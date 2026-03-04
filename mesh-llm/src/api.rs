@@ -13,7 +13,6 @@
 use crate::{download, election, mesh, nostr};
 use include_dir::{include_dir, Dir};
 use serde::Serialize;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -32,7 +31,6 @@ pub struct MeshApi {
 
 struct ApiInner {
     node: mesh::Node,
-    api_key_token: String,
     is_host: bool,
     is_client: bool,
     llama_ready: bool,
@@ -53,7 +51,6 @@ struct StatusPayload {
     latest_version: Option<String>,
     node_id: String,
     token: String,
-    api_key_token: String,
     node_status: String,
     is_host: bool,
     is_client: bool,
@@ -90,15 +87,19 @@ struct MeshModelPayload {
     status: String,
     node_count: usize,
     size_gb: f64,
+    /// Total requests seen across the mesh (from demand map)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    request_count: Option<u64>,
+    /// Seconds since last request or declaration (None if no demand data)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_active_secs_ago: Option<u64>,
 }
 
 impl MeshApi {
     pub fn new(node: mesh::Node, model_name: String, api_port: u16, model_size_bytes: u64) -> Self {
-        let api_key_token = load_or_create_api_key_token();
         MeshApi {
             inner: Arc::new(Mutex::new(ApiInner {
                 node,
-                api_key_token,
                 is_host: false,
                 is_client: false,
                 llama_ready: false,
@@ -147,27 +148,31 @@ impl MeshApi {
         self.inner.lock().await.llama_port = port;
     }
 
-    pub async fn reset_api_key_token(&self) -> String {
-        let token = generate_api_key_token();
-        if let Err(e) = save_api_key_token(&token) {
-            tracing::warn!("Failed to persist api_key_token: {e}");
-        }
-        {
-            let mut inner = self.inner.lock().await;
-            inner.api_key_token = token.clone();
-        }
-        self.push_status().await;
-        token
-    }
-
     async fn status(&self) -> StatusPayload {
-        let inner = self.inner.lock().await;
-        let node = &inner.node;
-        let node_id = node.id().fmt_short().to_string();
-        let token = node.invite_token();
-        let api_key_token = inner.api_key_token.clone();
-        let my_vram_gb = node.vram_bytes() as f64 / 1e9;
-        let inflight_requests = node.inflight_requests();
+        // Snapshot inner fields and drop the lock before any async node queries.
+        // This prevents deadlock: if node.peers() etc. block on node.state.lock(),
+        // we don't hold inner.lock() hostage, so other handlers can still proceed.
+        let (node, node_id, token, my_vram_gb, inflight_requests,
+             model_name, model_size_bytes, llama_ready, is_host, is_client,
+             api_port, draft_name, mesh_name, latest_version) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.node.clone(),
+                inner.node.id().fmt_short().to_string(),
+                inner.node.invite_token(),
+                inner.node.vram_bytes() as f64 / 1e9,
+                inner.node.inflight_requests(),
+                inner.model_name.clone(),
+                inner.model_size_bytes,
+                inner.llama_ready,
+                inner.is_host,
+                inner.is_client,
+                inner.api_port,
+                inner.draft_name.clone(),
+                inner.mesh_name.clone(),
+                inner.latest_version.clone(),
+            )
+        }; // inner lock dropped here
 
         let all_peers = node.peers().await;
         let peers: Vec<PeerPayload> = all_peers
@@ -188,55 +193,54 @@ impl MeshApi {
 
         let catalog = node.mesh_catalog().await;
         let served = node.models_being_served().await;
-        let my_serving = inner.model_name.clone();
-        let mesh_models: Vec<MeshModelPayload> = catalog
-            .iter()
-            .map(|name| {
-                let is_warm = served.contains(name);
-                let node_count = if is_warm {
-                    let peer_count = all_peers
-                        .iter()
-                        .filter(|p| p.serving.as_deref() == Some(name.as_str()))
-                        .count();
-                    let me = if *name == my_serving { 1 } else { 0 };
-                    peer_count + me
-                } else {
-                    0
-                };
-                // Model size: use local knowledge if it's our model, otherwise catalog
-                let size_gb = if *name == my_serving && inner.model_size_bytes > 0 {
-                    inner.model_size_bytes as f64 / 1e9
-                } else {
-                    download::parse_size_gb(
-                        download::MODEL_CATALOG
-                            .iter()
-                            .find(|m| {
-                                m.file.strip_suffix(".gguf").unwrap_or(m.file) == name.as_str()
-                                    || m.name == name.as_str()
-                            })
-                            .map(|m| m.size)
-                            .unwrap_or("0"),
-                    )
-                };
-                MeshModelPayload {
-                    name: name.clone(),
-                    status: if is_warm {
-                        "warm".into()
-                    } else {
-                        "cold".into()
-                    },
-                    node_count,
-                    size_gb,
-                }
-            })
-            .collect();
+        let active_demand = node.active_demand().await;
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mesh_models: Vec<MeshModelPayload> = catalog.iter().map(|name| {
+            let is_warm = served.contains(name);
+            let node_count = if is_warm {
+                let peer_count = all_peers.iter()
+                    .filter(|p| p.serving.as_deref() == Some(name.as_str()))
+                    .count();
+                let me = if *name == model_name { 1 } else { 0 };
+                peer_count + me
+            } else {
+                0
+            };
+            let size_gb = if *name == model_name && model_size_bytes > 0 {
+                model_size_bytes as f64 / 1e9
+            } else {
+                download::parse_size_gb(
+                    download::MODEL_CATALOG.iter()
+                        .find(|m| m.file.strip_suffix(".gguf").unwrap_or(m.file) == name.as_str()
+                            || m.name == name.as_str())
+                        .map(|m| m.size)
+                        .unwrap_or("0")
+                )
+            };
+            let (request_count, last_active_secs_ago) = match active_demand.get(name) {
+                Some(d) => (
+                    Some(d.request_count),
+                    Some(now_ts.saturating_sub(d.last_active)),
+                ),
+                None => (None, None),
+            };
+            MeshModelPayload {
+                name: name.clone(),
+                status: if is_warm { "warm".into() } else { "cold".into() },
+                node_count,
+                size_gb,
+                request_count,
+                last_active_secs_ago,
+            }
+        }).collect();
 
-        let (launch_pi, launch_goose) = if inner.llama_ready {
-            let name = &inner.model_name;
-            let port = inner.api_port;
+        let (launch_pi, launch_goose) = if llama_ready {
             (
-                Some(format!("pi --provider mesh --model {name}")),
-                Some(format!("GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{port} OPENAI_API_KEY={api_key_token} GOOSE_MODEL={name} goose session")),
+                Some(format!("pi --provider mesh --model {model_name}")),
+                Some(format!("GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{api_port} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name} goose session")),
             )
         } else {
             (None, None)
@@ -245,23 +249,21 @@ impl MeshApi {
         let mesh_id = node.mesh_id().await;
 
         // Derive node status for display
-        let node_status = if inner.is_client {
+        let node_status = if is_client {
             "Client".to_string()
-        } else if inner.is_host && inner.llama_ready {
-            // Check if any peers are workers in our split (serving same model, role=Worker)
-            let has_split_workers = all_peers.iter().any(|p| {
-                matches!(p.role, mesh::NodeRole::Worker)
-                    && p.serving.as_deref() == Some(inner.model_name.as_str())
-            });
+        } else if is_host && llama_ready {
+            let has_split_workers = all_peers.iter().any(|p|
+                matches!(p.role, mesh::NodeRole::Worker) &&
+                p.serving.as_deref() == Some(model_name.as_str())
+            );
             if has_split_workers {
                 "Serving (split)".to_string()
             } else {
                 "Serving".to_string()
             }
-        } else if !inner.is_host && inner.model_name != "(idle)" && inner.model_name != "" {
-            // We have a model assigned but aren't host — we're a worker in someone's split
+        } else if !is_host && model_name != "(idle)" && !model_name.is_empty() {
             "Worker (split)".to_string()
-        } else if inner.model_name == "(idle)" || inner.model_name == "" {
+        } else if model_name == "(idle)" || model_name.is_empty() {
             if all_peers.is_empty() {
                 "Idle".to_string()
             } else {
@@ -273,26 +275,25 @@ impl MeshApi {
 
         StatusPayload {
             version: MESH_LLM_VERSION.to_string(),
-            latest_version: inner.latest_version.clone(),
+            latest_version,
             node_id,
             token,
-            api_key_token,
             node_status,
-            is_host: inner.is_host,
-            is_client: inner.is_client,
-            llama_ready: inner.llama_ready,
-            model_name: inner.model_name.clone(),
-            draft_name: inner.draft_name.clone(),
-            api_port: inner.api_port,
+            is_host,
+            is_client,
+            llama_ready,
+            model_name,
+            draft_name,
+            api_port,
             my_vram_gb,
-            model_size_gb: inner.model_size_bytes as f64 / 1e9,
+            model_size_gb: model_size_bytes as f64 / 1e9,
             peers,
             launch_pi,
             launch_goose,
             mesh_models,
             inflight_requests,
             mesh_id,
-            mesh_name: inner.mesh_name.clone(),
+            mesh_name,
         }
     }
 
@@ -307,84 +308,6 @@ impl MeshApi {
             }
         }
     }
-}
-
-fn mesh_config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".mesh-llm")
-        .join("config.json")
-}
-
-fn generate_api_key_token() -> String {
-    format!(
-        "{:016x}{:016x}{:016x}{:016x}",
-        rand::random::<u64>(),
-        rand::random::<u64>(),
-        rand::random::<u64>(),
-        rand::random::<u64>(),
-    )
-}
-
-fn load_or_create_api_key_token() -> String {
-    let path = mesh_config_path();
-    let mut cfg = serde_json::Map::<String, serde_json::Value>::new();
-
-    if let Ok(raw) = std::fs::read_to_string(&path) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(obj) = value.as_object() {
-                cfg = obj.clone();
-            }
-        }
-    }
-
-    // Rotate API token on each startup and persist it in config.json.
-    let token = generate_api_key_token();
-    cfg.insert(
-        "api_key_token".to_string(),
-        serde_json::Value::String(token.clone()),
-    );
-
-    if let Some(parent) = path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!(
-                "Failed to create config directory {}: {e}",
-                parent.display()
-            );
-            return token;
-        }
-    }
-
-    let body = serde_json::Value::Object(cfg).to_string();
-    if let Err(e) = std::fs::write(&path, body) {
-        tracing::warn!("Failed to write config {}: {e}", path.display());
-    }
-
-    token
-}
-
-fn save_api_key_token(token: &str) -> std::io::Result<()> {
-    let path = mesh_config_path();
-    let mut cfg = serde_json::Map::<String, serde_json::Value>::new();
-
-    if let Ok(raw) = std::fs::read_to_string(&path) {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-            if let Some(obj) = value.as_object() {
-                cfg = obj.clone();
-            }
-        }
-    }
-
-    cfg.insert(
-        "api_key_token".to_string(),
-        serde_json::Value::String(token.to_string()),
-    );
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let body = serde_json::Value::Object(cfg).to_string();
-    std::fs::write(path, body)
 }
 
 // ── Server ──
@@ -583,18 +506,6 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
                     break;
                 }
             }
-        }
-
-        // ── Reset API key token ──
-        ("POST", "/api/api-key/reset") => {
-            let token = state.reset_api_key_token().await;
-            let body = serde_json::json!({ "api_key_token": token }).to_string();
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(resp.as_bytes()).await?;
         }
 
         // ── Chat proxy (routes through inference API port) ──

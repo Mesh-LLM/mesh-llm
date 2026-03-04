@@ -90,7 +90,6 @@ type StatusPayload = {
   latest_version?: string | null;
   node_id: string;
   token: string;
-  api_key_token?: string;
   node_status: string;
   is_host: boolean;
   is_client: boolean;
@@ -453,7 +452,6 @@ export function App() {
     const port = status?.api_port ?? 9337;
     return `http://127.0.0.1:${port}/v1`;
   }, [status?.api_port]);
-  const apiKeyToken = status?.api_key_token ?? '';
 
   useEffect(() => {
     if (!warmModels.length) return;
@@ -970,10 +968,6 @@ export function App() {
           inviteClientCommand={inviteClientCommand}
           inviteToken={inviteToken}
           apiDirectUrl={apiDirectUrl}
-          apiKeyToken={apiKeyToken}
-          onApiKeyReset={(token) =>
-            setStatus((prev) => (prev ? { ...prev, api_key_token: token } : prev))
-          }
         />
 
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -1075,8 +1069,6 @@ function AppHeader({
   inviteClientCommand,
   inviteToken,
   apiDirectUrl,
-  apiKeyToken,
-  onApiKeyReset,
 }: {
   sections: Array<{ key: TopSection; label: string }>;
   section: TopSection;
@@ -1089,15 +1081,11 @@ function AppHeader({
   inviteClientCommand: string;
   inviteToken: string;
   apiDirectUrl: string;
-  apiKeyToken: string;
-  onApiKeyReset: (token: string) => void;
 }) {
   const [inviteWithModelCopied, setInviteWithModelCopied] = useState(false);
   const [inviteClientCopied, setInviteClientCopied] = useState(false);
   const [tokenCopied, setTokenCopied] = useState(false);
   const [apiDirectCopied, setApiDirectCopied] = useState(false);
-  const [apiTokenCopied, setApiTokenCopied] = useState(false);
-  const [isResettingApiToken, setIsResettingApiToken] = useState(false);
   const [isThemePopoverOpen, setIsThemePopoverOpen] = useState(false);
 
   async function copyInviteWithModelCommand() {
@@ -1141,35 +1129,6 @@ function AppHeader({
       window.setTimeout(() => setApiDirectCopied(false), 1500);
     } catch {
       setApiDirectCopied(false);
-    }
-  }
-
-  async function copyApiKeyToken() {
-    if (!apiKeyToken) return;
-    try {
-      await navigator.clipboard.writeText(apiKeyToken);
-      setApiTokenCopied(true);
-      window.setTimeout(() => setApiTokenCopied(false), 1500);
-    } catch {
-      setApiTokenCopied(false);
-    }
-  }
-
-  async function resetApiKeyToken() {
-    if (isResettingApiToken) return;
-    setIsResettingApiToken(true);
-    try {
-      const response = await fetch('/api/api-key/reset', { method: 'POST' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const body = (await response.json()) as { api_key_token?: string };
-      if (body.api_key_token) {
-        onApiKeyReset(body.api_key_token);
-        setApiTokenCopied(false);
-      }
-    } catch (err) {
-      console.warn('Failed to reset API token:', err);
-    } finally {
-      setIsResettingApiToken(false);
     }
   }
 
@@ -1260,44 +1219,7 @@ function AppHeader({
                   <div className="text-xs text-muted-foreground">Direct endpoint unavailable until status is loaded.</div>
                 )}
               </div>
-              <div className="space-y-2">
-                <div className="text-xs font-medium text-muted-foreground">API Key Token</div>
-                {apiKeyToken ? (
-                  <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
-                    <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                      {apiKeyToken}
-                    </code>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 shrink-0"
-                      aria-label="Copy API key token"
-                      onClick={() => void copyApiKeyToken()}
-                    >
-                      {apiTokenCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="text-xs text-muted-foreground">Token unavailable until status is loaded.</div>
-                )}
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    disabled={isResettingApiToken}
-                    onClick={() => void resetApiKeyToken()}
-                  >
-                    {isResettingApiToken ? (
-                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-                    ) : (
-                      <RotateCcw className="mr-1.5 h-4 w-4" />
-                    )}
-                    {isResettingApiToken ? 'Resetting...' : 'Reset token'}
-                  </Button>
-                </div>
-              </div>
+
               </PopoverContent>
             </Popover>
             <Popover>
