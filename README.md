@@ -106,51 +106,9 @@ mesh-llm --model Qwen2.5-32B    # dashboard at http://localhost:3131
 
 Live topology, VRAM bars per node, model picker, built-in chat. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
 
-### Web UI dev mode
+### Development
 
-Run the backend and UI in a local dev loop with hot reload:
-
-```bash
-just dev-ui
-```
-
-Open:
-
-```text
-http://127.0.0.1:5173
-```
-
-Run each side separately (two terminals):
-
-```bash
-# Terminal A: mesh-llm backend (API + console on :3131)
-just mesh-dev
-
-# Terminal B: Vite dev server (HMR) for mesh-llm/ui
-just ui-dev
-```
-
-Defaults:
-- `just mesh-dev` runs the prebuilt binary at `mesh-llm/target/release/mesh-llm` (no Rust compile) with `--port 9337 --console 3131`.
-- `just ui-dev` serves on `127.0.0.1:5173` and proxies `/api/*` to `http://127.0.0.1:3131`.
-- `just dev-ui` also uses the prebuilt binary (no Rust compile).
-
-Overrides:
-
-```bash
-# Different backend API origin for /api proxy
-just ui-dev http://127.0.0.1:4141
-
-# Different Vite dev port
-just ui-dev http://127.0.0.1:3131 5174
-
-# Custom mesh-llm args with combined loop
-just dev-ui mesh-llm/target/release/mesh-llm "--client --auto --console 3131"
-
-# Use a different mesh-llm binary
-just mesh-dev /usr/local/bin/mesh-llm
-just dev-ui /usr/local/bin/mesh-llm "--port 9337 --console 3131" 5173 http://127.0.0.1:3131
-```
+Build-from-source and UI development instructions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Using with agents
 
@@ -229,12 +187,9 @@ ssh user@remote 'tar xzf mesh-bundle.tar.gz && mesh-bundle/mesh-llm --model Qwen
 
 Same architecture required (arm64 macOS → arm64 macOS). Bundle includes mesh-llm + llama.cpp binaries. For WAN: forward `--bind-port` UDP on the router — only the originator needs it.
 
-## Building
+## Contributing
 
-```bash
-just build            # clones llama.cpp fork, builds everything
-just bundle           # portable tarball
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build and development workflows.
 
 ## Project Structure
 

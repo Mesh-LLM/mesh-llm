@@ -93,8 +93,8 @@ impl std::fmt::Display for DiscoveredMesh {
 // ---------------------------------------------------------------------------
 
 fn nostr_key_path() -> Result<std::path::PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     Ok(home.join(".mesh-llm").join("nostr.nsec"))
 }
 
@@ -129,7 +129,10 @@ pub fn rotate_keys() -> Result<()> {
     let path = nostr_key_path()?;
     if path.exists() {
         std::fs::remove_file(&path)?;
-        eprintln!("🔑 Deleted {}. A new key will be generated on next --publish.", path.display());
+        eprintln!(
+            "🔑 Deleted {}. A new key will be generated on next --publish.",
+            path.display()
+        );
     } else {
         eprintln!("No key to rotate (none exists yet).");
     }
@@ -169,7 +172,10 @@ impl Publisher {
         let tags = vec![
             Tag::custom(TagKind::Custom("d".into()), vec!["mesh-llm".to_string()]),
             Tag::custom(TagKind::Custom("k".into()), vec!["mesh-llm".to_string()]),
-            Tag::custom(TagKind::Custom("expiration".into()), vec![expiration.to_string()]),
+            Tag::custom(
+                TagKind::Custom("expiration".into()),
+                vec![expiration.to_string()],
+            ),
         ];
 
         let builder = EventBuilder::new(Kind::Custom(MESH_SERVICE_KIND), content).tags(tags);
@@ -184,10 +190,16 @@ impl Publisher {
             .kind(Kind::Custom(MESH_SERVICE_KIND))
             .author(self.keys.public_key())
             .limit(10);
-        let events = self.client.fetch_events(filter, Duration::from_secs(5)).await?;
+        let events = self
+            .client
+            .fetch_events(filter, Duration::from_secs(5))
+            .await?;
         for event in events.iter() {
             let request = EventDeletionRequest::new().id(event.id);
-            let _ = self.client.send_event_builder(EventBuilder::delete(request)).await;
+            let _ = self
+                .client
+                .send_event_builder(EventBuilder::delete(request))
+                .await;
         }
         Ok(())
     }
@@ -227,7 +239,11 @@ pub async fn publish_loop(
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    eprintln!("📡 Publishing mesh to Nostr (npub: {}...{})", &npub[..12], &npub[npub.len()-8..]);
+    eprintln!(
+        "📡 Publishing mesh to Nostr (npub: {}...{})",
+        &npub[..12],
+        &npub[npub.len() - 8..]
+    );
 
     let mut delisted = false;
 
@@ -236,7 +252,8 @@ pub async fn publish_loop(
         let peers = node.peers().await;
 
         // Count clients
-        let client_count = peers.iter()
+        let client_count = peers
+            .iter()
             .filter(|p| matches!(p.role, crate::mesh::NodeRole::Client))
             .count();
 
@@ -246,12 +263,18 @@ pub async fn publish_loop(
                 if let Err(e) = publisher.unpublish().await {
                     tracing::warn!("Failed to unpublish from Nostr: {e}");
                 }
-                eprintln!("📡 Delisted from Nostr ({} clients, cap is {})", client_count, cap);
+                eprintln!(
+                    "📡 Delisted from Nostr ({} clients, cap is {})",
+                    client_count, cap
+                );
                 delisted = true;
                 tokio::time::sleep(Duration::from_secs(interval_secs)).await;
                 continue;
             } else if client_count < cap && delisted {
-                eprintln!("📡 Re-publishing to Nostr ({} clients, cap is {})", client_count, cap);
+                eprintln!(
+                    "📡 Re-publishing to Nostr ({} clients, cap is {})",
+                    client_count, cap
+                );
                 delisted = false;
             }
         }
@@ -282,7 +305,8 @@ pub async fn publish_loop(
             }
         }
 
-        let served_set: std::collections::HashSet<&str> = actually_serving.iter().map(|s| s.as_str()).collect();
+        let served_set: std::collections::HashSet<&str> =
+            actually_serving.iter().map(|s| s.as_str()).collect();
 
         // Wanted = requested but not actually being served by a host
         let mut wanted: Vec<String> = Vec::new();
@@ -316,13 +340,15 @@ pub async fn publish_loop(
             }
         }
 
-        let total_vram: u64 = peers.iter()
+        let total_vram: u64 = peers
+            .iter()
             .filter(|p| !matches!(p.role, crate::mesh::NodeRole::Client))
             .map(|p| p.vram_bytes)
             .sum::<u64>()
             + node.vram_bytes();
 
-        let node_count = peers.iter()
+        let node_count = peers
+            .iter()
             .filter(|p| !matches!(p.role, crate::mesh::NodeRole::Client))
             .count()
             + 1; // +1 for self
@@ -345,7 +371,12 @@ pub async fn publish_loop(
 
         let ttl = interval_secs * 2;
         match publisher.publish(&listing, ttl).await {
-            Ok(()) => tracing::debug!("Published mesh listing ({} models, {} nodes, {} clients)", listing.serving.len(), listing.node_count, client_count),
+            Ok(()) => tracing::debug!(
+                "Published mesh listing ({} models, {} nodes, {} clients)",
+                listing.serving.len(),
+                listing.node_count,
+                client_count
+            ),
             Err(e) => tracing::warn!("Failed to publish to Nostr: {e}"),
         }
 
@@ -387,15 +418,17 @@ pub async fn publish_watchdog(
                 let mesh_listed = if served.is_empty() {
                     false
                 } else {
-                    meshes.iter().any(|m| {
-                        served.iter().any(|s| m.listing.serving.contains(s))
-                    })
+                    meshes
+                        .iter()
+                        .any(|m| served.iter().any(|s| m.listing.serving.contains(s)))
                 };
 
                 if !mesh_listed && !our_peers.is_empty() {
                     // Only take over if we're directly reachable (not relay-only)
                     if !node.has_direct_connection().await {
-                        tracing::debug!("Mesh listing missing but we're relay-only — not taking over");
+                        tracing::debug!(
+                            "Mesh listing missing but we're relay-only — not taking over"
+                        );
                         tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
                         continue;
                     }
@@ -410,9 +443,9 @@ pub async fn publish_watchdog(
                         let still_missing = if served.is_empty() {
                             true
                         } else {
-                            !recheck.iter().any(|m| {
-                                served.iter().any(|s| m.listing.serving.contains(s))
-                            })
+                            !recheck
+                                .iter()
+                                .any(|m| served.iter().any(|s| m.listing.serving.contains(s)))
                         };
                         if !still_missing {
                             eprintln!("📡 Someone else took over publishing — standing down");
@@ -465,9 +498,21 @@ impl MeshFilter {
     pub fn matches(&self, mesh: &DiscoveredMesh) -> bool {
         if let Some(ref model) = self.model {
             let model_lower = model.to_lowercase();
-            let has_model = mesh.listing.serving.iter().any(|m| m.to_lowercase().contains(&model_lower))
-                || mesh.listing.wanted.iter().any(|m| m.to_lowercase().contains(&model_lower))
-                || mesh.listing.on_disk.iter().any(|m| m.to_lowercase().contains(&model_lower));
+            let has_model = mesh
+                .listing
+                .serving
+                .iter()
+                .any(|m| m.to_lowercase().contains(&model_lower))
+                || mesh
+                    .listing
+                    .wanted
+                    .iter()
+                    .any(|m| m.to_lowercase().contains(&model_lower))
+                || mesh
+                    .listing
+                    .on_disk
+                    .iter()
+                    .any(|m| m.to_lowercase().contains(&model_lower));
             if !has_model {
                 return false;
             }
@@ -503,16 +548,25 @@ pub async fn discover(relays: &[String], filter: &MeshFilter) -> Result<Vec<Disc
         }
     }
     if added == 0 {
-        anyhow::bail!("Could not connect to any Nostr relay (tried {})", relays.len());
+        anyhow::bail!(
+            "Could not connect to any Nostr relay (tried {})",
+            relays.len()
+        );
     }
     client.connect().await;
 
     let nostr_filter = Filter::new()
         .kind(Kind::Custom(MESH_SERVICE_KIND))
-        .custom_tag(SingleLetterTag::lowercase(Alphabet::K), "mesh-llm".to_string())
+        .custom_tag(
+            SingleLetterTag::lowercase(Alphabet::K),
+            "mesh-llm".to_string(),
+        )
         .limit(100);
 
-    let events = match client.fetch_events(nostr_filter, Duration::from_secs(5)).await {
+    let events = match client
+        .fetch_events(nostr_filter, Duration::from_secs(5))
+        .await
+    {
         Ok(e) => e,
         Err(e) => {
             tracing::warn!("Nostr fetch failed: {e}");
@@ -538,7 +592,9 @@ pub async fn discover(relays: &[String], filter: &MeshFilter) -> Result<Vec<Disc
     let mut meshes = Vec::new();
     for (_, event) in &latest {
         // Check expiration
-        let expires_at = event.tags.iter()
+        let expires_at = event
+            .tags
+            .iter()
             .find(|t| t.as_slice().first().map(|s| s.as_str()) == Some("expiration"))
             .and_then(|t| t.as_slice().get(1))
             .and_then(|s| s.parse::<u64>().ok());
@@ -569,7 +625,9 @@ pub async fn discover(relays: &[String], filter: &MeshFilter) -> Result<Vec<Disc
 
     // Sort by node count (bigger meshes first), then VRAM
     meshes.sort_by(|a, b| {
-        b.listing.node_count.cmp(&a.listing.node_count)
+        b.listing
+            .node_count
+            .cmp(&a.listing.node_count)
             .then(b.listing.total_vram_bytes.cmp(&a.listing.total_vram_bytes))
     });
 
@@ -656,17 +714,23 @@ pub fn smart_auto(
 
     // If target name is set, only consider meshes with that exact name
     let candidates: Vec<&DiscoveredMesh> = if let Some(target) = target_name {
-        meshes.iter().filter(|m| {
-            m.listing.name.as_ref()
-                .map(|n| n.eq_ignore_ascii_case(target))
-                .unwrap_or(false)
-        }).collect()
+        meshes
+            .iter()
+            .filter(|m| {
+                m.listing
+                    .name
+                    .as_ref()
+                    .map(|n| n.eq_ignore_ascii_case(target))
+                    .unwrap_or(false)
+            })
+            .collect()
     } else {
         meshes.iter().collect()
     };
 
     // Score and rank
-    let mut scored: Vec<(&DiscoveredMesh, i64)> = candidates.iter()
+    let mut scored: Vec<(&DiscoveredMesh, i64)> = candidates
+        .iter()
         .map(|m| (*m, score_mesh(m, now, last_mesh_id.as_deref())))
         .collect();
     scored.sort_by(|a, b| b.1.cmp(&a.1));
@@ -698,7 +762,8 @@ fn parse_size_gb(s: &str) -> f64 {
 /// Each entry is (model_name, min_vram_gb) where min_vram = file_size * 1.1.
 /// Excludes draft models (< 1GB).
 fn model_tiers() -> Vec<(&'static str, f64)> {
-    let mut tiers: Vec<_> = crate::download::MODEL_CATALOG.iter()
+    let mut tiers: Vec<_> = crate::download::MODEL_CATALOG
+        .iter()
         .filter(|m| parse_size_gb(m.size) >= 1.0) // skip drafts
         .map(|m| (m.name, parse_size_gb(m.size) * 1.1))
         .collect();
@@ -715,15 +780,16 @@ pub fn default_models_for_vram(vram_gb: f64) -> Vec<String> {
     let tiers = model_tiers();
 
     // Find the largest model that fits AND is already on disk
-    let on_disk_fit = tiers.iter()
+    let on_disk_fit = tiers
+        .iter()
         .find(|(name, min_vram)| *min_vram <= vram_gb && local_models.contains(&name.to_string()));
 
     // Find the largest model that fits (may need download)
-    let any_fit = tiers.iter()
-        .find(|(_, min_vram)| *min_vram <= vram_gb);
+    let any_fit = tiers.iter().find(|(_, min_vram)| *min_vram <= vram_gb);
 
     // Primary: prefer on-disk, fall back to downloadable
-    let primary = on_disk_fit.or(any_fit)
+    let primary = on_disk_fit
+        .or(any_fit)
         .map(|(name, _)| name.to_string())
         .unwrap_or_else(|| "Qwen2.5-3B-Instruct-Q4_K_M".into());
 

@@ -15,8 +15,8 @@ use crate::rewrite::{self, PortRewriteMap};
 use anyhow::Result;
 use iroh::EndpointId;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -48,8 +48,14 @@ impl Manager {
     pub async fn start(
         node: Node,
         rpc_port: u16,
-        mut tunnel_stream_rx: tokio::sync::mpsc::Receiver<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
-        mut tunnel_http_rx: tokio::sync::mpsc::Receiver<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
+        mut tunnel_stream_rx: tokio::sync::mpsc::Receiver<(
+            iroh::endpoint::SendStream,
+            iroh::endpoint::RecvStream,
+        )>,
+        mut tunnel_http_rx: tokio::sync::mpsc::Receiver<(
+            iroh::endpoint::SendStream,
+            iroh::endpoint::RecvStream,
+        )>,
     ) -> Result<Self> {
         let port_rewrite_map = rewrite::new_rewrite_map();
         let mgr = Manager {
@@ -87,6 +93,7 @@ impl Manager {
 
         // Handle inbound HTTP tunnel streams (plain byte relay to llama-server)
         let http_port_ref = mgr.http_port.clone();
+        let http_node = mgr.node.clone();
         tokio::spawn(async move {
             while let Some((send, recv)) = tunnel_http_rx.recv().await {
                 let port = http_port_ref.load(Ordering::Relaxed);
@@ -94,8 +101,9 @@ impl Manager {
                     tracing::warn!("Inbound HTTP tunnel but no llama-server running, dropping");
                     continue;
                 }
+                let node = http_node.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_inbound_http_stream(send, recv, port).await {
+                    if let Err(e) = handle_inbound_http_stream(node, send, recv, port).await {
                         tracing::warn!("Inbound HTTP tunnel stream error: {e}");
                     }
                 });
@@ -203,16 +211,16 @@ impl Manager {
 
                 self.node.set_tunnel_port(peer.id, port).await;
 
-                tracing::info!(
-                    "Tunnel 127.0.0.1:{port} → peer {}",
-                    peer.id.fmt_short()
-                );
+                tracing::info!("Tunnel 127.0.0.1:{port} → peer {}", peer.id.fmt_short());
 
                 let node = self.node.clone();
                 let peer_id = peer.id;
                 tokio::spawn(async move {
                     if let Err(e) = run_outbound_tunnel(node, peer_id, listener).await {
-                        tracing::error!("Outbound tunnel to {} on :{port} failed: {e}", peer_id.fmt_short());
+                        tracing::error!(
+                            "Outbound tunnel to {} on :{port} failed: {e}",
+                            peer_id.fmt_short()
+                        );
                     }
                 });
             }
@@ -221,11 +229,7 @@ impl Manager {
 }
 
 /// Run a local TCP listener that tunnels to a remote peer via QUIC bi-streams.
-async fn run_outbound_tunnel(
-    node: Node,
-    peer_id: EndpointId,
-    listener: TcpListener,
-) -> Result<()> {
+async fn run_outbound_tunnel(node: Node, peer_id: EndpointId, listener: TcpListener) -> Result<()> {
     loop {
         let (tcp_stream, _addr) = listener.accept().await?;
         tcp_stream.set_nodelay(true)?;
@@ -270,9 +274,7 @@ async fn handle_inbound_stream(
         rewrite::relay_with_rewrite(quic_recv, tcp_write, port_rewrite_map).await
     });
     // TCP→QUIC: plain byte relay (responses from rpc-server)
-    let mut t2 = tokio::spawn(async move {
-        relay_tcp_to_quic(tcp_read, quic_send).await
-    });
+    let mut t2 = tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
     tokio::select! {
         _ = &mut t1 => { t2.abort(); }
         _ = &mut t2 => { t1.abort(); }
@@ -283,6 +285,7 @@ async fn handle_inbound_stream(
 /// Handle an inbound HTTP tunnel bi-stream: connect to local llama-server and relay.
 /// Plain byte relay — no protocol awareness needed (HTTP/SSE just flows through).
 async fn handle_inbound_http_stream(
+    node: Node,
     quic_send: iroh::endpoint::SendStream,
     quic_recv: iroh::endpoint::RecvStream,
     http_port: u16,
@@ -290,6 +293,7 @@ async fn handle_inbound_http_stream(
     tracing::info!("Inbound HTTP tunnel stream → llama-server :{http_port}");
     let tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
     tcp_stream.set_nodelay(true)?;
+    let _inflight = node.begin_inflight_request();
 
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
@@ -298,14 +302,15 @@ async fn handle_inbound_http_stream(
 /// Relay a TCP stream through a QUIC bi-stream. Used by the lite client
 /// to tunnel local HTTP requests to the remote host's llama-server.
 /// Relay between two TCP streams (for local proxying).
-pub async fn relay_tcp_streams(
-    a: TcpStream,
-    b: TcpStream,
-) -> Result<()> {
+pub async fn relay_tcp_streams(a: TcpStream, b: TcpStream) -> Result<()> {
     let (a_read, mut a_write) = tokio::io::split(a);
     let (b_read, mut b_write) = tokio::io::split(b);
-    let mut t1 = tokio::spawn(async move { tokio::io::copy(&mut tokio::io::BufReader::new(a_read), &mut b_write).await });
-    let mut t2 = tokio::spawn(async move { tokio::io::copy(&mut tokio::io::BufReader::new(b_read), &mut a_write).await });
+    let mut t1 = tokio::spawn(async move {
+        tokio::io::copy(&mut tokio::io::BufReader::new(a_read), &mut b_write).await
+    });
+    let mut t2 = tokio::spawn(async move {
+        tokio::io::copy(&mut tokio::io::BufReader::new(b_read), &mut a_write).await
+    });
     tokio::select! {
         _ = &mut t1 => { t2.abort(); }
         _ = &mut t2 => { t1.abort(); }
@@ -329,12 +334,8 @@ pub async fn relay_bidirectional(
     quic_send: iroh::endpoint::SendStream,
     quic_recv: iroh::endpoint::RecvStream,
 ) -> Result<()> {
-    let mut t1 = tokio::spawn(async move {
-        relay_tcp_to_quic(tcp_read, quic_send).await
-    });
-    let mut t2 = tokio::spawn(async move {
-        relay_quic_to_tcp(quic_recv, tcp_write).await
-    });
+    let mut t1 = tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
+    let mut t2 = tokio::spawn(async move { relay_quic_to_tcp(quic_recv, tcp_write).await });
     // When either direction finishes, abort the other so we don't leak
     // tasks waiting on a half-open connection (rpc-server keeps TCP open).
     tokio::select! {

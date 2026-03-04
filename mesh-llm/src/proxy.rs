@@ -37,7 +37,8 @@ pub fn extract_model_from_http(buf: &[u8]) -> Option<String> {
 
 pub fn is_models_list_request(buf: &[u8]) -> bool {
     let s = String::from_utf8_lossy(buf);
-    s.starts_with("GET ") && (s.contains("/v1/models") || s.contains("/models"))
+    s.starts_with("GET ")
+        && (s.contains("/v1/models") || s.contains("/models"))
         && !s.contains("/v1/models/")
 }
 
@@ -109,11 +110,16 @@ pub async fn handle_mesh_request(node: mesh::Node, tcp_stream: TcpStream, track_
 /// Route a request to a known inference target (local llama-server or remote host).
 ///
 /// Used by the API proxy after election has determined the target.
-pub async fn route_to_target(node: mesh::Node, tcp_stream: TcpStream, target: election::InferenceTarget) {
+pub async fn route_to_target(
+    node: mesh::Node,
+    tcp_stream: TcpStream,
+    target: election::InferenceTarget,
+) {
     match target {
         election::InferenceTarget::Local(llama_port) => {
             match TcpStream::connect(format!("127.0.0.1:{llama_port}")).await {
                 Ok(upstream) => {
+                    let _inflight = node.begin_inflight_request();
                     let _ = upstream.set_nodelay(true);
                     if let Err(e) = tunnel::relay_tcp_streams(tcp_stream, upstream).await {
                         tracing::debug!("API proxy (local) ended: {e}");
@@ -125,19 +131,20 @@ pub async fn route_to_target(node: mesh::Node, tcp_stream: TcpStream, target: el
                 }
             }
         }
-        election::InferenceTarget::Remote(host_id) => {
-            match node.open_http_tunnel(host_id).await {
-                Ok((quic_send, quic_recv)) => {
-                    if let Err(e) = tunnel::relay_tcp_via_quic(tcp_stream, quic_send, quic_recv).await {
-                        tracing::debug!("API proxy (remote) ended: {e}");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("API proxy: can't tunnel to host {}: {e}", host_id.fmt_short());
-                    let _ = send_503(tcp_stream).await;
+        election::InferenceTarget::Remote(host_id) => match node.open_http_tunnel(host_id).await {
+            Ok((quic_send, quic_recv)) => {
+                if let Err(e) = tunnel::relay_tcp_via_quic(tcp_stream, quic_send, quic_recv).await {
+                    tracing::debug!("API proxy (remote) ended: {e}");
                 }
             }
-        }
+            Err(e) => {
+                tracing::warn!(
+                    "API proxy: can't tunnel to host {}: {e}",
+                    host_id.fmt_short()
+                );
+                let _ = send_503(tcp_stream).await;
+            }
+        },
         election::InferenceTarget::None => {
             let _ = send_503(tcp_stream).await;
         }
@@ -171,7 +178,8 @@ pub async fn send_json_ok(mut stream: TcpStream, data: &serde_json::Value) -> st
     let body = data.to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;

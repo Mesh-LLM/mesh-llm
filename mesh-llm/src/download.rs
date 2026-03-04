@@ -269,8 +269,14 @@ pub fn parse_size_gb(s: &str) -> f64 {
 
 pub fn find_model(query: &str) -> Option<&'static CatalogModel> {
     let q = query.to_lowercase();
-    MODEL_CATALOG.iter().find(|m| m.name.to_lowercase() == q)
-        .or_else(|| MODEL_CATALOG.iter().find(|m| m.name.to_lowercase().contains(&q)))
+    MODEL_CATALOG
+        .iter()
+        .find(|m| m.name.to_lowercase() == q)
+        .or_else(|| {
+            MODEL_CATALOG
+                .iter()
+                .find(|m| m.name.to_lowercase().contains(&q))
+        })
 }
 
 /// Download a model to ~/.models/ with resume support.
@@ -283,7 +289,11 @@ pub async fn download_model(model: &CatalogModel) -> Result<PathBuf> {
     if dest.exists() {
         let size = tokio::fs::metadata(&dest).await?.len();
         if size > 1_000_000 {
-            eprintln!("✅ {} already exists ({:.1}GB)", model.file, size as f64 / 1e9);
+            eprintln!(
+                "✅ {} already exists ({:.1}GB)",
+                model.file,
+                size as f64 / 1e9
+            );
             return Ok(dest);
         }
     }
@@ -317,8 +327,14 @@ async fn download_with_resume(dest: &Path, url: &str) -> Result<()> {
             0
         };
 
-        eprintln!("  attempt {attempt}/5{}...",
-            if existing_bytes > 0 { format!(" (resuming from {:.1}MB)", existing_bytes as f64 / 1e6) } else { String::new() });
+        eprintln!(
+            "  attempt {attempt}/5{}...",
+            if existing_bytes > 0 {
+                format!(" (resuming from {:.1}MB)", existing_bytes as f64 / 1e6)
+            } else {
+                String::new()
+            }
+        );
 
         let mut request = client.get(url);
         if existing_bytes > 0 {
@@ -351,7 +367,9 @@ async fn download_with_resume(dest: &Path, url: &str) -> Result<()> {
         // Total size from Content-Length (or Content-Range)
         let total_bytes = if status == reqwest::StatusCode::PARTIAL_CONTENT {
             // Content-Range: bytes 1234-5678/9999
-            response.headers().get("content-range")
+            response
+                .headers()
+                .get("content-range")
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| s.rsplit('/').next())
                 .and_then(|s| s.parse::<u64>().ok())
@@ -377,7 +395,9 @@ async fn download_with_resume(dest: &Path, url: &str) -> Result<()> {
         loop {
             match stream.next().await {
                 Some(Ok(chunk)) => {
-                    file.write_all(&chunk).await.context("Failed to write chunk")?;
+                    file.write_all(&chunk)
+                        .await
+                        .context("Failed to write chunk")?;
                     downloaded += chunk.len() as u64;
 
                     // Update progress every 500ms
@@ -389,8 +409,10 @@ async fn download_with_resume(dest: &Path, url: &str) -> Result<()> {
                 Some(Err(e)) => {
                     file.flush().await.ok();
                     eprint!("\r");
-                    eprintln!("  download interrupted at {:.1}MB: {e}",
-                        downloaded as f64 / 1e6);
+                    eprintln!(
+                        "  download interrupted at {:.1}MB: {e}",
+                        downloaded as f64 / 1e6
+                    );
                     if attempt < 5 {
                         eprintln!("  retrying in 3s (will resume)...");
                         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -403,7 +425,8 @@ async fn download_with_resume(dest: &Path, url: &str) -> Result<()> {
                     eprint!("\r");
                     print_progress(downloaded, total_bytes);
                     eprintln!();
-                    tokio::fs::rename(&tmp, dest).await
+                    tokio::fs::rename(&tmp, dest)
+                        .await
                         .context("Failed to move downloaded file")?;
                     return Ok(());
                 }
@@ -437,6 +460,9 @@ pub fn list_models() {
         } else {
             String::new()
         };
-        eprintln!("  {:40} {:>6}  {}{}", m.name, m.size, m.description, draft_info);
+        eprintln!(
+            "  {:40} {:>6}  {}{}",
+            m.name, m.size, m.description, draft_info
+        );
     }
 }

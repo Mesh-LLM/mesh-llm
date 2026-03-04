@@ -4,3 +4,4 @@ target/
 llama.cpp.bak/
 private-note.txt
 .idea/
+mesh-llm/ui/dist/

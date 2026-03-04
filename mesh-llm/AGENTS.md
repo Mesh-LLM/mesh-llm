@@ -10,6 +10,12 @@ The console is a visual UI — code review is not sufficient. Changes must be:
 
 This applies to ANY change touching `console.html` or `api.rs` status payloads that affect what the console displays.
 
+## UI Composition (React UI)
+
+For changes in `ui/`, use components and compose interfaces consistently with shadcn/ui patterns where possible.
+Prefer extending existing shadcn-style primitives in `ui/src/components/ui/` over ad-hoc custom markup/styling.
+Reference shadcn LLM instructions: https://ui.shadcn.com/llms.txt
+
 ## Project Structure
 
 - `src/` — Rust source (see `README.md` for file map)

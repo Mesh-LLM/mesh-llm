@@ -5,13 +5,13 @@
 
 use anyhow::Result;
 use base64::Engine;
-use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use iroh::endpoint::Connection;
+use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{watch, Mutex};
 
 pub const ALPN: &[u8] = b"mesh-llm/0";
 const STREAM_GOSSIP: u8 = 0x01;
@@ -119,7 +119,8 @@ pub fn scan_local_models() -> Vec<String> {
                     if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
                         // Skip draft models (tiny) and partial downloads
                         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                        if size > 500_000_000 { // > 500MB, skip draft models
+                        if size > 500_000_000 {
+                            // > 500MB, skip draft models
                             if !names.contains(&stem.to_string()) {
                                 names.push(stem.to_string());
                             }
@@ -157,7 +158,9 @@ pub fn detect_vram_bytes_capped(max_vram_gb: Option<f64>) -> u64 {
     let mut vram = detect_vram_bytes();
     if let Some(cap) = max_vram_gb {
         let cap_bytes = (cap * 1e9) as u64;
-        if cap_bytes < vram { vram = cap_bytes; }
+        if cap_bytes < vram {
+            vram = cap_bytes;
+        }
     }
     vram
 }
@@ -191,7 +194,8 @@ pub fn detect_vram_bytes() -> u64 {
             if out.status.success() {
                 if let Ok(s) = String::from_utf8(out.stdout) {
                     // Sum all GPUs (multi-GPU systems), nvidia-smi reports in MiB
-                    let total_mib: u64 = s.lines()
+                    let total_mib: u64 = s
+                        .lines()
                         .filter_map(|line| line.trim().parse::<u64>().ok())
                         .sum();
                     if total_mib > 0 {
@@ -247,7 +251,7 @@ pub struct RouteEntry {
 /// We can't send STUN from the bound port (iroh owns it), but we only need
 /// the public IP — the port is known from --bind-port + router forwarding.
 async fn stun_public_addr(advertised_port: u16) -> Option<std::net::SocketAddr> {
-    use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
     let stun_servers = [
         "stun.l.google.com:19302",
@@ -261,9 +265,13 @@ async fn stun_public_addr(advertised_port: u16) -> Option<std::net::SocketAddr> 
     for server in &stun_servers {
         // STUN Binding Request: type=0x0001, len=0, magic=0x2112A442, txn=random
         let mut req = [0u8; 20];
-        req[0] = 0x00; req[1] = 0x01; // Binding Request
-        // length = 0
-        req[4] = 0x21; req[5] = 0x12; req[6] = 0xA4; req[7] = 0x42; // Magic Cookie
+        req[0] = 0x00;
+        req[1] = 0x01; // Binding Request
+                       // length = 0
+        req[4] = 0x21;
+        req[5] = 0x12;
+        req[6] = 0xA4;
+        req[7] = 0x42; // Magic Cookie
         rand::fill(&mut req[8..20]);
 
         let dest: SocketAddr = match tokio::net::lookup_host(server).await {
@@ -274,13 +282,14 @@ async fn stun_public_addr(advertised_port: u16) -> Option<std::net::SocketAddr> 
             Err(_) => continue,
         };
 
-        if sock.send_to(&req, dest).await.is_err() { continue; }
+        if sock.send_to(&req, dest).await.is_err() {
+            continue;
+        }
 
         let mut buf = [0u8; 256];
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            sock.recv_from(&mut buf),
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(2), sock.recv_from(&mut buf))
+            .await
+        {
             Ok(Ok((len, _))) if len >= 20 => {
                 // Parse STUN response for XOR-MAPPED-ADDRESS (0x0020)
                 // or MAPPED-ADDRESS (0x0001)
@@ -290,14 +299,18 @@ async fn stun_public_addr(advertised_port: u16) -> Option<std::net::SocketAddr> 
                 while i + 4 <= len {
                     let attr_type = u16::from_be_bytes([buf[i], buf[i + 1]]);
                     let attr_len = u16::from_be_bytes([buf[i + 2], buf[i + 3]]) as usize;
-                    if i + 4 + attr_len > len { break; }
+                    if i + 4 + attr_len > len {
+                        break;
+                    }
                     let val = &buf[i + 4..i + 4 + attr_len];
 
                     if attr_type == 0x0020 && attr_len >= 8 && val[1] == 0x01 {
                         // XOR-MAPPED-ADDRESS, IPv4 — extract IP only
                         let ip = Ipv4Addr::new(
-                            val[4] ^ magic[0], val[5] ^ magic[1],
-                            val[6] ^ magic[2], val[7] ^ magic[3],
+                            val[4] ^ magic[0],
+                            val[5] ^ magic[1],
+                            val[6] ^ magic[2],
+                            val[7] ^ magic[3],
                         );
                         let addr = SocketAddr::V4(SocketAddrV4::new(ip, advertised_port));
                         tracing::info!("STUN discovered public address: {addr}");
@@ -337,13 +350,35 @@ pub struct Node {
     requested_models: Arc<Mutex<Vec<String>>>,
     request_counts: Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>>,
     last_request_snapshot: Arc<std::sync::Mutex<std::collections::HashMap<String, u64>>>,
+    inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
+    inflight_change_tx: watch::Sender<u64>,
     mesh_id: Arc<Mutex<Option<String>>>,
     accepting: Arc<(tokio::sync::Notify, std::sync::atomic::AtomicBool)>,
     vram_bytes: u64,
     peer_change_tx: watch::Sender<usize>,
     pub peer_change_rx: watch::Receiver<usize>,
     tunnel_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
-    tunnel_http_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
+    tunnel_http_tx:
+        tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
+}
+
+pub struct InflightRequestGuard {
+    inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
+    inflight_change_tx: watch::Sender<u64>,
+}
+
+impl Drop for InflightRequestGuard {
+    fn drop(&mut self) {
+        let _ = self.inflight_requests.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |current| current.checked_sub(1),
+        );
+        let _ = self.inflight_change_tx.send(
+            self.inflight_requests
+                .load(std::sync::atomic::Ordering::Relaxed) as u64,
+        );
+    }
 }
 
 struct MeshState {
@@ -367,10 +402,17 @@ pub struct TunnelChannels {
 }
 
 impl Node {
-    pub async fn start(role: NodeRole, relay_urls: &[String], bind_port: Option<u16>, max_vram_gb: Option<f64>) -> Result<(Self, TunnelChannels)> {
+    pub async fn start(
+        role: NodeRole,
+        relay_urls: &[String],
+        bind_port: Option<u16>,
+        max_vram_gb: Option<f64>,
+    ) -> Result<(Self, TunnelChannels)> {
         // Clients use an ephemeral key so they get a unique identity even
         // when running on the same machine as a GPU node.
-        let secret_key = if matches!(role, NodeRole::Client) || std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok() {
+        let secret_key = if matches!(role, NodeRole::Client)
+            || std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok()
+        {
             let key = SecretKey::generate(&mut rand::rng());
             tracing::info!("Using ephemeral key (unique identity)");
             key
@@ -393,9 +435,13 @@ impl Node {
 
         if !relay_urls.is_empty() {
             use iroh::{RelayConfig, RelayMap};
-            let configs: Vec<RelayConfig> = relay_urls.iter().map(|url| {
-                RelayConfig { url: url.parse().expect("invalid relay URL"), quic: None }
-            }).collect();
+            let configs: Vec<RelayConfig> = relay_urls
+                .iter()
+                .map(|url| RelayConfig {
+                    url: url.parse().expect("invalid relay URL"),
+                    quic: None,
+                })
+                .collect();
             let relay_map = RelayMap::from_iter(configs);
             tracing::info!("Using custom relay URLs: {:?}", relay_urls);
             builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map));
@@ -407,10 +453,7 @@ impl Node {
         let endpoint = builder.bind().await?;
         // Wait briefly for relay connection so the invite token includes the relay URL.
         // On sinkholed networks this times out and we proceed without relay (direct UDP only).
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            endpoint.online(),
-        ).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online()).await {
             Ok(()) => tracing::info!("Relay connected"),
             Err(_) => tracing::warn!("Relay connection timed out (5s) — proceeding without relay"),
         }
@@ -423,6 +466,7 @@ impl Node {
         let public_addr = stun_public_addr(stun_port).await;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
+        let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
 
@@ -430,10 +474,18 @@ impl Node {
         if let Some(max_gb) = max_vram_gb {
             let max_bytes = (max_gb * 1e9) as u64;
             if max_bytes < vram {
-                tracing::info!("Detected VRAM: {:.1} GB, capped to {:.1} GB (--max-vram)", vram as f64 / 1e9, max_gb);
+                tracing::info!(
+                    "Detected VRAM: {:.1} GB, capped to {:.1} GB (--max-vram)",
+                    vram as f64 / 1e9,
+                    max_gb
+                );
                 vram = max_bytes;
             } else {
-                tracing::info!("Detected VRAM: {:.1} GB (--max-vram {:.1} has no effect)", vram as f64 / 1e9, max_gb);
+                tracing::info!(
+                    "Detected VRAM: {:.1} GB (--max-vram {:.1} has no effect)",
+                    vram as f64 / 1e9,
+                    max_gb
+                );
             }
         } else {
             tracing::info!("Detected VRAM: {:.1} GB", vram as f64 / 1e9);
@@ -457,9 +509,16 @@ impl Node {
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
             request_counts: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            last_request_snapshot: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            last_request_snapshot: Arc::new(
+                std::sync::Mutex::new(std::collections::HashMap::new()),
+            ),
+            inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            inflight_change_tx,
             mesh_id: Arc::new(Mutex::new(None)),
-            accepting: Arc::new((tokio::sync::Notify::new(), std::sync::atomic::AtomicBool::new(false))),
+            accepting: Arc::new((
+                tokio::sync::Notify::new(),
+                std::sync::atomic::AtomicBool::new(false),
+            )),
             vram_bytes: vram,
             peer_change_tx,
             peer_change_rx,
@@ -470,9 +529,17 @@ impl Node {
         // Accept loop starts but waits for start_accepting() before processing connections.
         // This lets idle mode create a node (for identity/token) without joining any mesh.
         let node2 = node.clone();
-        tokio::spawn(async move { node2.accept_loop().await; });
+        tokio::spawn(async move {
+            node2.accept_loop().await;
+        });
 
-        Ok((node, TunnelChannels { rpc: tunnel_rx, http: tunnel_http_rx }))
+        Ok((
+            node,
+            TunnelChannels {
+                rpc: tunnel_rx,
+                http: tunnel_http_rx,
+            },
+        ))
     }
 
     pub fn invite_token(&self) -> String {
@@ -481,12 +548,10 @@ impl Node {
         if let Some(pub_addr) = self.public_addr {
             use iroh::TransportAddr;
             let has_public = addr.addrs.iter().any(|a| match a {
-                TransportAddr::Ip(sock) => {
-                    match sock.ip() {
-                        std::net::IpAddr::V4(v4) => !v4.is_private() && !v4.is_loopback(),
-                        _ => false,
-                    }
-                }
+                TransportAddr::Ip(sock) => match sock.ip() {
+                    std::net::IpAddr::V4(v4) => !v4.is_private() && !v4.is_loopback(),
+                    _ => false,
+                },
                 _ => false,
             });
             if !has_public {
@@ -500,7 +565,9 @@ impl Node {
     /// Enable accepting inbound connections. Call before join() or when ready to participate.
     /// Until this is called, the accept loop blocks waiting.
     pub fn start_accepting(&self) {
-        self.accepting.1.store(true, std::sync::atomic::Ordering::Release);
+        self.accepting
+            .1
+            .store(true, std::sync::atomic::Ordering::Release);
         self.accepting.0.notify_waiters();
     }
 
@@ -519,19 +586,25 @@ impl Node {
         let json = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(invite_token)?;
         let addr: EndpointAddr = serde_json::from_slice(&json)?;
         let peer_id = addr.id;
-        if peer_id == self.endpoint.id() { return Ok(()); }
+        if peer_id == self.endpoint.id() {
+            return Ok(());
+        }
 
         // Already have a connection? Done.
         {
             let state = self.state.lock().await;
-            if state.connections.contains_key(&peer_id) { return Ok(()); }
+            if state.connections.contains_key(&peer_id) {
+                return Ok(());
+            }
         }
 
         tracing::info!("Passive connect to {}...", peer_id.fmt_short());
         let conn = match tokio::time::timeout(
             std::time::Duration::from_secs(15),
             self.endpoint.connect(addr.clone(), ALPN),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(c)) => c,
             Ok(Err(e)) => anyhow::bail!("Failed to connect: {e}"),
             Err(_) => anyhow::bail!("Timeout connecting (15s)"),
@@ -566,7 +639,9 @@ impl Node {
     /// Add a route entry as a lightweight peer (from routing table, not gossip).
     async fn add_route_entry(&self, entry: &RouteEntry) {
         let mut state = self.state.lock().await;
-        if entry.endpoint_id == self.endpoint.id() { return; }
+        if entry.endpoint_id == self.endpoint.id() {
+            return;
+        }
         // Only add/update if we don't already have full peer info from gossip
         if let Some(existing) = state.peers.get_mut(&entry.endpoint_id) {
             // Update serving info from route table
@@ -574,25 +649,35 @@ impl Node {
             return;
         }
         // Add a minimal peer entry for routing purposes
-        state.peers.insert(entry.endpoint_id, PeerInfo {
-            id: entry.endpoint_id,
-            addr: EndpointAddr { id: entry.endpoint_id, addrs: Default::default() },
-            tunnel_port: None,
-            role: NodeRole::Host { http_port: 0 },
-            models: vec![entry.model.clone()],
-            vram_bytes: (entry.vram_gb * 1e9) as u64,
-            rtt_ms: None,
-            model_source: None,
-            serving: Some(entry.model.clone()),
-            available_models: vec![],
-            requested_models: vec![],
-            request_rates: std::collections::HashMap::new(),
-        });
+        state.peers.insert(
+            entry.endpoint_id,
+            PeerInfo {
+                id: entry.endpoint_id,
+                addr: EndpointAddr {
+                    id: entry.endpoint_id,
+                    addrs: Default::default(),
+                },
+                tunnel_port: None,
+                role: NodeRole::Host { http_port: 0 },
+                models: vec![entry.model.clone()],
+                vram_bytes: (entry.vram_gb * 1e9) as u64,
+                rtt_ms: None,
+                model_source: None,
+                serving: Some(entry.model.clone()),
+                available_models: vec![],
+                requested_models: vec![],
+                request_rates: std::collections::HashMap::new(),
+            },
+        );
     }
 
     #[allow(dead_code)]
-    pub fn endpoint(&self) -> &Endpoint { &self.endpoint }
-    pub fn id(&self) -> EndpointId { self.endpoint.id() }
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+    pub fn id(&self) -> EndpointId {
+        self.endpoint.id()
+    }
 
     pub async fn role(&self) -> NodeRole {
         self.role.lock().await.clone()
@@ -619,7 +704,11 @@ impl Node {
     pub async fn regossip(&self) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
-            state.connections.iter().map(|(id, c)| (*id, c.clone())).collect()
+            state
+                .connections
+                .iter()
+                .map(|(id, c)| (*id, c.clone()))
+                .collect()
         };
         for (peer_id, conn) in conns {
             let node = self.clone();
@@ -692,6 +781,31 @@ impl Node {
         rates
     }
 
+    /// Number of requests currently being served by this node.
+    pub fn inflight_requests(&self) -> u64 {
+        self.inflight_requests
+            .load(std::sync::atomic::Ordering::Relaxed) as u64
+    }
+
+    /// Marks the start of a served request and returns a guard that decrements
+    /// the counter when the request finishes.
+    pub fn begin_inflight_request(&self) -> InflightRequestGuard {
+        let current = self
+            .inflight_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        let _ = self.inflight_change_tx.send(current as u64);
+        InflightRequestGuard {
+            inflight_requests: self.inflight_requests.clone(),
+            inflight_change_tx: self.inflight_change_tx.clone(),
+        }
+    }
+
+    /// Subscribe to in-flight request count updates.
+    pub fn inflight_change_rx(&self) -> watch::Receiver<u64> {
+        self.inflight_change_tx.subscribe()
+    }
+
     pub async fn set_requested_models(&self, models: Vec<String>) {
         // Also accumulate into mesh-level wanted set
         let mut state = self.state.lock().await;
@@ -722,17 +836,22 @@ impl Node {
     pub fn start_heartbeat(&self) {
         let node = self.clone();
         tokio::spawn(async move {
-            let mut fail_counts: std::collections::HashMap<EndpointId, u32> = std::collections::HashMap::new();
+            let mut fail_counts: std::collections::HashMap<EndpointId, u32> =
+                std::collections::HashMap::new();
 
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
 
                 let peers_and_conns: Vec<(EndpointId, Option<Connection>)> = {
                     let state = node.state.lock().await;
-                    state.peers.keys().map(|id| {
-                        let conn = state.connections.get(id).cloned();
-                        (*id, conn)
-                    }).collect()
+                    state
+                        .peers
+                        .keys()
+                        .map(|id| {
+                            let conn = state.connections.get(id).cloned();
+                            (*id, conn)
+                        })
+                        .collect()
                 };
 
                 for (peer_id, conn) in peers_and_conns {
@@ -741,14 +860,21 @@ impl Node {
                         tokio::time::timeout(
                             std::time::Duration::from_secs(10),
                             node.initiate_gossip_inner(conn, peer_id, false),
-                        ).await.map(|r| r.is_ok()).unwrap_or(false)
+                        )
+                        .await
+                        .map(|r| r.is_ok())
+                        .unwrap_or(false)
                     } else {
                         false
                     };
 
                     if alive {
                         if fail_counts.contains_key(&peer_id) {
-                            eprintln!("💚 Heartbeat: {} recovered (was {}/2)", peer_id.fmt_short(), fail_counts.get(&peer_id).unwrap_or(&0));
+                            eprintln!(
+                                "💚 Heartbeat: {} recovered (was {}/2)",
+                                peer_id.fmt_short(),
+                                fail_counts.get(&peer_id).unwrap_or(&0)
+                            );
                             // Clear dead_peers if peer came back
                             node.state.lock().await.dead_peers.remove(&peer_id);
                         }
@@ -765,18 +891,24 @@ impl Node {
                             fail_counts.remove(&peer_id);
                             node.handle_peer_death(peer_id).await;
                         } else {
-                            eprintln!("💛 Heartbeat: {} unreachable ({}/2), will retry", peer_id.fmt_short(), count);
+                            eprintln!(
+                                "💛 Heartbeat: {} unreachable ({}/2), will retry",
+                                peer_id.fmt_short(),
+                                count
+                            );
                         }
                     }
                 }
-
             }
         });
     }
 
     /// Handle a peer death: remove from state, broadcast to all other peers.
     pub async fn handle_peer_death(&self, dead_id: EndpointId) {
-        eprintln!("⚠️  Peer {} died — removing and broadcasting", dead_id.fmt_short());
+        eprintln!(
+            "⚠️  Peer {} died — removing and broadcasting",
+            dead_id.fmt_short()
+        );
         {
             let mut state = self.state.lock().await;
             state.connections.remove(&dead_id);
@@ -790,7 +922,9 @@ impl Node {
     async fn broadcast_peer_down(&self, dead_id: EndpointId) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
-            state.connections.iter()
+            state
+                .connections
+                .iter()
                 .filter(|(id, _)| **id != dead_id)
                 .map(|(id, c)| (*id, c.clone()))
                 .collect()
@@ -805,9 +939,13 @@ impl Node {
                     send.write_all(&bytes).await?;
                     send.finish()?;
                     Ok::<_, anyhow::Error>(())
-                }.await;
+                }
+                .await;
                 if let Err(e) = res {
-                    tracing::debug!("Failed to broadcast peer_down to {}: {e}", peer_id.fmt_short());
+                    tracing::debug!(
+                        "Failed to broadcast peer_down to {}: {e}",
+                        peer_id.fmt_short()
+                    );
                 }
             });
         }
@@ -818,7 +956,9 @@ impl Node {
         let my_id_bytes = self.endpoint.id().as_bytes().to_vec();
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
-            state.connections.iter()
+            state
+                .connections
+                .iter()
                 .map(|(id, c)| (*id, c.clone()))
                 .collect()
         };
@@ -831,7 +971,8 @@ impl Node {
                     send.write_all(&bytes).await?;
                     send.finish()?;
                     Ok::<_, anyhow::Error>(())
-                }.await;
+                }
+                .await;
                 if let Err(e) = res {
                     tracing::debug!("Failed to send leaving to {}: {e}", peer_id.fmt_short());
                 }
@@ -911,7 +1052,9 @@ impl Node {
         let state = self.state.lock().await;
         let my_serving = self.serving.lock().await;
         let i_serve = my_serving.as_deref() == Some(model);
-        let peers: Vec<PeerInfo> = state.peers.values()
+        let peers: Vec<PeerInfo> = state
+            .peers
+            .values()
             .filter(|p| p.serving.as_deref() == Some(model))
             .cloned()
             .collect();
@@ -922,15 +1065,23 @@ impl Node {
     /// When multiple hosts serve the same model, picks one based on our node ID hash.
     pub async fn host_for_model(&self, model: &str) -> Option<PeerInfo> {
         let state = self.state.lock().await;
-        let mut hosts: Vec<&PeerInfo> = state.peers.values()
-            .filter(|p| matches!(p.role, NodeRole::Host { .. }) && p.serving.as_deref() == Some(model))
+        let mut hosts: Vec<&PeerInfo> = state
+            .peers
+            .values()
+            .filter(|p| {
+                matches!(p.role, NodeRole::Host { .. }) && p.serving.as_deref() == Some(model)
+            })
             .collect();
-        if hosts.is_empty() { return None; }
+        if hosts.is_empty() {
+            return None;
+        }
         // Sort for deterministic ordering, then hash-select
         hosts.sort_by_key(|p| p.id);
         let my_id = self.endpoint.id();
         let my_id_bytes = my_id.as_bytes();
-        let hash = my_id_bytes.iter().fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
+        let hash = my_id_bytes
+            .iter()
+            .fold(0u64, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u64));
         let idx = (hash as usize) % hosts.len();
         Some(hosts[idx].clone())
     }
@@ -938,7 +1089,9 @@ impl Node {
     /// Find ANY host in the mesh (fallback when no model match).
     pub async fn any_host(&self) -> Option<PeerInfo> {
         let state = self.state.lock().await;
-        state.peers.values()
+        state
+            .peers
+            .values()
             .find(|p| matches!(p.role, NodeRole::Host { .. }))
             .cloned()
     }
@@ -984,7 +1137,10 @@ impl Node {
     pub async fn request_routing_table(&self, peer_id: EndpointId) -> Result<RoutingTable> {
         let conn = {
             let state = self.state.lock().await;
-            state.connections.get(&peer_id).cloned()
+            state
+                .connections
+                .get(&peer_id)
+                .cloned()
                 .ok_or_else(|| anyhow::anyhow!("No connection to peer"))?
         };
         let (mut send, mut recv) = conn.open_bi().await?;
@@ -1000,7 +1156,13 @@ impl Node {
     /// Updates local peer info with current host/model mappings.
     pub async fn refresh_routing_table(&self) {
         let connected: Vec<EndpointId> = {
-            self.state.lock().await.connections.keys().cloned().collect()
+            self.state
+                .lock()
+                .await
+                .connections
+                .keys()
+                .cloned()
+                .collect()
         };
         for peer_id in connected {
             match self.request_routing_table(peer_id).await {
@@ -1012,11 +1174,16 @@ impl Node {
                     let active_ids: std::collections::HashSet<EndpointId> =
                         table.hosts.iter().map(|e| e.endpoint_id).collect();
                     let mut state = self.state.lock().await;
-                    state.peers.retain(|id, _| active_ids.contains(id) || *id == peer_id);
+                    state
+                        .peers
+                        .retain(|id, _| active_ids.contains(id) || *id == peer_id);
                     return; // Got table from one peer, that's enough
                 }
                 Err(e) => {
-                    tracing::debug!("Route table refresh from {} failed: {e}", peer_id.fmt_short());
+                    tracing::debug!(
+                        "Route table refresh from {} failed: {e}",
+                        peer_id.fmt_short()
+                    );
                 }
             }
         }
@@ -1033,7 +1200,9 @@ impl Node {
         let addr = self.endpoint.addr();
         for transport_addr in &addr.addrs {
             if let TransportAddr::Relay(url) = transport_addr {
-                let host = url.as_str().strip_prefix("https://")
+                let host = url
+                    .as_str()
+                    .strip_prefix("https://")
                     .or_else(|| url.as_str().strip_prefix("http://"))?;
                 let prefix = host.split('.').next()?;
                 let code = prefix.split('-').next()?;
@@ -1056,8 +1225,14 @@ impl Node {
     /// Check if any peer connection is direct (not relayed).
     /// A node with direct connections is likely reachable from the internet.
     pub async fn has_direct_connection(&self) -> bool {
-        let conns: Vec<_> = self.state.lock().await
-            .connections.values().cloned().collect();
+        let conns: Vec<_> = self
+            .state
+            .lock()
+            .await
+            .connections
+            .values()
+            .cloned()
+            .collect();
         for conn in conns {
             let mut paths = conn.paths();
             let path_list = iroh::Watcher::get(&mut paths);
@@ -1088,7 +1263,10 @@ impl Node {
     /// Open an HTTP tunnel bi-stream to a peer (tagged STREAM_TUNNEL_HTTP).
     /// If no connection exists, tries to connect on-demand (for passive nodes
     /// that learned about hosts from routing table but aren't directly connected).
-    pub async fn open_http_tunnel(&self, peer_id: EndpointId) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+    pub async fn open_http_tunnel(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
         let conn = {
             let state = self.state.lock().await;
             match state.connections.get(&peer_id).cloned() {
@@ -1101,10 +1279,19 @@ impl Node {
                         let c = tokio::time::timeout(
                             std::time::Duration::from_secs(10),
                             self.endpoint.connect(addr, ALPN),
-                        ).await
-                            .map_err(|_| anyhow::anyhow!("Timeout connecting to {}", peer_id.fmt_short()))?
-                            .map_err(|e| anyhow::anyhow!("Failed to connect to {}: {e}", peer_id.fmt_short()))?;
-                        self.state.lock().await.connections.insert(peer_id, c.clone());
+                        )
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!("Timeout connecting to {}", peer_id.fmt_short())
+                        })?
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to connect to {}: {e}", peer_id.fmt_short())
+                        })?;
+                        self.state
+                            .lock()
+                            .await
+                            .connections
+                            .insert(peer_id, c.clone());
                         c
                     } else {
                         anyhow::bail!("No connection or address for {}", peer_id.fmt_short());
@@ -1116,11 +1303,15 @@ impl Node {
             let (mut send, recv) = conn.open_bi().await?;
             send.write_all(&[STREAM_TUNNEL_HTTP]).await?;
             Ok::<_, anyhow::Error>((send, recv))
-        }.await;
+        }
+        .await;
 
         if result.is_err() {
             // Connection failed — peer is likely dead, broadcast it
-            tracing::info!("Tunnel to {} failed, broadcasting death", peer_id.fmt_short());
+            tracing::info!(
+                "Tunnel to {} failed, broadcasting death",
+                peer_id.fmt_short()
+            );
             self.handle_peer_death(peer_id).await;
         }
 
@@ -1135,7 +1326,10 @@ impl Node {
 
     /// Push our tunnel port map to all connected peers.
     /// Called after tunnel ports are established.
-    pub async fn broadcast_tunnel_map(&self, my_tunnel_map: HashMap<EndpointId, u16>) -> Result<()> {
+    pub async fn broadcast_tunnel_map(
+        &self,
+        my_tunnel_map: HashMap<EndpointId, u16>,
+    ) -> Result<()> {
         // Serialize: { endpoint_id_hex_string → port }
         let serializable: HashMap<String, u16> = my_tunnel_map
             .iter()
@@ -1145,7 +1339,11 @@ impl Node {
 
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
-            state.connections.iter().map(|(id, c)| (*id, c.clone())).collect()
+            state
+                .connections
+                .iter()
+                .map(|(id, c)| (*id, c.clone()))
+                .collect()
         };
 
         for (peer_id, conn) in conns {
@@ -1204,9 +1402,17 @@ impl Node {
     }
 
     /// Open a tunnel bi-stream to a peer using the stored connection.
-    pub async fn open_tunnel_stream(&self, peer_id: EndpointId) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+    pub async fn open_tunnel_stream(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
         let conn = {
-            self.state.lock().await.connections.get(&peer_id).cloned()
+            self.state
+                .lock()
+                .await
+                .connections
+                .get(&peer_id)
+                .cloned()
                 .ok_or_else(|| anyhow::anyhow!("No connection to {}", peer_id.fmt_short()))?
         };
         let (mut send, recv) = conn.open_bi().await?;
@@ -1275,7 +1481,11 @@ impl Node {
     }
 
     /// Dispatch bi-streams on a connection by type byte
-    fn dispatch_streams(&self, conn: Connection, remote: EndpointId) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+    fn dispatch_streams(
+        &self,
+        conn: Connection,
+        remote: EndpointId,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
         Box::pin(self._dispatch_streams(conn, remote))
     }
 
@@ -1300,7 +1510,9 @@ impl Node {
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(10),
                             self.endpoint.connect(addr, ALPN),
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok(Ok(new_conn)) => {
                                 tracing::info!("Reconnected to {}", remote.fmt_short());
                                 {
@@ -1322,7 +1534,10 @@ impl Node {
                                 });
                             }
                             _ => {
-                                tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
+                                tracing::info!(
+                                    "Reconnect to {} failed — removing peer",
+                                    remote.fmt_short()
+                                );
                                 self.remove_peer(remote).await;
                             }
                         }
@@ -1358,7 +1573,10 @@ impl Node {
                     let node = self.clone();
                     tokio::spawn(async move {
                         if let Err(e) = node.handle_tunnel_map_stream(remote, recv).await {
-                            tracing::warn!("Tunnel map stream error from {}: {e}", remote.fmt_short());
+                            tracing::warn!(
+                                "Tunnel map stream error from {}: {e}",
+                                remote.fmt_short()
+                            );
                         }
                     });
                 }
@@ -1395,14 +1613,19 @@ impl Node {
                                             tokio::time::timeout(
                                                 std::time::Duration::from_secs(3),
                                                 conn.open_bi(),
-                                            ).await.is_err()
+                                            )
+                                            .await
+                                            .is_err()
                                         } else {
                                             true // no connection = already gone
                                         }
                                     };
                                     if should_remove {
-                                        eprintln!("⚠️  Peer {} reported dead by {}, confirmed, removing",
-                                            dead_id.fmt_short(), remote.fmt_short());
+                                        eprintln!(
+                                            "⚠️  Peer {} reported dead by {}, confirmed, removing",
+                                            dead_id.fmt_short(),
+                                            remote.fmt_short()
+                                        );
                                         let mut state = node.state.lock().await;
                                         state.connections.remove(&dead_id);
                                         drop(state);
@@ -1423,7 +1646,10 @@ impl Node {
                         if recv.read_exact(&mut id_bytes).await.is_ok() {
                             if let Ok(pk) = iroh::PublicKey::from_bytes(&id_bytes) {
                                 let leaving_id = EndpointId::from(pk);
-                                eprintln!("👋 Peer {} announced clean shutdown", leaving_id.fmt_short());
+                                eprintln!(
+                                    "👋 Peer {} announced clean shutdown",
+                                    leaving_id.fmt_short()
+                                );
                                 let mut state = node.state.lock().await;
                                 state.connections.remove(&leaving_id);
                                 drop(state);
@@ -1443,11 +1669,15 @@ impl Node {
 
     async fn connect_to_peer(&self, addr: EndpointAddr) -> Result<()> {
         let peer_id = addr.id;
-        if peer_id == self.endpoint.id() { return Ok(()); }
+        if peer_id == self.endpoint.id() {
+            return Ok(());
+        }
 
         {
             let state = self.state.lock().await;
-            if state.peers.contains_key(&peer_id) { return Ok(()); }
+            if state.peers.contains_key(&peer_id) {
+                return Ok(());
+            }
             if state.dead_peers.contains(&peer_id) {
                 tracing::debug!("Skipping connection to dead peer {}", peer_id.fmt_short());
                 return Ok(());
@@ -1458,7 +1688,9 @@ impl Node {
         let conn = match tokio::time::timeout(
             std::time::Duration::from_secs(15),
             self.endpoint.connect(addr.clone(), ALPN),
-        ).await {
+        )
+        .await
+        {
             Ok(Ok(c)) => c,
             Ok(Err(e)) => {
                 anyhow::bail!("Failed to connect to {}: {e}", peer_id.fmt_short());
@@ -1476,7 +1708,9 @@ impl Node {
         let node_for_dispatch = self.clone();
         let conn_for_dispatch = conn.clone();
         tokio::spawn(async move {
-            node_for_dispatch.dispatch_streams(conn_for_dispatch, peer_id).await;
+            node_for_dispatch
+                .dispatch_streams(conn_for_dispatch, peer_id)
+                .await;
         });
 
         // Gossip exchange to learn peer's role/VRAM and announce ourselves
@@ -1489,7 +1723,12 @@ impl Node {
         self.initiate_gossip_inner(conn, remote, true).await
     }
 
-    async fn initiate_gossip_inner(&self, conn: Connection, remote: EndpointId, discover_peers: bool) -> Result<()> {
+    async fn initiate_gossip_inner(
+        &self,
+        conn: Connection,
+        remote: EndpointId,
+        discover_peers: bool,
+    ) -> Result<()> {
         let t0 = std::time::Instant::now();
         let (mut send, mut recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_GOSSIP]).await?;
@@ -1585,7 +1824,12 @@ impl Node {
                         let rtt_ms = rtt.as_millis() as u32;
                         let path_type = if path_info.is_ip() { "direct" } else { "relay" };
                         if rtt_ms > 0 {
-                            eprintln!("📡 Peer {} RTT: {}ms ({})", remote.fmt_short(), rtt_ms, path_type);
+                            eprintln!(
+                                "📡 Peer {} RTT: {}ms ({})",
+                                remote.fmt_short(),
+                                rtt_ms,
+                                path_type
+                            );
                             let mut state = self.state.lock().await;
                             if let Some(peer) = state.peers.get_mut(&remote) {
                                 peer.rtt_ms = Some(rtt_ms);
@@ -1602,7 +1846,9 @@ impl Node {
         // (they'll be rediscovered via the rejoin loop if they come back).
         for ann in their_announcements {
             let peer_id = ann.addr.id;
-            if peer_id == self.endpoint.id() { continue; }
+            if peer_id == self.endpoint.id() {
+                continue;
+            }
             // Only discover if we don't already have this peer
             let already_known = self.state.lock().await.peers.contains_key(&peer_id);
             if !already_known {
@@ -1657,7 +1903,11 @@ impl Node {
     async fn remove_peer(&self, id: EndpointId) {
         let mut state = self.state.lock().await;
         if state.peers.remove(&id).is_some() {
-            tracing::info!("Peer removed: {} (total: {})", id.fmt_short(), state.peers.len());
+            tracing::info!(
+                "Peer removed: {} (total: {})",
+                id.fmt_short(),
+                state.peers.len()
+            );
             let count = state.peers.len();
             drop(state);
             let _ = self.peer_change_tx.send(count);
@@ -1670,7 +1920,9 @@ impl Node {
             self.set_mesh_id(their_id.clone()).await;
         }
         let mut state = self.state.lock().await;
-        if id == self.endpoint.id() { return; }
+        if id == self.endpoint.id() {
+            return;
+        }
         // Accumulate peer's requested_models into mesh-level wanted set
         for m in &ann.requested_models {
             state.mesh_wanted.insert(m.clone());
@@ -1679,7 +1931,12 @@ impl Node {
             let role_changed = existing.role != ann.role;
             let serving_changed = existing.serving != ann.serving;
             if role_changed {
-                tracing::info!("Peer {} role updated: {:?} → {:?}", id.fmt_short(), existing.role, ann.role);
+                tracing::info!(
+                    "Peer {} role updated: {:?} → {:?}",
+                    id.fmt_short(),
+                    existing.role,
+                    ann.role
+                );
                 existing.role = ann.role.clone();
             }
             existing.models = ann.models.clone();
@@ -1698,20 +1955,32 @@ impl Node {
             }
             return;
         }
-        tracing::info!("Peer added: {} role={:?} vram={:.1}GB serving={:?} available={:?} (total: {})",
-            id.fmt_short(), ann.role, ann.vram_bytes as f64 / 1e9, ann.serving, ann.available_models, state.peers.len() + 1);
-        state.peers.insert(id, PeerInfo {
-            id, addr, tunnel_port: None,
-            role: ann.role.clone(),
-            models: ann.models.clone(),
-            vram_bytes: ann.vram_bytes,
-            rtt_ms: None,
-            model_source: ann.model_source.clone(),
-            serving: ann.serving.clone(),
-            available_models: ann.available_models.clone(),
-            requested_models: ann.requested_models.clone(),
-            request_rates: ann.request_rates.clone(),
-        });
+        tracing::info!(
+            "Peer added: {} role={:?} vram={:.1}GB serving={:?} available={:?} (total: {})",
+            id.fmt_short(),
+            ann.role,
+            ann.vram_bytes as f64 / 1e9,
+            ann.serving,
+            ann.available_models,
+            state.peers.len() + 1
+        );
+        state.peers.insert(
+            id,
+            PeerInfo {
+                id,
+                addr,
+                tunnel_port: None,
+                role: ann.role.clone(),
+                models: ann.models.clone(),
+                vram_bytes: ann.vram_bytes,
+                rtt_ms: None,
+                model_source: ann.model_source.clone(),
+                serving: ann.serving.clone(),
+                available_models: ann.available_models.clone(),
+                requested_models: ann.requested_models.clone(),
+                request_rates: ann.request_rates.clone(),
+            },
+        );
         let count = state.peers.len();
         drop(state);
         let _ = self.peer_change_tx.send(count);
@@ -1726,7 +1995,9 @@ impl Node {
         let my_available = self.available_models.lock().await.clone();
         let my_requested = self.requested_models.lock().await.clone();
         let my_mesh_id = self.mesh_id.lock().await.clone();
-        let mut announcements: Vec<PeerAnnouncement> = state.peers.values()
+        let mut announcements: Vec<PeerAnnouncement> = state
+            .peers
+            .values()
             .map(|p| PeerAnnouncement {
                 addr: p.addr.clone(),
                 role: p.role.clone(),
@@ -1780,7 +2051,11 @@ pub fn generate_mesh_id(name: Option<&str>, nostr_pubkey: Option<&str>) -> Strin
             }
         }
         // Generate new random ID and persist
-        let id = format!("{:016x}{:016x}", rand::random::<u64>(), rand::random::<u64>());
+        let id = format!(
+            "{:016x}{:016x}",
+            rand::random::<u64>(),
+            rand::random::<u64>()
+        );
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -1814,14 +2089,17 @@ pub fn load_last_mesh_id() -> Option<String> {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".mesh-llm")
         .join("last-mesh");
-    std::fs::read_to_string(&path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Load secret key from ~/.mesh-llm/key, or create a new one and save it.
 /// Migrates from ~/.mesh-inference/key if it exists.
 async fn load_or_create_key() -> Result<SecretKey> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let dir = home.join(".mesh-llm");
     let key_path = dir.join("key");
 
@@ -1850,5 +2128,3 @@ async fn load_or_create_key() -> Result<SecretKey> {
     tracing::info!("Generated new key, saved to {}", key_path.display());
     Ok(key)
 }
-
-

@@ -80,4 +80,24 @@
     overflow-x: hidden;
     overflow-y: auto;
   }
+
+  .react-flow__controls {
+    border-color: hsl(var(--border));
+    box-shadow: 0 1px 2px hsl(var(--foreground) / 0.08);
+  }
+
+  .react-flow__controls button {
+    background-color: hsl(var(--card));
+    border-bottom: 1px solid hsl(var(--border));
+    color: hsl(var(--foreground));
+  }
+
+  .react-flow__controls button:hover {
+    background-color: hsl(var(--accent));
+    color: hsl(var(--accent-foreground));
+  }
+
+  .react-flow__controls button:last-child {
+    border-bottom: 0;
+  }
 }
