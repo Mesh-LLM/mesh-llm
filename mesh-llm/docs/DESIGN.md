@@ -13,11 +13,10 @@ src/
 ├── mesh.rs        QUIC endpoint, gossip, peer management, mesh identity, request rates
 ├── election.rs    Per-model host election, latency-aware tensor split, llama-server lifecycle
 ├── proxy.rs       HTTP proxy plumbing: request parsing, model routing, response helpers
-├── api.rs         Mesh management API (:3131): status, events, discover, join, console HTML
+├── api.rs         Mesh management API (:3131): status, events, discover, join
 ├── tunnel.rs      TCP ↔ QUIC relay (RPC + HTTP), B2B rewrite map
 ├── rewrite.rs     REGISTER_PEER interception and endpoint rewriting
 ├── launch.rs      rpc-server and llama-server process management
-├── console.html   Embedded dashboard with topology view and chat
 ├── download.rs    Model catalog and HuggingFace download (reqwest, resume support)
 ├── nostr.rs       Nostr publish/discover: mesh listings, smart auto-join, publish watchdog
 ```
@@ -121,7 +120,7 @@ between workers (1 hop) instead of through the host (2 hops):
 ## Management API (port 3131)
 
 Separate from the inference API (port 9337). Serves mesh management endpoints
-and an optional HTML console.
+and the embedded web dashboard.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -130,9 +129,9 @@ and an optional HTML console.
 | `/api/discover` | GET | Browse Nostr-published meshes |
 | `/api/join` | POST | Join a mesh by invite token `{"token":"..."}` |
 | `/api/chat` | POST | Proxy to inference API (`/v1/chat/completions`) |
-| `/` | GET | Console HTML dashboard |
+| `/` | GET | Embedded web dashboard |
 
-The console HTML is a thin client — everything it shows comes from `/api/status`
+The dashboard is a thin client — everything it shows comes from `/api/status`
 and `/api/events`. Mesh management works without the HTML via curl/scripts.
 
 Always enabled on port 3131 (configurable with `--console <port>`).

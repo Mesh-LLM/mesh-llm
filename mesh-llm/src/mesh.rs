@@ -395,6 +395,8 @@ pub struct Node {
     vram_bytes: u64,
     peer_change_tx: watch::Sender<usize>,
     pub peer_change_rx: watch::Receiver<usize>,
+    inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
+    inflight_change_tx: watch::Sender<u64>,
     tunnel_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
     tunnel_http_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
 }
@@ -415,7 +417,48 @@ pub struct TunnelChannels {
     pub http: tokio::sync::mpsc::Receiver<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
 }
 
+pub struct InflightRequestGuard {
+    inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
+    inflight_change_tx: watch::Sender<u64>,
+}
+
+impl Drop for InflightRequestGuard {
+    fn drop(&mut self) {
+        let _ = self.inflight_requests.fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |current| current.checked_sub(1),
+        );
+        let _ = self.inflight_change_tx.send(
+            self.inflight_requests
+                .load(std::sync::atomic::Ordering::Relaxed) as u64,
+        );
+    }
+}
+
 impl Node {
+    pub fn begin_inflight_request(&self) -> InflightRequestGuard {
+        self.inflight_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.inflight_change_tx.send(
+            self.inflight_requests
+                .load(std::sync::atomic::Ordering::Relaxed) as u64,
+        );
+        InflightRequestGuard {
+            inflight_requests: self.inflight_requests.clone(),
+            inflight_change_tx: self.inflight_change_tx.clone(),
+        }
+    }
+
+    pub fn inflight_requests(&self) -> u64 {
+        self.inflight_requests
+            .load(std::sync::atomic::Ordering::Relaxed) as u64
+    }
+
+    pub fn inflight_change_rx(&self) -> watch::Receiver<u64> {
+        self.inflight_change_tx.subscribe()
+    }
+
     pub async fn start(role: NodeRole, relay_urls: &[String], bind_port: Option<u16>, max_vram_gb: Option<f64>) -> Result<(Self, TunnelChannels)> {
         // Clients use an ephemeral key so they get a unique identity even
         // when running on the same machine as a GPU node.
@@ -483,6 +526,7 @@ impl Node {
         let public_addr = stun_public_addr(stun_port).await;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
+        let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
 
@@ -521,6 +565,8 @@ impl Node {
             vram_bytes: vram,
             peer_change_tx,
             peer_change_rx,
+            inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            inflight_change_tx,
             tunnel_tx,
             tunnel_http_tx,
         };
@@ -2110,5 +2156,3 @@ async fn load_or_create_key() -> Result<SecretKey> {
     tracing::info!("Generated new key, saved to {}", key_path.display());
     Ok(key)
 }
-
-

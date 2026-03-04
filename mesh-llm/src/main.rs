@@ -1622,32 +1622,36 @@ async fn run_drop(model_name: &str, port: u16) -> Result<()> {
 }
 
 async fn check_for_update() {
-    let url = "https://api.github.com/repos/michaelneale/decentralized-inference/releases/latest";
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let resp = match client.get(url)
-        .header("User-Agent", "mesh-llm")
-        .send().await {
-        Ok(r) => r,
-        Err(_) => return,
-    };
-    let body: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-    if let Some(tag) = body["tag_name"].as_str() {
-        let latest = tag.trim_start_matches('v');
-        if version_newer(latest, VERSION) {
+    if let Some(latest) = latest_release_version().await {
+        if version_newer(&latest, VERSION) {
             eprintln!("💡 Update available: v{VERSION} → v{latest}  https://github.com/michaelneale/decentralized-inference/releases");
         }
     }
 }
 
-fn version_newer(a: &str, b: &str) -> bool {
+pub(crate) async fn latest_release_version() -> Option<String> {
+    let url = "https://api.github.com/repos/michaelneale/decentralized-inference/releases/latest";
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .ok()?;
+    let resp = client
+        .get(url)
+        .header("User-Agent", "mesh-llm")
+        .send()
+        .await
+        .ok()?;
+    let body: serde_json::Value = resp.json().await.ok()?;
+    let tag = body["tag_name"].as_str()?;
+    let latest = tag.trim_start_matches('v').trim();
+    if latest.is_empty() {
+        None
+    } else {
+        Some(latest.to_string())
+    }
+}
+
+pub(crate) fn version_newer(a: &str, b: &str) -> bool {
     let parse = |v: &str| -> Vec<u32> {
         v.split('.').filter_map(|s| s.parse().ok()).collect()
     };

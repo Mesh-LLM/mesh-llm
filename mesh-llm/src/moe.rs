@@ -6,7 +6,6 @@
 //!
 //! No cross-node traffic during inference — each node runs independently.
 
-use crate::download::MoeConfig;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -223,18 +222,6 @@ pub fn load_cached_ranking(path: &Path) -> Option<Vec<u32>> {
     if ranking.is_empty() { None } else { Some(ranking) }
 }
 
-/// Save a ranking to the cache directory.
-pub fn save_ranking(path: &Path, ranking: &[u32]) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let content: String = ranking.iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(path, content)
-}
-
 // ── Expert assignment ──
 
 /// Expert assignment for a single node: which expert IDs it should hold.
@@ -321,11 +308,6 @@ pub fn split_path(model_path: &Path, n_nodes: usize, node_index: usize) -> PathB
         .join(format!("node-{node_index}.gguf"))
 }
 
-/// Check if cached splits exist for this model + node count.
-pub fn splits_exist(model_path: &Path, n_nodes: usize) -> bool {
-    (0..n_nodes).all(|i| split_path(model_path, n_nodes, i).exists())
-}
-
 /// Run llama-moe-split to produce a split GGUF for one node.
 pub fn run_split(
     bin_dir: &Path,
@@ -349,49 +331,6 @@ pub fn run_split(
 
     anyhow::ensure!(status.success(), "llama-moe-split exited with {status}");
     Ok(())
-}
-
-/// Full pipeline: ensure split GGUFs exist for this model + node count.
-/// Returns paths to all split GGUFs.
-pub fn ensure_splits(
-    bin_dir: &Path,
-    model_path: &Path,
-    moe_config: &MoeConfig,
-    n_nodes: usize,
-) -> anyhow::Result<Vec<PathBuf>> {
-    // Check cache
-    if splits_exist(model_path, n_nodes) {
-        let paths: Vec<PathBuf> = (0..n_nodes)
-            .map(|i| split_path(model_path, n_nodes, i))
-            .collect();
-        tracing::info!("Using cached MoE splits for {n_nodes} nodes");
-        return Ok(paths);
-    }
-
-    tracing::info!(
-        "Splitting MoE model for {n_nodes} nodes ({} experts, top-{}, min {} per node)",
-        moe_config.n_expert, moe_config.n_expert_used, moe_config.min_experts_per_node
-    );
-
-    let assignments = compute_assignments(
-        moe_config.ranking,
-        n_nodes,
-        moe_config.min_experts_per_node,
-    );
-
-    let mut paths = Vec::with_capacity(n_nodes);
-    for (i, assignment) in assignments.iter().enumerate() {
-        let path = split_path(model_path, n_nodes, i);
-        tracing::info!(
-            "  Node {i}: {} experts ({} shared + {} unique) → {}",
-            assignment.experts.len(), assignment.n_shared, assignment.n_unique,
-            path.display()
-        );
-        run_split(bin_dir, model_path, assignment, &path)?;
-        paths.push(path);
-    }
-
-    Ok(paths)
 }
 
 #[cfg(test)]

@@ -153,6 +153,7 @@ pub async fn route_to_target(node: mesh::Node, tcp_stream: TcpStream, target: el
         election::InferenceTarget::Local(port) | election::InferenceTarget::MoeLocal(port) => {
             match TcpStream::connect(format!("127.0.0.1:{port}")).await {
                 Ok(upstream) => {
+                    let _inflight = node.begin_inflight_request();
                     let _ = upstream.set_nodelay(true);
                     if let Err(e) = tunnel::relay_tcp_streams(tcp_stream, upstream).await {
                         tracing::debug!("API proxy (local) ended: {e}");

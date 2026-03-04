@@ -1,14 +1,10 @@
 # mesh-llm — Agent Notes
 
-## Console Changes — MANDATORY REVIEW
+## UI Composition (React UI)
 
-**NEVER push changes to `console.html` without the user seeing the result first.**
-The console is a visual UI — code review is not sufficient. Changes must be:
-1. Built and running locally
-2. Shown to the user (leave it running, tell them to check localhost:3131)
-3. Explicitly approved before commit/push
-
-This applies to ANY change touching `console.html` or `api.rs` status payloads that affect what the console displays.
+For changes in `ui/`, use components and compose interfaces consistently with shadcn/ui patterns where possible.
+Prefer extending existing shadcn-style primitives in `ui/src/components/ui/` over ad-hoc custom markup/styling.
+Reference shadcn LLM instructions: https://ui.shadcn.com/llms.txt
 
 ## Project Structure
 
@@ -73,7 +69,7 @@ ssh mini "pkill -f mesh-llm; pkill -f rpc-server; pkill -f llama-server"
 
 ### Before starting nodes
 1. **Bump VERSION** — Change `VERSION` in `main.rs` to a new tentative version so you can verify the running binary is actually the new code.
-2. **Build and bundle** — `cargo build --release && just bundle`
+2. **Build and bundle** — `just build && just bundle`
 3. **Kill ALL processes on ALL nodes** — `pkill -9 -f mesh-llm; pkill -9 -f llama-server; pkill -9 -f rpc-server` on Local, Mini, AND Brad.
 4. **Verify clean** — Run `ps -eo pid,args | grep -E 'mesh-llm|llama-server|rpc-server' | grep -v grep` on EVERY node. Must return empty.
 5. **Deploy bundle** — scp + tar + codesign on Mini and Brad.

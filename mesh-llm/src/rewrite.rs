@@ -50,7 +50,6 @@ pub async fn relay_with_rewrite(
     mut tcp_write: tokio::io::WriteHalf<tokio::net::TcpStream>,
     port_map: PortRewriteMap,
 ) -> Result<()> {
-
     loop {
         // Read command byte
         let mut cmd_buf = [0u8; 1];
@@ -75,8 +74,10 @@ pub async fn relay_with_rewrite(
             // Extract endpoint string (bytes 4..132) — copy to avoid borrow conflict
             let endpoint_bytes = &payload[4..132];
             let endpoint_str = std::str::from_utf8(
-                &endpoint_bytes[..endpoint_bytes.iter().position(|&b| b == 0).unwrap_or(128)]
-            ).unwrap_or("").to_string();
+                &endpoint_bytes[..endpoint_bytes.iter().position(|&b| b == 0).unwrap_or(128)],
+            )
+            .unwrap_or("")
+            .to_string();
 
             // Parse port from endpoint string like "127.0.0.1:49502"
             if let Some(port_str) = endpoint_str.rsplit(':').next() {
@@ -118,7 +119,9 @@ pub async fn relay_with_rewrite(
             let mut buf = vec![0u8; 64 * 1024];
             while remaining > 0 {
                 let to_read = (remaining as usize).min(buf.len());
-                let n = quic_recv.read(&mut buf[..to_read]).await?
+                let n = quic_recv
+                    .read(&mut buf[..to_read])
+                    .await?
                     .ok_or_else(|| anyhow::anyhow!("stream closed mid-payload"))?;
                 tcp_write.write_all(&buf[..n]).await?;
                 remaining -= n as u64;

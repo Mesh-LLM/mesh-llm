@@ -1,5 +1,7 @@
 # Mesh LLM
 
+![Mesh LLM logo](docs/mesh-llm-logo.svg)
+
 ![Mesh LLM](mesh.png)
 
 Pool spare GPU capacity to run LLMs at larger scale. Models that don't fit on one machine are automatically distributed — dense models via pipeline parallelism, MoE models via expert sharding with zero cross-node inference traffic.
@@ -118,6 +120,10 @@ mesh-llm --model Qwen2.5-32B    # dashboard at http://localhost:3131
 ```
 
 Live topology, VRAM bars per node, model picker, built-in chat. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
+
+### Development
+
+Build-from-source and UI development instructions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Using with agents
 
@@ -257,12 +263,9 @@ ssh user@remote 'tar xzf mesh-bundle.tar.gz && mesh-bundle/mesh-llm --model Qwen
 
 Same architecture required (arm64 macOS → arm64 macOS). Bundle includes mesh-llm + llama.cpp binaries. For WAN: forward `--bind-port` UDP on the router — only the originator needs it.
 
-## Building
+## Contributing
 
-```bash
-just build            # clones llama.cpp fork, builds everything
-just bundle           # portable tarball
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build and development workflows.
 
 ## Project Structure
 
