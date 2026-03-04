@@ -142,11 +142,27 @@ impl MeshApi {
     }
 
     async fn status(&self) -> StatusPayload {
-        let inner = self.inner.lock().await;
-        let node = &inner.node;
-        let node_id = node.id().fmt_short().to_string();
-        let token = node.invite_token();
-        let my_vram_gb = node.vram_bytes() as f64 / 1e9;
+        // Snapshot inner fields and drop the lock before any async node queries.
+        // This prevents deadlock: if node.peers() etc. block on node.state.lock(),
+        // we don't hold inner.lock() hostage, so other handlers can still proceed.
+        let (node, node_id, token, my_vram_gb, model_name, model_size_bytes,
+             llama_ready, is_host, is_client, api_port, draft_name, mesh_name) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.node.clone(),
+                inner.node.id().fmt_short().to_string(),
+                inner.node.invite_token(),
+                inner.node.vram_bytes() as f64 / 1e9,
+                inner.model_name.clone(),
+                inner.model_size_bytes,
+                inner.llama_ready,
+                inner.is_host,
+                inner.is_client,
+                inner.api_port,
+                inner.draft_name.clone(),
+                inner.mesh_name.clone(),
+            )
+        }; // inner lock dropped here
 
         let all_peers = node.peers().await;
         let peers: Vec<PeerPayload> = all_peers.iter().map(|p| PeerPayload {
@@ -169,21 +185,19 @@ impl MeshApi {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let my_serving = inner.model_name.clone();
         let mesh_models: Vec<MeshModelPayload> = catalog.iter().map(|name| {
             let is_warm = served.contains(name);
             let node_count = if is_warm {
                 let peer_count = all_peers.iter()
                     .filter(|p| p.serving.as_deref() == Some(name.as_str()))
                     .count();
-                let me = if *name == my_serving { 1 } else { 0 };
+                let me = if *name == model_name { 1 } else { 0 };
                 peer_count + me
             } else {
                 0
             };
-            // Model size: use local knowledge if it's our model, otherwise catalog
-            let size_gb = if *name == my_serving && inner.model_size_bytes > 0 {
-                inner.model_size_bytes as f64 / 1e9
+            let size_gb = if *name == model_name && model_size_bytes > 0 {
+                model_size_bytes as f64 / 1e9
             } else {
                 download::parse_size_gb(
                     download::MODEL_CATALOG.iter()
@@ -193,7 +207,6 @@ impl MeshApi {
                         .unwrap_or("0")
                 )
             };
-            // Demand info from the unified demand map
             let (request_count, last_active_secs_ago) = match active_demand.get(name) {
                 Some(d) => (
                     Some(d.request_count),
@@ -211,35 +224,31 @@ impl MeshApi {
             }
         }).collect();
 
-        let (launch_pi, launch_goose) = if inner.llama_ready {
-            let name = &inner.model_name;
-            let port = inner.api_port;
+        let (launch_pi, launch_goose) = if llama_ready {
             (
-                Some(format!("pi --provider mesh --model {name}")),
-                Some(format!("GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{port} OPENAI_API_KEY=mesh GOOSE_MODEL={name} goose session")),
+                Some(format!("pi --provider mesh --model {model_name}")),
+                Some(format!("GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{api_port} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name} goose session")),
             )
         } else { (None, None) };
 
         let mesh_id = node.mesh_id().await;
 
         // Derive node status for display
-        let node_status = if inner.is_client {
+        let node_status = if is_client {
             "Client".to_string()
-        } else if inner.is_host && inner.llama_ready {
-            // Check if any peers are workers in our split (serving same model, role=Worker)
+        } else if is_host && llama_ready {
             let has_split_workers = all_peers.iter().any(|p|
                 matches!(p.role, mesh::NodeRole::Worker) &&
-                p.serving.as_deref() == Some(inner.model_name.as_str())
+                p.serving.as_deref() == Some(model_name.as_str())
             );
             if has_split_workers {
                 "Serving (split)".to_string()
             } else {
                 "Serving".to_string()
             }
-        } else if !inner.is_host && inner.model_name != "(idle)" && inner.model_name != "" {
-            // We have a model assigned but aren't host — we're a worker in someone's split
+        } else if !is_host && model_name != "(idle)" && !model_name.is_empty() {
             "Worker (split)".to_string()
-        } else if inner.model_name == "(idle)" || inner.model_name == "" {
+        } else if model_name == "(idle)" || model_name.is_empty() {
             if all_peers.is_empty() {
                 "Idle".to_string()
             } else {
@@ -253,20 +262,20 @@ impl MeshApi {
             node_id,
             token,
             node_status,
-            is_host: inner.is_host,
-            is_client: inner.is_client,
-            llama_ready: inner.llama_ready,
-            model_name: inner.model_name.clone(),
-            draft_name: inner.draft_name.clone(),
-            api_port: inner.api_port,
+            is_host,
+            is_client,
+            llama_ready,
+            model_name,
+            draft_name,
+            api_port,
             my_vram_gb,
-            model_size_gb: inner.model_size_bytes as f64 / 1e9,
+            model_size_gb: model_size_bytes as f64 / 1e9,
             peers,
             launch_pi,
             launch_goose,
             mesh_models,
             mesh_id,
-            mesh_name: inner.mesh_name.clone(),
+            mesh_name,
         }
     }
 
