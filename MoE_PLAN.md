@@ -38,12 +38,12 @@ All core phases are complete and integrated into mesh-llm.
 ### Tested
 - OLMoE-1B-7B: 2 nodes over WAN (225ms RTT Sydney↔Sydney), both shards coherent.
 - Qwen3-30B-A3B: local quality validation, 87/128 experts per node = excellent.
-- GLM-4.7-Flash-Q4_K_M: MoE auto-detected (64 experts, top-4), fits locally → solo mode, no split.
+- GLM-4.7-Flash-Q4_K_M: MoE auto-detected (64 experts, top-4), fits locally → solo mode, no split. No pre-baked ranking in catalog yet — would use 50% fallback if split.
 
 ## What's NOT Implemented
 
-### No probe-based session placement
-The current design uses hash routing — sessions are assigned to nodes deterministically. The MoE_PLAN originally proposed fan-out probes where each node scores "how well does my shard match this prompt" and the best node gets the session. This was found unnecessary for the 2-node case with sufficient overlap (68%+) — both nodes produce equivalent quality. Probing would only matter with more nodes, less overlap, or sharper expert specialization.
+### No probe-based session placement (planned)
+The current design uses hash routing — sessions are assigned to nodes deterministically. The original plan proposed fan-out probes where each node scores "how well does my shard match this prompt" and the best node gets the session. This was unnecessary for the 2-node case with sufficient overlap (68%+) — both nodes produce equivalent quality. Probing becomes important with more nodes, less overlap, or sharper expert specialization. With scale testing on larger models coming soon, this is next on the list.
 
 ### No lazy `moe-analyze` for unknown models
 Phase 4 in TODO. Unknown MoE models use the 50% shared core fallback with sequential expert IDs. Running `moe-analyze` automatically on first deploy (2-5 min of sample inference to compute proper rankings) is planned but not implemented. You can run it manually and the cached ranking will be picked up.

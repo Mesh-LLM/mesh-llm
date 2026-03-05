@@ -21,8 +21,9 @@ Design: [MoE_PLAN.md](../MoE_PLAN.md) · Auto-deploy: [MoE_DEPLOY_DESIGN.md](../
 - [x] Phase 1b: expert masking in llama.cpp (`llama_model_set_expert_mask()`)
 - [x] Phase 2: per-node GGUF packaging (`llama-moe-split`)
 - [x] Phase 3: mesh integration — auto-detect, split, session-sticky routing. Tested OLMoE-1B-7B over WAN.
-- [ ] **Phase 4: optimized rankings** — run `moe-analyze` lazily for unknown MoE models, cache rankings. Current fallback uses conservative 50% shared core.
-- [ ] **Phase 5: scale testing** — Mixtral 8×22B (~80GB), Qwen3-235B-A22B (~130GB) — models that actually need distribution.
+- [ ] **Phase 4: lazy `moe-analyze`** — auto-run on first deploy of unknown MoE models (2-5 min sample inference → cached ranking CSV). Currently unknown models use 50% shared core with sequential IDs, which is a blind guess. GLM-4.7-Flash is MoE (64 experts, top-4) but has no ranking in catalog.
+- [ ] **Phase 5: probe-based session placement** — fan-out probe to each shard node, score "how well does my expert set match this prompt", pin session to best node. Matters with 3+ nodes or less overlap. Hash routing is fine for 2-node with 68%+ overlap.
+- [ ] **Phase 6: scale testing** — Mixtral 8×22B (~80GB), Qwen3-235B-A22B (~130GB) — models that actually need distribution.
 
 ## Resilience
 - [x] Nostr re-discovery on peer loss (v0.26.1): `--auto` nodes re-discover after 90s with 0 peers.
