@@ -22,7 +22,7 @@ Design: [MoE_PLAN.md](../MoE_PLAN.md) · Auto-deploy: [MoE_DEPLOY_DESIGN.md](../
 - [x] Phase 2: per-node GGUF packaging (`llama-moe-split`)
 - [x] Phase 3: mesh integration — auto-detect, split, session-sticky routing. Tested OLMoE-1B-7B over WAN.
 - [ ] **Phase 4: lazy `moe-analyze`** — auto-run on first deploy of unknown MoE models (2-5 min sample inference → cached ranking CSV). Currently unknown models use 50% shared core with sequential IDs, which is a blind guess. GLM-4.7-Flash is MoE (64 experts, top-4) but has no ranking in catalog.
-- [ ] **Phase 5: probe-based session placement** — fan-out probe to each shard node, score "how well does my expert set match this prompt", pin session to best node. Matters with 3+ nodes or less overlap. Hash routing is fine for 2-node with 68%+ overlap.
+- [ ] **Phase 5: probe-based session placement** — fan-out probe to each shard node, score "how well does my expert set match this prompt", pin session to best node. Matters with 3+ nodes or less overlap. Hash routing is fine for 2-node with 68%+ overlap. WIP on `moe-probe` branch (logprob extraction validated against llama-server, but 1-token probe is insufficient — needs prompt perplexity or multi-token scoring).
 - [ ] **Phase 6: scale testing** — Mixtral 8×22B (~80GB), Qwen3-235B-A22B (~130GB) — models that actually need distribution.
 
 ## Resilience
