@@ -1,9 +1,13 @@
 use super::*;
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::Message;
 
 const HUB_MEMBERSHIP_SYNC_INTERVAL_SECS: u64 = 60;
 const HUB_MEMBERSHIP_TTL_SECS: u64 = 15 * 60;
@@ -11,6 +15,9 @@ const HUB_OUTAGE_GRACE_SECS: u64 = 10 * 60;
 const HUB_RUNTIME_SESSION_TTL_SECS: u64 = 15 * 60;
 const HUB_RUNTIME_SESSION_REFRESH_BEFORE_SECS: u64 = 5 * 60;
 const HUB_TELEMETRY_SYNC_INTERVAL_SECS: u64 = 30;
+const HUB_CONNECTOR_HEARTBEAT_SECS: u64 = 10;
+const HUB_CONNECTOR_RECONNECT_SECS: u64 = 3;
+const HUB_CONNECTOR_CHUNK_BYTES: usize = 24 * 1024;
 
 #[derive(Clone, Default)]
 pub(super) struct HubState {
@@ -79,6 +86,38 @@ struct HubTelemetrySnapshot {
     mesh_avg_ttft_ms: u64,
     node_warm_models: Vec<String>,
     mesh_warm_models: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ConnectorInboundRequestStart {
+    request_id: String,
+    method: String,
+    path: String,
+    #[serde(default)]
+    query: String,
+    #[serde(default)]
+    headers: HashMap<String, String>,
+    #[serde(default)]
+    body_b64: Option<String>,
+}
+
+fn hub_connector_ws_url(base_url: &str, mesh_id: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if let Some(rest) = trimmed.strip_prefix("https://") {
+        return format!("wss://{rest}/hub/v0/meshes/{mesh_id}/connector/session");
+    }
+    if let Some(rest) = trimmed.strip_prefix("http://") {
+        return format!("ws://{rest}/hub/v0/meshes/{mesh_id}/connector/session");
+    }
+    format!("wss://{trimmed}/hub/v0/meshes/{mesh_id}/connector/session")
+}
+
+fn connector_send_json(
+    tx: &mpsc::UnboundedSender<Message>,
+    payload: &serde_json::Value,
+) -> anyhow::Result<()> {
+    tx.send(Message::Text(payload.to_string().into()))
+        .map_err(|_| anyhow::anyhow!("connector writer channel closed"))
 }
 pub(super) fn load_state() -> HubState {
     let hub_base_url = std::env::var("MESH_LLM_HUB_BASE_URL")
@@ -252,6 +291,17 @@ pub(super) fn spawn_background_tasks(state: &MeshApi) {
             }
         }
     });
+
+    // Runtime reverse-connector tunnel for Cloudflare broker dispatch.
+    let state8 = state.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = state8.run_hub_connector_session().await {
+                tracing::warn!("Hub connector session failed: {err}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(HUB_CONNECTOR_RECONNECT_SECS)).await;
+        }
+    });
 }
 
 pub(super) async fn is_hub_enforced_mode(state: &MeshApi) -> bool {
@@ -277,7 +327,7 @@ pub(super) async fn handle_route(
             let base_url = state.hub_base_url().await;
             let client = reqwest::Client::new();
             match client
-                .post(format!("{base_url}/api/v0/device-auth/start"))
+                .post(format!("{base_url}/hub/v0/device-auth/start"))
                 .json(&serde_json::json!({ "client_name": client_name }))
                 .send()
                 .await
@@ -313,7 +363,7 @@ pub(super) async fn handle_route(
             let base_url = state.hub_base_url().await;
             let client = reqwest::Client::new();
             match client
-                .post(format!("{base_url}/api/v0/device-auth/poll"))
+                .post(format!("{base_url}/hub/v0/device-auth/poll"))
                 .json(&serde_json::json!({ "device_code": device_code }))
                 .send()
                 .await
@@ -899,7 +949,7 @@ impl MeshApi {
         let base_url = self.hub_base_url().await;
         let client = reqwest::Client::new();
         let response = client
-            .get(format!("{base_url}/api/v0/meshes/{hub_mesh_id}"))
+            .get(format!("{base_url}/hub/v0/meshes/{hub_mesh_id}"))
             .bearer_auth(token)
             .send()
             .await?;
@@ -952,7 +1002,7 @@ impl MeshApi {
         let client = reqwest::Client::new();
 
         let challenge_resp = client
-            .post(format!("{base_url}/api/v0/nodes/register"))
+            .post(format!("{base_url}/hub/v0/nodes/register"))
             .bearer_auth(&token)
             .json(&serde_json::json!({ "public_key": identity.public_key_b64 }))
             .send()
@@ -988,7 +1038,7 @@ impl MeshApi {
         let signature_b64 = sign_hub_message(&identity, &signed_message)?;
         let hostname = default_node_display_name();
         let complete_resp = client
-            .post(format!("{base_url}/api/v0/nodes/register/complete"))
+            .post(format!("{base_url}/hub/v0/nodes/register/complete"))
             .bearer_auth(&token)
             .json(&serde_json::json!({
                 "challenge_id": challenge_id,
@@ -1029,7 +1079,7 @@ impl MeshApi {
         let base_url = self.hub_base_url().await;
         let client = reqwest::Client::new();
         let response = client
-            .get(format!("{base_url}/api/v0/meshes/{hub_mesh_id}/nodes"))
+            .get(format!("{base_url}/hub/v0/meshes/{hub_mesh_id}/nodes"))
             .bearer_auth(token)
             .send()
             .await?;
@@ -1067,7 +1117,7 @@ impl MeshApi {
 
         // First try as mesh ID.
         let by_id_resp = client
-            .get(format!("{base_url}/api/v0/meshes/{selector}"))
+            .get(format!("{base_url}/hub/v0/meshes/{selector}"))
             .bearer_auth(&token)
             .send()
             .await?;
@@ -1086,7 +1136,7 @@ impl MeshApi {
         }
 
         let list_resp = client
-            .get(format!("{base_url}/api/v0/meshes"))
+            .get(format!("{base_url}/hub/v0/meshes"))
             .bearer_auth(token)
             .send()
             .await?;
@@ -1151,7 +1201,7 @@ impl MeshApi {
         let base_url = self.hub_base_url().await;
         let client = reqwest::Client::new();
         let response = client
-            .post(format!("{base_url}/api/v0/invites/redeem"))
+            .post(format!("{base_url}/hub/v0/invites/redeem"))
             .bearer_auth(token)
             .json(&serde_json::json!({
                 "invite_token": invite_token,
@@ -1187,7 +1237,7 @@ impl MeshApi {
         let base_url = self.hub_base_url().await;
         let client = reqwest::Client::new();
         let response = client
-            .post(format!("{base_url}/api/v0/meshes/{hub_mesh_id}/invites"))
+            .post(format!("{base_url}/hub/v0/meshes/{hub_mesh_id}/invites"))
             .bearer_auth(token)
             .json(&serde_json::json!({}))
             .send()
@@ -1306,7 +1356,7 @@ impl MeshApi {
         let client = reqwest::Client::new();
         let challenge_resp = client
             .post(format!(
-                "{base_url}/api/v0/nodes/{node_id}/session/challenge"
+                "{base_url}/hub/v0/nodes/{node_id}/session/challenge"
             ))
             .send()
             .await?;
@@ -1340,7 +1390,7 @@ impl MeshApi {
         let signature_b64 = sign_hub_message(&identity, &signed_message)?;
 
         let session_resp = client
-            .post(format!("{base_url}/api/v0/nodes/{node_id}/session"))
+            .post(format!("{base_url}/hub/v0/nodes/{node_id}/session"))
             .json(&serde_json::json!({
                 "challenge_id": challenge_id,
                 "signature": signature_b64,
@@ -1405,6 +1455,277 @@ impl MeshApi {
         anyhow::bail!("hub telemetry auth failed for {path}")
     }
 
+    async fn run_hub_connector_session(&self) -> anyhow::Result<()> {
+        let (base_url, node_id, mesh_id, api_port) = {
+            let inner = self.inner.lock().await;
+            if inner.hub.membership_enforcement != "hub_enforced" {
+                return Ok(());
+            }
+            let Some(node_id) = inner.hub.node_id.clone() else {
+                return Ok(());
+            };
+            let Some(mesh_id) = inner.hub.linked_mesh_id.clone() else {
+                return Ok(());
+            };
+            (inner.hub.base_url.clone(), node_id, mesh_id, inner.api_port)
+        };
+
+        let runtime_token = self.hub_ensure_runtime_access_token(&node_id).await?;
+        let ws_url = hub_connector_ws_url(&base_url, &mesh_id);
+        let mut request = ws_url.into_client_request()?;
+        request
+            .headers_mut()
+            .insert("Authorization", format!("Bearer {runtime_token}").parse()?);
+
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request).await?;
+        tracing::info!("Hub connector connected for mesh {}", mesh_id);
+
+        let (mut ws_write, mut ws_read) = ws_stream.split();
+        let (writer_tx, mut writer_rx) = mpsc::unbounded_channel::<Message>();
+
+        let writer_task = tokio::spawn(async move {
+            while let Some(msg) = writer_rx.recv().await {
+                if ws_write.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        connector_send_json(
+            &writer_tx,
+            &serde_json::json!({
+                "type": "hello",
+                "node_id": node_id,
+                "mesh_id": mesh_id,
+                "api_port": api_port,
+                "version": crate::VERSION,
+            }),
+        )?;
+
+        let heartbeat_state = self.clone();
+        let heartbeat_tx = writer_tx.clone();
+        let heartbeat_task = tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(HUB_CONNECTOR_HEARTBEAT_SECS));
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let inflight = {
+                    let inner = heartbeat_state.inner.lock().await;
+                    inner.node.inflight_requests()
+                };
+                if connector_send_json(
+                    &heartbeat_tx,
+                    &serde_json::json!({
+                        "type": "heartbeat",
+                        "inflight": inflight,
+                        "ts_unix": now_unix_secs(),
+                    }),
+                )
+                .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        while let Some(frame) = ws_read.next().await {
+            let frame = frame?;
+            match frame {
+                Message::Text(text) => {
+                    let parsed = serde_json::from_str::<serde_json::Value>(text.as_ref())?;
+                    let msg_type = parsed
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    if msg_type != "request_start" {
+                        continue;
+                    }
+                    let inbound: ConnectorInboundRequestStart = serde_json::from_value(parsed)?;
+                    let request_state = self.clone();
+                    let request_tx = writer_tx.clone();
+                    tokio::spawn(async move {
+                        request_state
+                            .handle_connector_request(api_port, inbound, request_tx)
+                            .await;
+                    });
+                }
+                Message::Ping(payload) => {
+                    if writer_tx.send(Message::Pong(payload)).is_err() {
+                        break;
+                    }
+                }
+                Message::Close(_) => break,
+                Message::Binary(_) | Message::Pong(_) | Message::Frame(_) => {}
+            }
+        }
+
+        heartbeat_task.abort();
+        drop(writer_tx);
+        let _ = writer_task.await;
+        Ok(())
+    }
+
+    async fn handle_connector_request(
+        &self,
+        api_port: u16,
+        inbound: ConnectorInboundRequestStart,
+        tx: mpsc::UnboundedSender<Message>,
+    ) {
+        let request_id = inbound.request_id.trim().to_string();
+        if request_id.is_empty() {
+            return;
+        }
+        let method = match reqwest::Method::from_bytes(inbound.method.as_bytes()) {
+            Ok(m) => m,
+            Err(_) => {
+                let _ = connector_send_json(
+                    &tx,
+                    &serde_json::json!({
+                        "type": "response_error",
+                        "request_id": request_id,
+                        "status": 400,
+                        "message": "invalid HTTP method",
+                    }),
+                );
+                return;
+            }
+        };
+        let path = if inbound.path.starts_with('/') {
+            inbound.path
+        } else {
+            format!("/{}", inbound.path)
+        };
+        let mut url = format!("http://127.0.0.1:{api_port}{path}");
+        if !inbound.query.trim().is_empty() {
+            url.push('?');
+            url.push_str(inbound.query.trim_start_matches('?'));
+        }
+
+        let client = reqwest::Client::new();
+        let mut request_builder = client.request(method, &url);
+        for (key, value) in &inbound.headers {
+            let lower = key.trim().to_ascii_lowercase();
+            if lower.is_empty() {
+                continue;
+            }
+            if matches!(
+                lower.as_str(),
+                "host"
+                    | "content-length"
+                    | "transfer-encoding"
+                    | "connection"
+                    | "authorization"
+                    | "proxy-connection"
+                    | "keep-alive"
+                    | "upgrade"
+            ) {
+                continue;
+            }
+            request_builder = request_builder.header(lower, value);
+        }
+        if let Some(body_b64) = inbound.body_b64.as_deref() {
+            match base64::engine::general_purpose::STANDARD.decode(body_b64.as_bytes()) {
+                Ok(body) => {
+                    request_builder = request_builder.body(body);
+                }
+                Err(_) => {
+                    let _ = connector_send_json(
+                        &tx,
+                        &serde_json::json!({
+                            "type": "response_error",
+                            "request_id": request_id,
+                            "status": 400,
+                            "message": "invalid base64 request body",
+                        }),
+                    );
+                    return;
+                }
+            }
+        }
+
+        let response = match request_builder.send().await {
+            Ok(resp) => resp,
+            Err(err) => {
+                let _ = connector_send_json(
+                    &tx,
+                    &serde_json::json!({
+                        "type": "response_error",
+                        "request_id": request_id,
+                        "status": 502,
+                        "message": format!("local API request failed: {err}"),
+                    }),
+                );
+                return;
+            }
+        };
+
+        let mut headers_json = serde_json::Map::new();
+        for (name, value) in response.headers() {
+            if let Ok(as_str) = value.to_str() {
+                headers_json.insert(
+                    name.as_str().to_string(),
+                    serde_json::Value::String(as_str.to_string()),
+                );
+            }
+        }
+        if connector_send_json(
+            &tx,
+            &serde_json::json!({
+                "type": "response_start",
+                "request_id": request_id,
+                "status": response.status().as_u16(),
+                "headers": serde_json::Value::Object(headers_json),
+            }),
+        )
+        .is_err()
+        {
+            return;
+        }
+
+        let mut byte_stream = response.bytes_stream();
+        while let Some(next) = byte_stream.next().await {
+            let chunk = match next {
+                Ok(chunk) => chunk,
+                Err(err) => {
+                    let _ = connector_send_json(
+                        &tx,
+                        &serde_json::json!({
+                            "type": "response_error",
+                            "request_id": request_id,
+                            "status": 502,
+                            "message": format!("failed reading local API stream: {err}"),
+                        }),
+                    );
+                    return;
+                }
+            };
+
+            for part in chunk.chunks(HUB_CONNECTOR_CHUNK_BYTES) {
+                if connector_send_json(
+                    &tx,
+                    &serde_json::json!({
+                        "type": "response_chunk",
+                        "request_id": request_id,
+                        "chunk_b64": base64::engine::general_purpose::STANDARD.encode(part),
+                    }),
+                )
+                .is_err()
+                {
+                    return;
+                }
+            }
+        }
+
+        let _ = connector_send_json(
+            &tx,
+            &serde_json::json!({
+                "type": "response_end",
+                "request_id": request_id,
+            }),
+        );
+    }
+
     async fn publish_hub_telemetry_once(&self) -> anyhow::Result<()> {
         let (node_id, hub_mesh_id, should_publish) = {
             let inner = self.inner.lock().await;
@@ -1435,13 +1756,13 @@ impl MeshApi {
 
         self.hub_post_runtime_json(
             &node_id,
-            &format!("/api/v0/nodes/{node_id}/heartbeat"),
+            &format!("/hub/v0/nodes/{node_id}/heartbeat"),
             &serde_json::json!({}),
         )
         .await?;
         self.hub_post_runtime_json(
             &node_id,
-            &format!("/api/v0/nodes/{node_id}/capabilities"),
+            &format!("/hub/v0/nodes/{node_id}/capabilities"),
             &serde_json::json!({
                 "capabilities": {
                     "total_vram_gb": telemetry.node_total_vram_gb,
@@ -1456,7 +1777,7 @@ impl MeshApi {
         .await?;
         self.hub_post_runtime_json(
             &node_id,
-            &format!("/api/v0/nodes/{node_id}/metrics"),
+            &format!("/hub/v0/nodes/{node_id}/metrics"),
             &serde_json::json!({
                 "hub_mesh_id": telemetry.hub_mesh_id,
                 "metrics": {
@@ -1472,7 +1793,7 @@ impl MeshApi {
         .await?;
         self.hub_post_runtime_json(
             &node_id,
-            &format!("/api/v0/nodes/{node_id}/models"),
+            &format!("/hub/v0/nodes/{node_id}/models"),
             &serde_json::json!({
                 "hub_mesh_id": telemetry.hub_mesh_id,
                 "warm_models": telemetry.node_warm_models,
@@ -1556,7 +1877,7 @@ impl MeshApi {
                 }]
             }]
         });
-        self.hub_post_runtime_json(&node_id, "/api/v0/oltp/v1/metrics", &otlp_payload)
+        self.hub_post_runtime_json(&node_id, "/hub/v0/oltp/v1/metrics", &otlp_payload)
             .await?;
 
         Ok(())
@@ -1576,7 +1897,7 @@ impl MeshApi {
         let client = reqwest::Client::new();
         let response = client
             .post(format!(
-                "{base_url}/api/v0/meshes/{hub_mesh_id}/nodes/attach"
+                "{base_url}/hub/v0/meshes/{hub_mesh_id}/nodes/attach"
             ))
             .bearer_auth(token)
             .json(&serde_json::json!({

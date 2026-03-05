@@ -2073,7 +2073,7 @@ async fn resolve_hub_mesh_id_by_selector(
     let client = reqwest::Client::new();
 
     let by_id_resp = client
-        .get(format!("{base_url}/api/v0/meshes/{selector}"))
+        .get(format!("{base_url}/hub/v0/meshes/{selector}"))
         .bearer_auth(access_token)
         .send()
         .await?;
@@ -2092,7 +2092,7 @@ async fn resolve_hub_mesh_id_by_selector(
     }
 
     let list_resp = client
-        .get(format!("{base_url}/api/v0/meshes"))
+        .get(format!("{base_url}/hub/v0/meshes"))
         .bearer_auth(access_token)
         .send()
         .await?;
@@ -2173,7 +2173,7 @@ async fn fetch_hub_mesh_model_hints(
 
     let client = reqwest::Client::new();
     let response = client
-        .get(format!("{base_url}/api/v0/meshes/{mesh_id}"))
+        .get(format!("{base_url}/hub/v0/meshes/{mesh_id}"))
         .bearer_auth(access_token)
         .send()
         .await?;
@@ -2213,7 +2213,7 @@ async fn fetch_hub_mesh_model_hints(
 async fn run_hub_device_sign_in(base_url: &str) -> Result<String> {
     let client = reqwest::Client::new();
     let start_response = client
-        .post(format!("{base_url}/api/v0/device-auth/start"))
+        .post(format!("{base_url}/hub/v0/device-auth/start"))
         .json(&serde_json::json!({ "client_name": "mesh-llm" }))
         .send()
         .await?;
@@ -2275,7 +2275,7 @@ async fn run_hub_device_sign_in(base_url: &str) -> Result<String> {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(poll_interval_secs)).await;
         let poll_response = client
-            .post(format!("{base_url}/api/v0/device-auth/poll"))
+            .post(format!("{base_url}/hub/v0/device-auth/poll"))
             .json(&serde_json::json!({ "device_code": device_code }))
             .send()
             .await?;
