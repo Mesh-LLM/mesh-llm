@@ -309,9 +309,30 @@ pub async fn election_loop(
         let i_am_host = if need_split {
             // Distributed mode: elect one host from the model group
             should_be_host_for_model(node.id(), my_vram, &model_peers)
-        } else {
-            // Solo mode: this node always runs its own llama-server
+        } else if model_peers.is_empty() {
+            // No other node serving this model — we must host
             true
+        } else if currently_host {
+            // Already running — don't tear down
+            true
+        } else {
+            // Another node is already serving this model.
+            // Only spin up a duplicate if there's enough demand:
+            //   - 2+ clients connected, OR
+            //   - 10+ requests in the demand tracker for this model
+            let n_clients = peers.iter()
+                .filter(|p| matches!(p.role, mesh::NodeRole::Client))
+                .count();
+            let demand = node.get_demand();
+            let req_count = demand.get(&model_name)
+                .map(|d| d.request_count)
+                .unwrap_or(0);
+            let should_dup = n_clients >= 2 || req_count >= 10;
+            if !should_dup {
+                eprintln!("💤 [{}] Peer already serving — standby (clients: {}, requests: {})",
+                    model_name, n_clients, req_count);
+            }
+            should_dup
         };
 
         // Compute the worker set (only relevant in split mode)
