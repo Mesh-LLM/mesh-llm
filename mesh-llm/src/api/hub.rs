@@ -123,7 +123,7 @@ pub(super) fn load_state() -> HubState {
     let hub_base_url = std::env::var("MESH_LLM_HUB_BASE_URL")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "https://www.inferencehub.cc".to_string())
+        .unwrap_or_else(|| "https://api.inferencehub.cc".to_string())
         .trim_end_matches('/')
         .to_string();
     let session = load_hub_session().unwrap_or_default();
