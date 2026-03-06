@@ -24,6 +24,7 @@ Design: [MoE_PLAN.md](../MoE_PLAN.md) · Auto-deploy: [MoE_DEPLOY_DESIGN.md](../
 - [ ] **Phase 4: lazy `moe-analyze`** — auto-run on first deploy of unknown MoE models (2-5 min sample inference → cached ranking CSV). Currently unknown models use 50% shared core with sequential IDs, which is a blind guess. GLM-4.7-Flash is MoE (64 experts, top-4) but has no ranking in catalog.
 - [ ] **Phase 5: probe-based session placement** — fan-out probe to each shard node, score "how well does my expert set match this prompt", pin session to best node. Matters with 3+ nodes or less overlap. Hash routing is fine for 2-node with 68%+ overlap. WIP on `moe-probe` branch (logprob extraction validated against llama-server, but 1-token probe is insufficient — needs prompt perplexity or multi-token scoring).
 - [ ] **Phase 6: scale testing** — Mixtral 8×22B (~80GB), Qwen3-235B-A22B (~130GB) — models that actually need distribution.
+- [ ] **Phase 7: pre-split shard downloads** — instead of downloading full GGUF + splitting locally, host pre-split shards on HuggingFace. Each node downloads only its shard (~40% of full size). WIP on `moe-shards` branch (MoeConfig has `shards` field, not wired into download path yet). Needs: a big machine to do initial split, HF repo to host shards, download code to use shard URLs when available.
 
 ## Resilience
 - [x] Nostr re-discovery on peer loss (v0.26.1): `--auto` nodes re-discover after 90s with 0 peers.

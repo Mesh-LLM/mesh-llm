@@ -216,7 +216,6 @@ fn lookup_moe_config(model_name: &str, model_path: &Path) -> Option<download::Mo
             n_expert_used: info.expert_used_count,
             min_experts_per_node: min_experts,
             ranking,
-            shards: &[],
         });
     }
 
@@ -229,7 +228,6 @@ fn lookup_moe_config(model_name: &str, model_path: &Path) -> Option<download::Mo
         n_expert_used: info.expert_used_count,
         min_experts_per_node: min_experts,
         ranking,
-        shards: &[],
     })
 }
 

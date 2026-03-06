@@ -31,11 +31,7 @@ pub struct MoeConfig {
     /// Expert IDs sorted by gate mass descending (hottest first).
     /// This is the content of the ranking CSV, embedded directly.
     pub ranking: &'static [u32],
-    /// Pre-split shard URLs. If present, nodes download only their shard
-    /// instead of the full model + local splitting.
-    /// Index 0 = shard for node 0, etc. Must match the ranking-based split.
-    #[allow(dead_code)]
-    pub shards: &'static [&'static str],
+
 }
 
 // Pre-computed expert rankings by gate mass (hottest first).
@@ -187,7 +183,6 @@ pub const MODEL_CATALOG: &[CatalogModel] = &[
             n_expert_used: 4,
             min_experts_per_node: 24,
             ranking: &[], // no pre-baked ranking — uses GGUF auto-detect + fallback
-            shards: &[],
         }),
     },
     CatalogModel {
@@ -202,7 +197,6 @@ pub const MODEL_CATALOG: &[CatalogModel] = &[
             n_expert_used: 8,
             min_experts_per_node: 46,
             ranking: QWEN3_30B_A3B_RANKING, // same arch as Coder variant
-            shards: &[],
         }),
     },
     CatalogModel {
@@ -217,7 +211,6 @@ pub const MODEL_CATALOG: &[CatalogModel] = &[
             n_expert_used: 8,
             min_experts_per_node: 46,
             ranking: QWEN3_30B_A3B_RANKING, // same arch as Qwen3-30B-A3B
-            shards: &[],
         }),
     },
     CatalogModel {
@@ -277,7 +270,6 @@ pub const MODEL_CATALOG: &[CatalogModel] = &[
             n_expert_used: 1,
             min_experts_per_node: 6,
             ranking: &[], // no pre-baked ranking — uses GGUF auto-detect
-            shards: &[],
         }),
     },
     CatalogModel {
