@@ -386,6 +386,11 @@ pub(super) async fn handle_route(
                                     if let Ok(profile) = state.hub_fetch_profile().await {
                                         state.set_hub_profile(profile).await;
                                     }
+                                    if let Err(err) = state.recover_hub_link_if_needed().await {
+                                        tracing::warn!(
+                                            "Hub link recovery after device auth failed: {err}"
+                                        );
+                                    }
                                 }
                             }
                             Some("pending") => {
@@ -760,43 +765,63 @@ impl MeshApi {
     }
 
     async fn auto_link_default_target_on_startup(&self) -> anyhow::Result<()> {
-        let (has_target, already_linked, onboarding_mode) = {
+        let (has_target, already_linked) = {
             let inner = self.inner.lock().await;
             let has_target = inner.hub.default_mesh_selector.is_some()
                 || inner.hub.default_invite_token.is_some()
                 || inner.hub.linked_mesh_id.is_some();
             let already_linked = inner.hub.membership_enforcement == "hub_enforced"
                 && inner.hub.linked_mesh_id.is_some();
-            (has_target, already_linked, inner.hub_first_time_onboarding)
+            (has_target, already_linked)
         };
-        if !onboarding_mode || !has_target || already_linked {
+        if !has_target || already_linked {
             return Ok(());
+        }
+
+        if self.recover_hub_link_if_needed().await? {
+            self.set_hub_first_time_onboarding(false).await;
+        }
+        Ok(())
+    }
+
+    async fn recover_hub_link_if_needed(&self) -> anyhow::Result<bool> {
+        let (is_signed_in, already_linked, has_target) = {
+            let inner = self.inner.lock().await;
+            let linked = inner.hub.membership_enforcement == "hub_enforced"
+                && inner.hub.linked_mesh_id.is_some();
+            let has_target = inner.hub.default_mesh_selector.is_some()
+                || inner.hub.default_invite_token.is_some()
+                || inner.hub.linked_mesh_id.is_some();
+            (inner.hub.access_token.is_some(), linked, has_target)
+        };
+        if !is_signed_in || already_linked || !has_target {
+            return Ok(false);
         }
 
         let hub_mesh_id = self.hub_resolve_target_mesh_id(None).await?;
         let preflight = self.compute_link_preflight(&hub_mesh_id).await?;
         if let Some(reason) = preflight.get("would_block_reason").and_then(|v| v.as_str()) {
             tracing::warn!(
-                "Hub auto-link preflight blocked for mesh {}: {}",
+                "Hub link recovery preflight blocked for mesh {}: {}",
                 hub_mesh_id,
                 reason
             );
-            return Ok(());
+            return Ok(false);
         }
 
         let node_id = self.hub_ensure_registered_node().await?;
         self.attach_node_to_hub_mesh(&hub_mesh_id, &node_id).await?;
 
-        let (linked_mesh_slug, linked_mesh_name, linked_mesh_visibility) = match self
-            .hub_fetch_mesh_metadata(&hub_mesh_id)
-            .await
-        {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                tracing::warn!("Failed to resolve linked mesh metadata during auto-link: {err}");
-                (None, None, None)
-            }
-        };
+        let (linked_mesh_slug, linked_mesh_name, linked_mesh_visibility) =
+            match self.hub_fetch_mesh_metadata(&hub_mesh_id).await {
+                Ok(metadata) => metadata,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to resolve linked mesh metadata during link recovery: {err}"
+                    );
+                    (None, None, None)
+                }
+            };
         self.set_hub_link_mode(
             "linked",
             "hub_enforced",
@@ -827,10 +852,9 @@ impl MeshApi {
             node.drop_peers(&drop_ids).await;
         }
 
-        self.set_hub_first_time_onboarding(false).await;
         self.push_status().await;
-        tracing::info!("Auto-linked to InferenceHub mesh {}", hub_mesh_id);
-        Ok(())
+        tracing::info!("Recovered InferenceHub link to mesh {}", hub_mesh_id);
+        Ok(true)
     }
 
     async fn set_hub_default_target(
@@ -868,7 +892,7 @@ impl MeshApi {
         };
         let client = reqwest::Client::new();
         let response = client
-            .get(format!("{base_url}/api/profile"))
+            .get(format!("{base_url}/hub/v0/me"))
             .bearer_auth(token)
             .send()
             .await?;
