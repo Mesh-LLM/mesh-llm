@@ -508,7 +508,15 @@ async fn pick_model_assignment(node: &mesh::Node, local_models: &[String]) -> Op
     let demand = node.active_demand().await;
 
     if demand.is_empty() {
-        eprintln!("📋 No demand signals — no models requested");
+        // No API requests yet — log what the mesh is serving for visibility
+        let served: Vec<&str> = peers.iter()
+            .filter_map(|p| p.serving.as_deref())
+            .collect();
+        if !served.is_empty() {
+            eprintln!("📋 No demand yet — mesh is serving {:?}, staying standby until needed", served);
+        } else {
+            eprintln!("📋 No demand signals — no models requested");
+        }
         return None;
     }
 
