@@ -171,9 +171,10 @@ pub async fn start_llama_server(
         "--no-mmap".to_string(),
         "--host".to_string(), "0.0.0.0".to_string(),
         "--port".to_string(), http_port.to_string(),
-        // Keep thinking tokens inline in content (like Ollama) rather than
-        // splitting into reasoning_content which confuses many OpenAI clients.
-        "--reasoning-format".to_string(), "none".to_string(),
+        // Use deepseek format: thinking goes into reasoning_content field.
+        // Goose/OpenAI clients parse this correctly. "none" leaks raw <think>
+        // tags into content which is worse.
+        "--reasoning-format".to_string(), "deepseek".to_string(),
     ]);
     // KV cache quantization based on model size:
     //   < 5GB: leave default (FP16) — small models, KV cache is negligible
