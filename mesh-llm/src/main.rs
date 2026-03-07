@@ -312,6 +312,9 @@ Use the dashboard InferenceHub controls instead."
     if first_time_hub_flow {
         run_inferencehub_interactive(&mut cli, &persisted_hub).await?;
     }
+    if hub_managed_mode {
+        restore_saved_hub_startup_model_if_available(&mut cli, &persisted_hub);
+    }
 
     // Background version check (non-blocking).
     // Spawn after any interactive prompts to avoid writing over input lines.
@@ -2776,6 +2779,21 @@ fn persist_hub_startup_model(startup_model: &str) -> anyhow::Result<()> {
             serde_json::Value::String(model.to_string()),
         );
     })
+}
+
+fn restore_saved_hub_startup_model_if_available(cli: &mut Cli, persisted_hub: &PersistedHubState) {
+    if cli.client || !cli.model.is_empty() {
+        return;
+    }
+    let Some(saved) = persisted_hub.default_startup_model.as_deref() else {
+        return;
+    };
+    if saved_startup_model_is_resolvable(saved) {
+        cli.model.push(PathBuf::from(saved));
+        eprintln!("🧠 Using saved startup model: {saved}");
+    } else {
+        eprintln!("⚠ Saved startup model is missing/unresolvable: {saved}");
+    }
 }
 
 /// Discover meshes on Nostr and optionally join one.
