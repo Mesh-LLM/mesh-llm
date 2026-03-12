@@ -1,15 +1,28 @@
 # mesh-llm TODO
 
+## Smart Router
+- [x] Heuristic classifier: Code/Reasoning/Chat/Creative/ToolCall categories
+- [x] Complexity detection: Quick/Moderate/Deep from message signals
+- [x] Task-dominant scoring: match bonus + tier + position
+- [x] Tool capability filter: hard gate on `tools: bool` per model profile
+- [x] needs_tools as attribute, not category override
+- [ ] **Static speed estimates**: Add `tok_s: f64` to ModelProfile (known from benchmarks, no runtime measurement). Feed into scoring so Quick tasks prefer fast models.
+- [ ] **Response quality checks**: Detect empty/repetitive/truncated responses, trigger retry with different model. Needs proxy to inspect response bytes (currently raw TCP relay).
+- [ ] **Complexity → context budget**: Deep requests get larger `-n` (max tokens), Quick gets smaller. Currently all requests use llama-server defaults.
+
+## Multi-Model Serving
+- [x] `--model A --model B` runs separate election loops per model
+- [x] Auto model packs by VRAM tier
+- [x] `serving_models: Vec<String>` in gossip (backward compatible)
+- [x] Router picks best model per request
+- [ ] **Demand-based model upgrade**: Large-VRAM host serving a small model should upgrade when demand exists for a bigger model nobody is serving.
+
 ## First-Time Experience
-- [ ] **Uptime signal**: Add `started_at: u64` to `MeshListing`. Score bonus for longer-running meshes.
 - [ ] **Solo fallback — fast starter model**: When `--auto` finds no mesh, download a small starter model first (Qwen2.5-3B, 2GB, ~1 min), start serving immediately, then background-download a better model for the node's VRAM tier.
-- [ ] **Score mesh by model quality**: `smart_auto` should weight model quality — use `MODEL_TIERS` VRAM requirements as a proxy.
+- [ ] **Uptime signal**: Add `started_at: u64` to `MeshListing`. Score bonus for longer-running meshes.
 
 ## Model Catalog
-- [ ] **Opinionated model tiers**: Principled "if you have X GB, run Y" recommendation per VRAM tier.
 - [ ] **Draft model completeness**: GLM-4.7 and DeepSeek have no draft pairing.
-- [ ] **Model quality metadata**: Benchmark scores in catalog entries for scoring.
-- [ ] **Auto-upgrade path**: Solo node finishes downloading a better model → gracefully switch.
 - [ ] **Don't download what won't fit**: Check VRAM before downloading via `--model`.
 - [ ] `mesh-llm recommend`: CLI subcommand to suggest models for your hardware.
 
@@ -17,29 +30,23 @@
 
 Design: [MoE_PLAN.md](../MoE_PLAN.md) · Auto-deploy: [MoE_DEPLOY_DESIGN.md](../MoE_DEPLOY_DESIGN.md) · Validation: [MoE_SPLIT_REPORT.md](../MoE_SPLIT_REPORT.md)
 
-- [x] Phase 1a: routing analysis tool (`llama-moe-analyze`)
-- [x] Phase 1b: expert masking in llama.cpp (`llama_model_set_expert_mask()`)
-- [x] Phase 2: per-node GGUF packaging (`llama-moe-split`)
-- [x] Phase 3: mesh integration — auto-detect, split, session-sticky routing. Tested OLMoE-1B-7B over WAN.
-- [ ] **Phase 4: lazy `moe-analyze`** — auto-run on first deploy of unknown MoE models (2-5 min sample inference → cached ranking CSV). Currently unknown models use 50% shared core with sequential IDs, which is a blind guess. GLM-4.7-Flash is MoE (64 experts, top-4) but has no ranking in catalog.
-- [ ] **Phase 5: probe-based session placement** — fan-out probe to each shard node, score "how well does my expert set match this prompt", pin session to best node. Matters with 3+ nodes or less overlap. Hash routing is fine for 2-node with 68%+ overlap. WIP on `moe-probe` branch (logprob extraction validated against llama-server, but 1-token probe is insufficient — needs prompt perplexity or multi-token scoring).
-- [ ] **Phase 6: scale testing** — Mixtral 8×22B (~80GB), Qwen3-235B-A22B (~130GB) — models that actually need distribution.
-- [ ] **Phase 7: pre-split shard downloads** — instead of downloading full GGUF + splitting locally, host pre-split shards on HuggingFace. Each node downloads only its shard (~40% of full size). WIP on `moe-shards` branch (MoeConfig has `shards` field, not wired into download path yet). Needs: a big machine to do initial split, HF repo to host shards, download code to use shard URLs when available.
+- [x] Phase 1–3: Routing analysis, expert masking, mesh integration. Tested OLMoE-1B-7B over WAN.
+- [ ] **Phase 4: lazy `moe-analyze`** — auto-run ranking for unknown MoE models. Currently unknown models fall through to PP.
+- [ ] **Phase 5: probe-based session placement** — parked on `moe-probe` branch.
+- [ ] **Phase 6: scale testing** — Mixtral 8×22B, Qwen3-235B-A22B.
 
 ## Resilience
-- [x] Nostr re-discovery on peer loss (v0.26.1): `--auto` nodes re-discover after 90s with 0 peers. Works for joiners, originators, and clients.
-- [x] llama-server death watchdog (v0.27.0): detects crash, resets election, auto-restarts.
-- [x] Multi-host load balancing (v0.27.0): proxy round-robins when multiple nodes serve same model.
-- [x] Demand-based duplicate hosting (v0.27.0): second node stays standby until 2+ clients or 10+ requests.
-- [ ] **Demand-based model upgrade**: Large-VRAM host serving a small model should upgrade when demand exists for a bigger model nobody is serving.
+- [x] Nostr re-discovery on peer loss
+- [x] llama-server death watchdog
+- [x] Multi-host load balancing
+- [x] Demand-based duplicate hosting
 - [ ] **Multi-node tensor split recovery**: If one split peer dies, re-split across remaining.
-- [ ] **`kill_llama_server()` uses `pkill -f`**: Kills ALL llama-server processes system-wide. Should kill by PID.
+- [ ] **`kill_llama_server()` uses `pkill -f`**: Should kill by PID, not pattern match.
 
 ## Discovery & Publishing
-- [ ] **Revisit `--publish` flag**: Bare `--publish` without `--mesh-name` is vestigial. Consider requiring `--mesh-name` or auto-generating a name.
-- [ ] **Public named meshes**: `--mesh-name "cool-mesh" --publish` gets -200 penalty. Add `public: true` field so named meshes aren't penalized in discovery.
+- [ ] **Revisit `--publish` flag**: Bare `--publish` without `--mesh-name` is vestigial.
 
 ## Experiments
 - [ ] Qwen3.5-397B-A17B across 128GB M4 Max + second machine (MoE, ~219GB Q4)
-- [ ] Qwen3.5-122B-A10B solo on 128GB (smaller MoE baseline)
 - [ ] Largest dense models across 2+ machines (Llama-3.3-70B, Qwen2.5-72B)
+- [ ] MiniMax-M2.5 MoE split across Studio + second large machine
