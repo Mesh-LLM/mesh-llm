@@ -287,40 +287,46 @@ pub async fn publish_loop(
         // ── Solo convergence: if we have no GPU peers, look for a mesh to join ──
         // First try split-heal (same mesh_id, different publisher, more nodes).
         // Then try merging with any other mesh (different mesh, unnamed only).
+        // Only merge into meshes strictly larger than us to avoid two solo nodes
+        // endlessly unpublishing and trying to join each other.
         let gpu_peers = peers.iter()
             .filter(|p| !matches!(p.role, crate::mesh::NodeRole::Client))
             .count();
+        let my_node_count = gpu_peers + 1; // peers + self
         if gpu_peers == 0 {
             let filter = MeshFilter::default();
             if let Ok(listings) = discover(&relays, &filter).await {
                 let my_npub = publisher.npub();
                 let my_mesh_id = node.mesh_id().await;
 
-                // 1. Split-heal: same mesh_id from a different publisher with more nodes
+                // 1. Split-heal: same mesh_id from a different publisher with more nodes than us
                 let split_target = my_mesh_id.as_ref().and_then(|mid| {
                     listings.iter().find(|m| {
                         m.listing.mesh_id.as_deref() == Some(mid.as_str())
                             && m.publisher_npub != my_npub
-                            && m.listing.node_count > 1
+                            && m.listing.node_count > my_node_count
                     })
                 });
 
-                // 2. Merge: any unnamed mesh from a different publisher
-                //    (only for unnamed meshes — named meshes are intentionally separate)
+                // 2. Merge: any unnamed mesh from a different publisher that is
+                //    strictly larger than us. Two solo nodes (both node_count=1)
+                //    must NOT try to merge — that creates a storm where both
+                //    unpublish and race to join each other.
                 let merge_target = if split_target.is_none() && name.is_none() {
                     listings.iter().find(|m| {
                         m.publisher_npub != my_npub
                             && m.listing.name.is_none()
-                            && m.listing.node_count >= 1
+                            && m.listing.node_count > my_node_count
                     })
                 } else {
                     None
                 };
 
                 if let Some(target) = split_target.or(merge_target) {
-                    eprintln!("📡 Found larger mesh '{}' ({} nodes) — rejoining instead of publishing solo",
+                    eprintln!("📡 Found larger mesh '{}' ({} nodes vs our {}) — rejoining",
                         target.listing.name.as_deref().unwrap_or("unnamed"),
-                        target.listing.node_count);
+                        target.listing.node_count,
+                        my_node_count);
                     if let Err(e) = publisher.unpublish().await {
                         tracing::warn!("Failed to unpublish solo listing: {e}");
                     }
@@ -330,7 +336,8 @@ pub async fn publish_loop(
                         continue;
                     }
                     eprintln!("📡 Merged into mesh — resuming publish as member");
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    // Cooldown: give the mesh time to stabilize before checking again
+                    tokio::time::sleep(Duration::from_secs(30)).await;
                     continue;
                 }
             }

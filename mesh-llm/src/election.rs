@@ -417,7 +417,7 @@ pub async fn election_loop(
                 );
             } else {
                 eprintln!(
-                    "🗳 [{}] Running as host ({:.1}GB VRAM for {:.1}GB model, solo)",
+                    "🗳 [{}] Running as host ({:.1}GB VRAM for {:.1}GB model, serving entirely)",
                     model_name,
                     my_vram as f64 / 1e9,
                     model_bytes as f64 / 1e9
@@ -590,7 +590,7 @@ async fn moe_election_loop(
             // Solo: check if the full model fits in VRAM
             let model_fits = my_vram >= (model_bytes as f64 * 1.1) as u64;
             if model_fits {
-                eprintln!("🧩 [{}] MoE solo mode — loading full model ({:.1}GB fits in {:.1}GB VRAM)",
+                eprintln!("🧩 [{}] MoE model — serving entirely ({:.1}GB fits in {:.1}GB VRAM)",
                     model_name, model_bytes as f64 / 1e9, my_vram as f64 / 1e9);
                 on_change(true, false);
 
@@ -614,7 +614,7 @@ async fn moe_election_loop(
                         currently_running = true;
                         update_targets(&node, &model_name, InferenceTarget::Local(llama_port), &target_tx).await;
                         on_change(true, true);
-                        eprintln!("✅ [{}] MoE solo — llama-server ready on port {llama_port}", model_name);
+                        eprintln!("✅ [{}] MoE — llama-server ready on port {llama_port}", model_name);
                     }
                     Err(e) => {
                         eprintln!("  Failed to start llama-server: {e}");
@@ -622,7 +622,7 @@ async fn moe_election_loop(
                 }
             } else {
                 // Model too large even for solo — wait for peers to join so we can split
-                eprintln!("⚠️  [{}] MoE model too large for solo ({:.1}GB model, {:.1}GB VRAM) — waiting for peers",
+                eprintln!("⚠️  [{}] MoE model too large to serve entirely ({:.1}GB model, {:.1}GB VRAM) — waiting for peers",
                     model_name, model_bytes as f64 / 1e9, my_vram as f64 / 1e9);
                 on_change(false, false);
             }
@@ -867,7 +867,7 @@ async fn start_llama(
             .count();
         if worker_count > 0 {
             eprintln!(
-                "  Model fits on host ({:.1}GB VRAM for {:.1}GB model) — loading solo",
+                "  Model fits on host ({:.1}GB VRAM for {:.1}GB model) — serving entirely",
                 my_vram as f64 / 1e9,
                 model_bytes as f64 / 1e9
             );
