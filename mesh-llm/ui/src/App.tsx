@@ -970,7 +970,7 @@ export function App() {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-background [height:100svh]">
+    <div className="h-screen overflow-hidden bg-background [height:100svh] [padding-top:env(safe-area-inset-top)] [padding-bottom:env(safe-area-inset-bottom)]">
       <div className="flex h-full min-h-0 flex-col">
         <AppHeader
           sections={sections}
