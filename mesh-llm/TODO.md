@@ -30,6 +30,25 @@ Design: [MoE_PLAN.md](../MoE_PLAN.md) · Auto-deploy: [MoE_DEPLOY_DESIGN.md](../
 - [ ] **Phase 4: lazy `moe-analyze`** — auto-run ranking for unknown MoE models.
 - [ ] **Phase 6: scale testing** — Mixtral 8×22B, Qwen3-235B-A22B.
 
+## Peer-to-Peer Model Transfer
+
+Fetch model files directly from mesh peers instead of HuggingFace. Peers already have QUIC connections — add a new stream type (`STREAM_FILE_TRANSFER`) where the requester sends a filename and offset, the responder streams the file back.
+
+**Why:** LAN transfers are massively faster than HuggingFace downloads. Two machines on the same network could transfer a 47GB model in minutes instead of an hour. Also works when HF is slow, rate-limited, or down.
+
+**Design:**
+- New bi-stream type in `dispatch_streams`: requester sends filename + resume offset, responder reads from `~/.models/` and streams back
+- Only serve files from `~/.models/` — no path traversal
+- Resume support: send byte offset, responder seeks to that position
+- Prefer low-RTT peers (LAN) over high-RTT (relay) for transfer source
+- Download logic tries peers first, falls back to HuggingFace
+- `available_models` gossip already exists — extend it to include filenames on disk so peers know what's fetchable
+
+**Open questions:**
+- Prioritize file transfer streams below inference streams? QUIC stream priorities could help
+- Rate limiting to avoid saturating the link during active inference
+- Multi-peer parallel download (fetch chunks from different peers)?
+
 ## Smart Router
 - [ ] **Static speed estimates**: Add `tok_s: f64` to ModelProfile. Feed into scoring so Quick tasks prefer fast models.
 - [ ] **Response quality checks**: Detect empty/repetitive/truncated responses, trigger retry with different model.
