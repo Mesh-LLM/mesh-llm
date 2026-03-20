@@ -2017,7 +2017,7 @@ function InviteFriendEmptyState({ inviteToken, selectedModel, isPublicMesh }: { 
           <BrandIcon className="h-12 w-12 text-primary/50 animate-wiggle" />
         </div>
         <p className="text-sm text-muted-foreground">
-          Chat: powered by shared compute.
+          Mesh LLM is a project to let people contribute spare compute, or build private networks of compute for AI, using mixtures of open models.
         </p>
         <button
           type="button"
@@ -2030,8 +2030,8 @@ function InviteFriendEmptyState({ inviteToken, selectedModel, isPublicMesh }: { 
         {open ? (
           <div className="space-y-4 rounded-md border border-dashed p-3 text-left">
             <div className="text-xs text-muted-foreground">
-              <a href="https://github.com/michaelneale/decentralized-inference" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
-                Learn about this new project →
+              <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+                Learn about this project →
               </a>
             </div>
             <Separator />
@@ -2076,6 +2076,12 @@ function InviteFriendEmptyState({ inviteToken, selectedModel, isPublicMesh }: { 
       <div className="flex justify-center">
         <BrandIcon className="h-12 w-12 text-primary/50 animate-wiggle" />
       </div>
+      <p className="text-sm text-muted-foreground">
+        Mesh LLM lets you build private networks of compute for AI, using mixtures of open models.{' '}
+        <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+          Learn more →
+        </a>
+      </p>
       <button
         type="button"
         onClick={() => setOpen(!open)}
@@ -2195,6 +2201,25 @@ function DashboardPage({
 
   return (
     <div className="space-y-4">
+      <Alert className="border-primary/20 bg-primary/5">
+        <Network className="h-4 w-4" />
+        <AlertTitle className="text-sm font-medium">
+          {isPublicMesh ? 'Welcome to the public mesh' : 'Your private mesh'}
+        </AlertTitle>
+        <AlertDescription className="text-xs text-muted-foreground">
+          {isPublicMesh
+            ? 'Mesh LLM is a project to let people contribute spare compute, or build private networks of compute for AI, using mixtures of open models.'
+            : 'Mesh LLM lets you build private networks of compute for AI, using mixtures of open models. Pool machines across your home, office, or friends — fully private, no cloud needed.'}
+          {' '}
+          <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground">
+            Learn more →
+          </a>
+          {' · '}
+          <a href="https://github.com/michaelneale/decentralized-inference" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 underline hover:text-foreground">
+            GitHub
+          </a>
+        </AlertDescription>
+      </Alert>
       <TooltipProvider>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <StatCard
