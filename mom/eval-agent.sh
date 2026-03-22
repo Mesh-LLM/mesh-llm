@@ -130,7 +130,7 @@ validate_file_editing() {
     fi
 
     # Check it compiles
-    if cd "$workdir" && cargo build 2>/dev/null; then
+    if (cd "$workdir" && cargo build 2>/dev/null); then
         echo "  ✅ cargo build succeeds"
         ((pass++))
     else
@@ -243,6 +243,7 @@ run_eval() {
     local start=$(date +%s)
     
     # Run pi with isolated config
+    cd "$workdir"
     PI_CODING_AGENT_DIR="$PI_CONFIG_DIR" \
     timeout "$TIMEOUT" \
     pi -p --no-session --no-skills \
@@ -251,6 +252,7 @@ run_eval() {
         2>"$workdir/stderr.log" \
         > "$workdir/output.log" \
     || true  # Don't fail on non-zero exit
+    cd "$SCRIPT_DIR"
     
     local end=$(date +%s)
     local elapsed=$((end - start))

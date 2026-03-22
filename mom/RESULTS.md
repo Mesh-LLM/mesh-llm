@@ -106,7 +106,50 @@ Claude found more subtle edge cases (NaN, infinity, booleans-as-ints, string-as-
 
 This is the real challenge for mesh-llm as an agent backend. The models can reason but they can't reliably execute multi-step tool-use workflows. MoM doesn't help here — you can't vote on "which model correctly edited a file" if none of them did.
 
-**Next:** Test with MiniMax-253B (much stronger) and Qwen2.5-72B via the mesh to see if model scale closes the gap.
+## MiniMax-253B via Mesh: Matches Claude
+
+Same task (add display_name() to Rust struct), pi -p harness, working directory fix applied.
+
+| | Claude Sonnet 4 | MiniMax-253B (mesh) | Qwen3-8B (local) |
+|--|---|---|---|
+| Time | **15s** | 24s | 84s |
+| Score | **5/5** | **5/5** | 3/5 |
+| Edited file? | ✅ | ✅ | ❌ |
+| Correct impl? | ✅ `format!("{} {}", ...)` | ✅ identical | N/A |
+| Hallucinated? | No | No | Yes |
+
+**MiniMax-253B matches Claude on this agentic task.** It read the file, found the right location, added the method with the correct signature and implementation, and produced compiling code. The edit is character-for-character identical to Claude's.
+
+**MoA failed** — 0 bytes output. The fan-out to 3 models waits for the slowest (Qwen3.5-9B, ~80s for thinking), which likely exceeded pi's internal timeout. MoA as an agent backend needs either: (a) a time-bounded fan-out that proceeds with whoever responded, or (b) fewer/faster reference models.
+
+### Implications
+
+1. **Model scale is the answer for agentic work.** MiniMax-253B (free, local) matches Claude Sonnet 4 (paid API). Qwen3-8B (also free, also local) completely fails. The gap is model capability, not the harness.
+
+2. **MoA latency kills agentic use.** An agent harness (pi, Claude Code, Goose) makes many small requests. Each MoA request waits for 3 models + aggregation. If each takes 30-90s, a 10-turn agent session becomes 5-15 minutes. Solo MiniMax at 24s/turn is already fast enough.
+
+3. **MoA's value is for single-turn quality** — where you want the best possible answer to one question. For agentic flows (many turns, tool use), solo strong model wins on speed.
+
+## Local Algorithm Comparison (3 models, no mesh)
+
+3 local models: Qwen3-30B-A3B (17GB MoE), Qwen2.5-Coder-7B (4.4GB), Mistral-Small-24B (13GB).
+
+### Code review task (find bugs in merge/search functions)
+
+| Strategy | Time | Finding |
+|---|---|---|
+| Solo Qwen3-30B | 19.5s | Found real bug + some false positives |
+| Solo Coder-7B | **6.9s** | Found real bug immediately, but also hallucinated hi=len(arr) is wrong |
+| Solo Mistral | 22.2s | Found real bug correctly |
+| MoA (synthesize) | 66.5s | Combined all findings, including hallucinated ones |
+| Best-of-N (pick) | 66.6s | Picked best solo response |
+| Rank-and-pick | 70.0s | Ranked and picked |
+
+**Key finding**: MoA synthesis amplifies hallucinations — if one model says something wrong, the aggregator includes it. Best-of-N is better for correctness because it selects rather than merges.
+
+### Monty Hall / Sieve of Eratosthenes
+
+All models get these right. MoA adds 3.5x latency for zero quality improvement. Confirms: when all models can solve the problem, ensembling is pure waste.
 
 ## Next Steps
 
