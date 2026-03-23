@@ -191,18 +191,6 @@ impl KnowledgeStore {
         scored.into_iter().map(|(_, item)| item).collect()
     }
 
-    /// Get items from a specific peer.
-    pub async fn from_peer(&self, name: &str) -> Vec<KnowledgeItem> {
-        let n = name.to_lowercase();
-        let mut items = self.items.lock().await;
-        self.prune_locked(&mut items);
-        let mut result: Vec<_> = items.iter()
-            .filter(|i| i.from.to_lowercase().contains(&n))
-            .cloned()
-            .collect();
-        result.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        result
-    }
 
     /// Get a thread: the given item + all replies.
     pub async fn thread(&self, id: u64) -> Vec<KnowledgeItem> {
