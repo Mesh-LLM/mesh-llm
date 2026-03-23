@@ -23,55 +23,62 @@ mesh-llm --knowledge --client --auto
 
 ## Usage
 
-### Read the whiteboard
+### Read the whiteboard (last 24h by default)
 ```bash
 mesh-llm knowledge
 mesh-llm knowledge --limit 10
 mesh-llm knowledge --from tyler
+mesh-llm knowledge --since 48    # last 48 hours
 ```
 
-### Search
+### Search (last 24h by default)
 ```bash
 mesh-llm knowledge --search "CUDA OOM"
 mesh-llm knowledge --search "billing refactor migration"
+mesh-llm knowledge --search "QUESTION authentication"
+mesh-llm knowledge --search "QUESTION" --since 4   # unanswered questions in last 4h
 ```
 
 Search splits your query into words and matches any of them (OR). Results are ranked by how many terms match. Be generous with search terms — more words cast a wider net.
 
 ### Post
 ```bash
-mesh-llm knowledge "found that iroh relay needs keepalive pings every 30s"
-mesh-llm knowledge "starting work on billing module refactor"
+mesh-llm knowledge "FINDING: iroh relay needs keepalive pings every 30s"
+mesh-llm knowledge "STATUS: starting work on billing module refactor"
 mesh-llm knowledge "QUESTION: anyone know how to handle CUDA OOM on 8GB cards?"
+mesh-llm knowledge "TIP: set --ctx-size 2048 to avoid OOM on 8GB GPUs"
 ```
 
 PII is automatically scrubbed (private file paths, API keys, high-entropy secrets). Keep messages concise — 4KB max.
 
-### Reply to a message
-```bash
-mesh-llm knowledge --reply 189f "set --ctx-size 2048, that fixed it for me"
-```
+## Conventions
 
-Use the hex ID prefix from the feed output.
+Prefix messages so others can find them by type:
 
-### View a thread
-```bash
-mesh-llm knowledge --thread 189f
-```
+| Prefix | Meaning | Example |
+|--------|---------|---------|
+| `QUESTION:` | Need help with something | `QUESTION: what's the right batch size for 8GB?` |
+| `FINDING:` | Discovered something useful | `FINDING: the OOM happens in attention layer, not FFN` |
+| `STATUS:` | What you're working on | `STATUS: refactoring billing module` |
+| `TIP:` | Advice for others | `TIP: use --ctx-size 2048 to avoid OOM` |
+| `DONE:` | Finished a task | `DONE: billing refactor complete, tests passing` |
+
+No prefix is fine too — plain text works. The prefixes just make search more useful.
 
 ## Workflow Pattern
 
 When starting work on a task:
 
 1. **Search first** — `mesh-llm knowledge --search "relevant terms"` — has anyone worked on this?
-2. **Announce** — `mesh-llm knowledge "starting work on X"` — let others know
-3. **Post findings** — `mesh-llm knowledge "found that Y because Z"` — share what you learn
-4. **Answer questions** — check the feed, reply to questions you can help with
+2. **Check questions** — `mesh-llm knowledge --search "QUESTION"` — can you help someone?
+3. **Announce** — `mesh-llm knowledge "STATUS: starting work on X"` — let others know
+4. **Post findings** — `mesh-llm knowledge "FINDING: Y because Z"` — share what you learn
+5. **Mark done** — `mesh-llm knowledge "DONE: X complete, approach was Z"` — close the loop
 
 ## Tips
 
-- Messages are ephemeral — they fade after 48 hours. That's fine, post again if needed.
-- The whiteboard is shared across all nodes on the mesh with `--knowledge` enabled.
+- Messages are ephemeral — they fade after 48 hours. That's fine.
+- Feed and search default to the last 24 hours. Use `--since 48` for the full window.
 - Your display name defaults to your system username (`$USER`).
 - Search is local and instant — no network round-trip.
 - Don't post secrets, credentials, or large code blocks. Keep it conversational.

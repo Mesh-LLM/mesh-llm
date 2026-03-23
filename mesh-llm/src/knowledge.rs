@@ -163,7 +163,8 @@ impl KnowledgeStore {
     /// Search items by multi-term OR matching (like megamind).
     /// Query is split into terms — any term matching is a hit.
     /// Results ranked by number of matching terms (most relevant first).
-    pub async fn search(&self, query: &str) -> Vec<KnowledgeItem> {
+    /// `since` filters to items newer than this unix timestamp (0 = no filter).
+    pub async fn search(&self, query: &str, since: u64) -> Vec<KnowledgeItem> {
         let terms: Vec<String> = query.to_lowercase()
             .split_whitespace()
             .filter(|w| !w.is_empty())
@@ -175,6 +176,7 @@ impl KnowledgeStore {
         let mut items = self.items.lock().await;
         self.prune_locked(&mut items);
         let mut scored: Vec<(usize, KnowledgeItem)> = items.iter()
+            .filter(|i| since == 0 || i.timestamp > since)
             .filter_map(|i| {
                 let text_lower = i.text.to_lowercase();
                 let from_lower = i.from.to_lowercase();
@@ -411,7 +413,7 @@ mod tests {
         let store = KnowledgeStore::new(true);
         store.insert(KnowledgeItem::new("alice".into(), "a".into(), "CUDA OOM fix".into(), None)).await;
         store.insert(KnowledgeItem::new("bob".into(), "b".into(), "networking stuff".into(), None)).await;
-        let results = store.search("cuda").await;
+        let results = store.search("cuda", 0).await;
         assert_eq!(results.len(), 1);
         assert!(results[0].text.contains("CUDA"));
     }
@@ -423,7 +425,7 @@ mod tests {
         store.insert(KnowledgeItem::new("bob".into(), "b".into(), "networking refactor".into(), None)).await;
         store.insert(KnowledgeItem::new("carol".into(), "c".into(), "unrelated stuff".into(), None)).await;
         // "CUDA networking" should match both alice and bob (OR)
-        let results = store.search("CUDA networking").await;
+        let results = store.search("CUDA networking", 0).await;
         assert_eq!(results.len(), 2);
     }
 
@@ -434,7 +436,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1));
         store.insert(KnowledgeItem::new("bob".into(), "b".into(), "CUDA fix for GPU OOM issue".into(), None)).await;
         // "CUDA OOM GPU" — bob matches 3 terms, alice matches 3 terms, bob is newer
-        let results = store.search("CUDA OOM GPU").await;
+        let results = store.search("CUDA OOM GPU", 0).await;
         assert_eq!(results.len(), 2);
     }
 

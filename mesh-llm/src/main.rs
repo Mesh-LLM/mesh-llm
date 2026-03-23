@@ -219,9 +219,10 @@ enum Command {
     /// Show feed:        mesh-llm knowledge
     /// Search:           mesh-llm knowledge --search "query"
     /// From a peer:      mesh-llm knowledge --from tyler
-    /// Reply:            mesh-llm knowledge --reply <id> "response"
-    /// Show thread:      mesh-llm knowledge --thread <id>
     /// Install skill:    mesh-llm knowledge install-skill
+    ///
+    /// Conventions: prefix messages with QUESTION:, STATUS:, FINDING:, TIP: etc.
+    /// Search picks these up naturally via multi-term OR matching.
     #[command(name = "knowledge")]
     Knowledge {
         /// Message to post (if provided).
@@ -233,11 +234,14 @@ enum Command {
         #[arg(long)]
         from: Option<String>,
         /// Reply to an item by ID (prefix match).
-        #[arg(long)]
+        #[arg(long, hide = true)]
         reply: Option<String>,
         /// Show a thread starting from an item ID (prefix match).
-        #[arg(long)]
+        #[arg(long, hide = true)]
         thread: Option<String>,
+        /// Only show items from the last N hours (default: 24).
+        #[arg(long)]
+        since: Option<f64>,
         /// Max items to show (default: 20).
         #[arg(long, default_value = "20")]
         limit: usize,
@@ -310,11 +314,11 @@ async fn main() -> Result<()> {
             Command::Claude { model, port } => {
                 return run_claude(model.clone(), *port).await;
             }
-            Command::Knowledge { text, search, from, reply, thread, limit, port } => {
+            Command::Knowledge { text, search, from, reply, thread, since, limit, port } => {
                 if text.as_deref() == Some("install-skill") {
                     return install_skill();
                 }
-                return run_knowledge(text.clone(), search.clone(), from.clone(), reply.clone(), thread.clone(), *limit, *port).await;
+                return run_knowledge(text.clone(), search.clone(), from.clone(), reply.clone(), thread.clone(), *since, *limit, *port).await;
             }
 
         }
@@ -2204,6 +2208,7 @@ async fn run_knowledge(
     from: Option<String>,
     reply: Option<String>,
     thread: Option<String>,
+    since_hours: Option<f64>,
     limit: usize,
     port: u16,
 ) -> Result<()> {
@@ -2217,6 +2222,17 @@ async fn run_knowledge(
         eprintln!("Cannot reach mesh-llm on port {port} — is it running with --knowledge?");
         std::process::exit(1);
     }
+
+    // Default: 24h for feed/search, override with --since
+    let default_hours = 24.0;
+    let since_secs = {
+        let hours = since_hours.unwrap_or(default_hours);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        now.saturating_sub((hours * 3600.0) as u64)
+    };
 
     // Show a thread
     if let Some(id_prefix) = thread {
@@ -2266,7 +2282,7 @@ async fn run_knowledge(
     // Search
     if let Some(q) = search {
         let resp = client.get(format!("{base}/api/knowledge/search"))
-            .query(&[("q", q.as_str()), ("limit", &limit.to_string())])
+            .query(&[("q", q.as_str()), ("limit", &limit.to_string()), ("since", &since_secs.to_string())])
             .send().await
             .context("Cannot reach mesh-llm — is it running with --knowledge?")?;
         let items: Vec<knowledge::KnowledgeItem> = resp.json().await?;
@@ -2279,7 +2295,7 @@ async fn run_knowledge(
     }
 
     // Feed (optionally filtered by peer)
-    let mut params = vec![("limit", limit.to_string())];
+    let mut params = vec![("limit", limit.to_string()), ("since", since_secs.to_string())];
     if let Some(ref f) = from {
         params.push(("from", f.clone()));
     }

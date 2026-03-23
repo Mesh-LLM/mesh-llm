@@ -576,12 +576,10 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
                 let from = params.iter().find(|(k, _)| *k == "from").map(|(_, v)| *v);
                 let limit: usize = params.iter().find(|(k, _)| *k == "limit")
                     .and_then(|(_, v)| v.parse().ok()).unwrap_or(20);
-                let items = if let Some(f) = from {
-                    let mut items = node.knowledge.from_peer(f).await;
-                    items.truncate(limit);
-                    items
-                } else {
-                    let mut items = node.knowledge.all().await;
+                let since: u64 = params.iter().find(|(k, _)| *k == "since")
+                    .and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
+                let items = {
+                    let mut items = node.knowledge.feed(since, from, limit).await;
                     items.truncate(limit);
                     items
                 };
@@ -606,8 +604,10 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
                 let q = params.iter().find(|(k, _)| *k == "q").map(|(_, v)| *v).unwrap_or("");
                 let limit: usize = params.iter().find(|(k, _)| *k == "limit")
                     .and_then(|(_, v)| v.parse().ok()).unwrap_or(20);
+                let since: u64 = params.iter().find(|(k, _)| *k == "since")
+                    .and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
                 let decoded_q = q.replace('+', " ").replace("%20", " ");
-                let mut items = node.knowledge.search(&decoded_q).await;
+                let mut items = node.knowledge.search(&decoded_q, since).await;
                 items.truncate(limit);
                 let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
                 let resp = format!(
