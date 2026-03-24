@@ -693,78 +693,101 @@ export function App() {
       const MAX_RETRIES = 3;
       const RETRY_DELAYS = [1000, 2000, 4000];
       const RETRYABLE = new Set([500, 502, 503]);
-      let response: Response | null = null;
 
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            model,
-            messages: historyForRequest.map((m) => ({
-              role: m.role,
-              content: m.image
-                ? [
-                    { type: 'text' as const, text: m.content },
-                    { type: 'image_url' as const, image_url: { url: m.image } },
-                  ]
-                : m.content,
-            })),
-            stream: true,
-            stream_options: { include_usage: true },
-            chat_template_kwargs: { enable_thinking: false },
-          }),
-        });
-        if (response.ok && response.body) break;
-        if (!RETRYABLE.has(response.status) || attempt === MAX_RETRIES - 1) break;
-        await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
-      }
+      const buildBody = () => JSON.stringify({
+        model,
+        messages: historyForRequest.map((m) => ({
+          role: m.role,
+          content: m.image
+            ? [
+                { type: 'text' as const, text: m.content },
+                { type: 'image_url' as const, image_url: { url: m.image } },
+              ]
+            : m.content,
+        })),
+        stream: true,
+        stream_options: { include_usage: true },
+        chat_template_kwargs: { enable_thinking: false },
+      });
 
-      if (!response?.ok || !response?.body) throw new Error(`HTTP ${response?.status ?? 'unknown'}`);
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
       let full = '';
       let reasoning = '';
       let completionTokens: number | null = null;
       let firstTokenAt: number | null = null;
+      let lastError: unknown = null;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop() ?? '';
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const data = line.slice(6).trim();
-          if (!data || data === '[DONE]') continue;
-          try {
-            const chunk = JSON.parse(data) as {
-              usage?: { completion_tokens?: number };
-              choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
-            };
-            const delta = chunk.choices?.[0]?.delta;
-            if (Number.isFinite(chunk.usage?.completion_tokens)) completionTokens = chunk.usage!.completion_tokens!;
-            const contentDelta = delta?.content ?? '';
-            const reasoningDelta = delta?.reasoning_content ?? '';
-            if (!contentDelta && !reasoningDelta) continue;
-            if (firstTokenAt == null) firstTokenAt = performance.now();
-            full += contentDelta;
-            reasoning += reasoningDelta;
-            updateChatState((prev) => ({
-              ...prev,
-              conversations: updateConversationList(prev.conversations, conversationId, (conversation) => ({
-                ...conversation,
-                messages: conversation.messages.map((m) => (m.id === assistantId ? { ...m, content: full, reasoning: reasoning || undefined } : m)),
-                updatedAt: Date.now(),
-              })),
-            }));
-          } catch {
-            // ignore malformed chunk
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        lastError = null;
+        try {
+          const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: buildBody(),
+          });
+
+          if (!response.ok || !response.body) {
+            if (RETRYABLE.has(response.status) && attempt < MAX_RETRIES - 1) {
+              await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+              continue;
+            }
+            throw new Error(`HTTP ${response.status}`);
           }
+
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() ?? '';
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              const data = line.slice(6).trim();
+              if (!data || data === '[DONE]') continue;
+              try {
+                const chunk = JSON.parse(data) as {
+                  usage?: { completion_tokens?: number };
+                  choices?: Array<{ delta?: { content?: string; reasoning_content?: string } }>;
+                };
+                const delta = chunk.choices?.[0]?.delta;
+                if (Number.isFinite(chunk.usage?.completion_tokens)) completionTokens = chunk.usage!.completion_tokens!;
+                const contentDelta = delta?.content ?? '';
+                const reasoningDelta = delta?.reasoning_content ?? '';
+                if (!contentDelta && !reasoningDelta) continue;
+                if (firstTokenAt == null) firstTokenAt = performance.now();
+                full += contentDelta;
+                reasoning += reasoningDelta;
+                updateChatState((prev) => ({
+                  ...prev,
+                  conversations: updateConversationList(prev.conversations, conversationId, (conversation) => ({
+                    ...conversation,
+                    messages: conversation.messages.map((m) => (m.id === assistantId ? { ...m, content: full, reasoning: reasoning || undefined } : m)),
+                    updatedAt: Date.now(),
+                  })),
+                }));
+              } catch {
+                // ignore malformed chunk
+              }
+            }
+          }
+
+          // Stream completed successfully — done
+          break;
+        } catch (err) {
+          // Abort is never retried
+          if (err instanceof Error && err.name === 'AbortError') throw err;
+          // Network error or stream broke — retry only if no tokens were streamed yet
+          if (firstTokenAt != null) throw err; // user already saw content, don't retry
+          lastError = err;
+          if (attempt < MAX_RETRIES - 1) {
+            await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt]));
+            continue;
+          }
+          throw err;
         }
       }
 
