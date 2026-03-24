@@ -2,7 +2,7 @@
 
 ## Repo Overview
 
-This repo (`decentralized-inference`) contains mesh-llm — a Rust binary that pools GPUs over QUIC for distributed LLM inference using llama.cpp.
+This repo (`mesh-llm`) contains mesh-llm — a Rust binary that pools GPUs over QUIC for distributed LLM inference using llama.cpp.
 
 ## Key Docs
 

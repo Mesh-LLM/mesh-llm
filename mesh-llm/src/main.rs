@@ -2227,7 +2227,7 @@ async fn run_blackboard(
         eprintln!("  Join a mesh:   mesh-llm --client --blackboard --join <token>");
         eprintln!("  Public mesh:   mesh-llm --client --blackboard --auto");
         eprintln!();
-        eprintln!("See https://michaelneale.github.io/decentralized-inference for setup guide.");
+        eprintln!("See https://github.com/michaelneale/mesh-llm for setup guide.");
         std::process::exit(1);
     }
 
