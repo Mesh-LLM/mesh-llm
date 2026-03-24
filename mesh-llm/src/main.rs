@@ -214,6 +214,8 @@ enum Command {
         #[arg(long, default_value = "9337")]
         port: u16,
     },
+    /// Stop all running mesh-llm, llama-server, and rpc-server processes.
+    Stop,
     /// Blackboard — post, search, and read messages shared across the mesh.
     ///
     /// Post a message:   mesh-llm blackboard "your message here"
@@ -300,6 +302,9 @@ async fn main() -> Result<()> {
             }
             Command::Drop { name, port } => {
                 return run_drop(name, *port).await;
+            }
+            Command::Stop => {
+                return run_stop();
             }
             Command::Discover { model, min_vram, region, auto, relay } => {
                 return run_discover(model.clone(), *min_vram, region.clone(), *auto, relay.clone()).await;
@@ -1960,6 +1965,26 @@ async fn run_discover(
 }
 
 /// Drop a model from the mesh by sending a control request to the running instance.
+fn run_stop() -> Result<()> {
+    use std::process::Command as Cmd;
+    let mut killed = 0u32;
+    for name in &["mesh-llm", "llama-server", "rpc-server"] {
+        // pkill sends SIGTERM; ignore errors (process might not exist)
+        let status = Cmd::new("pkill").arg("-f").arg(name).status();
+        match status {
+            Ok(s) if s.success() => {
+                eprintln!("🧹 Stopped {name}");
+                killed += 1;
+            }
+            _ => {}
+        }
+    }
+    if killed == 0 {
+        eprintln!("Nothing running.");
+    }
+    Ok(())
+}
+
 async fn run_drop(model_name: &str, port: u16) -> Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
