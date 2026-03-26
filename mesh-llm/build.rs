@@ -3,6 +3,8 @@ use std::path::Path;
 
 fn main() {
     watch_path(Path::new("ui/dist"));
+    watch_path(Path::new("proto"));
+    compile_proto();
 }
 
 fn watch_path(path: &Path) {
@@ -20,4 +22,13 @@ fn watch_path(path: &Path) {
             watch_path(&entry.path());
         }
     }
+}
+
+fn compile_proto() {
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc");
+    std::env::set_var("PROTOC", protoc);
+
+    prost_build::Config::new()
+        .compile_protos(&["proto/plugin.proto"], &["proto"])
+        .expect("compile plugin proto");
 }

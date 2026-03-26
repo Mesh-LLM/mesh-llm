@@ -10,7 +10,7 @@
 //! The dashboard is read-only — shows status, topology, models.
 //! All mutations happen via CLI flags (--join, --model, --auto).
 
-use crate::{download, election, mesh, nostr};
+use crate::{download, election, mesh, nostr, plugin};
 use include_dir::{include_dir, Dir};
 use serde::Serialize;
 use std::sync::Arc;
@@ -31,6 +31,7 @@ pub struct MeshApi {
 
 struct ApiInner {
     node: mesh::Node,
+    plugin_manager: plugin::PluginManager,
     is_host: bool,
     is_client: bool,
     llama_ready: bool,
@@ -103,10 +104,17 @@ struct MeshModelPayload {
 }
 
 impl MeshApi {
-    pub fn new(node: mesh::Node, model_name: String, api_port: u16, model_size_bytes: u64) -> Self {
+    pub fn new(
+        node: mesh::Node,
+        model_name: String,
+        api_port: u16,
+        model_size_bytes: u64,
+        plugin_manager: plugin::PluginManager,
+    ) -> Self {
         MeshApi {
             inner: Arc::new(Mutex::new(ApiInner {
                 node,
+                plugin_manager,
                 is_host: false,
                 is_client: false,
                 llama_ready: false,
@@ -563,67 +571,179 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
             }
         }
 
+        // ── Plugins ──
+        ("GET", "/api/plugins") => {
+            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+            let plugins = plugin_manager.list().await;
+            let json = serde_json::to_string(&plugins)?;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                json.len(),
+                json
+            );
+            stream.write_all(resp.as_bytes()).await?;
+        }
+
+        ("GET", p) if p.starts_with("/api/plugins/") && p.ends_with("/tools") => {
+            let rest = &p["/api/plugins/".len()..];
+            let plugin_name = rest.trim_end_matches("/tools");
+            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+            match plugin_manager.tools(plugin_name).await {
+                Ok(tools) => {
+                    let json = serde_json::to_string(&tools)?;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        json.len(),
+                        json
+                    );
+                    stream.write_all(resp.as_bytes()).await?;
+                }
+                Err(e) => {
+                    respond_error(&mut stream, 404, &e.to_string()).await?;
+                }
+            }
+        }
+
+        ("POST", p) if p.starts_with("/api/plugins/") && p.contains("/tools/") => {
+            let rest = &p["/api/plugins/".len()..];
+            if let Some((plugin_name, tool_name)) = rest.split_once("/tools/") {
+                let body = req.split("\r\n\r\n").nth(1).unwrap_or("{}");
+                let payload = if body.trim().is_empty() { "{}" } else { body };
+                let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+                match plugin_manager.call_tool(plugin_name, tool_name, payload).await {
+                    Ok(result) if !result.is_error => {
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            result.content_json.len(),
+                            result.content_json
+                        );
+                        stream.write_all(resp.as_bytes()).await?;
+                    }
+                    Ok(result) => {
+                        respond_error(&mut stream, 502, &result.content_json).await?;
+                    }
+                    Err(e) => {
+                        respond_error(&mut stream, 502, &e.to_string()).await?;
+                    }
+                }
+            } else {
+                respond_error(&mut stream, 404, "Not found").await?;
+            }
+        }
+
         // ── Blackboard ──
         ("GET", "/api/blackboard/feed") => {
-            let node = state.inner.lock().await.node.clone();
-            if !node.blackboard.is_enabled() {
-                respond_error(&mut stream, 404, "Blackboard not enabled. On public meshes (--auto), add --blackboard explicitly").await?;
+            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+            if !plugin_manager.is_enabled(plugin::BLACKBOARD_PLUGIN_ID) {
+                respond_error(&mut stream, 404, "Blackboard is disabled on this node").await?;
             } else {
                 let query_str = path.split('?').nth(1).unwrap_or("");
-                let params: Vec<(&str, &str)> = query_str.split('&')
+                let params: Vec<(&str, &str)> = query_str
+                    .split('&')
                     .filter_map(|p| p.split_once('='))
                     .collect();
-                let from = params.iter().find(|(k, _)| *k == "from").map(|(_, v)| *v);
-                let limit: usize = params.iter().find(|(k, _)| *k == "limit")
-                    .and_then(|(_, v)| v.parse().ok()).unwrap_or(20);
-                let since: u64 = params.iter().find(|(k, _)| *k == "since")
-                    .and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
-                let items = {
-                    let mut items = node.blackboard.feed(since, from, limit).await;
-                    items.truncate(limit);
-                    items
+                let request = crate::blackboard::FeedRequest {
+                    from: params.iter().find(|(k, _)| *k == "from").map(|(_, v)| (*v).to_string()),
+                    limit: params
+                        .iter()
+                        .find(|(k, _)| *k == "limit")
+                        .and_then(|(_, v)| v.parse().ok())
+                        .unwrap_or(20),
+                    since: params
+                        .iter()
+                        .find(|(k, _)| *k == "since")
+                        .and_then(|(_, v)| v.parse().ok())
+                        .unwrap_or(0),
                 };
-                let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    json.len(), json
-                );
-                stream.write_all(resp.as_bytes()).await?;
+                match plugin_manager
+                    .call_tool(
+                        plugin::BLACKBOARD_PLUGIN_ID,
+                        "feed",
+                        &serde_json::to_string(&request)?,
+                    )
+                    .await
+                {
+                    Ok(result) if !result.is_error => {
+                        let items: Vec<crate::blackboard::BlackboardItem> =
+                            serde_json::from_str(&result.content_json).unwrap_or_default();
+                        let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            json.len(),
+                            json
+                        );
+                        stream.write_all(resp.as_bytes()).await?;
+                    }
+                    Ok(result) => {
+                        respond_error(&mut stream, 502, &result.content_json).await?;
+                    }
+                    Err(e) => respond_error(&mut stream, 502, &e.to_string()).await?,
+                }
             }
         }
 
         ("GET", "/api/blackboard/search") => {
-            let node = state.inner.lock().await.node.clone();
-            if !node.blackboard.is_enabled() {
-                respond_error(&mut stream, 404, "Blackboard not enabled. On public meshes (--auto), add --blackboard explicitly").await?;
+            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+            if !plugin_manager.is_enabled(plugin::BLACKBOARD_PLUGIN_ID) {
+                respond_error(&mut stream, 404, "Blackboard is disabled on this node").await?;
             } else {
                 let query_str = path.split('?').nth(1).unwrap_or("");
-                let params: Vec<(&str, &str)> = query_str.split('&')
+                let params: Vec<(&str, &str)> = query_str
+                    .split('&')
                     .filter_map(|p| p.split_once('='))
                     .collect();
-                let q = params.iter().find(|(k, _)| *k == "q").map(|(_, v)| *v).unwrap_or("");
-                let limit: usize = params.iter().find(|(k, _)| *k == "limit")
-                    .and_then(|(_, v)| v.parse().ok()).unwrap_or(20);
-                let since: u64 = params.iter().find(|(k, _)| *k == "since")
-                    .and_then(|(_, v)| v.parse().ok()).unwrap_or(0);
-                let decoded_q = q.replace('+', " ").replace("%20", " ");
-                let mut items = node.blackboard.search(&decoded_q, since).await;
-                items.truncate(limit);
-                let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    json.len(), json
-                );
-                stream.write_all(resp.as_bytes()).await?;
+                let request = crate::blackboard::SearchRequest {
+                    query: params
+                        .iter()
+                        .find(|(k, _)| *k == "q")
+                        .map(|(_, v)| (*v).replace('+', " ").replace("%20", " "))
+                        .unwrap_or_default(),
+                    limit: params
+                        .iter()
+                        .find(|(k, _)| *k == "limit")
+                        .and_then(|(_, v)| v.parse().ok())
+                        .unwrap_or(20),
+                    since: params
+                        .iter()
+                        .find(|(k, _)| *k == "since")
+                        .and_then(|(_, v)| v.parse().ok())
+                        .unwrap_or(0),
+                };
+                match plugin_manager
+                    .call_tool(
+                        plugin::BLACKBOARD_PLUGIN_ID,
+                        "search",
+                        &serde_json::to_string(&request)?,
+                    )
+                    .await
+                {
+                    Ok(result) if !result.is_error => {
+                        let items: Vec<crate::blackboard::BlackboardItem> =
+                            serde_json::from_str(&result.content_json).unwrap_or_default();
+                        let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            json.len(),
+                            json
+                        );
+                        stream.write_all(resp.as_bytes()).await?;
+                    }
+                    Ok(result) => {
+                        respond_error(&mut stream, 502, &result.content_json).await?;
+                    }
+                    Err(e) => respond_error(&mut stream, 502, &e.to_string()).await?,
+                }
             }
         }
 
         ("POST", "/api/blackboard/post") => {
-            let node = state.inner.lock().await.node.clone();
-            if !node.blackboard.is_enabled() {
-                respond_error(&mut stream, 404, "Blackboard not enabled. On public meshes (--auto), add --blackboard explicitly").await?;
+            let (node, plugin_manager) = {
+                let inner = state.inner.lock().await;
+                (inner.node.clone(), inner.plugin_manager.clone())
+            };
+            if !plugin_manager.is_enabled(plugin::BLACKBOARD_PLUGIN_ID) {
+                respond_error(&mut stream, 404, "Blackboard is disabled on this node").await?;
             } else {
-                // Parse JSON body
                 let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
                 let parsed: Result<serde_json::Value, _> = serde_json::from_str(body);
                 match parsed {
@@ -632,23 +752,40 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
                         if text.is_empty() {
                             respond_error(&mut stream, 400, "Missing 'text' field").await?;
                         } else {
-                            let peer_name = node.peer_name().await;
-                            let peer_id_hex = format!("{}", node.id().fmt_short());
-                            let item = crate::blackboard::BlackboardItem::new(
-                                peer_name, peer_id_hex, text,
-                            );
-                            match node.blackboard.post(item).await {
-                                Ok(posted) => {
-                                    node.broadcast_blackboard(&posted).await;
-                                    let json = serde_json::to_string(&posted).unwrap_or_else(|_| "{}".into());
+                            let request = crate::blackboard::PostRequest {
+                                text,
+                                from: node.peer_name().await,
+                                peer_id: node.id().fmt_short().to_string(),
+                            };
+                            match plugin_manager
+                                .call_tool(
+                                    plugin::BLACKBOARD_PLUGIN_ID,
+                                    "post",
+                                    &serde_json::to_string(&request)?,
+                                )
+                                .await
+                            {
+                                Ok(result) if !result.is_error => {
+                                    let json = result.content_json;
                                     let resp = format!(
                                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                                        json.len(), json
+                                        json.len(),
+                                        json
                                     );
                                     stream.write_all(resp.as_bytes()).await?;
                                 }
-                                Err(reason) => {
-                                    respond_error(&mut stream, 429, &reason).await?;
+                                Ok(result) => {
+                                    let status = if result.content_json.contains("Rate limited") {
+                                        429
+                                    } else {
+                                        400
+                                    };
+                                    respond_error(&mut stream, status, &result.content_json).await?;
+                                }
+                                Err(e) => {
+                                    let msg = e.to_string();
+                                    let status = if msg.contains("Rate limited") { 429 } else { 400 };
+                                    respond_error(&mut stream, status, &msg).await?;
                                 }
                             }
                         }

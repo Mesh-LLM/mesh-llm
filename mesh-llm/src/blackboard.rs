@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub const BLACKBOARD_CHANNEL: &str = "blackboard.v1";
+
 /// Max items to keep in memory.
 const MAX_ITEMS: usize = 500;
 /// Items older than this are pruned.
@@ -37,6 +39,46 @@ pub struct BlackboardItem {
     /// The message.
     pub text: String,
 
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct FeedRequest {
+    #[serde(default)]
+    pub since: u64,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SearchRequest {
+    pub query: String,
+    #[serde(default)]
+    pub since: u64,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct PostRequest {
+    pub text: String,
+    #[serde(default = "default_post_from")]
+    pub from: String,
+    #[serde(default = "default_post_peer_id")]
+    pub peer_id: String,
+}
+
+fn default_limit() -> usize {
+    20
+}
+
+fn default_post_from() -> String {
+    "mcp".to_string()
+}
+
+fn default_post_peer_id() -> String {
+    "mcp".to_string()
 }
 
 impl BlackboardItem {
@@ -96,6 +138,7 @@ impl BlackboardStore {
         self.enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[allow(dead_code)]
     pub fn set_enabled(&self, v: bool) {
         self.enabled.store(v, std::sync::atomic::Ordering::Relaxed);
     }

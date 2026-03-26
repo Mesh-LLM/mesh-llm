@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package meshllm.plugin.v1;
+
+message Envelope {
+  uint32 protocol_version = 1;
+  string plugin_id = 2;
+  uint64 request_id = 3;
+
+  oneof payload {
+    InitializeRequest initialize_request = 10;
+    InitializeResponse initialize_response = 11;
+    HealthRequest health_request = 12;
+    HealthResponse health_response = 13;
+    ShutdownRequest shutdown_request = 14;
+    ShutdownResponse shutdown_response = 15;
+    MeshEvent mesh_event = 16;
+    ToolCallRequest tool_call_request = 17;
+    ToolCallResponse tool_call_response = 18;
+    ChannelMessage channel_message = 19;
+    ErrorResponse error_response = 20;
+  }
+}
+
+message Empty {}
+
+message InitializeRequest {
+  uint32 host_protocol_version = 1;
+  string host_version = 2;
+  repeated string requested_capabilities = 3;
+}
+
+message InitializeResponse {
+  string plugin_id = 1;
+  uint32 plugin_protocol_version = 2;
+  string plugin_version = 3;
+  repeated string capabilities = 4;
+  repeated ToolSchema tool_schemas = 5;
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_OK = 1;
+    STATUS_DEGRADED = 2;
+    STATUS_UNHEALTHY = 3;
+  }
+
+  Status status = 1;
+  string detail = 2;
+}
+
+message ShutdownRequest {
+  string reason = 1;
+}
+
+message ShutdownResponse {}
+
+message MeshPeer {
+  string peer_id = 1;
+  string version = 2;
+  repeated string capabilities = 3;
+}
+
+message MeshEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    PEER_UP = 1;
+    PEER_DOWN = 2;
+    PEER_UPDATED = 3;
+  }
+
+  Kind kind = 1;
+  MeshPeer peer = 2;
+}
+
+message ToolSchema {
+  string name = 1;
+  string description = 2;
+  string input_schema_json = 3;
+}
+
+message ToolCallRequest {
+  string name = 1;
+  string arguments_json = 2;
+}
+
+message ToolCallResponse {
+  string content_json = 1;
+  bool is_error = 2;
+}
+
+message ChannelMessage {
+  string channel = 1;
+  string source_peer_id = 2;
+  string target_peer_id = 3;
+  string content_type = 4;
+  bytes body = 5;
+}
+
+message MeshChannelFrame {
+  string plugin_id = 1;
+  string message_id = 2;
+  ChannelMessage message = 3;
+}
+
+message ErrorResponse {
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+    UNKNOWN = 1;
+    INVALID_REQUEST = 2;
+    UNSUPPORTED_CAPABILITY = 3;
+    PROTOCOL_MISMATCH = 4;
+    INTERNAL = 5;
+  }
+
+  Code code = 1;
+  string message = 2;
+}

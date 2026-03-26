@@ -189,7 +189,7 @@ impl BlackboardServer {
                 }
             }
             Ok(resp) if resp.status().as_u16() == 404 => {
-                "Blackboard not enabled. Restart mesh-llm with --blackboard.".into()
+                "Blackboard is disabled on this node. Re-enable the blackboard plugin in config.".into()
             }
             Ok(resp) => {
                 let status = resp.status();

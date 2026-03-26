@@ -2,7 +2,6 @@ mod api;
 mod download;
 mod election;
 mod blackboard;
-mod blackboard_mcp;
 mod launch;
 mod mesh;
 mod moe;
@@ -10,6 +9,8 @@ mod nostr;
 mod proxy;
 mod rewrite;
 mod pipeline;
+mod plugin;
+mod plugin_mcp;
 mod router;
 mod tunnel;
 
@@ -80,6 +81,10 @@ struct Cli {
     #[arg(long)]
     name: Option<String>,
 
+    /// Internal plugin service mode.
+    #[arg(long, hide = true)]
+    plugin: Option<String>,
+
     // ── Advanced options (hidden from default --help) ─────────────
 
     /// Draft model for speculative decoding.
@@ -137,6 +142,10 @@ struct Cli {
     /// Ignored (backward compat).
     #[arg(long, hide = true)]
     no_console: bool,
+
+    /// Optional path to the mesh-llm config file.
+    #[arg(long, hide = true)]
+    config: Option<PathBuf>,
 
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
@@ -215,7 +224,7 @@ enum Command {
     /// Show feed:        mesh-llm blackboard
     /// Search:           mesh-llm blackboard --search "query"
     /// From a peer:      mesh-llm blackboard --from tyler
-    /// MCP server:       mesh-llm blackboard --mcp
+    /// MCP server:       mesh-llm --client --join <token> blackboard --mcp
     /// Install skill:    mesh-llm blackboard install-skill
     ///
     /// Conventions: prefix messages with QUESTION:, STATUS:, FINDING:, TIP: etc.
@@ -243,6 +252,22 @@ enum Command {
         #[arg(long)]
         mcp: bool,
     },
+    /// Plugin management.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PluginCommand {
+    /// Compatibility shim for the old install workflow.
+    Install {
+        /// Plugin name.
+        name: String,
+    },
+    /// List auto-registered and configured plugins.
+    List,
 }
 
 #[tokio::main]
@@ -277,6 +302,10 @@ async fn main() -> Result<()> {
     }
 
     let mut cli = Cli::parse();
+
+    if let Some(name) = cli.plugin.clone() {
+        return plugin::run_plugin_process(name).await;
+    }
 
     // Clean up orphan processes from previous runs (skip for client — never runs llama-server)
     if !cli.client {
@@ -332,12 +361,15 @@ async fn main() -> Result<()> {
             }
             Command::Blackboard { text, search, from, since, limit, port, mcp } => {
                 if *mcp {
-                    return blackboard_mcp::run_mcp_server(*port).await;
+                    return run_plugin_mcp(&cli).await;
                 }
                 if text.as_deref() == Some("install-skill") {
                     return install_skill();
                 }
                 return run_blackboard(text.clone(), search.clone(), from.clone(), *since, *limit, *port).await;
+            }
+            Command::Plugin { command } => {
+                return run_plugin_command(command, &cli).await;
             }
 
         }
@@ -852,8 +884,92 @@ async fn check_unserved_model(node: &mesh::Node, local_models: &[String]) -> Opt
     None
 }
 
+fn load_resolved_plugins(cli: &Cli) -> Result<plugin::ResolvedPlugins> {
+    let config = plugin::load_config(cli.config.as_deref())?;
+    plugin::resolve_plugins(&config)
+}
+
+fn blackboard_display_name(cli: &Cli, node: &mesh::Node) -> String {
+    cli.name
+        .clone()
+        .or_else(|| std::env::var("USER").ok())
+        .or_else(|| std::env::var("USERNAME").ok())
+        .unwrap_or_else(|| node.id().fmt_short().to_string())
+}
+
+async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
+    if !cli.join.is_empty() {
+        for token in &cli.join {
+            match node.join(token).await {
+                Ok(()) => {
+                    eprintln!("Joined mesh");
+                    return Ok(());
+                }
+                Err(err) => tracing::warn!("Failed to join via token: {err}"),
+            }
+        }
+        anyhow::bail!("Failed to join any peer for MCP mode");
+    }
+
+    if cli.auto || cli.discover.is_some() {
+        let relays = nostr_relays(&cli.nostr_relay);
+        let filter = nostr::MeshFilter {
+            model: None,
+            min_vram_gb: None,
+            region: cli.region.clone(),
+        };
+        let target_name = cli.discover.as_deref().or(cli.mesh_name.as_deref());
+        let meshes = nostr::discover(&relays, &filter).await?;
+        match nostr::smart_auto(&meshes, 0.0, target_name) {
+            nostr::AutoDecision::Join { candidates } => {
+                let (token, mesh) = &candidates[0];
+                eprintln!(
+                    "✅ Joining: {} ({} nodes, {} models{})",
+                    mesh.listing.name.as_deref().unwrap_or("unnamed"),
+                    mesh.listing.node_count,
+                    mesh.listing.serving.len(),
+                    mesh.listing
+                        .region
+                        .as_ref()
+                        .map(|r| format!(", region: {r}"))
+                        .unwrap_or_default()
+                );
+                node.join(token).await?;
+            }
+            nostr::AutoDecision::StartNew { .. } => {
+                anyhow::bail!("No mesh found for MCP mode. Pass --join or start a mesh first.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
+    let resolved_plugins = load_resolved_plugins(cli)?;
+    let (node, _channels) =
+        mesh::Node::start(NodeRole::Client, &cli.relay, cli.bind_port, Some(0.0)).await?;
+    node.start_accepting();
+    node.set_blackboard_name(blackboard_display_name(cli, &node))
+        .await;
+    node.start_heartbeat();
+    join_mesh_for_mcp(cli, &node).await?;
+
+    let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
+    let plugin_manager = plugin::PluginManager::start(&resolved_plugins, plugin_mesh_tx).await?;
+    node.set_plugin_manager(plugin_manager.clone()).await;
+    node.start_plugin_channel_forwarder(plugin_mesh_rx);
+
+    if plugin_manager.list().await.is_empty() {
+        tracing::warn!("No plugins are enabled for MCP exposure");
+    }
+
+    plugin_mcp::run_mcp_server(plugin_manager).await
+}
+
 /// Auto-election mode: start rpc-server, join mesh, auto-elect host.
 async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_names: Vec<String>, bin_dir: PathBuf) -> Result<()> {
+    let resolved_plugins = load_resolved_plugins(&cli)?;
     let api_port = cli.port;
     let console_port = Some(cli.console);
     let is_client = cli.client;
@@ -869,27 +985,11 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
     let (node, channels) = mesh::Node::start(role, &cli.relay, cli.bind_port, max_vram).await?;
     node.start_accepting();
     let token = node.invite_token();
-
-    // Blackboard: on by default, off on public meshes (--auto) unless explicitly requested
-    let enable_blackboard = if cli.nostr_discovery {
-        if cli.blackboard {
-            eprintln!("⚠️  Blackboard on a public mesh — your posts are visible to all peers.");
-            true
-        } else {
-            false
-        }
-    } else {
-        true
-    };
-    if enable_blackboard {
-        node.blackboard.set_enabled(true);
-        let display_name = cli.name.clone()
-            .or_else(|| std::env::var("USER").ok())
-            .or_else(|| std::env::var("USERNAME").ok())
-            .unwrap_or_else(|| node.id().fmt_short().to_string());
-        node.set_blackboard_name(display_name.clone()).await;
-        eprintln!("📝 Blackboard enabled (name: {display_name})");
-    }
+    node.set_blackboard_name(blackboard_display_name(&cli, &node)).await;
+    let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
+    let plugin_manager = plugin::PluginManager::start(&resolved_plugins, plugin_mesh_tx).await?;
+    node.set_plugin_manager(plugin_manager.clone()).await;
+    node.start_plugin_channel_forwarder(plugin_mesh_rx);
 
     // Advertise what we have on disk and what we want the mesh to serve
     node.set_available_models(local_models.clone()).await;
@@ -1052,7 +1152,7 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
                 eprintln!("   VRAM: {:.1}GB, models on disk: {:?}", node.vram_bytes() as f64 / 1e9, local_models);
                 eprintln!("   Proxying requests to other nodes. Will activate when needed.");
             }
-            match run_passive(&cli, node.clone(), is_client).await? {
+            match run_passive(&cli, node.clone(), is_client, plugin_manager.clone()).await? {
                 Some(model_name) => {
                     // Promoted! Resolve the model path and continue to serving
                     let model_path = mesh::find_model_path(&model_name);
@@ -1140,7 +1240,13 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
     let model_name_for_console = model_name.clone();
     let console_state = if let Some(cport) = console_port {
         let model_size_bytes = election::total_model_bytes(&model);
-        let cs = api::MeshApi::new(node.clone(), model_name_for_console.clone(), api_port, model_size_bytes);
+        let cs = api::MeshApi::new(
+            node.clone(),
+            model_name_for_console.clone(),
+            api_port,
+            model_size_bytes,
+            plugin_manager.clone(),
+        );
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
         cs.set_nostr_discovery(cli.nostr_discovery).await;
         if let Some(draft) = &cli.draft {
@@ -1333,6 +1439,7 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
 /// Idle mode: no args → show instructions and read-only console.
 /// Use --auto or --join to actually connect to a mesh.
 async fn run_idle(cli: Cli, _bin_dir: PathBuf) -> Result<()> {
+    let resolved_plugins = load_resolved_plugins(&cli)?;
     let my_vram_gb = mesh::detect_vram_bytes_capped(cli.max_vram) as f64 / 1e9;
     let local_models = mesh::scan_local_models();
     eprintln!("mesh-llm v{VERSION} — {:.0}GB VRAM, {} models on disk", my_vram_gb, local_models.len());
@@ -1352,8 +1459,13 @@ async fn run_idle(cli: Cli, _bin_dir: PathBuf) -> Result<()> {
     // Start a dormant node just for the console
     let (node, _channels) = mesh::Node::start(NodeRole::Worker, &cli.relay, cli.bind_port, cli.max_vram).await?;
     node.set_available_models(local_models).await;
+    node.set_blackboard_name(blackboard_display_name(&cli, &node)).await;
+    let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
+    let plugin_manager = plugin::PluginManager::start(&resolved_plugins, plugin_mesh_tx).await?;
+    node.set_plugin_manager(plugin_manager.clone()).await;
+    node.start_plugin_channel_forwarder(plugin_mesh_rx);
 
-    let cs = api::MeshApi::new(node.clone(), "(idle)".into(), cli.port, 0);
+    let cs = api::MeshApi::new(node.clone(), "(idle)".into(), cli.port, 0, plugin_manager);
     cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
     cs.update(false, false).await;
     let cs2 = cs.clone();
@@ -1372,8 +1484,14 @@ async fn run_idle(cli: Cli, _bin_dir: PathBuf) -> Result<()> {
 /// Run as passive node (client or standby GPU).
 /// Returns Ok(Some(model_name)) if a standby GPU should promote to serve a model.
 /// Returns Ok(None) on clean shutdown.
-async fn run_passive(cli: &Cli, node: mesh::Node, is_client: bool) -> Result<Option<String>> {
+async fn run_passive(
+    cli: &Cli,
+    node: mesh::Node,
+    is_client: bool,
+    plugin_manager: plugin::PluginManager,
+) -> Result<Option<String>> {
     let local_port = cli.port;
+    node.set_blackboard_name(blackboard_display_name(cli, &node)).await;
 
     // Nostr publishing (if --publish, for idle GPU nodes advertising capacity)
     if cli.publish && !is_client {
@@ -1417,7 +1535,7 @@ async fn run_passive(cli: &Cli, node: mesh::Node, is_client: bool) -> Result<Opt
     {
         let cport = cli.console;
         let label = if is_client { "(client)".to_string() } else { "(standby)".to_string() };
-        let cs = api::MeshApi::new(node.clone(), label, local_port, 0);
+        let cs = api::MeshApi::new(node.clone(), label, local_port, 0, plugin_manager);
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
         cs.set_nostr_discovery(cli.nostr_discovery).await;
         if is_client { cs.set_client(true).await; }
@@ -2269,10 +2387,10 @@ async fn run_blackboard(
     if status_resp.is_err() {
         eprintln!("No mesh-llm node running on port {port}.");
         eprintln!();
-        eprintln!("Blackboard requires a running mesh. Add --blackboard to any node (client or full GPU):");
-        eprintln!("  Private mesh:  mesh-llm --client --blackboard  (share the join token printed out)");
-        eprintln!("  Join a mesh:   mesh-llm --client --blackboard --join <token>");
-        eprintln!("  Public mesh:   mesh-llm --client --blackboard --auto");
+        eprintln!("Blackboard requires a running mesh node:");
+        eprintln!("  Private mesh:  mesh-llm --client  (share the join token printed out)");
+        eprintln!("  Join a mesh:   mesh-llm --client --join <token>");
+        eprintln!("  Public mesh:   mesh-llm --client --auto");
         eprintln!();
         eprintln!("See https://github.com/michaelneale/mesh-llm for setup guide.");
         std::process::exit(1);
@@ -2282,9 +2400,8 @@ async fn run_blackboard(
     let feed_check = client.get(format!("{base}/api/blackboard/feed?limit=1")).send().await;
     if let Ok(resp) = feed_check {
         if resp.status().as_u16() == 404 {
-            eprintln!("Mesh is running but blackboard is not enabled.");
-            eprintln!("Blackboard is on by default for private meshes (--join).");
-            eprintln!("On public meshes (--auto), add --blackboard explicitly.");
+            eprintln!("Mesh is running but blackboard is disabled on that node.");
+            eprintln!("Re-enable it in the mesh config if you want to use the blackboard plugin.");
             std::process::exit(1);
         }
     }
@@ -2317,7 +2434,7 @@ async fn run_blackboard(
         let resp = client.post(format!("{base}/api/blackboard/post"))
             .json(&body)
             .send().await
-            .context("Cannot reach mesh-llm — is it running with --blackboard?")?;
+            .context("Cannot reach mesh-llm — is it running?")?;
         if resp.status().is_success() {
             let item: blackboard::BlackboardItem = resp.json().await?;
             eprintln!("📝 Posted (id: {:x})", item.id);
@@ -2333,7 +2450,7 @@ async fn run_blackboard(
         let resp = client.get(format!("{base}/api/blackboard/search"))
             .query(&[("q", q.as_str()), ("limit", &limit.to_string()), ("since", &since_secs.to_string())])
             .send().await
-            .context("Cannot reach mesh-llm — is it running with --blackboard?")?;
+            .context("Cannot reach mesh-llm — is it running?")?;
         let items: Vec<blackboard::BlackboardItem> = resp.json().await?;
         if items.is_empty() {
             eprintln!("No results.");
@@ -2351,7 +2468,7 @@ async fn run_blackboard(
     let resp = client.get(format!("{base}/api/blackboard/feed"))
         .query(&params)
         .send().await
-        .context("Cannot reach mesh-llm — is it running with --blackboard?")?;
+        .context("Cannot reach mesh-llm — is it running?")?;
     let items: Vec<blackboard::BlackboardItem> = resp.json().await?;
     if items.is_empty() {
         eprintln!("Blackboard is empty.");
@@ -2373,6 +2490,35 @@ fn print_blackboard_items(items: &[blackboard::BlackboardItem]) {
     }
 }
 
+async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Result<()> {
+    match command {
+        PluginCommand::Install { name } if name == plugin::BLACKBOARD_PLUGIN_ID => {
+            eprintln!("Blackboard is auto-registered by mesh-llm. Nothing to install.");
+            eprintln!("Disable it with [[plugin]] name = \"blackboard\" enabled = false in the config if needed.");
+        }
+        PluginCommand::Install { name } => {
+            let config = plugin::config_path(cli.config.as_deref())?;
+            anyhow::bail!(
+                "Plugins are configured as executables in {}. No install step exists for '{}'.",
+                config.display(),
+                name
+            );
+        }
+        PluginCommand::List => {
+            let resolved = load_resolved_plugins(cli)?;
+            for spec in resolved.externals {
+                println!(
+                    "{}\tkind=external\tcommand={}\targs={}",
+                    spec.name,
+                    spec.command,
+                    spec.args.join(" ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn chrono_format(ts: u64) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
@@ -2392,7 +2538,7 @@ fn install_skill() -> Result<()> {
     std::fs::write(&skill_path, skill_content)?;
     eprintln!("✅ Installed blackboard skill to {}", skill_path.display());
     eprintln!("   Works with pi, Goose, and other agents that read ~/.agents/skills/");
-    eprintln!("   Make sure mesh-llm is running with --blackboard.");
+    eprintln!("   Make sure mesh-llm is running and the blackboard plugin is not disabled in config.");
     Ok(())
 }
 
