@@ -28,7 +28,9 @@ add_sm() {
 }
 
 # ── Check if any NVIDIA GPU exists first ───────────────────────────────────────
-if ! command -v nvidia-smi &>/dev/null && [[ ! -d /proc/driver/nvidia/gpus ]]; then
+# Note: nvidia-smi is unreliable on some NVIDIA hardware (Jetson Thor/Orin),
+# so we also check /proc/driver/nvidia/gpus and tegrastats as fallbacks.
+if ! command -v nvidia-smi &>/dev/null && [[ ! -d /proc/driver/nvidia/gpus ]] && ! command -v tegrastats &>/dev/null; then
     echo "cpu"
     exit 0
 fi
