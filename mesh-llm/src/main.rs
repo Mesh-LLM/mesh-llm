@@ -27,7 +27,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 
-pub const VERSION: &str = "0.48.0";
+pub const VERSION: &str = "0.49.0";
 const DEFAULT_RELEASE_REPO: &str = "michaelneale/mesh-llm";
 const INSTALL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh";
