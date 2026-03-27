@@ -29,6 +29,8 @@ use std::path::PathBuf;
 
 pub const VERSION: &str = "0.48.0";
 const DEFAULT_RELEASE_REPO: &str = "michaelneale/mesh-llm";
+const INSTALL_SCRIPT_URL: &str =
+    "https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh";
 const SELF_UPDATE_ATTEMPTED_ENV: &str = "MESH_LLM_SELF_UPDATE_ATTEMPTED";
 const SELF_UPDATE_DISABLED_ENV: &str = "MESH_LLM_NO_SELF_UPDATE";
 const SELF_UPDATE_REPO_ENV: &str = "MESH_LLM_SELF_UPDATE_REPO";
@@ -2975,12 +2977,7 @@ async fn check_for_update() {
     if let Some(latest) = latest_release_version().await {
         if version_newer(&latest, VERSION) {
             eprintln!("💡 Update available: v{VERSION} → v{latest}  https://github.com/michaelneale/mesh-llm/releases");
-            if let Some(asset) = stable_release_asset_name() {
-                eprintln!(
-                    "   curl -fsSL {} | tar xz && mv mesh-bundle/* ~/.local/bin/",
-                    latest_release_asset_url(asset)
-                );
-            }
+            eprintln!("   curl -fsSL {INSTALL_SCRIPT_URL} | sh");
         }
     }
 }
@@ -3005,6 +3002,13 @@ async fn maybe_self_update(cli: &Cli) -> Result<bool> {
         return Ok(true);
     };
     if !version_newer(&latest, VERSION) {
+        return Ok(true);
+    }
+    if !path_is_writable(&exe) {
+        eprintln!(
+            "⚠️  Startup self-update skipped: {} is not writable",
+            exe.display()
+        );
         return Ok(true);
     }
 
@@ -3044,10 +3048,33 @@ fn startup_self_update_enabled(cli: &Cli) -> bool {
     }
 }
 
-fn stable_release_asset_name() -> Option<&'static str> {
+fn linux_release_flavor_suffix() -> &'static str {
+    if command_exists("nvidia-smi")
+        || command_exists("nvcc")
+        || Path::new("/dev/nvidiactl").exists()
+        || Path::new("/proc/driver/nvidia/gpus").exists()
+    {
+        return "-cuda";
+    }
+    ""
+}
+
+fn command_exists(name: &str) -> bool {
+    std::process::Command::new(name)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok()
+}
+
+fn stable_release_asset_name() -> Option<String> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("macos", "aarch64") => Some("mesh-llm-aarch64-apple-darwin.tar.gz"),
-        ("linux", "x86_64") => Some("mesh-llm-x86_64-unknown-linux-gnu.tar.gz"),
+        ("macos", "aarch64") => Some("mesh-llm-aarch64-apple-darwin.tar.gz".to_string()),
+        ("linux", "x86_64") => Some(format!(
+            "mesh-llm-x86_64-unknown-linux-gnu{}.tar.gz",
+            linux_release_flavor_suffix()
+        )),
         _ => None,
     }
 }
@@ -3071,6 +3098,23 @@ fn latest_release_asset_url(asset_name: &str) -> String {
         "https://github.com/{}/releases/latest/download/{asset_name}",
         release_repo()
     )
+}
+
+fn path_is_writable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        unsafe { libc::access(c_path.as_ptr(), libc::W_OK) == 0 }
+    }
+
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(path)
+            .map(|meta| !meta.permissions().readonly())
+            .unwrap_or(false)
+    }
 }
 
 fn bundle_install_dir(exe: &Path) -> Option<PathBuf> {
@@ -3409,6 +3453,15 @@ mod tests {
             "https://github.com/jdumay/mesh-llm/releases/latest/download/mesh-llm-x86_64-unknown-linux-gnu.tar.gz"
         );
         std::env::remove_var(SELF_UPDATE_REPO_ENV);
+    }
+
+    #[test]
+    fn test_path_is_writable_for_temp_file() {
+        let dir = temp_dir("self-update-writable");
+        let path = dir.join("mesh-llm");
+        std::fs::write(&path, b"binary").unwrap();
+        assert!(path_is_writable(&path));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

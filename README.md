@@ -8,15 +8,20 @@
 
 Pool spare GPU capacity to run LLMs at larger scale. Models that don't fit on one machine are automatically distributed — dense models via pipeline parallelism, MoE models via expert sharding with zero cross-node inference traffic. Have your agents gossip across the mesh — share status, findings, and questions without a central server.
 
-## Install (macOS Apple Silicon)
+## Install
 
 ```bash
-curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-bundle.tar.gz | tar xz && mkdir -p ~/.local/bin && mv mesh-bundle/* ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | sh
 ```
 
-## Install (Linux)
+The installer script detects the platform and, on Linux, prefers the CUDA bundle when it finds NVIDIA tooling or drivers. Otherwise it falls back to the generic CPU release. It installs into `~/.local/bin`.
 
-No pre-built binaries yet, build from source:
+Supported prebuilt targets:
+
+- macOS Apple Silicon
+- Linux x86_64
+
+For other platforms, build from source:
 
 ```bash
 git clone https://github.com/michaelneale/mesh-llm
@@ -24,7 +29,14 @@ cd mesh-llm
 just build
 ```
 
-Requires: `just`, `cmake`, Rust toolchain, Node.js + npm. NVIDIA GPU builds need `nvcc` (CUDA toolkit). CPU-only and Jetson/Tegra also work. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Requires: `just`, `cmake`, Rust toolchain, Node.js + npm. NVIDIA GPU builds need `nvcc` (CUDA toolkit). AMD GPU builds need ROCm/HIP. CPU-only and Jetson/Tegra also work. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+For testing against a fork:
+
+```bash
+export MESH_LLM_INSTALL_REPO=yourname/mesh-llm
+curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | sh
+```
 
 ## Run
 Once installed, you can run:

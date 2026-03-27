@@ -70,26 +70,26 @@ gh release create ${VERSION} \
 
 - <changelog here>
 
-### Install (macOS Apple Silicon)
+### Install
 
 \`\`\`bash
-curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-bundle.tar.gz | tar xz && mv mesh-bundle/* ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | sh
 \`\`\`
 "
 ```
 
 Two assets are uploaded: one with the version in the name (for pinning), one without (for the `latest` URL used in the README).
 
-### 7. Verify the install one-liner works
+### 7. Verify the install script works
 
 ```bash
-curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-bundle.tar.gz | tar xz && mv mesh-bundle/* ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | sh
 mesh-llm --model Qwen2.5-3B --console
 ```
 
 ## Notes
 
-- The unversioned asset name (`mesh-bundle.tar.gz`) is what the README's install one-liner uses via the `/latest/download/` URL. It must be uploaded with every release.
+- Keep `install.sh` aligned with the published stable release asset names for each supported platform.
 - `codesign` and `xattr` may be needed on the receiving machine if macOS Gatekeeper blocks unsigned binaries:
   ```bash
   codesign -s - /usr/local/bin/mesh-llm /usr/local/bin/rpc-server /usr/local/bin/llama-server
