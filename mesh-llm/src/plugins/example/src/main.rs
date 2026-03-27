@@ -1,40 +1,23 @@
-use anyhow::{bail, Context, Result};
-use prost::Message;
-use rmcp::model::{
-    CallToolResult, Content, Implementation, ListToolsResult, ServerCapabilities, ServerInfo, Tool,
+use anyhow::Result;
+use mesh_llm_plugin::{
+    Plugin, PluginContext, PluginResult, PluginRuntime, ToolCallRequest, async_trait,
+    bulk_transfer_message, channel_message, empty_object_schema, json_bytes, json_schema_tool,
+    json_string, list_tools, parse_optional_json, plugin_server_info, proto,
+    structured_tool_result, tool_error, tool_with_schema,
 };
+use rmcp::model::{CallToolResult, ListToolsResult, ServerInfo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-#[allow(dead_code)]
-mod proto {
-    include!(concat!(env!("OUT_DIR"), "/meshllm.plugin.v1.rs"));
-}
-
 const PLUGIN_ID: &str = "example";
-const PROTOCOL_VERSION: u32 = 1;
 const EXAMPLE_CHANNEL: &str = "example.v1";
 const DEFAULT_BULK_CHUNK_SIZE: usize = 16 * 1024;
 const DEFAULT_SNAPSHOT_LIMIT: usize = 20;
 const MAX_RECENT_ITEMS: usize = 128;
-
-#[cfg(unix)]
-type LocalStream = tokio::net::UnixStream;
-
-#[cfg(unix)]
-async fn connect(endpoint: &str) -> Result<LocalStream> {
-    Ok(tokio::net::UnixStream::connect(endpoint).await?)
-}
-
-#[cfg(not(unix))]
-compile_error!(
-    "plugin-surface example currently supports unix-domain socket plugin transport only"
-);
 
 #[derive(Debug, Deserialize, Default)]
 struct SnapshotParams {
@@ -329,449 +312,317 @@ impl ExampleState {
     }
 }
 
+struct ExamplePlugin {
+    state: Arc<Mutex<ExampleState>>,
+}
+
+#[async_trait]
+impl Plugin for ExamplePlugin {
+    fn plugin_id(&self) -> &str {
+        PLUGIN_ID
+    }
+
+    fn plugin_version(&self) -> String {
+        env!("CARGO_PKG_VERSION").into()
+    }
+
+    fn server_info(&self) -> ServerInfo {
+        server_info()
+    }
+
+    fn capabilities(&self) -> Vec<String> {
+        vec![
+            format!("channel:{EXAMPLE_CHANNEL}"),
+            "bulk:example".into(),
+            "mesh-events".into(),
+        ]
+    }
+
+    async fn health(&mut self, _context: &mut PluginContext<'_>) -> Result<String> {
+        let state = self.state.lock().await;
+        Ok(format!(
+            "peers={} messages={} bulk={} mesh_events={}",
+            state.known_peers.len(),
+            state.channel_messages.len(),
+            state.bulk_events.len(),
+            state.mesh_events.len()
+        ))
+    }
+
+    async fn list_tools(
+        &mut self,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<ListToolsResult>> {
+        Ok(Some(list_tools_result()))
+    }
+
+    async fn call_tool(
+        &mut self,
+        request: ToolCallRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<CallToolResult>> {
+        Ok(Some(handle_tool_call(&self.state, context, request).await?))
+    }
+
+    async fn on_channel_message(
+        &mut self,
+        message: proto::ChannelMessage,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        let mut state = self.state.lock().await;
+        state.record_channel_message("inbound", &message);
+        if should_ack_channel(&message) {
+            let ack = proto::ChannelMessage {
+                body: json_bytes(&json!({
+                    "acknowledged_kind": message.message_kind,
+                    "received_bytes": message.body.len(),
+                    "received_by": state.local_peer_id,
+                }))?,
+                ..channel_message(
+                    message.channel.clone(),
+                    message.source_peer_id.clone(),
+                    "application/json",
+                    Vec::new(),
+                    "example.ack",
+                )
+            };
+            let ack = proto::ChannelMessage {
+                correlation_id: if message.correlation_id.is_empty() {
+                    state.next_token("ack")
+                } else {
+                    message.correlation_id.clone()
+                },
+                metadata_json: json_string(&json!({
+                    "reply_to": message.correlation_id,
+                }))?,
+                ..ack
+            };
+            state.record_channel_message("outbound", &ack);
+            context.send_channel(ack).await?;
+        }
+        Ok(())
+    }
+
+    async fn on_bulk_transfer_message(
+        &mut self,
+        message: proto::BulkTransferMessage,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        let mut state = self.state.lock().await;
+        state.record_bulk_message("inbound", &message);
+        state.note_bulk_receive(&message);
+        if should_ack_bulk_offer(&message) {
+            let ack = proto::BulkTransferMessage {
+                transfer_id: message.transfer_id.clone(),
+                correlation_id: message.correlation_id.clone(),
+                metadata_json: json_string(&json!({
+                    "accepted_by": state.local_peer_id,
+                }))?,
+                ..bulk_transfer_message(
+                    proto::bulk_transfer_message::Kind::Accept as i32,
+                    message.channel.clone(),
+                    message.source_peer_id.clone(),
+                    message.content_type.clone(),
+                    message.total_bytes,
+                    0,
+                    Vec::new(),
+                    false,
+                )
+            };
+            state.record_bulk_message("outbound", &ack);
+            context.send_bulk(ack).await?;
+        }
+        Ok(())
+    }
+
+    async fn on_mesh_event(
+        &mut self,
+        event: proto::MeshEvent,
+        _context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        self.state.lock().await.record_mesh_event(&event);
+        Ok(())
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    let endpoint =
-        std::env::var("MESH_LLM_PLUGIN_ENDPOINT").context("MESH_LLM_PLUGIN_ENDPOINT is not set")?;
-    let transport =
-        std::env::var("MESH_LLM_PLUGIN_TRANSPORT").unwrap_or_else(|_| "unix".to_string());
-    if transport != "unix" {
-        bail!("unsupported transport '{transport}'");
-    }
-
-    let mut stream = connect(&endpoint).await?;
-    let state = Arc::new(Mutex::new(ExampleState::default()));
-
-    loop {
-        let envelope = read_envelope(&mut stream).await?;
-        match envelope.payload {
-            Some(proto::envelope::Payload::InitializeRequest(_)) => {
-                write_envelope(
-                    &mut stream,
-                    &proto::Envelope {
-                        protocol_version: PROTOCOL_VERSION,
-                        plugin_id: PLUGIN_ID.into(),
-                        request_id: envelope.request_id,
-                        payload: Some(proto::envelope::Payload::InitializeResponse(
-                            proto::InitializeResponse {
-                                plugin_id: PLUGIN_ID.into(),
-                                plugin_protocol_version: PROTOCOL_VERSION,
-                                plugin_version: env!("CARGO_PKG_VERSION").into(),
-                                server_info_json: serde_json::to_string(&server_info())?,
-                                capabilities: vec![
-                                    format!("channel:{EXAMPLE_CHANNEL}"),
-                                    "bulk:example".into(),
-                                    "mesh-events".into(),
-                                ],
-                            },
-                        )),
-                    },
-                )
-                .await?;
-            }
-            Some(proto::envelope::Payload::HealthRequest(_)) => {
-                let state = state.lock().await;
-                write_envelope(
-                    &mut stream,
-                    &proto::Envelope {
-                        protocol_version: PROTOCOL_VERSION,
-                        plugin_id: PLUGIN_ID.into(),
-                        request_id: envelope.request_id,
-                        payload: Some(proto::envelope::Payload::HealthResponse(
-                            proto::HealthResponse {
-                                status: proto::health_response::Status::Ok as i32,
-                                detail: format!(
-                                    "peers={} messages={} bulk={} mesh_events={}",
-                                    state.known_peers.len(),
-                                    state.channel_messages.len(),
-                                    state.bulk_events.len(),
-                                    state.mesh_events.len()
-                                ),
-                            },
-                        )),
-                    },
-                )
-                .await?;
-            }
-            Some(proto::envelope::Payload::ShutdownRequest(_)) => {
-                write_envelope(
-                    &mut stream,
-                    &proto::Envelope {
-                        protocol_version: PROTOCOL_VERSION,
-                        plugin_id: PLUGIN_ID.into(),
-                        request_id: envelope.request_id,
-                        payload: Some(proto::envelope::Payload::ShutdownResponse(
-                            proto::ShutdownResponse {},
-                        )),
-                    },
-                )
-                .await?;
-                break;
-            }
-            Some(proto::envelope::Payload::RpcRequest(request)) => {
-                let payload = handle_rpc_request(&state, &mut stream, request).await?;
-                write_envelope(
-                    &mut stream,
-                    &proto::Envelope {
-                        protocol_version: PROTOCOL_VERSION,
-                        plugin_id: PLUGIN_ID.into(),
-                        request_id: envelope.request_id,
-                        payload: Some(payload),
-                    },
-                )
-                .await?;
-            }
-            Some(proto::envelope::Payload::ChannelMessage(message)) => {
-                let mut state = state.lock().await;
-                state.record_channel_message("inbound", &message);
-                if should_ack_channel(&message) {
-                    let ack = proto::ChannelMessage {
-                        channel: message.channel.clone(),
-                        source_peer_id: String::new(),
-                        target_peer_id: message.source_peer_id.clone(),
-                        content_type: "application/json".into(),
-                        body: serde_json::to_vec(&json!({
-                            "acknowledged_kind": message.message_kind,
-                            "received_bytes": message.body.len(),
-                            "received_by": state.local_peer_id,
-                        }))?,
-                        message_kind: "example.ack".into(),
-                        correlation_id: if message.correlation_id.is_empty() {
-                            state.next_token("ack")
-                        } else {
-                            message.correlation_id.clone()
-                        },
-                        metadata_json: json!({
-                            "reply_to": message.correlation_id,
-                        })
-                        .to_string(),
-                    };
-                    state.record_channel_message("outbound", &ack);
-                    send_channel(&mut stream, ack).await?;
-                }
-            }
-            Some(proto::envelope::Payload::BulkTransferMessage(message)) => {
-                let mut state = state.lock().await;
-                state.record_bulk_message("inbound", &message);
-                state.note_bulk_receive(&message);
-                if should_ack_bulk_offer(&message) {
-                    let ack = proto::BulkTransferMessage {
-                        kind: proto::bulk_transfer_message::Kind::Accept as i32,
-                        transfer_id: message.transfer_id.clone(),
-                        channel: message.channel.clone(),
-                        source_peer_id: String::new(),
-                        target_peer_id: message.source_peer_id.clone(),
-                        content_type: message.content_type.clone(),
-                        correlation_id: message.correlation_id.clone(),
-                        metadata_json: json!({
-                            "accepted_by": state.local_peer_id,
-                        })
-                        .to_string(),
-                        total_bytes: message.total_bytes,
-                        offset: 0,
-                        body: Vec::new(),
-                        final_chunk: false,
-                    };
-                    state.record_bulk_message("outbound", &ack);
-                    send_bulk(&mut stream, ack).await?;
-                }
-            }
-            Some(proto::envelope::Payload::MeshEvent(event)) => {
-                state.lock().await.record_mesh_event(&event);
-            }
-            Some(proto::envelope::Payload::RpcNotification(_)) => {}
-            Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                bail!("host error: {}", err.message);
-            }
-            _ => {}
-        }
-    }
-
-    Ok(())
+    PluginRuntime::run(ExamplePlugin {
+        state: Arc::new(Mutex::new(ExampleState::default())),
+    })
+    .await
 }
 
-async fn handle_rpc_request(
+async fn handle_tool_call(
     state: &Arc<Mutex<ExampleState>>,
-    stream: &mut LocalStream,
-    request: proto::RpcRequest,
-) -> Result<proto::envelope::Payload> {
-    match request.method.as_str() {
-        "tools/list" => Ok(proto::envelope::Payload::RpcResponse(proto::RpcResponse {
-            result_json: serde_json::to_string(&list_tools_result())?,
-        })),
-        "tools/call" => {
-            let params: ToolCallParams = serde_json::from_str(&request.params_json)
-                .context("invalid tools/call params_json")?;
-            let result = call_tool(state, stream, params).await?;
-            Ok(proto::envelope::Payload::RpcResponse(proto::RpcResponse {
-                result_json: serde_json::to_string(&result)?,
-            }))
-        }
-        method => Ok(proto::envelope::Payload::ErrorResponse(
-            proto::ErrorResponse {
-                code: -32601,
-                message: format!("unsupported method '{method}'"),
-                data_json: String::new(),
-            },
-        )),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolCallParams {
-    name: String,
-    #[serde(default)]
-    arguments: Option<serde_json::Value>,
-}
-
-async fn call_tool(
-    state: &Arc<Mutex<ExampleState>>,
-    stream: &mut LocalStream,
-    params: ToolCallParams,
-) -> Result<CallToolResult> {
-    let arguments = params.arguments.unwrap_or_else(|| json!({}));
-    match params.name.as_str() {
+    context: &mut PluginContext<'_>,
+    request: ToolCallRequest,
+) -> PluginResult<CallToolResult> {
+    match request.name.as_str() {
         "snapshot" => {
-            let params: SnapshotParams = serde_json::from_value(arguments).unwrap_or_default();
+            let params: SnapshotParams = request.arguments_or_default()?;
             let snapshot = state
                 .lock()
                 .await
                 .snapshot(params.limit.unwrap_or(DEFAULT_SNAPSHOT_LIMIT));
-            Ok(CallToolResult::structured(snapshot))
+            structured_tool_result(snapshot)
         }
         "clear" => {
-            let _params: ClearParams = serde_json::from_value(arguments).unwrap_or_default();
+            let _params: ClearParams = request.arguments_or_default()?;
             state.lock().await.clear_history();
-            Ok(CallToolResult::structured(json!({
+            structured_tool_result(json!({
                 "ok": true,
                 "cleared": ["mesh_events", "channel_messages", "bulk_events", "completed_transfers"],
-            })))
+            }))
         }
         "send_message" => {
-            let params: SendMessageArguments = serde_json::from_value(arguments)?;
+            let params: SendMessageArguments = request.arguments()?;
             let mut state = state.lock().await;
             let target_peer_id = normalize_target_peer_id(params.target_peer_id);
             let correlation_id = state.next_token("msg");
             let message = proto::ChannelMessage {
-                channel: EXAMPLE_CHANNEL.into(),
-                source_peer_id: String::new(),
-                target_peer_id: target_peer_id.clone(),
-                content_type: "text/plain".into(),
-                body: params.text.into_bytes(),
-                message_kind: "example.message".into(),
                 correlation_id: correlation_id.clone(),
-                metadata_json: json!({
+                metadata_json: json_string(&json!({
                     "request_ack": params.request_ack.unwrap_or(true),
-                })
-                .to_string(),
+                }))?,
+                ..channel_message(
+                    EXAMPLE_CHANNEL,
+                    target_peer_id.clone(),
+                    "text/plain",
+                    params.text.into_bytes(),
+                    "example.message",
+                )
             };
             state.record_channel_message("outbound", &message);
-            send_channel(stream, message).await?;
-            Ok(CallToolResult::structured(json!({
+            context.send_channel(message).await?;
+            structured_tool_result(json!({
                 "ok": true,
                 "channel": EXAMPLE_CHANNEL,
                 "target_peer_id": render_target(&target_peer_id),
                 "correlation_id": correlation_id,
-            })))
+            }))
         }
         "send_bulk" => {
-            let params: SendBulkArguments = serde_json::from_value(arguments)?;
+            let params: SendBulkArguments = request.arguments()?;
             let mut state = state.lock().await;
             let target_peer_id = normalize_target_peer_id(params.target_peer_id);
             let correlation_id = state.next_token("bulk-corr");
             let transfer_id = state.next_token("bulk");
             let bytes = params.text.into_bytes();
             let chunk_size = params.chunk_size.unwrap_or(DEFAULT_BULK_CHUNK_SIZE).max(1);
-            let metadata_json = json!({
+            let metadata_json = json_string(&json!({
                 "request_ack": params.request_ack.unwrap_or(true),
-            })
-            .to_string();
+            }))?;
 
             let offer = proto::BulkTransferMessage {
-                kind: proto::bulk_transfer_message::Kind::Offer as i32,
                 transfer_id: transfer_id.clone(),
-                channel: EXAMPLE_CHANNEL.into(),
-                source_peer_id: String::new(),
-                target_peer_id: target_peer_id.clone(),
-                content_type: "text/plain".into(),
                 correlation_id: correlation_id.clone(),
                 metadata_json: metadata_json.clone(),
-                total_bytes: bytes.len() as u64,
-                offset: 0,
-                body: Vec::new(),
-                final_chunk: false,
+                ..bulk_transfer_message(
+                    proto::bulk_transfer_message::Kind::Offer as i32,
+                    EXAMPLE_CHANNEL,
+                    target_peer_id.clone(),
+                    "text/plain",
+                    bytes.len() as u64,
+                    0,
+                    Vec::new(),
+                    false,
+                )
             };
             state.record_bulk_message("outbound", &offer);
-            send_bulk(stream, offer).await?;
+            context.send_bulk(offer).await?;
 
             let mut offset = 0usize;
             for chunk in bytes.chunks(chunk_size) {
                 let message = proto::BulkTransferMessage {
-                    kind: proto::bulk_transfer_message::Kind::Chunk as i32,
                     transfer_id: transfer_id.clone(),
-                    channel: EXAMPLE_CHANNEL.into(),
-                    source_peer_id: String::new(),
-                    target_peer_id: target_peer_id.clone(),
-                    content_type: "text/plain".into(),
                     correlation_id: correlation_id.clone(),
                     metadata_json: metadata_json.clone(),
-                    total_bytes: bytes.len() as u64,
-                    offset: offset as u64,
-                    body: chunk.to_vec(),
-                    final_chunk: false,
+                    ..bulk_transfer_message(
+                        proto::bulk_transfer_message::Kind::Chunk as i32,
+                        EXAMPLE_CHANNEL,
+                        target_peer_id.clone(),
+                        "text/plain",
+                        bytes.len() as u64,
+                        offset as u64,
+                        chunk.to_vec(),
+                        false,
+                    )
                 };
                 offset += chunk.len();
                 state.record_bulk_message("outbound", &message);
-                send_bulk(stream, message).await?;
+                context.send_bulk(message).await?;
             }
 
             let complete = proto::BulkTransferMessage {
-                kind: proto::bulk_transfer_message::Kind::Complete as i32,
                 transfer_id: transfer_id.clone(),
-                channel: EXAMPLE_CHANNEL.into(),
-                source_peer_id: String::new(),
-                target_peer_id: target_peer_id.clone(),
-                content_type: "text/plain".into(),
                 correlation_id: correlation_id.clone(),
                 metadata_json,
-                total_bytes: bytes.len() as u64,
-                offset: bytes.len() as u64,
-                body: Vec::new(),
-                final_chunk: true,
+                ..bulk_transfer_message(
+                    proto::bulk_transfer_message::Kind::Complete as i32,
+                    EXAMPLE_CHANNEL,
+                    target_peer_id.clone(),
+                    "text/plain",
+                    bytes.len() as u64,
+                    bytes.len() as u64,
+                    Vec::new(),
+                    true,
+                )
             };
             state.record_bulk_message("outbound", &complete);
-            send_bulk(stream, complete).await?;
+            context.send_bulk(complete).await?;
 
-            Ok(CallToolResult::structured(json!({
+            structured_tool_result(json!({
                 "ok": true,
                 "transfer_id": transfer_id,
                 "target_peer_id": render_target(&target_peer_id),
                 "total_bytes": bytes.len(),
                 "chunk_size": chunk_size,
-            })))
+            }))
         }
-        other => Ok(CallToolResult::error(vec![Content::text(format!(
-            "unknown tool '{other}'"
-        ))])),
+        other => Ok(tool_error(format!("unknown tool '{other}'"))),
     }
 }
 
 fn server_info() -> ServerInfo {
-    ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
-        Implementation::new(PLUGIN_ID, env!("CARGO_PKG_VERSION"))
-            .with_title("Plugin Surface Example")
-            .with_description(
-                "Standalone example plugin that exercises tools, channel messages, bulk transfers, and mesh events.",
-            ),
+    plugin_server_info(
+        PLUGIN_ID,
+        env!("CARGO_PKG_VERSION"),
+        "Plugin Surface Example",
+        "Standalone example plugin that exercises tools, channel messages, bulk transfers, and mesh events.",
+        None::<String>,
     )
 }
 
 fn list_tools_result() -> ListToolsResult {
-    ListToolsResult {
-        tools: vec![
-            Tool::new(
-                "snapshot",
-                "Inspect the example plugin state: known peers, mesh events, recent channel messages, recent bulk transfers, and counters.",
-                Arc::new(
-                    serde_json::json!({
-                        "type": "object",
-                        "properties": {
-                            "limit": { "type": "integer", "minimum": 1 }
-                        }
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap(),
-                ),
-            ),
-            Tool::new(
-                "send_message",
-                "Send a plugin channel message to one peer or broadcast to all peers. Leave target_peer_id empty or set it to 'all' to broadcast.",
-                Arc::new(schema_for::<SendMessageArguments>()),
-            ),
-            Tool::new(
-                "send_bulk",
-                "Send a bulk transfer to one peer or broadcast to all peers. This emits OFFER, CHUNK, and COMPLETE frames so the full bulk transport path is exercised.",
-                Arc::new(schema_for::<SendBulkArguments>()),
-            ),
-            Tool::new(
-                "clear",
-                "Clear recorded example-plugin history while keeping the current peer snapshot.",
-                Arc::new(
-                    serde_json::json!({
-                        "type": "object",
-                        "additionalProperties": false
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap(),
-                ),
-            ),
-        ],
-        meta: None,
-        next_cursor: None,
-    }
-}
-
-fn schema_for<T: JsonSchema>() -> serde_json::Map<String, serde_json::Value> {
-    serde_json::to_value(schemars::schema_for!(T))
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_else(|| {
+    list_tools(vec![
+        tool_with_schema(
+            "snapshot",
+            "Inspect the example plugin state: known peers, mesh events, recent channel messages, recent bulk transfers, and counters.",
             serde_json::json!({
                 "type": "object",
-                "additionalProperties": true
+                "properties": {
+                    "limit": { "type": "integer", "minimum": 1 }
+                }
             })
             .as_object()
             .cloned()
-            .unwrap()
-        })
-}
-
-async fn send_channel(stream: &mut LocalStream, message: proto::ChannelMessage) -> Result<()> {
-    write_envelope(
-        stream,
-        &proto::Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            plugin_id: PLUGIN_ID.into(),
-            request_id: 0,
-            payload: Some(proto::envelope::Payload::ChannelMessage(message)),
-        },
-    )
-    .await
-}
-
-async fn send_bulk(stream: &mut LocalStream, message: proto::BulkTransferMessage) -> Result<()> {
-    write_envelope(
-        stream,
-        &proto::Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            plugin_id: PLUGIN_ID.into(),
-            request_id: 0,
-            payload: Some(proto::envelope::Payload::BulkTransferMessage(message)),
-        },
-    )
-    .await
-}
-
-async fn write_envelope(stream: &mut LocalStream, envelope: &proto::Envelope) -> Result<()> {
-    let mut body = Vec::new();
-    envelope.encode(&mut body)?;
-    stream.write_all(&(body.len() as u32).to_le_bytes()).await?;
-    stream.write_all(&body).await?;
-    Ok(())
-}
-
-async fn read_envelope(stream: &mut LocalStream) -> Result<proto::Envelope> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf).await?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len > 16 * 1024 * 1024 {
-        bail!("plugin frame too large");
-    }
-    let mut body = vec![0u8; len];
-    stream.read_exact(&mut body).await?;
-    Ok(proto::Envelope::decode(body.as_slice())?)
+            .unwrap(),
+        ),
+        json_schema_tool::<SendMessageArguments>(
+            "send_message",
+            "Send a plugin channel message to one peer or broadcast to all peers. Leave target_peer_id empty or set it to 'all' to broadcast.",
+        ),
+        json_schema_tool::<SendBulkArguments>(
+            "send_bulk",
+            "Send a bulk transfer to one peer or broadcast to all peers. This emits OFFER, CHUNK, and COMPLETE frames so the full bulk transport path is exercised.",
+        ),
+        tool_with_schema(
+            "clear",
+            "Clear recorded example-plugin history while keeping the current peer snapshot.",
+            empty_object_schema(),
+        ),
+    ])
 }
 
 fn should_ack_channel(message: &proto::ChannelMessage) -> bool {
@@ -790,14 +641,6 @@ fn should_ack_bulk_offer(message: &proto::BulkTransferMessage) -> bool {
         && parse_optional_json(&message.metadata_json)
             .and_then(|value| value.get("request_ack").and_then(|v| v.as_bool()))
             .unwrap_or(false)
-}
-
-fn parse_optional_json(raw: &str) -> Option<serde_json::Value> {
-    if raw.trim().is_empty() {
-        None
-    } else {
-        serde_json::from_str(raw).ok()
-    }
 }
 
 fn preview_bytes(bytes: &[u8]) -> String {

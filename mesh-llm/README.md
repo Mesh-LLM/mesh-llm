@@ -19,9 +19,7 @@ src/
 │   ├── mod.rs                 Plugin module registry
 │   ├── blackboard/mod.rs      Shared ephemeral messages across the mesh (plugin runtime/state)
 │   ├── blackboard/mcp.rs      Standalone MCP server for blackboard
-│
-examples/
-└── plugin-surface/            Standalone example plugin executable for tools, channel, bulk, and mesh events
+│   └── example/               Standalone example plugin crate for tools, channel, bulk, and mesh events
 ```
 
 ## Design

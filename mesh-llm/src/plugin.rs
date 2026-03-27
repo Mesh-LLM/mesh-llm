@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
+pub use mesh_llm_plugin::proto;
 use prost::Message;
 use rmcp::model::{
     CallToolResult as McpCallToolResult, ErrorCode, InitializeRequestParams, ListToolsResult,
@@ -16,15 +17,10 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 pub const BLACKBOARD_PLUGIN_ID: &str = "blackboard";
-pub(crate) const PROTOCOL_VERSION: u32 = 1;
+pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 const HEALTH_CHECK_INTERVAL_SECS: u64 = 15;
-
-#[allow(dead_code)]
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/meshllm.plugin.v1.rs"));
-}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct MeshConfig {
@@ -157,8 +153,6 @@ pub(crate) enum LocalStream {
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
     PipeServer(tokio::net::windows::named_pipe::NamedPipeServer),
-    #[cfg(windows)]
-    PipeClient(tokio::net::windows::named_pipe::NamedPipeClient),
 }
 
 enum LocalListener {
@@ -1174,8 +1168,6 @@ impl LocalStream {
             LocalStream::Unix(stream) => stream.write_all(bytes).await?,
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => stream.write_all(bytes).await?,
-            #[cfg(windows)]
-            LocalStream::PipeClient(stream) => stream.write_all(bytes).await?,
         }
         Ok(())
     }
@@ -1188,10 +1180,6 @@ impl LocalStream {
             }
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => {
-                let _ = stream.read_exact(bytes).await?;
-            }
-            #[cfg(windows)]
-            LocalStream::PipeClient(stream) => {
                 let _ = stream.read_exact(bytes).await?;
             }
         }
@@ -1229,46 +1217,9 @@ fn runtime_dir() -> Result<PathBuf> {
 }
 
 pub async fn run_plugin_process(name: String) -> Result<()> {
-    let endpoint = std::env::var("MESH_LLM_PLUGIN_ENDPOINT")
-        .context("MESH_LLM_PLUGIN_ENDPOINT is not set for plugin process")?;
-    let transport =
-        std::env::var("MESH_LLM_PLUGIN_TRANSPORT").unwrap_or_else(|_| default_transport().into());
-    let stream = connect_to_host(&endpoint, &transport).await?;
-
     match name.as_str() {
-        BLACKBOARD_PLUGIN_ID => crate::plugins::blackboard::run_plugin(name, stream).await,
+        BLACKBOARD_PLUGIN_ID => crate::plugins::blackboard::run_plugin(name).await,
         _ => bail!("Unknown built-in plugin '{}'", name),
-    }
-}
-
-pub(crate) async fn send_plugin_channel_message(
-    stream: &mut LocalStream,
-    plugin_id: &str,
-    message: proto::ChannelMessage,
-) -> Result<()> {
-    write_envelope(
-        stream,
-        &proto::Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            plugin_id: plugin_id.to_string(),
-            request_id: 0,
-            payload: Some(proto::envelope::Payload::ChannelMessage(message)),
-        },
-    )
-    .await
-}
-
-async fn connect_to_host(endpoint: &str, transport: &str) -> Result<LocalStream> {
-    match transport {
-        #[cfg(unix)]
-        "unix" => Ok(LocalStream::Unix(
-            tokio::net::UnixStream::connect(endpoint).await?,
-        )),
-        #[cfg(windows)]
-        "pipe" => Ok(LocalStream::PipeClient(
-            tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)?,
-        )),
-        _ => bail!("Unsupported plugin transport '{transport}'"),
     }
 }
 
@@ -1359,17 +1310,6 @@ pub(crate) async fn read_envelope(stream: &mut LocalStream) -> Result<proto::Env
     let mut body = vec![0u8; len];
     stream.read_exact(&mut body).await?;
     Ok(proto::Envelope::decode(body.as_slice())?)
-}
-
-fn default_transport() -> &'static str {
-    #[cfg(unix)]
-    {
-        "unix"
-    }
-    #[cfg(windows)]
-    {
-        "pipe"
-    }
 }
 
 fn format_args_for_log(args: &[String]) -> String {

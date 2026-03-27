@@ -16,7 +16,7 @@ point a plugin config entry at the resulting binary.
 ## Build
 
 ```bash
-cargo build --manifest-path mesh-llm/examples/plugin-surface/Cargo.toml
+cargo build --manifest-path mesh-llm/src/plugins/example/Cargo.toml
 ```
 
 ## Use with mesh-llm

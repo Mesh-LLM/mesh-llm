@@ -267,6 +267,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32637268377fc7b10a8c6d51de3e7fba1ce5dd371a96e342b34e6078db558e7f"
 
 [[package]]
+name = "biip"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e85575af624c98bfc59609e274059bc120ffb3db6abfa5b662e3ed9519898bf"
+dependencies = [
+ "dotenv",
+ "regex",
+]
+
+[[package]]
 name = "bip39"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -889,6 +899,12 @@ checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
 ]
+
+[[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "dunce"
@@ -2140,16 +2156,16 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
+ "biip",
  "clap",
  "dirs",
  "hex",
  "include_dir",
  "iroh",
  "libc",
+ "mesh-llm-plugin",
  "nostr-sdk",
  "prost",
- "prost-build",
- "protoc-bin-vendored",
  "rand 0.9.2",
  "regex-lite",
  "reqwest",
@@ -2163,6 +2179,22 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "mesh-llm-plugin"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "prost",
+ "prost-build",
+ "protoc-bin-vendored",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -2869,6 +2901,19 @@ dependencies = [
  "quick-xml",
  "serde",
  "time",
+]
+
+[[package]]
+name = "plugin-surface-example"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-plugin",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
