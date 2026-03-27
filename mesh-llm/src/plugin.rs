@@ -10,7 +10,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 pub const BLACKBOARD_PLUGIN_ID: &str = "blackboard";
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 
@@ -49,9 +49,15 @@ pub struct ExternalPluginSpec {
 }
 
 #[derive(Clone, Debug)]
-pub struct PluginChannelEvent {
-    pub plugin_id: String,
-    pub message: proto::ChannelMessage,
+pub enum PluginMeshEvent {
+    Channel {
+        plugin_id: String,
+        message: proto::ChannelMessage,
+    },
+    BulkTransfer {
+        plugin_id: String,
+        message: proto::BulkTransferMessage,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -197,7 +203,7 @@ pub fn blackboard_plugin_spec() -> Result<ExternalPluginSpec> {
 impl PluginManager {
     pub async fn start(
         specs: &ResolvedPlugins,
-        mesh_tx: mpsc::Sender<PluginChannelEvent>,
+        mesh_tx: mpsc::Sender<PluginMeshEvent>,
     ) -> Result<Self> {
         if specs.externals.is_empty() {
             tracing::info!("Plugin manager: no plugins enabled");
@@ -287,20 +293,37 @@ impl PluginManager {
         plugin.call_tool(tool_name, arguments_json).await
     }
 
-    pub async fn dispatch_channel_message(&self, event: PluginChannelEvent) -> Result<()> {
-        let Some(plugin) = self.inner.plugins.get(&event.plugin_id) else {
+    pub async fn dispatch_channel_message(&self, event: PluginMeshEvent) -> Result<()> {
+        let PluginMeshEvent::Channel { plugin_id, message } = event else {
+            bail!("expected plugin channel event");
+        };
+        let Some(plugin) = self.inner.plugins.get(&plugin_id) else {
             tracing::debug!(
                 "Dropping channel message for unloaded plugin '{}'",
-                event.plugin_id
+                plugin_id
             );
             return Ok(());
         };
-        plugin.send_channel_message(event.message).await
+        plugin.send_channel_message(message).await
+    }
+
+    pub async fn dispatch_bulk_transfer_message(&self, event: PluginMeshEvent) -> Result<()> {
+        let PluginMeshEvent::BulkTransfer { plugin_id, message } = event else {
+            bail!("expected plugin bulk transfer event");
+        };
+        let Some(plugin) = self.inner.plugins.get(&plugin_id) else {
+            tracing::debug!(
+                "Dropping bulk transfer message for unloaded plugin '{}'",
+                plugin_id
+            );
+            return Ok(());
+        };
+        plugin.send_bulk_transfer_message(message).await
     }
 }
 
 impl ExternalPlugin {
-    async fn spawn(spec: &ExternalPluginSpec, mesh_tx: mpsc::Sender<PluginChannelEvent>) -> Result<Self> {
+    async fn spawn(spec: &ExternalPluginSpec, mesh_tx: mpsc::Sender<PluginMeshEvent>) -> Result<Self> {
         let listener = bind_local_listener(&spec.name).await?;
         let endpoint = listener.endpoint();
         let transport = listener.transport_name();
@@ -450,6 +473,18 @@ impl ExternalPlugin {
             .map_err(|_| anyhow!("Plugin '{}' is not accepting messages", self.summary.name))
     }
 
+    async fn send_bulk_transfer_message(&self, message: proto::BulkTransferMessage) -> Result<()> {
+        self.outbound_tx
+            .send(proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: self.summary.name.clone(),
+                request_id: 0,
+                payload: Some(proto::envelope::Payload::BulkTransferMessage(message)),
+            })
+            .await
+            .map_err(|_| anyhow!("Plugin '{}' is not accepting bulk transfers", self.summary.name))
+    }
+
     async fn request(&self, payload: proto::envelope::Payload) -> Result<proto::Envelope> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
@@ -483,7 +518,7 @@ async fn connection_loop(
     mut stream: LocalStream,
     mut outbound_rx: mpsc::Receiver<proto::Envelope>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>,
-    mesh_tx: mpsc::Sender<PluginChannelEvent>,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
     plugin_name: String,
 ) {
     let result: Result<()> = async {
@@ -507,7 +542,22 @@ async fn connection_loop(
                             } else {
                                 plugin_id_from_env
                             };
-                            let _ = mesh_tx.send(PluginChannelEvent { plugin_id, message }).await;
+                            let _ = mesh_tx
+                                .send(PluginMeshEvent::Channel { plugin_id, message })
+                                .await;
+                        }
+                        Some(proto::envelope::Payload::BulkTransferMessage(message)) => {
+                            let plugin_id = if plugin_id_from_env.is_empty() {
+                                plugin_name.clone()
+                            } else {
+                                plugin_id_from_env
+                            };
+                            let _ = mesh_tx
+                                .send(PluginMeshEvent::BulkTransfer {
+                                    plugin_id,
+                                    message,
+                                })
+                                .await;
                         }
                         _ => {
                             let responder = pending.lock().await.remove(&request_id);
@@ -661,6 +711,22 @@ async fn run_blackboard_plugin(name: String, mut stream: LocalStream) -> Result<
         BLACKBOARD_CHANNEL,
     };
 
+    fn blackboard_channel_message(
+        target_peer_id: String,
+        body: Vec<u8>,
+    ) -> proto::ChannelMessage {
+        proto::ChannelMessage {
+            channel: BLACKBOARD_CHANNEL.to_string(),
+            source_peer_id: String::new(),
+            target_peer_id,
+            content_type: "application/json".into(),
+            body,
+            message_kind: "blackboard".into(),
+            correlation_id: String::new(),
+            metadata_json: String::new(),
+        }
+    }
+
     let store = BlackboardStore::new(true);
     loop {
         let envelope = read_envelope(&mut stream).await?;
@@ -729,13 +795,10 @@ async fn run_blackboard_plugin(name: String, mut stream: LocalStream) -> Result<
                 send_plugin_channel_message(
                     &mut stream,
                     &name,
-                    proto::ChannelMessage {
-                        channel: BLACKBOARD_CHANNEL.to_string(),
-                        source_peer_id: String::new(),
-                        target_peer_id: String::new(),
-                        content_type: "application/json".into(),
-                        body: serde_json::to_vec(&BlackboardMessage::SyncRequest)?,
-                    },
+                    blackboard_channel_message(
+                        String::new(),
+                        serde_json::to_vec(&BlackboardMessage::SyncRequest)?,
+                    ),
                 )
                 .await?;
             }
@@ -815,15 +878,12 @@ async fn run_blackboard_plugin(name: String, mut stream: LocalStream) -> Result<
                                         send_plugin_channel_message(
                                             &mut stream,
                                             &name,
-                                            proto::ChannelMessage {
-                                                channel: BLACKBOARD_CHANNEL.to_string(),
-                                                source_peer_id: String::new(),
-                                                target_peer_id: String::new(),
-                                                content_type: "application/json".into(),
-                                                body: serde_json::to_vec(&BlackboardMessage::Post(
+                                            blackboard_channel_message(
+                                                String::new(),
+                                                serde_json::to_vec(&BlackboardMessage::Post(
                                                     posted.clone(),
                                                 ))?,
-                                            },
+                                            ),
                                         )
                                         .await?;
                                         proto::envelope::Payload::ToolCallResponse(
@@ -880,13 +940,10 @@ async fn run_blackboard_plugin(name: String, mut stream: LocalStream) -> Result<
                         send_plugin_channel_message(
                             &mut stream,
                             &name,
-                            proto::ChannelMessage {
-                                channel: BLACKBOARD_CHANNEL.to_string(),
-                                source_peer_id: String::new(),
-                                target_peer_id: message.source_peer_id,
-                                content_type: "application/json".into(),
-                                body: serde_json::to_vec(&response)?,
-                            },
+                            blackboard_channel_message(
+                                message.source_peer_id,
+                                serde_json::to_vec(&response)?,
+                            ),
                         )
                         .await?;
                     }
@@ -900,15 +957,10 @@ async fn run_blackboard_plugin(name: String, mut stream: LocalStream) -> Result<
                             send_plugin_channel_message(
                                 &mut stream,
                                 &name,
-                                proto::ChannelMessage {
-                                    channel: BLACKBOARD_CHANNEL.to_string(),
-                                    source_peer_id: String::new(),
-                                    target_peer_id: message.source_peer_id,
-                                    content_type: "application/json".into(),
-                                    body: serde_json::to_vec(&BlackboardMessage::FetchRequest(
-                                        missing,
-                                    ))?,
-                                },
+                                blackboard_channel_message(
+                                    message.source_peer_id,
+                                    serde_json::to_vec(&BlackboardMessage::FetchRequest(missing))?,
+                                ),
                             )
                             .await?;
                         }
@@ -918,15 +970,10 @@ async fn run_blackboard_plugin(name: String, mut stream: LocalStream) -> Result<
                         send_plugin_channel_message(
                             &mut stream,
                             &name,
-                            proto::ChannelMessage {
-                                channel: BLACKBOARD_CHANNEL.to_string(),
-                                source_peer_id: String::new(),
-                                target_peer_id: message.source_peer_id,
-                                content_type: "application/json".into(),
-                                body: serde_json::to_vec(&BlackboardMessage::FetchResponse(
-                                    items,
-                                ))?,
-                            },
+                            blackboard_channel_message(
+                                message.source_peer_id,
+                                serde_json::to_vec(&BlackboardMessage::FetchResponse(items))?,
+                            ),
                         )
                         .await?;
                     }

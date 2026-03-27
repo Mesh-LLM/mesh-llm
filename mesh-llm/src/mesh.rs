@@ -68,6 +68,7 @@ const STREAM_PEER_DOWN: u8 = 0x06;
 const STREAM_PEER_LEAVING: u8 = 0x07;
 const STREAM_BLACKBOARD: u8 = 0x08;
 const STREAM_PLUGIN_CHANNEL: u8 = 0x09;
+const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x0a;
 
 /// Role a node plays in the mesh.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -796,13 +797,13 @@ impl Node {
 
     pub fn start_plugin_channel_forwarder(
         &self,
-        mut rx: tokio::sync::mpsc::Receiver<crate::plugin::PluginChannelEvent>,
+        mut rx: tokio::sync::mpsc::Receiver<crate::plugin::PluginMeshEvent>,
     ) {
         let node = self.clone();
         tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
-                if let Err(err) = node.forward_plugin_channel(event).await {
-                    tracing::debug!("Plugin channel forward failed: {err}");
+                if let Err(err) = node.forward_plugin_event(event).await {
+                    tracing::debug!("Plugin mesh forward failed: {err}");
                 }
             }
         });
@@ -1173,20 +1174,43 @@ impl Node {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
-    async fn forward_plugin_channel(&self, event: crate::plugin::PluginChannelEvent) -> Result<()> {
-        let mut message = event.message;
-        if message.source_peer_id.is_empty() {
-            message.source_peer_id = endpoint_id_hex(self.endpoint.id());
+    async fn forward_plugin_event(&self, event: crate::plugin::PluginMeshEvent) -> Result<()> {
+        match event {
+            crate::plugin::PluginMeshEvent::Channel {
+                plugin_id,
+                mut message,
+            } => {
+                if message.source_peer_id.is_empty() {
+                    message.source_peer_id = endpoint_id_hex(self.endpoint.id());
+                }
+                let frame = crate::plugin::proto::MeshChannelFrame {
+                    plugin_id,
+                    message_id: new_plugin_message_id(&message.source_peer_id),
+                    message: Some(message),
+                };
+                if !self.remember_plugin_message(frame.message_id.clone()).await {
+                    return Ok(());
+                }
+                self.broadcast_plugin_channel_frame(&frame, None).await
+            }
+            crate::plugin::PluginMeshEvent::BulkTransfer {
+                plugin_id,
+                mut message,
+            } => {
+                if message.source_peer_id.is_empty() {
+                    message.source_peer_id = endpoint_id_hex(self.endpoint.id());
+                }
+                let frame = crate::plugin::proto::MeshBulkFrame {
+                    plugin_id,
+                    message_id: new_plugin_message_id(&message.source_peer_id),
+                    message: Some(message),
+                };
+                if !self.remember_plugin_message(frame.message_id.clone()).await {
+                    return Ok(());
+                }
+                self.broadcast_plugin_bulk_frame(&frame, None).await
+            }
         }
-        let frame = crate::plugin::proto::MeshChannelFrame {
-            plugin_id: event.plugin_id,
-            message_id: new_plugin_message_id(&message.source_peer_id),
-            message: Some(message),
-        };
-        if !self.remember_plugin_message(frame.message_id.clone()).await {
-            return Ok(());
-        }
-        self.broadcast_plugin_channel_frame(&frame, None).await
     }
 
     async fn remember_plugin_message(&self, message_id: String) -> bool {
@@ -1237,6 +1261,41 @@ impl Node {
         Ok(())
     }
 
+    async fn broadcast_plugin_bulk_frame(
+        &self,
+        frame: &crate::plugin::proto::MeshBulkFrame,
+        skip_peer: Option<EndpointId>,
+    ) -> Result<()> {
+        let data = frame.encode_to_vec();
+        let conns: Vec<(EndpointId, Connection)> = {
+            let state = self.state.lock().await;
+            state.connections.iter()
+                .filter(|(peer_id, _)| Some(**peer_id) != skip_peer)
+                .map(|(peer_id, conn)| (*peer_id, conn.clone()))
+                .collect()
+        };
+        for (peer_id, conn) in conns {
+            let bytes = data.clone();
+            tokio::spawn(async move {
+                let result = async {
+                    let (mut send, _recv) = conn.open_bi().await?;
+                    send.write_all(&[STREAM_PLUGIN_BULK_TRANSFER]).await?;
+                    send.write_all(&(bytes.len() as u32).to_le_bytes()).await?;
+                    send.write_all(&bytes).await?;
+                    send.finish()?;
+                    Ok::<_, anyhow::Error>(())
+                }.await;
+                if let Err(e) = result {
+                    tracing::debug!(
+                        "Failed to broadcast plugin bulk frame to {}: {e}",
+                        peer_id.fmt_short()
+                    );
+                }
+            });
+        }
+        Ok(())
+    }
+
     async fn handle_plugin_channel_stream(
         &self,
         remote: EndpointId,
@@ -1272,7 +1331,7 @@ impl Node {
             let plugin_manager = self.plugin_manager.lock().await.clone();
             if let Some(plugin_manager) = plugin_manager {
                 plugin_manager
-                    .dispatch_channel_message(crate::plugin::PluginChannelEvent {
+                    .dispatch_channel_message(crate::plugin::PluginMeshEvent::Channel {
                         plugin_id: frame.plugin_id.clone(),
                         message: message.clone(),
                     })
@@ -1282,6 +1341,56 @@ impl Node {
 
         if message.target_peer_id != local_peer_id {
             self.broadcast_plugin_channel_frame(&frame, Some(remote)).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn handle_plugin_bulk_stream(
+        &self,
+        remote: EndpointId,
+        mut send: iroh::endpoint::SendStream,
+        mut recv: iroh::endpoint::RecvStream,
+    ) -> Result<()> {
+        let mut len_buf = [0u8; 4];
+        recv.read_exact(&mut len_buf).await?;
+        let len = u32::from_le_bytes(len_buf) as usize;
+        if len > 64_000_000 {
+            anyhow::bail!("Plugin bulk frame too large");
+        }
+        let mut buf = vec![0u8; len];
+        recv.read_exact(&mut buf).await?;
+        send.finish()?;
+
+        let frame = crate::plugin::proto::MeshBulkFrame::decode(buf.as_slice())?;
+        if frame.plugin_id.is_empty() || frame.message_id.is_empty() {
+            return Ok(());
+        }
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
+        }
+
+        let Some(message) = frame.message.clone() else {
+            return Ok(());
+        };
+        let local_peer_id = endpoint_id_hex(self.endpoint.id());
+        let deliver_local =
+            message.target_peer_id.is_empty() || message.target_peer_id == local_peer_id;
+
+        if deliver_local {
+            let plugin_manager = self.plugin_manager.lock().await.clone();
+            if let Some(plugin_manager) = plugin_manager {
+                plugin_manager
+                    .dispatch_bulk_transfer_message(crate::plugin::PluginMeshEvent::BulkTransfer {
+                        plugin_id: frame.plugin_id.clone(),
+                        message: message.clone(),
+                    })
+                    .await?;
+            }
+        }
+
+        if message.target_peer_id != local_peer_id {
+            self.broadcast_plugin_bulk_frame(&frame, Some(remote)).await?;
         }
 
         Ok(())
@@ -1986,6 +2095,17 @@ impl Node {
                         if let Err(e) = node.handle_plugin_channel_stream(remote, send, recv).await {
                             tracing::debug!(
                                 "Plugin channel stream error from {}: {e}",
+                                remote.fmt_short()
+                            );
+                        }
+                    });
+                }
+                STREAM_PLUGIN_BULK_TRANSFER => {
+                    let node = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = node.handle_plugin_bulk_stream(remote, send, recv).await {
+                            tracing::debug!(
+                                "Plugin bulk stream error from {}: {e}",
                                 remote.fmt_short()
                             );
                         }

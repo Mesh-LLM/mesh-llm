@@ -248,6 +248,7 @@ Core message families:
 - shutdown
 - tool calls
 - channel messages
+- bulk transfer
 - mesh events
 - structured errors
 
@@ -316,18 +317,51 @@ Each `ChannelMessage` contains:
 - `target_peer_id`
 - `content_type`
 - `body`
+- `message_kind`
+- `correlation_id`
+- `metadata_json`
 
 The host wraps these in `MeshChannelFrame` for mesh-wide forwarding.
 
+### Bulk Transfer
+
+Plugins can also send and receive `BulkTransferMessage` values through the host.
+
+This is the generic path for larger payloads where ordinary control messages are
+not a good fit.
+
+Each `BulkTransferMessage` contains:
+
+- `kind`
+- `transfer_id`
+- `channel`
+- `source_peer_id`
+- `target_peer_id`
+- `content_type`
+- `correlation_id`
+- `metadata_json`
+- `total_bytes`
+- `offset`
+- `body`
+- `final_chunk`
+
+The host wraps these in `MeshBulkFrame` for mesh-wide forwarding.
+
 ### Mesh-Wide Forwarding
 
-The host reserves a generic mesh stream for plugin traffic.
+The host reserves generic mesh streams for plugin traffic.
 
 Every forwarded frame contains:
 
 - `plugin_id`
 - `message_id`
 - `ChannelMessage`
+
+For bulk transfer, every forwarded frame contains:
+
+- `plugin_id`
+- `message_id`
+- `BulkTransferMessage`
 
 Forwarding behavior:
 

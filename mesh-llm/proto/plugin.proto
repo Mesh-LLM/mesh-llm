@@ -19,6 +19,7 @@ message Envelope {
     ToolCallResponse tool_call_response = 18;
     ChannelMessage channel_message = 19;
     ErrorResponse error_response = 20;
+    BulkTransferMessage bulk_transfer_message = 21;
   }
 }
 
@@ -98,12 +99,47 @@ message ChannelMessage {
   string target_peer_id = 3;
   string content_type = 4;
   bytes body = 5;
+  string message_kind = 6;
+  string correlation_id = 7;
+  string metadata_json = 8;
 }
 
 message MeshChannelFrame {
   string plugin_id = 1;
   string message_id = 2;
   ChannelMessage message = 3;
+}
+
+message BulkTransferMessage {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    OFFER = 1;
+    ACCEPT = 2;
+    REJECT = 3;
+    CHUNK = 4;
+    COMPLETE = 5;
+    CANCEL = 6;
+    ERROR = 7;
+  }
+
+  Kind kind = 1;
+  string transfer_id = 2;
+  string channel = 3;
+  string source_peer_id = 4;
+  string target_peer_id = 5;
+  string content_type = 6;
+  string correlation_id = 7;
+  string metadata_json = 8;
+  uint64 total_bytes = 9;
+  uint64 offset = 10;
+  bytes body = 11;
+  bool final_chunk = 12;
+}
+
+message MeshBulkFrame {
+  string plugin_id = 1;
+  string message_id = 2;
+  BulkTransferMessage message = 3;
 }
 
 message ErrorResponse {
