@@ -2750,10 +2750,10 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowNodeData>) {
                   />
                   <span className="text-muted-foreground">{data.info.isSoc ? "SoC" : "GPU"}</span>
                   <span className="relative inline-flex font-medium">
-                    <span className={`transition-opacity duration-200 group-hover/gpu:opacity-0`}>
+                    <span className="group-hover/gpu:invisible">
                       {model}
                     </span>
-                    <span className="absolute left-0 top-0 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/gpu:opacity-100">
+                    <span className="invisible absolute left-0 top-0 whitespace-nowrap group-hover/gpu:visible">
                       {Math.round(vramGb)} GB
                     </span>
                   </span>
