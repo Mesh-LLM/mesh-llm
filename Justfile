@@ -110,7 +110,7 @@ worker host="0.0.0.0" port="50052" device="" gguf=model:
     set -euo pipefail
     DEVICE="{{ device }}"
     if [ -z "$DEVICE" ]; then
-        DEVICE="$(scripts/detect-llama-device.sh)"
+        DEVICE="$(scripts/detect-llama-device.sh "{{ build_dir }}/bin/rpc-server")"
     fi
     exec {{ build_dir }}/bin/rpc-server --host {{ host }} --port {{ port }} -d "$DEVICE" --gguf {{ gguf }}
 
@@ -126,7 +126,7 @@ serve rpc="127.0.0.1:50052" port="8080" gguf=model:
 local: build download-model
     #!/usr/bin/env bash
     set -euo pipefail
-    DEVICE="$(scripts/detect-llama-device.sh)"
+    DEVICE="$(scripts/detect-llama-device.sh "{{ build_dir }}/bin/rpc-server")"
     echo "Starting rpc-server (worker)..."
     {{ build_dir }}/bin/rpc-server --host 127.0.0.1 --port 50052 -d "$DEVICE" --gguf {{ model }} &
     WORKER_PID=$!
