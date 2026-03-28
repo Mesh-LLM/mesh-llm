@@ -1,5 +1,3 @@
-$ErrorActionPreference = "Stop"
-
 param(
     [Parameter(Mandatory = $true)]
     [string]$MeshLlm,
@@ -8,6 +6,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ModelPath
 )
+
+$ErrorActionPreference = "Stop"
 
 $apiPort = 9337
 $consolePort = 3131
