@@ -821,8 +821,8 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     // Collect non-draft, non-vision models with their sizes (×1.1 headroom)
     let mut candidates: Vec<(&str, f64, u8, u8)> = MODEL_CATALOG
         .iter()
-        .filter(|m| m.chat_rank > 0 && m.tool_rank > 0) // skip drafts and vision-only
-        .map(|m| (m.name, parse_size_gb(m.size) * 1.1, m.chat_rank, m.tool_rank))
+        .filter(|m| m.chat_rank() > 0 && m.tool_rank() > 0) // skip drafts and vision-only
+        .map(|m| (m.name, parse_size_gb(m.size) * 1.1, m.chat_rank(), m.tool_rank()))
         .collect();
 
     let usable = vram_gb * 0.85;
@@ -881,7 +881,7 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     // Fallback: if nothing fit, pick smallest available
     if selected.is_empty() {
         let smallest = MODEL_CATALOG.iter()
-            .filter(|m| m.chat_rank > 0)
+            .filter(|m| m.chat_rank() > 0)
             .min_by(|a, b| parse_size_gb(a.size).partial_cmp(&parse_size_gb(b.size)).unwrap());
         if let Some(m) = smallest {
             selected.push(m.name.to_string());
@@ -934,8 +934,8 @@ mod auto_pack_tests {
         assert_eq!(pack.len(), 2);
         // Best chat_rank fitting ~13.6GB = DeepSeek-R1-Distill-14B (chat_rank=6, 9GB)
         assert_eq!(pack[0], "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M");
-        // Best tool_rank fitting remaining ~4.6GB
-        assert_eq!(pack[1], "Llama-3.2-3B-Instruct-Q4_K_M");
+        // Best tool_rank fitting remaining ~4.6GB (both 3B models are tool_rank=1)
+        assert_eq!(pack[1], "Qwen2.5-3B-Instruct-Q4_K_M");
     }
 
     #[test]
