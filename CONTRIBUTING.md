@@ -11,7 +11,11 @@ This file covers local build and development workflows for this repository.
 
 **macOS**: Apple Silicon. Metal is used automatically.
 
-**Linux**: x86_64 with an NVIDIA GPU. Requires the CUDA toolkit (`nvcc` in your `PATH`). On Arch Linux, CUDA is typically at `/opt/cuda`; on Ubuntu/Debian it's at `/usr/local/cuda`. Auto-detection finds the right SM architecture for your GPU.
+**Linux NVIDIA**: x86_64 with an NVIDIA GPU. Requires the CUDA toolkit (`nvcc` in your `PATH`). On Arch Linux, CUDA is typically at `/opt/cuda`; on Ubuntu/Debian it's at `/usr/local/cuda`. Auto-detection finds the right SM architecture for your GPU.
+
+**Linux AMD**: ROCm/HIP is supported when ROCm is installed. Typical installs expose `hipcc`, `hipconfig`, and `rocm-smi` under `/opt/rocm/bin`.
+
+**Linux Vulkan**: Vulkan is supported when the Vulkan development files and `glslc` are installed. On Ubuntu/Debian, install `libvulkan-dev glslc`. On Arch Linux, install `vulkan-headers shaderc`.
 
 ## Build from source
 
@@ -21,7 +25,7 @@ Build everything (llama.cpp fork, mesh binary, and UI production build):
 just build
 ```
 
-On Linux, make sure `nvcc` is in your `PATH` first:
+On Linux, `just build` auto-detects CUDA vs ROCm vs Vulkan. For NVIDIA, make sure `nvcc` is in your `PATH` first:
 
 ```bash
 # Arch Linux
@@ -31,10 +35,28 @@ PATH=/opt/cuda/bin:$PATH just build
 PATH=/usr/local/cuda/bin:$PATH just build
 ```
 
-The build script auto-detects your GPU's CUDA architecture. To override:
+For NVIDIA builds, the script auto-detects your GPU's CUDA architecture. To override:
 
 ```bash
 just build cuda_arch=90   # e.g. H100
+```
+
+For AMD ROCm builds, you can force the backend explicitly:
+
+```bash
+just build backend=rocm
+```
+
+To override the AMD GPU target list:
+
+```bash
+just build backend=rocm rocm_arch="gfx90a;gfx942;gfx1100"
+```
+
+For Vulkan builds, force the backend explicitly:
+
+```bash
+just build backend=vulkan
 ```
 
 Create a portable bundle:

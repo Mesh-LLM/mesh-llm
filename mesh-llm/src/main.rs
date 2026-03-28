@@ -1,4 +1,5 @@
 mod api;
+mod autoupdate;
 mod download;
 mod election;
 mod hardware;
@@ -15,13 +16,14 @@ mod rewrite;
 mod router;
 mod tunnel;
 
+pub(crate) use autoupdate::{latest_release_version, version_newer};
 pub use plugins::blackboard;
 pub use plugins::blackboard::mcp as blackboard_mcp;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use mesh::NodeRole;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const VERSION: &str = "0.49.0";
 
@@ -89,6 +91,10 @@ struct Cli {
     #[arg(long, hide = true)]
     plugin: Option<String>,
 
+    /// Disable startup self-update for this process.
+    #[arg(long, hide = true)]
+    no_self_update: bool,
+
     // ── Advanced options (hidden from default --help) ─────────────
     /// Draft model for speculative decoding.
     #[arg(long, hide = true)]
@@ -122,7 +128,11 @@ struct Cli {
     #[arg(long, hide = true)]
     bin_dir: Option<PathBuf>,
 
-    /// Device for rpc-server (e.g. MTL0, CPU).
+    /// Override which bundled llama.cpp flavor to use.
+    #[arg(long, value_enum)]
+    llama_flavor: Option<launch::BinaryFlavor>,
+
+    /// Device for rpc-server (e.g. MTL0, CUDA0, HIP0, Vulkan0, CPU).
     #[arg(long, hide = true)]
     device: Option<String>,
 
@@ -321,16 +331,22 @@ async fn main() -> Result<()> {
         return plugin::run_plugin_process(name).await;
     }
 
+    let checked_updates = if autoupdate::startup_self_update_enabled(&cli) {
+        autoupdate::maybe_self_update(&cli).await?
+    } else {
+        false
+    };
+
     // Clean up orphan processes from previous runs (skip for client — never runs llama-server)
     if !cli.client {
         launch::kill_llama_server().await;
         launch::kill_orphan_rpc_servers().await;
     }
 
-    // Background version check (non-blocking)
-    tokio::spawn(async {
-        check_for_update().await;
-    });
+    // Finish the release check before startup continues.
+    if !checked_updates {
+        autoupdate::check_for_update().await;
+    }
 
     // Subcommand dispatch
     if let Some(cmd) = &cli.command {
@@ -1404,7 +1420,13 @@ async fn run_auto(
     launch::kill_orphan_rpc_servers().await;
 
     // Start rpc-server
-    let rpc_port = launch::start_rpc_server(&bin_dir, cli.device.as_deref(), Some(&model)).await?;
+    let rpc_port = launch::start_rpc_server(
+        &bin_dir,
+        cli.llama_flavor,
+        cli.device.as_deref(),
+        Some(&model),
+    )
+    .await?;
     tracing::info!("rpc-server on 127.0.0.1:{rpc_port} serving {model_name}");
 
     let tunnel_mgr =
@@ -1500,6 +1522,7 @@ async fn run_auto(
     let draft2 = cli.draft.clone();
     let draft_max = cli.draft_max;
     let force_split = cli.split;
+    let llama_flavor = cli.llama_flavor;
     let cb_console_port = console_port;
     let model_name_for_cb = model_name.clone();
     let model_name_for_election = model_name.clone();
@@ -1508,7 +1531,7 @@ async fn run_auto(
     tokio::spawn(async move {
         election::election_loop(
             node2, tunnel_mgr2, rpc_port, bin_dir2, model2, model_name_for_election,
-            draft2, draft_max, force_split, cli.ctx_size, primary_target_tx,
+            draft2, draft_max, force_split, llama_flavor, cli.ctx_size, primary_target_tx,
             move |is_host, llama_ready| {
                 if llama_ready {
                     let n = node_for_cb.clone();
@@ -1576,11 +1599,12 @@ async fn run_auto(
             let extra_target_tx = target_tx.clone();
             let extra_model_name = extra_name.clone();
             let api_port_extra = api_port;
+            let extra_llama_flavor = cli.llama_flavor;
             eprintln!("  + {extra_name}");
             tokio::spawn(async move {
                 election::election_loop(
                     extra_node, extra_tunnel, 0, extra_bin, extra_path, extra_model_name.clone(),
-                    None, 8, false, cli.ctx_size, extra_target_tx,
+                    None, 8, false, extra_llama_flavor, cli.ctx_size, extra_target_tx,
                     move |is_host, llama_ready| {
                         if is_host && llama_ready {
                             eprintln!("✅ [{extra_model_name}] ready (multi-model)");
@@ -2110,20 +2134,43 @@ fn first_available_target(targets: &election::ModelTargets) -> election::Inferen
     election::InferenceTarget::None
 }
 
+fn bundled_bin_names(name: &str) -> Vec<String> {
+    let mut names = vec![name.to_string()];
+    names.extend(
+        launch::BinaryFlavor::ALL
+            .into_iter()
+            .map(|flavor| format!("{name}-{}", flavor.suffix())),
+    );
+    names
+}
+
+fn has_bundled_llama_bins(dir: &Path) -> bool {
+    bundled_bin_names("rpc-server")
+        .iter()
+        .any(|name| dir.join(name).exists())
+        && bundled_bin_names("llama-server")
+            .iter()
+            .any(|name| dir.join(name).exists())
+}
+
 fn detect_bin_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("Failed to determine own binary path")?;
     let dir = exe.parent().context("Binary has no parent directory")?;
 
-    if dir.join("rpc-server").exists() && dir.join("llama-server").exists() {
+    if has_bundled_llama_bins(dir) {
         return Ok(dir.to_path_buf());
     }
     let dev = dir.join("../llama.cpp/build/bin");
-    if dev.join("rpc-server").exists() && dev.join("llama-server").exists() {
+    if has_bundled_llama_bins(&dev) {
         return Ok(dev.canonicalize()?);
     }
     let cargo = dir.join("../../llama.cpp/build/bin");
-    if cargo.join("rpc-server").exists() && cargo.join("llama-server").exists() {
+    if has_bundled_llama_bins(&cargo) {
         return Ok(cargo.canonicalize()?);
+    }
+    let cargo_alt = dir.join("../../../llama.cpp/build/bin");
+    if has_bundled_llama_bins(&cargo_alt) {
+        return Ok(cargo_alt.canonicalize()?);
     }
 
     Ok(dir.to_path_buf())
@@ -2925,42 +2972,6 @@ fn install_skill() -> Result<()> {
     Ok(())
 }
 
-async fn check_for_update() {
-    if let Some(latest) = latest_release_version().await {
-        if version_newer(&latest, VERSION) {
-            eprintln!("💡 Update available: v{VERSION} → v{latest}  https://github.com/michaelneale/mesh-llm/releases");
-            eprintln!("   curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-bundle.tar.gz | tar xz && mv mesh-bundle/* ~/.local/bin/");
-        }
-    }
-}
-
-pub(crate) async fn latest_release_version() -> Option<String> {
-    let url = "https://api.github.com/repos/michaelneale/mesh-llm/releases/latest";
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .ok()?;
-    let resp = client
-        .get(url)
-        .header("User-Agent", "mesh-llm")
-        .send()
-        .await
-        .ok()?;
-    let body: serde_json::Value = resp.json().await.ok()?;
-    let tag = body["tag_name"].as_str()?;
-    let latest = tag.trim_start_matches('v').trim();
-    if latest.is_empty() {
-        None
-    } else {
-        Some(latest.to_string())
-    }
-}
-
-pub(crate) fn version_newer(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse().ok()).collect() };
-    parse(a) > parse(b)
-}
-
 /// Build the list of models this node is serving for gossip announcement.
 /// `resolved_models` comes from explicit `--model` args (may be empty for `--auto`).
 /// `model_name` is the actual model we're about to serve (always set).
@@ -3043,12 +3054,5 @@ mod tests {
         let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M-00001-of-00004");
         assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M"]);
         assert_eq!(result.len(), 1);
-    }
-
-    #[test]
-    fn test_version_newer() {
-        assert!(version_newer("0.33.1", "0.33.0"));
-        assert!(!version_newer("0.33.0", "0.33.0"));
-        assert!(!version_newer("0.32.0", "0.33.0"));
     }
 }

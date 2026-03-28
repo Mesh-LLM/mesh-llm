@@ -243,6 +243,7 @@ pub async fn election_loop(
     draft: Option<std::path::PathBuf>,
     draft_max: u16,
     force_split: bool,
+    binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
     target_tx: Arc<watch::Sender<ModelTargets>>,
     mut on_change: impl FnMut(bool, bool) + Send,
@@ -287,6 +288,7 @@ pub async fn election_loop(
                 moe_cfg.clone(),
                 my_vram,
                 model_bytes as u64,
+                binary_flavor,
                 ctx_size_override,
                 target_tx,
                 &mut on_change,
@@ -470,6 +472,7 @@ pub async fn election_loop(
                 draft.as_deref(),
                 draft_max,
                 force_split,
+                binary_flavor,
                 ctx_size_override,
             )
             .await
@@ -580,6 +583,7 @@ async fn moe_election_loop(
     moe_cfg: download::MoeConfig,
     my_vram: u64,
     model_bytes: u64,
+    binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
     target_tx: Arc<watch::Sender<ModelTargets>>,
     on_change: &mut impl FnMut(bool, bool),
@@ -650,6 +654,7 @@ async fn moe_election_loop(
                 let mb = total_model_bytes(&model);
                 match launch::start_llama_server(
                     &bin_dir,
+                    binary_flavor,
                     &model,
                     llama_port,
                     &[],
@@ -757,6 +762,7 @@ async fn moe_election_loop(
             let shard_bytes = std::fs::metadata(&shard_path).map(|m| m.len()).unwrap_or(0);
             match launch::start_llama_server(
                 &bin_dir,
+                binary_flavor,
                 &shard_path,
                 llama_port,
                 &[],
@@ -915,6 +921,7 @@ async fn start_llama(
     draft: Option<&Path>,
     draft_max: u16,
     force_split: bool,
+    binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
 ) -> Option<(u16, tokio::sync::oneshot::Receiver<()>)> {
     let my_vram = node.vram_bytes();
@@ -1020,7 +1027,7 @@ async fn start_llama(
     }
 
     // Build --rpc list: only remote workers.
-    // The host's own GPU is used directly via Metal — no need to route
+    // The host's own GPU is used directly on the local backend — no need to route
     // through the local rpc-server (which would add unnecessary TCP round trips).
     let all_ports = tunnel_mgr.peer_ports_map().await;
     let mut rpc_ports: Vec<u16> = Vec::new();
@@ -1031,7 +1038,7 @@ async fn start_llama(
     }
 
     // Calculate tensor split from VRAM.
-    // Device order: RPC workers first (matching --rpc order), then Metal (host) last.
+    // Device order: RPC workers first (matching --rpc order), then the local host device last.
     let my_vram_f = my_vram as f64;
     let mut all_vrams: Vec<f64> = Vec::new();
     for id in &worker_ids {
@@ -1043,7 +1050,7 @@ async fn start_llama(
             });
         }
     }
-    all_vrams.push(my_vram_f); // Metal is last device
+    all_vrams.push(my_vram_f); // Host device is last
     let total: f64 = all_vrams.iter().sum();
     let split = if total > 0.0 && !rpc_ports.is_empty() {
         let s: Vec<String> = all_vrams
@@ -1088,6 +1095,7 @@ async fn start_llama(
 
     match launch::start_llama_server(
         bin_dir,
+        binary_flavor,
         model,
         llama_port,
         &rpc_ports,
