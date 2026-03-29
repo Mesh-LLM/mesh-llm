@@ -1200,16 +1200,23 @@ async fn run_auto(
                         return None;
                     }
                     benchmark::run_or_load(&hw, &bin_dir_clone, std::time::Duration::from_secs(25))
-                })
-            ).await
-            .map_err(|_| tracing::warn!("benchmark timed out after 30s — bandwidth will not be gossiped"))
+                }),
+            )
+            .await
+            .map_err(|_| {
+                tracing::warn!("benchmark timed out after 30s — bandwidth will not be gossiped")
+            })
             .ok()
             .and_then(|r| r.ok())
             .flatten();
 
             if let Some(ref per_gpu) = result {
                 let total: f64 = per_gpu.iter().sum();
-                tracing::info!("Memory bandwidth fingerprint: {} GPUs, {:.1} GB/s total", per_gpu.len(), total);
+                tracing::info!(
+                    "Memory bandwidth fingerprint: {} GPUs, {:.1} GB/s total",
+                    per_gpu.len(),
+                    total
+                );
                 for (i, gbps) in per_gpu.iter().enumerate() {
                     tracing::debug!("  GPU {}: {:.1} GB/s", i, gbps);
                 }
@@ -2001,19 +2008,18 @@ async fn api_proxy(
 
         let drop_tx = drop_tx.clone();
         tokio::spawn(async move {
-            // Read the HTTP request to extract the model name
-            let mut buf = vec![0u8; 32768];
-            match proxy::peek_request(&tcp_stream, &mut buf).await {
-                Ok((n, model_name)) => {
-                    let body_json = proxy::extract_body_json(&buf[..n]);
-                    if proxy::is_models_list_request(&buf[..n]) {
+            let mut tcp_stream = tcp_stream;
+            match proxy::read_http_request(&mut tcp_stream).await {
+                Ok(request) => {
+                    let body_json = request.body_json.as_ref();
+                    if proxy::is_models_list_request(&request.method, &request.path) {
                         let models: Vec<String> = targets.targets.keys().cloned().collect();
                         let _ = proxy::send_models_list(tcp_stream, &models).await;
                         return;
                     }
 
-                    if proxy::is_drop_request(&buf[..n]) {
-                        if let Some(ref name) = model_name {
+                    if proxy::is_drop_request(&request.method, &request.path) {
+                        if let Some(ref name) = request.model_name {
                             let _ = drop_tx.send(name.clone());
                             let _ = proxy::send_json_ok(
                                 tcp_stream,
@@ -2027,33 +2033,34 @@ async fn api_proxy(
                     }
 
                     // Smart routing: if no model specified (or model="auto"), classify and pick
-                    let (effective_model, classification) =
-                        if model_name.is_none() || model_name.as_deref() == Some("auto") {
-                            if let Some(body_json) = body_json.as_ref() {
-                                let cl = router::classify(&body_json);
-                                let available: Vec<(&str, f64)> = targets
-                                    .targets
-                                    .keys()
-                                    .map(|name| (name.as_str(), 0.0))
-                                    .collect();
-                                let picked = router::pick_model_classified(&cl, &available);
-                                if let Some(name) = picked {
-                                    tracing::info!(
-                                        "router: {:?}/{:?} tools={} → {name}",
-                                        cl.category,
-                                        cl.complexity,
-                                        cl.needs_tools
-                                    );
-                                    (Some(name.to_string()), Some(cl))
-                                } else {
-                                    (None, Some(cl))
-                                }
+                    let (effective_model, classification) = if request.model_name.is_none()
+                        || request.model_name.as_deref() == Some("auto")
+                    {
+                        if let Some(body_json) = body_json {
+                            let cl = router::classify(body_json);
+                            let available: Vec<(&str, f64)> = targets
+                                .targets
+                                .keys()
+                                .map(|name| (name.as_str(), 0.0))
+                                .collect();
+                            let picked = router::pick_model_classified(&cl, &available);
+                            if let Some(name) = picked {
+                                tracing::info!(
+                                    "router: {:?}/{:?} tools={} → {name}",
+                                    cl.category,
+                                    cl.complexity,
+                                    cl.needs_tools
+                                );
+                                (Some(name.to_string()), Some(cl))
                             } else {
-                                (None, None)
+                                (None, Some(cl))
                             }
                         } else {
-                            (model_name.clone(), None)
-                        };
+                            (None, None)
+                        }
+                    } else {
+                        (request.model_name.clone(), None)
+                    };
 
                     if let Some(ref name) = effective_model {
                         node.record_request(name);
@@ -2102,8 +2109,7 @@ async fn api_proxy(
                                 );
                                 proxy::pipeline_proxy_local(
                                     tcp_stream,
-                                    &buf,
-                                    n,
+                                    request.body_json.clone().unwrap_or_default(),
                                     planner_port,
                                     &planner_name,
                                     strong_port,
@@ -2118,7 +2124,9 @@ async fn api_proxy(
 
                     // MoE routing: use session hint for sticky routing across shards
                     let target = if targets.moe.is_some() {
-                        let session_hint = proxy::extract_session_hint(&buf[..n])
+                        let session_hint = request
+                            .session_hint
+                            .clone()
                             .unwrap_or_else(|| format!("{_addr}"));
                         targets
                             .get_moe_target(&session_hint)
@@ -2135,8 +2143,13 @@ async fn api_proxy(
                             tracing::debug!("Model '{}' not found, trying first available", name);
                             first_available_target(&targets)
                         } else {
-                            let routed =
-                                proxy::route_to_target(node.clone(), tcp_stream, t.clone()).await;
+                            let routed = proxy::route_to_target(
+                                node.clone(),
+                                tcp_stream,
+                                t.clone(),
+                                &request.raw,
+                            )
+                            .await;
                             if routed {
                                 if let Some(prefix_hash) = selection.learn_prefix_hash {
                                     affinity.learn_target(name, prefix_hash, &t);
@@ -2155,7 +2168,7 @@ async fn api_proxy(
                         first_available_target(&targets)
                     };
 
-                    let _ = proxy::route_to_target(node, tcp_stream, target).await;
+                    let _ = proxy::route_to_target(node, tcp_stream, target, &request.raw).await;
                 }
                 Err(_) => return,
             };
