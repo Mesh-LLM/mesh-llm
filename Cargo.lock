@@ -2653,7 +2653,7 @@ dependencies = [
 [[package]]
 name = "mlx-internal-macros"
 version = "0.25.3"
-source = "git+https://github.com/i386/mlx-rs?rev=4b99baf961538509a5ebd7999ca4ed0431d734e3#4b99baf961538509a5ebd7999ca4ed0431d734e3"
+source = "git+https://github.com/i386/mlx-rs?rev=22432d4c4e45d171937678e0dfbe7d9c6684c241#22432d4c4e45d171937678e0dfbe7d9c6684c241"
 dependencies = [
  "darling 0.21.3",
  "itertools 0.14.0",
@@ -2665,7 +2665,7 @@ dependencies = [
 [[package]]
 name = "mlx-lm"
 version = "0.0.1"
-source = "git+https://github.com/i386/mlx-rs?rev=4b99baf961538509a5ebd7999ca4ed0431d734e3#4b99baf961538509a5ebd7999ca4ed0431d734e3"
+source = "git+https://github.com/i386/mlx-rs?rev=22432d4c4e45d171937678e0dfbe7d9c6684c241#22432d4c4e45d171937678e0dfbe7d9c6684c241"
 dependencies = [
  "anyhow",
  "clap",
@@ -2683,7 +2683,7 @@ dependencies = [
 [[package]]
 name = "mlx-lm-utils"
 version = "0.0.1"
-source = "git+https://github.com/i386/mlx-rs?rev=4b99baf961538509a5ebd7999ca4ed0431d734e3#4b99baf961538509a5ebd7999ca4ed0431d734e3"
+source = "git+https://github.com/i386/mlx-rs?rev=22432d4c4e45d171937678e0dfbe7d9c6684c241#22432d4c4e45d171937678e0dfbe7d9c6684c241"
 dependencies = [
  "minijinja",
  "minijinja-contrib",
@@ -2696,7 +2696,7 @@ dependencies = [
 [[package]]
 name = "mlx-macros"
 version = "0.25.3"
-source = "git+https://github.com/i386/mlx-rs?rev=4b99baf961538509a5ebd7999ca4ed0431d734e3#4b99baf961538509a5ebd7999ca4ed0431d734e3"
+source = "git+https://github.com/i386/mlx-rs?rev=22432d4c4e45d171937678e0dfbe7d9c6684c241#22432d4c4e45d171937678e0dfbe7d9c6684c241"
 dependencies = [
  "darling 0.21.3",
  "proc-macro2",
@@ -2707,7 +2707,7 @@ dependencies = [
 [[package]]
 name = "mlx-rs"
 version = "0.25.3"
-source = "git+https://github.com/i386/mlx-rs?rev=4b99baf961538509a5ebd7999ca4ed0431d734e3#4b99baf961538509a5ebd7999ca4ed0431d734e3"
+source = "git+https://github.com/i386/mlx-rs?rev=22432d4c4e45d171937678e0dfbe7d9c6684c241#22432d4c4e45d171937678e0dfbe7d9c6684c241"
 dependencies = [
  "dyn-clone",
  "half",
@@ -2730,7 +2730,7 @@ dependencies = [
 [[package]]
 name = "mlx-sys"
 version = "0.2.0"
-source = "git+https://github.com/i386/mlx-rs?rev=4b99baf961538509a5ebd7999ca4ed0431d734e3#4b99baf961538509a5ebd7999ca4ed0431d734e3"
+source = "git+https://github.com/i386/mlx-rs?rev=22432d4c4e45d171937678e0dfbe7d9c6684c241#22432d4c4e45d171937678e0dfbe7d9c6684c241"
 dependencies = [
  "bindgen",
  "cc",
