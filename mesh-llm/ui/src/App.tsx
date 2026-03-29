@@ -2454,33 +2454,35 @@ function DashboardPage({
         </CardHeader>
         <CardContent className="min-h-0 pt-0">
           {peerRows.length > 0 ? (
-            <ScrollArea horizontal className="max-h-[18rem] pr-3 md:max-h-[20rem]">
-              <Table className="min-w-[920px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Model</TableHead>
-                    <TableHead className="text-right">Latency</TableHead>
-                    <TableHead className="text-right">VRAM</TableHead>
-                    <TableHead className="text-right whitespace-nowrap">Share</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {peerRows.map((peer) => (
-                    <TableRow key={peer.id}>
-                      <TableCell className="font-mono text-xs">{peer.id}</TableCell>
-                      <TableCell>{peer.role}</TableCell>
-                      <TableCell>{peer.statusLabel}</TableCell>
-                      <TableCell className="max-w-[180px] truncate">{peer.modelLabel}</TableCell>
-                      <TableCell className="text-right">{peer.latencyLabel}</TableCell>
-                      <TableCell className="text-right">{peer.vram_gb.toFixed(1)} GB</TableCell>
-                      <TableCell className="text-right whitespace-nowrap">{peer.shareLabel}</TableCell>
+            <ScrollArea horizontal className="max-h-[18rem] md:max-h-[20rem]">
+              <div className="pr-3">
+                <Table className="min-w-[920px]">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Model</TableHead>
+                      <TableHead className="text-right">Latency</TableHead>
+                      <TableHead className="text-right">VRAM</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Share</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {peerRows.map((peer) => (
+                      <TableRow key={peer.id}>
+                        <TableCell className="font-mono text-xs">{peer.id}</TableCell>
+                        <TableCell>{peer.role}</TableCell>
+                        <TableCell>{peer.statusLabel}</TableCell>
+                        <TableCell className="max-w-[180px] truncate">{peer.modelLabel}</TableCell>
+                        <TableCell className="text-right">{peer.latencyLabel}</TableCell>
+                        <TableCell className="text-right">{peer.vram_gb.toFixed(1)} GB</TableCell>
+                        <TableCell className="text-right whitespace-nowrap">{peer.shareLabel}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </ScrollArea>
           ) : (
             <DashboardPanelEmpty
