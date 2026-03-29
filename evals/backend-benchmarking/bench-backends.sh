@@ -42,7 +42,7 @@ Options:
   --output-dir PATH         Output directory (default: $DEFAULT_OUTPUT_DIR)
   --cases-file PATH         JSON file with benchmark cases (default: $DEFAULT_CASES_FILE)
   --case 'label|max|prompt' Add a simple user-message case.
-  --case-json JSON          Add a full case object with label, max_tokens, and messages.
+  --case-json JSON          Add a full case object with label, max_tokens, messages, and optional temperature.
   --help                    Show this help.
 
 Example:
@@ -78,12 +78,14 @@ for raw in custom_cases:
             "label": label,
             "max_tokens": int(max_tokens),
             "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.0,
         }
     cases.append(case)
 
 for case in cases:
     label = case["label"]
     max_tokens = int(case["max_tokens"])
+    temperature = float(case.get("temperature", 0.0))
     messages = case["messages"]
     preview_parts = []
     for message in messages:
@@ -93,7 +95,7 @@ for case in cases:
             content = json.dumps(content, ensure_ascii=True)
         preview_parts.append(f"{role}: {str(content).replace(chr(10), ' ')[:120]}")
     preview = " | ".join(preview_parts)
-    print("\t".join([label, str(max_tokens), preview, json.dumps(messages, separators=(",", ":"))]))
+    print("\t".join([label, str(max_tokens), str(temperature), preview, json.dumps(messages, separators=(",", ":"))]))
 PY
 }
 
@@ -246,6 +248,7 @@ run_measure() {
     local model_id="$1"
     local messages_json="$2"
     local max_tokens="$3"
+    local temperature="$4"
     local attempt
     local output=""
     for attempt in 1 2 3 4 5; do
@@ -254,7 +257,8 @@ run_measure() {
                 --url "http://127.0.0.1:${PORT}/v1/chat/completions" \
                 --model "$model_id" \
                 --messages-json "$messages_json" \
-                --max-tokens "$max_tokens"
+                --max-tokens "$max_tokens" \
+                --temperature "$temperature"
         )"; then
             printf '%s\n' "$output"
             return 0
@@ -274,18 +278,19 @@ append_result() {
     local case_label="$5"
     local input_preview="$6"
     local max_tokens="$7"
-    local run_index="$8"
-    local startup_ms="$9"
-    local measured_json="${10}"
-    local messages_json="${11}"
+    local temperature="$8"
+    local run_index="$9"
+    local startup_ms="${10}"
+    local measured_json="${11}"
+    local messages_json="${12}"
 
-    python3 - "$results_file" "$backend" "$backend_model_path" "$served_model_id" "$case_label" "$input_preview" "$max_tokens" "$run_index" "$startup_ms" "$measured_json" "$messages_json" <<'PY'
+    python3 - "$results_file" "$backend" "$backend_model_path" "$served_model_id" "$case_label" "$input_preview" "$max_tokens" "$temperature" "$run_index" "$startup_ms" "$measured_json" "$messages_json" <<'PY'
 import json
 import pathlib
 import sys
 
 results_file = pathlib.Path(sys.argv[1])
-record = json.loads(sys.argv[10])
+record = json.loads(sys.argv[11])
 record.update(
     {
         "backend": sys.argv[2],
@@ -294,9 +299,10 @@ record.update(
         "case": sys.argv[5],
         "input_preview": sys.argv[6],
         "max_tokens_requested": int(sys.argv[7]),
-        "run": int(sys.argv[8]),
-        "startup_ms": int(sys.argv[9]),
-        "messages": json.loads(sys.argv[11]),
+        "temperature": float(sys.argv[8]),
+        "run": int(sys.argv[9]),
+        "startup_ms": int(sys.argv[10]),
+        "messages": json.loads(sys.argv[12]),
     }
 )
 with results_file.open("a", encoding="utf-8") as fh:
@@ -473,18 +479,18 @@ for backend in llama mlx; do
 
     echo "ready: model=$model_id startup=${startup_ms}ms"
 
-    while IFS=$'\t' read -r case_label max_tokens input_preview messages_json; do
+    while IFS=$'\t' read -r case_label max_tokens temperature input_preview messages_json; do
         [[ -n "$case_label" ]] || continue
-        echo "  case=$case_label warmup=$WARMUP_RUNS measured=$RUNS max_tokens=$max_tokens"
+        echo "  case=$case_label warmup=$WARMUP_RUNS measured=$RUNS max_tokens=$max_tokens temperature=$temperature"
         echo "    context=${input_preview:0:140}"
 
         for _ in $(seq 1 "$WARMUP_RUNS"); do
-            run_measure "$model_id" "$messages_json" "$max_tokens" >/dev/null
+            run_measure "$model_id" "$messages_json" "$max_tokens" "$temperature" >/dev/null
         done
 
         for run_index in $(seq 1 "$RUNS"); do
-            measured_json="$(run_measure "$model_id" "$messages_json" "$max_tokens")"
-            append_result "$RESULTS_FILE" "$backend" "$backend_model" "$model_id" "$case_label" "$input_preview" "$max_tokens" "$run_index" "$startup_ms" "$measured_json" "$messages_json"
+            measured_json="$(run_measure "$model_id" "$messages_json" "$max_tokens" "$temperature")"
+            append_result "$RESULTS_FILE" "$backend" "$backend_model" "$model_id" "$case_label" "$input_preview" "$max_tokens" "$temperature" "$run_index" "$startup_ms" "$measured_json" "$messages_json"
             echo "    run=$run_index $measured_json"
         done
     done < <(render_cases_tsv "$CASES_FILE" "${CUSTOM_CASES[@]-}")

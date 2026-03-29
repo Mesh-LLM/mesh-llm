@@ -18,7 +18,7 @@ import urllib.request
 import urllib.error
 
 
-def make_body(model, prompt, max_tokens, stream, messages_json=None):
+def make_body(model, prompt, max_tokens, stream, messages_json=None, temperature=0.0):
     if messages_json:
         messages = json.loads(messages_json)
     else:
@@ -27,7 +27,7 @@ def make_body(model, prompt, max_tokens, stream, messages_json=None):
         "model": model,
         "messages": messages,
         "max_tokens": max_tokens,
-        "temperature": 0.0,
+        "temperature": temperature,
         "stream": stream,
     }).encode()
 
@@ -48,8 +48,8 @@ def extract_visible_delta(obj):
     return ""
 
 
-def measure_completion_usage(url, model, prompt, max_tokens, messages_json=None):
-    body = make_body(model, prompt, max_tokens, False, messages_json=messages_json)
+def measure_completion_usage(url, model, prompt, max_tokens, messages_json=None, temperature=0.0):
+    body = make_body(model, prompt, max_tokens, False, messages_json=messages_json, temperature=temperature)
     req = urllib.request.Request(
         url, data=body,
         headers={"Content-Type": "application/json"},
@@ -76,8 +76,8 @@ def measure_completion_usage(url, model, prompt, max_tokens, messages_json=None)
     return max(1, len(str(text).split())) if str(text).strip() else 0
 
 
-def measure_streaming(url, model, prompt, max_tokens, messages_json=None):
-    body = make_body(model, prompt, max_tokens, True, messages_json=messages_json)
+def measure_streaming(url, model, prompt, max_tokens, messages_json=None, temperature=0.0):
+    body = make_body(model, prompt, max_tokens, True, messages_json=messages_json, temperature=temperature)
 
     req = urllib.request.Request(
         url, data=body,
@@ -124,7 +124,7 @@ def measure_streaming(url, model, prompt, max_tokens, messages_json=None):
     ttft_ms = (t_first_token - t_start) * 1000 if t_first_token else None
     total_ms = (t_end - t_start) * 1000
     completion_tokens = measure_completion_usage(
-        url, model, prompt, max_tokens, messages_json=messages_json
+        url, model, prompt, max_tokens, messages_json=messages_json, temperature=temperature
     )
     if t_first_token and completion_tokens > 0:
         gen_ms = (t_end - t_first_token) * 1000
@@ -142,8 +142,8 @@ def measure_streaming(url, model, prompt, max_tokens, messages_json=None):
     }
 
 
-def measure_non_streaming(url, model, prompt, max_tokens, messages_json=None):
-    body = make_body(model, prompt, max_tokens, False, messages_json=messages_json)
+def measure_non_streaming(url, model, prompt, max_tokens, messages_json=None, temperature=0.0):
+    body = make_body(model, prompt, max_tokens, False, messages_json=messages_json, temperature=temperature)
     req = urllib.request.Request(
         url, data=body,
         headers={"Content-Type": "application/json"},
@@ -171,16 +171,16 @@ def measure_non_streaming(url, model, prompt, max_tokens, messages_json=None):
     }
 
 
-def measure(url, model, prompt, max_tokens, messages_json=None):
+def measure(url, model, prompt, max_tokens, messages_json=None, temperature=0.0):
     try:
         result = measure_streaming(
-            url, model, prompt, max_tokens, messages_json=messages_json
+            url, model, prompt, max_tokens, messages_json=messages_json, temperature=temperature
         )
     except urllib.error.HTTPError as err:
         if err.code != 400:
             raise
         result = measure_non_streaming(
-            url, model, prompt, max_tokens, messages_json=messages_json
+            url, model, prompt, max_tokens, messages_json=messages_json, temperature=temperature
         )
 
     print(json.dumps(result))
@@ -193,6 +193,7 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", default="Say hello in 5 languages")
     parser.add_argument("--messages-json")
     parser.add_argument("--max-tokens", type=int, default=20)
+    parser.add_argument("--temperature", type=float, default=0.0)
     args = parser.parse_args()
     measure(
         args.url,
@@ -200,4 +201,5 @@ if __name__ == "__main__":
         args.prompt,
         args.max_tokens,
         messages_json=args.messages_json,
+        temperature=args.temperature,
     )

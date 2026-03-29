@@ -13,6 +13,6 @@ default-members = [
 resolver = "2"
 
 [patch."https://github.com/oxideai/mlx-rs"]
-mlx-rs = { git = "https://github.com/i386/mlx-rs", rev = "445e8ac3d667a55a109e355c6ebc116919c12c71", package = "mlx-rs" }
-mlx-lm = { git = "https://github.com/i386/mlx-rs", rev = "445e8ac3d667a55a109e355c6ebc116919c12c71", package = "mlx-lm" }
-mlx-lm-utils = { git = "https://github.com/i386/mlx-rs", rev = "445e8ac3d667a55a109e355c6ebc116919c12c71", package = "mlx-lm-utils" }
+mlx-rs = { git = "https://github.com/i386/mlx-rs", rev = "4b99baf961538509a5ebd7999ca4ed0431d734e3", package = "mlx-rs" }
+mlx-lm = { git = "https://github.com/i386/mlx-rs", rev = "4b99baf961538509a5ebd7999ca4ed0431d734e3", package = "mlx-lm" }
+mlx-lm-utils = { git = "https://github.com/i386/mlx-rs", rev = "4b99baf961538509a5ebd7999ca4ed0431d734e3", package = "mlx-lm-utils" }

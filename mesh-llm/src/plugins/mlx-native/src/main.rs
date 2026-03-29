@@ -134,7 +134,7 @@ struct Qwen2Engine {
     chat_template: Option<String>,
     model: qwen2::Model,
     stop_ids: Vec<u32>,
-    prompt_cache: Option<PromptCacheEntry>,
+    prompt_cache: Option<Qwen2PromptCacheEntry>,
 }
 
 #[cfg(feature = "native-mlx")]
@@ -176,6 +176,22 @@ struct PromptCacheEntry {
     prompt_ids: Vec<u32>,
     prefill_cache: Vec<Option<ConcatKeyValueCache>>,
     prefill_logits: Array,
+}
+
+#[cfg(feature = "native-mlx")]
+#[derive(Clone)]
+struct Qwen2PromptCacheEntry {
+    prompt_ids: Vec<u32>,
+    prefill_cache: Vec<Option<ConcatKeyValueCache>>,
+    prefill_logits: Array,
+    checkpoints: Vec<Qwen2PromptCheckpoint>,
+}
+
+#[cfg(feature = "native-mlx")]
+#[derive(Clone)]
+struct Qwen2PromptCheckpoint {
+    prompt_len: usize,
+    prefill_cache: Vec<Option<ConcatKeyValueCache>>,
 }
 
 #[cfg(feature = "native-mlx")]
@@ -2235,6 +2251,9 @@ fn common_prefix_len(left: &[u32], right: &[u32]) -> usize {
 }
 
 #[cfg(feature = "native-mlx")]
+const QWEN2_PREFILL_CHECKPOINT_STRIDE: usize = 64;
+
+#[cfg(feature = "native-mlx")]
 fn extend_llama_prefill_one_token_at_a_time(
     model: &mut llama::Model,
     prompt_ids: &[u32],
@@ -2331,8 +2350,8 @@ fn get_or_create_llama_prefill(
 fn get_or_create_qwen2_prefill(
     model: &mut qwen2::Model,
     prompt_ids: &[u32],
-    prompt_tokens: &Array,
-    prompt_cache: &mut Option<PromptCacheEntry>,
+    _prompt_tokens: &Array,
+    prompt_cache: &mut Option<Qwen2PromptCacheEntry>,
 ) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>, usize)> {
     if let Some(entry) = prompt_cache.as_ref() {
         let reused_prompt_tokens = common_prefix_len(&entry.prompt_ids, prompt_ids);
@@ -2345,83 +2364,71 @@ fn get_or_create_qwen2_prefill(
         }
 
         if reused_prompt_tokens > 0 {
-            let trimmed_cache = entry
-                .prefill_cache
+            if let Some((checkpoint_len, checkpoint_cache, carried_checkpoints)) = entry
+                .checkpoints
                 .iter()
-                .map(|entry| {
-                    entry
-                        .as_ref()
-                        .map(|cache| cache.trimmed_to(reused_prompt_tokens as i32))
-                        .transpose()
+                .filter(|checkpoint| checkpoint.prompt_len <= reused_prompt_tokens)
+                .max_by_key(|checkpoint| checkpoint.prompt_len)
+                .map(|checkpoint| {
+                    let carried: Vec<Qwen2PromptCheckpoint> = entry
+                        .checkpoints
+                        .iter()
+                        .filter(|candidate| candidate.prompt_len <= checkpoint.prompt_len)
+                        .cloned()
+                        .collect();
+                    (
+                        checkpoint.prompt_len,
+                        checkpoint.prefill_cache.clone(),
+                        carried,
+                    )
                 })
-                .collect::<Result<Vec<_>, _>>()?;
-            let (prefill_logits, prefill_cache) = extend_qwen2_prefill_one_token_at_a_time(
-                model,
-                prompt_ids,
-                reused_prompt_tokens,
-                trimmed_cache,
-            )?;
-            *prompt_cache = Some(PromptCacheEntry {
-                prompt_ids: prompt_ids.to_vec(),
-                prefill_cache: prefill_cache.clone(),
-                prefill_logits: prefill_logits.clone(),
-            });
-            return Ok((prefill_logits, prefill_cache, reused_prompt_tokens));
-        }
-
-        if reused_prompt_tokens == entry.prompt_ids.len() && reused_prompt_tokens < prompt_ids.len()
-        {
-            let (prefill_logits, prefill_cache) = extend_qwen2_prefill_one_token_at_a_time(
-                model,
-                prompt_ids,
-                reused_prompt_tokens,
-                entry.prefill_cache.clone(),
-            )?;
-            *prompt_cache = Some(PromptCacheEntry {
-                prompt_ids: prompt_ids.to_vec(),
-                prefill_cache: prefill_cache.clone(),
-                prefill_logits: prefill_logits.clone(),
-            });
-            return Ok((prefill_logits, prefill_cache, reused_prompt_tokens));
+            {
+                if checkpoint_len < prompt_ids.len() {
+                    let (prefill_logits, prefill_cache) = extend_qwen2_prefill_chunked(
+                        model,
+                        prompt_ids,
+                        checkpoint_len,
+                        checkpoint_cache,
+                    )?;
+                    let mut checkpoints = carried_checkpoints;
+                    checkpoints.push(Qwen2PromptCheckpoint {
+                        prompt_len: prompt_ids.len(),
+                        prefill_cache: prefill_cache.clone(),
+                    });
+                    *prompt_cache = Some(Qwen2PromptCacheEntry {
+                        prompt_ids: prompt_ids.to_vec(),
+                        prefill_cache: prefill_cache.clone(),
+                        prefill_logits: prefill_logits.clone(),
+                        checkpoints,
+                    });
+                    return Ok((prefill_logits, prefill_cache, checkpoint_len));
+                }
+            }
         }
     }
 
-    let (prefill_logits, prefill_cache) = prefill_qwen2_prompt(model, prompt_tokens)?;
-    *prompt_cache = Some(PromptCacheEntry {
+    let (prefill_logits, prefill_cache, checkpoints) =
+        prefill_qwen2_prompt_with_checkpoints(model, prompt_ids)?;
+    *prompt_cache = Some(Qwen2PromptCacheEntry {
         prompt_ids: prompt_ids.to_vec(),
         prefill_cache: prefill_cache.clone(),
         prefill_logits: prefill_logits.clone(),
+        checkpoints,
     });
     Ok((prefill_logits, prefill_cache, 0))
 }
 
-#[cfg(feature = "native-mlx")]
-fn prefill_qwen2_prompt(
-    model: &mut qwen2::Model,
-    prompt_tokens: &Array,
-) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>)> {
-    let mut cache = Vec::<Option<ConcatKeyValueCache>>::new();
-    let input = qwen2::ModelInput {
-        inputs: prompt_tokens,
-        mask: None,
-        cache: &mut cache,
-    };
-    let logits = model.forward(input)?;
-    let logits = logits.index((.., -1, ..));
-    eval([&logits])?;
-    Ok((logits, cache))
-}
-
-#[cfg(feature = "native-mlx")]
-fn extend_qwen2_prefill_one_token_at_a_time(
+fn prefill_qwen2_prompt_with_checkpoints(
     model: &mut qwen2::Model,
     prompt_ids: &[u32],
-    start_at: usize,
-    mut cache: Vec<Option<ConcatKeyValueCache>>,
-) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>)> {
+) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>, Vec<Qwen2PromptCheckpoint>)> {
+    let mut cache = Vec::<Option<ConcatKeyValueCache>>::new();
+    let mut checkpoints = Vec::new();
     let mut last_logits = None;
-    for token_id in &prompt_ids[start_at..] {
-        let chunk_tokens = build_prompt_array(&[*token_id])?;
+    let mut consumed = 0usize;
+
+    for chunk in prompt_ids.chunks(QWEN2_PREFILL_CHECKPOINT_STRIDE) {
+        let chunk_tokens = build_prompt_array(chunk)?;
         let input = qwen2::ModelInput {
             inputs: &chunk_tokens,
             mask: None,
@@ -2430,11 +2437,35 @@ fn extend_qwen2_prefill_one_token_at_a_time(
         let logits = model.forward(input)?;
         let logits = logits.index((.., -1, ..));
         eval([&logits])?;
+        consumed += chunk.len();
+        checkpoints.push(Qwen2PromptCheckpoint {
+            prompt_len: consumed,
+            prefill_cache: cache.clone(),
+        });
         last_logits = Some(logits.clone());
     }
+
     let prefill_logits =
         last_logits.ok_or_else(|| anyhow!("qwen2 prompt must contain at least one token"))?;
-    Ok((prefill_logits, cache))
+    Ok((prefill_logits, cache, checkpoints))
+}
+
+fn extend_qwen2_prefill_chunked(
+    model: &mut qwen2::Model,
+    prompt_ids: &[u32],
+    start_at: usize,
+    mut cache: Vec<Option<ConcatKeyValueCache>>,
+) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>)> {
+    let suffix_tokens = build_prompt_array(&prompt_ids[start_at..])?;
+    let input = qwen2::ModelInput {
+        inputs: &suffix_tokens,
+        mask: None,
+        cache: &mut cache,
+    };
+    let logits = model.forward(input)?;
+    let logits = logits.index((.., -1, ..));
+    eval([&logits])?;
+    Ok((logits, cache))
 }
 
 #[cfg(feature = "native-mlx")]
@@ -2609,7 +2640,7 @@ fn generate_qwen2_tokens(
     prompt_tokens: &Array,
     max_tokens: usize,
     temperature: f32,
-    prompt_cache: &mut Option<PromptCacheEntry>,
+    prompt_cache: &mut Option<Qwen2PromptCacheEntry>,
 ) -> Result<(String, &'static str, usize)> {
     let decode_started = Instant::now();
     let mut output_ids = Vec::new();
@@ -2732,7 +2763,7 @@ fn stream_qwen2_tokens(
     max_tokens: usize,
     temperature: f32,
     on_chunk: &mut dyn FnMut(String) -> Result<(), ApiError>,
-    prompt_cache: &mut Option<PromptCacheEntry>,
+    prompt_cache: &mut Option<Qwen2PromptCacheEntry>,
 ) -> Result<(&'static str, usize)> {
     let decode_started = Instant::now();
     let mut completion_tokens = 0usize;
@@ -4222,6 +4253,76 @@ mod tests {
     #[cfg(feature = "native-mlx")]
     #[test]
     #[ignore = "requires a real local Qwen2 MLX model"]
+    fn real_qwen2_parameter_key_coverage() {
+        use mlx_rs::module::ModuleParameters;
+
+        let path =
+            resolve_or_download_test_model(ModelFamily::Qwen2).expect("resolve qwen2 test model");
+        let Some(path) = path else {
+            eprintln!("skipping real_qwen2_parameter_key_coverage: no local model configured");
+            return;
+        };
+
+        let args = qwen2::get_qwen2_model_args(&path).expect("load qwen2 config");
+        let model = qwen2::Model::new(args).expect("build qwen2 model");
+        let params = model.parameters().flatten();
+        let param_set: std::collections::HashSet<_> = params
+            .keys()
+            .map(|key: &std::rc::Rc<str>| key.to_string())
+            .collect();
+
+        let weights_path = path.join("model.safetensors");
+        let weight_set: std::collections::HashSet<_> = if weights_path.exists() {
+            mlx_rs::Array::load_safetensors(&weights_path)
+                .expect("load qwen2 safetensors")
+                .keys()
+                .map(|key| key.to_string())
+                .collect()
+        } else {
+            let raw = std::fs::read_to_string(path.join("model.safetensors.index.json"))
+                .expect("read qwen2 weights index");
+            let index: crate::quantized::WeightMap =
+                serde_json::from_str(&raw).expect("parse qwen2 weights index");
+            index.weight_map.keys().cloned().collect()
+        };
+        let normalized_weight_set: std::collections::HashSet<_> = weight_set
+            .into_iter()
+            .filter(|key| !key.contains("rotary_emb.inv_freq"))
+            .map(|key| {
+                if key.ends_with(".weight") {
+                    let compat_key = key.replacen(".weight", ".inner.weight", 1);
+                    if param_set.contains(&compat_key) {
+                        return compat_key;
+                    }
+                }
+                key
+            })
+            .collect();
+
+        let unloaded: Vec<_> = normalized_weight_set
+            .difference(&param_set)
+            .cloned()
+            .collect();
+        let missing: Vec<_> = param_set
+            .difference(&normalized_weight_set)
+            .cloned()
+            .collect();
+
+        assert!(
+            unloaded.is_empty(),
+            "qwen2 weights missing matching params, sample: {:?}",
+            unloaded.iter().take(10).collect::<Vec<_>>()
+        );
+        assert!(
+            missing.is_empty(),
+            "qwen2 params missing matching weights, sample: {:?}",
+            missing.iter().take(10).collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(feature = "native-mlx")]
+    #[test]
+    #[ignore = "requires a real local Qwen2 MLX model"]
     fn real_qwen2_exact_repeat_cache_smoke() {
         let path =
             resolve_or_download_test_model(ModelFamily::Qwen2).expect("resolve qwen2 test model");
@@ -4267,6 +4368,74 @@ mod tests {
             reused_repeat,
             prompt_ids.len(),
             "exact repeated prompt should reuse the full cached prompt"
+        );
+    }
+
+    #[cfg(feature = "native-mlx")]
+    #[test]
+    #[ignore = "requires a real local Qwen2 MLX model"]
+    fn real_qwen2_partial_shared_prefix_reuses_checkpoint_cache() {
+        let path =
+            resolve_or_download_test_model(ModelFamily::Qwen2).expect("resolve qwen2 test model");
+        let Some(path) = path else {
+            eprintln!(
+                "skipping real_qwen2_partial_shared_prefix_reuses_checkpoint_cache: no local model configured"
+            );
+            return;
+        };
+
+        let mut engine = load_qwen2_engine(&path).expect("load qwen2 engine");
+        let base_ids = render_chat_prompt(
+            &mut engine.tokenizer,
+            engine.chat_template.clone(),
+            &[ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(
+                    "Context:\nMesh-LLM is being evaluated in a small Apple Silicon lab.\n\nTask: summarize the operational implications of these observations.".into(),
+                ),
+            }],
+        )
+        .expect("encode base qwen2 prompt");
+        let base_tokens = build_prompt_array(&base_ids).expect("build base qwen2 prompt array");
+
+        let (_, _, reused_base) = get_or_create_qwen2_prefill(
+            &mut engine.model,
+            &base_ids,
+            &base_tokens,
+            &mut engine.prompt_cache,
+        )
+        .expect("prefill base qwen2 prompt");
+        assert_eq!(reused_base, 0, "first qwen2 prompt should be cold");
+
+        let extended_ids = render_chat_prompt(
+            &mut engine.tokenizer,
+            engine.chat_template.clone(),
+            &[ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(
+                    "Context:\nMesh-LLM is being evaluated in a small Apple Silicon lab.\n\nTask: summarize the operational implications of these observations. Then add one final bullet naming the highest-priority next experiment.".into(),
+                ),
+            }],
+        )
+        .expect("encode extended qwen2 prompt");
+        let extended_tokens =
+            build_prompt_array(&extended_ids).expect("build extended qwen2 prompt array");
+
+        let (_, _, reused_extended) = get_or_create_qwen2_prefill(
+            &mut engine.model,
+            &extended_ids,
+            &extended_tokens,
+            &mut engine.prompt_cache,
+        )
+        .expect("prefill extended qwen2 prompt");
+        assert_eq!(
+            reused_extended % QWEN2_PREFILL_CHECKPOINT_STRIDE,
+            0,
+            "checkpoint reuse should align to the qwen2 checkpoint stride"
+        );
+        assert!(
+            reused_extended > 0 && reused_extended < extended_ids.len(),
+            "partial shared-prefix qwen2 prompts should reuse a prefix checkpoint"
         );
     }
 
