@@ -15,6 +15,7 @@ pub struct CuratedModel {
     pub url: &'static str,
     pub source_repo: Option<&'static str>,
     pub source_file: &'static str,
+    pub source_revision: Option<&'static str>,
     pub size: &'static str,
     pub description: &'static str,
     pub draft: Option<&'static str>,
@@ -72,8 +73,15 @@ pub struct ModelDetails {
 #[derive(Clone, Debug)]
 pub enum ExactModelRef {
     Curated(&'static CuratedModel),
-    HuggingFace { repo: String, file: String },
-    Url { url: String, filename: String },
+    HuggingFace {
+        repo: String,
+        revision: Option<String>,
+        file: String,
+    },
+    Url {
+        url: String,
+        filename: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,8 +335,8 @@ pub async fn resolve_model_input(input: &Path) -> Result<PathBuf> {
         );
     }
 
-    if let Some((repo, file)) = parse_huggingface_ref(&text) {
-        return download_huggingface_model(&repo, &file).await;
+    if let Some((repo, revision, file)) = parse_huggingface_ref(&text) {
+        return download_huggingface_model(&repo, revision.as_deref(), &file).await;
     }
 
     if text.starts_with("http://") || text.starts_with("https://") {
@@ -348,7 +356,11 @@ pub async fn resolve_model_input(input: &Path) -> Result<PathBuf> {
 pub async fn download_exact_ref(input: &str) -> Result<PathBuf> {
     match parse_exact_model_ref(input)? {
         ExactModelRef::Curated(model) => download_curated_model(model).await,
-        ExactModelRef::HuggingFace { repo, file } => download_huggingface_model(&repo, &file).await,
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => download_huggingface_model(&repo, revision.as_deref(), &file).await,
         ExactModelRef::Url { url, filename } => {
             let dest = primary_models_dir().join(filename);
             if existing_download(&dest).await {
@@ -365,8 +377,12 @@ pub fn parse_exact_model_ref(input: &str) -> Result<ExactModelRef> {
     if let Some(model) = find_curated_model_exact(input) {
         return Ok(ExactModelRef::Curated(model));
     }
-    if let Some((repo, file)) = parse_huggingface_ref(input) {
-        return Ok(ExactModelRef::HuggingFace { repo, file });
+    if let Some((repo, revision, file)) = parse_huggingface_ref(input) {
+        return Ok(ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        });
     }
     if input.starts_with("http://") || input.starts_with("https://") {
         return Ok(ExactModelRef::Url {
@@ -397,17 +413,31 @@ fn matching_curated_model_by_basename(repo_file: &str) -> Option<&'static Curate
 
 pub fn matching_curated_model_for_huggingface(
     repo: &str,
+    revision: Option<&str>,
     file: &str,
 ) -> Option<&'static CuratedModel> {
     let repo = repo.to_lowercase();
+    let revision = revision.map(|value| value.to_lowercase());
     let file = file.to_lowercase();
     CURATED_MODELS
         .iter()
         .find(|model| {
             model.source_repo.map(str::to_lowercase) == Some(repo.clone())
                 && model.source_file.to_lowercase() == file
+                && match &revision {
+                    Some(revision) => {
+                        model.source_revision.map(str::to_lowercase) == Some(revision.clone())
+                    }
+                    None => true,
+                }
         })
-        .or_else(|| matching_curated_model_by_basename(file.as_str()))
+        .or_else(|| {
+            if revision.is_none() {
+                matching_curated_model_by_basename(file.as_str())
+            } else {
+                None
+            }
+        })
 }
 
 pub fn matching_curated_model_for_url(url: &str) -> Option<&'static CuratedModel> {
@@ -430,9 +460,13 @@ pub async fn show_exact_model(input: &str) -> Result<ModelDetails> {
             vision: model.mmproj.is_some(),
             moe: model.moe.clone(),
         }),
-        ExactModelRef::HuggingFace { repo, file } => {
-            let exact_ref = format!("{repo}/{file}");
-            let curated = matching_curated_model_for_huggingface(&repo, &file);
+        ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            let exact_ref = format_huggingface_exact_ref(&repo, revision.as_deref(), &file);
+            let curated = matching_curated_model_for_huggingface(&repo, revision.as_deref(), &file);
             Ok(ModelDetails {
                 display_name: Path::new(&file)
                     .file_name()
@@ -441,7 +475,7 @@ pub async fn show_exact_model(input: &str) -> Result<ModelDetails> {
                     .to_string(),
                 exact_ref: exact_ref.clone(),
                 source: "huggingface",
-                download_url: huggingface_resolve_url(&repo, &file),
+                download_url: huggingface_resolve_url(&repo, revision.as_deref(), &file),
                 size_label: curated.map(|model| model.size.to_string()),
                 description: curated.map(|model| model.description.to_string()),
                 draft: curated.and_then(|model| model.draft.map(str::to_string)),
@@ -515,7 +549,7 @@ pub async fn search_huggingface(query: &str, limit: usize) -> Result<Vec<SearchH
                 .then_with(|| left.cmp(right))
         });
         for file in files.into_iter().take(3) {
-            let curated = matching_curated_model_for_huggingface(&repo_id, &file);
+            let curated = matching_curated_model_for_huggingface(&repo_id, None, &file);
             hits.push(SearchHit {
                 exact_ref: format!("{repo_id}/{file}"),
                 downloads: repo.downloads,
@@ -610,22 +644,30 @@ pub async fn download_curated_model(model: &CuratedModel) -> Result<PathBuf> {
     Ok(dest)
 }
 
-pub async fn download_huggingface_model(repo: &str, file: &str) -> Result<PathBuf> {
-    let assets = huggingface_download_assets(repo, file)?;
-    download_remote_assets(&format!("{repo}/{file}"), assets).await
+pub async fn download_huggingface_model(
+    repo: &str,
+    revision: Option<&str>,
+    file: &str,
+) -> Result<PathBuf> {
+    let assets = huggingface_download_assets(repo, revision, file)?;
+    download_remote_assets(&format_huggingface_exact_ref(repo, revision, file), assets).await
 }
 
 pub async fn download_url(url: &str, dest: &Path) -> Result<()> {
     download_with_resume(dest, url, |_, _| {}).await
 }
 
-pub fn huggingface_download_assets(repo: &str, file: &str) -> Result<Vec<(String, String)>> {
+pub fn huggingface_download_assets(
+    repo: &str,
+    revision: Option<&str>,
+    file: &str,
+) -> Result<Vec<(String, String)>> {
     remote_split_parts(file)?
         .unwrap_or_else(|| vec![file.to_string()])
         .into_iter()
         .map(|part| {
             let filename = remote_basename(&part)?;
-            Ok((filename, huggingface_resolve_url(repo, &part)))
+            Ok((filename, huggingface_resolve_url(repo, revision, &part)))
         })
         .collect()
 }
@@ -637,11 +679,19 @@ where
     download_with_resume(dest, url, on_progress).await
 }
 
-pub fn huggingface_resolve_url(repo: &str, file: &str) -> String {
-    format!("https://huggingface.co/{repo}/resolve/main/{file}")
+pub fn huggingface_resolve_url(repo: &str, revision: Option<&str>, file: &str) -> String {
+    let revision = revision.unwrap_or("main");
+    format!("https://huggingface.co/{repo}/resolve/{revision}/{file}")
 }
 
-fn parse_huggingface_ref(input: &str) -> Option<(String, String)> {
+fn format_huggingface_exact_ref(repo: &str, revision: Option<&str>, file: &str) -> String {
+    match revision {
+        Some(revision) => format!("{repo}@{revision}/{file}"),
+        None => format!("{repo}/{file}"),
+    }
+}
+
+fn parse_huggingface_ref(input: &str) -> Option<(String, Option<String>, String)> {
     if let Some(rest) = input.strip_prefix("https://huggingface.co/") {
         return parse_huggingface_url_tail(rest);
     }
@@ -651,13 +701,21 @@ fn parse_huggingface_ref(input: &str) -> Option<(String, String)> {
     if input.ends_with(".gguf") {
         let parts: Vec<&str> = input.splitn(3, '/').collect();
         if parts.len() == 3 {
-            return Some((format!("{}/{}", parts[0], parts[1]), parts[2].to_string()));
+            let (repo_tail, revision) = match parts[1].split_once('@') {
+                Some((repo, revision)) => (repo, Some(revision.to_string())),
+                None => (parts[1], None),
+            };
+            return Some((
+                format!("{}/{}", parts[0], repo_tail),
+                revision,
+                parts[2].to_string(),
+            ));
         }
     }
     None
 }
 
-fn parse_huggingface_url_tail(tail: &str) -> Option<(String, String)> {
+fn parse_huggingface_url_tail(tail: &str) -> Option<(String, Option<String>, String)> {
     let parts: Vec<&str> = tail.split('/').collect();
     if parts.len() < 5 {
         return None;
@@ -666,9 +724,10 @@ fn parse_huggingface_url_tail(tail: &str) -> Option<(String, String)> {
         return None;
     }
     let repo = format!("{}/{}", parts[0], parts[1]);
+    let revision = parts.get(3).map(|value| value.to_string());
     let file = parts[4..].join("/");
     if file.ends_with(".gguf") {
-        Some((repo, file))
+        Some((repo, revision, file))
     } else {
         None
     }
@@ -1019,8 +1078,33 @@ mod tests {
         )
         .unwrap();
         match parsed {
-            ExactModelRef::HuggingFace { repo, file } => {
+            ExactModelRef::HuggingFace {
+                repo,
+                revision,
+                file,
+            } => {
                 assert_eq!(repo, "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF");
+                assert_eq!(revision, None);
+                assert_eq!(file, "qwen2.5-coder-32b-instruct-q4_k_m.gguf");
+            }
+            _ => panic!("expected Hugging Face ref"),
+        }
+    }
+
+    #[test]
+    fn parses_exact_hf_refs_with_revision() {
+        let parsed = parse_exact_model_ref(
+            "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF@9f8e7d6c/qwen2.5-coder-32b-instruct-q4_k_m.gguf",
+        )
+        .unwrap();
+        match parsed {
+            ExactModelRef::HuggingFace {
+                repo,
+                revision,
+                file,
+            } => {
+                assert_eq!(repo, "Qwen/Qwen2.5-Coder-32B-Instruct-GGUF");
+                assert_eq!(revision.as_deref(), Some("9f8e7d6c"));
                 assert_eq!(file, "qwen2.5-coder-32b-instruct-q4_k_m.gguf");
             }
             _ => panic!("expected Hugging Face ref"),
@@ -1037,6 +1121,7 @@ mod tests {
     fn matches_split_huggingface_refs_using_repo_and_remote_path() {
         let matched = matching_curated_model_for_huggingface(
             "Qwen/Qwen3-Coder-Next-GGUF",
+            Some("main"),
             "Qwen3-Coder-Next-Q4_K_M/Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",
         )
         .unwrap();
@@ -1056,6 +1141,7 @@ mod tests {
     fn expands_split_huggingface_download_assets() {
         let assets = huggingface_download_assets(
             "Qwen/Qwen3-Coder-Next-GGUF",
+            Some("main"),
             "Qwen3-Coder-Next-Q4_K_M/Qwen3-Coder-Next-Q4_K_M-00001-of-00004.gguf",
         )
         .unwrap();

@@ -57,7 +57,7 @@ fn render_catalog(models: &[CatalogEntry]) -> String {
     let mut out = String::new();
     out.push_str("pub static CURATED_MODELS: &[CuratedModel] = &[\n");
     for model in models {
-        let (source_repo, source_file) = parse_huggingface_source(&model.url);
+        let (source_repo, source_revision, source_file) = parse_huggingface_source(&model.url);
         out.push_str("    CuratedModel {\n");
         out.push_str(&format!("        name: {:?},\n", model.id));
         out.push_str(&format!("        id: {:?},\n", model.id));
@@ -70,6 +70,10 @@ fn render_catalog(models: &[CatalogEntry]) -> String {
         out.push_str(&format!(
             "        source_file: {:?},\n",
             source_file.as_deref().unwrap_or(&model.file)
+        ));
+        out.push_str(&format!(
+            "        source_revision: {},\n",
+            render_option_str(source_revision.as_deref())
         ));
         out.push_str(&format!("        size: {:?},\n", model.size));
         out.push_str(&format!("        description: {:?},\n", model.description));
@@ -145,16 +149,17 @@ fn render_optional_asset(asset: Option<&AssetEntry>) -> String {
     }
 }
 
-fn parse_huggingface_source(url: &str) -> (Option<String>, Option<String>) {
+fn parse_huggingface_source(url: &str) -> (Option<String>, Option<String>, Option<String>) {
     let Some(rest) = url.strip_prefix("https://huggingface.co/") else {
-        return (None, None);
+        return (None, None, None);
     };
     let parts: Vec<&str> = rest.split('/').collect();
     if parts.len() < 5 || parts.get(2) != Some(&"resolve") {
-        return (None, None);
+        return (None, None, None);
     }
 
     let repo = format!("{}/{}", parts[0], parts[1]);
+    let revision = parts.get(3).map(|value| value.to_string());
     let file = parts[4..].join("/");
-    (Some(repo), Some(file))
+    (Some(repo), revision, Some(file))
 }

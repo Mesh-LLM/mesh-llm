@@ -723,8 +723,12 @@ async fn run_model_download_job(
                 draft_path,
             )
         }
-        models::ExactModelRef::HuggingFace { repo, file } => {
-            let mut assets = models::huggingface_download_assets(repo, file)?;
+        models::ExactModelRef::HuggingFace {
+            repo,
+            revision,
+            file,
+        } => {
+            let mut assets = models::huggingface_download_assets(repo, revision.as_deref(), file)?;
             let filename = assets
                 .first()
                 .map(|(file, _)| file.clone())
