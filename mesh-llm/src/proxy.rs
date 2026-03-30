@@ -495,6 +495,7 @@ pub async fn route_to_target(
     target: election::InferenceTarget,
     prefetched: &[u8],
 ) -> bool {
+    let mut tcp_stream = tcp_stream;
     tracing::info!("API proxy: routing to target {target:?}");
     match target {
         election::InferenceTarget::Local(port) | election::InferenceTarget::MoeLocal(port) => {
@@ -507,9 +508,17 @@ pub async fn route_to_target(
                         let _ = send_503(tcp_stream).await;
                         return false;
                     }
-                    if let Err(e) = tunnel::relay_tcp_streams(tcp_stream, upstream).await {
+                    if let Err(e) = upstream.shutdown().await {
+                        tracing::warn!(
+                            "API proxy: failed to half-close request stream to local llama-server on {port}: {e}"
+                        );
+                        let _ = send_503(tcp_stream).await;
+                        return false;
+                    }
+                    if let Err(e) = tokio::io::copy(&mut upstream, &mut tcp_stream).await {
                         tracing::debug!("API proxy (local) ended: {e}");
                     }
+                    let _ = tcp_stream.shutdown().await;
                     true
                 }
                 Err(e) => {
@@ -531,8 +540,15 @@ pub async fn route_to_target(
                         let _ = send_503(tcp_stream).await;
                         return false;
                     }
-                    if let Err(e) =
-                        tunnel::relay_tcp_via_quic(tcp_stream, quic_send, quic_recv).await
+                    if let Err(e) = quic_send.finish() {
+                        tracing::warn!(
+                            "API proxy: failed to finish buffered request to host {}: {e}",
+                            host_id.fmt_short()
+                        );
+                        let _ = send_503(tcp_stream).await;
+                        return false;
+                    }
+                    if let Err(e) = tunnel::relay_quic_response_to_tcp(tcp_stream, quic_recv).await
                     {
                         tracing::debug!("API proxy (remote) ended: {e}");
                     }

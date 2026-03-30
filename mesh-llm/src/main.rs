@@ -3475,4 +3475,38 @@ mod tests {
         proxy_handle.abort();
         let _ = strong_handle.await;
     }
+
+    #[tokio::test]
+    async fn test_api_proxy_integration_pipelined_follow_up_is_not_forwarded() {
+        let (upstream_port, upstream_rx, upstream_handle) =
+            spawn_capturing_upstream(r#"{"ok":true}"#).await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness(local_targets(&[("test", upstream_port)])).await;
+
+        let body = json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "first"}],
+        })
+        .to_string();
+        let first_request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let second_request = "GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n";
+
+        let response = send_request_and_read_response(
+            proxy_addr,
+            vec![format!("{first_request}{second_request}").into_bytes()],
+        )
+        .await;
+        let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(raw.contains("\"content\":\"first\""));
+        assert!(!raw.contains("GET /v1/models HTTP/1.1"));
+
+        proxy_handle.abort();
+        let _ = upstream_handle.await;
+    }
 }

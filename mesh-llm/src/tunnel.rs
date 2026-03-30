@@ -302,33 +302,6 @@ async fn handle_inbound_http_stream(
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
 }
 
-/// Relay a TCP stream through a QUIC bi-stream. Used by the lite client
-/// to tunnel local HTTP requests to the remote host's llama-server.
-/// Relay between two TCP streams (for local proxying).
-pub async fn relay_tcp_streams(a: TcpStream, b: TcpStream) -> Result<()> {
-    let (a_read, mut a_write) = tokio::io::split(a);
-    let (b_read, mut b_write) = tokio::io::split(b);
-    let mut t1 = tokio::spawn(async move {
-        tokio::io::copy(&mut tokio::io::BufReader::new(a_read), &mut b_write).await
-    });
-    let mut t2 = tokio::spawn(async move {
-        tokio::io::copy(&mut tokio::io::BufReader::new(b_read), &mut a_write).await
-    });
-    tokio::select! {
-        r1 = &mut t1 => {
-            r1??;
-            tracing::debug!("relay_tcp_streams: request side finished, waiting for response side");
-            t2.await??;
-        }
-        r2 = &mut t2 => {
-            r2??;
-            t1.abort();
-            let _ = t1.await;
-        }
-    }
-    Ok(())
-}
-
 pub async fn relay_tcp_via_quic(
     tcp_stream: TcpStream,
     quic_send: iroh::endpoint::SendStream,
@@ -336,6 +309,26 @@ pub async fn relay_tcp_via_quic(
 ) -> Result<()> {
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+}
+
+/// Relay only the QUIC response side back to a TCP client.
+///
+/// Used by the HTTP proxy after it has already buffered and forwarded exactly
+/// one request upstream. Any further bytes from the client connection are
+/// intentionally ignored so pipelined follow-up requests are not replayed to
+/// the selected upstream without a fresh routing decision.
+pub async fn relay_quic_response_to_tcp(
+    mut tcp_stream: TcpStream,
+    mut quic_recv: iroh::endpoint::RecvStream,
+) -> Result<()> {
+    let result = relay_response_with_first_byte_timeout(
+        &mut quic_recv,
+        &mut tcp_stream,
+        quic_response_first_byte_timeout(),
+    )
+    .await;
+    let _ = tcp_stream.shutdown().await;
+    result
 }
 
 /// Bidirectional relay. When either direction finishes, abort the other.
