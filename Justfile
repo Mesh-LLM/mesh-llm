@@ -16,8 +16,7 @@ build: build-mac
 #   just build backend=cpu
 #   just build backend=cuda cuda_arch='120;86'
 #   just build backend=rocm rocm_arch='gfx942;gfx90a'
-
-# just build backend=vulkan
+#   just build backend=vulkan
 [linux]
 build backend="" cuda_arch="" rocm_arch="":
     @scripts/build-linux.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
@@ -257,13 +256,13 @@ release-bundle-vulkan-windows version output="dist":
 # Build Apple Silicon memory bandwidth benchmark (macOS only)
 [macos]
 benchmark-build-apple:
-    swiftc -O benchmarks/membench-fingerprint.swift -o {{ mesh_dir }}/target/release/membench-fingerprint
-    echo "Built: {{ mesh_dir }}/target/release/membench-fingerprint"
+    swiftc -O benchmarks/membench-fingerprint.swift -o {{mesh_dir}}/target/release/membench-fingerprint
+    echo "Built: {{mesh_dir}}/target/release/membench-fingerprint"
 
 # Build NVIDIA CUDA memory bandwidth benchmark (requires CUDA toolkit)
 benchmark-build-cuda:
-    nvcc -O3 -o {{ mesh_dir }}/target/release/membench-fingerprint-cuda benchmarks/membench-fingerprint.cu
-    echo "Built: {{ mesh_dir }}/target/release/membench-fingerprint-cuda"
+    nvcc -O3 -o {{mesh_dir}}/target/release/membench-fingerprint-cuda benchmarks/membench-fingerprint.cu
+    echo "Built: {{mesh_dir}}/target/release/membench-fingerprint-cuda"
 
 [windows]
 benchmark-build-cuda-windows:
@@ -271,8 +270,8 @@ benchmark-build-cuda-windows:
 
 # Build AMD ROCm/HIP memory bandwidth benchmark (requires ROCm)
 benchmark-build-hip:
-    hipcc -O3 -std=c++17 -o {{ mesh_dir }}/target/release/membench-fingerprint-hip benchmarks/membench-fingerprint.hip
-    echo "Built: {{ mesh_dir }}/target/release/membench-fingerprint-hip"
+    hipcc -O3 -std=c++17 -o {{mesh_dir}}/target/release/membench-fingerprint-hip benchmarks/membench-fingerprint.hip
+    echo "Built: {{mesh_dir}}/target/release/membench-fingerprint-hip"
 
 [windows]
 benchmark-build-hip-windows:
@@ -281,8 +280,8 @@ benchmark-build-hip-windows:
 # Build Intel Arc SYCL memory bandwidth benchmark (requires Intel oneAPI) — UNVALIDATED
 benchmark-build-intel:
     @echo "WARNING: Intel Arc benchmark is unvalidated — no Intel Arc hardware has been tested"
-    icpx -O3 -fsycl -o {{ mesh_dir }}/target/release/membench-fingerprint-intel benchmarks/membench-fingerprint-intel.cpp
-    echo "Built: {{ mesh_dir }}/target/release/membench-fingerprint-intel"
+    icpx -O3 -fsycl -o {{mesh_dir}}/target/release/membench-fingerprint-intel benchmarks/membench-fingerprint-intel.cpp
+    echo "Built: {{mesh_dir}}/target/release/membench-fingerprint-intel"
 
 [windows]
 benchmark-build-intel-windows:
@@ -314,109 +313,6 @@ stop:
     pkill -f "rpc-server" 2>/dev/null || true
     pkill -f "llama-server" 2>/dev/null || true
     echo "Stopped"
-
-# MLX helper defaults (override with `just --set name value <recipe>`)
-ssh_host_a := ""
-ssh_host_b := ""
-ip_a := ""
-ip_b := ""
-remote_python := "python3"
-remote_http_port := "18080"
-starting_port := "47000"
-connections_per_ip := "1"
-connections_per_rank := "1"
-max_tokens := "32"
-prompt := "Reply with the single word ok."
-startup_timeout_secs := "120"
-request_timeout_secs := "90"
-pipeline := "0"
-env := ""
-model_name := ""
-model_gb := ""
-candidates := ""
-force_split := "0"
-remote_mesh_bin := "mesh-llm"
-remote_bin_dir := ""
-remote_api_port := "19337"
-remote_console_port := "13131"
-remote_bind_port_a := "47010"
-remote_bind_port_b := "47011"
-remote_mlx_server_bin := ""
-
-# Manual two-Mac MLX distributed smoke test over SSH.
-mlx-smoke:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ARGS=(
-      --ssh-host-a "{{ ssh_host_a }}"
-      --ssh-host-b "{{ ssh_host_b }}"
-      --ip-a "{{ ip_a }}"
-      --ip-b "{{ ip_b }}"
-      --model "{{ model }}"
-      --remote-python "{{ remote_python }}"
-      --remote-http-port "{{ remote_http_port }}"
-      --starting-port "{{ starting_port }}"
-      --connections-per-ip "{{ connections_per_ip }}"
-      --max-tokens "{{ max_tokens }}"
-      --prompt "{{ prompt }}"
-      --startup-timeout-secs "{{ startup_timeout_secs }}"
-      --request-timeout-secs "{{ request_timeout_secs }}"
-    )
-    if [ "{{ pipeline }}" = "1" ]; then
-      ARGS+=(--pipeline)
-    fi
-    if [ -n "{{ env }}" ]; then
-      ARGS+=(--env "{{ env }}")
-    fi
-    exec bash scripts/mlx-smoke-test.sh "${ARGS[@]}"
-
-# Print the deterministic MLX distributed plan without launching anything.
-mlx-plan:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ARGS=(
-      --model-name "{{ model_name }}"
-      --model-gb "{{ model_gb }}"
-      --connections-per-rank "{{ connections_per_rank }}"
-    )
-    IFS=',' read -ra CANDS <<< "{{ candidates }}"
-    for cand in "${CANDS[@]}"; do
-      [[ -n "$cand" ]] && ARGS+=(--candidate "$cand")
-    done
-    if [ "{{ force_split }}" = "1" ]; then
-      ARGS+=(--force-split)
-    fi
-    exec python3 scripts/mlx-plan.py "${ARGS[@]}"
-
-# Manual two-Mac MLX distributed smoke test through mesh-llm + QUIC shims.
-mlx-mesh-smoke:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ARGS=(
-      --ssh-host-a "{{ ssh_host_a }}"
-      --ssh-host-b "{{ ssh_host_b }}"
-      --ip-a "{{ ip_a }}"
-      --ip-b "{{ ip_b }}"
-      --model "{{ model }}"
-      --remote-mesh-bin "{{ remote_mesh_bin }}"
-      --remote-bin-dir "{{ remote_bin_dir }}"
-      --remote-api-port "{{ remote_api_port }}"
-      --remote-console-port "{{ remote_console_port }}"
-      --remote-bind-port-a "{{ remote_bind_port_a }}"
-      --remote-bind-port-b "{{ remote_bind_port_b }}"
-      --connections-per-rank "{{ connections_per_rank }}"
-      --max-tokens "{{ max_tokens }}"
-      --prompt "{{ prompt }}"
-      --startup-timeout-secs "{{ startup_timeout_secs }}"
-      --request-timeout-secs "{{ request_timeout_secs }}"
-    )
-    if [ -n "{{ remote_mlx_server_bin }}" ]; then
-      ARGS+=(--remote-mlx-server-bin "{{ remote_mlx_server_bin }}")
-    fi
-    if [ "{{ pipeline }}" = "1" ]; then
-      ARGS+=(--pipeline)
-    fi
-    exec bash scripts/mlx-mesh-smoke-test.sh "${ARGS[@]}"
 
 # Quick test inference (works with any running server on 8080 or 8090)
 test port="9337":

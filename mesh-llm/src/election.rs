@@ -5,7 +5,7 @@
 //! Every mesh change: kill llama-server, re-elect, winner starts fresh.
 //! mesh-llm owns :api_port and proxies to the right host by model name.
 
-use crate::{backend, download, launch, mesh, moe, tunnel};
+use crate::{download, launch, mesh, moe, tunnel};
 use mesh::NodeRole;
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,17 +16,6 @@ use tokio::sync::watch;
 /// Calculate total model size, summing all split files if present.
 /// Split files follow the pattern: name-00001-of-00004.gguf
 pub fn total_model_bytes(model: &Path) -> u64 {
-    if model.is_dir() {
-        return std::fs::read_dir(model)
-            .ok()
-            .into_iter()
-            .flat_map(|entries| entries.flatten())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("safetensors"))
-            .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
-            .sum();
-    }
-
     let name = model.to_string_lossy();
     // Check for split pattern: *-00001-of-NNNNN.gguf
     if let Some(pos) = name.find("-00001-of-") {
@@ -67,78 +56,6 @@ pub fn should_be_host_for_model(
         }
     }
     true
-}
-
-fn mlx_distributed_mode() -> launch::MlxDistributedMode {
-    if std::env::var("MESH_LLM_MLX_PIPELINE").ok().as_deref() == Some("1") {
-        launch::MlxDistributedMode::Pipeline
-    } else {
-        launch::MlxDistributedMode::Tensor
-    }
-}
-
-fn mlx_connections_per_rank() -> usize {
-    std::env::var("MESH_LLM_MLX_CONNECTIONS_PER_RANK")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(1)
-}
-
-fn mlx_shim_base_port(model_name: &str) -> u16 {
-    let hash = model_name.bytes().fold(0u64, |acc, b| {
-        acc.wrapping_mul(31).wrapping_add(u64::from(b))
-    });
-    40_000 + ((hash % 200) as u16) * 70
-}
-
-fn sorted_mlx_candidates(
-    my_id: iroh::EndpointId,
-    my_vram: u64,
-    model_peers: &[mesh::PeerInfo],
-) -> Vec<(iroh::EndpointId, u64)> {
-    let mut candidates: Vec<(iroh::EndpointId, u64)> = model_peers
-        .iter()
-        .filter(|p| !matches!(p.role, NodeRole::Client))
-        .map(|p| (p.id, p.vram_bytes))
-        .collect();
-    candidates.push((my_id, my_vram));
-    candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
-    candidates
-}
-
-fn select_mlx_cohort(
-    my_id: iroh::EndpointId,
-    my_vram: u64,
-    model_peers: &[mesh::PeerInfo],
-    model_bytes: u64,
-    force_split: bool,
-) -> (Vec<iroh::EndpointId>, u64) {
-    let min_vram = (model_bytes as f64 * 1.1) as u64;
-    let min_nodes = if force_split { 2 } else { 1 };
-    let mut total_vram = 0u64;
-    let mut selected = Vec::new();
-    for (peer_id, vram) in sorted_mlx_candidates(my_id, my_vram, model_peers) {
-        if total_vram >= min_vram && selected.len() >= min_nodes {
-            break;
-        }
-        total_vram = total_vram.saturating_add(vram);
-        selected.push(peer_id);
-    }
-    (selected, total_vram)
-}
-
-fn cohort_bind_ports(model_name: &str, world_size: usize) -> Option<Vec<Vec<u16>>> {
-    launch::allocate_mlx_loopback_bind_ports(
-        world_size,
-        mlx_connections_per_rank(),
-        mlx_shim_base_port(model_name),
-    )
-    .ok()
-}
-
-fn peer_id_for_rank(cohort: &[iroh::EndpointId], rank: usize) -> Option<iroh::EndpointId> {
-    cohort.get(rank).copied()
 }
 
 /// The current state of llama-server as managed by the election loop.
@@ -357,7 +274,6 @@ pub async fn election_loop(
     let model_bytes = total_model_bytes(&model);
     let my_vram = node.vram_bytes();
     let model_fits_locally = my_vram >= (model_bytes as f64 * 1.1) as u64;
-    let backend_kind = backend::detect_backend(&model);
 
     // Check if this is a MoE model with pre-computed expert routing
     let moe_config = lookup_moe_config(&model_name, &model);
@@ -403,25 +319,6 @@ pub async fn election_loop(
         }
     }
 
-    if backend_kind == backend::BackendKind::Mlx && (force_split || !model_fits_locally) {
-        mlx_distributed_election_loop(
-            node,
-            tunnel_mgr,
-            bin_dir,
-            model,
-            model_name,
-            my_vram,
-            model_bytes as u64,
-            binary_flavor,
-            ctx_size_override,
-            force_split,
-            target_tx,
-            &mut on_change,
-        )
-        .await;
-        return;
-    }
-
     loop {
         // Collect our model group (peers also serving this model)
         let peers = node.peers().await;
@@ -431,39 +328,11 @@ pub async fn election_loop(
             .cloned()
             .collect();
 
-        if !backend_kind.capabilities().supports_rpc_split {
-            if force_split {
-                eprintln!(
-                    "⚠ [{}] backend '{}' ignores --split (solo-only for now)",
-                    model_name,
-                    backend_kind.as_str()
-                );
-            }
-            if !model_fits_locally {
-                eprintln!(
-                    "⏳ [{}] backend '{}' requires local fit ({:.1}GB model, {:.1}GB VRAM)",
-                    model_name,
-                    backend_kind.as_str(),
-                    model_bytes as f64 / 1e9,
-                    my_vram as f64 / 1e9
-                );
-                update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
-                on_change(false, false);
-                last_worker_set.clear();
-                if peer_rx.changed().await.is_err() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                continue;
-            }
-        }
-
         // Splitting decision: only split when forced OR when the model
         // genuinely doesn't fit on this node alone. If it fits, every
         // node serving this model runs its own independent llama-server
         // (no election needed — everyone is a host).
-        let need_split =
-            backend_kind.capabilities().supports_rpc_split && (force_split || !model_fits_locally);
+        let need_split = force_split || !model_fits_locally;
 
         let i_am_host = if need_split {
             // Distributed mode: elect one host from the model group
@@ -546,11 +415,7 @@ pub async fn election_loop(
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    eprintln!(
-                        "🔄 [{}] {} died — restarting...",
-                        model_name,
-                        backend_kind.process_label()
-                    );
+                    eprintln!("🔄 [{}] llama-server died — restarting...", model_name);
                     llama_death_rx = None;
                     currently_host = false;
                     update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -561,9 +426,9 @@ pub async fn election_loop(
             }
         }
 
-        // Something changed — kill the inference server if we were running it
+        // Something changed — kill llama-server if we were running it
         if currently_host {
-            launch::kill_server_processes(backend_kind).await;
+            launch::kill_llama_server().await;
             tunnel_mgr.set_http_port(0);
             node.set_role(NodeRole::Worker).await;
             update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -618,7 +483,7 @@ pub async fn election_loop(
 
             // In solo mode, pass empty model_peers so start_llama won't use any workers
             let peers_for_launch = if need_split { &model_peers[..] } else { &[] };
-            let (llama_port, death_rx) = match start_model_server(
+            let (llama_port, death_rx) = match start_llama(
                 &node,
                 &tunnel_mgr,
                 rpc_port,
@@ -663,9 +528,8 @@ pub async fn election_loop(
             llama_death_rx = Some(death_rx);
             on_change(true, true);
             eprintln!(
-                "✅ [{}] {} ready on internal port {llama_port}",
-                model_name,
-                backend_kind.process_label()
+                "✅ [{}] llama-server ready on internal port {llama_port}",
+                model_name
             );
         } else {
             // We're a worker in split mode. Find who the host is.
@@ -714,11 +578,7 @@ pub async fn election_loop(
                     std::future::pending::<()>().await;
                 }
             } => {
-                eprintln!(
-                    "🔄 [{}] {} died — restarting...",
-                    model_name,
-                    backend_kind.process_label()
-                );
+                eprintln!("🔄 [{}] llama-server died — restarting...", model_name);
                 llama_death_rx = None;
                 currently_host = false;
                 update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -978,298 +838,6 @@ async fn moe_election_loop(
     }
 }
 
-async fn mlx_distributed_election_loop(
-    node: mesh::Node,
-    tunnel_mgr: tunnel::Manager,
-    bin_dir: std::path::PathBuf,
-    model: std::path::PathBuf,
-    model_name: String,
-    my_vram: u64,
-    model_bytes: u64,
-    binary_flavor: Option<launch::BinaryFlavor>,
-    ctx_size_override: Option<u32>,
-    force_split: bool,
-    target_tx: Arc<watch::Sender<ModelTargets>>,
-    on_change: &mut impl FnMut(bool, bool),
-) {
-    let mut peer_rx = node.peer_change_rx.clone();
-    let mut currently_running = false;
-    let mut current_rank: Option<usize> = None;
-    let mut current_cohort: Vec<iroh::EndpointId> = vec![];
-    let mut death_rx: Option<tokio::sync::oneshot::Receiver<()>> = None;
-    const WORKER_HTTP_PORT: u16 = 18080;
-
-    loop {
-        let peers = node.peers().await;
-        let model_peers: Vec<mesh::PeerInfo> = peers
-            .iter()
-            .filter(|p| p.serving.as_deref() == Some(&model_name))
-            .filter(|p| !matches!(p.role, NodeRole::Client))
-            .cloned()
-            .collect();
-
-        let (cohort, total_vram) =
-            select_mlx_cohort(node.id(), my_vram, &model_peers, model_bytes, force_split);
-        let min_vram = (model_bytes as f64 * 1.1) as u64;
-        let need_nodes = if force_split { 2 } else { 1 };
-        let host_id = cohort.first().copied();
-        let my_rank = cohort.iter().position(|id| *id == node.id());
-        let ready = total_vram >= min_vram && cohort.len() >= need_nodes;
-
-        if !ready {
-            if currently_running {
-                launch::kill_server_processes(backend::BackendKind::Mlx).await;
-                tunnel::clear_mlx_shim_routes().await;
-                tunnel_mgr.set_http_port(0);
-                node.set_role(NodeRole::Worker).await;
-                currently_running = false;
-                death_rx = None;
-            }
-            let target = match host_id {
-                Some(id) if id != node.id() => InferenceTarget::Remote(id),
-                _ => InferenceTarget::None,
-            };
-            update_targets(&node, &model_name, target, &target_tx).await;
-            on_change(false, false);
-            eprintln!(
-                "⏳ [{}] MLX distributed waiting for more capacity — need {:.1}GB and {} node(s), have {:.1}GB across {}",
-                model_name,
-                min_vram as f64 / 1e9,
-                need_nodes,
-                total_vram as f64 / 1e9,
-                cohort.len()
-            );
-            current_cohort = cohort;
-            current_rank = my_rank;
-            if peer_rx.changed().await.is_err() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            continue;
-        }
-
-        if currently_running && current_cohort == cohort && current_rank == my_rank {
-            let target = if my_rank == Some(0) {
-                match node.role().await {
-                    NodeRole::Host { http_port } => InferenceTarget::Local(http_port),
-                    _ => InferenceTarget::None,
-                }
-            } else if let Some(id) = host_id {
-                InferenceTarget::Remote(id)
-            } else {
-                InferenceTarget::None
-            };
-            update_targets(&node, &model_name, target, &target_tx).await;
-            tokio::select! {
-                res = peer_rx.changed() => {
-                    if res.is_err() { break; }
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    continue;
-                }
-                _ = async {
-                    if let Some(ref mut rx) = death_rx {
-                        let _ = rx.await;
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                } => {
-                    eprintln!("🔄 [{}] mlx distributed rank died — restarting...", model_name);
-                    death_rx = None;
-                    currently_running = false;
-                    update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
-                    on_change(false, false);
-                }
-            }
-        }
-
-        if currently_running {
-            launch::kill_server_processes(backend::BackendKind::Mlx).await;
-            tunnel::clear_mlx_shim_routes().await;
-            tunnel_mgr.set_http_port(0);
-            node.set_role(NodeRole::Worker).await;
-            currently_running = false;
-            death_rx = None;
-            update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
-            on_change(false, false);
-        }
-
-        let Some(rank) = my_rank else {
-            if let Some(id) = host_id {
-                update_targets(&node, &model_name, InferenceTarget::Remote(id), &target_tx).await;
-            } else {
-                update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
-            }
-            current_cohort = cohort;
-            current_rank = None;
-            on_change(false, false);
-            if peer_rx.changed().await.is_err() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            continue;
-        };
-
-        let bind_ports = match cohort_bind_ports(&model_name, cohort.len()) {
-            Some(ports) => ports,
-            None => {
-                eprintln!(
-                    "❌ [{}] failed to allocate deterministic MLX bind ports",
-                    model_name
-                );
-                if peer_rx.changed().await.is_err() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                continue;
-            }
-        };
-        let plans = match launch::build_mlx_quic_ring_plans(
-            &bind_ports,
-            mlx_shim_base_port(&model_name) + 32,
-        ) {
-            Ok(plans) => plans,
-            Err(e) => {
-                eprintln!("❌ [{}] failed to build MLX rank plans: {e}", model_name);
-                if peer_rx.changed().await.is_err() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                continue;
-            }
-        };
-        let plan = &plans[rank];
-        let mut shim_routes = Vec::new();
-        for route in &plan.shim_routes {
-            let Some(remote_peer) = peer_id_for_rank(&cohort, route.remote_rank) else {
-                continue;
-            };
-            let Ok(remote_addr): Result<std::net::SocketAddr, _> = route.remote_target_addr.parse()
-            else {
-                continue;
-            };
-            shim_routes.push(tunnel::MlxMeshShimRoute {
-                local_listen_addr: route.local_listen_addr.clone(),
-                remote_peer,
-                remote_target_port: remote_addr.port(),
-            });
-        }
-        if let Err(e) = tunnel::replace_mlx_shim_routes(node.clone(), shim_routes).await {
-            eprintln!("❌ [{}] failed to start MLX QUIC shims: {e}", model_name);
-            if peer_rx.changed().await.is_err() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            continue;
-        }
-
-        eprintln!(
-            "🧠 [{}] MLX rank {}/{} mode={} bind_addrs={:?} shims={}",
-            model_name,
-            rank,
-            cohort.len(),
-            mlx_distributed_mode().as_str(),
-            plan.bind_addrs,
-            plan.shim_routes.len()
-        );
-
-        let http_port = if rank == 0 {
-            match find_free_port().await {
-                Ok(port) => port,
-                Err(e) => {
-                    eprintln!("❌ [{}] failed to find MLX HTTP port: {e}", model_name);
-                    if peer_rx.changed().await.is_err() {
-                        break;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                    continue;
-                }
-            }
-        } else {
-            WORKER_HTTP_PORT
-        };
-
-        match launch::start_model_server(
-            &bin_dir,
-            binary_flavor,
-            launch::ModelLaunchSpec {
-                backend: backend::BackendKind::Mlx,
-                model: &model,
-                http_port,
-                tunnel_ports: &[],
-                tensor_split: None,
-                draft: None,
-                draft_max: 0,
-                model_bytes,
-                my_vram,
-                mmproj: None,
-                ctx_size_override,
-                total_group_vram: Some(total_vram),
-                mlx_hostfile_json: Some(&plan.hostfile_json),
-                mlx_rank: Some(rank),
-                mlx_bind_addrs: &plan.bind_addrs,
-                mlx_mode: Some(mlx_distributed_mode()),
-                mlx_serves_http: rank == 0,
-            },
-        )
-        .await
-        {
-            Ok(rx) => {
-                death_rx = Some(rx);
-                current_cohort = cohort.clone();
-                current_rank = Some(rank);
-                currently_running = true;
-                if rank == 0 {
-                    node.set_role(NodeRole::Host { http_port }).await;
-                    tunnel_mgr.set_http_port(http_port);
-                    node.regossip().await;
-                    update_targets(
-                        &node,
-                        &model_name,
-                        InferenceTarget::Local(http_port),
-                        &target_tx,
-                    )
-                    .await;
-                    on_change(true, true);
-                    eprintln!(
-                        "✅ [{}] MLX distributed rank 0 ready on {http_port} with {} ranks",
-                        model_name,
-                        cohort.len()
-                    );
-                } else {
-                    node.set_role(NodeRole::Worker).await;
-                    tunnel_mgr.set_http_port(0);
-                    update_targets(
-                        &node,
-                        &model_name,
-                        InferenceTarget::Remote(cohort[0]),
-                        &target_tx,
-                    )
-                    .await;
-                    on_change(false, false);
-                    eprintln!(
-                        "✅ [{}] MLX distributed rank {} joined (host {})",
-                        model_name,
-                        rank,
-                        cohort[0].fmt_short()
-                    );
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "❌ [{}] failed to start distributed MLX rank {}: {e}",
-                    model_name, rank
-                );
-                tunnel::clear_mlx_shim_routes().await;
-                if peer_rx.changed().await.is_err() {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                continue;
-            }
-        }
-    }
-}
-
 /// Update the model targets map — sets our model's target and includes
 /// targets for other models we know about from peers.
 /// When multiple nodes serve the same model, all are included for load balancing.
@@ -1367,7 +935,7 @@ async fn update_targets(
 
 /// Start llama-server with --rpc pointing at model-group nodes (self + workers).
 /// Returns the ephemeral port and a death notification receiver, or None on failure.
-async fn start_model_server(
+async fn start_llama(
     node: &mesh::Node,
     tunnel_mgr: &tunnel::Manager,
     _my_rpc_port: u16,
@@ -1384,7 +952,6 @@ async fn start_model_server(
     let my_vram = node.vram_bytes();
     let model_bytes = total_model_bytes(model);
     let min_vram = (model_bytes as f64 * 1.1) as u64;
-    let backend_kind = backend::detect_backend(model);
 
     // Decide whether to split: only if model doesn't fit on host alone, or --split forced
     let need_split = force_split || my_vram < min_vram;
@@ -1555,34 +1122,26 @@ async fn start_model_server(
         None
     };
 
-    match launch::start_model_server(
+    match launch::start_llama_server(
         bin_dir,
         binary_flavor,
-        launch::ModelLaunchSpec {
-            backend: backend_kind,
-            model,
-            http_port: llama_port,
-            tunnel_ports: &rpc_ports,
-            tensor_split: split.as_deref(),
-            draft,
-            draft_max,
-            model_bytes,
-            my_vram,
-            mmproj: mmproj_path.as_deref(),
-            ctx_size_override,
-            total_group_vram: group_vram,
-            mlx_hostfile_json: None,
-            mlx_rank: None,
-            mlx_bind_addrs: &[],
-            mlx_mode: None,
-            mlx_serves_http: true,
-        },
+        model,
+        llama_port,
+        &rpc_ports,
+        split.as_deref(),
+        draft,
+        draft_max,
+        model_bytes,
+        my_vram,
+        mmproj_path.as_deref(),
+        ctx_size_override,
+        group_vram,
     )
     .await
     {
         Ok(death_rx) => Some((llama_port, death_rx)),
         Err(e) => {
-            eprintln!("  Failed to start {}: {e}", backend_kind.process_label());
+            eprintln!("  Failed to start llama-server: {e}");
             None
         }
     }
@@ -1599,28 +1158,6 @@ async fn find_free_port() -> anyhow::Result<u16> {
 mod tests {
     use super::*;
     use iroh::SecretKey;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_dir(prefix: &str) -> std::path::PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{unique}"))
-    }
-
-    #[test]
-    fn test_total_model_bytes_sums_mlx_safetensors() {
-        let dir = temp_dir("mesh-llm-mlx-size");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("model-00001-of-00002.safetensors"), vec![0u8; 3]).unwrap();
-        std::fs::write(dir.join("model-00002-of-00002.safetensors"), vec![0u8; 5]).unwrap();
-        std::fs::write(dir.join("config.json"), b"{}").unwrap();
-
-        assert_eq!(total_model_bytes(&dir), 8);
-
-        let _ = std::fs::remove_dir_all(dir);
-    }
 
     /// Create a deterministic EndpointId from a byte seed.
     fn make_id(seed: u8) -> iroh::EndpointId {

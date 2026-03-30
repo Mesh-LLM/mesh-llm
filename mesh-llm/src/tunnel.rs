@@ -12,7 +12,7 @@
 
 use crate::mesh::Node;
 use crate::rewrite::{self, PortRewriteMap};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use iroh::EndpointId;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
@@ -21,19 +21,6 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-
-#[derive(Clone, Debug)]
-pub struct MlxMeshShimRoute {
-    pub local_listen_addr: String,
-    pub remote_peer: EndpointId,
-    pub remote_target_port: u16,
-}
-
-fn mlx_shim_tasks() -> &'static Mutex<Vec<tokio::task::JoinHandle<()>>> {
-    static TASKS: std::sync::OnceLock<Mutex<Vec<tokio::task::JoinHandle<()>>>> =
-        std::sync::OnceLock::new();
-    TASKS.get_or_init(|| Mutex::new(Vec::new()))
-}
 
 /// Global byte counter for tunnel traffic
 static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);
@@ -79,11 +66,6 @@ impl Manager {
             iroh::endpoint::SendStream,
             iroh::endpoint::RecvStream,
         )>,
-        mut tunnel_mlx_rx: tokio::sync::mpsc::Receiver<(
-            iroh::endpoint::SendStream,
-            iroh::endpoint::RecvStream,
-            u16,
-        )>,
     ) -> Result<Self> {
         let port_rewrite_map = rewrite::new_rewrite_map();
         let mgr = Manager {
@@ -127,30 +109,12 @@ impl Manager {
                 let port = http_port_ref.load(Ordering::Relaxed);
                 if port == 0 {
                     tracing::warn!("Inbound HTTP tunnel but no llama-server running, dropping");
-                    tokio::spawn(async move {
-                        if let Err(e) = send_http_unavailable(send, "LLM host not ready").await {
-                            tracing::warn!("Failed to send HTTP tunnel unavailable response: {e}");
-                        }
-                        drop(recv);
-                    });
                     continue;
                 }
                 let node = http_node.clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle_inbound_http_stream(node, send, recv, port).await {
                         tracing::warn!("Inbound HTTP tunnel stream error: {e}");
-                    }
-                });
-            }
-        });
-
-        tokio::spawn(async move {
-            while let Some((send, recv, target_port)) = tunnel_mlx_rx.recv().await {
-                tokio::spawn(async move {
-                    if let Err(e) = handle_inbound_mlx_stream(send, recv, target_port).await {
-                        tracing::warn!(
-                            "Inbound MLX shim tunnel stream error for :{target_port}: {e}"
-                        );
                     }
                 });
             }
@@ -267,39 +231,6 @@ impl Manager {
     }
 }
 
-pub async fn clear_mlx_shim_routes() {
-    let mut tasks = mlx_shim_tasks().lock().await;
-    for task in tasks.drain(..) {
-        task.abort();
-    }
-}
-
-pub async fn replace_mlx_shim_routes(node: Node, routes: Vec<MlxMeshShimRoute>) -> Result<()> {
-    clear_mlx_shim_routes().await;
-
-    let mut tasks = mlx_shim_tasks().lock().await;
-    for route in routes {
-        let listener = TcpListener::bind(&route.local_listen_addr)
-            .await
-            .with_context(|| format!("failed to bind MLX shim on {}", route.local_listen_addr))?;
-        tracing::info!(
-            "MLX shim {} -> {}:{}",
-            route.local_listen_addr,
-            route.remote_peer.fmt_short(),
-            route.remote_target_port
-        );
-
-        let node = node.clone();
-        tasks.push(tokio::spawn(async move {
-            if let Err(e) = run_mlx_shim_listener(node, route, listener).await {
-                tracing::warn!("MLX shim listener stopped: {e}");
-            }
-        }));
-    }
-
-    Ok(())
-}
-
 /// Run a local TCP listener that tunnels to a remote peer via QUIC bi-streams.
 async fn run_outbound_tunnel(node: Node, peer_id: EndpointId, listener: TcpListener) -> Result<()> {
     loop {
@@ -321,42 +252,6 @@ async fn relay_outbound(node: Node, peer_id: EndpointId, tcp_stream: TcpStream) 
     let (quic_send, quic_recv) = node.open_tunnel_stream(peer_id).await?;
     tracing::info!("Tunnel stream opened to {}", peer_id.fmt_short());
 
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
-}
-
-async fn run_mlx_shim_listener(
-    node: Node,
-    route: MlxMeshShimRoute,
-    listener: TcpListener,
-) -> Result<()> {
-    loop {
-        let (tcp_stream, _addr) = listener.accept().await?;
-        tcp_stream.set_nodelay(true)?;
-        let node = node.clone();
-        let route = route.clone();
-        tokio::spawn(async move {
-            let route_for_log = route.clone();
-            if let Err(e) = relay_outbound_mlx_shim(node, route, tcp_stream).await {
-                tracing::warn!(
-                    "MLX shim relay {} -> {}:{} ended: {e}",
-                    route_for_log.local_listen_addr,
-                    route_for_log.remote_peer.fmt_short(),
-                    route_for_log.remote_target_port
-                );
-            }
-        });
-    }
-}
-
-async fn relay_outbound_mlx_shim(
-    node: Node,
-    route: MlxMeshShimRoute,
-    tcp_stream: TcpStream,
-) -> Result<()> {
-    let (quic_send, quic_recv) = node
-        .open_mlx_shim_tunnel(route.remote_peer, route.remote_target_port)
-        .await?;
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
 }
@@ -399,15 +294,7 @@ async fn handle_inbound_http_stream(
     http_port: u16,
 ) -> Result<()> {
     tracing::info!("Inbound HTTP tunnel stream → llama-server :{http_port}");
-    let tcp_stream = match TcpStream::connect(format!("127.0.0.1:{http_port}")).await {
-        Ok(stream) => stream,
-        Err(e) => {
-            tracing::warn!("Inbound HTTP tunnel can't reach llama-server :{http_port}: {e}");
-            send_http_unavailable(quic_send, "LLM host unavailable").await?;
-            drop(quic_recv);
-            return Ok(());
-        }
-    };
+    let tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
     tcp_stream.set_nodelay(true)?;
     let _inflight = node.begin_inflight_request();
 
@@ -415,56 +302,6 @@ async fn handle_inbound_http_stream(
     relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
 }
 
-async fn send_http_unavailable(mut quic_send: iroh::endpoint::SendStream, msg: &str) -> Result<()> {
-    let body = format!("{{\"error\":\"{msg}\"}}");
-    let resp = format!(
-        "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    quic_send.write_all(resp.as_bytes()).await?;
-    quic_send.finish()?;
-    Ok(())
-}
-
-async fn handle_inbound_mlx_stream(
-    quic_send: iroh::endpoint::SendStream,
-    quic_recv: iroh::endpoint::RecvStream,
-    target_port: u16,
-) -> Result<()> {
-    tracing::info!("Inbound MLX shim tunnel stream -> 127.0.0.1:{target_port}");
-    let tcp_stream = TcpStream::connect(format!("127.0.0.1:{target_port}")).await?;
-    tcp_stream.set_nodelay(true)?;
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
-}
-
-/// Relay a TCP stream through a QUIC bi-stream. Used by the lite client
-/// to tunnel local HTTP requests to the remote host's llama-server.
-/// Relay between two TCP streams (for local proxying).
-pub async fn relay_tcp_streams(a: TcpStream, b: TcpStream) -> Result<()> {
-    let (a_read, mut a_write) = tokio::io::split(a);
-    let (b_read, mut b_write) = tokio::io::split(b);
-    let mut t1 = tokio::spawn(async move {
-        tokio::io::copy(&mut tokio::io::BufReader::new(a_read), &mut b_write).await
-    });
-    let mut t2 = tokio::spawn(async move {
-        tokio::io::copy(&mut tokio::io::BufReader::new(b_read), &mut a_write).await
-    });
-    tokio::select! {
-        r1 = &mut t1 => {
-            r1??;
-            tracing::debug!("relay_tcp_streams: request side finished, waiting for response side");
-            t2.await??;
-        }
-        r2 = &mut t2 => {
-            r2??;
-            t1.abort();
-            let _ = t1.await;
-        }
-    }
-    Ok(())
-}
 pub async fn relay_tcp_via_quic(
     tcp_stream: TcpStream,
     quic_send: iroh::endpoint::SendStream,
@@ -618,7 +455,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh::{Node, NodeRole};
 
     #[tokio::test]
     async fn relay_response_times_out_before_first_byte() {
@@ -710,89 +546,5 @@ mod tests {
             forwarded,
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
         );
-    }
-
-    async fn wait_for_peers(node: &Node, expected: usize) {
-        for _ in 0..100 {
-            if node.peers().await.len() >= expected {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        panic!("timed out waiting for {expected} peers");
-    }
-
-    async fn free_port() -> u16 {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-        port
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn mlx_shim_route_relays_bytes_between_nodes() {
-        tokio::time::timeout(std::time::Duration::from_secs(30), async {
-            let _ = std::env::var("MESH_LLM_EPHEMERAL_KEY");
-            std::env::set_var("MESH_LLM_EPHEMERAL_KEY", "1");
-            clear_mlx_shim_routes().await;
-
-            let bind_port_a = free_port().await;
-            let bind_port_b = free_port().await;
-            let (node_a, mut channels_a) =
-                Node::start(NodeRole::Worker, &[], Some(bind_port_a), None, false)
-                    .await
-                    .unwrap();
-            let (node_b, _channels_b) =
-                Node::start(NodeRole::Worker, &[], Some(bind_port_b), None, false)
-                    .await
-                    .unwrap();
-            node_a.start_accepting();
-            node_b.start_accepting();
-            node_b.join(&node_a.invite_token()).await.unwrap();
-            wait_for_peers(&node_a, 1).await;
-            wait_for_peers(&node_b, 1).await;
-
-            let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let target_port = target_listener.local_addr().unwrap().port();
-            tokio::spawn(async move {
-                let (mut stream, _) = target_listener.accept().await.unwrap();
-                let mut buf = [0u8; 4];
-                stream.read_exact(&mut buf).await.unwrap();
-                assert_eq!(&buf, b"ping");
-                stream.write_all(b"pong").await.unwrap();
-            });
-
-            tokio::spawn(async move {
-                if let Some((send, recv, port)) = channels_a.mlx.recv().await {
-                    handle_inbound_mlx_stream(send, recv, port).await.unwrap();
-                } else {
-                    panic!("mlx tunnel channel closed");
-                }
-            });
-
-            let listen_port = free_port().await;
-            replace_mlx_shim_routes(
-                node_b.clone(),
-                vec![MlxMeshShimRoute {
-                    local_listen_addr: format!("127.0.0.1:{listen_port}"),
-                    remote_peer: node_a.id(),
-                    remote_target_port: target_port,
-                }],
-            )
-            .await
-            .unwrap();
-
-            let mut client = TcpStream::connect(format!("127.0.0.1:{listen_port}"))
-                .await
-                .unwrap();
-            client.write_all(b"ping").await.unwrap();
-            let mut buf = [0u8; 4];
-            client.read_exact(&mut buf).await.unwrap();
-            assert_eq!(&buf, b"pong");
-
-            clear_mlx_shim_routes().await;
-        })
-        .await
-        .expect("mlx shim route test timed out");
     }
 }

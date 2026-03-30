@@ -1,7 +1,6 @@
 mod affinity;
 mod api;
 mod autoupdate;
-mod backend;
 mod benchmark;
 mod download;
 mod election;
@@ -130,10 +129,6 @@ struct Cli {
     /// Path to rpc-server, llama-server, and llama-moe-split binaries.
     #[arg(long, hide = true)]
     bin_dir: Option<PathBuf>,
-
-    /// Override the MLX server executable used for the mlx backend.
-    #[arg(long, hide = true)]
-    mlx_server_bin: Option<PathBuf>,
 
     /// Override which bundled llama.cpp flavor to use.
     #[arg(long, value_enum)]
@@ -334,10 +329,6 @@ async fn main() -> Result<()> {
 
     let mut cli = Cli::parse();
 
-    if let Some(path) = &cli.mlx_server_bin {
-        std::env::set_var("MESH_LLM_MLX_SERVER_BIN", path);
-    }
-
     if let Some(name) = cli.plugin.clone() {
         return plugin::run_plugin_process(name).await;
     }
@@ -348,9 +339,9 @@ async fn main() -> Result<()> {
         false
     };
 
-    // Clean up orphan processes from previous runs (skip for client — never runs inference servers)
+    // Clean up orphan processes from previous runs (skip for client — never runs llama-server)
     if !cli.client {
-        launch::kill_all_server_processes().await;
+        launch::kill_llama_server().await;
         launch::kill_orphan_rpc_servers().await;
     }
 
@@ -625,8 +616,11 @@ async fn main() -> Result<()> {
     // Strip split GGUF suffix so "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
     let requested_model_names: Vec<String> = resolved_models
         .iter()
-        .filter_map(|m| model_path_name(m))
-        .map(|name| router::strip_split_suffix_owned(&name))
+        .filter_map(|m| {
+            m.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| router::strip_split_suffix_owned(s))
+        })
         .collect();
 
     let bin_dir = match &cli.bin_dir {
@@ -794,7 +788,9 @@ async fn pick_model_assignment(node: &mesh::Node, local_models: &[String]) -> Op
     /// Check if a model fits in our VRAM. Returns false and logs if it doesn't.
     fn model_fits(model: &str, my_vram: u64) -> bool {
         let model_path = mesh::find_model_path(model);
-        let model_bytes = election::total_model_bytes(&model_path);
+        let model_bytes = std::fs::metadata(&model_path)
+            .map(|md| md.len())
+            .unwrap_or(0);
         let needed = (model_bytes as f64 * 1.1) as u64;
         if model_bytes > 0 && needed > my_vram {
             eprintln!(
@@ -1435,9 +1431,15 @@ async fn run_auto(
         }
     };
 
-    let model_name = model_path_name(&model)
-        .map(|name| router::strip_split_suffix_owned(&name))
-        .unwrap_or_else(|| "unknown".to_string());
+    let model_name = {
+        let stem = model
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
+        router::strip_split_suffix_owned(&stem)
+    };
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = if !cli.model.is_empty() {
@@ -1461,38 +1463,21 @@ async fn run_auto(
         }
     }
 
-    let primary_backend = backend::detect_backend(&model);
-
     // Clean up stale processes from previous runs
     launch::kill_orphan_rpc_servers().await;
 
-    // Start rpc-server when the backend needs llama.cpp RPC workers.
-    let rpc_port = if primary_backend.capabilities().requires_rpc_server {
-        let port = launch::start_rpc_server(
-            &bin_dir,
-            cli.llama_flavor,
-            cli.device.as_deref(),
-            Some(&model),
-        )
-        .await?;
-        tracing::info!("rpc-server on 127.0.0.1:{port} serving {model_name}");
-        port
-    } else {
-        tracing::info!(
-            "Backend '{}' does not require rpc-server",
-            primary_backend.as_str()
-        );
-        0
-    };
-
-    let tunnel_mgr = tunnel::Manager::start(
-        node.clone(),
-        rpc_port,
-        channels.rpc,
-        channels.http,
-        channels.mlx,
+    // Start rpc-server
+    let rpc_port = launch::start_rpc_server(
+        &bin_dir,
+        cli.llama_flavor,
+        cli.device.as_deref(),
+        Some(&model),
     )
     .await?;
+    tracing::info!("rpc-server on 127.0.0.1:{rpc_port} serving {model_name}");
+
+    let tunnel_mgr =
+        tunnel::Manager::start(node.clone(), rpc_port, channels.rpc, channels.http).await?;
 
     // Election publishes per-model targets
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
@@ -1543,7 +1528,11 @@ async fn run_auto(
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
         cs.set_nostr_discovery(cli.nostr_discovery).await;
         if let Some(draft) = &cli.draft {
-            let dn = model_path_name(draft).unwrap_or_else(|| draft.display().to_string());
+            let dn = draft
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             cs.set_draft_name(dn).await;
         }
         if let Some(ref name) = cli.mesh_name {
@@ -1589,7 +1578,6 @@ async fn run_auto(
     let model_name_for_election = model_name.clone();
     let node_for_cb = node.clone();
     let primary_target_tx = target_tx.clone();
-    let primary_process_label = primary_backend.process_label().to_string();
     tokio::spawn(async move {
         election::election_loop(
             node2, tunnel_mgr2, rpc_port, bin_dir2, model2, model_name_for_election,
@@ -1610,7 +1598,7 @@ async fn run_auto(
                     eprintln!("  pi:    pi --provider mesh --model {model_name_for_cb}");
                     eprintln!("  goose: GOOSE_PROVIDER=openai OPENAI_HOST={url} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name_for_cb} goose session");
                 } else if is_host {
-                    eprintln!("⏳ Starting {primary_process_label}...");
+                    eprintln!("⏳ Starting llama-server...");
                 } else {
                     eprintln!("  API: http://localhost:{api_port} (proxied to host)");
                 }
@@ -1635,15 +1623,25 @@ async fn run_auto(
         // Announce all models to mesh
         let all_names: Vec<String> = resolved_models
             .iter()
-            .filter_map(|m| model_path_name(m))
+            .map(|m| {
+                m.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            })
             .collect();
         node.set_models(all_names).await;
         node.regossip().await;
 
         for extra_model in resolved_models.iter().skip(1) {
-            let extra_name = model_path_name(extra_model)
-                .map(|name| router::strip_split_suffix_owned(&name))
-                .unwrap_or_else(|| "unknown".to_string());
+            let extra_name = {
+                let stem = extra_model
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                router::strip_split_suffix_owned(&stem)
+            };
             let extra_node = node.clone();
             let extra_tunnel = tunnel_mgr.clone();
             let extra_bin = bin_dir.clone();
@@ -1739,7 +1737,7 @@ async fn run_auto(
         handle.abort();
     }
 
-    launch::kill_all_server_processes().await;
+    launch::kill_llama_server().await;
     launch::kill_orphan_rpc_servers().await;
     Ok(())
 }
@@ -2144,44 +2142,35 @@ async fn api_proxy(
                             .get_moe_target(&session_hint)
                             .unwrap_or(first_available_target(&targets))
                     } else if let Some(ref name) = effective_model {
-                        let selection = match select_explicit_model_target(
-                            &targets,
-                            name,
-                            request.body_json.as_ref(),
-                            &affinity,
-                        ) {
-                            Ok(selection) => selection,
-                            Err(msg) => {
-                                tracing::warn!(
-                                    "Model '{}' not available in current target map",
-                                    name
-                                );
-                                let _ = proxy::send_400(tcp_stream, &msg).await;
-                                return;
-                            }
-                        };
+                        let selection = affinity::select_model_target_for_request(
+                            &targets, name, body_json, &affinity,
+                        );
                         let t = selection.target.clone();
-
-                        let routed = proxy::route_to_target(
-                            node.clone(),
-                            tcp_stream,
-                            t.clone(),
-                            &request.raw,
-                        )
-                        .await;
-                        if routed {
-                            if let Some(prefix_hash) = selection.learn_prefix_hash {
-                                affinity.learn_target(name, prefix_hash, &t);
+                        if matches!(t, election::InferenceTarget::None) {
+                            tracing::debug!("Model '{}' not found, trying first available", name);
+                            first_available_target(&targets)
+                        } else {
+                            let routed = proxy::route_to_target(
+                                node.clone(),
+                                tcp_stream,
+                                t.clone(),
+                                &request.raw,
+                            )
+                            .await;
+                            if routed {
+                                if let Some(prefix_hash) = selection.learn_prefix_hash {
+                                    affinity.learn_target(name, prefix_hash, &t);
+                                }
+                            } else if let (Some(prefix_hash), Some(cached_target)) = (
+                                selection.learn_prefix_hash,
+                                selection.cached_target.as_ref(),
+                            ) {
+                                if cached_target == &t {
+                                    affinity.forget_target(name, prefix_hash, &t);
+                                }
                             }
-                        } else if let (Some(prefix_hash), Some(cached_target)) = (
-                            selection.learn_prefix_hash,
-                            selection.cached_target.as_ref(),
-                        ) {
-                            if cached_target == &t {
-                                affinity.forget_target(name, prefix_hash, &t);
-                            }
+                            return;
                         }
-                        return;
                     } else {
                         first_available_target(&targets)
                     };
@@ -2249,20 +2238,6 @@ fn first_available_target(targets: &election::ModelTargets) -> election::Inferen
     election::InferenceTarget::None
 }
 
-fn select_explicit_model_target(
-    targets: &election::ModelTargets,
-    model: &str,
-    body_json: Option<&serde_json::Value>,
-    affinity: &affinity::AffinityRouter,
-) -> std::result::Result<affinity::TargetSelection, String> {
-    let selection = affinity::select_model_target_for_request(targets, model, body_json, affinity);
-    if matches!(selection.target, election::InferenceTarget::None) {
-        Err(format!("model not available: {model}"))
-    } else {
-        Ok(selection)
-    }
-}
-
 fn bundled_bin_names(name: &str) -> Vec<String> {
     #[cfg(windows)]
     let add_platform_name = |items: &mut Vec<String>, base: String| {
@@ -2313,40 +2288,6 @@ fn detect_bin_dir() -> Result<PathBuf> {
     }
 
     Ok(dir.to_path_buf())
-}
-
-fn huggingface_repo_id(path: &Path) -> Option<String> {
-    for component in path.components() {
-        let component = component.as_os_str().to_str()?;
-        if let Some(repo) = component.strip_prefix("models--") {
-            return Some(repo.replace("--", "/"));
-        }
-    }
-    None
-}
-
-fn model_path_name(path: &Path) -> Option<String> {
-    if let Some(repo_id) = huggingface_repo_id(path) {
-        return Some(repo_id);
-    }
-
-    if path.is_dir() {
-        return path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_string());
-    }
-
-    match path.extension().and_then(|ext| ext.to_str()) {
-        Some("gguf") => path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| stem.to_string()),
-        _ => path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_string()),
-    }
 }
 
 /// Update ~/.pi/agent/models.json to include a "mesh" provider.
@@ -2661,7 +2602,7 @@ async fn run_discover(
 /// Drop a model from the mesh by sending a control request to the running instance.
 fn run_stop() -> Result<()> {
     let mut killed = 0u32;
-    for name in &["mesh-llm", "llama-server", "rpc-server", "mlx_lm.server"] {
+    for name in &["llama-server", "rpc-server", "mesh-llm"] {
         if crate::launch::terminate_process_by_name(name) {
             eprintln!("🧹 Stopped {name}");
             killed += 1;
@@ -3147,8 +3088,15 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
     let clean_name = router::strip_split_suffix_owned(model_name);
     let mut all: Vec<String> = resolved_models
         .iter()
-        .filter_map(|m| model_path_name(m))
-        .map(|name| router::strip_split_suffix_owned(&name))
+        .map(|m| {
+            let stem = m
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            // Strip split GGUF suffix: "Model-00001-of-00004" → "Model"
+            router::strip_split_suffix_owned(&stem)
+        })
         .collect();
     if !all.contains(&clean_name) {
         all.insert(0, clean_name);
@@ -3159,8 +3107,6 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::affinity::AffinityRouter;
-    use crate::election::{InferenceTarget, ModelTargets};
     use serde_json::json;
     use std::collections::HashMap;
     use std::net::SocketAddr;
@@ -3848,72 +3794,5 @@ mod tests {
             .unwrap();
 
         proxy_handle.abort();
-    }
-
-    #[test]
-    fn test_model_path_name_huggingface_snapshot_uses_repo_id() {
-        let path = PathBuf::from(
-            "/Users/test/.cache/huggingface/hub/models--mlx-community--Qwen2.5-1.5B-Instruct-4bit/snapshots/863c846a9ac6fad4e49e1743d52984dff262e953",
-        );
-        assert_eq!(
-            model_path_name(&path).as_deref(),
-            Some("mlx-community/Qwen2.5-1.5B-Instruct-4bit")
-        );
-    }
-
-    #[test]
-    fn test_build_serving_list_mlx_directory_keeps_directory_name() {
-        let resolved = vec![PathBuf::from("/home/.models/Qwen2.5-0.5B-Instruct-4bit")];
-        let result = build_serving_list(&resolved, "Qwen2.5-0.5B-Instruct-4bit");
-        assert_eq!(result, vec!["Qwen2.5-0.5B-Instruct-4bit"]);
-    }
-
-    #[test]
-    fn test_select_explicit_model_target_rejects_missing_model_instead_of_fallback() {
-        let mut targets = ModelTargets::default();
-        targets.targets.insert(
-            "Llama-3.2-1B-Instruct-Q4_K_M".to_string(),
-            vec![InferenceTarget::Local(9337)],
-        );
-
-        let err = select_explicit_model_target(
-            &targets,
-            "Qwen3-8B-Q4_K_M",
-            Some(&serde_json::json!({
-                "model": "Qwen3-8B-Q4_K_M",
-                "messages": [{ "role": "user", "content": "hi" }]
-            })),
-            &AffinityRouter::default(),
-        )
-        .err()
-        .unwrap();
-
-        assert_eq!(err, "model not available: Qwen3-8B-Q4_K_M");
-        assert_eq!(
-            first_available_target(&targets),
-            InferenceTarget::Local(9337)
-        );
-    }
-
-    #[test]
-    fn test_select_explicit_model_target_returns_selected_target_when_present() {
-        let mut targets = ModelTargets::default();
-        targets.targets.insert(
-            "Qwen3-8B-Q4_K_M".to_string(),
-            vec![InferenceTarget::Local(4242)],
-        );
-
-        let selection = select_explicit_model_target(
-            &targets,
-            "Qwen3-8B-Q4_K_M",
-            Some(&serde_json::json!({
-                "model": "Qwen3-8B-Q4_K_M",
-                "messages": [{ "role": "user", "content": "hi" }]
-            })),
-            &AffinityRouter::default(),
-        )
-        .unwrap();
-
-        assert_eq!(selection.target, InferenceTarget::Local(4242));
     }
 }

@@ -5,7 +5,7 @@
 
 use crate::{
     affinity::{prepare_remote_targets_for_request, AffinityRouter, PreparedTargets},
-    election, launch, mesh, router, tunnel,
+    election, mesh, router, tunnel,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -332,52 +332,6 @@ pub fn pipeline_request_supported(path: &str, body: &serde_json::Value) -> bool 
             .unwrap_or(false)
 }
 
-fn rewrite_http_json_model(req: &[u8], model_override: &str) -> Option<Vec<u8>> {
-    let request = std::str::from_utf8(req).ok()?;
-    let (head, body) = request.split_once("\r\n\r\n")?;
-    let mut json: serde_json::Value = serde_json::from_str(body).ok()?;
-    json["model"] = serde_json::Value::String(model_override.to_string());
-    let new_body = serde_json::to_string(&json).ok()?;
-
-    let mut lines = head.split("\r\n");
-    let start_line = lines.next()?;
-    let mut saw_content_length = false;
-    let mut headers = Vec::new();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        if line
-            .split_once(':')
-            .map(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .unwrap_or(false)
-        {
-            headers.push(format!("Content-Length: {}", new_body.len()));
-            saw_content_length = true;
-        } else {
-            headers.push(line.to_string());
-        }
-    }
-    if !saw_content_length {
-        headers.push(format!("Content-Length: {}", new_body.len()));
-    }
-
-    Some(format!("{start_line}\r\n{}\r\n\r\n{new_body}", headers.join("\r\n")).into_bytes())
-}
-
-async fn relay_local_with_model_override(
-    node: mesh::Node,
-    mut tcp_stream: TcpStream,
-    mut upstream: TcpStream,
-    model_override: &str,
-) -> Result<()> {
-    let request = read_http_request(&mut tcp_stream).await?;
-    let rewritten = rewrite_http_json_model(&request.raw, model_override).unwrap_or(request.raw);
-    let _inflight = node.begin_inflight_request();
-    upstream.write_all(&rewritten).await?;
-    tunnel::relay_tcp_streams(tcp_stream, upstream).await
-}
-
 // ── Model-aware tunnel routing ──
 
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
@@ -556,30 +510,6 @@ pub async fn route_to_target(
     tracing::info!("API proxy: routing to target {target:?}");
     match target {
         election::InferenceTarget::Local(port) | election::InferenceTarget::MoeLocal(port) => {
-            if let Some(model_override) = launch::mlx_model_override_for_port(port) {
-                return match TcpStream::connect(format!("127.0.0.1:{port}")).await {
-                    Ok(upstream) => {
-                        let _ = upstream.set_nodelay(true);
-                        if let Err(e) = relay_local_with_model_override(
-                            node,
-                            tcp_stream,
-                            upstream,
-                            &model_override,
-                        )
-                        .await
-                        {
-                            tracing::debug!("API proxy (local mlx) ended: {e}");
-                        }
-                        true
-                    }
-                    Err(e) => {
-                        tracing::warn!("API proxy: can't reach mlx backend on {port}: {e}");
-                        let _ = send_503(tcp_stream).await;
-                        false
-                    }
-                };
-            }
-
             match TcpStream::connect(format!("127.0.0.1:{port}")).await {
                 Ok(mut upstream) => {
                     let _inflight = node.begin_inflight_request();
@@ -599,7 +529,7 @@ pub async fn route_to_target(
                     true
                 }
                 Err(e) => {
-                    tracing::warn!("API proxy: can't reach local inference server on {port}: {e}");
+                    tracing::warn!("API proxy: can't reach llama-server on {port}: {e}");
                     let _ = send_503(tcp_stream).await;
                     false
                 }
@@ -1091,24 +1021,5 @@ mod tests {
         assert!(raw.starts_with("GET /v1/models HTTP/1.1\r\n"));
         assert!(!raw.contains("/mesh/drop"));
         assert!(raw.contains("Connection: close\r\n\r\n"));
-    }
-
-    #[test]
-    fn test_rewrite_http_json_model_updates_body_and_content_length() {
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n{\"model\":\"mesh-alias\",\"messages\":[]}";
-        let rewritten =
-            rewrite_http_json_model(req, "/Users/test/.models/Qwen2.5-1.5B-Instruct-4bit").unwrap();
-        let rewritten = String::from_utf8(rewritten).unwrap();
-        assert!(rewritten.contains("\"model\":\"/Users/test/.models/Qwen2.5-1.5B-Instruct-4bit\""));
-        let body = rewritten.split("\r\n\r\n").nth(1).unwrap();
-        assert!(rewritten.contains(&format!("Content-Length: {}", body.len())));
-    }
-
-    #[test]
-    fn test_rewrite_http_json_model_adds_missing_model_field() {
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"messages\":[]}";
-        let rewritten = rewrite_http_json_model(req, "default_model").unwrap();
-        let rewritten = String::from_utf8(rewritten).unwrap();
-        assert!(rewritten.contains("\"model\":\"default_model\""));
     }
 }
