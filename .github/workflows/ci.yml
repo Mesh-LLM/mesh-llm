@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Tiny model for integration tests (~138MB Q8_0, has chat template)
   MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf
@@ -38,11 +42,11 @@ jobs:
         with:
           workspaces: mesh-llm
 
-      - name: Build mesh-llm
-        run: cargo build --release
-
       - name: Unit tests
-        run: cargo test
+        run: cargo test --release
+
+      - name: Build mesh-llm
+        run: cargo build --release -p mesh-llm --bin mesh-llm
 
       - name: Check formatting
         working-directory: mesh-llm
@@ -72,7 +76,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DLLAMA_OPENSSL=OFF \
             "${CACHE_FLAGS[@]}"
-          cmake --build llama.cpp/build --config Release -j$(nproc)
+          cmake --build llama.cpp/build --config Release -j$(nproc) --target rpc-server llama-server
 
       # ── Download model ──
       - name: Cache model
@@ -131,19 +135,11 @@ jobs:
         with:
           workspaces: mesh-llm
 
-      - name: Build mesh-llm
-        run: cargo build --release
-
       - name: Unit tests
-        run: cargo test
+        run: cargo test --release
 
-      - name: Check formatting
-        working-directory: mesh-llm
-        run: cargo fmt -- --check || true
-
-      - name: Clippy
-        working-directory: mesh-llm
-        run: cargo clippy -- -D warnings || true
+      - name: Build mesh-llm
+        run: cargo build --release -p mesh-llm --bin mesh-llm
 
       # ── llama.cpp (Metal + RPC) ──
       - name: Clone llama.cpp fork
@@ -164,7 +160,7 @@ jobs:
             -DBUILD_SHARED_LIBS=OFF \
             -DLLAMA_OPENSSL=OFF \
             "${CACHE_FLAGS[@]}"
-          cmake --build llama.cpp/build --config Release -j$(sysctl -n hw.ncpu)
+          cmake --build llama.cpp/build --config Release -j$(sysctl -n hw.ncpu) --target rpc-server llama-server
 
       # ── Download model ──
       - name: Cache model
