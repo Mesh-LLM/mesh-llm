@@ -260,6 +260,9 @@ pub async fn publish_loop(
 
     let mut delisted = false;
 
+    // Reusable client for solo-convergence discovery checks.
+    let disco = DiscoveryClient::new(&relays).await.ok();
+
     loop {
         let invite_token = node.invite_token();
         let peers = node.peers().await;
@@ -309,7 +312,7 @@ pub async fn publish_loop(
         let my_node_count = gpu_peers + 1; // peers + self
         if gpu_peers == 0 {
             let filter = MeshFilter::default();
-            if let Ok(listings) = discover(&relays, &filter).await {
+            if let Ok(listings) = discover(&relays, &filter, disco.as_ref()).await {
                 let my_npub = publisher.npub();
                 let my_mesh_id = node.mesh_id().await;
 
@@ -473,22 +476,30 @@ pub async fn publish_watchdog(
     let jitter = (rand::random::<u64>() % 20) + 10;
     tokio::time::sleep(Duration::from_secs(jitter)).await;
 
+    // Reusable client for repeated discovery checks.
+    let disco = DiscoveryClient::new(&relays).await.ok();
+
     loop {
         // Check if any listing for our mesh exists on Nostr
         let filter = MeshFilter::default();
-        match discover(&relays, &filter).await {
+        match discover(&relays, &filter, disco.as_ref()).await {
             Ok(meshes) => {
                 let our_peers = node.peers().await;
                 let served = node.models_being_served().await;
+                let our_mesh_id = node.mesh_id().await;
 
-                // Our mesh is "listed" if any Nostr listing shares at least one
-                // model with what we're currently serving.
-                let mesh_listed = if served.is_empty() {
-                    false
-                } else {
+                // Our mesh is "listed" if any Nostr listing carries our mesh_id.
+                // Fall back to model overlap only if we don't have a mesh_id yet.
+                let mesh_listed = if let Some(ref mid) = our_mesh_id {
+                    meshes
+                        .iter()
+                        .any(|m| m.listing.mesh_id.as_deref() == Some(mid.as_str()))
+                } else if !served.is_empty() {
                     meshes
                         .iter()
                         .any(|m| served.iter().any(|s| m.listing.serving.contains(s)))
+                } else {
+                    false
                 };
 
                 if !mesh_listed && (!our_peers.is_empty() || !served.is_empty()) {
@@ -498,13 +509,17 @@ pub async fn publish_watchdog(
                     tokio::time::sleep(Duration::from_secs(backoff)).await;
 
                     // Re-check — maybe another watchdog already took over
-                    if let Ok(recheck) = discover(&relays, &filter).await {
-                        let still_missing = if served.is_empty() {
-                            true
-                        } else {
+                    if let Ok(recheck) = discover(&relays, &filter, disco.as_ref()).await {
+                        let still_missing = if let Some(ref mid) = our_mesh_id {
+                            !recheck
+                                .iter()
+                                .any(|m| m.listing.mesh_id.as_deref() == Some(mid.as_str()))
+                        } else if !served.is_empty() {
                             !recheck
                                 .iter()
                                 .any(|m| served.iter().any(|s| m.listing.serving.contains(s)))
+                        } else {
+                            true
                         };
                         if !still_missing {
                             eprintln!("📡 Someone else took over publishing — standing down");
@@ -592,27 +607,71 @@ impl MeshFilter {
     }
 }
 
-/// Discover meshes from Nostr relays.
-pub async fn discover(relays: &[String], filter: &MeshFilter) -> Result<Vec<DiscoveredMesh>> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+/// A reusable read-only Nostr client for discovery.
+/// Create once, pass to repeated `discover()` calls to avoid opening
+/// new websocket connections and generating throwaway keys every time.
+pub struct DiscoveryClient {
+    client: Client,
+}
 
-    // Anonymous client for read-only discovery
-    let keys = Keys::generate();
-    let client = Client::new(keys);
-    let mut added = 0;
-    for relay in relays {
-        match client.add_relay(relay).await {
-            Ok(_) => added += 1,
-            Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+impl DiscoveryClient {
+    pub async fn new(relays: &[String]) -> Result<Self> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let keys = Keys::generate();
+        let client = Client::new(keys);
+        let mut added = 0;
+        for relay in relays {
+            match client.add_relay(relay).await {
+                Ok(_) => added += 1,
+                Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+            }
         }
+        if added == 0 {
+            anyhow::bail!(
+                "Could not connect to any Nostr relay (tried {})",
+                relays.len()
+            );
+        }
+        client.connect().await;
+        Ok(Self { client })
     }
-    if added == 0 {
-        anyhow::bail!(
-            "Could not connect to any Nostr relay (tried {})",
-            relays.len()
-        );
-    }
-    client.connect().await;
+}
+
+/// Discover meshes from Nostr relays.
+///
+/// If `cached_client` is provided, reuses its connections.  Otherwise
+/// creates (and drops) a one-shot client — fine for the initial
+/// `--auto` join but wasteful in tight loops.
+pub async fn discover(
+    relays: &[String],
+    filter: &MeshFilter,
+    cached_client: Option<&DiscoveryClient>,
+) -> Result<Vec<DiscoveredMesh>> {
+    // Build a temporary client only when no cached one is supplied.
+    let _tmp;
+    let client: &Client = if let Some(cc) = cached_client {
+        &cc.client
+    } else {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let keys = Keys::generate();
+        let c = Client::new(keys);
+        let mut added = 0;
+        for relay in relays {
+            match c.add_relay(relay).await {
+                Ok(_) => added += 1,
+                Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+            }
+        }
+        if added == 0 {
+            anyhow::bail!(
+                "Could not connect to any Nostr relay (tried {})",
+                relays.len()
+            );
+        }
+        c.connect().await;
+        _tmp = c;
+        &_tmp
+    };
 
     let nostr_filter = Filter::new()
         .kind(Kind::Custom(MESH_SERVICE_KIND))

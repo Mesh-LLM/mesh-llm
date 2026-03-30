@@ -607,7 +607,7 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
         ("GET", "/api/discover") => {
             let relays = state.inner.lock().await.nostr_relays.clone();
             let filter = nostr::MeshFilter::default();
-            match nostr::discover(&relays, &filter).await {
+            match nostr::discover(&relays, &filter, None).await {
                 Ok(meshes) => {
                     if let Ok(json) = serde_json::to_string(&meshes) {
                         let resp = format!(

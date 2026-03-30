@@ -456,7 +456,7 @@ async fn main() -> Result<()> {
             min_vram_gb: None,
             region: None,
         };
-        let meshes = nostr::discover(&relays, &filter).await?;
+        let meshes = nostr::discover(&relays, &filter, None).await?;
 
         let my_vram_gb = mesh::detect_vram_bytes_capped(cli.max_vram) as f64 / 1e9;
         let now = std::time::SystemTime::now()
@@ -557,7 +557,7 @@ async fn main() -> Result<()> {
                     for attempt in 1..=20 {
                         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
                         eprintln!("🔍 Retry {attempt}/20...");
-                        if let Ok(retry_meshes) = nostr::discover(&relays, &filter).await {
+                        if let Ok(retry_meshes) = nostr::discover(&relays, &filter, None).await {
                             if let nostr::AutoDecision::Join { candidates } =
                                 nostr::smart_auto(&retry_meshes, my_vram_gb, target_name)
                             {
@@ -1074,7 +1074,7 @@ async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
             region: cli.region.clone(),
         };
         let target_name = cli.discover.as_deref().or(cli.mesh_name.as_deref());
-        let meshes = nostr::discover(&relays, &filter).await?;
+        let meshes = nostr::discover(&relays, &filter, None).await?;
         match nostr::smart_auto(&meshes, 0.0, target_name) {
             nostr::AutoDecision::Join { candidates } => {
                 let (token, mesh) = &candidates[0];
@@ -2392,7 +2392,7 @@ async fn nostr_rediscovery(
         eprintln!("🔍 No peers — re-discovering meshes via Nostr...");
 
         let filter = nostr::MeshFilter::default();
-        let meshes = match nostr::discover(&nostr_relays, &filter).await {
+        let meshes = match nostr::discover(&nostr_relays, &filter, None).await {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("⚠️  Nostr re-discovery failed: {e}");
@@ -2527,7 +2527,7 @@ async fn run_discover(
     };
 
     eprintln!("🔍 Searching Nostr relays for mesh-llm meshes...");
-    let meshes = nostr::discover(&relays, &filter).await?;
+    let meshes = nostr::discover(&relays, &filter, None).await?;
 
     if meshes.is_empty() {
         eprintln!("No meshes found.");
