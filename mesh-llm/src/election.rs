@@ -92,8 +92,8 @@ pub struct ModelTargets {
     /// MoE state — if set, this model uses MoE expert sharding.
     /// The proxy uses this for session-sticky routing across MoE nodes.
     pub moe: Option<MoeState>,
-    /// Round-robin counter for load balancing (not cloned — each clone starts fresh,
-    /// but that's fine since the proxy clones per-request anyway)
+    /// Round-robin counter for load balancing, shared across clones via Arc<AtomicU64>
+    /// so that all ModelTargets clones (including per-request proxy clones) share a sequence.
     counter: Arc<AtomicU64>,
 }
 
