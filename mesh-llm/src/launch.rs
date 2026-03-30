@@ -301,8 +301,11 @@ pub async fn start_rpc_server(
         .stderr(std::process::Stdio::from(rpc_log_file2))
         .spawn()
         .with_context(|| {
-        format!("Failed to start rpc-server at {}", rpc_server.path.display())
-    })?;
+            format!(
+                "Failed to start rpc-server at {}",
+                rpc_server.path.display()
+            )
+        })?;
 
     // Wait for it to be listening
     for _ in 0..startup_polls {
@@ -550,8 +553,7 @@ pub async fn start_llama_server(
         args.push("--tensor-split".to_string());
         args.push(ts.to_string());
     }
-    let local_device =
-        resolve_device_for_binary(&llama_server.path, llama_server.flavor, None)?;
+    let local_device = resolve_device_for_binary(&llama_server.path, llama_server.flavor, None)?;
     if let Some(draft_path) = draft {
         if draft_path.exists() {
             if local_device != "CPU" {
@@ -599,7 +601,12 @@ pub async fn start_llama_server(
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(log_file2))
         .spawn()
-        .with_context(|| format!("Failed to start llama-server at {}", llama_server.path.display()))?;
+        .with_context(|| {
+            format!(
+                "Failed to start llama-server at {}",
+                llama_server.path.display()
+            )
+        })?;
 
     // Wait for health check
     let url = format!("http://localhost:{http_port}/health");

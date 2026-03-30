@@ -975,7 +975,11 @@ mod tests {
 
         #[cfg(unix)]
         {
-            assert!(free.is_some(), "should get free space for {}", path.display());
+            assert!(
+                free.is_some(),
+                "should get free space for {}",
+                path.display()
+            );
             let bytes = free.unwrap();
             assert!(bytes > 1_000_000_000, "should have >1GB free, got {bytes}");
         }
