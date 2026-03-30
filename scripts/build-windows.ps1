@@ -532,6 +532,7 @@ Invoke-InRepo {
     $cmakeArgs = @(
         "-B", $buildDir,
         "-S", $llamaDir,
+        "-DCMAKE_BUILD_TYPE=Release",
         "-DGGML_RPC=ON",
         "-DGGML_METAL=OFF",
         "-DGGML_CUDA=OFF",
