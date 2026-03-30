@@ -280,6 +280,8 @@ def expand_path(raw: str) -> Path:
 
 def normalize_model_identity(name: str) -> str:
     value = Path(name).name.lower()
+    if "@" in value:
+        value = value.split("@", 1)[0]
     if value.endswith(".gguf"):
         value = value[: -len(".gguf")]
     value = re.sub(r"[-_](split|part)-\d+of\d+$", "", value)

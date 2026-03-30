@@ -2269,18 +2269,71 @@ fn detect_bin_dir() -> Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
-fn huggingface_repo_id(path: &Path) -> Option<String> {
+fn huggingface_source_identity(path: &Path) -> Option<(String, Option<String>)> {
+    let mut current = Some(path);
+    while let Some(dir) = current {
+        let name = dir.file_name()?.to_str()?;
+        if name == "snapshots" {
+            let revision = path
+                .strip_prefix(dir)
+                .ok()?
+                .components()
+                .next()
+                .and_then(|component| component.as_os_str().to_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let model_dir = dir.parent()?;
+            let model_dir_name = model_dir.file_name()?.to_str()?;
+            if let Some(repo) = model_dir_name.strip_prefix("models--") {
+                return Some((repo.replace("--", "/"), revision));
+            }
+        }
+        current = dir.parent();
+    }
+
     for component in path.components() {
         let component = component.as_os_str().to_str()?;
         if let Some(repo) = component.strip_prefix("models--") {
-            return Some(repo.replace("--", "/"));
+            return Some((repo.replace("--", "/"), None));
         }
     }
     None
 }
 
+fn model_source_repo_from_config(path: &Path) -> Option<String> {
+    let config_path = path.join("config.json");
+    let text = std::fs::read_to_string(config_path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let raw_name = config.get("_name_or_path")?.as_str()?.trim();
+    normalize_hf_repo(raw_name)
+}
+
+fn normalize_hf_repo(raw: &str) -> Option<String> {
+    let value = raw.trim().trim_end_matches('/');
+    if value.is_empty() || value == "." {
+        return None;
+    }
+    if value.starts_with('/') || value.starts_with('.') {
+        return None;
+    }
+
+    let parts: Vec<_> = value.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.len() == 2 {
+        return Some(format!("{}/{}", parts[0], parts[1]));
+    }
+
+    None
+}
+
 fn model_path_name(path: &Path) -> Option<String> {
-    if let Some(repo_id) = huggingface_repo_id(path) {
+    if let Some((repo_id, revision)) = huggingface_source_identity(path) {
+        return Some(match revision {
+            Some(revision) => format!("{repo_id}@{revision}"),
+            None => repo_id,
+        });
+    }
+
+    if let Some(repo_id) = model_source_repo_from_config(path) {
         return Some(repo_id);
     }
 
@@ -3183,7 +3236,9 @@ mod tests {
         );
         assert_eq!(
             model_path_name(&path).as_deref(),
-            Some("mlx-community/Qwen2.5-1.5B-Instruct-4bit")
+            Some(
+                "mlx-community/Qwen2.5-1.5B-Instruct-4bit@863c846a9ac6fad4e49e1743d52984dff262e953"
+            )
         );
     }
 
@@ -3192,5 +3247,24 @@ mod tests {
         let resolved = vec![PathBuf::from("/home/.models/Qwen2.5-0.5B-Instruct-4bit")];
         let result = build_serving_list(&resolved, "Qwen2.5-0.5B-Instruct-4bit");
         assert_eq!(result, vec!["Qwen2.5-0.5B-Instruct-4bit"]);
+    }
+
+    #[test]
+    fn test_model_path_name_uses_full_repo_from_config_when_available() {
+        let dir = std::env::temp_dir().join("mesh-llm-pr79-config-name");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            br#"{"_name_or_path":"mlx-community/Qwen2.5-0.5B-Instruct-4bit"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            model_path_name(&dir).as_deref(),
+            Some("mlx-community/Qwen2.5-0.5B-Instruct-4bit")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
