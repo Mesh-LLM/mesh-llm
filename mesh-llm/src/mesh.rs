@@ -297,16 +297,12 @@ pub fn scan_local_models() -> Vec<String> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
-                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                        // Skip draft models (tiny) and partial downloads
-                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                        if size > 500_000_000 {
-                            // > 500MB, skip draft models
-                            // For split GGUFs (name-00001-of-00006.gguf), use base name
-                            let name = split_gguf_base_name(stem).unwrap_or(stem).to_string();
-                            if !names.contains(&name) {
-                                names.push(name);
-                            }
+                    // Skip draft models (tiny) and partial downloads
+                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    if size > 500_000_000 {
+                        let name = crate::model_identity::resolved_model_name(&path);
+                        if !names.contains(&name) {
+                            names.push(name);
                         }
                     }
                 }
@@ -320,8 +316,8 @@ pub fn scan_local_models() -> Vec<String> {
 /// Extract the base model name from a split GGUF stem.
 /// "GLM-5-UD-IQ2_XXS-00001-of-00006" → Some("GLM-5-UD-IQ2_XXS")
 /// "Qwen3-8B-Q4_K_M" → None (not a split file)
+#[cfg(test)]
 fn split_gguf_base_name(stem: &str) -> Option<&str> {
-    // Pattern: ...-NNNNN-of-NNNNN
     let suffix = stem.rfind("-of-")?;
     let part_num = &stem[suffix + 4..];
     if part_num.len() != 5 || !part_num.chars().all(|c| c.is_ascii_digit()) {
@@ -499,7 +495,7 @@ pub struct Node {
     serving: Arc<Mutex<Option<String>>>,
     serving_models: Arc<Mutex<Vec<String>>>,
     hosted_models: Arc<Mutex<Vec<String>>>,
-    llama_ready: Arc<Mutex<bool>>,
+    inference_ready: Arc<Mutex<bool>>,
     available_models: Arc<Mutex<Vec<String>>>,
     requested_models: Arc<Mutex<Vec<String>>>,
     /// Mesh-wide demand map — merged from gossip + local API requests.
@@ -718,7 +714,7 @@ impl Node {
             serving: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
-            llama_ready: Arc::new(Mutex::new(false)),
+            inference_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1034,12 +1030,12 @@ impl Node {
         self.serving.lock().await.clone()
     }
 
-    pub async fn set_llama_ready(&self, ready: bool) {
-        *self.llama_ready.lock().await = ready;
+    pub async fn set_inference_ready(&self, ready: bool) {
+        *self.inference_ready.lock().await = ready;
     }
 
-    pub async fn is_llama_ready(&self) -> bool {
-        *self.llama_ready.lock().await
+    pub async fn is_inference_ready(&self) -> bool {
+        *self.inference_ready.lock().await
     }
 
     pub async fn mesh_id(&self) -> Option<String> {

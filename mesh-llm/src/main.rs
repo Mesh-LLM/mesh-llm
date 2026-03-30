@@ -6,6 +6,7 @@ mod election;
 mod hardware;
 mod launch;
 mod mesh;
+mod model_identity;
 mod moe;
 mod nostr;
 mod pipeline;
@@ -24,6 +25,7 @@ pub use plugins::blackboard::mcp as blackboard_mcp;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use mesh::NodeRole;
+use model_identity::resolved_model_name;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -129,6 +131,30 @@ struct Cli {
     /// Path to rpc-server, llama-server, and llama-moe-split binaries.
     #[arg(long, hide = true)]
     bin_dir: Option<PathBuf>,
+
+    /// Override the vllm executable used for the vllm backend.
+    #[arg(long, hide = true)]
+    vllm_bin: Option<PathBuf>,
+
+    /// Override the dtype passed to `vllm serve --dtype`.
+    #[arg(long, hide = true)]
+    vllm_dtype: Option<String>,
+
+    /// Enable `vllm serve --trust-remote-code`.
+    #[arg(long, hide = true)]
+    vllm_trust_remote_code: bool,
+
+    /// Override `vllm serve --gpu-memory-utilization`.
+    #[arg(long, hide = true)]
+    vllm_gpu_memory_utilization: Option<f32>,
+
+    /// Override `vllm serve --max-num-batched-tokens`.
+    #[arg(long, hide = true)]
+    vllm_max_num_batched_tokens: Option<u32>,
+
+    /// Extra argument to append to `vllm serve` (repeatable).
+    #[arg(long, hide = true)]
+    vllm_arg: Vec<String>,
 
     /// Override which bundled llama.cpp flavor to use.
     #[arg(long, value_enum)]
@@ -310,16 +336,8 @@ enum RuntimeEvent {
 struct LocalRuntimeModelHandle {
     port: u16,
     backend: backend::BackendKind,
+    backend_runtime: Option<String>,
     process: launch::InferenceServerHandle,
-}
-
-fn resolved_model_name(path: &Path) -> String {
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    router::strip_split_suffix_owned(&stem)
 }
 
 fn mmproj_path_for_model(model_name: &str) -> Option<PathBuf> {
@@ -471,6 +489,7 @@ async fn start_runtime_local_model(
         LocalRuntimeModelHandle {
             port,
             backend,
+            backend_runtime: process.backend_runtime.clone(),
             process: process.handle,
         },
         process.death_rx,
@@ -481,6 +500,7 @@ fn local_process_payload(
     model_name: &str,
     kind: &str,
     backend: backend::BackendKind,
+    backend_runtime: Option<&str>,
     port: u16,
     pid: u32,
     startup_managed: bool,
@@ -489,6 +509,7 @@ fn local_process_payload(
         name: model_name.to_string(),
         kind: kind.into(),
         backend: backend.as_str().into(),
+        backend_runtime: backend_runtime.map(str::to_string),
         status: "ready".into(),
         port,
         pid,
@@ -542,6 +563,28 @@ async fn main() -> Result<()> {
     }
 
     let mut cli = Cli::parse();
+
+    if let Some(path) = &cli.vllm_bin {
+        std::env::set_var("MESH_LLM_VLLM_BIN", path);
+    }
+    if let Some(dtype) = &cli.vllm_dtype {
+        std::env::set_var("MESH_LLM_VLLM_DTYPE", dtype);
+    }
+    if cli.vllm_trust_remote_code {
+        std::env::set_var("MESH_LLM_VLLM_TRUST_REMOTE_CODE", "1");
+    }
+    if let Some(utilization) = cli.vllm_gpu_memory_utilization {
+        std::env::set_var(
+            "MESH_LLM_VLLM_GPU_MEMORY_UTILIZATION",
+            utilization.to_string(),
+        );
+    }
+    if let Some(tokens) = cli.vllm_max_num_batched_tokens {
+        std::env::set_var("MESH_LLM_VLLM_MAX_NUM_BATCHED_TOKENS", tokens.to_string());
+    }
+    if !cli.vllm_arg.is_empty() {
+        std::env::set_var("MESH_LLM_VLLM_ARGS", cli.vllm_arg.join("\n"));
+    }
 
     if let Some(name) = cli.plugin.clone() {
         return plugin::run_plugin_process(name).await;
@@ -841,11 +884,7 @@ async fn main() -> Result<()> {
     // Strip split GGUF suffix so "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
     let requested_model_names: Vec<String> = resolved_models
         .iter()
-        .filter_map(|m| {
-            m.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| router::strip_split_suffix_owned(s))
-        })
+        .map(|m| resolved_model_name(m))
         .collect();
 
     let bin_dir = match &cli.bin_dir {
@@ -1611,15 +1650,7 @@ async fn run_auto(
         }
     };
 
-    let model_name = {
-        let stem = model
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
-        router::strip_split_suffix_owned(&stem)
-    };
+    let model_name = resolved_model_name(&model);
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = if !cli.model.is_empty() {
@@ -1648,13 +1679,18 @@ async fn run_auto(
     }
 
     let primary_backend = backend::detect_backend(&model);
+    let primary_caps = primary_backend.capabilities();
+    let primary_backend_runtime = backend::backend_ops(primary_backend)
+        .resolve_runtime_label()
+        .ok()
+        .flatten();
 
     // Clean up stale processes from previous runs
-    if backend::requires_rpc_server(primary_backend) {
+    if primary_caps.requires_rpc_server {
         launch::kill_orphan_rpc_servers().await;
     }
 
-    let rpc_port = if backend::requires_rpc_server(primary_backend) {
+    let rpc_port = if primary_caps.requires_rpc_server {
         let port = launch::start_rpc_server(
             &bin_dir,
             cli.llama_flavor,
@@ -1725,6 +1761,8 @@ async fn run_auto(
         );
         cs.set_primary_backend(backend::detect_backend(&model).as_str().into())
             .await;
+        cs.set_primary_backend_runtime(primary_backend_runtime.clone())
+            .await;
         cs.set_runtime_control(control_tx.clone()).await;
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
         cs.set_nostr_discovery(cli.nostr_discovery).await;
@@ -1783,26 +1821,27 @@ async fn run_auto(
     let console_state_for_primary_process = console_state.clone();
     let primary_process_model_name = model_name.clone();
     let primary_model_name_for_advertise = model_name.clone();
+    let primary_process_label = backend::backend_ops(primary_backend)
+        .process_label()
+        .to_string();
     tokio::spawn(async move {
         election::election_loop(
             node2, tunnel_mgr2, api_port, rpc_port, bin_dir2, model2, model_name_for_election,
             draft2, draft_max, force_split, llama_flavor, cli.ctx_size, primary_target_tx,
-            move |is_host, llama_ready| {
+            move |is_host, inference_ready| {
                 let advertise_node = node_for_cb.clone();
                 let advertise_model = primary_model_name_for_advertise.clone();
                 tokio::spawn(async move {
-                    if is_host && llama_ready {
+                    if is_host && inference_ready {
                         advertise_model_ready(&advertise_node, &advertise_model, &advertise_model)
                             .await;
                     } else {
                         withdraw_advertised_model(&advertise_node, &advertise_model).await;
                     }
                 });
-                if llama_ready {
-                    let n = node_for_cb.clone();
-                    tokio::spawn(async move { n.set_llama_ready(true).await; });
-                }
-                if is_host && llama_ready {
+                let n = node_for_cb.clone();
+                tokio::spawn(async move { n.set_inference_ready(inference_ready).await; });
+                if is_host && inference_ready {
                     let url = format!("http://localhost:{api_port}");
                     eprintln!("  API:     {url}");
                     if let Some(cp) = cb_console_port {
@@ -1813,14 +1852,14 @@ async fn run_auto(
                     eprintln!("  pi:    pi --provider mesh --model {model_name_for_cb}");
                     eprintln!("  goose: GOOSE_PROVIDER=openai OPENAI_HOST={url} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name_for_cb} goose session");
                 } else if is_host {
-                    eprintln!("⏳ Starting llama-server...");
+                    eprintln!("⏳ Starting {primary_process_label}...");
                 } else {
                     eprintln!("  API: http://localhost:{api_port} (proxied to host)");
                 }
                 if let Some(ref cs) = console_state_for_election {
                     let cs = cs.clone();
                     tokio::spawn(async move {
-                        cs.update(is_host, llama_ready).await;
+                        cs.update(is_host, inference_ready).await;
                     });
                 }
             },
@@ -1831,10 +1870,13 @@ async fn run_auto(
                     tokio::spawn(async move {
                         match process {
                             Some(process) => {
+                                cs.set_primary_backend_runtime(process.backend_runtime.clone())
+                                    .await;
                                 cs.upsert_local_process(local_process_payload(
                                     &model_name,
                                     "primary",
                                     process.backend,
+                                    process.backend_runtime.as_deref(),
                                     process.port,
                                     process.pid,
                                     true,
@@ -1862,25 +1904,13 @@ async fn run_auto(
         // Announce all models to mesh
         let all_names: Vec<String> = resolved_models
             .iter()
-            .map(|m| {
-                m.file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
+            .map(|m| resolved_model_name(m))
             .collect();
         node.set_models(all_names).await;
         node.regossip().await;
 
         for extra_model in resolved_models.iter().skip(1) {
-            let extra_name = {
-                let stem = extra_model
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                router::strip_split_suffix_owned(&stem)
-            };
+            let extra_name = resolved_model_name(extra_model);
             let extra_node = node.clone();
             let extra_tunnel = tunnel_mgr.clone();
             let extra_bin = bin_dir.clone();
@@ -1900,19 +1930,19 @@ async fn run_auto(
                 election::election_loop(
                     extra_node, extra_tunnel, api_port_extra, 0, extra_bin, extra_path, extra_model_name.clone(),
                     None, 8, false, extra_llama_flavor, cli.ctx_size, extra_target_tx,
-                    move |is_host, llama_ready| {
+                    move |is_host, inference_ready| {
                         let advertise_node = extra_node_for_advertise.clone();
                         let model_name = extra_model_name_for_advertise.clone();
                         let primary_model_name = primary_model_name_for_extra.clone();
                         tokio::spawn(async move {
-                            if is_host && llama_ready {
+                            if is_host && inference_ready {
                                 advertise_model_ready(&advertise_node, &primary_model_name, &model_name)
                                     .await;
                             } else {
                                 withdraw_advertised_model(&advertise_node, &model_name).await;
                             }
                         });
-                        if is_host && llama_ready {
+                        if is_host && inference_ready {
                             eprintln!("✅ [{extra_model_name_for_status}] ready (multi-model)");
                             eprintln!("  API: http://localhost:{api_port_extra} (model={extra_model_name_for_status})");
                         }
@@ -1928,6 +1958,7 @@ async fn run_auto(
                                             &model_name,
                                             "startup",
                                             process.backend,
+                                            process.backend_runtime.as_deref(),
                                             process.port,
                                             process.pid,
                                             true,
@@ -2024,6 +2055,7 @@ async fn run_auto(
                                     &loaded_name,
                                     "runtime",
                                     handle.backend,
+                                    handle.backend_runtime.as_deref(),
                                     handle.port,
                                     handle.process.pid(),
                                     false,
@@ -3600,15 +3632,7 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
     let clean_name = router::strip_split_suffix_owned(model_name);
     let mut all: Vec<String> = resolved_models
         .iter()
-        .map(|m| {
-            let stem = m
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            // Strip split GGUF suffix: "Model-00001-of-00004" → "Model"
-            router::strip_split_suffix_owned(&stem)
-        })
+        .map(|m| resolved_model_name(m))
         .collect();
     if !all.contains(&clean_name) {
         all.insert(0, clean_name);
@@ -3620,7 +3644,6 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
     #[test]
     fn test_build_serving_list_auto_no_resolved() {
         // --auto: resolved_models is empty, model picked dynamically

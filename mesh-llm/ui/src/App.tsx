@@ -105,8 +105,11 @@ type StatusPayload = {
   node_id: string;
   token: string;
   node_status: string;
+  backend?: string;
+  backend_runtime?: string | null;
   is_host: boolean;
   is_client: boolean;
+  inference_ready?: boolean;
   llama_ready: boolean;
   model_name: string;
   serving_models?: string[];
@@ -683,7 +686,7 @@ export function App() {
 
   useEffect(() => () => currentAbortRef.current?.abort(), []);
 
-  const canChat = !!status && (status.llama_ready || (status.is_client && warmModels.length > 0));
+  const canChat = !!status && ((status.inference_ready ?? status.llama_ready) || (status.is_client && warmModels.length > 0));
   const canRegenerate = canChat && !!activeConversation && findLastUserMessageIndex(activeConversation.messages) >= 0;
 
   function updateChatState(updater: (prev: ChatState) => ChatState) {
@@ -2309,9 +2312,21 @@ function DashboardPage({
           title="Node ID"
           value={status?.node_id ?? 'n/a'}
           valueSuffix={(
-            <Badge className={cn('h-6 px-2 text-[10px] font-semibold tracking-wide', topologyStatusClass(status?.node_status ?? 'n/a'))}>
-              {status?.node_status ?? 'n/a'}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge className={cn('h-6 px-2 text-[10px] font-semibold tracking-wide', topologyStatusClass(status?.node_status ?? 'n/a'))}>
+                {status?.node_status ?? 'n/a'}
+              </Badge>
+              {status?.backend ? (
+                <Badge variant="outline" className="h-6 px-2 text-[10px] font-semibold tracking-wide">
+                  {status.backend}
+                </Badge>
+              ) : null}
+              {status?.backend_runtime ? (
+                <Badge variant="outline" className="h-6 px-2 text-[10px] font-semibold tracking-wide">
+                  {status.backend_runtime}
+                </Badge>
+              ) : null}
+            </div>
           )}
           icon={<Hash className="h-4 w-4" />}
           tooltip="Current node identifier in this mesh."

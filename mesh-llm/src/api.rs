@@ -43,6 +43,7 @@ pub struct RuntimeModelPayload {
     pub name: String,
     pub kind: String,
     pub backend: String,
+    pub backend_runtime: Option<String>,
     pub status: String,
     pub port: Option<u16>,
     pub startup_managed: bool,
@@ -59,6 +60,7 @@ pub struct RuntimeProcessPayload {
     pub name: String,
     pub kind: String,
     pub backend: String,
+    pub backend_runtime: Option<String>,
     pub status: String,
     pub port: u16,
     pub pid: u32,
@@ -81,10 +83,11 @@ struct ApiInner {
     plugin_manager: plugin::PluginManager,
     is_host: bool,
     is_client: bool,
-    llama_ready: bool,
-    llama_port: Option<u16>,
+    inference_ready: bool,
+    inference_port: Option<u16>,
     model_name: String,
     primary_backend: Option<String>,
+    primary_backend_runtime: Option<String>,
     draft_name: Option<String>,
     api_port: u16,
     model_size_bytes: u64,
@@ -134,8 +137,12 @@ struct StatusPayload {
     node_id: String,
     token: String,
     node_status: String,
+    backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend_runtime: Option<String>,
     is_host: bool,
     is_client: bool,
+    inference_ready: bool,
     llama_ready: bool,
     model_name: String,
     serving_models: Vec<String>,
@@ -207,10 +214,11 @@ impl MeshApi {
                 plugin_manager,
                 is_host: false,
                 is_client: false,
-                llama_ready: false,
-                llama_port: None,
+                inference_ready: false,
+                inference_port: None,
                 model_name,
                 primary_backend: None,
+                primary_backend_runtime: None,
                 draft_name: None,
                 api_port,
                 model_size_bytes,
@@ -230,6 +238,10 @@ impl MeshApi {
 
     pub async fn set_primary_backend(&self, backend: String) {
         self.inner.lock().await.primary_backend = Some(backend);
+    }
+
+    pub async fn set_primary_backend_runtime(&self, runtime: Option<String>) {
+        self.inner.lock().await.primary_backend_runtime = runtime;
     }
 
     pub async fn set_draft_name(&self, name: String) {
@@ -276,37 +288,47 @@ impl MeshApi {
         self.push_status().await;
     }
 
-    pub async fn update(&self, is_host: bool, llama_ready: bool) {
+    pub async fn update(&self, is_host: bool, inference_ready: bool) {
         {
             let mut inner = self.inner.lock().await;
             inner.is_host = is_host;
-            inner.llama_ready = llama_ready;
+            inner.inference_ready = inference_ready;
         }
         self.push_status().await;
     }
 
-    pub async fn set_llama_port(&self, port: Option<u16>) {
-        self.inner.lock().await.llama_port = port;
+    pub async fn set_inference_port(&self, port: Option<u16>) {
+        self.inner.lock().await.inference_port = port;
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let (model_name, primary_backend, is_host, llama_ready, llama_port, local_processes) = {
+        let (
+            model_name,
+            primary_backend,
+            primary_backend_runtime,
+            is_host,
+            inference_ready,
+            inference_port,
+            local_processes,
+        ) = {
             let inner = self.inner.lock().await;
             (
                 inner.model_name.clone(),
                 inner.primary_backend.clone(),
+                inner.primary_backend_runtime.clone(),
                 inner.is_host,
-                inner.llama_ready,
-                inner.llama_port,
+                inner.inference_ready,
+                inner.inference_port,
                 inner.local_processes.clone(),
             )
         };
         build_runtime_status_payload(
             &model_name,
             primary_backend,
+            primary_backend_runtime,
             is_host,
-            llama_ready,
-            llama_port,
+            inference_ready,
+            inference_port,
             local_processes,
         )
     }
@@ -328,7 +350,7 @@ impl MeshApi {
             inflight_requests,
             model_name,
             model_size_bytes,
-            llama_ready,
+            inference_ready,
             is_host,
             is_client,
             api_port,
@@ -336,6 +358,8 @@ impl MeshApi {
             mesh_name,
             latest_version,
             nostr_discovery,
+            primary_backend,
+            primary_backend_runtime,
         ) = {
             let inner = self.inner.lock().await;
             (
@@ -346,7 +370,7 @@ impl MeshApi {
                 inner.node.inflight_requests(),
                 inner.model_name.clone(),
                 inner.model_size_bytes,
-                inner.llama_ready,
+                inner.inference_ready,
                 inner.is_host,
                 inner.is_client,
                 inner.api_port,
@@ -354,6 +378,11 @@ impl MeshApi {
                 inner.mesh_name.clone(),
                 inner.latest_version.clone(),
                 inner.nostr_discovery,
+                inner
+                    .primary_backend
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+                inner.primary_backend_runtime.clone(),
             )
         }; // inner lock dropped here
 
@@ -449,7 +478,7 @@ impl MeshApi {
             })
             .collect();
 
-        let (launch_pi, launch_goose) = if llama_ready {
+        let (launch_pi, launch_goose) = if inference_ready {
             (
                 Some(format!("pi --provider mesh --model {model_name}")),
                 Some(format!("GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{api_port} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name} goose session")),
@@ -463,7 +492,7 @@ impl MeshApi {
         // Derive node status for display
         let node_status = if is_client {
             "Client".to_string()
-        } else if is_host && llama_ready {
+        } else if is_host && inference_ready {
             let has_split_workers = all_peers.iter().any(|p| {
                 matches!(p.role, mesh::NodeRole::Worker) && p.is_assigned_model(model_name.as_str())
             });
@@ -490,9 +519,12 @@ impl MeshApi {
             node_id,
             token,
             node_status,
+            backend: primary_backend,
+            backend_runtime: primary_backend_runtime,
             is_host,
             is_client,
-            llama_ready,
+            inference_ready,
+            llama_ready: inference_ready,
             model_name,
             serving_models: my_hosted_models.clone(),
             assigned_models: my_assigned_models,
@@ -548,15 +580,17 @@ pub async fn start(
             match target {
                 election::InferenceTarget::Local(port)
                 | election::InferenceTarget::MoeLocal(port) => {
-                    state2.set_llama_port(Some(port)).await;
+                    state2.set_inference_port(Some(port)).await;
                 }
                 election::InferenceTarget::Remote(_) | election::InferenceTarget::MoeRemote(_) => {
                     let mut inner = state2.inner.lock().await;
-                    inner.llama_ready = true;
-                    inner.llama_port = None;
+                    inner.inference_ready = true;
+                    inner.inference_port = None;
                 }
                 election::InferenceTarget::None => {
-                    state2.set_llama_port(None).await;
+                    let mut inner = state2.inner.lock().await;
+                    inner.inference_ready = false;
+                    inner.inference_port = None;
                 }
             }
             state2.push_status().await;
@@ -1115,7 +1149,7 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
         }
         ("POST", p) if p.starts_with("/api/chat") => {
             let inner = state.inner.lock().await;
-            if !inner.llama_ready && !inner.is_client {
+            if !inner.inference_ready && !inner.is_client {
                 drop(inner);
                 return respond_error(&mut stream, 503, "LLM not ready").await;
             }
@@ -1182,9 +1216,10 @@ async fn respond_json<T: Serialize>(
 fn build_runtime_status_payload(
     model_name: &str,
     primary_backend: Option<String>,
+    primary_backend_runtime: Option<String>,
     is_host: bool,
-    llama_ready: bool,
-    llama_port: Option<u16>,
+    inference_ready: bool,
+    inference_port: Option<u16>,
     mut local_processes: Vec<RuntimeProcessPayload>,
 ) -> RuntimeStatusPayload {
     local_processes.sort_by(|a, b| {
@@ -1199,6 +1234,7 @@ fn build_runtime_status_payload(
             name: process.name,
             kind: process.kind,
             backend: process.backend,
+            backend_runtime: process.backend_runtime,
             status: process.status,
             port: Some(process.port),
             startup_managed: process.startup_managed,
@@ -1207,7 +1243,7 @@ fn build_runtime_status_payload(
 
     let has_primary_process = models.iter().any(|model| model.kind == "primary");
     if is_host
-        && !llama_ready
+        && !inference_ready
         && !has_primary_process
         && model_name != "(idle)"
         && !model_name.is_empty()
@@ -1218,8 +1254,9 @@ fn build_runtime_status_payload(
                 name: model_name.to_string(),
                 kind: "primary".into(),
                 backend: primary_backend.unwrap_or_else(|| "unknown".into()),
+                backend_runtime: primary_backend_runtime,
                 status: "starting".into(),
-                port: llama_port,
+                port: inference_port,
                 startup_managed: true,
             },
         );
@@ -1451,6 +1488,7 @@ mod tests {
         let payload = build_runtime_status_payload(
             "Qwen",
             Some("llama".into()),
+            None,
             true,
             true,
             Some(9337),
@@ -1459,6 +1497,7 @@ mod tests {
                     name: "Qwen".into(),
                     kind: "primary".into(),
                     backend: "llama".into(),
+                    backend_runtime: None,
                     status: "ready".into(),
                     port: 9337,
                     pid: 100,
@@ -1468,6 +1507,7 @@ mod tests {
                     name: "Llama".into(),
                     kind: "runtime".into(),
                     backend: "llama".into(),
+                    backend_runtime: None,
                     status: "ready".into(),
                     port: 9444,
                     pid: 101,
@@ -1489,6 +1529,7 @@ mod tests {
         let payload = build_runtime_status_payload(
             "Qwen",
             Some("llama".into()),
+            None,
             true,
             false,
             Some(9337),
@@ -1508,6 +1549,7 @@ mod tests {
                 name: "Zulu".into(),
                 kind: "runtime".into(),
                 backend: "llama".into(),
+                backend_runtime: None,
                 status: "ready".into(),
                 port: 9444,
                 pid: 11,
@@ -1517,6 +1559,7 @@ mod tests {
                 name: "Alpha".into(),
                 kind: "primary".into(),
                 backend: "llama".into(),
+                backend_runtime: None,
                 status: "ready".into(),
                 port: 9337,
                 pid: 10,

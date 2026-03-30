@@ -232,9 +232,9 @@ pub async fn publish_loop(
         eprintln!("   Will delist when {} clients connected", cap);
     }
 
-    // Wait for llama-server to be ready before first publish (up to 60s).
+    // Wait for the local inference backend to be ready before first publish.
     for _ in 0..120 {
-        if node.is_llama_ready().await {
+        if node.is_inference_ready().await {
             break;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;

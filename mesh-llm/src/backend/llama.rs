@@ -275,7 +275,11 @@ async fn start_llama_server(
                 }
                 let _ = death_tx.send(());
             });
-            return Ok(InferenceServerProcess { handle, death_rx });
+            return Ok(InferenceServerProcess {
+                handle,
+                death_rx,
+                backend_runtime: None,
+            });
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }

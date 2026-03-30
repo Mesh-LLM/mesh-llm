@@ -1,8 +1,8 @@
 //! Automatic host election and dynamic mesh management.
 //!
 //! Per-model election: nodes serving the same model form a group.
-//! The highest-VRAM node in each group becomes its host and runs llama-server.
-//! Every mesh change: kill llama-server, re-elect, winner starts fresh.
+//! The highest-VRAM node in each group becomes its host and runs the backend inference server.
+//! Every mesh change: kill the inference server, re-elect, winner starts fresh.
 //! mesh-llm owns :api_port and proxies to the right host by model name.
 
 use crate::{backend, download, launch, mesh, moe, tunnel};
@@ -80,17 +80,17 @@ pub fn should_be_host_for_model(
     true
 }
 
-/// The current state of llama-server as managed by the election loop.
+/// The current state of the backend inference server as managed by the election loop.
 /// The API proxy reads this to know where to forward requests.
 #[derive(Clone, Debug)]
 pub enum InferenceTarget {
-    /// No llama-server running anywhere (election in progress, mesh empty, etc.)
+    /// No inference server running anywhere (election in progress, mesh empty, etc.)
     None,
-    /// We are host — llama-server is on this local port.
+    /// We are host — the inference server is on this local port.
     Local(u16),
     /// Another node is host — proxy via QUIC to this peer.
     Remote(iroh::EndpointId),
-    /// MoE mode — this node runs its own llama-server with its expert shard.
+    /// MoE mode — this node runs its own inference server with its expert shard.
     /// All MoE nodes are independent; the proxy picks one per session.
     MoeLocal(u16),
     /// MoE mode — another node is running its shard; proxy via QUIC.
@@ -121,6 +121,7 @@ pub struct ModelTargets {
 #[derive(Clone, Debug)]
 pub struct LocalProcessInfo {
     pub backend: backend::BackendKind,
+    pub backend_runtime: Option<String>,
     pub pid: u32,
     pub port: u16,
 }
@@ -350,7 +351,7 @@ pub async fn election_loop(
             .cloned()
             .collect();
 
-        if !backend::supports_rpc_split(backend_kind) {
+        if !backend_kind.capabilities().supports_rpc_split {
             if force_split {
                 eprintln!(
                     "⚠ [{}] backend '{}' ignores --split (solo-only for now)",
@@ -382,7 +383,7 @@ pub async fn election_loop(
         // node serving this model runs its own independent llama-server
         // (no election needed — everyone is a host).
         let need_split =
-            backend::supports_rpc_split(backend_kind) && (force_split || !model_fits_locally);
+            backend_kind.capabilities().supports_rpc_split && (force_split || !model_fits_locally);
 
         let i_am_host = if need_split {
             // Distributed mode: elect one host from the model group
@@ -456,7 +457,8 @@ pub async fn election_loop(
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    eprintln!("🔄 [{}] llama-server died — restarting...", model_name);
+                    let process_label = backend::backend_ops(backend_kind).process_label();
+                    eprintln!("🔄 [{}] {process_label} died — restarting...", model_name);
                     llama_process = None;
                     currently_host = false;
                     current_local_port = None;
@@ -577,13 +579,15 @@ pub async fn election_loop(
             if let Some(ref process) = llama_process {
                 on_process(Some(LocalProcessInfo {
                     backend: backend::detect_backend(&model),
+                    backend_runtime: process.backend_runtime.clone(),
                     pid: process.handle.pid(),
                     port: llama_port,
                 }));
             }
             on_change(true, true);
+            let process_label = backend::backend_ops(backend_kind).process_label();
             eprintln!(
-                "✅ [{}] llama-server ready on internal port {llama_port}",
+                "✅ [{}] {process_label} ready on internal port {llama_port}",
                 model_name
             );
         } else {
@@ -633,7 +637,8 @@ pub async fn election_loop(
                     std::future::pending::<()>().await;
                 }
             } => {
-                eprintln!("🔄 [{}] llama-server died — restarting...", model_name);
+                let process_label = backend::backend_ops(backend_kind).process_label();
+                eprintln!("🔄 [{}] {process_label} died — restarting...", model_name);
                 llama_process = None;
                 currently_host = false;
                 update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -767,6 +772,7 @@ async fn moe_election_loop(
                         if let Some(ref process) = llama_process {
                             on_process(Some(LocalProcessInfo {
                                 backend: backend::detect_backend(&model),
+                                backend_runtime: process.backend_runtime.clone(),
                                 pid: process.handle.pid(),
                                 port: llama_port,
                             }));
@@ -779,13 +785,17 @@ async fn moe_election_loop(
                         )
                         .await;
                         on_change(true, true);
+                        let process_label =
+                            backend::backend_ops(backend::detect_backend(&model)).process_label();
                         eprintln!(
-                            "✅ [{}] MoE — llama-server ready on port {llama_port}",
+                            "✅ [{}] MoE — {process_label} ready on port {llama_port}",
                             model_name
                         );
                     }
                     Err(e) => {
-                        eprintln!("  Failed to start llama-server: {e}");
+                        let process_label =
+                            backend::backend_ops(backend::detect_backend(&model)).process_label();
+                        eprintln!("  Failed to start {process_label}: {e}");
                     }
                 }
             } else {
@@ -887,6 +897,7 @@ async fn moe_election_loop(
                     if let Some(ref process) = llama_process {
                         on_process(Some(LocalProcessInfo {
                             backend: backend::detect_backend(&shard_path),
+                            backend_runtime: process.backend_runtime.clone(),
                             pid: process.handle.pid(),
                             port: llama_port,
                         }));
@@ -906,7 +917,9 @@ async fn moe_election_loop(
                     );
                 }
                 Err(e) => {
-                    eprintln!("  ❌ Failed to start llama-server: {e}");
+                    let process_label =
+                        backend::backend_ops(backend::detect_backend(&shard_path)).process_label();
+                    eprintln!("  ❌ Failed to start {process_label}: {e}");
                 }
             }
         }
@@ -1219,7 +1232,9 @@ async fn start_llama(
     {
         Ok(process) => Some((llama_port, process)),
         Err(e) => {
-            eprintln!("  Failed to start llama-server: {e}");
+            let process_label =
+                backend::backend_ops(backend::detect_backend(model)).process_label();
+            eprintln!("  Failed to start {process_label}: {e}");
             None
         }
     }

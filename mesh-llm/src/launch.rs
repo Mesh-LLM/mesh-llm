@@ -175,6 +175,7 @@ impl InferenceServerHandle {
 pub struct InferenceServerProcess {
     pub handle: InferenceServerHandle,
     pub death_rx: tokio::sync::oneshot::Receiver<()>,
+    pub backend_runtime: Option<String>,
 }
 
 pub struct ModelLaunchSpec<'a> {
@@ -458,6 +459,7 @@ pub async fn start_model_server(
     spec: ModelLaunchSpec<'_>,
 ) -> Result<InferenceServerProcess> {
     let ops = backend::backend_ops(spec.backend);
+    ops.validate_model(spec.model)?;
     tracing::debug!(
         "dispatching backend '{}' via {} (health: {})",
         ops.as_str(),

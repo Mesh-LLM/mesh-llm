@@ -2175,6 +2175,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "shlex",
  "tokio",
  "tokio-stream",
  "toml",
