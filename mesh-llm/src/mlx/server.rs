@@ -345,9 +345,35 @@ async fn generate_streaming(
     Ok(())
 }
 
-/// Prefill all prompt tokens in one forward pass.
+/// Prefill prompt tokens. Uses chunked prefill (with eval barriers between
+/// chunks) to keep the computation graph and peak memory bounded. The chunk
+/// size of 2048 matches mlx-lm's default `prefill_step_size`. For prompts
+/// ≤2048 tokens, there is only one chunk so no overhead.
+const PREFILL_STEP_SIZE: usize = 2048;
+
 fn prefill(model: &MlxModel, prompt_tokens: &[u32], caches: &mut [model::KVCache]) -> Result<u32> {
-    let input = Array::from_slice(prompt_tokens, &[1, prompt_tokens.len() as i32]);
+    let total = prompt_tokens.len();
+
+    if total <= PREFILL_STEP_SIZE {
+        // Small prompt — single forward pass, no eval barriers
+        let input = Array::from_slice(prompt_tokens, &[1, total as i32]);
+        let logits = model.forward(&input, caches)?;
+        return model::argmax_last(&logits);
+    }
+
+    // Large prompt — chunk to avoid huge computation graphs
+    let mut pos = 0;
+    while total - pos > PREFILL_STEP_SIZE {
+        let chunk = &prompt_tokens[pos..pos + PREFILL_STEP_SIZE];
+        let input = Array::from_slice(chunk, &[1, PREFILL_STEP_SIZE as i32]);
+        model.forward(&input, caches)?;
+        mlx_rs::transforms::eval(caches.iter().flat_map(|c| c.arrays()))?;
+        pos += PREFILL_STEP_SIZE;
+    }
+
+    // Final chunk — get logits for the first generated token
+    let last_chunk = &prompt_tokens[pos..];
+    let input = Array::from_slice(last_chunk, &[1, last_chunk.len() as i32]);
     let logits = model.forward(&input, caches)?;
     model::argmax_last(&logits)
 }

@@ -4,6 +4,7 @@
 //! No Python, no subprocess — just Rust + MLX C library.
 
 use anyhow::{bail, Context, Result};
+use mlx_rs::ops::indexing::{IndexOp, TryIndexMutOp};
 use mlx_rs::Array;
 use std::collections::HashMap;
 use std::path::Path;
@@ -203,6 +204,15 @@ impl Layer {
 }
 
 // ── KV cache ──
+//
+// Pre-allocated KV cache following mlx-lm's approach:
+//   - Allocate in chunks of STEP (256) positions
+//   - Use slice assignment (index_mut) to write new KV entries in-place
+//   - Return a view [0..offset] to SDPA — no allocations per token
+//
+// This eliminates the O(n²) concatenation cost that killed prefill performance.
+
+const KV_CACHE_STEP: usize = 256;
 
 pub struct KVCache {
     keys: Option<Array>,
@@ -232,20 +242,74 @@ impl KVCache {
     }
 
     pub fn update(&mut self, k: Array, v: Array) -> Result<(Array, Array)> {
+        use std::ops::RangeFull;
+
         let seq_len = k.shape()[2] as usize;
-        if let (Some(prev_k), Some(prev_v)) = (&self.keys, &self.values) {
-            let new_k = mlx_rs::ops::concatenate_axis(&[prev_k, &k], 2)?;
-            let new_v = mlx_rs::ops::concatenate_axis(&[prev_v, &v], 2)?;
-            self.offset += seq_len;
-            self.keys = Some(new_k.clone());
-            self.values = Some(new_v.clone());
-            Ok((new_k, new_v))
-        } else {
-            self.offset = seq_len;
-            self.keys = Some(k.clone());
-            self.values = Some(v.clone());
-            Ok((k, v))
+        let prev = self.offset;
+
+        if self.keys.is_none() || (prev + seq_len) > self.keys.as_ref().unwrap().shape()[2] as usize
+        {
+            // Grow: pre-allocate in steps, matching the incoming dtype
+            let [b, n_kv_heads, _, k_head_dim] = k.shape()[..4] else {
+                bail!("unexpected k shape");
+            };
+            let v_head_dim = v.shape()[3];
+            let k_dtype = k.dtype();
+            let v_dtype = v.dtype();
+
+            let n_steps = ((KV_CACHE_STEP + seq_len - 1) / KV_CACHE_STEP) * KV_CACHE_STEP;
+            let k_shape = &[b, n_kv_heads, n_steps as i32, k_head_dim];
+            let v_shape = &[b, n_kv_heads, n_steps as i32, v_head_dim];
+
+            let new_k = mlx_rs::ops::zeros_dtype(k_shape, k_dtype)?;
+            let new_v = mlx_rs::ops::zeros_dtype(v_shape, v_dtype)?;
+
+            if let (Some(ref mut old_k), Some(ref mut old_v)) = (&mut self.keys, &mut self.values) {
+                if prev % KV_CACHE_STEP != 0 {
+                    *old_k = old_k.index((RangeFull, RangeFull, ..(prev as i32), RangeFull));
+                    *old_v = old_v.index((RangeFull, RangeFull, ..(prev as i32), RangeFull));
+                }
+                self.keys = Some(mlx_rs::ops::concatenate_axis(
+                    &[old_k as &Array, &new_k],
+                    2,
+                )?);
+                self.values = Some(mlx_rs::ops::concatenate_axis(
+                    &[old_v as &Array, &new_v],
+                    2,
+                )?);
+            } else {
+                self.keys = Some(new_k);
+                self.values = Some(new_v);
+            }
         }
+
+        self.offset = prev + seq_len;
+        let prev_i = prev as i32;
+        let end_i = self.offset as i32;
+
+        // Slice-assign into pre-allocated buffer (no copy of existing data)
+        self.keys
+            .as_mut()
+            .unwrap()
+            .try_index_mut((RangeFull, RangeFull, prev_i..end_i, RangeFull), &k)?;
+        self.values
+            .as_mut()
+            .unwrap()
+            .try_index_mut((RangeFull, RangeFull, prev_i..end_i, RangeFull), &v)?;
+
+        // Return views up to current offset
+        let k_out = self
+            .keys
+            .as_ref()
+            .unwrap()
+            .index((RangeFull, RangeFull, ..end_i, RangeFull));
+        let v_out = self
+            .values
+            .as_ref()
+            .unwrap()
+            .index((RangeFull, RangeFull, ..end_i, RangeFull));
+
+        Ok((k_out, v_out))
     }
 }
 
