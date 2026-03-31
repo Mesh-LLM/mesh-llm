@@ -51,6 +51,15 @@ jobs:
         with:
           workspaces: mesh-llm
 
+      - name: Stamp CI version
+        shell: bash
+        run: |
+          base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' mesh-llm/Cargo.toml | head -n1)"
+          short_sha="${GITHUB_SHA::7}"
+          ci_version="${base_version}-${short_sha}-${GITHUB_RUN_NUMBER}"
+          echo "CI_VERSION=$ci_version" >> "$GITHUB_ENV"
+          scripts/set-workspace-version.sh "$ci_version"
+
       - name: Unit tests
         run: cargo test --release
 
@@ -129,6 +138,18 @@ jobs:
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
 
+      - name: Package CI artifacts
+        shell: bash
+        run: |
+          just --shell bash --shell-arg -lc release-bundle "${CI_VERSION}" dist
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-cpu
+          path: dist/*
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -157,6 +178,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: mesh-llm
+
+      - name: Stamp CI version
+        shell: bash
+        run: |
+          base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' mesh-llm/Cargo.toml | head -n1)"
+          short_sha="${GITHUB_SHA::7}"
+          ci_version="${base_version}-${short_sha}-${GITHUB_RUN_NUMBER}"
+          echo "CI_VERSION=$ci_version" >> "$GITHUB_ENV"
+          scripts/set-workspace-version.sh "$ci_version"
 
       - name: Unit tests
         run: cargo test --release
@@ -220,6 +250,18 @@ jobs:
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
 
+      - name: Package CI artifacts
+        shell: bash
+        run: |
+          just --shell bash --shell-arg -lc release-bundle "${CI_VERSION}" dist
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-macos
+          path: dist/*
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -272,6 +314,15 @@ jobs:
           workspaces: |
             . -> target
 
+      - name: Stamp CI version
+        shell: bash
+        run: |
+          base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' mesh-llm/Cargo.toml | head -n1)"
+          short_sha="${GITHUB_SHA::7}"
+          ci_version="${base_version}-${short_sha}-${GITHUB_RUN_NUMBER}"
+          echo "CI_VERSION=$ci_version" >> "$GITHUB_ENV"
+          scripts/set-workspace-version.sh "$ci_version"
+
       - name: Build Linux CUDA backend
         shell: bash
         run: |
@@ -282,6 +333,18 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Package CI artifacts
+        shell: bash
+        run: |
+          just --shell bash --shell-arg -lc release-bundle-cuda "${CI_VERSION}" dist
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-cuda
+          path: dist/*
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()
@@ -335,6 +398,15 @@ jobs:
           workspaces: |
             . -> target
 
+      - name: Stamp CI version
+        shell: bash
+        run: |
+          base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' mesh-llm/Cargo.toml | head -n1)"
+          short_sha="${GITHUB_SHA::7}"
+          ci_version="${base_version}-${short_sha}-${GITHUB_RUN_NUMBER}"
+          echo "CI_VERSION=$ci_version" >> "$GITHUB_ENV"
+          scripts/set-workspace-version.sh "$ci_version"
+
       - name: Build Linux ROCm backend
         shell: bash
         run: |
@@ -345,6 +417,18 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Package CI artifacts
+        shell: bash
+        run: |
+          just --shell bash --shell-arg -lc release-bundle-amd "${CI_VERSION}" dist
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-rocm
+          path: dist/*
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()
@@ -398,6 +482,15 @@ jobs:
           workspaces: |
             . -> target
 
+      - name: Stamp CI version
+        shell: bash
+        run: |
+          base_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' mesh-llm/Cargo.toml | head -n1)"
+          short_sha="${GITHUB_SHA::7}"
+          ci_version="${base_version}-${short_sha}-${GITHUB_RUN_NUMBER}"
+          echo "CI_VERSION=$ci_version" >> "$GITHUB_ENV"
+          scripts/set-workspace-version.sh "$ci_version"
+
       - name: Build Linux Vulkan backend
         shell: bash
         run: |
@@ -408,6 +501,18 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Package CI artifacts
+        shell: bash
+        run: |
+          just --shell bash --shell-arg -lc release-bundle-vulkan "${CI_VERSION}" dist
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-vulkan
+          path: dist/*
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()
@@ -459,6 +564,15 @@ jobs:
         with:
           workspaces: |
             . -> target
+
+      - name: Stamp CI version
+        shell: pwsh
+        run: |
+          $baseVersion = (Select-String -Path 'mesh-llm/Cargo.toml' -Pattern '^version = "([^"]+)"').Matches[0].Groups[1].Value
+          $shortSha = "${env:GITHUB_SHA}".Substring(0, 7)
+          $ciVersion = "$baseVersion-$shortSha-${env:GITHUB_RUN_NUMBER}"
+          "CI_VERSION=$ciVersion" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          bash scripts/set-workspace-version.sh $ciVersion
 
       - name: Cache Windows SDK installers
         if: matrix.backend != 'cpu'
@@ -514,6 +628,26 @@ jobs:
         run: |
           target\release\mesh-llm.exe --version
           target\release\mesh-llm.exe --help | Select-Object -First 5
+
+      - name: Package CI artifacts
+        shell: pwsh
+        run: |
+          if ('${{ matrix.backend }}' -eq 'cpu') {
+            just release-bundle-windows $env:CI_VERSION dist
+          } elseif ('${{ matrix.backend }}' -eq 'cuda') {
+            just release-bundle-cuda-windows $env:CI_VERSION dist
+          } elseif ('${{ matrix.backend }}' -eq 'rocm') {
+            just release-bundle-amd-windows $env:CI_VERSION dist
+          } else {
+            just release-bundle-vulkan-windows $env:CI_VERSION dist
+          }
+
+      - name: Upload CI artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-windows-${{ matrix.backend }}
+          path: dist/*
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()

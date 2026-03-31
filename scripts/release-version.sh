@@ -17,32 +17,6 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+"$SCRIPT_DIR/set-workspace-version.sh" "$version"
 
-files=(
-    "$REPO_ROOT/mesh-llm/src/main.rs"
-    "$REPO_ROOT/mesh-llm/Cargo.toml"
-    "$REPO_ROOT/mesh-llm/plugin/Cargo.toml"
-    "$REPO_ROOT/mesh-llm/src/plugins/example/Cargo.toml"
-)
-
-perl -0pi -e 's/pub const VERSION: &str = "\K[^"]+(?=";)/'"$version"'/g' \
-    "$REPO_ROOT/mesh-llm/src/main.rs"
-
-for manifest in \
-    "$REPO_ROOT/mesh-llm/Cargo.toml" \
-    "$REPO_ROOT/mesh-llm/plugin/Cargo.toml" \
-    "$REPO_ROOT/mesh-llm/src/plugins/example/Cargo.toml"
-do
-    perl -0pi -e 's/^version = "[^"]+"/version = "'"$version"'"/m' "$manifest"
-done
-
-echo "Refreshing Cargo.lock workspace package versions..."
-(cd "$REPO_ROOT" && cargo metadata --format-version 1 >/dev/null)
-
-files+=("$REPO_ROOT/Cargo.lock")
-
-echo "Updated release version to $version:"
-for file in "${files[@]}"; do
-    echo "  $file"
-done
+echo "Updated release version to $version."
