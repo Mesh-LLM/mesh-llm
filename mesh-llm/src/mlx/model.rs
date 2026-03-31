@@ -311,6 +311,12 @@ impl KVCache {
 
         Ok((k_out, v_out))
     }
+
+    /// Rewind the cache to `n` tokens. The underlying buffer is kept —
+    /// only the offset is moved back so new tokens overwrite the tail.
+    pub fn trim_to(&mut self, n: usize) {
+        self.offset = n;
+    }
 }
 
 // ── Quantized embedding ──

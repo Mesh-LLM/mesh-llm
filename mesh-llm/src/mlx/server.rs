@@ -16,6 +16,16 @@ use tokio::sync::{watch, Mutex};
 struct InferState {
     model: MlxModel,
     model_name: String,
+    /// Prompt cache: KV caches + token IDs from the last request.
+    /// On the next request, we find the longest common prefix and
+    /// skip re-prefilling those tokens — huge win for agent workloads
+    /// where the system prompt + conversation history grows incrementally.
+    prompt_cache: Option<PromptCache>,
+}
+
+struct PromptCache {
+    tokens: Vec<u32>,
+    caches: Vec<model::KVCache>,
 }
 
 /// Start the MLX inference server on the given port.
@@ -40,7 +50,11 @@ pub async fn start_mlx_server(
         model.config.vocab_size,
     );
 
-    let state = Arc::new(Mutex::new(InferState { model, model_name }));
+    let state = Arc::new(Mutex::new(InferState {
+        model,
+        model_name,
+        prompt_cache: None,
+    }));
 
     let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
         .await
@@ -388,6 +402,48 @@ fn prefill(model: &MlxModel, prompt_tokens: &[u32], caches: &mut [model::KVCache
     model::argmax_last(&logits)
 }
 
+/// Find the longest common prefix between cached tokens and new tokens.
+fn common_prefix_len(cached: &[u32], new: &[u32]) -> usize {
+    cached
+        .iter()
+        .zip(new.iter())
+        .take_while(|(a, b)| a == b)
+        .count()
+}
+
+/// Set up caches for a new request, reusing the prompt cache if possible.
+/// Returns (caches, tokens_to_prefill) where tokens_to_prefill is the
+/// suffix of prompt_tokens that still needs to be forwarded.
+fn setup_caches_with_reuse<'a>(
+    state: &mut InferState,
+    prompt_tokens: &'a [u32],
+) -> (Vec<model::KVCache>, &'a [u32]) {
+    if let Some(ref cached) = state.prompt_cache {
+        let prefix_len = common_prefix_len(&cached.tokens, prompt_tokens);
+        if prefix_len > 0 {
+            // Reuse cached KV — trim to prefix length and return suffix
+            let mut caches = state.prompt_cache.take().unwrap().caches;
+            let rewind_to = caches[0].offset.saturating_sub(1);
+            for c in &mut caches {
+                c.trim_to(prefix_len);
+            }
+            tracing::info!(
+                "MLX prompt cache: reusing {prefix_len}/{} tokens ({} new)",
+                prompt_tokens.len(),
+                prompt_tokens.len() - prefix_len,
+            );
+            return (caches, &prompt_tokens[prefix_len..]);
+        }
+    }
+    // No cache hit — fresh caches
+    (state.model.new_caches(), prompt_tokens)
+}
+
+/// Save caches + tokens for future reuse.
+fn save_prompt_cache(state: &mut InferState, tokens: Vec<u32>, caches: Vec<model::KVCache>) {
+    state.prompt_cache = Some(PromptCache { tokens, caches });
+}
+
 /// Run inference synchronously (called from blocking thread).
 fn run_inference(
     state: &mut InferState,
@@ -402,10 +458,23 @@ fn run_inference(
     let prompt_tokens: Vec<u32> = encoding.get_ids().to_vec();
     let prompt_len = prompt_tokens.len();
 
-    let mut caches = state.model.new_caches();
+    let (mut caches, suffix) = setup_caches_with_reuse(state, &prompt_tokens);
 
-    // Chunked prefill
-    let mut next_token = prefill(&state.model, &prompt_tokens, &mut caches)?;
+    // Prefill only the new suffix
+    let mut next_token = if suffix.is_empty() {
+        // Entire prompt was cached — re-forward last token to get logits
+        let last = prompt_tokens[prompt_tokens.len() - 1];
+        // Rewind one position so the last token gets forwarded
+        let rewind_to = caches[0].offset.saturating_sub(1);
+        for c in &mut caches {
+            c.trim_to(rewind_to);
+        }
+        let input = Array::from_slice(&[last], &[1, 1]);
+        let logits = state.model.forward(&input, &mut caches)?;
+        model::argmax_last(&logits)?
+    } else {
+        prefill(&state.model, suffix, &mut caches)?
+    };
 
     let mut generated: Vec<u32> = vec![next_token];
 
@@ -433,6 +502,9 @@ fn run_inference(
         .decode(&generated, true)
         .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?;
 
+    // Save prompt cache for next request (prompt only, not generated tokens)
+    save_prompt_cache(state, prompt_tokens, caches);
+
     Ok((text, prompt_len, generated.len()))
 }
 
@@ -450,10 +522,21 @@ fn run_inference_streaming(
         .map_err(|e| anyhow::anyhow!("tokenizer encode: {e}"))?;
     let prompt_tokens: Vec<u32> = encoding.get_ids().to_vec();
 
-    let mut caches = state.model.new_caches();
+    let (mut caches, suffix) = setup_caches_with_reuse(state, &prompt_tokens);
 
-    // Chunked prefill
-    let mut next_token = prefill(&state.model, &prompt_tokens, &mut caches)?;
+    // Prefill only the new suffix
+    let mut next_token = if suffix.is_empty() {
+        let rewind_to = caches[0].offset.saturating_sub(1);
+        for c in &mut caches {
+            c.trim_to(rewind_to);
+        }
+        let last = prompt_tokens[prompt_tokens.len() - 1];
+        let input = Array::from_slice(&[last], &[1, 1]);
+        let logits = state.model.forward(&input, &mut caches)?;
+        model::argmax_last(&logits)?
+    } else {
+        prefill(&state.model, suffix, &mut caches)?
+    };
 
     // Decode + stream
     for _ in 0..max_tokens {
@@ -477,6 +560,9 @@ fn run_inference_streaming(
         let logits = state.model.forward(&input, &mut caches)?;
         next_token = model::argmax_last(&logits)?;
     }
+
+    // Save prompt cache for next request
+    save_prompt_cache(state, prompt_tokens, caches);
 
     Ok(())
 }
