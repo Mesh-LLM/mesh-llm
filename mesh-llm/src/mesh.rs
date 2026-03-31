@@ -814,7 +814,7 @@ impl Node {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(1024u32.into())
             .build();
-        let mut builder = Endpoint::builder()
+        let mut builder = Endpoint::empty_builder()
             .secret_key(secret_key)
             .alpns(vec![ALPN_V1.to_vec(), ALPN_V0.to_vec()])
             .transport_config(transport_config);
@@ -971,7 +971,7 @@ impl Node {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(1024u32.into())
             .build();
-        let endpoint = Endpoint::builder()
+        let endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(iroh::endpoint::RelayMode::Disabled)
@@ -3214,8 +3214,10 @@ impl Node {
                 let path_list = iroh::Watcher::get(&mut paths);
                 for path_info in path_list {
                     if path_info.is_selected() {
-                        let rtt = path_info.rtt();
-                        let rtt_ms = rtt.as_millis() as u32;
+                        let rtt_ms = match path_info.rtt() {
+                            Some(rtt) => rtt.as_millis() as u32,
+                            None => continue,
+                        };
                         let path_type = if path_info.is_ip() { "direct" } else { "relay" };
                         if rtt_ms > 0 {
                             eprintln!(
@@ -3625,7 +3627,7 @@ pub(crate) mod tests {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(128u32.into())
             .build();
-        let endpoint = Endpoint::builder()
+        let endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V1.to_vec(), ALPN_V0.to_vec()])
             .transport_config(transport_config)
@@ -4126,7 +4128,7 @@ pub(crate) mod tests {
             .await;
         post_node.start_accepting();
 
-        let legacy_endpoint = Endpoint::builder()
+        let legacy_endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V0.to_vec()])
             .transport_config(
@@ -5669,7 +5671,7 @@ pub(crate) mod tests {
             .await;
         post_node.start_accepting();
 
-        let legacy_endpoint = Endpoint::builder()
+        let legacy_endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V0.to_vec()])
             .transport_config(
@@ -5855,7 +5857,7 @@ pub(crate) mod tests {
             .await;
         post_node.start_accepting();
 
-        let legacy_endpoint = Endpoint::builder()
+        let legacy_endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V0.to_vec()])
             .transport_config(
@@ -6038,7 +6040,7 @@ pub(crate) mod tests {
         node_b.set_mesh_id("three-node-mesh-001".to_string()).await;
         let node_b_id = node_b.id();
 
-        let legacy_endpoint = Endpoint::builder()
+        let legacy_endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V0.to_vec()])
             .transport_config(
@@ -6194,7 +6196,7 @@ pub(crate) mod tests {
         );
 
         // Sub-test A: v1 node connecting to a v0-only endpoint negotiates ALPN_V0
-        let v0_endpoint = Endpoint::builder()
+        let v0_endpoint = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V0.to_vec()])
             .transport_config(
@@ -6256,7 +6258,7 @@ pub(crate) mod tests {
         node_b.start_accepting();
         let node_b_addr = node_b.endpoint.addr();
 
-        let v0_ep2 = Endpoint::builder()
+        let v0_ep2 = Endpoint::empty_builder()
             .secret_key(SecretKey::generate(&mut rand::rng()))
             .alpns(vec![ALPN_V0.to_vec()])
             .transport_config(
