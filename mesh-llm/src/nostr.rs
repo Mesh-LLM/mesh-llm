@@ -17,6 +17,8 @@ pub const DEFAULT_RELAYS: &[&str] = &[
     "wss://relay.damus.io",
     "wss://nos.lol",
     "wss://relay.nostr.band",
+    "wss://nostr.land",
+    "wss://nostr.wine",
 ];
 
 /// What we publish about a mesh.
@@ -124,18 +126,31 @@ pub fn load_or_create_keys() -> Result<Keys> {
     }
 }
 
-/// Delete the Nostr key (forces a new identity on next publish).
+/// Delete the Nostr key and node identity key.  After rotation the
+/// node gets a fresh identity on next start.
 pub fn rotate_keys() -> Result<()> {
-    let path = nostr_key_path()?;
-    if path.exists() {
-        std::fs::remove_file(&path)?;
-        eprintln!(
-            "🔑 Deleted {}. A new key will be generated on next --publish.",
-            path.display()
-        );
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let mesh_dir = home.join(".mesh-llm");
+
+    let nostr_path = nostr_key_path()?;
+    if nostr_path.exists() {
+        std::fs::remove_file(&nostr_path)?;
+        eprintln!("🔑 Deleted {}", nostr_path.display());
     } else {
-        eprintln!("No key to rotate (none exists yet).");
+        eprintln!("No Nostr key to rotate (none exists yet).");
     }
+
+    let node_key_path = mesh_dir.join("key");
+    if node_key_path.exists() {
+        std::fs::remove_file(&node_key_path)?;
+        eprintln!("🔑 Deleted {}", node_key_path.display());
+    } else {
+        eprintln!("No node key to rotate (none exists yet).");
+    }
+
+    eprintln!();
+    eprintln!("✅ Keys rotated. New identities will be generated on next start.");
     Ok(())
 }
 
@@ -247,6 +262,9 @@ pub async fn publish_loop(
 
     let mut delisted = false;
 
+    // Reusable client for solo-convergence discovery checks.
+    let disco = DiscoveryClient::new(&relays).await.ok();
+
     loop {
         let invite_token = node.invite_token();
         let peers = node.peers().await;
@@ -296,7 +314,7 @@ pub async fn publish_loop(
         let my_node_count = gpu_peers + 1; // peers + self
         if gpu_peers == 0 {
             let filter = MeshFilter::default();
-            if let Ok(listings) = discover(&relays, &filter).await {
+            if let Ok(listings) = discover(&relays, &filter, disco.as_ref()).await {
                 let my_npub = publisher.npub();
                 let my_mesh_id = node.mesh_id().await;
 
@@ -460,22 +478,30 @@ pub async fn publish_watchdog(
     let jitter = (rand::random::<u64>() % 20) + 10;
     tokio::time::sleep(Duration::from_secs(jitter)).await;
 
+    // Reusable client for repeated discovery checks.
+    let disco = DiscoveryClient::new(&relays).await.ok();
+
     loop {
         // Check if any listing for our mesh exists on Nostr
         let filter = MeshFilter::default();
-        match discover(&relays, &filter).await {
+        match discover(&relays, &filter, disco.as_ref()).await {
             Ok(meshes) => {
                 let our_peers = node.peers().await;
                 let served = node.models_being_served().await;
+                let our_mesh_id = node.mesh_id().await;
 
-                // Our mesh is "listed" if any Nostr listing shares at least one
-                // model with what we're currently serving.
-                let mesh_listed = if served.is_empty() {
-                    false
-                } else {
+                // Our mesh is "listed" if any Nostr listing carries our mesh_id.
+                // Fall back to model overlap only if we don't have a mesh_id yet.
+                let mesh_listed = if let Some(ref mid) = our_mesh_id {
+                    meshes
+                        .iter()
+                        .any(|m| m.listing.mesh_id.as_deref() == Some(mid.as_str()))
+                } else if !served.is_empty() {
                     meshes
                         .iter()
                         .any(|m| served.iter().any(|s| m.listing.serving.contains(s)))
+                } else {
+                    false
                 };
 
                 if !mesh_listed && (!our_peers.is_empty() || !served.is_empty()) {
@@ -485,13 +511,17 @@ pub async fn publish_watchdog(
                     tokio::time::sleep(Duration::from_secs(backoff)).await;
 
                     // Re-check — maybe another watchdog already took over
-                    if let Ok(recheck) = discover(&relays, &filter).await {
-                        let still_missing = if served.is_empty() {
-                            true
-                        } else {
+                    if let Ok(recheck) = discover(&relays, &filter, disco.as_ref()).await {
+                        let still_missing = if let Some(ref mid) = our_mesh_id {
+                            !recheck
+                                .iter()
+                                .any(|m| m.listing.mesh_id.as_deref() == Some(mid.as_str()))
+                        } else if !served.is_empty() {
                             !recheck
                                 .iter()
                                 .any(|m| served.iter().any(|s| m.listing.serving.contains(s)))
+                        } else {
+                            true
                         };
                         if !still_missing {
                             eprintln!("📡 Someone else took over publishing — standing down");
@@ -579,27 +609,71 @@ impl MeshFilter {
     }
 }
 
-/// Discover meshes from Nostr relays.
-pub async fn discover(relays: &[String], filter: &MeshFilter) -> Result<Vec<DiscoveredMesh>> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+/// A reusable read-only Nostr client for discovery.
+/// Create once, pass to repeated `discover()` calls to avoid opening
+/// new websocket connections and generating throwaway keys every time.
+pub struct DiscoveryClient {
+    client: Client,
+}
 
-    // Anonymous client for read-only discovery
-    let keys = Keys::generate();
-    let client = Client::new(keys);
-    let mut added = 0;
-    for relay in relays {
-        match client.add_relay(relay).await {
-            Ok(_) => added += 1,
-            Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+impl DiscoveryClient {
+    pub async fn new(relays: &[String]) -> Result<Self> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let keys = Keys::generate();
+        let client = Client::new(keys);
+        let mut added = 0;
+        for relay in relays {
+            match client.add_relay(relay).await {
+                Ok(_) => added += 1,
+                Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+            }
         }
+        if added == 0 {
+            anyhow::bail!(
+                "Could not connect to any Nostr relay (tried {})",
+                relays.len()
+            );
+        }
+        client.connect().await;
+        Ok(Self { client })
     }
-    if added == 0 {
-        anyhow::bail!(
-            "Could not connect to any Nostr relay (tried {})",
-            relays.len()
-        );
-    }
-    client.connect().await;
+}
+
+/// Discover meshes from Nostr relays.
+///
+/// If `cached_client` is provided, reuses its connections.  Otherwise
+/// creates (and drops) a one-shot client — fine for the initial
+/// `--auto` join but wasteful in tight loops.
+pub async fn discover(
+    relays: &[String],
+    filter: &MeshFilter,
+    cached_client: Option<&DiscoveryClient>,
+) -> Result<Vec<DiscoveredMesh>> {
+    // Build a temporary client only when no cached one is supplied.
+    let _tmp;
+    let client: &Client = if let Some(cc) = cached_client {
+        &cc.client
+    } else {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let keys = Keys::generate();
+        let c = Client::new(keys);
+        let mut added = 0;
+        for relay in relays {
+            match c.add_relay(relay).await {
+                Ok(_) => added += 1,
+                Err(e) => tracing::warn!("Nostr relay {relay}: {e}"),
+            }
+        }
+        if added == 0 {
+            anyhow::bail!(
+                "Could not connect to any Nostr relay (tried {})",
+                relays.len()
+            );
+        }
+        c.connect().await;
+        _tmp = c;
+        &_tmp
+    };
 
     let nostr_filter = Filter::new()
         .kind(Kind::Custom(MESH_SERVICE_KIND))
@@ -823,22 +897,18 @@ fn model_tiers() -> Vec<(String, f64)> {
     tiers
 }
 
-/// Pick models to SERVE for `--auto` based on VRAM and what's on disk.
-/// Returns models this node should actually load into llama-servers.
+/// Pick the model to SERVE for `--auto` based on VRAM.
+/// Returns a single-element vec (the model this node should load).
 ///
-/// Strategy: one strong generalist + one code specialist when VRAM allows.
-/// MoE models preferred (faster tok/s per VRAM GB). Prefers on-disk models
-/// to avoid download wait. Leaves ~15% VRAM headroom for KV cache.
+/// One model per node. Biggest model that fits with 15% KV cache headroom.
 ///
-/// Packs by VRAM tier:
-///   <13GB:   Qwen3-8B (5G)
-///   13-22GB: Qwen3-8B (5G) + Coder-7B (4.4G)
-///   22-28GB: GLM-4.7-Flash (18G) — MoE, fast, good all-rounder
-///   28-52GB: Qwen3-30B-A3B (17G) + Coder-7B (4.4G)
-///   55-58GB: Qwen2.5-32B (20G) + Qwen3-30B-A3B (17G) + Coder-7B (4.4G)
-///   58-85GB: Qwen2.5-72B (47G)
-///   85-165GB: Qwen2.5-72B (47G) + Coder-32B (20G)
-///   165GB+:  MiniMax-M2.5 (138G)
+/// Tiers:
+///   <8GB:    Qwen3-4B (2.5G)
+///   8-24GB:  Qwen3-8B (5G)
+///   24-50GB: Qwen3.5-27B (17G) — vision + text
+///   50-63GB: GLM-4.7-Flash (18G) — 30B MoE, fast, tool calling
+///   63-179GB: Qwen3-Coder-Next (48G) — frontier coder ~85B
+///   179GB+:  MiniMax-M2.5 (138G) — 456B MoE flagship
 pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     let local_models = crate::models::scan_local_models();
     let tiers = model_tiers();
@@ -853,8 +923,6 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
             .map(|(_, s)| *s)
             .unwrap_or(f64::MAX)
     };
-    let fits = |name: &str, budget: f64| -> bool { size_of(name) <= budget };
-
     let usable = vram_gb * 0.85; // 15% headroom for KV cache
 
     // Opinionated packs — each is (generalist, optional specialist(s))
@@ -864,47 +932,30 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
         models: &'static [&'static str],
     }
     let packs: &[Pack] = &[
-        // Sizes: MiniMax=138G, 72B=47G, Coder-32B=20G, 32B=20G, 30B-A3B=17.3G,
-        //        GLM-Flash=18G, 14B=9G, Qwen3-8B=5G, Coder-7B=4.4G
-        // With 1.1× tier multiplier and 0.85× usable VRAM.
+        // One model per tier. Node serves one model at a time.
         Pack {
-            min_vram: 165.0,
+            min_vram: 179.0,
             models: &["MiniMax-M2.5-Q4_K_M"],
         },
         Pack {
-            min_vram: 85.0,
-            models: &[
-                "Qwen2.5-72B-Instruct-Q4_K_M",
-                "Qwen2.5-Coder-32B-Instruct-Q4_K_M",
-            ],
+            min_vram: 63.0,
+            models: &["Qwen3-Coder-Next-Q4_K_M"],
         },
         Pack {
-            min_vram: 58.0,
-            models: &["Qwen2.5-72B-Instruct-Q4_K_M"],
-        },
-        Pack {
-            min_vram: 55.0,
-            models: &[
-                "Qwen2.5-32B-Instruct-Q4_K_M",
-                "Qwen3-30B-A3B-Q4_K_M",
-                "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
-            ],
-        },
-        Pack {
-            min_vram: 28.0,
-            models: &["Qwen3-30B-A3B-Q4_K_M", "Qwen2.5-Coder-7B-Instruct-Q4_K_M"],
-        },
-        Pack {
-            min_vram: 22.0,
+            min_vram: 50.0,
             models: &["GLM-4.7-Flash-Q4_K_M"],
         },
         Pack {
-            min_vram: 13.0,
-            models: &["Qwen3-8B-Q4_K_M", "Qwen2.5-Coder-7B-Instruct-Q4_K_M"],
+            min_vram: 24.0,
+            models: &["Qwen3.5-27B-Q4_K_M"],
+        },
+        Pack {
+            min_vram: 8.0,
+            models: &["Qwen3-8B-Q4_K_M"],
         },
         Pack {
             min_vram: 0.0,
-            models: &["Qwen3-8B-Q4_K_M"],
+            models: &["Qwen3-4B-Q4_K_M"],
         },
     ];
 
@@ -920,7 +971,7 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
         }
     }
 
-    // Fallback: find the largest single model that fits, prefer on-disk
+    // Fallback: largest single model that fits, prefer on-disk
     let on_disk_fit = tiers
         .iter()
         .find(|(name, min_vram)| *min_vram <= usable && on_disk(name));
@@ -929,20 +980,7 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
     let primary = on_disk_fit
         .or(any_fit)
         .map(|(name, _)| name.to_string())
-        .unwrap_or_else(|| "Qwen2.5-3B-Instruct-Q4_K_M".into());
-
-    // Try to add a code specialist if there's room
-    let remaining = usable - size_of(&primary);
-    let coders = [
-        "Qwen2.5-Coder-32B-Instruct-Q4_K_M",
-        "Qwen2.5-Coder-14B-Instruct-Q4_K_M",
-        "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
-    ];
-    for coder in coders {
-        if coder != primary && fits(coder, remaining) {
-            return vec![primary, coder.to_string()];
-        }
-    }
+        .unwrap_or_else(|| "Qwen3-4B-Q4_K_M".into());
 
     vec![primary]
 }
@@ -952,10 +990,11 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
 /// NOT served by this node — just demand hints for the mesh.
 pub fn demand_seed_models() -> Vec<String> {
     vec![
+        "Qwen3-Coder-Next-Q4_K_M".into(),
+        "Qwen3.5-27B-Q4_K_M".into(),
         "GLM-4.7-Flash-Q4_K_M".into(),
-        "Qwen3-30B-A3B-Q4_K_M".into(),
         "Qwen3-8B-Q4_K_M".into(),
-        "Qwen2.5-3B-Instruct-Q4_K_M".into(),
+        "Qwen3-4B-Q4_K_M".into(),
         "Qwen3-0.6B-Q4_K_M".into(),
     ]
 }
@@ -977,82 +1016,66 @@ mod auto_pack_tests {
     use super::*;
 
     #[test]
+    fn pack_4gb_starter() {
+        let pack = auto_model_pack(4.0);
+        assert_eq!(pack, vec!["Qwen3-4B-Q4_K_M"]);
+    }
+
+    #[test]
     fn pack_8gb_single_model() {
         let pack = auto_model_pack(8.0);
-        assert_eq!(pack.len(), 1);
-        assert_eq!(pack[0], "Qwen3-8B-Q4_K_M");
+        assert_eq!(pack, vec!["Qwen3-8B-Q4_K_M"]);
     }
 
     #[test]
-    fn pack_16gb_dual_model() {
+    fn pack_16gb_single() {
         let pack = auto_model_pack(16.0);
-        assert_eq!(pack.len(), 2);
-        assert_eq!(pack[0], "Qwen3-8B-Q4_K_M");
-        assert_eq!(pack[1], "Qwen2.5-Coder-7B-Instruct-Q4_K_M");
+        assert_eq!(pack, vec!["Qwen3-8B-Q4_K_M"]);
     }
 
     #[test]
-    fn pack_24gb_glm_flash() {
+    fn pack_24gb_vision() {
         let pack = auto_model_pack(24.0);
-        assert_eq!(pack.len(), 1);
-        assert_eq!(pack[0], "GLM-4.7-Flash-Q4_K_M");
+        assert_eq!(pack, vec!["Qwen3.5-27B-Q4_K_M"]);
     }
 
     #[test]
-    fn pack_32gb_generalist_plus_coder() {
-        let pack = auto_model_pack(32.0);
-        assert_eq!(pack.len(), 2);
-        assert_eq!(pack[0], "Qwen3-30B-A3B-Q4_K_M");
-        assert_eq!(pack[1], "Qwen2.5-Coder-7B-Instruct-Q4_K_M");
+    fn pack_50gb_glm_flash() {
+        let pack = auto_model_pack(50.0);
+        assert_eq!(pack, vec!["GLM-4.7-Flash-Q4_K_M"]);
     }
 
     #[test]
-    fn pack_52gb_generalist_plus_coder() {
-        // 52GB isn't enough for triple pack (needs 55+), gets dual instead
-        let pack = auto_model_pack(52.0);
-        assert_eq!(pack.len(), 2);
-        assert_eq!(pack[0], "Qwen3-30B-A3B-Q4_K_M");
-        assert_eq!(pack[1], "Qwen2.5-Coder-7B-Instruct-Q4_K_M");
+    fn pack_63gb_frontier_coder() {
+        let pack = auto_model_pack(63.0);
+        assert_eq!(pack, vec!["Qwen3-Coder-Next-Q4_K_M"]);
     }
 
     #[test]
-    fn pack_55gb_triple() {
-        let pack = auto_model_pack(55.0);
-        assert_eq!(pack.len(), 3);
-        assert!(pack.contains(&"Qwen2.5-32B-Instruct-Q4_K_M".to_string()));
-        assert!(pack.contains(&"Qwen3-30B-A3B-Q4_K_M".to_string()));
-        assert!(pack.contains(&"Qwen2.5-Coder-7B-Instruct-Q4_K_M".to_string()));
-    }
-
-    #[test]
-    fn pack_72gb_frontier() {
-        let pack = auto_model_pack(72.0);
-        assert_eq!(pack.len(), 1);
-        assert_eq!(pack[0], "Qwen2.5-72B-Instruct-Q4_K_M");
-    }
-
-    #[test]
-    fn pack_96gb_frontier_plus_coder() {
-        let pack = auto_model_pack(96.0);
-        assert_eq!(pack.len(), 2);
-        assert_eq!(pack[0], "Qwen2.5-72B-Instruct-Q4_K_M");
-        assert_eq!(pack[1], "Qwen2.5-Coder-32B-Instruct-Q4_K_M");
+    fn pack_85gb_frontier_coder() {
+        let pack = auto_model_pack(85.0);
+        assert_eq!(pack, vec!["Qwen3-Coder-Next-Q4_K_M"]);
     }
 
     #[test]
     fn pack_206gb_minimax() {
         let pack = auto_model_pack(206.0);
-        assert_eq!(pack.len(), 1);
-        assert_eq!(pack[0], "MiniMax-M2.5-Q4_K_M");
+        assert_eq!(pack, vec!["MiniMax-M2.5-Q4_K_M"]);
+    }
+
+    #[test]
+    fn pack_between_tiers_falls_through() {
+        // 40GB: below 50GB tier, falls to 24GB tier (Qwen3.5-27B)
+        let pack = auto_model_pack(40.0);
+        assert_eq!(pack, vec!["Qwen3.5-27B-Q4_K_M"]);
     }
 
     #[test]
     fn demand_seeds_are_separate() {
         let seeds = demand_seed_models();
         assert!(seeds.len() >= 4);
-        // Seeds should cover small to large
         assert!(seeds.contains(&"Qwen3-0.6B-Q4_K_M".to_string()));
-        assert!(seeds.contains(&"GLM-4.7-Flash-Q4_K_M".to_string()));
+        assert!(seeds.contains(&"Qwen3-Coder-Next-Q4_K_M".to_string()));
     }
 
     #[test]
@@ -1062,16 +1085,651 @@ mod auto_pack_tests {
         let seeds = demand_seed_models();
         // Pack models come first
         for m in &pack {
-            assert!(all.contains(m));
+            assert!(
+                all.contains(m),
+                "pack model {m} missing from default_models"
+            );
         }
         // Seeds are also present
         for m in &seeds {
-            assert!(all.contains(m));
+            assert!(
+                all.contains(m),
+                "seed model {m} missing from default_models"
+            );
         }
         // No duplicates
         let mut deduped = all.clone();
         deduped.sort();
         deduped.dedup();
         assert_eq!(all.len(), deduped.len());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests: score_mesh, smart_auto, MeshFilter
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod scoring_tests {
+    use super::*;
+
+    fn make_mesh(
+        name: Option<&str>,
+        mesh_id: Option<&str>,
+        serving: &[&str],
+        node_count: usize,
+        vram: u64,
+        clients: usize,
+        max_clients: usize,
+    ) -> DiscoveredMesh {
+        DiscoveredMesh {
+            listing: MeshListing {
+                invite_token: format!("invite-{}", mesh_id.unwrap_or("test")),
+                serving: serving.iter().map(|s| s.to_string()).collect(),
+                wanted: vec![],
+                on_disk: vec![],
+                total_vram_bytes: vram,
+                node_count,
+                client_count: clients,
+                max_clients,
+                name: name.map(|s| s.to_string()),
+                region: None,
+                mesh_id: mesh_id.map(|s| s.to_string()),
+            },
+            publisher_npub: format!("npub-{}", mesh_id.unwrap_or("test")),
+            published_at: 1000,
+            expires_at: Some(2000),
+        }
+    }
+
+    #[test]
+    fn score_community_mesh_bonus() {
+        let mesh = make_mesh(
+            Some("mesh-llm"),
+            Some("abc"),
+            &["Qwen3-8B-Q4_K_M"],
+            3,
+            48_000_000_000,
+            1,
+            10,
+        );
+        let score = score_mesh(&mesh, 1500, None);
+        // base(100) + community(300) + headroom + nodes(15) + models(10)
+        assert!(score > 400, "community mesh should score high, got {score}");
+    }
+
+    #[test]
+    fn score_private_mesh_penalty() {
+        let mesh = make_mesh(
+            Some("bobs-cluster"),
+            Some("xyz"),
+            &["Qwen3-8B-Q4_K_M"],
+            3,
+            48_000_000_000,
+            0,
+            0,
+        );
+        let score = score_mesh(&mesh, 1500, None);
+        // base(100) - private(200) + nodes + models = low
+        assert!(score < 100, "private mesh should score low, got {score}");
+    }
+
+    #[test]
+    fn score_full_mesh_penalty() {
+        let mesh = make_mesh(
+            None,
+            Some("full"),
+            &["Qwen3-8B-Q4_K_M"],
+            2,
+            16_000_000_000,
+            5,
+            5,
+        );
+        let score = score_mesh(&mesh, 1500, None);
+        assert!(score < 0, "full mesh should score negative, got {score}");
+    }
+
+    #[test]
+    fn score_sticky_mesh_bonus() {
+        let mesh = make_mesh(
+            None,
+            Some("my-mesh"),
+            &["Qwen3-8B-Q4_K_M"],
+            2,
+            16_000_000_000,
+            0,
+            0,
+        );
+        let score_sticky = score_mesh(&mesh, 1500, Some("my-mesh"));
+        let score_fresh = score_mesh(&mesh, 1500, None);
+        assert!(
+            score_sticky > score_fresh + 400,
+            "sticky bonus should be large, sticky={score_sticky} fresh={score_fresh}"
+        );
+    }
+
+    #[test]
+    fn score_more_nodes_better() {
+        let small = make_mesh(
+            None,
+            Some("s"),
+            &["Qwen3-8B-Q4_K_M"],
+            1,
+            8_000_000_000,
+            0,
+            0,
+        );
+        let big = make_mesh(
+            None,
+            Some("b"),
+            &["Qwen3-8B-Q4_K_M"],
+            5,
+            40_000_000_000,
+            0,
+            0,
+        );
+        assert!(score_mesh(&big, 1500, None) > score_mesh(&small, 1500, None));
+    }
+
+    #[test]
+    fn score_more_models_better() {
+        let one = make_mesh(
+            None,
+            Some("1"),
+            &["Qwen3-8B-Q4_K_M"],
+            2,
+            16_000_000_000,
+            0,
+            0,
+        );
+        let two = make_mesh(
+            None,
+            Some("2"),
+            &["Qwen3-8B-Q4_K_M", "Qwen3-32B-Q4_K_M"],
+            2,
+            40_000_000_000,
+            0,
+            0,
+        );
+        assert!(score_mesh(&two, 1500, None) > score_mesh(&one, 1500, None));
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    fn make_mesh_for_filter(
+        serving: &[&str],
+        wanted: &[&str],
+        on_disk: &[&str],
+        vram: u64,
+        region: Option<&str>,
+    ) -> DiscoveredMesh {
+        DiscoveredMesh {
+            listing: MeshListing {
+                invite_token: "tok".into(),
+                serving: serving.iter().map(|s| s.to_string()).collect(),
+                wanted: wanted.iter().map(|s| s.to_string()).collect(),
+                on_disk: on_disk.iter().map(|s| s.to_string()).collect(),
+                total_vram_bytes: vram,
+                node_count: 1,
+                client_count: 0,
+                max_clients: 0,
+                name: None,
+                region: region.map(|s| s.to_string()),
+                mesh_id: None,
+            },
+            publisher_npub: "npub-test".into(),
+            published_at: 1000,
+            expires_at: Some(2000),
+        }
+    }
+
+    #[test]
+    fn filter_default_matches_all() {
+        let m = make_mesh_for_filter(&["Qwen3-8B-Q4_K_M"], &[], &[], 8_000_000_000, None);
+        assert!(MeshFilter::default().matches(&m));
+    }
+
+    #[test]
+    fn filter_model_serving() {
+        let m = make_mesh_for_filter(&["Qwen3-8B-Q4_K_M"], &[], &[], 8_000_000_000, None);
+        let f = MeshFilter {
+            model: Some("qwen3-8b".into()),
+            ..Default::default()
+        };
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn filter_model_wanted() {
+        let m = make_mesh_for_filter(&[], &["Qwen3-32B-Q4_K_M"], &[], 8_000_000_000, None);
+        let f = MeshFilter {
+            model: Some("32b".into()),
+            ..Default::default()
+        };
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn filter_model_on_disk() {
+        let m = make_mesh_for_filter(&[], &[], &["MiniMax-M2.5-Q4_K_M"], 8_000_000_000, None);
+        let f = MeshFilter {
+            model: Some("minimax".into()),
+            ..Default::default()
+        };
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn filter_model_no_match() {
+        let m = make_mesh_for_filter(&["Qwen3-8B-Q4_K_M"], &[], &[], 8_000_000_000, None);
+        let f = MeshFilter {
+            model: Some("llama".into()),
+            ..Default::default()
+        };
+        assert!(!f.matches(&m));
+    }
+
+    #[test]
+    fn filter_min_vram() {
+        let m = make_mesh_for_filter(&[], &[], &[], 8_000_000_000, None);
+        let pass = MeshFilter {
+            min_vram_gb: Some(5.0),
+            ..Default::default()
+        };
+        let fail = MeshFilter {
+            min_vram_gb: Some(16.0),
+            ..Default::default()
+        };
+        assert!(pass.matches(&m));
+        assert!(!fail.matches(&m));
+    }
+
+    #[test]
+    fn filter_region() {
+        let m = make_mesh_for_filter(&[], &[], &[], 8_000_000_000, Some("us-east"));
+        let pass = MeshFilter {
+            region: Some("us-east".into()),
+            ..Default::default()
+        };
+        let fail = MeshFilter {
+            region: Some("eu-west".into()),
+            ..Default::default()
+        };
+        assert!(pass.matches(&m));
+        assert!(!fail.matches(&m));
+    }
+
+    #[test]
+    fn filter_region_case_insensitive() {
+        let m = make_mesh_for_filter(&[], &[], &[], 8_000_000_000, Some("US-East"));
+        let f = MeshFilter {
+            region: Some("us-east".into()),
+            ..Default::default()
+        };
+        assert!(f.matches(&m));
+    }
+
+    #[test]
+    fn filter_combined() {
+        let m = make_mesh_for_filter(
+            &["Qwen3-8B-Q4_K_M"],
+            &[],
+            &[],
+            16_000_000_000,
+            Some("us-east"),
+        );
+        let pass = MeshFilter {
+            model: Some("qwen3".into()),
+            min_vram_gb: Some(10.0),
+            region: Some("us-east".into()),
+        };
+        let fail_model = MeshFilter {
+            model: Some("llama".into()),
+            min_vram_gb: Some(10.0),
+            region: Some("us-east".into()),
+        };
+        assert!(pass.matches(&m));
+        assert!(!fail_model.matches(&m));
+    }
+}
+
+#[cfg(test)]
+mod smart_auto_tests {
+    use super::*;
+
+    fn make_mesh(
+        name: Option<&str>,
+        mesh_id: &str,
+        serving: &[&str],
+        node_count: usize,
+        vram: u64,
+        clients: usize,
+        max_clients: usize,
+    ) -> DiscoveredMesh {
+        DiscoveredMesh {
+            listing: MeshListing {
+                invite_token: format!("invite-{mesh_id}"),
+                serving: serving.iter().map(|s| s.to_string()).collect(),
+                wanted: vec![],
+                on_disk: vec![],
+                total_vram_bytes: vram,
+                node_count,
+                client_count: clients,
+                max_clients,
+                name: name.map(|s| s.to_string()),
+                region: None,
+                mesh_id: Some(mesh_id.to_string()),
+            },
+            publisher_npub: format!("npub-{mesh_id}"),
+            published_at: 1000,
+            expires_at: Some(2000),
+        }
+    }
+
+    #[test]
+    fn smart_auto_prefers_community_mesh() {
+        let meshes = vec![
+            make_mesh(
+                Some("mesh-llm"),
+                "aaa",
+                &["Qwen3-8B-Q4_K_M"],
+                3,
+                48_000_000_000,
+                1,
+                10,
+            ),
+            make_mesh(
+                Some("bobs-cluster"),
+                "bbb",
+                &["Qwen3-8B-Q4_K_M"],
+                5,
+                80_000_000_000,
+                0,
+                0,
+            ),
+        ];
+        match smart_auto(&meshes, 8.0, None) {
+            AutoDecision::Join { candidates } => {
+                assert!(!candidates.is_empty());
+                // Community mesh should be first
+                assert_eq!(candidates[0].0, "invite-aaa");
+            }
+            AutoDecision::StartNew { .. } => panic!("should join, not start new"),
+        }
+    }
+
+    #[test]
+    fn smart_auto_filters_full_mesh() {
+        let meshes = vec![make_mesh(
+            None,
+            "full",
+            &["Qwen3-8B-Q4_K_M"],
+            2,
+            16_000_000_000,
+            10,
+            10,
+        )];
+        match smart_auto(&meshes, 8.0, None) {
+            AutoDecision::Join { candidates } => {
+                // Full mesh should still appear (score might be negative but target_name is None
+                // so it filters on score > 0)
+                assert!(candidates.is_empty(), "full mesh should be filtered out");
+            }
+            AutoDecision::StartNew { models } => {
+                assert!(!models.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn smart_auto_target_name_filters() {
+        let meshes = vec![
+            make_mesh(
+                Some("mesh-llm"),
+                "aaa",
+                &["Qwen3-8B-Q4_K_M"],
+                3,
+                48_000_000_000,
+                1,
+                10,
+            ),
+            make_mesh(
+                Some("private"),
+                "bbb",
+                &["Qwen3-32B-Q4_K_M"],
+                2,
+                40_000_000_000,
+                0,
+                0,
+            ),
+        ];
+        match smart_auto(&meshes, 8.0, Some("private")) {
+            AutoDecision::Join { candidates } => {
+                assert!(!candidates.is_empty());
+                // Only "private" mesh should match
+                for (token, _) in &candidates {
+                    assert_eq!(token, "invite-bbb");
+                }
+            }
+            AutoDecision::StartNew { .. } => panic!("should find the named mesh"),
+        }
+    }
+
+    #[test]
+    fn smart_auto_empty_starts_new() {
+        match smart_auto(&[], 24.0, None) {
+            AutoDecision::StartNew { models } => {
+                assert!(!models.is_empty());
+            }
+            AutoDecision::Join { .. } => panic!("no meshes should mean start new"),
+        }
+    }
+
+    #[test]
+    fn smart_auto_sticky_preference() {
+        // Save a fake last-mesh
+        let dir = dirs::home_dir().unwrap().join(".mesh-llm");
+        let path = dir.join("last-mesh");
+        let had_file = path.exists();
+        let old_content = if had_file {
+            std::fs::read_to_string(&path).ok()
+        } else {
+            None
+        };
+
+        // Write our test mesh_id
+        std::fs::create_dir_all(&dir).ok();
+        std::fs::write(&path, "sticky-mesh").ok();
+
+        let meshes = vec![
+            make_mesh(None, "other", &["Qwen3-8B-Q4_K_M"], 3, 24_000_000_000, 0, 0),
+            make_mesh(
+                None,
+                "sticky-mesh",
+                &["Qwen3-8B-Q4_K_M"],
+                2,
+                16_000_000_000,
+                0,
+                0,
+            ),
+        ];
+        let result = smart_auto(&meshes, 8.0, None);
+
+        // Restore
+        if let Some(old) = old_content {
+            std::fs::write(&path, old).ok();
+        } else if had_file {
+            // shouldn't happen but be safe
+        } else {
+            std::fs::remove_file(&path).ok();
+        }
+
+        match result {
+            AutoDecision::Join { candidates } => {
+                assert!(!candidates.is_empty());
+                // Sticky mesh should be first despite fewer nodes
+                assert_eq!(candidates[0].0, "invite-sticky-mesh");
+            }
+            AutoDecision::StartNew { .. } => panic!("should join"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod rotate_key_tests {
+    use super::*;
+    use std::fs;
+
+    // rotate_keys uses hardcoded paths (~/.mesh-llm/), so we test the logic
+    // by verifying files are created/deleted in the real location.
+    // This is safe because rotate_keys only deletes key and nostr.nsec.
+    //
+    // Both scenarios (keys present + keys missing) run in a single test to
+    // avoid a race — Rust runs tests in parallel and both would touch the
+    // same files.
+
+    #[test]
+    fn rotate_deletes_both_keys_and_handles_missing() {
+        let dir = dirs::home_dir().unwrap().join(".mesh-llm");
+        fs::create_dir_all(&dir).ok();
+
+        let key_path = dir.join("key");
+        let nsec_path = dir.join("nostr.nsec");
+
+        // Save originals so we can restore after the test.
+        let orig_key = if key_path.exists() {
+            Some(fs::read(&key_path).unwrap())
+        } else {
+            None
+        };
+        let orig_nsec = if nsec_path.exists() {
+            Some(fs::read(&nsec_path).unwrap())
+        } else {
+            None
+        };
+
+        // --- Scenario 1: both keys exist → rotate deletes them ---
+        fs::write(&key_path, b"test-node-key").unwrap();
+        fs::write(&nsec_path, b"test-nostr-nsec").unwrap();
+
+        let result = rotate_keys();
+        assert!(result.is_ok(), "rotate should succeed when keys exist");
+        assert!(!key_path.exists(), "node key should be deleted");
+        assert!(!nsec_path.exists(), "nostr key should be deleted");
+
+        // --- Scenario 2: no keys on disk → rotate still succeeds ---
+        // (files were just deleted above, so the directory is clean)
+        let result = rotate_keys();
+        assert!(result.is_ok(), "rotate should succeed even with no keys");
+
+        // Restore originals.
+        if let Some(k) = orig_key {
+            fs::write(&key_path, k).ok();
+        }
+        if let Some(n) = orig_nsec {
+            fs::write(&nsec_path, n).ok();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Integration test — publish/discover against real Nostr relays
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+
+    /// End-to-end: two publishers advertise the same mesh, a reusable
+    /// DiscoveryClient finds both listings, and fields round-trip correctly.
+    /// Covers publish, discover, multi-publisher, and client reuse in one test.
+    #[tokio::test]
+    async fn publish_discover_round_trip() {
+        let relays: Vec<String> = DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect();
+        let mesh_name = format!("mesh-llm-test-{}", rand::random::<u32>());
+        let mesh_id = format!("test-id-{}", rand::random::<u32>());
+
+        // Publisher A
+        let keys_a = Keys::generate();
+        let pub_a = Publisher::new(keys_a.clone(), &relays)
+            .await
+            .expect("pub_a");
+        let listing_a = MeshListing {
+            invite_token: "invite-a".into(),
+            serving: vec!["Qwen3-8B-Q4_K_M".into()],
+            wanted: vec![],
+            on_disk: vec![],
+            total_vram_bytes: 16_000_000_000,
+            node_count: 2,
+            client_count: 0,
+            max_clients: 0,
+            name: Some(mesh_name.clone()),
+            region: Some("test-region".into()),
+            mesh_id: Some(mesh_id.clone()),
+        };
+        pub_a.publish(&listing_a, 120).await.expect("publish A");
+
+        // Publisher B — same mesh, different invite token
+        let keys_b = Keys::generate();
+        let pub_b = Publisher::new(keys_b.clone(), &relays)
+            .await
+            .expect("pub_b");
+        let mut listing_b = listing_a.clone();
+        listing_b.invite_token = "invite-b".into();
+        pub_b.publish(&listing_b, 120).await.expect("publish B");
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // Discover with reusable client (tests DiscoveryClient + discover)
+        let dc = DiscoveryClient::new(&relays).await.expect("dc");
+        let meshes = discover(&relays, &MeshFilter::default(), Some(&dc))
+            .await
+            .expect("discover");
+
+        let found: Vec<_> = meshes
+            .iter()
+            .filter(|m| m.listing.mesh_id.as_deref() == Some(mesh_id.as_str()))
+            .collect();
+        assert!(
+            found.len() >= 2,
+            "should find both publishers for mesh_id={mesh_id}, found {}",
+            found.len()
+        );
+
+        // Verify fields round-tripped
+        let m = &found[0];
+        assert_eq!(m.listing.name.as_deref(), Some(mesh_name.as_str()));
+        assert_eq!(m.listing.serving, vec!["Qwen3-8B-Q4_K_M"]);
+        assert_eq!(m.listing.node_count, 2);
+        assert_eq!(m.listing.total_vram_bytes, 16_000_000_000);
+
+        // Both invite tokens present
+        let tokens: Vec<_> = found
+            .iter()
+            .map(|m| m.listing.invite_token.as_str())
+            .collect();
+        assert!(
+            tokens.contains(&"invite-a"),
+            "missing invite-a in {tokens:?}"
+        );
+        assert!(
+            tokens.contains(&"invite-b"),
+            "missing invite-b in {tokens:?}"
+        );
+
+        // Second discover with same client still works
+        let r2 = discover(&relays, &MeshFilter::default(), Some(&dc))
+            .await
+            .expect("second discover");
+        let found2: Vec<_> = r2
+            .iter()
+            .filter(|m| m.listing.mesh_id.as_deref() == Some(mesh_id.as_str()))
+            .collect();
+        assert!(found2.len() >= 2, "reused client should still find both");
+
+        // Cleanup
+        pub_a.unpublish().await.ok();
+        pub_b.unpublish().await.ok();
     }
 }

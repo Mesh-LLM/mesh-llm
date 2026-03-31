@@ -90,8 +90,7 @@ echo "llama.cpp ROCm build complete: $BUILD_DIR/bin/"
 
 if [[ -d "$MESH_DIR" ]]; then
     if [[ -d "$UI_DIR" ]]; then
-        echo "Building mesh-llm UI..."
-        (cd "$UI_DIR" && npm ci && npm run build)
+        "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
     fi
     echo "Building mesh-llm..."
     (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm)

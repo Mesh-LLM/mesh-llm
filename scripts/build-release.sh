@@ -101,11 +101,7 @@ echo "Building llama.cpp..."
 cmake --build "$BUILD_DIR" --config Release --parallel "$(detect_jobs)"
 
 echo "Building UI..."
-(
-    cd "$UI_DIR"
-    npm ci
-    npm run build
-)
+"$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
 
 echo "Building mesh-llm..."
 (

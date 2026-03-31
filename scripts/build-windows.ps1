@@ -102,6 +102,85 @@ function Invoke-NativeCommand {
     }
 }
 
+function Test-UiBuildRequired {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$UiDirectory
+    )
+
+    $distDir = Join-Path $UiDirectory "dist"
+    if (-not (Test-Path $distDir)) {
+        return $true
+    }
+
+    $distFiles = Get-ChildItem -Path $distDir -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $distFiles) {
+        return $true
+    }
+
+    $distTimestampUtc = (Get-Item $distDir).LastWriteTimeUtc
+    $uiBuildInputs = @(
+        (Join-Path $UiDirectory "package.json"),
+        (Join-Path $UiDirectory "package-lock.json"),
+        (Join-Path $UiDirectory "vite.config.ts"),
+        (Join-Path $UiDirectory "tsconfig.json"),
+        (Join-Path $UiDirectory "postcss.config.cjs"),
+        (Join-Path $UiDirectory "tailwind.config.ts"),
+        (Join-Path $UiDirectory "index.html"),
+        (Join-Path $UiDirectory "src"),
+        (Join-Path $UiDirectory "public")
+    )
+
+    foreach ($path in $uiBuildInputs) {
+        if (-not (Test-Path $path)) {
+            continue
+        }
+
+        $item = Get-Item $path
+        if ($item.PSIsContainer) {
+            $newerInput = Get-ChildItem -Path $path -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.LastWriteTimeUtc -gt $distTimestampUtc } |
+                Select-Object -First 1
+            if ($newerInput) {
+                return $true
+            }
+            continue
+        }
+
+        if ($item.LastWriteTimeUtc -gt $distTimestampUtc) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Test-NpmInstallRequired {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$UiDirectory
+    )
+
+    $nodeModulesDir = Join-Path $UiDirectory "node_modules"
+    if (-not (Test-Path $nodeModulesDir)) {
+        return $true
+    }
+
+    $nodeModulesTimestampUtc = (Get-Item $nodeModulesDir).LastWriteTimeUtc
+    foreach ($manifestName in @("package.json", "package-lock.json")) {
+        $manifestPath = Join-Path $UiDirectory $manifestName
+        if (-not (Test-Path $manifestPath)) {
+            continue
+        }
+
+        if ((Get-Item $manifestPath).LastWriteTimeUtc -gt $nodeModulesTimestampUtc) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Normalize-RecipeArgument {
     param(
         [AllowEmptyString()]
@@ -594,13 +673,19 @@ Invoke-InRepo {
     Write-Host "Build complete: $buildDir\bin\"
 
     if (Test-Path $meshUiDir) {
-        Write-Host "Building mesh-llm UI..."
-        Push-Location $meshUiDir
-        try {
-            Invoke-NativeCommand "npm" @("ci")
-            Invoke-NativeCommand "npm" @("run", "build")
-        } finally {
-            Pop-Location
+        if (Test-UiBuildRequired -UiDirectory $meshUiDir) {
+            Write-Host "Building mesh-llm UI..."
+            Push-Location $meshUiDir
+            try {
+                if (Test-NpmInstallRequired -UiDirectory $meshUiDir) {
+                    Invoke-NativeCommand "npm" @("ci")
+                }
+                Invoke-NativeCommand "npm" @("run", "build")
+            } finally {
+                Pop-Location
+            }
+        } else {
+            Write-Host "Skipping mesh-llm UI build; dist is up to date."
         }
     }
 

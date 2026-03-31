@@ -90,12 +90,7 @@ echo "Build complete: $BUILD_DIR/bin/"
 if [[ -d "$MESH_DIR" ]]; then
     echo "Building mesh-llm..."
     if [[ -d "$UI_DIR" ]]; then
-        echo "Building mesh-llm UI..."
-        (
-            cd "$UI_DIR"
-            npm ci
-            npm run build
-        )
+        "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
     fi
 
     if [[ -n "$rustc_wrapper" ]]; then
