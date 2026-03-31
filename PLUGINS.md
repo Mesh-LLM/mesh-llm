@@ -271,6 +271,14 @@ The plugin must provide:
 
 The host currently requires protocol version equality.
 
+Current state:
+
+- the host speaks `meshllm.plugin.v2`
+- `PROTOCOL_VERSION` is `2`
+- older `meshllm.plugin.v1` plugins are rejected at initialize time
+
+This is currently an explicit breaking change, not a compatibility bridge.
+
 ### Mesh Events
 
 The host can send `MeshEvent` envelopes into every running plugin.
@@ -564,4 +572,4 @@ Known gaps:
 2. Restart policy and crash supervision are not implemented.
 3. A standalone example plugin outside the main `mesh-llm` executable is still missing.
 4. Cross-platform transport testing, especially Windows named pipes, needs more coverage.
-5. Plugin protocol version negotiation is still stricter than the long-term design likely wants.
+5. Plugin protocol version negotiation is strict equality today; v1 plugins are intentionally not supported by the current host.
