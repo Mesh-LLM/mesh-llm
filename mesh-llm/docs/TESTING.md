@@ -97,7 +97,7 @@ mesh-llm --client --join <TOKEN> --port 9555
 ### 9. Drop a model
 
 ```bash
-mesh-llm drop GLM-4.7-Flash-Q4_K_M
+mesh-llm runtime unload GLM-4.7-Flash-Q4_K_M
 ```
 
 - Node serving that model exits cleanly
@@ -111,10 +111,10 @@ mesh-llm drop GLM-4.7-Flash-Q4_K_M
 mesh-llm --model Qwen2.5-0.5B-Instruct-Q4_K_M --console
 
 # Operator surface
-mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
-mesh-llm models
+mesh-llm runtime load Llama-3.2-1B-Instruct-Q4_K_M
+mesh-llm runtime
 mesh-llm ps
-mesh-llm drop Llama-3.2-1B-Instruct-Q4_K_M
+mesh-llm runtime unload Llama-3.2-1B-Instruct-Q4_K_M
 
 # REST surface
 curl localhost:3131/api/runtime
@@ -125,7 +125,7 @@ curl -X POST localhost:3131/api/runtime/models \
 curl -X DELETE localhost:3131/api/runtime/models/Llama-3.2-1B-Instruct-Q4_K_M
 ```
 
-- `mesh-llm models` shows the local models currently backed by running inference processes
+- `mesh-llm runtime` shows the local models currently backed by running inference processes
 - `mesh-llm ps` shows backend, port, pid, and whether each process is startup-managed or runtime-managed
 - `GET /api/runtime` and `GET /api/runtime/processes` agree with the CLI output
 - Loading a small local model adds it to `/v1/models` without restarting the node

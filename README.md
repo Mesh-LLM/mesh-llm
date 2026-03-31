@@ -421,9 +421,9 @@ Catalog models are downloaded with resume support — if a download is interrupt
 Stage one supports local-only hot load/unload on a running node.
 
 ```bash
-mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
-mesh-llm drop Llama-3.2-1B-Instruct-Q4_K_M
-mesh-llm models
+mesh-llm runtime load Llama-3.2-1B-Instruct-Q4_K_M
+mesh-llm runtime unload Llama-3.2-1B-Instruct-Q4_K_M
+mesh-llm runtime
 mesh-llm ps
 ```
 

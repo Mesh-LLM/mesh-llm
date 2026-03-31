@@ -194,7 +194,13 @@ enum Command {
         #[arg(long)]
         draft: bool,
     },
+    /// Inspect and manage local runtime-served models.
+    Runtime {
+        #[command(subcommand)]
+        command: Option<RuntimeCommand>,
+    },
     /// Load a local-only model into a running mesh-llm instance.
+    #[command(hide = true)]
     Load {
         /// Model name/path/url to load
         name: String,
@@ -203,6 +209,7 @@ enum Command {
         port: u16,
     },
     /// Drop a local runtime-loaded model from a running mesh-llm instance.
+    #[command(hide = true)]
     Drop {
         /// Model name to drop
         name: String,
@@ -211,6 +218,7 @@ enum Command {
         port: u16,
     },
     /// Show locally served models on a running mesh-llm instance.
+    #[command(hide = true)]
     Models {
         /// Console/API port of the running mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
@@ -307,6 +315,33 @@ enum Command {
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RuntimeCommand {
+    /// Show locally served runtime status on a running mesh-llm instance.
+    Status {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
+    /// Load a local-only model into a running mesh-llm instance.
+    Load {
+        /// Model name/path/url to load
+        name: String,
+        /// API port of the running mesh-llm instance (default: 9337)
+        #[arg(long, default_value = "9337")]
+        port: u16,
+    },
+    /// Unload a local runtime-loaded model from a running mesh-llm instance.
+    #[command(alias = "drop")]
+    Unload {
+        /// Model name to unload
+        name: String,
+        /// API port of the running mesh-llm instance (default: 9337)
+        #[arg(long, default_value = "9337")]
+        port: u16,
     },
 }
 
@@ -594,6 +629,20 @@ async fn main() -> Result<()> {
                 }
                 return Ok(());
             }
+            Command::Runtime { command } => match command {
+                Some(RuntimeCommand::Status { port }) => {
+                    return run_models(*port).await;
+                }
+                Some(RuntimeCommand::Load { name, port }) => {
+                    return run_load(name, *port).await;
+                }
+                Some(RuntimeCommand::Unload { name, port }) => {
+                    return run_drop(name, *port).await;
+                }
+                None => {
+                    return run_models(3131).await;
+                }
+            },
             Command::Load { name, port } => {
                 return run_load(name, *port).await;
             }
@@ -3140,31 +3189,42 @@ async fn run_models(port: u16) -> Result<()> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Invalid runtime status payload"))?;
 
+    println!("⚙️  Runtime");
+    println!();
+
+    let primary_model = body["primary_model"].as_str().unwrap_or("none");
+    println!("🧠 Primary: {primary_model}");
+
     if models.is_empty() {
-        eprintln!("No local models are currently being served.");
+        println!("📦 Models served locally: 0");
+        println!();
+        println!("No local models are currently being served.");
         return Ok(());
     }
 
+    println!("📦 Models served locally: {}", models.len());
+    println!();
+
     println!(
-        "{:<38} {:<8} {:<8} {:<10} {:<6} {:<7}",
-        "MODEL", "KIND", "BACKEND", "STATUS", "PORT", "SOURCE"
+        "{:<42} {:<8} {:<8} {:<10} {:<6} {:<8}",
+        "Model", "Role", "Backend", "State", "Port", "Source"
     );
     for model in models {
         let name = model["name"].as_str().unwrap_or("unknown");
-        let kind = model["kind"].as_str().unwrap_or("unknown");
-        let backend = model["backend"].as_str().unwrap_or("unknown");
-        let status = model["status"].as_str().unwrap_or("unknown");
+        let kind = display_runtime_role(model["kind"].as_str().unwrap_or("unknown"));
+        let backend = display_backend_label(model["backend"].as_str().unwrap_or("unknown"));
+        let status = display_runtime_state(model["status"].as_str().unwrap_or("unknown"));
         let port = model["port"]
             .as_u64()
             .map(|p| p.to_string())
             .unwrap_or_else(|| "-".into());
         let source = if model["startup_managed"].as_bool().unwrap_or(false) {
-            "startup"
+            "Startup"
         } else {
-            "runtime"
+            "Runtime"
         };
         println!(
-            "{:<38} {:<8} {:<8} {:<10} {:<6} {:<7}",
+            "{:<42} {:<8} {:<8} {:<10} {:<6} {:<8}",
             name, kind, backend, status, port, source
         );
     }
@@ -3192,20 +3252,27 @@ async fn run_ps(port: u16) -> Result<()> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("Invalid runtime process payload"))?;
 
+    println!("⚙️  Processes");
+    println!();
+
     if processes.is_empty() {
-        eprintln!("No local inference processes are currently running.");
+        println!("📦 Local processes: 0");
+        println!();
+        println!("No local inference processes are currently running.");
         return Ok(());
     }
 
+    println!("📦 Local processes: {}", processes.len());
+    println!();
+
     println!(
-        "{:<38} {:<8} {:<8} {:<10} {:<6} {:<8} {:<7}",
-        "MODEL", "KIND", "BACKEND", "STATUS", "PORT", "PID", "SOURCE"
+        "{:<42} {:<8} {:<8} {:<8} {:<6} {:<8}",
+        "Model", "Role", "Backend", "Pid", "Port", "Source"
     );
     for process in processes {
         let name = process["name"].as_str().unwrap_or("unknown");
-        let kind = process["kind"].as_str().unwrap_or("unknown");
-        let backend = process["backend"].as_str().unwrap_or("unknown");
-        let status = process["status"].as_str().unwrap_or("unknown");
+        let kind = display_runtime_role(process["kind"].as_str().unwrap_or("unknown"));
+        let backend = display_backend_label(process["backend"].as_str().unwrap_or("unknown"));
         let port = process["port"]
             .as_u64()
             .map(|p| p.to_string())
@@ -3215,13 +3282,13 @@ async fn run_ps(port: u16) -> Result<()> {
             .map(|p| p.to_string())
             .unwrap_or_else(|| "-".into());
         let source = if process["startup_managed"].as_bool().unwrap_or(false) {
-            "startup"
+            "Startup"
         } else {
-            "runtime"
+            "Runtime"
         };
         println!(
-            "{:<38} {:<8} {:<8} {:<10} {:<6} {:<8} {:<7}",
-            name, kind, backend, status, port, pid, source
+            "{:<42} {:<8} {:<8} {:<8} {:<6} {:<8}",
+            name, kind, backend, pid, port, source
         );
     }
 
@@ -3232,7 +3299,6 @@ async fn run_control_request(path: &str, model_name: &str, port: u16, verb: &str
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     let body = serde_json::json!({ "model": model_name }).to_string();
-    let verb_lower = verb.to_lowercase();
     let request = format!(
         "POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -3247,17 +3313,51 @@ async fn run_control_request(path: &str, model_name: &str, port: u16, verb: &str
     let n = stream.read(&mut response).await?;
     let resp = String::from_utf8_lossy(&response[..n]);
 
-    if resp.contains("200 OK") {
-        eprintln!("✅ {verb} model: {model_name}");
+    if resp.contains("200 OK") || resp.contains("201 Created") {
+        let action = if verb == "Loaded" {
+            "Loaded"
+        } else {
+            "Unloaded"
+        };
+        eprintln!("✅ {action} runtime model");
+        eprintln!();
+        eprintln!("Model: {model_name}");
+        eprintln!("Scope: Local node");
     } else {
-        eprintln!(
-            "❌ Failed to {} model: {}",
-            verb_lower,
-            resp.lines().last().unwrap_or("unknown error")
-        );
+        let action = if verb == "Loaded" { "load" } else { "unload" };
+        eprintln!("❌ Failed to {action} runtime model");
+        eprintln!();
+        eprintln!("Model: {model_name}");
+        eprintln!("Reason: {}", resp.lines().last().unwrap_or("unknown error"));
     }
 
     Ok(())
+}
+
+fn display_runtime_role(value: &str) -> &'static str {
+    match value {
+        "primary" => "Primary",
+        "runtime" => "Runtime",
+        _ => "Unknown",
+    }
+}
+
+fn display_runtime_state(value: &str) -> &'static str {
+    match value {
+        "ready" => "Ready",
+        "starting" => "Starting",
+        "stopped" => "Stopped",
+        _ => "Unknown",
+    }
+}
+
+fn display_backend_label(value: &str) -> &'static str {
+    match value {
+        "llama" => "Llama",
+        "mlx" => "MLX",
+        "vllm" => "vLLM",
+        _ => "Unknown",
+    }
 }
 
 /// Ensure mesh-llm is running on `port`, then return (available_models, chosen_model, spawned_child).
