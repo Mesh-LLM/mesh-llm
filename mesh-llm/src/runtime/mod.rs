@@ -1126,15 +1126,25 @@ async fn run_auto(
     // Clean up stale processes from previous runs
     launch::kill_orphan_rpc_servers().await;
 
-    // Start rpc-server
-    let rpc_port = launch::start_rpc_server(
-        &bin_dir,
-        cli.llama_flavor,
-        cli.device.as_deref(),
-        Some(&model),
-    )
-    .await?;
-    tracing::info!("rpc-server on 127.0.0.1:{rpc_port} serving {model_name}");
+    #[cfg(target_os = "macos")]
+    let is_mlx = crate::mlx::is_mlx_model_dir(&model);
+    #[cfg(not(target_os = "macos"))]
+    let is_mlx = false;
+
+    let rpc_port = if is_mlx {
+        tracing::info!("MLX model detected — skipping rpc-server");
+        0
+    } else {
+        let port = launch::start_rpc_server(
+            &bin_dir,
+            cli.llama_flavor,
+            cli.device.as_deref(),
+            Some(&model),
+        )
+        .await?;
+        tracing::info!("rpc-server on 127.0.0.1:{port} serving {model_name}");
+        port
+    };
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), rpc_port, channels.rpc, channels.http).await?;

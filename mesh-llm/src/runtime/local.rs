@@ -162,30 +162,46 @@ pub(super) async fn start_runtime_local_model(
 
     let port = alloc_local_port().await?;
     let mmproj_path = mmproj_path_for_model(&model_name);
-    let process = launch::start_llama_server(
-        bin_dir,
-        binary_flavor,
-        launch::ModelLaunchSpec {
-            model: model_path,
-            http_port: port,
-            tunnel_ports: &[],
-            tensor_split: None,
-            draft: None,
-            draft_max: 0,
-            model_bytes,
-            my_vram,
-            mmproj: mmproj_path.as_deref(),
-            ctx_size_override,
-            total_group_vram: None,
-        },
-    )
-    .await?;
+    #[cfg(target_os = "macos")]
+    let mlx_process = if crate::mlx::is_mlx_model_dir(model_path) {
+        Some(crate::mlx::start_mlx_server(model_path, model_name.clone(), port).await?)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mlx_process: Option<launch::InferenceServerProcess> = None;
+
+    let (backend, process) = if let Some(process) = mlx_process {
+        ("mlx", process)
+    } else {
+        (
+            "llama",
+            launch::start_llama_server(
+                bin_dir,
+                binary_flavor,
+                launch::ModelLaunchSpec {
+                    model: model_path,
+                    http_port: port,
+                    tunnel_ports: &[],
+                    tensor_split: None,
+                    draft: None,
+                    draft_max: 0,
+                    model_bytes,
+                    my_vram,
+                    mmproj: mmproj_path.as_deref(),
+                    ctx_size_override,
+                    total_group_vram: None,
+                },
+            )
+            .await?,
+        )
+    };
 
     Ok((
         model_name,
         LocalRuntimeModelHandle {
             port,
-            backend: "llama".into(),
+            backend: backend.into(),
             process: process.handle,
         },
         process.death_rx,

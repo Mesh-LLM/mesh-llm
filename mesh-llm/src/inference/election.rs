@@ -1076,6 +1076,28 @@ async fn start_llama(
     binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
 ) -> Option<(u16, launch::InferenceServerProcess)> {
+    // ── MLX native backend: if model is a safetensors directory, run in-process ──
+    #[cfg(target_os = "macos")]
+    if crate::mlx::is_mlx_model_dir(model) {
+        let llama_port = match find_free_port().await {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("  Failed to find free port: {e}");
+                return None;
+            }
+        };
+        eprintln!("🍎 MLX native backend: loading {model_name}...");
+        match crate::mlx::start_mlx_server(model, model_name.to_string(), llama_port).await {
+            Ok(process) => {
+                eprintln!("✅ MLX server ready on port {llama_port}");
+                return Some((llama_port, process));
+            }
+            Err(e) => {
+                eprintln!("  ❌ MLX server failed: {e}");
+                return None;
+            }
+        }
+    }
     let my_vram = node.vram_bytes();
     let model_bytes = total_model_bytes(model);
     let min_vram = (model_bytes as f64 * 1.1) as u64;

@@ -34,6 +34,10 @@ toml = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 hf-hub = { git = "https://github.com/i386/hf-hub.git", rev = "3afec18e119569d21083b13b682e8629bb874dea", default-features = false, features = ["ureq", "tokio", "rustls-tls", "cache-manager"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+mlx-rs = { version = "0.25", features = ["safetensors"] }
+tokenizers = "0.21"
+
 [dev-dependencies]
 serial_test = "3"
 
