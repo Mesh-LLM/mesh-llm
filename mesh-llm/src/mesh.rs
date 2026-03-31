@@ -645,6 +645,7 @@ struct MeshState {
 /// Returns `true` if the given peer has completed gossip validation and is
 /// a full mesh member. Unadmitted peers are in `state.connections` but not
 /// in `state.peers` — they are quarantined until gossip succeeds.
+#[cfg(test)]
 pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &EndpointId) -> bool {
     peers.contains_key(id)
 }
@@ -2380,6 +2381,7 @@ impl Node {
         RoutingTable { hosts, mesh_id }
     }
 
+    #[cfg(test)]
     pub async fn request_route_table(&self, conn: &Connection) -> Result<RoutingTable> {
         use prost::Message as _;
         let protocol = connection_protocol(conn);

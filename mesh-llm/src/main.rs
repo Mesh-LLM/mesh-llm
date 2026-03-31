@@ -302,16 +302,49 @@ enum PluginCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("mesh_inference=info".parse()?)
-                .add_directive("nostr_relay_pool=off".parse()?)
-                .add_directive("nostr_sdk=warn".parse()?)
-                .add_directive("noq_proto::connection=warn".parse()?),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // Log to both stderr and ~/.mesh-llm/mesh-llm.log
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("mesh_inference=info".parse()?)
+        .add_directive("nostr_relay_pool=off".parse()?)
+        .add_directive("nostr_sdk=warn".parse()?)
+        .add_directive("noq_proto::connection=warn".parse()?);
+
+    let log_dir = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".mesh-llm");
+    std::fs::create_dir_all(&log_dir).ok();
+    let log_path = log_dir.join("mesh-llm.log");
+
+    // Truncate log file on startup (keeps it from growing forever across restarts)
+    let log_file = std::fs::File::create(&log_path).ok();
+
+    if let Some(file) = log_file {
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        let (non_blocking, _guard) = tracing_appender::non_blocking(file);
+        // Leak the guard so it lives for the entire process
+        std::mem::forget(_guard);
+
+        let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(non_blocking);
+
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(stderr_layer)
+            .with(file_layer)
+            .init();
+
+        tracing::info!("Logging to {}", log_path.display());
+    } else {
+        // Fallback: stderr only
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_writer(std::io::stderr)
+            .init();
+    };
 
     // --help-advanced: print full help with all hidden options and commands visible
     if std::env::args().any(|a| a == "--help-advanced") {
