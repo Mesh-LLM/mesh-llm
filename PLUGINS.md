@@ -300,10 +300,10 @@ The current `MeshPeer` payload includes:
 - `version`
 - `role`
 - `vram_bytes`
-- `configured_models`
-- `assigned_models`
-- `catalog_models`
-- `desired_models`
+- `models`
+- `serving_models`
+- `available_models`
+- `requested_models`
 - `hosted_models`
 - `hosted_models_known`
 - `rtt_ms`
