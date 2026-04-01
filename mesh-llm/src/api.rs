@@ -1207,7 +1207,8 @@ fn http_body_text(raw: &[u8]) -> &str {
 }
 
 async fn respond_error(stream: &mut TcpStream, code: u16, msg: &str) -> anyhow::Result<()> {
-    let body = format!("{{\"error\":\"{msg}\"}}");
+    let body = serde_json::to_string(&serde_json::json!({"error": msg}))
+        .unwrap_or_else(|_| r#"{"error":"internal error"}"#.to_string());
     let status = match code {
         400 => "Bad Request",
         404 => "Not Found",
@@ -1357,7 +1358,7 @@ fn decode_runtime_model_path(path: &str) -> Option<String> {
                     return None;
                 }
             }
-            b'+' => decoded.push(b' '),
+            b'+' => decoded.push(b'+'),
             b => decoded.push(b),
         }
         i += 1;
@@ -1659,10 +1660,11 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_runtime_model_path_decodes_percent_and_plus() {
+    fn test_decode_runtime_model_path_decodes_percent_not_plus() {
+        // %20 is a space; + is a literal plus in URL paths (not a space)
         assert_eq!(
             decode_runtime_model_path("/api/runtime/models/Llama%203.2+1B"),
-            Some("Llama 3.2 1B".into())
+            Some("Llama 3.2+1B".into())
         );
     }
 

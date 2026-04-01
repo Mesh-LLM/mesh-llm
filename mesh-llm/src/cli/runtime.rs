@@ -14,8 +14,8 @@ pub(crate) enum RuntimeCommand {
     Load {
         /// Model name/path/url to load
         name: String,
-        /// API port of the running mesh-llm instance (default: 9337)
-        #[arg(long, default_value = "9337")]
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
         port: u16,
     },
     /// Unload a local runtime-loaded model from a running mesh-llm instance.
@@ -23,18 +23,92 @@ pub(crate) enum RuntimeCommand {
     Unload {
         /// Model name to unload
         name: String,
-        /// API port of the running mesh-llm instance (default: 9337)
-        #[arg(long, default_value = "9337")]
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
         port: u16,
     },
 }
 
 pub(crate) async fn run_drop(model_name: &str, port: u16) -> Result<()> {
-    run_control_request("/mesh/drop", model_name, port, "Dropped").await
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let encoded = percent_encode_path_segment(model_name);
+    let url = format!("http://127.0.0.1:{port}/api/runtime/models/{encoded}");
+    let resp = client
+        .delete(&url)
+        .send()
+        .await
+        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
+    display_runtime_result(resp, model_name, "Unloaded").await
 }
 
 pub(crate) async fn run_load(model_name: &str, port: u16) -> Result<()> {
-    run_control_request("/mesh/load", model_name, port, "Loaded").await
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let url = format!("http://127.0.0.1:{port}/api/runtime/models");
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({"model": model_name}))
+        .send()
+        .await
+        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
+    display_runtime_result(resp, model_name, "Loaded").await
+}
+
+async fn display_runtime_result(
+    resp: reqwest::Response,
+    model_name: &str,
+    verb: &str,
+) -> Result<()> {
+    let action_inf = if verb == "Loaded" { "load" } else { "unload" };
+    if resp.status().is_success() {
+        eprintln!("✅ {verb} runtime model");
+        eprintln!();
+        eprintln!("Model: {model_name}");
+        eprintln!("Scope: Local node");
+    } else {
+        eprintln!("❌ Failed to {action_inf} runtime model");
+        eprintln!();
+        eprintln!("Model: {model_name}");
+        let reason = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown error".to_string());
+        eprintln!("Reason: {reason}");
+    }
+    Ok(())
+}
+
+/// Percent-encode a string for use as a URL path segment.
+/// Unreserved characters (A-Z a-z 0-9 - _ . ~) are passed through unchanged;
+/// all other bytes are encoded as %XX.
+fn percent_encode_path_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for byte in s.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char);
+            }
+            b => {
+                out.push('%');
+                out.push(
+                    char::from_digit((b >> 4) as u32, 16)
+                        .unwrap()
+                        .to_ascii_uppercase(),
+                );
+                out.push(
+                    char::from_digit((b & 0xf) as u32, 16)
+                        .unwrap()
+                        .to_ascii_uppercase(),
+                );
+            }
+        }
+    }
+    out
 }
 
 pub(crate) async fn run_status(port: u16) -> Result<()> {
@@ -95,61 +169,6 @@ pub(crate) async fn run_status(port: u16) -> Result<()> {
     }
 
     Ok(())
-}
-
-async fn run_control_request(path: &str, model_name: &str, port: u16, verb: &str) -> Result<()> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let body = serde_json::json!({ "model": model_name }).to_string();
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-
-    let mut stream = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}"))
-        .await
-        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
-    stream.write_all(request.as_bytes()).await?;
-
-    let mut resp = String::new();
-    stream.read_to_string(&mut resp).await?;
-
-    if resp.contains("200 OK") || resp.contains("201 Created") {
-        let action = if verb == "Loaded" {
-            "Loaded"
-        } else {
-            "Unloaded"
-        };
-        eprintln!("✅ {action} runtime model");
-        eprintln!();
-        eprintln!("Model: {model_name}");
-        eprintln!("Scope: Local node");
-    } else {
-        let action = if verb == "Loaded" { "load" } else { "unload" };
-        eprintln!("❌ Failed to {action} runtime model");
-        eprintln!();
-        eprintln!("Model: {model_name}");
-        let reason = extract_error_reason(&resp);
-        eprintln!("Reason: {reason}");
-    }
-
-    Ok(())
-}
-
-fn extract_error_reason(resp: &str) -> String {
-    // Response body is after the blank line separating headers from body
-    let body = resp.split("\r\n\r\n").nth(1).unwrap_or("");
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(msg) = val["error"].as_str() {
-            return msg.to_string();
-        }
-    }
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        "unknown error".to_string()
-    } else {
-        trimmed.to_string()
-    }
 }
 
 fn display_runtime_role(value: &str) -> &'static str {
