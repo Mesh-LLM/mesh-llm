@@ -163,6 +163,9 @@ jobs:
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
 
+      - name: Client-auto boot test
+        run: scripts/ci-client-auto-test.sh target/release/mesh-llm
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -255,6 +258,9 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Client-auto boot test
+        run: scripts/ci-client-auto-test.sh target/release/mesh-llm
 
       - name: Show sccache stats
         if: always()
