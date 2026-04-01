@@ -32,7 +32,7 @@ schemars = "1"
 prost = "0.14"
 toml = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-hf-hub = { git = "https://github.com/i386/hf-hub.git", rev = "71088fdca79cf9967e247794b5b6d2c0aecc894c", default-features = false, features = ["ureq", "rustls-tls", "cache-manager"] }
+hf-hub = { git = "https://github.com/i386/hf-hub.git", rev = "2da3782bc95e5714db680fc120da175731b12120", default-features = false, features = ["ureq", "tokio", "rustls-tls", "cache-manager"] }
 
 [dev-dependencies]
 serial_test = "3"

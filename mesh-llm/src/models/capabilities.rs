@@ -1,5 +1,6 @@
+use super::build_hf_tokio_api;
 use super::catalog;
-use super::{hf_token_override, http_client, huggingface_resolve_url};
+use hf_hub::{Repo, RepoType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -515,11 +516,12 @@ async fn fetch_remote_metadata_jsons(repo: &str, revision: Option<&str>) -> Vec<
 }
 
 async fn fetch_remote_json(repo: &str, revision: Option<&str>, file: &str) -> Option<Value> {
-    let client = http_client().ok()?;
-    let mut request = client.get(huggingface_resolve_url(repo, revision, file));
-    if let Some(token) = hf_token_override() {
-        request = request.bearer_auth(token);
-    }
-    let response = request.send().await.ok()?.error_for_status().ok()?;
-    response.json::<Value>().await.ok()
+    let api = build_hf_tokio_api(false).ok()?;
+    let repo = match revision {
+        Some(revision) => {
+            Repo::with_revision(repo.to_string(), RepoType::Model, revision.to_string())
+        }
+        None => Repo::new(repo.to_string(), RepoType::Model),
+    };
+    api.repo(repo).read_json(file).await.ok()
 }

@@ -7,10 +7,10 @@ pub mod topology;
 
 use anyhow::{anyhow, bail, Context, Result};
 use hf_hub::api::sync::{Api, ApiBuilder};
+use hf_hub::api::tokio::{Api as TokioApi, ApiBuilder as TokioApiBuilder};
 use hf_hub::api::RepoInfo;
 use hf_hub::cache::CacheInfo;
 use hf_hub::{Repo, RepoType};
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -110,28 +110,6 @@ enum ExactModelRef {
         url: String,
         filename: String,
     },
-}
-
-#[derive(Debug, Deserialize)]
-struct HuggingFaceRepoSummary {
-    id: String,
-    downloads: Option<u64>,
-    likes: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HuggingFaceRepoDetail {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default, rename = "modelId")]
-    model_id: Option<String>,
-    #[serde(default)]
-    siblings: Vec<HuggingFaceSibling>,
-}
-
-#[derive(Debug, Deserialize)]
-struct HuggingFaceSibling {
-    rfilename: String,
 }
 
 fn merge_capabilities(left: ModelCapabilities, right: ModelCapabilities) -> ModelCapabilities {
@@ -283,43 +261,29 @@ pub async fn show_exact_model(input: &str) -> Result<ModelDetails> {
 // but it does not expose a Hub search surface in this crate version.
 pub async fn search_huggingface(query: &str, limit: usize) -> Result<Vec<SearchHit>> {
     let repo_limit = limit.clamp(1, 100);
-    let client = http_client()?;
-    let mut request = client.get("https://huggingface.co/api/models").query(&[
-        ("search", query),
-        ("filter", "gguf"),
-        ("limit", &repo_limit.to_string()),
-    ]);
-    if let Some(token) = hf_token_override() {
-        request = request.bearer_auth(token);
-    }
-    let repos: Vec<HuggingFaceRepoSummary> = request
-        .send()
+    let api = build_hf_tokio_api(false)?;
+    let repos = api
+        .search(RepoType::Model)
+        .with_query(query)
+        .with_filter("gguf")
+        .with_limit(repo_limit)
+        .run()
         .await
-        .context("Search Hugging Face")?
-        .error_for_status()
-        .context("Hugging Face search failed")?
-        .json()
-        .await
-        .context("Parse Hugging Face search response")?;
+        .context("Search Hugging Face")?;
 
     let mut hits = Vec::new();
     for repo in repos {
-        let mut detail_request =
-            client.get(format!("https://huggingface.co/api/models/{}", repo.id));
-        if let Some(token) = hf_token_override() {
-            detail_request = detail_request.bearer_auth(token);
-        }
-        let detail: HuggingFaceRepoDetail = detail_request
-            .send()
+        let detail = api
+            .repo(repo.repo())
+            .info()
             .await
-            .with_context(|| format!("Fetch Hugging Face repo {}", repo.id))?
-            .error_for_status()
-            .with_context(|| format!("Hugging Face repo {} returned an error", repo.id))?
-            .json()
-            .await
-            .with_context(|| format!("Parse Hugging Face repo {}", repo.id))?;
+            .with_context(|| format!("Fetch Hugging Face repo {}", repo.id))?;
 
-        let repo_id = detail.id.or(detail.model_id).unwrap_or(repo.id.clone());
+        let repo_id = detail
+            .id
+            .clone()
+            .or(detail.model_id.clone())
+            .unwrap_or(repo.id.clone());
         let sibling_names: Vec<String> = detail
             .siblings
             .iter()
@@ -341,10 +305,9 @@ pub async fn search_huggingface(query: &str, limit: usize) -> Result<Vec<SearchH
         });
         if let Some(file) = files.into_iter().next() {
             let catalog = matching_catalog_model_for_huggingface(&repo_id, None, &file);
-            let download_url = huggingface_resolve_url(&repo_id, None, &file);
             let size_label = match catalog {
                 Some(model) => Some(model.size.to_string()),
-                None => remote_size_label(&download_url).await,
+                None => remote_hf_size_label_with_api(&api, &repo_id, None, &file).await,
             };
             let remote_caps = capabilities::infer_remote_hf_capabilities(
                 &repo_id,
@@ -365,8 +328,8 @@ pub async fn search_huggingface(query: &str, limit: usize) -> Result<Vec<SearchH
                 file: file.clone(),
                 exact_ref: format!("{repo_id}/{file}"),
                 size_label,
-                downloads: repo.downloads,
-                likes: repo.likes,
+                downloads: detail.downloads.or(repo.downloads),
+                likes: detail.likes.or(repo.likes),
                 catalog,
                 capabilities,
             });
@@ -627,6 +590,20 @@ fn build_hf_api(progress: bool) -> Result<Api> {
     }
     builder = builder.with_token(hf_token_override());
     builder.build().context("Build Hugging Face API client")
+}
+
+pub(super) fn build_hf_tokio_api(progress: bool) -> Result<TokioApi> {
+    let mut builder = TokioApiBuilder::from_cache(huggingface_hub_cache()).with_progress(progress);
+    if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
+        let endpoint = endpoint.trim();
+        if !endpoint.is_empty() {
+            builder = builder.with_endpoint(endpoint.to_string());
+        }
+    }
+    builder = builder.with_token(hf_token_override());
+    builder
+        .build()
+        .context("Build Hugging Face async API client")
 }
 
 fn hf_token_override() -> Option<String> {
@@ -980,14 +957,18 @@ fn http_client() -> Result<reqwest::Client> {
 }
 
 async fn remote_size_label(url: &str) -> Option<String> {
-    let client = http_client().ok()?;
-    let mut request = client.head(url);
-    if url.contains("huggingface.co/") {
-        if let Some(token) = hf_token_override() {
-            request = request.bearer_auth(token);
-        }
+    if let Some((repo, revision, file)) = parse_hf_resolve_url(url) {
+        let api = build_hf_tokio_api(false).ok()?;
+        return remote_hf_size_label_with_api(&api, &repo, revision.as_deref(), &file).await;
     }
-    let response = request.send().await.ok()?.error_for_status().ok()?;
+    let client = http_client().ok()?;
+    let response = client
+        .head(url)
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
     let size = response
         .headers()
         .get(reqwest::header::CONTENT_LENGTH)?
@@ -996,6 +977,22 @@ async fn remote_size_label(url: &str) -> Option<String> {
         .parse::<u64>()
         .ok()?;
     Some(format_size_bytes(size))
+}
+
+async fn remote_hf_size_label_with_api(
+    api: &TokioApi,
+    repo: &str,
+    revision: Option<&str>,
+    file: &str,
+) -> Option<String> {
+    let repo = match revision {
+        Some(revision) => {
+            Repo::with_revision(repo.to_string(), RepoType::Model, revision.to_string())
+        }
+        None => Repo::new(repo.to_string(), RepoType::Model),
+    };
+    let metadata = api.repo(repo).file_metadata(file).await.ok()?;
+    Some(format_size_bytes(metadata.size() as u64))
 }
 
 fn format_size_bytes(bytes: u64) -> String {
