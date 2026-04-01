@@ -480,30 +480,64 @@ pub async fn kill_llama_server() {
 
 async fn terminate_process(pid: u32) {
     let pid_str = pid.to_string();
-    let _ = std::process::Command::new("kill")
-        .args(["-TERM", &pid_str])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    for _ in 0..20 {
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        let alive = std::process::Command::new("kill")
-            .args(["-0", &pid_str])
+
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid_str])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if !alive {
-            return;
+            .status();
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid_str])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !alive {
+                return;
+            }
         }
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid_str])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid_str])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+
+    #[cfg(windows)]
+    {
+        // Graceful termination via taskkill (sends WM_CLOSE to the process tree)
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid_str, "/T"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        for _ in 0..20 {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let alive = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid_str}"), "/NH"])
+                .output()
+                .map(|o| {
+                    o.status.success() && String::from_utf8_lossy(&o.stdout).contains(&pid_str)
+                })
+                .unwrap_or(false);
+            if !alive {
+                return;
+            }
+        }
+        // Force-kill if still alive
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid_str, "/T", "/F"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
 }
 
 /// Start llama-server with the given model, HTTP port, and RPC tunnel ports.
