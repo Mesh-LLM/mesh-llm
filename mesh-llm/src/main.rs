@@ -4169,6 +4169,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_api_proxy_preserves_context_overflow_bad_request_for_single_target() {
+        let overflow_body =
+            r#"{"error":{"message":"prompt tokens exceed context window (n_ctx=4096)"}}"#;
+        let (port, upstream_rx, upstream_handle) =
+            spawn_status_upstream("400 Bad Request", overflow_body).await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
+
+        let body = json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "single target overflow should stay 400"}],
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(response.contains("context window"));
+        assert!(raw.contains("single target overflow should stay 400"));
+
+        proxy_handle.abort();
+        let _ = upstream_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_api_proxy_returns_last_context_overflow_bad_request_when_all_targets_overflow() {
+        let first_body =
+            r#"{"error":{"message":"prompt tokens exceed context window (n_ctx=2048)"}}"#;
+        let second_body =
+            r#"{"error":{"message":"prompt tokens exceed context window (n_ctx=4096)"}}"#;
+        let (first_port, first_rx, first_handle) =
+            spawn_status_upstream("400 Bad Request", first_body).await;
+        let (second_port, second_rx, second_handle) =
+            spawn_status_upstream("400 Bad Request", second_body).await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness(single_model_targets("test", &[first_port, second_port]))
+                .await;
+
+        let body = json!({
+            "model": "test",
+            "messages": [{"role": "user", "content": "all targets overflow"}],
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        let first_raw = String::from_utf8(first_rx.await.unwrap()).unwrap();
+        let second_raw = String::from_utf8(second_rx.await.unwrap()).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
+        assert!(response.contains("n_ctx=4096"));
+        assert!(first_raw.contains("all targets overflow"));
+        assert!(second_raw.contains("all targets overflow"));
+
+        proxy_handle.abort();
+        let _ = first_handle.await;
+        let _ = second_handle.await;
+    }
+
+    #[tokio::test]
     async fn test_api_proxy_does_not_retry_generic_bad_request() {
         let bad_request_body = r#"{"error":{"message":"missing required field: messages"}}"#;
         let (bad_port, bad_rx, bad_handle) =
@@ -4203,6 +4273,37 @@ mod tests {
         proxy_handle.abort();
         let _ = bad_handle.await;
         unused_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_proxy_normalizes_max_completion_tokens_for_upstream() {
+        let (upstream_port, upstream_rx, upstream_handle) =
+            spawn_capturing_upstream(r#"{"ok":true}"#).await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness(local_targets(&[("test", upstream_port)])).await;
+
+        let body = json!({
+            "model": "test",
+            "max_completion_tokens": 32,
+            "messages": [{"role": "user", "content": "normalize token alias"}],
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+        let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK"));
+        assert!(raw.contains("\"max_tokens\":32"));
+        assert!(!raw.contains("max_completion_tokens"));
+        assert!(raw.contains("normalize token alias"));
+
+        proxy_handle.abort();
+        let _ = upstream_handle.await;
     }
 
     #[tokio::test]

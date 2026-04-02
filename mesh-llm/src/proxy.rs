@@ -138,14 +138,31 @@ async fn read_http_request_with_limits(
         Vec::new()
     };
 
-    let body_json = if body.is_empty() {
+    let mut body_json = if body.is_empty() {
         None
     } else {
         serde_json::from_slice(&body).ok()
     };
+    let rewritten_body = if let Some(body_json) = body_json.as_mut() {
+        if normalize_openai_compat_body(body_json) {
+            Some(
+                serde_json::to_vec(body_json)
+                    .context("serialize normalized OpenAI-compatible request body")?,
+            )
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let model_name = body_json.as_ref().and_then(extract_model_from_json);
     let session_hint = body_json.as_ref().and_then(extract_session_hint_from_json);
-    let raw = finalize_forwarded_request(raw, header_end, parsed.expects_continue)?;
+    let raw = finalize_forwarded_request(
+        raw,
+        header_end,
+        parsed.expects_continue,
+        rewritten_body.as_deref(),
+    )?;
 
     Ok(BufferedHttpRequest {
         raw,
@@ -161,8 +178,9 @@ fn finalize_forwarded_request(
     mut raw: Vec<u8>,
     header_end: usize,
     strip_expect: bool,
+    rewritten_body: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
-    let body = raw.split_off(header_end);
+    let original_body = raw.split_off(header_end);
     // Re-parse with httparse so we iterate over validated header structs.
     let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut req = httparse::Request::new(&mut headers_buf);
@@ -182,8 +200,17 @@ fn finalize_forwarded_request(
         if strip_expect && name.eq_ignore_ascii_case("expect") {
             continue;
         }
+        if rewritten_body.is_some()
+            && (name.eq_ignore_ascii_case("content-length")
+                || name.eq_ignore_ascii_case("transfer-encoding"))
+        {
+            continue;
+        }
         let value = std::str::from_utf8(header.value).unwrap_or("");
         rebuilt.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = rewritten_body {
+        rebuilt.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
 
     // The proxy buffers exactly one request for routing, so force a single-request
@@ -191,7 +218,7 @@ fn finalize_forwarded_request(
     rebuilt.push_str("Connection: close\r\n\r\n");
 
     let mut forwarded = rebuilt.into_bytes();
-    forwarded.extend_from_slice(&body);
+    forwarded.extend_from_slice(rewritten_body.unwrap_or(&original_body));
     Ok(forwarded)
 }
 
@@ -333,6 +360,23 @@ fn extract_session_hint_from_json(body: &serde_json::Value) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(ToString::to_string)
     })
+}
+
+fn normalize_openai_compat_body(body: &mut serde_json::Value) -> bool {
+    let Some(object) = body.as_object_mut() else {
+        return false;
+    };
+
+    let mut changed = false;
+    for alias in ["max_completion_tokens", "max_output_tokens"] {
+        let Some(value) = object.remove(alias) else {
+            continue;
+        };
+        changed = true;
+        object.entry("max_tokens".to_string()).or_insert(value);
+    }
+
+    changed
 }
 
 fn response_first_byte_timeout() -> Duration {
@@ -859,8 +903,18 @@ pub async fn handle_mesh_request(
     // have a fresh routing table (doesn't block the retry loop).
     let mut last_retryable = false;
     let mut refreshed = false;
-    for target_host in &target_hosts {
-        match route_remote_attempt(&node, &mut tcp_stream, *target_host, &request.raw, true).await {
+    let total_targets = target_hosts.len();
+    for (idx, target_host) in target_hosts.iter().enumerate() {
+        let retry_context_overflow = idx + 1 < total_targets;
+        match route_remote_attempt(
+            &node,
+            &mut tcp_stream,
+            *target_host,
+            &request.raw,
+            retry_context_overflow,
+        )
+        .await
+        {
             RouteAttemptResult::Delivered { status_code } => {
                 if should_learn_affinity(status_code) {
                     if let (Some(name), Some(prefix_hash)) =
@@ -1005,9 +1059,19 @@ pub async fn route_model_request(
 
     let mut ordered = ordered_candidates;
     move_target_first(&mut ordered, &selection.target);
+    let total_targets = ordered.len();
     let mut refreshed = false;
-    for target in ordered {
-        match route_attempt_for_target(&node, &mut tcp_stream, &target, prefetched, true).await {
+    for (idx, target) in ordered.into_iter().enumerate() {
+        let retry_context_overflow = idx + 1 < total_targets;
+        match route_attempt_for_target(
+            &node,
+            &mut tcp_stream,
+            &target,
+            prefetched,
+            retry_context_overflow,
+        )
+        .await
+        {
             RouteAttemptResult::Delivered { status_code } => {
                 if should_learn_affinity(status_code) {
                     if let Some(prefix_hash) = selection.learn_prefix_hash {
