@@ -6,7 +6,7 @@ import type { MeshConfig, NodeConfig } from '../../types/config';
 describe('mesh config parse/serialize', () => {
   it('round-trips full mesh config shape', () => {
     const input: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -57,15 +57,15 @@ describe('mesh config parse/serialize', () => {
   it('requires explicit authored schema version', () => {
     expect(parseConfig('')).toBeNull();
     expect(parseConfig('[[nodes]]\nnode_id = "node-a"\n')).toBeNull();
-    expect(parseConfig('version = 1\n')).toBeNull();
-    expect(parseConfig('version = 2\n')).toEqual({ version: 3, nodes: [] });
-    expect(parseConfig('version = 3\n')).toEqual({ version: 3, nodes: [] });
+    expect(parseConfig('version = 1\n')).toEqual({ version: 1, nodes: [] });
+    expect(parseConfig('version = 2\n')).toBeNull();
+    expect(parseConfig('version = 3\n')).toBeNull();
   });
 
   it('defaults missing nodes/models to empty arrays for valid versioned config', () => {
-    expect(parseConfig('version = 2\n')).toEqual({ version: 3, nodes: [] });
-    expect(parseConfig('version = 2\n\n[[nodes]]\nnode_id = "node-a"\n')).toEqual({
-      version: 3,
+    expect(parseConfig('version = 1\n')).toEqual({ version: 1, nodes: [] });
+    expect(parseConfig('version = 1\n\n[[nodes]]\nnode_id = "node-a"\n')).toEqual({
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -76,41 +76,9 @@ describe('mesh config parse/serialize', () => {
     });
   });
 
-  it('loads schema v2 by defaulting placement to pooled and gpu_index to undefined', () => {
-    const v2 = `
-version = 2
-
-[[nodes]]
-node_id = "node-a"
-
-[[nodes.models]]
-name = "Qwen3-30B-A3B-Q4_K_M"
-model_key = "mk-qwen3-30b"
-split = { start = 0, end = 32, total = 33 }
-`;
-
-    expect(parseConfig(v2)).toEqual({
-      version: 3,
-      nodes: [
-        {
-          node_id: 'node-a',
-          placement_mode: 'pooled',
-          models: [
-            {
-              name: 'Qwen3-30B-A3B-Q4_K_M',
-              model_key: 'mk-qwen3-30b',
-              split: { start: 0, end: 32, total: 33 },
-              ctx_size: 4096,
-            },
-          ],
-        },
-      ],
-    });
-  });
-
   it('rejects malformed split objects instead of silently accepting them', () => {
     const malformed = `
-version = 2
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -126,7 +94,7 @@ split = { start = 0, end = "20", total = 33 }
 
   it('rejects zero-layer splits (start >= end)', () => {
     const zeroLayers = `
-version = 2
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -140,7 +108,7 @@ split = { start = 0, end = 0, total = 33 }
     expect(parseConfig(zeroLayers)).toBeNull();
 
     const reversed = `
-version = 2
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -157,7 +125,7 @@ split = { start = 10, end = 5, total = 33 }
   it('accepts valid single-node full-model split', () => {
     // Single node serving all layers: start=0, end=total-1
     const fullModel = `
-version = 2
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -170,21 +138,21 @@ split = { start = 0, end = 32, total = 33 }
 
     const parsed = parseConfig(fullModel);
     expect(parsed).not.toBeNull();
-    expect(parsed?.version).toBe(3);
+    expect(parsed?.version).toBe(1);
     expect(parsed?.nodes[0].models[0].split).toEqual({ start: 0, end: 32, total: 33 });
     expect(parsed?.nodes[0].placement_mode).toBe('pooled');
   });
 
-  it('serializes parsed schema v2 config back as schema v3', () => {
-    const parsed = parseConfig('version = 2\n');
-    expect(parsed).toEqual({ version: 3, nodes: [] });
+  it('serializes parsed schema v1 config back as schema v1', () => {
+    const parsed = parseConfig('version = 1\n');
+    expect(parsed).toEqual({ version: 1, nodes: [] });
     const serialized = serializeConfig(parsed as MeshConfig);
-    expect(serialized).toContain('version = 3');
+    expect(serialized).toContain('version = 1');
   });
 
-  it('rejects invalid placement_mode values in schema v3', () => {
+  it('rejects invalid placement_mode values', () => {
     const invalidPlacementMode = `
-version = 3
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -194,9 +162,9 @@ placement_mode = "invalid"
     expect(parseConfig(invalidPlacementMode)).toBeNull();
   });
 
-  it('rejects invalid gpu_index values in schema v3', () => {
+  it('rejects invalid gpu_index values', () => {
     const negativeGpuIndex = `
-version = 3
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -208,7 +176,7 @@ gpu_index = -1
 `;
 
     const nonIntegerGpuIndex = `
-version = 3
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -220,7 +188,7 @@ gpu_index = 1.5
 `;
 
     const nonNumericGpuIndex = `
-version = 3
+version = 1
 
 [[nodes]]
 node_id = "node-a"
@@ -285,7 +253,7 @@ describe('deepEqual', () => {
 
   it('returns true for nested objects with same structure', () => {
     const obj1: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -301,7 +269,7 @@ describe('deepEqual', () => {
     };
 
     const obj2: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -321,7 +289,7 @@ describe('deepEqual', () => {
 
   it('returns false for nested objects with different values', () => {
     const obj1: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -337,7 +305,7 @@ describe('deepEqual', () => {
     };
 
     const obj2: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',

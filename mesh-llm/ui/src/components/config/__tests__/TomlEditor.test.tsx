@@ -10,9 +10,9 @@ vi.mock('shiki', () => ({
 import type { MeshConfig } from '../../../types/config';
 import { TomlEditor } from '../TomlEditor';
 
-const emptyConfig: MeshConfig = { version: 2, nodes: [] };
+const emptyConfig: MeshConfig = { version: 1, nodes: [] };
 const configWithNode: MeshConfig = {
-  version: 2,
+  version: 1,
   nodes: [{ node_id: 'abc123', models: [{ name: 'TestModel' }] }],
 };
 
@@ -67,7 +67,7 @@ describe('TomlEditor', () => {
     });
 
     const textarea = screen.getByTestId('toml-textarea') as HTMLTextAreaElement;
-    const validToml = `version = 2\n\n[[nodes]]\nnode_id = "xyz"\nmodels = []\n`;
+    const validToml = `version = 1\n\n[[nodes]]\nnode_id = "xyz"\nmodels = []\n`;
 
     fireEvent.change(textarea, { target: { value: validToml } });
 
@@ -124,7 +124,7 @@ describe('TomlEditor', () => {
 
     expect(onParseErrorChange).toHaveBeenLastCalledWith('Invalid TOML');
 
-    fireEvent.change(textarea, { target: { value: 'version = 2\n\nnodes = []\n' } });
+    fireEvent.change(textarea, { target: { value: 'version = 1\n\nnodes = []\n' } });
 
     await act(async () => {
       vi.advanceTimersByTime(200);

@@ -98,7 +98,7 @@ mod tests {
             derive_owner_key("fire lake mountain river cloud").expect("KDF should succeed");
         let secret_key = SecretKey::from_bytes(&key_bytes);
         let _public_key = secret_key.public();
-        let fp = crate::mesh::owner_fingerprint_from_key_material(key_bytes);
+        let fp = crate::identity::owner_fingerprint_from_key_material(key_bytes);
         assert_eq!(fp.len(), 64, "fingerprint must be 64 hex chars");
         assert!(
             fp.chars().all(|c| c.is_ascii_hexdigit()),
@@ -110,7 +110,7 @@ mod tests {
     fn test_fingerprint_compatibility() {
         let passphrase = "alpha bravo charlie delta echo foxtrot golf";
         let key_bytes = derive_owner_key(passphrase).expect("derivation failed");
-        let fp = crate::mesh::owner_fingerprint_from_key_material(key_bytes);
+        let fp = crate::identity::owner_fingerprint_from_key_material(key_bytes);
         assert_eq!(fp.len(), 64, "fingerprint must be 64 hex chars");
         assert!(
             fp.chars().all(|c| c.is_ascii_hexdigit()),

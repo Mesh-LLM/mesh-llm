@@ -10,7 +10,7 @@ import { broadcastConfig } from '../../../lib/api';
 import type { MeshConfig } from '../../../types/config';
 import { SaveConfig } from '../SaveConfig';
 
-const config: MeshConfig = { version: 3, nodes: [] };
+const config: MeshConfig = { version: 1, nodes: [] };
 
 describe('SaveConfig', () => {
   beforeEach(() => {
@@ -224,12 +224,12 @@ describe('SaveConfig', () => {
     });
   });
 
-  it('broadcasts a v3 config with placement_mode separate and gpu_index in the serialized TOML', async () => {
+  it('broadcasts a config with placement_mode separate and gpu_index in the serialized TOML', async () => {
     const user = userEvent.setup();
     vi.mocked(broadcastConfig).mockResolvedValue({ ok: true, saved: 1, total: 1, failed: [] });
 
-    const v3Config: MeshConfig = {
-      version: 3,
+    const specialConfig: MeshConfig = {
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -239,7 +239,7 @@ describe('SaveConfig', () => {
       ],
     };
 
-    render(<SaveConfig config={v3Config} isDirty={true} onSaveSuccess={vi.fn()} />);
+    render(<SaveConfig config={specialConfig} isDirty={true} onSaveSuccess={vi.fn()} />);
 
     await user.click(screen.getByTestId('save-config-btn'));
     await user.click(screen.getByTestId('confirm-save-button'));
@@ -254,13 +254,13 @@ describe('SaveConfig', () => {
     expect(broadcastArg).toContain('gpu_index');
   });
 
-  it('onSaveSuccess receives a v3 config snapshot with placement_mode and gpu_index preserved after broadcast', async () => {
+  it('onSaveSuccess receives a config snapshot with placement_mode and gpu_index preserved after broadcast', async () => {
     const user = userEvent.setup();
     const onSaveSuccess = vi.fn();
     vi.mocked(broadcastConfig).mockResolvedValue({ ok: true, saved: 1, total: 1, failed: [] });
 
-    const v3Config: MeshConfig = {
-      version: 3,
+    const specialConfig: MeshConfig = {
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -270,7 +270,7 @@ describe('SaveConfig', () => {
       ],
     };
 
-    render(<SaveConfig config={v3Config} isDirty={true} onSaveSuccess={onSaveSuccess} />);
+    render(<SaveConfig config={specialConfig} isDirty={true} onSaveSuccess={onSaveSuccess} />);
 
     await user.click(screen.getByTestId('save-config-btn'));
     await user.click(screen.getByTestId('confirm-save-button'));
@@ -280,7 +280,7 @@ describe('SaveConfig', () => {
     });
 
     const savedConfig = onSaveSuccess.mock.calls[0]?.[0] as MeshConfig;
-    expect(savedConfig.version).toBe(3);
+    expect(savedConfig.version).toBe(1);
     const node = savedConfig.nodes[0];
     expect(node?.placement_mode).toBe('separate');
     expect(node?.models[0]?.gpu_index).toBe(1);
@@ -290,11 +290,11 @@ describe('SaveConfig', () => {
     const user = userEvent.setup();
 
     const currentConfig: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [{ node_id: 'node-a', models: [{ name: 'Qwen3' }, { name: 'NewModel' }] }],
     };
     const baseSavedConfig: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [{ node_id: 'node-a', models: [{ name: 'Qwen3' }, { name: 'OldModel' }] }],
     };
 

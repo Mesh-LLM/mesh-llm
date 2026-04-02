@@ -223,7 +223,7 @@ type Peer = {
   rtt_ms?: number | null;
   hostname?: string;
   is_soc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  gpus?: { name: string; vram_bytes: number; reserved_bytes?: number; bandwidth_gbps?: number }[];
   owner_id?: string | null;
   owner_fingerprint?: string | null;
   owner_fingerprint_verified?: boolean;
@@ -256,7 +256,7 @@ export type StatusPayload = {
   nostr_discovery?: boolean;
   my_hostname?: string;
   my_is_soc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  gpus?: { name: string; vram_bytes: number; reserved_bytes?: number; bandwidth_gbps?: number }[];
   owner_id?: string | null;
   owner_fingerprint?: string | null;
   owner_fingerprint_verified?: boolean;
@@ -315,7 +315,7 @@ type TopologyNode = {
   latencyMs?: number | null;
   hostname?: string;
   isSoc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  gpus?: { name: string; vram_bytes: number; reserved_bytes?: number; bandwidth_gbps?: number }[];
 };
 
 type ThemeMode = "auto" | "light" | "dark";
@@ -3802,7 +3802,7 @@ type TopologyNodeInfo = {
   vramSharePct: number;
   hostname?: string;
   isSoc?: boolean;
-  gpus?: { name: string; vram_bytes: number }[];
+  gpus?: { name: string; vram_bytes: number; reserved_bytes?: number }[];
 };
 
 type TopologyFlowNodeData = {

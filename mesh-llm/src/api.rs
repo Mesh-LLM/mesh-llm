@@ -114,6 +114,7 @@ struct ApiInner {
 struct GpuEntry {
     name: String,
     vram_bytes: u64,
+    reserved_bytes: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     bandwidth_gbps: Option<f64>,
 }
@@ -122,6 +123,7 @@ fn build_gpus(
     gpu_name: Option<&str>,
     gpu_vram: Option<&str>,
     gpu_bandwidth: Option<&str>,
+    gpu_reserved: Option<&str>,
 ) -> Vec<GpuEntry> {
     let names: Vec<&str> = gpu_name
         .map(|s| s.split(", ").collect())
@@ -135,12 +137,16 @@ fn build_gpus(
     let bandwidths: Vec<Option<f64>> = gpu_bandwidth
         .map(|s| s.split(',').map(|v| v.trim().parse::<f64>().ok()).collect())
         .unwrap_or_default();
+    let reserveds: Vec<Option<u64>> = gpu_reserved
+        .map(|s| s.split(',').map(|v| v.trim().parse::<u64>().ok()).collect())
+        .unwrap_or_default();
     names
         .into_iter()
         .enumerate()
         .map(|(i, name)| GpuEntry {
             name: name.to_string(),
             vram_bytes: vrams.get(i).copied().flatten().unwrap_or(0),
+            reserved_bytes: reserveds.get(i).copied().flatten().unwrap_or(0),
             bandwidth_gbps: bandwidths.get(i).copied().flatten(),
         })
         .collect()
@@ -976,6 +982,7 @@ impl MeshApi {
                     p.gpu_name.as_deref(),
                     p.gpu_vram.as_deref(),
                     p.gpu_bandwidth_gbps.as_deref(),
+                    p.gpu_reserved.as_deref(),
                 ),
                 model_sizes: p.model_sizes.clone().or_else(|| {
                     let sizes: Vec<(String, u64)> = p
@@ -1089,6 +1096,7 @@ impl MeshApi {
                     node.gpu_name.as_deref(),
                     node.gpu_vram.as_deref(),
                     bw_str.as_deref(),
+                    node.gpu_reserved.as_deref(),
                 )
             },
             routing_affinity,
@@ -2987,13 +2995,13 @@ mod tests {
 
     #[test]
     fn test_build_gpus_both_none() {
-        let result = build_gpus(None, None, None);
+        let result = build_gpus(None, None, None, None);
         assert!(result.is_empty(), "expected empty vec when no gpu_name");
     }
 
     #[test]
     fn test_build_gpus_single_no_vram() {
-        let result = build_gpus(Some("NVIDIA RTX 5090"), None, None);
+        let result = build_gpus(Some("NVIDIA RTX 5090"), None, None, None);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "NVIDIA RTX 5090");
         assert_eq!(result[0].vram_bytes, 0);
@@ -3001,7 +3009,7 @@ mod tests {
 
     #[test]
     fn test_build_gpus_single_with_vram() {
-        let result = build_gpus(Some("NVIDIA RTX 5090"), Some("34359738368"), None);
+        let result = build_gpus(Some("NVIDIA RTX 5090"), Some("34359738368"), None, None);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].name, "NVIDIA RTX 5090");
         assert_eq!(result[0].vram_bytes, 34_359_738_368);
@@ -3012,6 +3020,7 @@ mod tests {
         let result = build_gpus(
             Some("NVIDIA RTX 5090, NVIDIA RTX 3080"),
             Some("34359738368,10737418240"),
+            None,
             None,
         );
         assert_eq!(result.len(), 2);
@@ -3027,6 +3036,7 @@ mod tests {
             Some("NVIDIA RTX 5090, NVIDIA RTX 3080"),
             Some("34359738368"),
             None,
+            None,
         );
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].vram_bytes, 34_359_738_368);
@@ -3038,7 +3048,7 @@ mod tests {
 
     #[test]
     fn test_build_gpus_vram_no_gpu_name() {
-        let result = build_gpus(None, Some("34359738368"), None);
+        let result = build_gpus(None, Some("34359738368"), None, None);
         assert!(
             result.is_empty(),
             "no gpu_name means no entries even if vram present"
@@ -3047,7 +3057,7 @@ mod tests {
 
     #[test]
     fn test_build_gpus_vram_whitespace_trimmed() {
-        let result = build_gpus(Some("NVIDIA RTX 4090"), Some(" 25769803776 "), None);
+        let result = build_gpus(Some("NVIDIA RTX 4090"), Some(" 25769803776 "), None, None);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].vram_bytes, 25_769_803_776);
     }
@@ -3058,6 +3068,7 @@ mod tests {
             Some("NVIDIA A100, NVIDIA A6000"),
             Some("85899345920,51539607552"),
             Some("1948.70,780.10"),
+            None,
         );
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].bandwidth_gbps, Some(1948.70));
@@ -3066,7 +3077,7 @@ mod tests {
 
     #[test]
     fn test_build_gpus_unparsable_vram_preserves_index() {
-        let result = build_gpus(Some("GPU0, GPU1, GPU2"), Some("100,foo,300"), None);
+        let result = build_gpus(Some("GPU0, GPU1, GPU2"), Some("100,foo,300"), None, None);
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].vram_bytes, 100);
         assert_eq!(
@@ -3082,6 +3093,7 @@ mod tests {
             Some("GPU0, GPU1, GPU2"),
             Some("100,200,300"),
             Some("1.0,bad,3.0"),
+            None,
         );
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].bandwidth_gbps, Some(1.0));
@@ -3090,6 +3102,42 @@ mod tests {
             "unparsable bandwidth should be None, not shift indices"
         );
         assert_eq!(result[2].bandwidth_gbps, Some(3.0));
+    }
+
+    #[test]
+    fn test_build_gpus_with_reserved() {
+        let result = build_gpus(
+            Some("NVIDIA RTX 5090, NVIDIA RTX 3080"),
+            Some("34359738368,10737418240"),
+            None,
+            Some("555745280,380534784"),
+        );
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].reserved_bytes, 555_745_280);
+        assert_eq!(result[1].reserved_bytes, 380_534_784);
+    }
+
+    #[test]
+    fn test_build_gpus_reserved_defaults_to_zero() {
+        let result = build_gpus(Some("NVIDIA RTX 5090"), Some("34359738368"), None, None);
+        assert_eq!(result[0].reserved_bytes, 0, "reserved_bytes defaults to 0 when not provided");
+    }
+
+    #[test]
+    fn test_build_gpus_unparsable_reserved_preserves_index() {
+        let result = build_gpus(
+            Some("GPU0, GPU1, GPU2"),
+            Some("100,200,300"),
+            None,
+            Some("1024,bad,3072"),
+        );
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].reserved_bytes, 1024);
+        assert_eq!(
+            result[1].reserved_bytes, 0,
+            "unparsable reserved should be 0, not shift indices"
+        );
+        assert_eq!(result[2].reserved_bytes, 3072);
     }
 
     #[test]
@@ -3325,6 +3373,7 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
+            gpu_reserved: None,
             available_model_metadata: vec![],
             experts_summary: None,
             available_model_sizes: HashMap::new(),

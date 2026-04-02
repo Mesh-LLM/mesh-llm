@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use tokio::sync::{watch, Mutex};
 
+use crate::identity::owner_fingerprint_from_key_material;
 use crate::protocol::*;
 
 /// Demand signal for a model — tracks interest via API requests and --model declarations.
@@ -469,11 +470,6 @@ fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.owner_fingerprint_transitive != new.owner_fingerprint_transitive
 }
 
-pub(crate) fn owner_fingerprint_from_key_material(owner_key_material: [u8; 32]) -> String {
-    let owner_key = SecretKey::from_bytes(&owner_key_material);
-    hex::encode(Sha256::digest(owner_key.public().as_bytes()))
-}
-
 fn model_identity_score(identity: &ServedModelIdentity) -> u8 {
     let kind_score = match identity.source_kind {
         ModelSourceKind::HuggingFace => 4,
@@ -558,6 +554,8 @@ pub(crate) struct PeerAnnouncementV0 {
     #[serde(default)]
     gpu_vram: Option<String>,
     #[serde(default)]
+    gpu_reserved: Option<String>,
+    #[serde(default)]
     gpu_bandwidth_gbps: Option<String>,
     #[serde(default)]
     available_model_sizes: HashMap<String, u64>,
@@ -599,6 +597,7 @@ impl PeerAnnouncementV0 {
             hostname: self.hostname,
             is_soc: self.is_soc,
             gpu_vram: self.gpu_vram,
+            gpu_reserved: self.gpu_reserved,
             gpu_bandwidth_gbps: self.gpu_bandwidth_gbps,
             available_model_metadata: vec![],
             experts_summary: None,
@@ -631,6 +630,7 @@ impl From<&PeerAnnouncement> for PeerAnnouncementV0 {
             hostname: ann.hostname.clone(),
             is_soc: ann.is_soc,
             gpu_vram: ann.gpu_vram.clone(),
+            gpu_reserved: ann.gpu_reserved.clone(),
             gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
             available_model_sizes: ann.available_model_sizes.clone(),
             served_model_descriptors: ann.served_model_descriptors.clone(),
@@ -676,6 +676,9 @@ fn apply_transitive_ann(
     }
     if ann.gpu_vram.is_some() {
         existing.gpu_vram = ann.gpu_vram.clone();
+    }
+    if ann.gpu_reserved.is_some() {
+        existing.gpu_reserved = ann.gpu_reserved.clone();
     }
     if ann.gpu_bandwidth_gbps.is_some() {
         existing.gpu_bandwidth_gbps = ann.gpu_bandwidth_gbps.clone();
@@ -847,6 +850,7 @@ pub(crate) struct PeerAnnouncement {
     pub(crate) hostname: Option<String>,
     pub(crate) is_soc: Option<bool>,
     pub(crate) gpu_vram: Option<String>,
+    pub(crate) gpu_reserved: Option<String>,
     pub(crate) gpu_bandwidth_gbps: Option<String>,
     pub(crate) available_model_metadata: Vec<crate::proto::node::CompactModelMetadata>,
     pub(crate) experts_summary: Option<crate::proto::node::ExpertsSummary>,
@@ -891,6 +895,7 @@ pub struct PeerInfo {
     pub hostname: Option<String>,
     pub is_soc: Option<bool>,
     pub gpu_vram: Option<String>,
+    pub gpu_reserved: Option<String>,
     pub gpu_bandwidth_gbps: Option<String>,
     pub available_model_metadata: Vec<crate::proto::node::CompactModelMetadata>,
     pub experts_summary: Option<crate::proto::node::ExpertsSummary>,
@@ -932,6 +937,7 @@ impl PeerInfo {
             hostname: ann.hostname.clone(),
             is_soc: ann.is_soc,
             gpu_vram: ann.gpu_vram.clone(),
+            gpu_reserved: ann.gpu_reserved.clone(),
             gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
             available_model_metadata: ann.available_model_metadata.clone(),
             experts_summary: ann.experts_summary.clone(),
@@ -1615,6 +1621,7 @@ pub struct Node {
     pub hostname: Option<String>,
     pub is_soc: Option<bool>,
     pub gpu_vram: Option<String>,
+    pub gpu_reserved: Option<String>,
     pub gpu_bandwidth_gbps: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     owner_key_material: Arc<Mutex<Option<[u8; 32]>>>,
 }
@@ -1880,6 +1887,17 @@ impl Node {
                     .join(","),
             )
         };
+        let gpu_reserved = if hw.gpu_reserved.is_empty() {
+            None
+        } else {
+            Some(
+                hw.gpu_reserved
+                    .iter()
+                    .map(|b| b.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
+            )
+        };
         if let Some(max_gb) = max_vram_gb {
             let max_bytes = (max_gb * 1e9) as u64;
             if max_bytes < vram {
@@ -1943,6 +1961,7 @@ impl Node {
             hostname,
             is_soc,
             gpu_vram,
+            gpu_reserved,
             gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             owner_key_material: Arc::new(Mutex::new(None)),
         };
@@ -2030,6 +2049,7 @@ impl Node {
             hostname: None,
             is_soc: Some(false),
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             available_model_sizes: Arc::new(Mutex::new(HashMap::new())),
             available_model_metadata: Arc::new(Mutex::new(Vec::new())),
@@ -4697,6 +4717,7 @@ impl Node {
             existing.hostname = ann.hostname.clone();
             existing.is_soc = ann.is_soc;
             existing.gpu_vram = ann.gpu_vram.clone();
+            existing.gpu_reserved = ann.gpu_reserved.clone();
             existing.gpu_bandwidth_gbps = ann.gpu_bandwidth_gbps.clone();
             if ann.experts_summary.is_some() {
                 existing.experts_summary = ann.experts_summary.clone();
@@ -4714,6 +4735,7 @@ impl Node {
                 || old_peer.hostname != updated_peer.hostname
                 || old_peer.is_soc != updated_peer.is_soc
                 || old_peer.gpu_vram != updated_peer.gpu_vram
+                || old_peer.gpu_reserved != updated_peer.gpu_reserved
                 || old_peer.gpu_bandwidth_gbps != updated_peer.gpu_bandwidth_gbps;
             if role_changed || serving_changed {
                 let count = state.peers.len();
@@ -4868,6 +4890,7 @@ impl Node {
                     hostname: p.hostname.clone(),
                     is_soc: p.is_soc,
                     gpu_vram: p.gpu_vram.clone(),
+                    gpu_reserved: p.gpu_reserved.clone(),
                     gpu_bandwidth_gbps: p.gpu_bandwidth_gbps.clone(),
                     available_model_metadata: p.available_model_metadata.clone(),
                     experts_summary: p.experts_summary.clone(),
@@ -4906,6 +4929,11 @@ impl Node {
             is_soc: self.is_soc,
             gpu_vram: if self.enumerate_host {
                 self.gpu_vram.clone()
+            } else {
+                None
+            },
+            gpu_reserved: if self.enumerate_host {
+                self.gpu_reserved.clone()
             } else {
                 None
             },
@@ -4994,6 +5022,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             available_model_sizes: Arc::new(Mutex::new(HashMap::new())),
             available_model_metadata: Arc::new(Mutex::new(Vec::new())),
@@ -5516,6 +5545,7 @@ mod tests {
             hostname: Some("legacy-peer".to_string()),
             is_soc: Some(false),
             gpu_vram: Some((48_u64 * 1024 * 1024 * 1024).to_string()),
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
@@ -5735,6 +5765,7 @@ mod tests {
             hostname: Some("worker-01".into()),
             is_soc: Some(false),
             gpu_vram: Some("51539607552".into()),
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::from([("Qwen".into(), 1234_u64)]),
             served_model_descriptors: vec![],
@@ -5806,6 +5837,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
             experts_summary: None,
@@ -6115,6 +6147,7 @@ mod tests {
             hostname: Some("test-node".to_string()),
             is_soc: Some(true),
             gpu_vram: Some("128 GB".to_string()),
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![meta.clone()],
             experts_summary: Some(experts.clone()),
@@ -6319,6 +6352,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![meta],
             experts_summary: None,
@@ -6389,6 +6423,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
             experts_summary: None,
@@ -6438,6 +6473,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
             experts_summary: None,
@@ -6488,6 +6524,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
             experts_summary: None,
@@ -7491,6 +7528,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
@@ -7681,6 +7719,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
@@ -7893,6 +7932,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
@@ -8112,6 +8152,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpu_vram: None,
+            gpu_reserved: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
             experts_summary: None,

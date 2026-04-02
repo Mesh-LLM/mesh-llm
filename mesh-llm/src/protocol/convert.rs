@@ -429,6 +429,7 @@ pub(crate) fn proto_ann_to_local(
         owner_attestation: None,
         owner_fingerprint_verified,
         owner_fingerprint_transitive,
+        gpu_reserved: None,
     };
     crate::mesh::backfill_legacy_descriptors(&mut ann);
     Ok(Some((addr, ann)))

@@ -15,7 +15,7 @@ import { configHistoryReducer, type ConfigHistoryState } from '../ConfigPage';
 import { SaveConfig } from '../../components/config/SaveConfig';
 
 function makeConfig(nodeId: string): MeshConfig {
-  return { version: 3, nodes: [{ node_id: nodeId, models: [] }] };
+  return { version: 1, nodes: [{ node_id: nodeId, models: [] }] };
 }
 
 function emptyHistory(config: MeshConfig): ConfigHistoryState {
@@ -129,7 +129,7 @@ function BackendErrorWrapper({ config }: { config: MeshConfig }) {
 }
 
 describe('backend validation errors', () => {
-  const config: MeshConfig = { version: 3, nodes: [] };
+  const config: MeshConfig = { version: 1, nodes: [] };
 
   beforeEach(() => {
     vi.clearAllMocks();

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ModelSplit, ScannedModelMetadata } from '../../types/config';
 import { cn } from '../../lib/utils';
-import { GPU_SYSTEM_OVERHEAD_BYTES } from '../../lib/vram';
+
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { DRAG_INTERACTIVE_ATTRIBUTE, VRAM_DROP_TARGET_PREFIX } from './DndContext';
 import { BlockContextMenu, type ContextMenuPosition } from './BlockContextMenu';
@@ -42,7 +42,7 @@ type VramContainerProps = {
   availableNodeCount?: number;
   placementTarget?: string;
   crossNodeSplitGroupIds?: Set<string>;
-  showReservedBlock?: boolean;
+  reservedBytes?: number;
 };
 
 type FitStatus = 'fits' | 'overcommit' | 'unknown';
@@ -259,14 +259,13 @@ export function VramContainer({
   availableNodeCount,
   placementTarget,
   crossNodeSplitGroupIds,
-  showReservedBlock,
+  reservedBytes = 0,
 }: VramContainerProps) {
   const assignedBytes = assignments.reduce((sum, assignment) => sum + assignment.sizeBytes, 0);
   const freeBytes = Math.max(0, totalVramBytes - assignedBytes);
   const overcommitBytes = Math.max(0, assignedBytes - totalVramBytes);
   const isOvercommitted = overcommitBytes > 0;
 
-  const reservedBytes = showReservedBlock ? GPU_SYSTEM_OVERHEAD_BYTES : 0;
   const reservedPercent = totalVramBytes > 0 ? (reservedBytes / totalVramBytes) * 100 : 0;
 
   const { ref, isDropTarget } = useDroppable({
@@ -430,9 +429,9 @@ export function VramContainer({
         </div>
       ) : null}
 
-      {assignments.length > 0 || showReservedBlock ? (
+      {assignments.length > 0 || reservedBytes > 0 ? (
         <div className="flex min-h-[3rem] w-full gap-1.5 overflow-visible rounded-md border border-border/40" data-testid="vram-capacity-bar">
-          {showReservedBlock && reservedPercent > 0.5 ? (
+          {reservedPercent > 0.5 ? (
             <Tooltip>
               <TooltipTrigger asChild>
                 <div
@@ -452,7 +451,7 @@ export function VramContainer({
                 </div>
               </TooltipTrigger>
               <TooltipContent side="top" className="text-xs">
-                System reserved · {formatVramCompact(GPU_SYSTEM_OVERHEAD_BYTES)}
+                System reserved · {formatVramCompact(reservedBytes)}
               </TooltipContent>
             </Tooltip>
           ) : null}
@@ -517,7 +516,7 @@ export function VramContainer({
         <div
           data-testid="vram-empty"
           className={cn(
-            showReservedBlock
+            reservedBytes > 0
               ? 'mt-2 flex min-h-[2rem] items-center justify-center rounded-md border text-xs text-muted-foreground/50'
               : 'flex min-h-[4rem] items-center justify-center rounded-md border text-xs text-muted-foreground/60',
             isDraggingAssignable

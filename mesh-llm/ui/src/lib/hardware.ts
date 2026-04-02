@@ -1,6 +1,7 @@
 export type ReportedGpu = {
   name: string;
   vram_bytes: number;
+  reserved_bytes?: number;
 };
 
 export function shortenHardwareModelName(name: string) {
@@ -51,6 +52,7 @@ export interface GpuTarget {
   index: number;
   name: string;
   vramBytes: number;
+  reservedBytes: number;
   label: string;
 }
 
@@ -59,6 +61,7 @@ export function gpuTargets(gpus: ReportedGpu[] | undefined): GpuTarget[] {
     index,
     name: gpu.name,
     vramBytes: gpu.vram_bytes,
+    reservedBytes: gpu.reserved_bytes ?? 0,
     label: `GPU ${index} · ${gpu.name} · ${(gpu.vram_bytes / 1e9).toFixed(1)} GB`,
   }));
 }

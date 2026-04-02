@@ -150,14 +150,14 @@ vi.mock('../TomlEditor', () => ({
       <button
         type="button"
         data-testid="toml-set-b"
-        onClick={() => onConfigChange({ version: 2, nodes: [{ node_id: 'node-b', models: [] }] })}
+        onClick={() => onConfigChange({ version: 1, nodes: [{ node_id: 'node-b', models: [] }] })}
       >
         Set B
       </button>
       <button
         type="button"
         data-testid="toml-set-c"
-        onClick={() => onConfigChange({ version: 2, nodes: [{ node_id: 'node-c', models: [] }] })}
+        onClick={() => onConfigChange({ version: 1, nodes: [{ node_id: 'node-c', models: [] }] })}
       >
         Set C
       </button>
@@ -224,7 +224,7 @@ describe('ConfigPage canonical authored config state', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\n\n[[nodes]]\nnode_id = "hydrated-node"\nmodels = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\n\n[[nodes]]\nnode_id = "hydrated-node"\nmodels = []\n'),
       }),
     );
 
@@ -251,7 +251,7 @@ describe('ConfigPage canonical authored config state', () => {
     await waitFor(() => {
       expect(screen.getByTestId('config-load-error')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('toml-config')).toHaveTextContent('"version":3');
+    expect(screen.getByTestId('toml-config')).toHaveTextContent('"version":1');
     expect(screen.getByTestId('save-is-dirty')).toHaveTextContent('clean');
   });
 
@@ -260,7 +260,7 @@ describe('ConfigPage canonical authored config state', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -292,7 +292,7 @@ describe('ConfigPage canonical authored config state', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -318,7 +318,7 @@ describe('ConfigPage canonical authored config state', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -379,7 +379,7 @@ describe('ConfigPage canonical authored config state', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 2\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 0, end = 23, total = 48 }\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 24, end = 47, total = 48 }\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 0, end = 23, total = 48 }\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 24, end = 47, total = 48 }\n',
         ),
       }),
     );
@@ -426,7 +426,7 @@ describe('ConfigPage canonical authored config state', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -451,7 +451,7 @@ describe('ConfigPage canonical authored config state', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -500,7 +500,7 @@ describe('ConfigPage canonical authored config state', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 2\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nctx_size = 4096\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nctx_size = 4096\n',
         ),
       }),
     );
@@ -531,7 +531,7 @@ describe('ConfigPage canonical authored config state', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 2\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nctx_size = 4096\nsplit = { start = 0, end = 23, total = 48 }\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nctx_size = 4096\nsplit = { start = 24, end = 47, total = 48 }\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nctx_size = 4096\nsplit = { start = 0, end = 23, total = 48 }\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nctx_size = 4096\nsplit = { start = 24, end = 47, total = 48 }\n',
         ),
       }),
     );
@@ -557,7 +557,7 @@ describe('ConfigPage canonical authored config state', () => {
 describe('ConfigPage split normalization helpers', () => {
   it('resizes a split boundary without creating gaps or overlaps', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -590,7 +590,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('clamps the first split boundary so the leading edge keeps at least two layers', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -622,7 +622,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('clamps the last split boundary so the trailing edge keeps at least two layers', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -654,7 +654,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('rejects an invalid split move and leaves authored config unchanged', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -695,7 +695,7 @@ describe('ConfigPage split normalization helpers', () => {
   it('rejects a split move when the destination node advertises the model name but not the matching model_key', () => {
 
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -735,7 +735,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('recombines a complete split group back into a single model on one node', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -763,7 +763,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('rejects recombine when related split blocks still span multiple nodes', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -795,7 +795,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('recombines the remaining split block into a full assignment when one moved split assignment is removed', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -827,7 +827,7 @@ describe('ConfigPage split normalization helpers', () => {
 
   it('keeps remaining split fragments split when more than one fragment remains after deletion', () => {
     const config: MeshConfig = {
-      version: 2,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -860,7 +860,7 @@ describe('ConfigPage split normalization helpers', () => {
   });
 });
 
-describe('ConfigPage schema-v3 placement rehydration', () => {
+describe('ConfigPage schema-v1 placement rehydration', () => {
   beforeEach(() => {
     previousDirtySnapshot = null;
     ownedNodesValue = [];
@@ -870,7 +870,7 @@ describe('ConfigPage schema-v3 placement rehydration', () => {
     vi.clearAllMocks();
   });
 
-  it('rehydrates a v3 config with placement_mode separate and gpu_index 1 correctly', async () => {
+  it('rehydrates a v1 config with placement_mode separate and gpu_index 1 correctly', async () => {
     ownedNodesValue = [makeOwnedNode({ id: 'node-a', hostname: 'alpha.local', separateCapable: true })];
 
     vi.stubGlobal(
@@ -878,7 +878,7 @@ describe('ConfigPage schema-v3 placement rehydration', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 3\n\n[[nodes]]\nnode_id = "node-a"\nplacement_mode = "separate"\n\n[[nodes.models]]\nname = "Qwen3"\ngpu_index = 1\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\nplacement_mode = "separate"\n\n[[nodes.models]]\nname = "Qwen3"\ngpu_index = 1\n',
         ),
       }),
     );
@@ -898,40 +898,12 @@ describe('ConfigPage schema-v3 placement rehydration', () => {
     expect(screen.getByTestId('node-node-a-mode-pooled')).toHaveAttribute('data-state', 'inactive');
   });
 
-  it('rehydrates a v2 config without placement fields as pooled mode by default', async () => {
-    ownedNodesValue = [makeOwnedNode({ id: 'node-a', hostname: 'alpha.local', separateCapable: true })];
-
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        text: vi.fn().mockResolvedValue(
-          'version = 2\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\n',
-        ),
-      }),
-    );
-
-    render(<ConfigPage status={null} />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('toml-config')).toHaveTextContent('"node_id":"node-a"');
-    });
-
-    const configJson = JSON.parse(screen.getByTestId('toml-config').textContent ?? '{}') as MeshConfig;
-    expect(configJson.version).toBe(3);
-    const nodeA = configJson.nodes.find((n) => n.node_id === 'node-a');
-    expect(nodeA?.placement_mode).toBe('pooled');
-    expect(nodeA?.models[0]?.gpu_index).toBeUndefined();
-    expect(screen.getByTestId('save-is-dirty')).toHaveTextContent('clean');
-    expect(screen.getByTestId('node-node-a-mode-pooled')).toHaveAttribute('data-state', 'active');
-    expect(screen.getByTestId('node-node-a-mode-separate')).toHaveAttribute('data-state', 'inactive');
-  });
 });
 
 describe('ConfigPage config schema round-trip', () => {
   it('serializeConfig then parseConfig reproduces the full authored config with splits and model_key', () => {
     const original: MeshConfig = {
-      version: 3,
+      version: 1,
       nodes: [
         {
           node_id: 'node-a',
@@ -994,7 +966,7 @@ describe('ConfigPage placement mode orchestration', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 3\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\n\n[[nodes]]\nnode_id = "node-b"\n\n[[nodes.models]]\nname = "GLM"\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\n\n[[nodes]]\nnode_id = "node-b"\n\n[[nodes.models]]\nname = "GLM"\n',
         ),
       }),
     );
@@ -1031,7 +1003,7 @@ describe('ConfigPage placement mode orchestration', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 3\n\n[[nodes]]\nnode_id = "node-a"\nplacement_mode = "separate"\n\n[[nodes.models]]\nname = "Qwen3"\ngpu_index = 0\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\nplacement_mode = "separate"\n\n[[nodes.models]]\nname = "Qwen3"\ngpu_index = 0\n',
         ),
       }),
     );
@@ -1105,7 +1077,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1126,7 +1098,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1154,7 +1126,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1183,7 +1155,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1243,7 +1215,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1260,7 +1232,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1287,7 +1259,7 @@ describe('ConfigPage partial failure invariants', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+        text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
       }),
     );
 
@@ -1311,7 +1283,7 @@ describe('ConfigPage partial failure invariants', () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: vi.fn().mockResolvedValue(
-          'version = 3\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 0, end = 5, total = 15 }\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 10, end = 15, total = 15 }\n',
+          'version = 1\n\n[[nodes]]\nnode_id = "node-a"\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 0, end = 5, total = 15 }\n\n[[nodes.models]]\nname = "Qwen3"\nmodel_key = "abc123"\nsplit = { start = 10, end = 15, total = 15 }\n',
         ),
       }),
     );
@@ -1354,7 +1326,7 @@ describe('ConfigPage partial failure invariants', () => {
         'fetch',
         vi.fn().mockResolvedValue({
           ok: true,
-          text: vi.fn().mockResolvedValue('version = 2\nnodes = []\n'),
+          text: vi.fn().mockResolvedValue('version = 1\nnodes = []\n'),
         }),
       );
     });

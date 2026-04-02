@@ -131,6 +131,7 @@ export function ConfigNodeSection({
   const effectiveMode: PlacementMode = placementMode ?? 'pooled';
   const gpuTargets = node.gpuTargets ?? [];
   const hasMixedGpus = node.mixedGpuWarning ?? false;
+  const totalReservedBytes = gpuTargets.reduce((sum, g) => sum + g.reservedBytes, 0);
 
   const showMixedGpuWarning = useMemo(() => {
     if (!hasMixedGpus) return false;
@@ -332,7 +333,7 @@ export function ConfigNodeSection({
                 availableNodeCount={availableNodeCount}
                 crossNodeSplitGroupIds={crossNodeSplitGroupIds}
                 placementTarget={`${node.id}:gpu-${gpu.index}`}
-                showReservedBlock
+                reservedBytes={gpu.reservedBytes}
               />
             </div>
           ))
@@ -355,8 +356,8 @@ export function ConfigNodeSection({
                 availableNodeCount={availableNodeCount}
                 crossNodeSplitGroupIds={crossNodeSplitGroupIds}
                 placementTarget={`${node.id}:pooled`}
-                showReservedBlock
-              />
+                reservedBytes={totalReservedBytes}
+               />
            </div>
         )}
 

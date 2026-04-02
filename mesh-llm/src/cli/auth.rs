@@ -87,7 +87,7 @@ pub async fn run_auth_init(
         std::fs::set_permissions(&key_path, perms)?;
     }
 
-    let fingerprint = crate::mesh::owner_fingerprint_from_key_material(*key_bytes);
+    let fingerprint = crate::identity::owner_fingerprint_from_key_material(*key_bytes);
     println!("Owner key initialized.");
     println!("Fingerprint: {}", fingerprint);
     println!("Key stored at: {}", key_path.display());
@@ -110,15 +110,14 @@ pub async fn dispatch_auth_command(command: AuthCommand) -> Result<()> {
                     use std::io::IsTerminal;
                     if std::io::stdin().is_terminal() {
                         use zeroize::Zeroizing;
-                        let suggestion = crate::wordlist::generate_passphrase(7);
-                        println!("Suggested passphrase: {}", suggestion);
-                        println!("Press Enter to accept, or type your own passphrase:");
+                        println!("Enter passphrase (2+ words, e.g. \"river cloud brick\"):");
                         let input = Zeroizing::new(rpassword::read_password()?);
                         if input.trim().is_empty() {
-                            Some(suggestion)
-                        } else {
-                            Some(input.as_str().to_owned())
+                            return Err(anyhow!(
+                                "No passphrase entered. Use --passphrase flag for non-interactive use."
+                            ));
                         }
+                        Some(input.as_str().to_owned())
                     } else {
                         return Err(anyhow!(
                             "No passphrase provided. Use --passphrase flag for non-interactive use."
@@ -173,7 +172,7 @@ pub async fn run_auth_status(owner_key: Option<PathBuf>) -> Result<()> {
     }
     let mut key_bytes: [u8; 32] = bytes.try_into().unwrap();
 
-    let fingerprint = crate::mesh::owner_fingerprint_from_key_material(key_bytes);
+    let fingerprint = crate::identity::owner_fingerprint_from_key_material(key_bytes);
     println!("Owner key: {}", key_path.display());
     println!("Fingerprint: {}", fingerprint);
 
@@ -449,7 +448,7 @@ mod status_tests {
     #[test]
     fn test_status_fingerprint_format() {
         let key_bytes = [42u8; 32];
-        let fingerprint = crate::mesh::owner_fingerprint_from_key_material(key_bytes);
+        let fingerprint = crate::identity::owner_fingerprint_from_key_material(key_bytes);
         assert_eq!(fingerprint.len(), 64, "fingerprint must be 64 chars");
         assert!(
             fingerprint

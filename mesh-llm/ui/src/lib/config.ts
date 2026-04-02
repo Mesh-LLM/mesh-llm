@@ -9,8 +9,7 @@ import type {
   PlacementMode,
 } from '../types/config';
 
-export const AUTHORED_CONFIG_VERSION = 3;
-const LEGACY_AUTHORED_CONFIG_VERSION = 2;
+export const AUTHORED_CONFIG_VERSION = 1;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -208,7 +207,7 @@ function normalizeConfig(value: unknown): MeshConfig | null {
   }
 
   const version = toNonNegativeIntegerOrUndefined(value.version);
-  if (version !== AUTHORED_CONFIG_VERSION && version !== LEGACY_AUTHORED_CONFIG_VERSION) {
+  if (version !== AUTHORED_CONFIG_VERSION) {
     return null;
   }
 

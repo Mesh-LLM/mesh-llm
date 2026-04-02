@@ -7,6 +7,7 @@ mod cli;
 mod config;
 mod election;
 mod hardware;
+mod identity;
 mod launch;
 mod mesh;
 mod models;
@@ -21,7 +22,6 @@ mod proxy;
 mod rewrite;
 mod router;
 mod tunnel;
-mod wordlist;
 
 pub mod proto {
     pub mod node {

@@ -14,6 +14,8 @@ pub struct HardwareSurvey {
     /// Per-GPU VRAM in bytes, same order as gpu_name list.
     /// Unified-memory SoCs report a single entry.
     pub gpu_vram: Vec<u64>,
+    /// Per-GPU driver/OS reserved bytes, same order as gpu_vram. Not usable for inference.
+    pub gpu_reserved: Vec<u64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -48,6 +50,18 @@ pub fn parse_nvidia_gpu_names(output: &str) -> Vec<String> {
 /// Parse `nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits` → per-GPU VRAM bytes.
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 pub fn parse_nvidia_gpu_memory(output: &str) -> Vec<u64> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mib = line.trim().parse::<u64>().ok()?;
+            Some(mib * 1024 * 1024)
+        })
+        .collect()
+}
+
+/// Parse `nvidia-smi --query-gpu=memory.reserved --format=csv,noheader,nounits` → per-GPU reserved bytes.
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+pub fn parse_nvidia_gpu_reserved(output: &str) -> Vec<u64> {
     output
         .lines()
         .filter_map(|line| {
@@ -279,6 +293,7 @@ impl Collector for DefaultCollector {
                             // ~75% usable for Metal on unified memory (mesh.rs:263)
                             survey.vram_bytes = (bytes as f64 * 0.75) as u64;
                             survey.gpu_vram = vec![bytes];
+                            survey.gpu_reserved = vec![200 * 1024 * 1024];
                         }
                     }
                 }
@@ -330,9 +345,31 @@ impl Collector for DefaultCollector {
                 })();
 
                 if let Some((vram, per_gpu)) = nvidia_vram {
+                    let gpu_count = per_gpu.len();
                     survey.gpu_vram = per_gpu;
                     let ram_offload = system_ram.saturating_sub(vram);
                     survey.vram_bytes = vram + (ram_offload as f64 * 0.75) as u64;
+                    let nvidia_reserved = std::process::Command::new("nvidia-smi")
+                        .args([
+                            "--query-gpu=memory.reserved",
+                            "--format=csv,noheader,nounits",
+                        ])
+                        .output()
+                        .ok()
+                        .and_then(|out| {
+                            if !out.status.success() {
+                                return None;
+                            }
+                            let s = String::from_utf8(out.stdout).ok()?;
+                            let v = parse_nvidia_gpu_reserved(&s);
+                            if v.len() == gpu_count {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        });
+                    survey.gpu_reserved =
+                        nvidia_reserved.unwrap_or_else(|| vec![512 * 1024 * 1024; gpu_count]);
                 } else {
                     // Try AMD ROCm (mesh.rs:295-316)
                     let rocm_vram: Option<Vec<u64>> = (|| {
@@ -353,10 +390,12 @@ impl Collector for DefaultCollector {
                     })();
 
                     if let Some(per_gpu) = rocm_vram {
+                        let gpu_count = per_gpu.len();
                         let vram: u64 = per_gpu.iter().sum();
                         survey.gpu_vram = per_gpu;
                         let ram_offload = system_ram.saturating_sub(vram);
                         survey.vram_bytes = vram + (ram_offload as f64 * 0.75) as u64;
+                        survey.gpu_reserved = vec![256 * 1024 * 1024; gpu_count];
                     } else if system_ram > 0 {
                         // CPU-only (mesh.rs:320-322)
                         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
@@ -468,11 +507,33 @@ impl Collector for DefaultCollector {
 
             if want_vram {
                 if let Some(per_gpu) = nvidia_vram {
+                    let gpu_count = per_gpu.len();
                     let total: u64 = per_gpu.iter().sum();
                     if total > 0 {
                         survey.gpu_vram = per_gpu;
                         let ram_offload = system_ram.saturating_sub(total);
                         survey.vram_bytes = total + (ram_offload as f64 * 0.75) as u64;
+                        let nvidia_reserved = std::process::Command::new("nvidia-smi")
+                            .args([
+                                "--query-gpu=memory.reserved",
+                                "--format=csv,noheader,nounits",
+                            ])
+                            .output()
+                            .ok()
+                            .and_then(|out| {
+                                if !out.status.success() {
+                                    return None;
+                                }
+                                let s = String::from_utf8(out.stdout).ok()?;
+                                let v = parse_nvidia_gpu_reserved(&s);
+                                if v.len() == gpu_count {
+                                    Some(v)
+                                } else {
+                                    None
+                                }
+                            });
+                        survey.gpu_reserved =
+                            nvidia_reserved.unwrap_or_else(|| vec![512 * 1024 * 1024; gpu_count]);
                     }
                 } else {
                     let per_gpu: Vec<u64> = windows_gpus
@@ -480,11 +541,13 @@ impl Collector for DefaultCollector {
                         .map(|(_, ram)| *ram)
                         .filter(|ram| *ram > 0)
                         .collect();
+                    let gpu_count = per_gpu.len();
                     let total: u64 = per_gpu.iter().sum();
                     if total > 0 {
                         survey.gpu_vram = per_gpu;
                         let ram_offload = system_ram.saturating_sub(total);
                         survey.vram_bytes = total + (ram_offload as f64 * 0.75) as u64;
+                        survey.gpu_reserved = vec![512 * 1024 * 1024; gpu_count];
                     } else if system_ram > 0 {
                         survey.vram_bytes = (system_ram as f64 * 0.75) as u64;
                     }
@@ -546,6 +609,7 @@ impl Collector for TegraCollector {
             if let Some(ram) = total_ram {
                 survey.vram_bytes = (ram as f64 * 0.75) as u64;
                 survey.gpu_vram = vec![ram];
+                survey.gpu_reserved = vec![256 * 1024 * 1024];
             }
         }
 
