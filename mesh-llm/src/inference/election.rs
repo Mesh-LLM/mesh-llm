@@ -5,7 +5,10 @@
 //! Every mesh change: kill llama-server, re-elect, winner starts fresh.
 //! mesh-llm owns :api_port and proxies to the right host by model name.
 
-use crate::{launch, mesh, models, moe, tunnel};
+use crate::inference::{launch, moe};
+use crate::mesh;
+use crate::models;
+use crate::network::tunnel;
 use mesh::NodeRole;
 use std::collections::HashMap;
 use std::path::Path;
@@ -1566,7 +1569,7 @@ mod tests {
         let (_, idx_b) = moe_shard_index(id_b, &[id_a]);
 
         let ranking: Vec<u32> = (0..128).collect();
-        let assignments = crate::moe::compute_assignments(&ranking, 2, 46);
+        let assignments = crate::inference::moe::compute_assignments(&ranking, 2, 46);
 
         // Node A picks assignment[idx_a], Node B picks assignment[idx_b]
         // They should be different shards

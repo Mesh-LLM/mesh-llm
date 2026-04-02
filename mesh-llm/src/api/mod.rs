@@ -14,240 +14,32 @@
 //! The dashboard is mostly read-only — shows status, topology, and models.
 //! Local model load/unload is exposed for operator control.
 
-use crate::{affinity, election, mesh, nostr, plugin, proxy};
-use include_dir::{include_dir, Dir};
-use serde::Serialize;
+mod assets;
+mod http;
+mod routes;
+mod state;
+mod status;
+
+pub use self::state::{MeshApi, RuntimeControlRequest, RuntimeModelPayload, RuntimeProcessPayload};
+pub(crate) use self::status::classify_runtime_error;
+
+use self::assets::{respond_console_asset, respond_console_index};
+use self::http::{http_body_text, respond_error};
+use self::routes::dispatch_request;
+use self::state::ApiInner;
+use self::status::{
+    build_gpus, build_runtime_processes_payload, build_runtime_status_payload, MeshModelPayload,
+    PeerPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
+};
+use crate::inference::election;
+use crate::mesh;
+use crate::network::{affinity, nostr, proxy};
+use crate::plugin;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex};
 
-static CONSOLE_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui/dist");
 const MESH_LLM_VERSION: &str = crate::VERSION;
-
-// ── Shared state ──
-
-pub enum RuntimeControlRequest {
-    Load {
-        spec: String,
-        resp: tokio::sync::oneshot::Sender<anyhow::Result<String>>,
-    },
-    Unload {
-        model: String,
-        resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
-    },
-}
-
-#[derive(Clone, Serialize)]
-pub struct RuntimeModelPayload {
-    pub name: String,
-    pub backend: String,
-    pub status: String,
-    pub port: Option<u16>,
-}
-
-#[derive(Serialize)]
-struct RuntimeStatusPayload {
-    models: Vec<RuntimeModelPayload>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct RuntimeProcessPayload {
-    pub name: String,
-    pub backend: String,
-    pub status: String,
-    pub port: u16,
-    pub pid: u32,
-}
-
-#[derive(Serialize)]
-struct RuntimeProcessesPayload {
-    processes: Vec<RuntimeProcessPayload>,
-}
-
-/// Shared live state — written by the main process, read by API handlers.
-#[derive(Clone)]
-pub struct MeshApi {
-    inner: Arc<Mutex<ApiInner>>,
-}
-
-struct ApiInner {
-    node: mesh::Node,
-    plugin_manager: plugin::PluginManager,
-    affinity_router: affinity::AffinityRouter,
-    is_host: bool,
-    is_client: bool,
-    llama_ready: bool,
-    llama_port: Option<u16>,
-    model_name: String,
-    primary_backend: Option<String>,
-    draft_name: Option<String>,
-    api_port: u16,
-    model_size_bytes: u64,
-    mesh_name: Option<String>,
-    latest_version: Option<String>,
-    nostr_relays: Vec<String>,
-    nostr_discovery: bool,
-    runtime_control: Option<tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>>,
-    local_processes: Vec<RuntimeProcessPayload>,
-    sse_clients: Vec<tokio::sync::mpsc::UnboundedSender<String>>,
-    inventory_scan_running: bool,
-    inventory_scan_waiters:
-        Vec<tokio::sync::oneshot::Sender<crate::models::LocalModelInventorySnapshot>>,
-}
-
-#[derive(Serialize)]
-struct GpuEntry {
-    name: String,
-    vram_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bandwidth_gbps: Option<f64>,
-}
-
-fn build_gpus(
-    gpu_name: Option<&str>,
-    gpu_vram: Option<&str>,
-    gpu_bandwidth: Option<&str>,
-) -> Vec<GpuEntry> {
-    let names: Vec<&str> = gpu_name
-        .map(|s| s.split(", ").collect())
-        .unwrap_or_default();
-    if names.is_empty() {
-        return vec![];
-    }
-    let vrams: Vec<Option<u64>> = gpu_vram
-        .map(|s| s.split(',').map(|v| v.trim().parse::<u64>().ok()).collect())
-        .unwrap_or_default();
-    let bandwidths: Vec<Option<f64>> = gpu_bandwidth
-        .map(|s| s.split(',').map(|v| v.trim().parse::<f64>().ok()).collect())
-        .unwrap_or_default();
-    names
-        .into_iter()
-        .enumerate()
-        .map(|(i, name)| GpuEntry {
-            name: name.to_string(),
-            vram_bytes: vrams.get(i).copied().flatten().unwrap_or(0),
-            bandwidth_gbps: bandwidths.get(i).copied().flatten(),
-        })
-        .collect()
-}
-
-#[derive(Serialize)]
-struct StatusPayload {
-    version: String,
-    latest_version: Option<String>,
-    node_id: String,
-    token: String,
-    node_status: String,
-    is_host: bool,
-    is_client: bool,
-    llama_ready: bool,
-    model_name: String,
-    models: Vec<String>,
-    available_models: Vec<String>,
-    requested_models: Vec<String>,
-    serving_models: Vec<String>,
-    hosted_models: Vec<String>,
-    draft_name: Option<String>,
-    api_port: u16,
-    my_vram_gb: f64,
-    model_size_gb: f64,
-    peers: Vec<PeerPayload>,
-    launch_pi: Option<String>,
-    launch_goose: Option<String>,
-    inflight_requests: u64,
-    /// Mesh identity (for matching against discovered meshes)
-    mesh_id: Option<String>,
-    /// Human-readable mesh name (from Nostr publishing)
-    mesh_name: Option<String>,
-    /// true when this node found the mesh via Nostr discovery (community/public mesh)
-    nostr_discovery: bool,
-    my_hostname: Option<String>,
-    my_is_soc: Option<bool>,
-    gpus: Vec<GpuEntry>,
-    routing_affinity: affinity::AffinityStatsSnapshot,
-}
-
-#[derive(Serialize)]
-struct ModelsPayload {
-    mesh_models: Vec<MeshModelPayload>,
-}
-
-#[derive(Serialize)]
-struct PeerPayload {
-    id: String,
-    role: String,
-    models: Vec<String>,
-    available_models: Vec<String>,
-    requested_models: Vec<String>,
-    vram_gb: f64,
-    serving_models: Vec<String>,
-    hosted_models: Vec<String>,
-    hosted_models_known: bool,
-    rtt_ms: Option<u32>,
-    hostname: Option<String>,
-    is_soc: Option<bool>,
-    gpus: Vec<GpuEntry>,
-}
-
-#[derive(Serialize)]
-struct MeshModelPayload {
-    name: String,
-    display_name: String,
-    status: String,
-    node_count: usize,
-    mesh_vram_gb: f64,
-    size_gb: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    architecture: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    context_length: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    quantization: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    /// Whether this model supports vision/image input
-    vision: bool,
-    /// Display-oriented vision metadata status.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    vision_status: Option<&'static str>,
-    /// Whether this model appears reasoning-oriented.
-    reasoning: bool,
-    /// Display-oriented reasoning metadata status.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_status: Option<&'static str>,
-    tool_use: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_use_status: Option<&'static str>,
-    moe: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expert_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    used_expert_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    draft_model: Option<String>,
-    /// Total requests seen across the mesh (from demand map)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    request_count: Option<u64>,
-    /// Seconds since last request or declaration (None if no demand data)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    last_active_secs_ago: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_page_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_ref: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_revision: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    source_file: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    active_nodes: Vec<String>,
-    fit_label: String,
-    fit_detail: String,
-    download_command: String,
-    run_command: String,
-    auto_command: String,
-}
 
 fn find_catalog_model(name: &str) -> Option<&'static crate::models::catalog::CatalogModel> {
     crate::models::catalog::MODEL_CATALOG
@@ -444,19 +236,41 @@ impl MeshApi {
         self.inner.lock().await.llama_port = port;
     }
 
+    async fn runtime_status(&self) -> RuntimeStatusPayload {
+        let (model_name, primary_backend, is_host, llama_ready, llama_port, local_processes) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.model_name.clone(),
+                inner.primary_backend.clone(),
+                inner.is_host,
+                inner.llama_ready,
+                inner.llama_port,
+                inner.local_processes.clone(),
+            )
+        };
+        build_runtime_status_payload(
+            &model_name,
+            primary_backend,
+            is_host,
+            llama_ready,
+            llama_port,
+            local_processes,
+        )
+    }
+
+    async fn runtime_processes(&self) -> RuntimeProcessesPayload {
+        let local_processes = self.inner.lock().await.local_processes.clone();
+        build_runtime_processes_payload(local_processes)
+    }
+
     async fn local_inventory_snapshot(&self) -> crate::models::LocalModelInventorySnapshot {
-        // Always await a oneshot for the result; if no scan is running, start one in
-        // a detached task that will perform the scan and notify all waiters.
         let rx = {
             let mut inner = self.inner.lock().await;
             if inner.inventory_scan_running {
-                // A scan is already in progress; just register as another waiter.
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 inner.inventory_scan_waiters.push(tx);
                 rx
             } else {
-                // No scan running: mark as running, register ourselves as a waiter,
-                // and kick off a detached task to perform the scan and cleanup.
                 inner.inventory_scan_running = true;
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 inner.inventory_scan_waiters.push(tx);
@@ -492,35 +306,8 @@ impl MeshApi {
         rx.await.unwrap_or_default()
     }
 
-    async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let (model_name, primary_backend, is_host, llama_ready, llama_port, local_processes) = {
-            let inner = self.inner.lock().await;
-            (
-                inner.model_name.clone(),
-                inner.primary_backend.clone(),
-                inner.is_host,
-                inner.llama_ready,
-                inner.llama_port,
-                inner.local_processes.clone(),
-            )
-        };
-        build_runtime_status_payload(
-            &model_name,
-            primary_backend,
-            is_host,
-            llama_ready,
-            llama_port,
-            local_processes,
-        )
-    }
-
-    async fn runtime_processes(&self) -> RuntimeProcessesPayload {
-        let local_processes = self.inner.lock().await.local_processes.clone();
-        build_runtime_processes_payload(local_processes)
-    }
-
     async fn mesh_models(&self) -> Vec<MeshModelPayload> {
-        let (node, my_vram_gb, model_name, model_size_bytes, local_processes) = {
+        let (node, my_vram_gb, model_name, model_size_bytes, _local_processes) = {
             let inner = self.inner.lock().await;
             (
                 inner.node.clone(),
@@ -551,12 +338,6 @@ impl MeshApi {
             }
         }
         let my_hosted_models = node.hosted_models().await;
-        let _display_model_name = local_processes
-            .first()
-            .map(|process| process.name.clone())
-            .or_else(|| my_hosted_models.first().cloned())
-            .or_else(|| my_serving_models.first().cloned())
-            .unwrap_or_else(|| model_name.clone());
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -914,6 +695,7 @@ impl MeshApi {
             .or_else(|| my_hosted_models.first().cloned())
             .or_else(|| my_serving_models.first().cloned())
             .unwrap_or_else(|| model_name.clone());
+        let mesh_models = self.mesh_models().await;
 
         let (launch_pi, launch_goose) = if effective_llama_ready {
             (
@@ -973,6 +755,7 @@ impl MeshApi {
             peers,
             launch_pi,
             launch_goose,
+            mesh_models,
             inflight_requests,
             mesh_id,
             mesh_name,
@@ -1078,10 +861,10 @@ pub async fn start(
     // One-shot check for newer public release (for UI footer indicator).
     let state5 = state.clone();
     tokio::spawn(async move {
-        let Some(latest) = crate::latest_release_version().await else {
+        let Some(latest) = crate::system::autoupdate::latest_release_version().await else {
             return;
         };
-        if !crate::version_newer(&latest, crate::VERSION) {
+        if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
             return;
         }
         {
@@ -1164,679 +947,29 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
             }
         }
 
-        // ── Discover meshes via Nostr ──
-        ("GET", "/api/discover") => {
-            let relays = state.inner.lock().await.nostr_relays.clone();
-            let filter = nostr::MeshFilter::default();
-            match nostr::discover(&relays, &filter, None).await {
-                Ok(meshes) => {
-                    if let Ok(json) = serde_json::to_string(&meshes) {
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                            json.len(), json
-                        );
-                        stream.write_all(resp.as_bytes()).await?;
-                    } else {
-                        respond_error(&mut stream, 500, "Failed to serialize").await?;
-                    }
-                }
-                Err(e) => {
-                    respond_error(&mut stream, 500, &format!("Discovery failed: {e}")).await?;
-                }
-            }
-        }
-
-        // ── Live status ──
-        ("GET", "/api/status") => {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), state.status()).await {
-                Ok(status) => {
-                    respond_json(&mut stream, 200, &status).await?;
-                }
-                Err(_) => {
-                    respond_error(&mut stream, 503, "Status temporarily unavailable").await?;
-                }
-            }
-        }
-
-        ("GET", "/api/models") => {
-            let mesh_models = state.mesh_models().await;
-            respond_json(&mut stream, 200, &ModelsPayload { mesh_models }).await?;
-        }
-
-        ("GET", "/api/runtime") => {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_status())
-                .await
+        _ => {
+            if !dispatch_request(
+                &mut stream,
+                state,
+                method,
+                path,
+                path_only,
+                body,
+                req.as_ref(),
+            )
+            .await?
             {
-                Ok(runtime_status) => {
-                    respond_json(&mut stream, 200, &runtime_status).await?;
-                }
-                Err(_) => {
-                    respond_error(&mut stream, 503, "Runtime status temporarily unavailable")
-                        .await?;
-                }
-            }
-        }
-
-        ("GET", "/api/runtime/processes") => {
-            match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_processes())
-                .await
-            {
-                Ok(runtime_processes) => {
-                    respond_json(&mut stream, 200, &runtime_processes).await?;
-                }
-                Err(_) => {
-                    respond_error(
-                        &mut stream,
-                        503,
-                        "Runtime process status temporarily unavailable",
-                    )
-                    .await?;
-                }
-            }
-        }
-
-        ("POST", "/api/runtime/models") => {
-            let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
-                respond_error(&mut stream, 503, "Runtime control unavailable").await?;
-                return Ok(());
-            };
-            let body = req.split("\r\n\r\n").nth(1).unwrap_or("");
-            let parsed: Result<serde_json::Value, _> = serde_json::from_str(body);
-            match parsed {
-                Ok(val) => {
-                    let spec = val["model"].as_str().unwrap_or("").to_string();
-                    if spec.is_empty() {
-                        respond_error(&mut stream, 400, "Missing 'model' field").await?;
-                    } else {
-                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                        let _ = control_tx.send(RuntimeControlRequest::Load {
-                            spec,
-                            resp: resp_tx,
-                        });
-                        match resp_rx.await {
-                            Ok(Ok(loaded)) => {
-                                respond_json(
-                                    &mut stream,
-                                    201,
-                                    &serde_json::json!({ "loaded": loaded }),
-                                )
-                                .await?;
-                            }
-                            Ok(Err(e)) => {
-                                respond_runtime_error(&mut stream, &e.to_string()).await?;
-                            }
-                            Err(_) => {
-                                respond_error(&mut stream, 503, "Runtime control unavailable")
-                                    .await?;
-                            }
-                        }
-                    }
-                }
-                Err(_) => {
-                    respond_error(&mut stream, 400, "Invalid JSON body").await?;
-                }
-            }
-        }
-
-        ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
-            let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
-                respond_error(&mut stream, 503, "Runtime control unavailable").await?;
-                return Ok(());
-            };
-            let Some(model_name) = decode_runtime_model_path(p) else {
-                respond_error(&mut stream, 400, "Missing model path").await?;
-                return Ok(());
-            };
-            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            let _ = control_tx.send(RuntimeControlRequest::Unload {
-                model: model_name.clone(),
-                resp: resp_tx,
-            });
-            match resp_rx.await {
-                Ok(Ok(())) => {
-                    respond_json(
-                        &mut stream,
-                        200,
-                        &serde_json::json!({ "dropped": model_name }),
-                    )
-                    .await?;
-                }
-                Ok(Err(e)) => {
-                    respond_runtime_error(&mut stream, &e.to_string()).await?;
-                }
-                Err(_) => {
-                    respond_error(&mut stream, 503, "Runtime control unavailable").await?;
-                }
-            }
-        }
-
-        // ── SSE event stream ──
-        ("GET", "/api/events") => {
-            let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n";
-            stream.write_all(header.as_bytes()).await?;
-
-            let status = state.status().await;
-            if let Ok(json) = serde_json::to_string(&status) {
-                stream
-                    .write_all(format!("data: {json}\n\n").as_bytes())
-                    .await?;
-            }
-
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            state.inner.lock().await.sse_clients.push(tx);
-
-            loop {
-                tokio::select! {
-                    event = rx.recv() => {
-                        match event {
-                            Some(data) => {
-                                if stream.write_all(data.as_bytes()).await.is_err() {
-                                    break;
-                                }
-                            }
-                            None => break,
-                        }
-                    }
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
-                        // SSE keepalive comment to prevent proxy/browser timeout
-                        if stream.write_all(b": keepalive\n\n").await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── Plugins ──
-        ("GET", "/api/plugins") => {
-            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-            let plugins = plugin_manager.list().await;
-            let json = serde_json::to_string(&plugins)?;
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                json.len(),
-                json
-            );
-            stream.write_all(resp.as_bytes()).await?;
-        }
-
-        ("GET", p) if p.starts_with("/api/plugins/") && p.ends_with("/tools") => {
-            let rest = &p["/api/plugins/".len()..];
-            let plugin_name = rest.trim_end_matches("/tools");
-            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-            match plugin_manager.tools(plugin_name).await {
-                Ok(tools) => {
-                    let json = serde_json::to_string(&tools)?;
-                    let resp = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                        json.len(),
-                        json
-                    );
-                    stream.write_all(resp.as_bytes()).await?;
-                }
-                Err(e) => {
-                    respond_error(&mut stream, 404, &e.to_string()).await?;
-                }
-            }
-        }
-
-        ("POST", p) if p.starts_with("/api/plugins/") && p.contains("/tools/") => {
-            let rest = &p["/api/plugins/".len()..];
-            if let Some((plugin_name, tool_name)) = rest.split_once("/tools/") {
-                let payload = if body.trim().is_empty() { "{}" } else { body };
-                let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-                match plugin_manager
-                    .call_tool(plugin_name, tool_name, payload)
-                    .await
-                {
-                    Ok(result) if !result.is_error => {
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                            result.content_json.len(),
-                            result.content_json
-                        );
-                        stream.write_all(resp.as_bytes()).await?;
-                    }
-                    Ok(result) => {
-                        respond_error(&mut stream, 502, &result.content_json).await?;
-                    }
-                    Err(e) => {
-                        respond_error(&mut stream, 502, &e.to_string()).await?;
-                    }
-                }
-            } else {
                 respond_error(&mut stream, 404, "Not found").await?;
             }
         }
-
-        // ── Blackboard ──
-        ("GET", "/api/blackboard/feed") => {
-            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-            if !plugin_manager
-                .is_enabled(plugin::BLACKBOARD_PLUGIN_ID)
-                .await
-            {
-                respond_error(&mut stream, 404, "Blackboard is disabled on this node").await?;
-            } else {
-                let query_str = path.split('?').nth(1).unwrap_or("");
-                let params: Vec<(&str, &str)> = query_str
-                    .split('&')
-                    .filter_map(|p| p.split_once('='))
-                    .collect();
-                let request = crate::blackboard::FeedRequest {
-                    from: params
-                        .iter()
-                        .find(|(k, _)| *k == "from")
-                        .map(|(_, v)| (*v).to_string()),
-                    limit: params
-                        .iter()
-                        .find(|(k, _)| *k == "limit")
-                        .and_then(|(_, v)| v.parse().ok())
-                        .unwrap_or(20),
-                    since: params
-                        .iter()
-                        .find(|(k, _)| *k == "since")
-                        .and_then(|(_, v)| v.parse().ok())
-                        .unwrap_or(0),
-                };
-                match plugin_manager
-                    .call_tool(
-                        plugin::BLACKBOARD_PLUGIN_ID,
-                        "feed",
-                        &serde_json::to_string(&request)?,
-                    )
-                    .await
-                {
-                    Ok(result) if !result.is_error => {
-                        let items: Vec<crate::blackboard::BlackboardItem> =
-                            serde_json::from_str(&result.content_json).unwrap_or_default();
-                        let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                            json.len(),
-                            json
-                        );
-                        stream.write_all(resp.as_bytes()).await?;
-                    }
-                    Ok(result) => {
-                        respond_error(&mut stream, 502, &result.content_json).await?;
-                    }
-                    Err(e) => respond_error(&mut stream, 502, &e.to_string()).await?,
-                }
-            }
-        }
-
-        ("GET", "/api/blackboard/search") => {
-            let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-            if !plugin_manager
-                .is_enabled(plugin::BLACKBOARD_PLUGIN_ID)
-                .await
-            {
-                respond_error(&mut stream, 404, "Blackboard is disabled on this node").await?;
-            } else {
-                let query_str = path.split('?').nth(1).unwrap_or("");
-                let params: Vec<(&str, &str)> = query_str
-                    .split('&')
-                    .filter_map(|p| p.split_once('='))
-                    .collect();
-                let request = crate::blackboard::SearchRequest {
-                    query: params
-                        .iter()
-                        .find(|(k, _)| *k == "q")
-                        .map(|(_, v)| (*v).replace('+', " ").replace("%20", " "))
-                        .unwrap_or_default(),
-                    limit: params
-                        .iter()
-                        .find(|(k, _)| *k == "limit")
-                        .and_then(|(_, v)| v.parse().ok())
-                        .unwrap_or(20),
-                    since: params
-                        .iter()
-                        .find(|(k, _)| *k == "since")
-                        .and_then(|(_, v)| v.parse().ok())
-                        .unwrap_or(0),
-                };
-                match plugin_manager
-                    .call_tool(
-                        plugin::BLACKBOARD_PLUGIN_ID,
-                        "search",
-                        &serde_json::to_string(&request)?,
-                    )
-                    .await
-                {
-                    Ok(result) if !result.is_error => {
-                        let items: Vec<crate::blackboard::BlackboardItem> =
-                            serde_json::from_str(&result.content_json).unwrap_or_default();
-                        let json = serde_json::to_string(&items).unwrap_or_else(|_| "[]".into());
-                        let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                            json.len(),
-                            json
-                        );
-                        stream.write_all(resp.as_bytes()).await?;
-                    }
-                    Ok(result) => {
-                        respond_error(&mut stream, 502, &result.content_json).await?;
-                    }
-                    Err(e) => respond_error(&mut stream, 502, &e.to_string()).await?,
-                }
-            }
-        }
-
-        ("POST", "/api/blackboard/post") => {
-            let (node, plugin_manager) = {
-                let inner = state.inner.lock().await;
-                (inner.node.clone(), inner.plugin_manager.clone())
-            };
-            if !plugin_manager
-                .is_enabled(plugin::BLACKBOARD_PLUGIN_ID)
-                .await
-            {
-                respond_error(&mut stream, 404, "Blackboard is disabled on this node").await?;
-            } else {
-                let parsed: Result<serde_json::Value, _> = serde_json::from_str(body);
-                match parsed {
-                    Ok(val) => {
-                        let text = val["text"].as_str().unwrap_or("").to_string();
-                        if text.is_empty() {
-                            respond_error(&mut stream, 400, "Missing 'text' field").await?;
-                        } else {
-                            let request = crate::blackboard::PostRequest {
-                                text,
-                                from: node.peer_name().await,
-                                peer_id: node.id().fmt_short().to_string(),
-                            };
-                            match plugin_manager
-                                .call_tool(
-                                    plugin::BLACKBOARD_PLUGIN_ID,
-                                    "post",
-                                    &serde_json::to_string(&request)?,
-                                )
-                                .await
-                            {
-                                Ok(result) if !result.is_error => {
-                                    let json = result.content_json;
-                                    let resp = format!(
-                                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                                        json.len(),
-                                        json
-                                    );
-                                    stream.write_all(resp.as_bytes()).await?;
-                                }
-                                Ok(result) => {
-                                    let status = if result.content_json.contains("Rate limited") {
-                                        429
-                                    } else {
-                                        400
-                                    };
-                                    respond_error(&mut stream, status, &result.content_json)
-                                        .await?;
-                                }
-                                Err(e) => {
-                                    let msg = e.to_string();
-                                    let status = if msg.contains("Rate limited") {
-                                        429
-                                    } else {
-                                        400
-                                    };
-                                    respond_error(&mut stream, status, &msg).await?;
-                                }
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        respond_error(&mut stream, 400, "Invalid JSON body").await?;
-                    }
-                }
-            }
-        }
-
-        // ── Chat proxy (routes through inference API port) ──
-        (m, p) if m != "POST" && p.starts_with("/api/chat") => {
-            respond_error(&mut stream, 405, "Method Not Allowed").await?;
-        }
-        ("POST", p) if p.starts_with("/api/chat") => {
-            let inner = state.inner.lock().await;
-            if !inner.llama_ready && !inner.is_client {
-                drop(inner);
-                return respond_error(&mut stream, 503, "LLM not ready").await;
-            }
-            let port = inner.api_port;
-            drop(inner);
-            let target = format!("127.0.0.1:{port}");
-            if let Ok(mut upstream) = TcpStream::connect(&target).await {
-                let rewritten = req.replacen("/api/chat", "/v1/chat/completions", 1);
-                upstream.write_all(rewritten.as_bytes()).await?;
-                tokio::io::copy_bidirectional(&mut stream, &mut upstream).await?;
-            } else {
-                respond_error(&mut stream, 502, "Cannot reach LLM server").await?;
-            }
-        }
-
-        _ => {
-            respond_error(&mut stream, 404, "Not found").await?;
-        }
     }
-    Ok(())
-}
-
-fn http_body_text(raw: &[u8]) -> &str {
-    let body_start = raw
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .map(|idx| idx + 4)
-        .unwrap_or(raw.len());
-    std::str::from_utf8(&raw[body_start..]).unwrap_or("")
-}
-
-async fn respond_error(stream: &mut TcpStream, code: u16, msg: &str) -> anyhow::Result<()> {
-    let body = serde_json::to_string(&serde_json::json!({"error": msg}))
-        .unwrap_or_else(|_| r#"{"error":"internal error"}"#.to_string());
-    let status = match code {
-        400 => "Bad Request",
-        404 => "Not Found",
-        409 => "Conflict",
-        422 => "Unprocessable Content",
-        405 => "Method Not Allowed",
-        500 => "Internal Server Error",
-        502 => "Bad Gateway",
-        503 => "Service Unavailable",
-        _ => "Unknown",
-    };
-    let resp = format!(
-        "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
-    );
-    stream.write_all(resp.as_bytes()).await?;
-    Ok(())
-}
-
-async fn respond_json<T: Serialize>(
-    stream: &mut TcpStream,
-    code: u16,
-    value: &T,
-) -> anyhow::Result<()> {
-    let json = serde_json::to_string(value)?;
-    let status = match code {
-        200 => "OK",
-        201 => "Created",
-        _ => "OK",
-    };
-    let resp = format!(
-        "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        json.len(),
-        json
-    );
-    stream.write_all(resp.as_bytes()).await?;
-    Ok(())
-}
-
-fn build_runtime_status_payload(
-    model_name: &str,
-    primary_backend: Option<String>,
-    is_host: bool,
-    llama_ready: bool,
-    llama_port: Option<u16>,
-    mut local_processes: Vec<RuntimeProcessPayload>,
-) -> RuntimeStatusPayload {
-    local_processes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-    let mut models: Vec<RuntimeModelPayload> = local_processes
-        .into_iter()
-        .map(|process| RuntimeModelPayload {
-            name: process.name,
-            backend: process.backend,
-            status: process.status,
-            port: Some(process.port),
-        })
-        .collect();
-
-    let has_model_process = models.iter().any(|model| model.name == model_name);
-    if is_host && !llama_ready && !has_model_process && !model_name.is_empty() {
-        models.insert(
-            0,
-            RuntimeModelPayload {
-                name: model_name.to_string(),
-                backend: primary_backend.unwrap_or_else(|| "unknown".into()),
-                status: "starting".into(),
-                port: llama_port,
-            },
-        );
-    }
-
-    RuntimeStatusPayload { models }
-}
-
-fn build_runtime_processes_payload(
-    mut local_processes: Vec<RuntimeProcessPayload>,
-) -> RuntimeProcessesPayload {
-    local_processes.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    RuntimeProcessesPayload {
-        processes: local_processes,
-    }
-}
-
-pub(crate) fn classify_runtime_error(msg: &str) -> u16 {
-    if msg.contains("not loaded") {
-        404
-    } else if msg.contains("already loaded") {
-        409
-    } else if msg.contains("fit locally") || msg.contains("runtime load only supports") {
-        422
-    } else {
-        400
-    }
-}
-
-async fn respond_runtime_error(stream: &mut TcpStream, msg: &str) -> anyhow::Result<()> {
-    respond_error(stream, classify_runtime_error(msg), msg).await
-}
-
-fn decode_runtime_model_path(path: &str) -> Option<String> {
-    let raw = path.strip_prefix("/api/runtime/models/")?;
-    if raw.is_empty() {
-        return None;
-    }
-
-    let bytes = raw.as_bytes();
-    let mut decoded: Vec<u8> = Vec::with_capacity(raw.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'%' if i + 2 < bytes.len() => {
-                let hi = bytes[i + 1] as char;
-                let lo = bytes[i + 2] as char;
-                let hex = [hi, lo].iter().collect::<String>();
-                if let Ok(value) = u8::from_str_radix(&hex, 16) {
-                    decoded.push(value);
-                    i += 3;
-                    continue;
-                } else {
-                    return None;
-                }
-            }
-            b'+' => decoded.push(b'+'),
-            b => decoded.push(b),
-        }
-        i += 1;
-    }
-    String::from_utf8(decoded).ok()
-}
-
-async fn respond_console_index(stream: &mut TcpStream) -> anyhow::Result<bool> {
-    if let Some(file) = CONSOLE_DIST.get_file("index.html") {
-        respond_bytes_cached(
-            stream,
-            200,
-            "OK",
-            "text/html; charset=utf-8",
-            "no-cache",
-            file.contents(),
-        )
-        .await?;
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-async fn respond_console_asset(stream: &mut TcpStream, path: &str) -> anyhow::Result<bool> {
-    let rel = path.trim_start_matches('/');
-    if rel.contains("..") {
-        return Ok(false);
-    }
-    let Some(file) = CONSOLE_DIST.get_file(rel) else {
-        return Ok(false);
-    };
-    let content_type = match rel.rsplit('.').next().unwrap_or("") {
-        "js" => "text/javascript; charset=utf-8",
-        "css" => "text/css; charset=utf-8",
-        "svg" => "image/svg+xml",
-        "json" => "application/json; charset=utf-8",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        "woff2" => "font/woff2",
-        _ => "application/octet-stream",
-    };
-    // Hashed asset filenames (Vite output) are immutable — cache forever.
-    // Non-hashed assets (favicon, manifest) get short cache.
-    let cache_control = if rel.starts_with("assets/") {
-        "public, max-age=31536000, immutable"
-    } else {
-        "public, max-age=3600"
-    };
-    respond_bytes_cached(
-        stream,
-        200,
-        "OK",
-        content_type,
-        cache_control,
-        file.contents(),
-    )
-    .await?;
-    Ok(true)
-}
-
-async fn respond_bytes_cached(
-    stream: &mut TcpStream,
-    code: u16,
-    status: &str,
-    content_type: &str,
-    cache_control: &str,
-    body: &[u8],
-) -> anyhow::Result<()> {
-    let header = format!(
-        "HTTP/1.1 {code} {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: {cache_control}\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(header.as_bytes()).await?;
-    stream.write_all(body).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::status::decode_runtime_model_path;
     use mesh_llm_plugin::MeshVisibility;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

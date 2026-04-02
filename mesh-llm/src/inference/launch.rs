@@ -761,7 +761,7 @@ pub async fn start_llama_server(
     let url = format!("http://localhost:{http_port}/health");
     for i in 0..600 {
         if i > 0 && i % 10 == 0 {
-            let bytes = crate::tunnel::bytes_transferred();
+            let bytes = crate::network::tunnel::bytes_transferred();
             let kb = bytes as f64 / 1024.0;
             let mb = bytes as f64 / (1024.0 * 1024.0);
             let gb = bytes as f64 / (1024.0 * 1024.0 * 1024.0);

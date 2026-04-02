@@ -160,8 +160,8 @@ pub fn inject_plan(body: &mut Value, plan: &PlanResult) {
 /// - Agentic tasks (needs_tools + complex content)
 /// - Deep complexity
 /// - Skip for simple chat, quick lookups, etc.
-pub fn should_pipeline(classification: &crate::router::Classification) -> bool {
-    use crate::router::{Category, Complexity};
+pub fn should_pipeline(classification: &crate::network::router::Classification) -> bool {
+    use crate::network::router::{Category, Complexity};
 
     // Only pipeline for complex tasks that need tools
     if !classification.needs_tools {
@@ -192,7 +192,7 @@ pub async fn route_with_pipeline(
     planner_model: &str,
     strong_model: &str,
     mut body: Value,
-    classification: &crate::router::Classification,
+    classification: &crate::network::router::Classification,
 ) -> (Value, String, Option<PlanResult>) {
     if !should_pipeline(classification) {
         return (body, strong_model.to_string(), None);
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_should_pipeline_complex_code() {
-        use crate::router::{Category, Classification, Complexity};
+        use crate::network::router::{Category, Classification, Complexity};
         let cl = Classification {
             category: Category::Code,
             complexity: Complexity::Deep,
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_should_not_pipeline_simple_chat() {
-        use crate::router::{Category, Classification, Complexity};
+        use crate::network::router::{Category, Classification, Complexity};
         let cl = Classification {
             category: Category::Chat,
             complexity: Complexity::Quick,
@@ -297,7 +297,7 @@ mod tests {
 
     #[test]
     fn test_should_not_pipeline_quick_tool_use() {
-        use crate::router::{Category, Classification, Complexity};
+        use crate::network::router::{Category, Classification, Complexity};
         let cl = Classification {
             category: Category::ToolCall,
             complexity: Complexity::Quick,
@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn test_should_pipeline_moderate_code_with_tools() {
-        use crate::router::{Category, Classification, Complexity};
+        use crate::network::router::{Category, Classification, Complexity};
         let cl = Classification {
             category: Category::Code,
             complexity: Complexity::Moderate,
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn test_should_not_pipeline_moderate_chat() {
-        use crate::router::{Category, Classification, Complexity};
+        use crate::network::router::{Category, Classification, Complexity};
         let cl = Classification {
             category: Category::Chat,
             complexity: Complexity::Moderate,
@@ -330,7 +330,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_route_with_pipeline_preplan_failure_falls_back_unmodified() {
-        use crate::router::{Category, Classification, Complexity};
+        use crate::network::router::{Category, Classification, Complexity};
 
         let client = Client::new();
         let body = json!({

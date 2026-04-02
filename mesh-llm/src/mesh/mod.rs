@@ -810,7 +810,7 @@ const PEER_STALE_SECS: u64 = 180; // 3 minutes
 /// "VRAM" is a misnomer — on macOS unified memory and Linux CPU-only, this
 /// is system RAM. On Linux with a GPU, it's actual GPU VRAM.
 pub fn detect_vram_bytes_capped(max_vram_gb: Option<f64>) -> u64 {
-    let mut detected = crate::hardware::survey().vram_bytes;
+    let mut detected = crate::system::hardware::survey().vram_bytes;
     if let Some(cap) = max_vram_gb {
         let cap_bytes = (cap * 1e9) as u64;
         if cap_bytes < detected {
@@ -1206,7 +1206,7 @@ impl Node {
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
 
-        let hw = crate::hardware::survey();
+        let hw = crate::system::hardware::survey();
         let mut vram = hw.vram_bytes;
         let gpu_name = if matches!(role, NodeRole::Client) {
             None
@@ -1489,10 +1489,12 @@ impl Node {
 
     pub async fn set_model_source(&self, source: String) {
         *self.model_source.lock().await = Some(source);
+        self.refresh_served_model_descriptors().await;
     }
 
     pub async fn set_serving_models(&self, models: Vec<String>) {
         *self.serving_models.lock().await = models;
+        self.refresh_served_model_descriptors().await;
     }
 
     pub async fn set_served_model_descriptors(&self, descriptors: Vec<ServedModelDescriptor>) {
@@ -1509,6 +1511,23 @@ impl Node {
 
     pub async fn hosted_models(&self) -> Vec<String> {
         self.hosted_models.lock().await.clone()
+    }
+
+    async fn refresh_served_model_descriptors(&self) {
+        let serving_models = self.serving_models.lock().await.clone();
+        let descriptors = if let Some(primary_model_name) = serving_models.first() {
+            let model_source = self.model_source.lock().await.clone();
+            let primary_model_path = crate::models::find_model_path(primary_model_name);
+            infer_served_model_descriptors(
+                primary_model_name,
+                &serving_models,
+                model_source.as_deref(),
+                Some(primary_model_path.as_path()),
+            )
+        } else {
+            Vec::new()
+        };
+        self.set_served_model_descriptors(descriptors).await;
     }
 
     /// Set the display name for blackboard posts.
