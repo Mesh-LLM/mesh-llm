@@ -105,6 +105,28 @@ fn legacy_descriptor_from_identity(
     }
 }
 
+fn runtime_descriptor_to_proto(
+    descriptor: &crate::mesh::ModelRuntimeDescriptor,
+) -> crate::proto::node::ModelRuntimeDescriptor {
+    crate::proto::node::ModelRuntimeDescriptor {
+        model_name: descriptor.model_name.clone(),
+        identity_hash: descriptor.identity_hash.clone(),
+        context_length: descriptor.context_length,
+        ready: descriptor.ready,
+    }
+}
+
+fn proto_runtime_descriptor_to_local(
+    descriptor: &crate::proto::node::ModelRuntimeDescriptor,
+) -> crate::mesh::ModelRuntimeDescriptor {
+    crate::mesh::ModelRuntimeDescriptor {
+        model_name: descriptor.model_name.clone(),
+        identity_hash: descriptor.identity_hash.clone(),
+        context_length: descriptor.context_length,
+        ready: descriptor.ready,
+    }
+}
+
 /// Returns `true` when a proto descriptor carries a non-empty model name.
 /// Descriptors without a valid identity are discarded so a partial list
 /// cannot suppress the legacy-identity backfill fallback.
@@ -191,10 +213,14 @@ pub(crate) fn local_ann_to_proto_ann(
                             min_experts_per_node: moe.min_experts_per_node,
                             source: moe.source.clone(),
                         }),
-                    context_length: topology.context_length,
                 }
             }),
         })
+        .collect();
+    let served_model_runtime = ann
+        .served_model_runtime
+        .iter()
+        .map(runtime_descriptor_to_proto)
         .collect();
     crate::proto::node::PeerAnnouncement {
         endpoint_id: ann.addr.id.as_bytes().to_vec(),
@@ -223,6 +249,7 @@ pub(crate) fn local_ann_to_proto_ann(
         hosted_models_known: Some(ann.hosted_models.is_some()),
         served_model_identities,
         served_model_descriptors,
+        served_model_runtime,
     }
 }
 
@@ -295,6 +322,11 @@ pub(crate) fn proto_ann_to_local(
         available_model_metadata: Vec::new(),
         experts_summary: pa.experts_summary.clone(),
         available_model_sizes: HashMap::new(),
+        served_model_runtime: pa
+            .served_model_runtime
+            .iter()
+            .map(proto_runtime_descriptor_to_local)
+            .collect(),
         served_model_descriptors: if !pa.served_model_descriptors.is_empty() {
             let descriptors: Vec<_> = pa
                 .served_model_descriptors
@@ -318,7 +350,6 @@ pub(crate) fn proto_ann_to_local(
                         .unwrap_or_default(),
                     topology: descriptor.topology.as_ref().map(|topology| {
                         crate::models::ModelTopology {
-                            context_length: topology.context_length,
                             moe: topology
                                 .moe
                                 .as_ref()

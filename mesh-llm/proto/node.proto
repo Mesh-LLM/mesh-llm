@@ -35,6 +35,7 @@ message PeerAnnouncement {
   optional bool hosted_models_known = 24;            // false/absent when relayed from legacy JSON peers
   repeated ServedModelDescriptor served_model_descriptors = 25;
   repeated ServedModelIdentity served_model_identities = 26;
+  repeated ModelRuntimeDescriptor served_model_runtime = 27;
 }
 
 message ServedModelDescriptor {
@@ -71,7 +72,13 @@ enum CapabilityLevel {
 
 message ModelTopology {
   optional ModelMoeInfo moe = 1;
-  optional uint32 context_length = 2;
+}
+
+message ModelRuntimeDescriptor {
+  string model_name = 1;
+  optional string identity_hash = 2;
+  optional uint32 context_length = 3;
+  bool ready = 4;
 }
 
 message ModelMoeInfo {

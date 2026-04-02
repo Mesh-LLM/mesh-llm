@@ -138,7 +138,7 @@ async fn set_advertised_model_context(
     model_name: &str,
     context_length: Option<u32>,
 ) {
-    node.set_served_model_context_length(model_name, context_length)
+    node.set_model_runtime_context_length(model_name, context_length)
         .await;
     node.regossip().await;
 }

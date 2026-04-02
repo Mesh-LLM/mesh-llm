@@ -83,24 +83,19 @@ pub struct ServedModelDescriptor {
     pub topology: Option<crate::models::ModelTopology>,
 }
 
-impl ServedModelDescriptor {
-    pub fn context_length(&self) -> Option<u32> {
-        self.topology
-            .as_ref()
-            .and_then(|topology| topology.context_length)
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ModelRuntimeDescriptor {
+    pub model_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
+    pub ready: bool,
+}
 
-    pub fn set_context_length(&mut self, context_length: Option<u32>) {
-        match (self.topology.as_mut(), context_length) {
-            (Some(topology), value) => topology.context_length = value,
-            (None, Some(value)) => {
-                self.topology = Some(crate::models::ModelTopology {
-                    context_length: Some(value),
-                    ..Default::default()
-                });
-            }
-            (None, None) => {}
-        }
+impl ModelRuntimeDescriptor {
+    pub fn advertised_context_length(&self) -> Option<u32> {
+        self.ready.then_some(self.context_length).flatten()
     }
 }
 
@@ -478,6 +473,7 @@ fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.available_models != new.available_models
         || old.requested_models != new.requested_models
         || old.served_model_descriptors != new.served_model_descriptors
+        || old.served_model_runtime != new.served_model_runtime
         || old.version != new.version
 }
 
@@ -570,6 +566,8 @@ pub(crate) struct PeerAnnouncementV0 {
     available_model_sizes: HashMap<String, u64>,
     #[serde(skip_serializing, skip_deserializing, default)]
     served_model_descriptors: Vec<ServedModelDescriptor>,
+    #[serde(skip_serializing, skip_deserializing, default)]
+    served_model_runtime: Vec<ModelRuntimeDescriptor>,
 }
 
 impl PeerAnnouncementV0 {
@@ -601,6 +599,7 @@ impl PeerAnnouncementV0 {
             experts_summary: None,
             available_model_sizes: self.available_model_sizes,
             served_model_descriptors: self.served_model_descriptors,
+            served_model_runtime: self.served_model_runtime,
         }
     }
 }
@@ -627,6 +626,7 @@ impl From<&PeerAnnouncement> for PeerAnnouncementV0 {
             gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
             available_model_sizes: ann.available_model_sizes.clone(),
             served_model_descriptors: ann.served_model_descriptors.clone(),
+            served_model_runtime: ann.served_model_runtime.clone(),
         }
     }
 }
@@ -675,6 +675,7 @@ fn apply_transitive_ann(
         existing.model_source = ann.model_source.clone();
     }
     existing.served_model_descriptors = ann.served_model_descriptors.clone();
+    existing.served_model_runtime = ann.served_model_runtime.clone();
     if ann.experts_summary.is_some() {
         existing.experts_summary = ann.experts_summary.clone();
     }
@@ -736,6 +737,7 @@ pub(crate) struct PeerAnnouncement {
     pub(crate) experts_summary: Option<crate::proto::node::ExpertsSummary>,
     pub(crate) available_model_sizes: HashMap<String, u64>,
     pub(crate) served_model_descriptors: Vec<ServedModelDescriptor>,
+    pub(crate) served_model_runtime: Vec<ModelRuntimeDescriptor>,
 }
 
 #[derive(Debug, Clone)]
@@ -774,6 +776,7 @@ pub struct PeerInfo {
     pub experts_summary: Option<crate::proto::node::ExpertsSummary>,
     pub available_model_sizes: HashMap<String, u64>,
     pub served_model_descriptors: Vec<ServedModelDescriptor>,
+    pub served_model_runtime: Vec<ModelRuntimeDescriptor>,
 }
 
 #[derive(Debug, Clone)]
@@ -809,6 +812,7 @@ impl PeerInfo {
             experts_summary: ann.experts_summary.clone(),
             available_model_sizes: ann.available_model_sizes.clone(),
             served_model_descriptors: ann.served_model_descriptors.clone(),
+            served_model_runtime: ann.served_model_runtime.clone(),
         }
     }
 
@@ -833,10 +837,10 @@ impl PeerInfo {
     }
 
     pub fn advertised_context_length(&self, model: &str) -> Option<u32> {
-        self.served_model_descriptors
+        self.served_model_runtime
             .iter()
-            .find(|descriptor| descriptor.identity.model_name == model)
-            .and_then(ServedModelDescriptor::context_length)
+            .find(|runtime| runtime.model_name == model)
+            .and_then(ModelRuntimeDescriptor::advertised_context_length)
     }
 }
 
@@ -976,6 +980,7 @@ pub struct Node {
     model_source: Arc<Mutex<Option<String>>>,
     serving_models: Arc<Mutex<Vec<String>>>,
     served_model_descriptors: Arc<Mutex<Vec<ServedModelDescriptor>>>,
+    model_runtime_descriptors: Arc<Mutex<Vec<ModelRuntimeDescriptor>>>,
     hosted_models: Arc<Mutex<Vec<String>>>,
     llama_ready: Arc<Mutex<bool>>,
     available_models: Arc<Mutex<Vec<String>>>,
@@ -1301,6 +1306,7 @@ impl Node {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
@@ -1387,6 +1393,7 @@ impl Node {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
@@ -1535,7 +1542,15 @@ impl Node {
     }
 
     pub async fn set_served_model_descriptors(&self, descriptors: Vec<ServedModelDescriptor>) {
+        let model_names: std::collections::HashSet<_> = descriptors
+            .iter()
+            .map(|descriptor| descriptor.identity.model_name.clone())
+            .collect();
         *self.served_model_descriptors.lock().await = descriptors;
+        self.model_runtime_descriptors
+            .lock()
+            .await
+            .retain(|runtime| model_names.contains(&runtime.model_name));
     }
 
     pub async fn upsert_served_model_descriptor(&self, descriptor: ServedModelDescriptor) {
@@ -1555,31 +1570,53 @@ impl Node {
             .lock()
             .await
             .retain(|descriptor| descriptor.identity.model_name != model_name);
+        self.model_runtime_descriptors
+            .lock()
+            .await
+            .retain(|runtime| runtime.model_name != model_name);
     }
 
-    pub async fn set_served_model_context_length(
+    pub async fn set_model_runtime_context_length(
         &self,
         model_name: &str,
         context_length: Option<u32>,
     ) {
-        if let Some(descriptor) = self
+        let identity_hash = self
             .served_model_descriptors
             .lock()
             .await
             .iter_mut()
             .find(|descriptor| descriptor.identity.model_name == model_name)
-        {
-            descriptor.set_context_length(context_length);
+            .and_then(|descriptor| descriptor.identity.identity_hash.clone());
+        let mut runtimes = self.model_runtime_descriptors.lock().await;
+        if let Some(context_length) = context_length {
+            if let Some(runtime) = runtimes
+                .iter_mut()
+                .find(|runtime| runtime.model_name == model_name)
+            {
+                runtime.identity_hash = identity_hash.or_else(|| runtime.identity_hash.clone());
+                runtime.context_length = Some(context_length);
+                runtime.ready = true;
+            } else {
+                runtimes.push(ModelRuntimeDescriptor {
+                    model_name: model_name.to_string(),
+                    identity_hash,
+                    context_length: Some(context_length),
+                    ready: true,
+                });
+            }
+        } else {
+            runtimes.retain(|runtime| runtime.model_name != model_name);
         }
     }
 
     pub async fn local_model_context_length(&self, model_name: &str) -> Option<u32> {
-        self.served_model_descriptors
+        self.model_runtime_descriptors
             .lock()
             .await
             .iter()
-            .find(|descriptor| descriptor.identity.model_name == model_name)
-            .and_then(ServedModelDescriptor::context_length)
+            .find(|runtime| runtime.model_name == model_name)
+            .and_then(ModelRuntimeDescriptor::advertised_context_length)
     }
 
     pub async fn peer_model_context_length(
@@ -4062,6 +4099,7 @@ impl Node {
         let my_source = self.model_source.lock().await.clone();
         let my_serving_models = self.serving_models.lock().await.clone();
         let my_served_model_descriptors = self.served_model_descriptors.lock().await.clone();
+        let my_model_runtime_descriptors = self.model_runtime_descriptors.lock().await.clone();
         let my_hosted_models = self.hosted_models.lock().await.clone();
         let my_available = self.available_models.lock().await.clone();
         let my_requested = self.requested_models.lock().await.clone();
@@ -4102,6 +4140,7 @@ impl Node {
                     experts_summary: p.experts_summary.clone(),
                     available_model_sizes: p.available_model_sizes.clone(),
                     served_model_descriptors: p.served_model_descriptors.clone(),
+                    served_model_runtime: p.served_model_runtime.clone(),
                 })
                 .collect()
         };
@@ -4144,6 +4183,7 @@ impl Node {
             experts_summary: None,
             available_model_sizes: my_model_sizes,
             served_model_descriptors: my_served_model_descriptors,
+            served_model_runtime: my_model_runtime_descriptors,
         });
         announcements
     }
@@ -4190,6 +4230,7 @@ mod tests {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
@@ -4694,6 +4735,7 @@ mod tests {
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
         let legacy_route_table = RoutingTable {
             hosts: vec![RouteEntry {
@@ -4908,6 +4950,7 @@ mod tests {
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::from([("Qwen".into(), 1234_u64)]),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
         let json = serde_json::to_vec(&vec![ann.clone()]).unwrap();
 
@@ -4976,6 +5019,7 @@ mod tests {
             experts_summary: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         }
     }
 
@@ -5290,10 +5334,13 @@ mod tests {
                     identity_hash: Some("sha256:abc123".into()),
                 },
                 capabilities: crate::models::ModelCapabilities::default(),
-                topology: Some(crate::models::ModelTopology {
-                    context_length: Some(32768),
-                    moe: None,
-                }),
+                topology: Some(crate::models::ModelTopology { moe: None }),
+            }],
+            served_model_runtime: vec![ModelRuntimeDescriptor {
+                model_name: "Qwen3-8B-Q4_K_M".to_string(),
+                identity_hash: Some("sha256:abc123".into()),
+                context_length: Some(32768),
+                ready: true,
             }],
         };
 
@@ -5340,11 +5387,11 @@ mod tests {
         assert!(roundtripped.available_model_sizes.is_empty());
         assert_eq!(
             roundtripped
-                .served_model_descriptors
+                .served_model_runtime
                 .first()
-                .and_then(ServedModelDescriptor::context_length),
+                .and_then(ModelRuntimeDescriptor::advertised_context_length),
             Some(32768),
-            "proto_ann_to_local must preserve served descriptor context length"
+            "proto_ann_to_local must preserve served model runtime context length"
         );
 
         let frame = build_gossip_frame(&[local_ann], peer_id);
@@ -5370,12 +5417,11 @@ mod tests {
         );
         assert_eq!(
             wire_pa
-                .served_model_descriptors
+                .served_model_runtime
                 .first()
-                .and_then(|descriptor| descriptor.topology.as_ref())
-                .and_then(|topology| topology.context_length),
+                .and_then(|runtime| runtime.context_length),
             Some(32768),
-            "build_gossip_frame must preserve served descriptor context length"
+            "build_gossip_frame must preserve served model runtime context length"
         );
         let (_, final_local) =
             proto_ann_to_local(wire_pa).expect("final proto_ann_to_local must succeed");
@@ -5384,9 +5430,9 @@ mod tests {
         assert!(final_local.available_model_sizes.is_empty());
         assert_eq!(
             final_local
-                .served_model_descriptors
+                .served_model_runtime
                 .first()
-                .and_then(ServedModelDescriptor::context_length),
+                .and_then(ModelRuntimeDescriptor::advertised_context_length),
             Some(32768)
         );
     }
@@ -5511,6 +5557,7 @@ mod tests {
             experts_summary: None,
             available_model_sizes: new_sizes,
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
 
         apply_transitive_ann(&mut existing, &addr, &ann);
@@ -5577,6 +5624,7 @@ mod tests {
             experts_summary: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
 
         apply_transitive_ann(&mut existing, &weak_addr, &ann);
@@ -5622,6 +5670,7 @@ mod tests {
             experts_summary: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
         apply_transitive_ann(&mut existing, &richer_addr, &ann2);
 
@@ -6603,6 +6652,7 @@ mod tests {
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
 
         let server = tokio::spawn(async move {
@@ -6788,6 +6838,7 @@ mod tests {
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
 
         let server = tokio::spawn(async move {
@@ -6995,6 +7046,7 @@ mod tests {
             gpu_bandwidth_gbps: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         };
         let v0_gossip_json =
             serde_json::to_vec(&vec![v0_ann]).expect("v0 gossip JSON must serialize");
@@ -7212,6 +7264,7 @@ mod tests {
             tunnel_port: None,
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
+            served_model_runtime: vec![],
         }
     }
 
