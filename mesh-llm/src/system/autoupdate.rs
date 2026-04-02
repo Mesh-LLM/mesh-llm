@@ -6,7 +6,9 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use crate::{cli::Cli, launch, plugin, VERSION};
+use crate::cli::Cli;
+use crate::inference::launch;
+use crate::{plugin, VERSION};
 
 const DEFAULT_RELEASE_REPO: &str = "michaelneale/mesh-llm";
 #[cfg(not(windows))]
@@ -590,8 +592,8 @@ fn replace_bundle_files(
 
     let staged_names: BTreeSet<&str> = staged_files.iter().map(String::as_str).collect();
     let mut managed_names: BTreeSet<String> = BTreeSet::from([mesh_binary_name()]);
-    managed_names.extend(super::bundled_bin_names("rpc-server"));
-    managed_names.extend(super::bundled_bin_names("llama-server"));
+    managed_names.extend(crate::runtime::bundled_bin_names("rpc-server"));
+    managed_names.extend(crate::runtime::bundled_bin_names("llama-server"));
 
     let mut backed_up = Vec::new();
     for name in managed_names {
@@ -694,8 +696,8 @@ fn windows_update_script(
     let args_json = serde_json::to_string(&args)?;
 
     let mut managed_names: BTreeSet<String> = BTreeSet::from([mesh_binary_name()]);
-    managed_names.extend(super::bundled_bin_names("rpc-server"));
-    managed_names.extend(super::bundled_bin_names("llama-server"));
+    managed_names.extend(crate::runtime::bundled_bin_names("rpc-server"));
+    managed_names.extend(crate::runtime::bundled_bin_names("llama-server"));
     let managed_json = serde_json::to_string(&managed_names.into_iter().collect::<Vec<_>>())?;
 
     let quote = |path: &Path| path.to_string_lossy().replace('\'', "''");

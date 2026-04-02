@@ -197,10 +197,6 @@ pub fn huggingface_identity_for_path(path: &Path) -> Option<HuggingFaceModelIden
     scan_hf_cache_identity_for_path(path, &cache)
 }
 
-pub fn exact_model_source_for_path(path: &Path) -> Option<String> {
-    huggingface_identity_for_path(path).map(|identity| identity.canonical_ref)
-}
-
 pub fn gguf_metadata_cache_path(path: &Path) -> Option<PathBuf> {
     let key = if let Some(identity) = huggingface_identity_for_path(path) {
         format!("hf:{}", identity.canonical_ref)

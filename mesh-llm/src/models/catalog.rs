@@ -323,7 +323,7 @@ fn format_download_bytes(bytes: u64) -> String {
 }
 
 fn download_hf_assets_blocking(label: &str, assets: Vec<HfAsset>) -> Result<Vec<PathBuf>> {
-    let api = super::build_hf_api()?;
+    let api = super::build_hf_api(false)?;
     let cache = crate::models::huggingface_hub_cache();
     let mut download_plan = std::collections::BTreeSet::new();
     let mut config_repos = std::collections::BTreeSet::new();

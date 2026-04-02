@@ -3,10 +3,12 @@
 //! Used by the API proxy (port 9337), bootstrap proxy, and passive mode.
 //! All inference traffic flows through these functions.
 
-use crate::{
-    affinity::{prepare_remote_targets_for_request, AffinityRouter, PreparedTargets},
-    election, mesh, router,
+use crate::inference::election;
+use crate::mesh;
+use crate::network::affinity::{
+    prepare_remote_targets_for_request, AffinityRouter, PreparedTargets,
 };
+use crate::network::router;
 use anyhow::{anyhow, bail, Context, Result};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -1023,7 +1025,7 @@ pub async fn route_model_request(
     filtered_targets
         .targets
         .insert(model.to_string(), ordered_candidates.clone());
-    let selection = crate::affinity::select_model_target_for_request(
+    let selection = crate::network::affinity::select_model_target_for_request(
         &filtered_targets,
         model,
         parsed_body,
@@ -1261,7 +1263,9 @@ pub async fn pipeline_proxy_local(
         .cloned()
         .unwrap_or_default();
 
-    match crate::pipeline::pre_plan(&http_client, &planner_url, planner_model, &messages).await {
+    match crate::inference::pipeline::pre_plan(&http_client, &planner_url, planner_model, &messages)
+        .await
+    {
         Ok(plan) => {
             tracing::info!(
                 "pipeline: pre-plan by {} in {}ms — {}",
@@ -1269,7 +1273,7 @@ pub async fn pipeline_proxy_local(
                 plan.elapsed_ms,
                 plan.plan_text.chars().take(200).collect::<String>()
             );
-            crate::pipeline::inject_plan(&mut body, &plan);
+            crate::inference::pipeline::inject_plan(&mut body, &plan);
         }
         Err(e) => {
             tracing::warn!("pipeline: pre-plan failed ({e}), falling back to direct proxy");

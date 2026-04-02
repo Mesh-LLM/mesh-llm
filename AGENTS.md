@@ -47,6 +47,71 @@ See `CONTRIBUTING.md` for full dev workflow.
 - `relay/` — Self-hosted iroh relay
 - `evals/` — Benchmarking and evaluation scripts
 
+## Module Structure Rules
+
+The crate root should stay minimal.
+
+- Keep `mesh-llm/src/lib.rs` and `mesh-llm/src/main.rs` as the only root `.rs` files unless there is a strong reason otherwise.
+- New code should go into an existing domain directory when possible.
+
+Use semantic ownership for module placement.
+
+- `mesh-llm/src/cli/` — Clap types, command parsing, command dispatch, and user-facing command handlers.
+- `mesh-llm/src/runtime/` — top-level process orchestration and startup/runtime coordination.
+- `mesh-llm/src/network/` — request routing, proxying, tunneling, relay/discovery networking, request-affinity logic, and endpoint rewrite support.
+- `mesh-llm/src/inference/` — model-serving logic, election, launch, pipeline, and MoE behavior.
+- `mesh-llm/src/system/` — machine-local environment and platform concerns such as hardware detection, benchmarking, self-update, and local system integration.
+- `mesh-llm/src/models/` — model catalog, resolution, downloads, local model storage, and model metadata.
+- `mesh-llm/src/mesh/` — peer membership, gossip, identity, peer state, and mesh node behavior.
+- `mesh-llm/src/plugin/` — plugin host, plugin runtime, transport, config, and MCP bridge support.
+- `mesh-llm/src/api/` — management API surface and route handling.
+- `mesh-llm/src/protocol/` — wire protocol types, encoding/decoding, and conversions.
+
+CLI ownership rule.
+
+- All command handlers belong under `mesh-llm/src/cli/`, usually `mesh-llm/src/cli/commands/`.
+- Domain modules should not own Clap parsing or top-level command dispatch.
+- Domain modules may expose reusable functions that CLI handlers call.
+
+Do not introduce generic buckets.
+
+- Avoid directories or modules named `app`, `utils`, `misc`, `common`, or similar catch-alls.
+- Name modules after the responsibility they own.
+
+Keep shared code honest.
+
+- If code is only used by one subsystem, keep it inside that subsystem.
+- Only move code to a shared module when it is truly cross-domain.
+- Do not create shared helpers prematurely.
+
+Prefer semantic grouping over symmetry.
+
+- Do not create one directory per file just for visual symmetry.
+- A single `foo.rs` file is already a Rust module; use a directory only when `foo` has meaningful substructure.
+
+Minimize crate-root re-exports.
+
+- Root re-exports are acceptable as temporary compatibility shims during refactors.
+- New code should prefer importing from the owning module directly.
+- Remove transitional re-exports once call sites have been updated.
+
+When to split a file.
+
+- Split a file when it contains multiple separable responsibilities, when navigation becomes difficult, or when tests naturally cluster by concern.
+- Do not split purely to reduce line count if the code still represents one coherent object or subsystem.
+
+Naming rule.
+
+- File and module names should describe responsibility, not implementation detail.
+- Prefer names like `affinity`, `discovery`, `transport`, `maintenance`, `warnings`.
+- Avoid vague names like `helpers`, `stuff`, `logic`, or `manager` unless the abstraction is genuinely that broad.
+
+Current structure notes.
+
+- Request-affinity code belongs with networking/routing behavior, not `system/`.
+- Plugin MCP support belongs inside `mesh-llm/src/plugin/`, not as a separate root module.
+- Model command handlers belong in `mesh-llm/src/cli/commands/`; `mesh-llm/src/models/` should stay domain-focused.
+
 ## Key Source Files
 
 - `mesh-llm/src/main.rs` — CLI args, orchestration: `run_auto()`, `run_idle()`, `run_passive()`

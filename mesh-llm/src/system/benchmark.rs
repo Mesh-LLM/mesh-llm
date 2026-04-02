@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use crate::hardware::HardwareSurvey;
+use crate::system::hardware::HardwareSurvey;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BenchmarkOutput {

@@ -1,6 +1,6 @@
 //! Prefix affinity and sticky routing helpers for inference target selection.
 
-use crate::election;
+use crate::inference::election;
 use iroh::EndpointId;
 use serde::Serialize;
 use serde_json::Value;

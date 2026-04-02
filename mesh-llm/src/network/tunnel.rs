@@ -11,7 +11,7 @@
 //! 3. Bidirectionally relay
 
 use crate::mesh::Node;
-use crate::rewrite::{self, PortRewriteMap};
+use crate::network::rewrite::{self, PortRewriteMap};
 use anyhow::Result;
 use iroh::EndpointId;
 use std::collections::HashMap;
