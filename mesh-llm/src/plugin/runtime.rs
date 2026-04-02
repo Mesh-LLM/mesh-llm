@@ -3,13 +3,25 @@
 //! Handles spawning, restarting, health-checking, and bidirectional proto framing
 //! for individual plugin processes.
 
-use super::support::{plugin_error, serialize_params, summarize_capabilities};
+use super::support::{parse_optional_json, plugin_error, serialize_params, summarize_capabilities};
 use super::transport::{bind_local_listener, connection_loop};
-#[allow(unused_imports)]
-use super::*;
-use anyhow::Context;
+use super::{
+    AtomicU64, CONNECT_TIMEOUT_SECS, ExternalPlugin, ExternalPluginSpec,
+    HEALTH_CHECK_INTERVAL_SECS, PROTOCOL_VERSION, PluginHostMode, PluginMeshEvent, PluginRpcBridge,
+    PluginRuntime, PluginSummary, REQUEST_TIMEOUT_SECS, RpcResult, ToolCallResult, ToolSummary,
+    proto, proto_mesh_visibility,
+};
+use anyhow::{Context, Result};
+use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
+use rmcp::model::{
+    CallToolResult as McpCallToolResult, InitializeRequestParams, ListToolsResult,
+    PaginatedRequestParams, ServerInfo,
+};
+use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
-use tokio::process::Command;
+use std::sync::Arc;
+use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
 impl ExternalPlugin {

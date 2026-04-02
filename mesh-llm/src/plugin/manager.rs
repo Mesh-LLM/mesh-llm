@@ -5,9 +5,13 @@
 
 use super::support::{format_args_for_log, format_slice_for_log, format_tool_names_for_log};
 use super::transport::make_instance_id;
-#[allow(unused_imports)]
-use super::*;
-use anyhow::bail;
+use super::{
+    ExternalPlugin, PluginHostMode, PluginMeshEvent, PluginManager, PluginManagerInner,
+    PluginRpcBridge, PluginSummary, ResolvedPlugins, proto,
+};
+use anyhow::{Result, bail};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
 impl PluginManager {
