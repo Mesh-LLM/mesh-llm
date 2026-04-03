@@ -339,6 +339,14 @@ jobs:
             expect_contains: Blue
             forbid_contains: "{"
             thinking_mode: ""
+          - name: lfm2-350m
+            repo: mlx-community/LFM2-350M-4bit
+            template_source: chat_template.jinja
+            cache_slug: mlx-community--LFM2-350M-4bit
+            prompt: "Reply with exactly: blue"
+            expect_contains: "🔴"
+            forbid_contains: "{"
+            thinking_mode: ""
     steps:
       - uses: actions/checkout@v5
 

@@ -6,7 +6,7 @@
 use anyhow::{bail, Context, Result};
 use mlx_rs::array;
 use mlx_rs::ops::indexing::{IndexOp, TryIndexMutOp};
-use mlx_rs::ops::{dequantize, dequantize_device, quantize};
+use mlx_rs::ops::{conv1d, dequantize, dequantize_device, pad, quantize};
 use mlx_rs::Array;
 use mlx_rs::{Dtype, StreamOrDevice};
 use serde_json::Value;
@@ -20,6 +20,7 @@ pub struct ModelConfig {
     pub hidden_size: i32,
     pub num_hidden_layers: i32,
     #[allow(dead_code)]
+    #[serde(default)]
     pub intermediate_size: i32,
     pub num_attention_heads: i32,
     pub num_key_value_heads: i32,
@@ -33,6 +34,7 @@ pub struct ModelConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub vocab_size_per_layer_input: Option<i32>,
+    #[serde(alias = "norm_eps")]
     pub rms_norm_eps: f32,
     #[serde(default = "default_rope_theta")]
     pub rope_theta: f32,
@@ -98,6 +100,30 @@ pub struct ModelConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub cache_implementation: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub conv_bias: Option<bool>,
+    #[serde(default, alias = "conv_L_cache")]
+    pub conv_l_cache: Option<i32>,
+    #[serde(default)]
+    pub block_norm_eps: Option<f32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub block_dim: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub block_ff_dim: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub block_multiple_of: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub block_ffn_dim_multiplier: Option<f32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub block_auto_adjust_ff_dim: Option<bool>,
+    #[serde(default)]
+    pub full_attn_idxs: Option<Vec<i32>>,
     pub quantization: Option<QuantConfig>,
     /// EOS token ID(s) — can be a single int or array in config.json.
     #[serde(default, deserialize_with = "deserialize_eos_token_id")]
@@ -933,9 +959,53 @@ impl DeepseekV3MoE {
     }
 }
 
+pub struct Lfm2ShortConv {
+    conv_weight: Array,
+    in_proj: QuantizedLinear,
+    out_proj: QuantizedLinear,
+    hidden_size: i32,
+    conv_l_cache: i32,
+}
+
+impl Lfm2ShortConv {
+    fn forward_no_cache(&self, x: &Array) -> Result<Array> {
+        let bcx = self.in_proj.forward(x)?;
+        let hidden = self.hidden_size;
+        let b = bcx.index((std::ops::RangeFull, std::ops::RangeFull, 0..hidden));
+        let c = bcx.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            hidden..(hidden * 2),
+        ));
+        let x_proj = bcx.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            (hidden * 2)..(hidden * 3),
+        ));
+        let bx = b.multiply(&x_proj)?;
+        let bx = pad(
+            &bx,
+            &[(0, 0), (self.conv_l_cache - 1, 0), (0, 0)],
+            None::<Array>,
+            None::<mlx_rs::ops::PadMode>,
+        )?;
+        let conv_out = conv1d(
+            &bx,
+            &self.conv_weight,
+            None::<i32>,
+            None::<i32>,
+            None::<i32>,
+            Some(self.hidden_size),
+        )?;
+        let y = c.multiply(&conv_out)?;
+        self.out_proj.forward(&y)
+    }
+}
+
 pub enum AttentionKind {
     Standard(Attention),
     DeepseekV3(DeepseekV3Attention),
+    Lfm2ShortConv(Lfm2ShortConv),
 }
 
 impl AttentionKind {
@@ -943,6 +1013,7 @@ impl AttentionKind {
         match self {
             Self::Standard(attn) => attn.forward_no_cache(x),
             Self::DeepseekV3(attn) => attn.forward_no_cache(x),
+            Self::Lfm2ShortConv(conv) => conv.forward_no_cache(x),
         }
     }
 
@@ -955,6 +1026,9 @@ impl AttentionKind {
         match self {
             Self::Standard(attn) => attn.forward(x, cache, shared_cache),
             Self::DeepseekV3(attn) => attn.forward(x, cache),
+            Self::Lfm2ShortConv(_) => {
+                bail!("LFM2 ShortConv currently requires cacheless generation")
+            }
         }
     }
 
@@ -962,6 +1036,7 @@ impl AttentionKind {
         match self {
             Self::Standard(attn) => attn.kv_shared_source,
             Self::DeepseekV3(_) => None,
+            Self::Lfm2ShortConv(_) => None,
         }
     }
 }
@@ -1494,6 +1569,18 @@ impl MlxModel {
             })
         };
 
+        let load_lfm2_conv_weight = |prefix: &str| -> Result<Array> {
+            let weight = tensors
+                .get(&format!("{prefix}.weight"))
+                .cloned()
+                .with_context(|| format!("missing {prefix}.weight"))?;
+            if weight.ndim() == 3 && weight.shape()[2] > weight.shape()[1] {
+                Ok(weight.transpose_axes(&[0, 2, 1])?)
+            } else {
+                Ok(weight)
+            }
+        };
+
         let (embed_group_size, embed_bits) = quant_params_for(
             &config_json,
             &format!("{}.embed_tokens", prefixes.model),
@@ -1592,11 +1679,18 @@ impl MlxModel {
         };
 
         let norm = RMSNorm {
-            weight: tensors
-                .get(&format!("{}.norm.weight", prefixes.model))
-                .cloned()
-                .with_context(|| format!("missing {}.norm.weight", prefixes.model))?,
-            eps: config.rms_norm_eps,
+            weight: if arch.is_lfm2() {
+                tensors
+                    .get(&format!("{}.embedding_norm.weight", prefixes.model))
+                    .cloned()
+                    .with_context(|| format!("missing {}.embedding_norm.weight", prefixes.model))?
+            } else {
+                tensors
+                    .get(&format!("{}.norm.weight", prefixes.model))
+                    .cloned()
+                    .with_context(|| format!("missing {}.norm.weight", prefixes.model))?
+            },
+            eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
             add_unit_offset: arch.uses_gemma_norm_offset(),
         };
 
@@ -1762,6 +1856,86 @@ impl MlxModel {
                                 format!("missing {p}.post_attention_layernorm.weight")
                             })?,
                         eps: config.rms_norm_eps,
+                        add_unit_offset: false,
+                    },
+                    mlp_out_norm: None,
+                    per_layer_input: None,
+                    layer_scalar: None,
+                });
+                continue;
+            }
+            if arch.is_lfm2() {
+                let full_attn_idxs = config
+                    .full_attn_idxs
+                    .as_ref()
+                    .with_context(|| format!("missing full_attn_idxs for LFM2 layer {}", i))?;
+                let is_attention_layer = full_attn_idxs.contains(&i);
+                let operator = if is_attention_layer {
+                    AttentionKind::Standard(Attention {
+                        q_proj: load_qlinear(&format!("{p}.self_attn.q_proj"))?,
+                        k_proj: load_qlinear(&format!("{p}.self_attn.k_proj"))?,
+                        v_proj: load_qlinear(&format!("{p}.self_attn.v_proj"))?,
+                        o_proj: load_qlinear(&format!("{p}.self_attn.out_proj"))?,
+                        q_norm: tensors
+                            .get(&format!("{p}.self_attn.q_layernorm.weight"))
+                            .cloned()
+                            .map(|weight| RMSNorm {
+                                weight,
+                                eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
+                                add_unit_offset: false,
+                            }),
+                        k_norm: tensors
+                            .get(&format!("{p}.self_attn.k_layernorm.weight"))
+                            .cloned()
+                            .map(|weight| RMSNorm {
+                                weight,
+                                eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
+                                add_unit_offset: false,
+                            }),
+                        v_norm: None,
+                        num_heads: config.num_attention_heads,
+                        num_kv_heads: config.num_key_value_heads,
+                        head_dim,
+                        scale: 1.0 / (head_dim as f32).sqrt(),
+                        attn_logit_softcapping: None,
+                        rope_dim: head_dim,
+                        rope_theta: config.rope_theta,
+                        kv_shared_source: None,
+                    })
+                } else {
+                    AttentionKind::Lfm2ShortConv(Lfm2ShortConv {
+                        conv_weight: load_lfm2_conv_weight(&format!("{p}.conv.conv"))?,
+                        in_proj: load_qlinear(&format!("{p}.conv.in_proj"))?,
+                        out_proj: load_qlinear(&format!("{p}.conv.out_proj"))?,
+                        hidden_size: config.hidden_size,
+                        conv_l_cache: config.conv_l_cache.unwrap_or(3),
+                    })
+                };
+
+                layers.push(Layer {
+                    attn: operator,
+                    mlp: MlpKind::Dense(MLP {
+                        gate_up_proj: None,
+                        gate_proj: Some(load_qlinear(&format!("{p}.feed_forward.w1"))?),
+                        up_proj: Some(load_qlinear(&format!("{p}.feed_forward.w3"))?),
+                        down_proj: load_qlinear(&format!("{p}.feed_forward.w2"))?,
+                        activation: Activation::Silu,
+                    }),
+                    attn_in_norm: RMSNorm {
+                        weight: tensors
+                            .get(&format!("{p}.operator_norm.weight"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.operator_norm.weight"))?,
+                        eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
+                        add_unit_offset: false,
+                    },
+                    attn_out_norm: None,
+                    mlp_in_norm: RMSNorm {
+                        weight: tensors
+                            .get(&format!("{p}.ffn_norm.weight"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.ffn_norm.weight"))?,
+                        eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
                         add_unit_offset: false,
                     },
                     mlp_out_norm: None,
@@ -2013,7 +2187,7 @@ impl MlxModel {
             tokenizer,
             prompt_template,
             tokenwise_prefill: arch.is_gemma2() || arch.is_gemma4(),
-            cacheless_generation: arch.is_gemma2(),
+            cacheless_generation: arch.is_gemma2() || arch.is_lfm2(),
         })
     }
 
@@ -2192,6 +2366,7 @@ impl MlxModel {
 enum ModelArchitecture {
     LlamaLike,
     DeepseekV3,
+    Lfm2,
     Glm4,
     Gemma2,
     Gemma3,
@@ -2205,6 +2380,10 @@ impl ModelArchitecture {
 
     fn is_glm4(self) -> bool {
         matches!(self, Self::Glm4)
+    }
+
+    fn is_lfm2(self) -> bool {
+        matches!(self, Self::Lfm2)
     }
 
     fn is_gemma2(self) -> bool {
@@ -2253,6 +2432,8 @@ fn model_architecture(config: &Value) -> ModelArchitecture {
         || model_type.starts_with("kimi_k25")
     {
         ModelArchitecture::DeepseekV3
+    } else if model_type.starts_with("lfm2") {
+        ModelArchitecture::Lfm2
     } else if model_type.starts_with("gemma4") {
         ModelArchitecture::Gemma4
     } else if model_type.starts_with("gemma2") {
@@ -2314,6 +2495,14 @@ fn effective_text_config_json(config: &Value) -> Value {
         "final_logit_softcapping",
         "sliding_window",
         "cache_implementation",
+        "conv_bias",
+        "conv_L_cache",
+        "block_dim",
+        "block_ff_dim",
+        "block_multiple_of",
+        "block_ffn_dim_multiplier",
+        "block_auto_adjust_ff_dim",
+        "full_attn_idxs",
     ] {
         if !merged.contains_key(key) || merged.get(key).is_some_and(Value::is_null) {
             if let Some(value) = config.get(key) {
@@ -2429,6 +2618,7 @@ fn config_supports_mlx(config: &Value) -> bool {
             "llama"
                 | "glm4"
                 | "deepseek_v3"
+                | "lfm2"
                 | "qwen2"
                 | "qwen3"
                 | "gemma2"
@@ -2438,6 +2628,7 @@ fn config_supports_mlx(config: &Value) -> bool {
                 | "gemma4_text"
                 | "glm4forcausallm"
                 | "deepseekv3forcausallm"
+                | "lfm2forcausallm"
                 | "llamaforcausallm"
                 | "qwen2forcausallm"
                 | "qwen3forcausallm"
@@ -2484,7 +2675,7 @@ fn ensure_supported_mlx_model(dir: &Path, config: &Value) -> Result<()> {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "none".to_string());
     bail!(
-        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/DeepSeekV3/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
+        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/DeepSeekV3/LFM2/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
         dir.display(),
         model_type,
         architectures,
@@ -2602,6 +2793,10 @@ mod tests {
             "model_type": "glm4",
             "architectures": ["Glm4ForCausalLM"]
         });
+        let lfm2: Value = serde_json::json!({
+            "model_type": "lfm2",
+            "architectures": ["Lfm2ForCausalLM"]
+        });
         let qwen: Value = serde_json::json!({
             "model_type": "qwen2",
             "architectures": ["Qwen2ForCausalLM"]
@@ -2627,6 +2822,7 @@ mod tests {
         assert!(config_supports_mlx(&deepseek));
         assert!(config_supports_mlx(&kimi));
         assert!(config_supports_mlx(&glm4));
+        assert!(config_supports_mlx(&lfm2));
         assert!(config_supports_mlx(&qwen));
         assert!(config_supports_mlx(&llama));
         assert!(config_supports_mlx(&gemma2));
@@ -2816,6 +3012,16 @@ mod tests {
     }
 
     #[test]
+    fn model_architecture_detects_lfm2() {
+        let config = serde_json::json!({
+            "model_type": "lfm2",
+            "architectures": ["Lfm2ForCausalLM"]
+        });
+
+        assert_eq!(model_architecture(&config), ModelArchitecture::Lfm2);
+    }
+
+    #[test]
     fn model_architecture_detects_deepseek_v3() {
         let config = serde_json::json!({
             "model_type": "deepseek_v3",
@@ -2911,6 +3117,45 @@ mod tests {
         assert_eq!(config.topk_group, Some(4));
         assert_eq!(config.num_experts_per_tok, Some(8));
         assert_eq!(config.first_k_dense_replace, Some(3));
+    }
+
+    #[test]
+    fn lfm2_config_parses_conv_and_attention_layout() {
+        let config: ModelConfig = serde_json::from_value(serde_json::json!({
+            "model_type": "lfm2",
+            "hidden_size": 1024,
+            "num_hidden_layers": 16,
+            "intermediate_size": 6656,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 8,
+            "vocab_size": 65536,
+            "rms_norm_eps": 0.00001,
+            "max_position_embeddings": 128000,
+            "tie_word_embeddings": false,
+            "rope_theta": 1000000.0,
+            "conv_bias": false,
+            "conv_L_cache": 3,
+            "block_norm_eps": 0.00001,
+            "block_dim": 1024,
+            "block_ff_dim": 6656,
+            "block_multiple_of": 256,
+            "block_ffn_dim_multiplier": 1.0,
+            "block_auto_adjust_ff_dim": true,
+            "full_attn_idxs": [2, 5, 8, 10, 12, 14],
+            "quantization": {
+                "group_size": 64,
+                "bits": 4
+            },
+            "eos_token_id": 7
+        }))
+        .unwrap();
+
+        assert_eq!(config.conv_l_cache, Some(3));
+        assert_eq!(
+            config.full_attn_idxs.as_deref(),
+            Some(&[2, 5, 8, 10, 12, 14][..])
+        );
+        assert_eq!(config.block_norm_eps, Some(0.00001));
     }
 
     #[test]

@@ -542,6 +542,7 @@ fn run_inference(
         prompt_len
     );
 
+    let mut decode_stream = state.model.tokenizer.decode_stream(true);
     let mut text = String::new();
     let mut completion_tokens = 0usize;
     let mut finish_reason = "length";
@@ -553,11 +554,10 @@ fn run_inference(
             break;
         }
         completion_tokens += 1;
-        let piece = state
-            .model
-            .tokenizer
-            .decode(&[next_token], true)
-            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?;
+        let piece = decode_stream
+            .step(next_token)
+            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
+            .unwrap_or_default();
         let chunk = stop_buffer.push(&piece);
         text.push_str(&chunk.emit);
         if chunk.matched {
@@ -626,6 +626,7 @@ fn run_inference_streaming(
         sampler.sample_next_token(&logits)?
     };
 
+    let mut decode_stream = state.model.tokenizer.decode_stream(true);
     let mut finish_reason = "length";
 
     // Decode + stream
@@ -635,11 +636,10 @@ fn run_inference_streaming(
             break;
         }
 
-        let piece = state
-            .model
-            .tokenizer
-            .decode(&[next_token], true)
-            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?;
+        let piece = decode_stream
+            .step(next_token)
+            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
+            .unwrap_or_default();
         let chunk = stop_buffer.push(&piece);
         if !chunk.emit.is_empty() {
             if tx.blocking_send(StreamEvent::Text(chunk.emit)).is_err() {
@@ -695,6 +695,7 @@ fn run_inference_cacheless(
         });
     }
 
+    let mut decode_stream = state.model.tokenizer.decode_stream(true);
     let mut text = String::new();
     let mut completion_tokens = 0usize;
     let mut finish_reason = "length";
@@ -709,11 +710,10 @@ fn run_inference_cacheless(
         }
         completion_tokens += 1;
         tokens.push(next_token);
-        let piece = state
-            .model
-            .tokenizer
-            .decode(&[next_token], true)
-            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?;
+        let piece = decode_stream
+            .step(next_token)
+            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
+            .unwrap_or_default();
         let chunk = stop_buffer.push(&piece);
         text.push_str(&chunk.emit);
         if chunk.matched {
@@ -755,6 +755,7 @@ fn run_inference_streaming_cacheless(
         return Ok("length");
     }
 
+    let mut decode_stream = state.model.tokenizer.decode_stream(true);
     let mut finish_reason = "length";
 
     for _ in 0..generation.max_tokens {
@@ -767,11 +768,10 @@ fn run_inference_streaming_cacheless(
         }
 
         tokens.push(next_token);
-        let piece = state
-            .model
-            .tokenizer
-            .decode(&[next_token], true)
-            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?;
+        let piece = decode_stream
+            .step(next_token)
+            .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
+            .unwrap_or_default();
         let chunk = stop_buffer.push(&piece);
         if !chunk.emit.is_empty() && tx.blocking_send(StreamEvent::Text(chunk.emit)).is_err() {
             break;
@@ -826,6 +826,13 @@ fn parse_stop_sequences(stop: Option<&serde_json::Value>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokenizers::decoders::byte_fallback::ByteFallback;
+    use tokenizers::models::bpe::BPE;
+    use tokenizers::normalizers::unicode::NFC;
+    use tokenizers::normalizers::utils::Sequence;
+    use tokenizers::normalizers::Strip;
+    use tokenizers::pre_tokenizers::byte_level::ByteLevel;
+    use tokenizers::TokenizerBuilder;
 
     #[test]
     fn mlx_chat_smoke_renders_llama3_prompt_from_hf_request_shape() {
@@ -910,6 +917,37 @@ mod tests {
         assert!(prompt.contains("<start_of_turn>model\nHi.<end_of_turn>\n"));
         assert!(prompt.contains("<start_of_turn>user\nlook<start_of_image>here<end_of_turn>\n"));
         assert!(prompt.ends_with("<start_of_turn>model\n"));
+    }
+
+    #[test]
+    fn decode_stream_handles_split_utf8_tokens() {
+        let vocab = [
+            ("<0x20>".to_string(), 0),
+            ("<0xC3>".to_string(), 1),
+            ("<0xA9>".to_string(), 2),
+            (" This".to_string(), 3),
+        ];
+        let bpe = BPE::builder()
+            .vocab_and_merges(vocab, vec![])
+            .byte_fallback(true)
+            .build()
+            .unwrap();
+        let tokenizer = TokenizerBuilder::new()
+            .with_model(bpe)
+            .with_normalizer(Some(Sequence::new(vec![
+                Strip::new(true, true).into(),
+                NFC.into(),
+            ])))
+            .with_pre_tokenizer(Some(ByteLevel::default()))
+            .with_post_processor(Some(ByteLevel::default()))
+            .with_decoder(Some(ByteFallback::default()))
+            .build()
+            .unwrap();
+
+        let mut decode_stream = tokenizer.decode_stream(false);
+        assert_eq!(decode_stream.step(0).unwrap(), Some(" ".to_string()));
+        assert_eq!(decode_stream.step(1).unwrap(), None);
+        assert_eq!(decode_stream.step(2).unwrap(), Some("é".to_string()));
     }
 }
 

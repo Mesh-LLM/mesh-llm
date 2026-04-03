@@ -42,6 +42,8 @@ These families are now in the supported native MLX runtime set:
 - Gemma 2 text
 - Gemma 3 text
 - Gemma 4 text
+- GLM4 text
+- LFM2 text
 
 Notes:
 - Gemma 4 support currently targets text-capable MLX repos such as `unsloth/gemma-4-E4B-it-UD-MLX-4bit`
@@ -52,8 +54,8 @@ Notes:
 
 These families have template-level support or partial investigation, but not full runtime support yet:
 - Kimi
+- Kimi Linear
 - gpt-oss
-- LFM2
 
 These need explicit loader/runtime work, not just template changes.
 
@@ -69,13 +71,65 @@ Remaining work:
 - harden around layer-type-specific attention behavior if new repos expose gaps
 - add more Gemma 4 catalog coverage once confidence is higher
 
-### Kimi / gpt-oss / LFM2
+### Kimi / Kimi Linear / gpt-oss / LFM2
 
-Remaining work for each family:
-- real loader/config support
-- tensor-layout implementation
+These should not be treated as one bucket anymore.
+
+#### Kimi
+
+Current understanding:
+- `Kimi-K2` / `K2.5` ride on a DeepSeekV3-style MLA + MoE runtime base
+- that base is now implemented in the MLX runtime
+- live smoke coverage is still missing because the public MLX repos are very large
+
+Remaining work:
+- add a real known-good K2/K2.5 runtime validation pass once practical hardware/CI coverage exists
+- catalog only when we are comfortable with real runtime validation, not just compile-time support
+
+#### Kimi Linear
+
+Current understanding:
+- `kimi_linear` is a separate architecture from K2/K2.5
+- it uses its own linear-attention stack plus MoE and custom projection structure
+- it is not covered by the current DeepSeekV3/K2 support
+
+Remaining work:
+- dedicated loader/config support
+- dedicated linear-attention runtime implementation
 - one known-good public MLX target repo
 - focused runtime smoke tests
+
+#### gpt-oss
+
+Current understanding:
+- the realistic public target is `mlx-community/gpt-oss-20b-MXFP4-Q4`
+- its runtime is broadly tractable, but the model uses `mxfp4` quantization
+- the current Rust MLX path does not expose `mxfp4` quantization mode support
+
+What is additionally needed:
+- either add `mxfp4` quantization support in the runtime/bindings, potentially via an `mlx-rs` fork
+- or implement a correctness-first dense fallback path for MXFP4 weights
+- then add the family-specific loader/runtime support and a real target-model validation pass
+
+This is why `gpt-oss` is not just “another dense family”.
+
+#### LFM2
+
+Current understanding:
+- the best first target is `mlx-community/LFM2-350M-4bit`
+- `LFM2` is more tractable than `gpt-oss` because the public MLX target uses plain affine quantization
+- the family alternates standard attention blocks with `ShortConv` blocks
+
+Current status:
+- `lfm2` config support is implemented
+- `ShortConv` runtime is implemented
+- `mlx-community/LFM2-350M-4bit` passes a live local MLX smoke
+- MLX generation now uses streaming-safe token decoding, which fixed non-ASCII output for this family (`🔴` instead of replacement characters)
+
+Remaining work:
+- add broader LFM2 coverage beyond the 350M target
+- add GGUF-side parity where practical if we want matrix symmetry
+- revisit cached generation for LFM2 after the correctness-first cacheless path
 
 ## Prompt Template Compatibility
 
@@ -170,8 +224,8 @@ Remaining work:
 
 These are the main technical tasks still on the table:
 - family-specific loader/runtime support for Kimi
+- family-specific loader/runtime support for Kimi Linear
 - family-specific loader/runtime support for gpt-oss
-- family-specific loader/runtime support for LFM2
 - broader Gemma 4 validation and hardening
 - MLX vision runtime support for families where `mesh-llm` already supports vision on the llama path
 - distributed MLX serving
@@ -184,6 +238,7 @@ Reasons a fork might become necessary:
 - missing kernels for quantized paths we need
 - attention-mask behavior the current API cannot express cleanly
 - backend/device movement limitations that block correct runtime behavior
+- quantization modes such as MXFP4 that the current bindings/runtime path do not expose cleanly
 
 This should remain a last resort, but it is explicitly on the table.
 
@@ -203,15 +258,14 @@ Issues already raised for MLX follow-up:
 
 Recommended order:
 
-1. Land and stabilize Gemma 2 and Gemma 4 text support in CI.
-2. Fix the current MLX smoke flake around JOSIE sequential startup.
-3. Narrow issue `#142` to the remaining Gemma-family work now that Gemma 2, Gemma 3, and Gemma 4 text support exist.
-4. Start scoping MLX vision support, since vision is already supported on the llama-backed path.
-5. Decide whether the next major priority is:
+1. Land and stabilize DeepSeekV3 / Kimi-K2 coverage beyond compile-time validation.
+2. Narrow issue `#142` to the remaining Gemma-family work now that Gemma 2, Gemma 3, and Gemma 4 text support exist.
+3. Start scoping MLX vision support, since vision is already supported on the llama-backed path.
+4. Decide whether the next major priority is:
    - broader family coverage, or
    - distributed MLX serving from `#146`
 
-If family coverage is the priority after Gemma 2, the next order should be:
+If family coverage is the priority, the next order should be:
 - Kimi
 - gpt-oss
-- LFM2
+- Kimi Linear
