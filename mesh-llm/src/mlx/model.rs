@@ -5,8 +5,8 @@
 
 use anyhow::{bail, Context, Result};
 use mlx_rs::array;
-use mlx_rs::ops::dequantize_device;
 use mlx_rs::ops::indexing::{IndexOp, TryIndexMutOp};
+use mlx_rs::ops::{dequantize, dequantize_device, quantize};
 use mlx_rs::Array;
 use mlx_rs::{Dtype, StreamOrDevice};
 use serde_json::Value;
@@ -46,6 +46,42 @@ pub struct ModelConfig {
     pub hidden_activation: Option<String>,
     #[serde(default)]
     pub hidden_size_per_layer_input: Option<i32>,
+    #[serde(default)]
+    pub moe_intermediate_size: Option<i32>,
+    #[serde(default)]
+    pub n_shared_experts: Option<i32>,
+    #[serde(default)]
+    pub n_routed_experts: Option<i32>,
+    #[serde(default)]
+    pub routed_scaling_factor: Option<f32>,
+    #[serde(default)]
+    pub kv_lora_rank: Option<i32>,
+    #[serde(default)]
+    pub q_lora_rank: Option<i32>,
+    #[serde(default)]
+    pub qk_rope_head_dim: Option<i32>,
+    #[serde(default)]
+    pub v_head_dim: Option<i32>,
+    #[serde(default)]
+    pub qk_nope_head_dim: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub topk_method: Option<String>,
+    #[serde(default)]
+    pub norm_topk_prob: Option<bool>,
+    #[serde(default)]
+    pub n_group: Option<i32>,
+    #[serde(default)]
+    pub topk_group: Option<i32>,
+    #[serde(default)]
+    pub num_experts_per_tok: Option<i32>,
+    #[serde(default)]
+    pub moe_layer_freq: Option<i32>,
+    #[serde(default)]
+    pub first_k_dense_replace: Option<i32>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub attention_bias: Option<bool>,
     #[serde(default)]
     pub num_kv_shared_layers: Option<i32>,
     #[serde(default)]
@@ -226,6 +262,119 @@ impl RMSNorm {
     }
 }
 
+pub struct QuantizedMultiLinear {
+    weight: Array,
+    scales: Array,
+    biases: Array,
+    group_size: i32,
+    bits: i32,
+}
+
+impl QuantizedMultiLinear {
+    fn forward(&self, x: &Array, transpose: bool) -> Result<Array> {
+        let num_heads = self.weight.shape()[0];
+        let mut outputs = Vec::with_capacity(num_heads as usize);
+        for head in 0..num_heads {
+            let idx = Array::from_int(head);
+            let w = self
+                .weight
+                .take_axis(&idx, 0)?
+                .reshape(&[self.weight.shape()[1], self.weight.shape()[2]])?;
+            let s = self
+                .scales
+                .take_axis(&idx, 0)?
+                .reshape(&[self.scales.shape()[1], self.scales.shape()[2]])?;
+            let b = self
+                .biases
+                .take_axis(&idx, 0)?
+                .reshape(&[self.biases.shape()[1], self.biases.shape()[2]])?;
+            let xh = x.index((
+                std::ops::RangeFull,
+                head,
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+            ));
+            let out = mlx_rs::ops::quantized_matmul(
+                &xh,
+                &w,
+                &s,
+                &b,
+                transpose,
+                self.group_size,
+                self.bits,
+            )?;
+            outputs.push(out.expand_dims(1)?);
+        }
+        let output_refs: Vec<&Array> = outputs.iter().collect();
+        Ok(mlx_rs::ops::concatenate_axis(&output_refs, 1)?)
+    }
+}
+
+fn quantize_stacked_weights(
+    dense: &Array,
+    group_size: i32,
+    bits: i32,
+) -> Result<(Array, Array, Array)> {
+    let num_heads = dense.shape()[0];
+    let mut q_weights = Vec::with_capacity(num_heads as usize);
+    let mut q_scales = Vec::with_capacity(num_heads as usize);
+    let mut q_biases = Vec::with_capacity(num_heads as usize);
+    for head in 0..num_heads {
+        let slice = dense
+            .index((head, std::ops::RangeFull, std::ops::RangeFull))
+            .reshape(&[dense.shape()[1], dense.shape()[2]])?;
+        let (w, s, b) = quantize(&slice, group_size, bits)?;
+        q_weights.push(w.expand_dims(0)?);
+        q_scales.push(s.expand_dims(0)?);
+        q_biases.push(b.expand_dims(0)?);
+    }
+    let q_weight_refs: Vec<&Array> = q_weights.iter().collect();
+    let q_scale_refs: Vec<&Array> = q_scales.iter().collect();
+    let q_bias_refs: Vec<&Array> = q_biases.iter().collect();
+    Ok((
+        mlx_rs::ops::concatenate_axis(&q_weight_refs, 0)?,
+        mlx_rs::ops::concatenate_axis(&q_scale_refs, 0)?,
+        mlx_rs::ops::concatenate_axis(&q_bias_refs, 0)?,
+    ))
+}
+
+fn expert_slice_2d(array: &Array, expert: i32) -> Result<Array> {
+    Ok(array
+        .take_axis(&Array::from_int(expert), 0)?
+        .reshape(&[array.shape()[1], array.shape()[2]])?)
+}
+
+pub struct QuantizedSwitchLinear {
+    weight: Array,
+    scales: Array,
+    biases: Array,
+    bias: Option<Array>,
+    group_size: i32,
+    bits: i32,
+}
+
+impl QuantizedSwitchLinear {
+    fn forward_single(&self, x: &Array, expert: i32) -> Result<Array> {
+        let out = mlx_rs::ops::quantized_matmul(
+            x,
+            &expert_slice_2d(&self.weight, expert)?,
+            &expert_slice_2d(&self.scales, expert)?,
+            &expert_slice_2d(&self.biases, expert)?,
+            true,
+            self.group_size,
+            self.bits,
+        )?;
+        Ok(if let Some(bias) = &self.bias {
+            let bias = bias
+                .take_axis(&Array::from_int(expert), 0)?
+                .reshape(&[1, bias.shape()[1]])?;
+            out.add(&bias)?
+        } else {
+            out
+        })
+    }
+}
+
 // ── Attention ──
 
 pub struct Attention {
@@ -358,6 +507,163 @@ impl Attention {
                 .reshape(&[b, l, self.num_heads * self.head_dim])?;
 
         self.o_proj.forward(&attn)
+    }
+}
+
+pub struct DeepseekV3Attention {
+    q_proj: Option<QuantizedLinear>,
+    q_a_proj: Option<QuantizedLinear>,
+    q_a_layernorm: Option<RMSNorm>,
+    q_b_proj: Option<QuantizedLinear>,
+    kv_a_proj_with_mqa: QuantizedLinear,
+    kv_a_layernorm: RMSNorm,
+    embed_q: QuantizedMultiLinear,
+    unembed_out: QuantizedMultiLinear,
+    o_proj: QuantizedLinear,
+    num_heads: i32,
+    q_head_dim: i32,
+    qk_rope_head_dim: i32,
+    qk_nope_head_dim: i32,
+    kv_lora_rank: i32,
+    v_head_dim: i32,
+    scale: f32,
+    rope_theta: f32,
+}
+
+impl DeepseekV3Attention {
+    fn build_q(&self, x: &Array) -> Result<Array> {
+        let q = if let Some(q_proj) = &self.q_proj {
+            q_proj.forward(x)?
+        } else {
+            self.q_b_proj
+                .as_ref()
+                .context("missing q_b_proj for DeepSeekV3 attention")?
+                .forward(
+                    &self
+                        .q_a_layernorm
+                        .as_ref()
+                        .context("missing q_a_layernorm for DeepSeekV3 attention")?
+                        .forward(
+                            &self
+                                .q_a_proj
+                                .as_ref()
+                                .context("missing q_a_proj for DeepSeekV3 attention")?
+                                .forward(x)?,
+                        )?,
+                )?
+        };
+        Ok(q)
+    }
+
+    fn attention_mask(&self, q_pe: &Array, k_pe: &Array, causal: bool) -> Result<Array> {
+        let mut pe_scores = mlx_rs::ops::matmul(
+            &q_pe.multiply(&array!(self.scale))?,
+            &k_pe.transpose_axes(&[0, 1, 3, 2])?,
+        )?;
+        if causal {
+            let mask = causal_mask(q_pe.shape()[2], k_pe.shape()[2])?;
+            let fill = array!(pe_scores.dtype().finfo_min()? as f32).as_dtype(pe_scores.dtype())?;
+            pe_scores = mlx_rs::ops::r#where(&mask, &pe_scores, &fill)?;
+        }
+        Ok(pe_scores)
+    }
+
+    fn forward_impl(&self, x: &Array, cache: Option<&mut KVCache>) -> Result<Array> {
+        let shape = x.shape();
+        let (b, l) = (shape[0], shape[1]);
+
+        let q = self
+            .build_q(x)?
+            .reshape(&[b, l, self.num_heads, self.q_head_dim])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+        let q_nope = q.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            ..self.qk_nope_head_dim,
+        ));
+        let q_pe = q.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            self.qk_nope_head_dim..,
+        ));
+
+        let compressed_kv = self.kv_a_proj_with_mqa.forward(x)?;
+        let kv_latent = compressed_kv.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            ..self.kv_lora_rank,
+        ));
+        let k_pe = compressed_kv.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            self.kv_lora_rank..,
+        ));
+        let kv_latent = self.kv_a_layernorm.forward(&kv_latent)?.expand_dims(1)?;
+        let k_pe = k_pe
+            .reshape(&[b, l, 1, self.qk_rope_head_dim])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let offset = cache.as_ref().map(|cache| cache.offset as i32).unwrap_or(0);
+        let q_pe = apply_rope(
+            &q_pe,
+            self.qk_rope_head_dim,
+            self.qk_rope_head_dim,
+            self.rope_theta,
+            offset,
+        )?;
+        let k_pe = apply_rope(
+            &k_pe,
+            self.qk_rope_head_dim,
+            self.qk_rope_head_dim,
+            self.rope_theta,
+            offset,
+        )?;
+
+        let (kv_latent, k_pe) = if let Some(cache) = cache {
+            cache.update(kv_latent, k_pe)?
+        } else {
+            (kv_latent, k_pe)
+        };
+
+        let mask = self.attention_mask(&q_pe, &k_pe, l > 1)?;
+        let output = if l == 1 {
+            let q_nope = self.embed_q.forward(&q_nope, true)?;
+            let output = mlx_rs::fast::scaled_dot_product_attention(
+                &q_nope,
+                &kv_latent,
+                &kv_latent,
+                self.scale,
+                Some((&mask).into()),
+            )?;
+            self.unembed_out.forward(&output, true)?
+        } else {
+            let k = self.embed_q.forward(&kv_latent, false)?;
+            let v = self.unembed_out.forward(&kv_latent, true)?;
+            mlx_rs::fast::scaled_dot_product_attention(
+                &q_nope,
+                &k,
+                &v,
+                self.scale,
+                Some((&mask).into()),
+            )?
+        };
+
+        let output = output.transpose_axes(&[0, 2, 1, 3])?.reshape(&[
+            b,
+            l,
+            self.num_heads * self.v_head_dim,
+        ])?;
+        self.o_proj.forward(&output)
+    }
+
+    pub fn forward_no_cache(&self, x: &Array) -> Result<Array> {
+        self.forward_impl(x, None)
+    }
+
+    pub fn forward(&self, x: &Array, cache: &mut KVCache) -> Result<Array> {
+        self.forward_impl(x, Some(cache))
     }
 }
 
@@ -526,11 +832,159 @@ impl MLP {
     }
 }
 
+pub struct DeepseekV3MoE {
+    switch_gate_proj: QuantizedSwitchLinear,
+    switch_up_proj: QuantizedSwitchLinear,
+    switch_down_proj: QuantizedSwitchLinear,
+    gate_weight: Array,
+    gate_bias: Array,
+    top_k: i32,
+    n_group: i32,
+    topk_group: i32,
+    routed_scaling_factor: f32,
+    norm_topk_prob: bool,
+    shared_experts: Option<MLP>,
+}
+
+impl DeepseekV3MoE {
+    fn gate(&self, x: &Array) -> Result<(Array, Array)> {
+        let mut scores = mlx_rs::ops::matmul(x, &self.gate_weight.transpose_axes(&[1, 0])?)?;
+        scores = mlx_rs::ops::sigmoid(&scores.as_dtype(Dtype::Float32)?)?;
+        let orig_scores = scores.clone();
+        scores = scores.add(&self.gate_bias)?;
+
+        if self.n_group > 1 {
+            let experts_per_group = scores.shape()[scores.shape().len() - 1] / self.n_group;
+            let scores_grouped = scores.reshape(&[-1, self.n_group, experts_per_group])?;
+            let top2 = mlx_rs::ops::indexing::topk_axis(&scores_grouped, 2, -1)?;
+            let group_scores = top2.sum_axes(&[-1], true)?;
+            let k = self.n_group - self.topk_group;
+            let group_idx = mlx_rs::ops::argpartition_axis(&group_scores, k - 1, -2)?.index((
+                std::ops::RangeFull,
+                ..k,
+                std::ops::RangeFull,
+            ));
+            let scores_grouped = mlx_rs::ops::indexing::put_along_axis(
+                &scores_grouped,
+                &group_idx,
+                &array!(0.0f32),
+                -2,
+            )?;
+            scores = scores_grouped.reshape(&[-1, self.gate_weight.shape()[0]])?;
+        }
+
+        let inds = mlx_rs::ops::argpartition_axis(
+            &scores.multiply(&array!(-1.0f32))?,
+            self.top_k - 1,
+            -1,
+        )?
+        .index((std::ops::RangeFull, ..self.top_k));
+        let mut probs = mlx_rs::ops::indexing::take_along_axis(&orig_scores, &inds, -1)?
+            .as_dtype(Dtype::Float32)?;
+        if self.top_k > 1 && self.norm_topk_prob {
+            probs = probs.divide(&probs.sum_axes(&[-1], true)?)?;
+        }
+        probs = probs.multiply(&array!(self.routed_scaling_factor))?;
+        Ok((inds, probs))
+    }
+
+    fn switch_forward_single(&self, x: &Array, expert: i32) -> Result<Array> {
+        let x_up = self.switch_up_proj.forward_single(x, expert)?;
+        let x_gate = self.switch_gate_proj.forward_single(x, expert)?;
+        let activated = &mlx_rs::ops::sigmoid(&x_gate)? * &x_gate;
+        self.switch_down_proj
+            .forward_single(&activated.multiply(&x_up)?, expert)
+    }
+
+    pub fn forward(&self, x: &Array) -> Result<Array> {
+        let b = x.shape()[0];
+        let l = x.shape()[1];
+        let hidden = x.shape()[2];
+        let flat = x.reshape(&[b * l, hidden])?;
+        let (inds, scores) = self.gate(&flat)?;
+        mlx_rs::transforms::eval([&inds, &scores])?;
+        let inds_slice = inds.as_slice::<u32>();
+        let scores_slice = scores.as_slice::<f32>();
+        let mut outputs = Vec::with_capacity((b * l) as usize);
+        for token_idx in 0..(b * l) {
+            let x_tok = flat.index((token_idx..token_idx + 1, std::ops::RangeFull));
+            let mut token_out: Option<Array> = None;
+            for expert_slot in 0..self.top_k {
+                let offset = (token_idx * self.top_k + expert_slot) as usize;
+                let expert = inds_slice[offset] as i32;
+                let score = scores_slice[offset];
+                let routed = self
+                    .switch_forward_single(&x_tok, expert)?
+                    .multiply(&array!(score))?;
+                token_out = Some(match token_out {
+                    Some(acc) => acc.add(&routed)?,
+                    None => routed,
+                });
+            }
+            let token_out = if let Some(shared) = &self.shared_experts {
+                token_out.unwrap().add(&shared.forward(&x_tok)?)?
+            } else {
+                token_out.unwrap()
+            };
+            outputs.push(token_out);
+        }
+        let output_refs: Vec<&Array> = outputs.iter().collect();
+        Ok(mlx_rs::ops::concatenate_axis(&output_refs, 0)?.reshape(&[b, l, hidden])?)
+    }
+}
+
+pub enum AttentionKind {
+    Standard(Attention),
+    DeepseekV3(DeepseekV3Attention),
+}
+
+impl AttentionKind {
+    fn forward_no_cache(&self, x: &Array) -> Result<Array> {
+        match self {
+            Self::Standard(attn) => attn.forward_no_cache(x),
+            Self::DeepseekV3(attn) => attn.forward_no_cache(x),
+        }
+    }
+
+    fn forward(
+        &self,
+        x: &Array,
+        cache: &mut KVCache,
+        shared_cache: Option<&KVCache>,
+    ) -> Result<Array> {
+        match self {
+            Self::Standard(attn) => attn.forward(x, cache, shared_cache),
+            Self::DeepseekV3(attn) => attn.forward(x, cache),
+        }
+    }
+
+    fn kv_shared_source(&self) -> Option<usize> {
+        match self {
+            Self::Standard(attn) => attn.kv_shared_source,
+            Self::DeepseekV3(_) => None,
+        }
+    }
+}
+
+pub enum MlpKind {
+    Dense(MLP),
+    DeepseekV3MoE(DeepseekV3MoE),
+}
+
+impl MlpKind {
+    fn forward(&self, x: &Array) -> Result<Array> {
+        match self {
+            Self::Dense(mlp) => mlp.forward(x),
+            Self::DeepseekV3MoE(moe) => moe.forward(x),
+        }
+    }
+}
+
 // ── Transformer layer ──
 
 pub struct Layer {
-    attn: Attention,
-    mlp: MLP,
+    attn: AttentionKind,
+    mlp: MlpKind,
     attn_in_norm: RMSNorm,
     attn_out_norm: Option<RMSNorm>,
     mlp_in_norm: RMSNorm,
@@ -828,6 +1282,70 @@ fn quant_params_for(
     )
 }
 
+fn transform_deepseek_v3_tensors(
+    tensors: &mut HashMap<String, Array>,
+    prefixes: &TensorPrefixes,
+    config: &ModelConfig,
+    config_json: &Value,
+    default_group_size: i32,
+    default_bits: i32,
+) -> Result<()> {
+    let num_heads = config.num_attention_heads;
+    let qk_nope_head_dim = config
+        .qk_nope_head_dim
+        .context("missing qk_nope_head_dim for DeepSeekV3")?;
+    let v_head_dim = config
+        .v_head_dim
+        .context("missing v_head_dim for DeepSeekV3")?;
+    let kv_lora_rank = config
+        .kv_lora_rank
+        .context("missing kv_lora_rank for DeepSeekV3")?;
+
+    for i in 0..config.num_hidden_layers {
+        let prefix = format!("{}.layers.{i}.self_attn", prefixes.model);
+        if !tensors.contains_key(&format!("{prefix}.kv_b_proj.weight"))
+            || tensors.contains_key(&format!("{prefix}.embed_q.weight"))
+        {
+            continue;
+        }
+
+        let (group_size, bits) = quant_params_for(
+            config_json,
+            &format!("{prefix}.kv_b_proj"),
+            default_group_size,
+            default_bits,
+        );
+        let weight = tensors
+            .get(&format!("{prefix}.kv_b_proj.weight"))
+            .cloned()
+            .with_context(|| format!("missing {prefix}.kv_b_proj.weight"))?;
+        let scales = tensors
+            .get(&format!("{prefix}.kv_b_proj.scales"))
+            .cloned()
+            .with_context(|| format!("missing {prefix}.kv_b_proj.scales"))?;
+        let biases = tensors
+            .get(&format!("{prefix}.kv_b_proj.biases"))
+            .cloned()
+            .with_context(|| format!("missing {prefix}.kv_b_proj.biases"))?;
+        let dense = dequantize(&weight, &scales, &biases, group_size, bits)?;
+        let dense = dense.reshape(&[num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank])?;
+        let wk = dense
+            .index((std::ops::RangeFull, ..qk_nope_head_dim, std::ops::RangeFull))
+            .transpose_axes(&[0, 2, 1])?;
+        let wv = dense.index((std::ops::RangeFull, qk_nope_head_dim.., std::ops::RangeFull));
+        let (wk_q, wk_s, wk_b) = quantize_stacked_weights(&wk, group_size, bits)?;
+        let (wv_q, wv_s, wv_b) = quantize_stacked_weights(&wv, group_size, bits)?;
+        tensors.insert(format!("{prefix}.embed_q.weight"), wk_q);
+        tensors.insert(format!("{prefix}.embed_q.scales"), wk_s);
+        tensors.insert(format!("{prefix}.embed_q.biases"), wk_b);
+        tensors.insert(format!("{prefix}.unembed_out.weight"), wv_q);
+        tensors.insert(format!("{prefix}.unembed_out.scales"), wv_s);
+        tensors.insert(format!("{prefix}.unembed_out.biases"), wv_b);
+    }
+
+    Ok(())
+}
+
 // ── Full model ──
 
 pub struct MlxModel {
@@ -883,13 +1401,23 @@ impl MlxModel {
         );
 
         let start = std::time::Instant::now();
-        let tensors = load_all_safetensors(dir)?;
+        let mut tensors = load_all_safetensors(dir)?;
         tracing::info!(
             "MLX: loaded {} tensors in {:.2}s",
             tensors.len(),
             start.elapsed().as_secs_f64()
         );
         let prefixes = tensor_prefixes(&tensors)?;
+        if arch.is_deepseek_v3() {
+            transform_deepseek_v3_tensors(
+                &mut tensors,
+                &prefixes,
+                &config,
+                &config_json,
+                group_size,
+                bits,
+            )?;
+        }
 
         let load_qlinear = |prefix: &str| -> Result<QuantizedLinear> {
             let (group_size, bits) = quant_params_for(&config_json, prefix, group_size, bits);
@@ -922,6 +1450,47 @@ impl MlxModel {
                 group_size,
                 bits,
                 dense_weight_t,
+            })
+        };
+
+        let load_multi_linear = |prefix: &str| -> Result<QuantizedMultiLinear> {
+            let (group_size, bits) = quant_params_for(&config_json, prefix, group_size, bits);
+            Ok(QuantizedMultiLinear {
+                weight: tensors
+                    .get(&format!("{prefix}.weight"))
+                    .cloned()
+                    .with_context(|| format!("missing {prefix}.weight"))?,
+                scales: tensors
+                    .get(&format!("{prefix}.scales"))
+                    .cloned()
+                    .with_context(|| format!("missing {prefix}.scales"))?,
+                biases: tensors
+                    .get(&format!("{prefix}.biases"))
+                    .cloned()
+                    .with_context(|| format!("missing {prefix}.biases"))?,
+                group_size,
+                bits,
+            })
+        };
+
+        let load_switch_linear = |prefix: &str| -> Result<QuantizedSwitchLinear> {
+            let (group_size, bits) = quant_params_for(&config_json, prefix, group_size, bits);
+            Ok(QuantizedSwitchLinear {
+                weight: tensors
+                    .get(&format!("{prefix}.weight"))
+                    .cloned()
+                    .with_context(|| format!("missing {prefix}.weight"))?,
+                scales: tensors
+                    .get(&format!("{prefix}.scales"))
+                    .cloned()
+                    .with_context(|| format!("missing {prefix}.scales"))?,
+                biases: tensors
+                    .get(&format!("{prefix}.biases"))
+                    .cloned()
+                    .with_context(|| format!("missing {prefix}.biases"))?,
+                bias: tensors.get(&format!("{prefix}.bias")).cloned(),
+                group_size,
+                bits,
             })
         };
 
@@ -1052,6 +1621,155 @@ impl MlxModel {
         let mut layers = Vec::new();
         for i in 0..config.num_hidden_layers {
             let p = format!("{}.layers.{i}", prefixes.model);
+            if arch.is_deepseek_v3() {
+                let qk_nope_head_dim = config
+                    .qk_nope_head_dim
+                    .context("missing qk_nope_head_dim for DeepSeekV3")?;
+                let qk_rope_head_dim = config
+                    .qk_rope_head_dim
+                    .context("missing qk_rope_head_dim for DeepSeekV3")?;
+                let kv_lora_rank = config
+                    .kv_lora_rank
+                    .context("missing kv_lora_rank for DeepSeekV3")?;
+                let v_head_dim = config
+                    .v_head_dim
+                    .context("missing v_head_dim for DeepSeekV3")?;
+                let q_head_dim = qk_nope_head_dim + qk_rope_head_dim;
+                let is_moe_layer = config.n_routed_experts.is_some()
+                    && (i >= config.first_k_dense_replace.unwrap_or(0))
+                    && (i % config.moe_layer_freq.unwrap_or(1) == 0);
+                let shared_intermediate = config
+                    .n_shared_experts
+                    .zip(config.moe_intermediate_size)
+                    .map(|(n_shared, hidden)| n_shared * hidden);
+                let mlp_kind = if is_moe_layer {
+                    MlpKind::DeepseekV3MoE(DeepseekV3MoE {
+                        switch_gate_proj: load_switch_linear(&format!(
+                            "{p}.mlp.switch_mlp.gate_proj"
+                        ))?,
+                        switch_up_proj: load_switch_linear(&format!("{p}.mlp.switch_mlp.up_proj"))?,
+                        switch_down_proj: load_switch_linear(&format!(
+                            "{p}.mlp.switch_mlp.down_proj"
+                        ))?,
+                        gate_weight: tensors
+                            .get(&format!("{p}.mlp.gate.weight"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.mlp.gate.weight"))?,
+                        gate_bias: tensors
+                            .get(&format!("{p}.mlp.gate.e_score_correction_bias"))
+                            .cloned()
+                            .with_context(|| {
+                                format!("missing {p}.mlp.gate.e_score_correction_bias")
+                            })?,
+                        top_k: config.num_experts_per_tok.unwrap_or(1),
+                        n_group: config.n_group.unwrap_or(1),
+                        topk_group: config.topk_group.unwrap_or(1),
+                        routed_scaling_factor: config.routed_scaling_factor.unwrap_or(1.0),
+                        norm_topk_prob: config.norm_topk_prob.unwrap_or(true),
+                        shared_experts: shared_intermediate
+                            .map(|_intermediate_size| -> Result<MLP> {
+                                Ok(MLP {
+                                    gate_up_proj: None,
+                                    gate_proj: Some(load_qlinear(&format!(
+                                        "{p}.mlp.shared_experts.gate_proj"
+                                    ))?),
+                                    up_proj: Some(load_qlinear(&format!(
+                                        "{p}.mlp.shared_experts.up_proj"
+                                    ))?),
+                                    down_proj: load_qlinear(&format!(
+                                        "{p}.mlp.shared_experts.down_proj"
+                                    ))?,
+                                    activation: Activation::Silu,
+                                })
+                            })
+                            .transpose()?,
+                    })
+                } else {
+                    MlpKind::Dense(MLP {
+                        gate_up_proj: None,
+                        gate_proj: Some(load_qlinear(&format!("{p}.mlp.gate_proj"))?),
+                        up_proj: Some(load_qlinear(&format!("{p}.mlp.up_proj"))?),
+                        down_proj: load_qlinear(&format!("{p}.mlp.down_proj"))?,
+                        activation: Activation::Silu,
+                    })
+                };
+
+                layers.push(Layer {
+                    attn: AttentionKind::DeepseekV3(DeepseekV3Attention {
+                        q_proj: if config.q_lora_rank.is_some() {
+                            None
+                        } else {
+                            Some(load_qlinear(&format!("{p}.self_attn.q_proj"))?)
+                        },
+                        q_a_proj: config
+                            .q_lora_rank
+                            .is_some()
+                            .then(|| load_qlinear(&format!("{p}.self_attn.q_a_proj")))
+                            .transpose()?,
+                        q_a_layernorm: tensors
+                            .get(&format!("{p}.self_attn.q_a_layernorm.weight"))
+                            .cloned()
+                            .map(|weight| RMSNorm {
+                                weight,
+                                eps: 1e-6,
+                                add_unit_offset: false,
+                            }),
+                        q_b_proj: config
+                            .q_lora_rank
+                            .is_some()
+                            .then(|| load_qlinear(&format!("{p}.self_attn.q_b_proj")))
+                            .transpose()?,
+                        kv_a_proj_with_mqa: load_qlinear(&format!(
+                            "{p}.self_attn.kv_a_proj_with_mqa"
+                        ))?,
+                        kv_a_layernorm: RMSNorm {
+                            weight: tensors
+                                .get(&format!("{p}.self_attn.kv_a_layernorm.weight"))
+                                .cloned()
+                                .with_context(|| {
+                                    format!("missing {p}.self_attn.kv_a_layernorm.weight")
+                                })?,
+                            eps: 1e-6,
+                            add_unit_offset: false,
+                        },
+                        embed_q: load_multi_linear(&format!("{p}.self_attn.embed_q"))?,
+                        unembed_out: load_multi_linear(&format!("{p}.self_attn.unembed_out"))?,
+                        o_proj: load_qlinear(&format!("{p}.self_attn.o_proj"))?,
+                        num_heads: config.num_attention_heads,
+                        q_head_dim,
+                        qk_rope_head_dim,
+                        qk_nope_head_dim,
+                        kv_lora_rank,
+                        v_head_dim,
+                        scale: 1.0 / (q_head_dim as f32).sqrt(),
+                        rope_theta: config.rope_theta,
+                    }),
+                    mlp: mlp_kind,
+                    attn_in_norm: RMSNorm {
+                        weight: tensors
+                            .get(&format!("{p}.input_layernorm.weight"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.input_layernorm.weight"))?,
+                        eps: config.rms_norm_eps,
+                        add_unit_offset: false,
+                    },
+                    attn_out_norm: None,
+                    mlp_in_norm: RMSNorm {
+                        weight: tensors
+                            .get(&format!("{p}.post_attention_layernorm.weight"))
+                            .cloned()
+                            .with_context(|| {
+                                format!("missing {p}.post_attention_layernorm.weight")
+                            })?,
+                        eps: config.rms_norm_eps,
+                        add_unit_offset: false,
+                    },
+                    mlp_out_norm: None,
+                    per_layer_input: None,
+                    layer_scalar: None,
+                });
+                continue;
+            }
             let layer_type = config
                 .layer_types
                 .as_ref()
@@ -1113,7 +1831,7 @@ impl MlxModel {
                 format!("{p}.post_attention_layernorm.weight")
             };
             layers.push(Layer {
-                attn: Attention {
+                attn: AttentionKind::Standard(Attention {
                     q_proj: load_qlinear(&format!("{p}.self_attn.q_proj"))?,
                     k_proj: load_qlinear(&format!("{p}.self_attn.k_proj"))?,
                     v_proj: load_qlinear(&format!("{p}.self_attn.v_proj"))?,
@@ -1150,8 +1868,8 @@ impl MlxModel {
                     rope_dim,
                     rope_theta,
                     kv_shared_source,
-                },
-                mlp: MLP {
+                }),
+                mlp: MlpKind::Dense(MLP {
                     gate_up_proj: tensors
                         .contains_key(&format!("{p}.mlp.gate_up_proj.weight"))
                         .then(|| load_qlinear(&format!("{p}.mlp.gate_up_proj")))
@@ -1166,7 +1884,7 @@ impl MlxModel {
                         .transpose()?,
                     down_proj: load_qlinear(&format!("{p}.mlp.down_proj"))?,
                     activation: activation,
-                },
+                }),
                 attn_in_norm: RMSNorm {
                     weight: tensors
                         .get(&format!("{p}.input_layernorm.weight"))
@@ -1362,7 +2080,7 @@ impl MlxModel {
             let current_cache = &mut current_and_after[0];
             let shared_cache = layer
                 .attn
-                .kv_shared_source
+                .kv_shared_source()
                 .and_then(|source| before.get(source));
             h = layer.forward(&h, layer_input.as_ref(), current_cache, shared_cache)?;
         }
@@ -1473,6 +2191,7 @@ impl MlxModel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ModelArchitecture {
     LlamaLike,
+    DeepseekV3,
     Glm4,
     Gemma2,
     Gemma3,
@@ -1480,6 +2199,10 @@ enum ModelArchitecture {
 }
 
 impl ModelArchitecture {
+    fn is_deepseek_v3(self) -> bool {
+        matches!(self, Self::DeepseekV3)
+    }
+
     fn is_glm4(self) -> bool {
         matches!(self, Self::Glm4)
     }
@@ -1525,6 +2248,11 @@ fn model_architecture(config: &Value) -> ModelArchitecture {
 
     if model_type.starts_with("glm4") {
         ModelArchitecture::Glm4
+    } else if model_type.starts_with("deepseek_v3")
+        || model_type.starts_with("kimi_k2")
+        || model_type.starts_with("kimi_k25")
+    {
+        ModelArchitecture::DeepseekV3
     } else if model_type.starts_with("gemma4") {
         ModelArchitecture::Gemma4
     } else if model_type.starts_with("gemma2") {
@@ -1562,6 +2290,23 @@ fn effective_text_config_json(config: &Value) -> Value {
         "vocab_size_per_layer_input",
         "vocab_size",
         "hidden_size_per_layer_input",
+        "moe_intermediate_size",
+        "n_shared_experts",
+        "n_routed_experts",
+        "routed_scaling_factor",
+        "kv_lora_rank",
+        "q_lora_rank",
+        "qk_rope_head_dim",
+        "v_head_dim",
+        "qk_nope_head_dim",
+        "topk_method",
+        "norm_topk_prob",
+        "n_group",
+        "topk_group",
+        "num_experts_per_tok",
+        "moe_layer_freq",
+        "first_k_dense_replace",
+        "attention_bias",
         "num_kv_shared_layers",
         "layer_types",
         "rope_parameters",
@@ -1683,6 +2428,7 @@ fn config_supports_mlx(config: &Value) -> bool {
             name.as_str(),
             "llama"
                 | "glm4"
+                | "deepseek_v3"
                 | "qwen2"
                 | "qwen3"
                 | "gemma2"
@@ -1691,6 +2437,7 @@ fn config_supports_mlx(config: &Value) -> bool {
                 | "gemma4"
                 | "gemma4_text"
                 | "glm4forcausallm"
+                | "deepseekv3forcausallm"
                 | "llamaforcausallm"
                 | "qwen2forcausallm"
                 | "qwen3forcausallm"
@@ -1737,7 +2484,7 @@ fn ensure_supported_mlx_model(dir: &Path, config: &Value) -> Result<()> {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "none".to_string());
     bail!(
-        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
+        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/DeepSeekV3/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
         dir.display(),
         model_type,
         architectures,
@@ -1843,6 +2590,14 @@ mod tests {
 
     #[test]
     fn config_supports_known_mlx_architectures() {
+        let deepseek: Value = serde_json::json!({
+            "model_type": "deepseek_v3",
+            "architectures": ["DeepseekV3ForCausalLM"]
+        });
+        let kimi: Value = serde_json::json!({
+            "model_type": "kimi_k2",
+            "architectures": ["DeepseekV3ForCausalLM"]
+        });
         let glm4: Value = serde_json::json!({
             "model_type": "glm4",
             "architectures": ["Glm4ForCausalLM"]
@@ -1869,6 +2624,8 @@ mod tests {
             "text_config": {"model_type": "gemma4_text"}
         });
 
+        assert!(config_supports_mlx(&deepseek));
+        assert!(config_supports_mlx(&kimi));
         assert!(config_supports_mlx(&glm4));
         assert!(config_supports_mlx(&qwen));
         assert!(config_supports_mlx(&llama));
@@ -1883,9 +2640,9 @@ mod tests {
             "model_type": "glm",
             "architectures": ["GlmForCausalLM"]
         });
-        let kimi: Value = serde_json::json!({
-            "model_type": "kimi_k25",
-            "architectures": ["KimiK25ForConditionalGeneration"]
+        let kimi_linear: Value = serde_json::json!({
+            "model_type": "kimi_linear",
+            "architectures": ["KimiLinearForCausalLM"]
         });
         let gpt_oss: Value = serde_json::json!({
             "model_type": "gpt_oss",
@@ -1897,7 +2654,7 @@ mod tests {
         });
 
         assert!(!config_supports_mlx(&glm));
-        assert!(!config_supports_mlx(&kimi));
+        assert!(!config_supports_mlx(&kimi_linear));
         assert!(!config_supports_mlx(&gpt_oss));
         assert!(!config_supports_mlx(&lfm2));
     }
@@ -1968,8 +2725,8 @@ mod tests {
                 "architectures": ["GlmForCausalLM"]
             }),
             serde_json::json!({
-                "model_type": "kimi_k25",
-                "architectures": ["KimiK25ForConditionalGeneration"]
+                "model_type": "kimi_linear",
+                "architectures": ["KimiLinearForCausalLM"]
             }),
             serde_json::json!({
                 "model_type": "gpt_oss",
@@ -2059,6 +2816,26 @@ mod tests {
     }
 
     #[test]
+    fn model_architecture_detects_deepseek_v3() {
+        let config = serde_json::json!({
+            "model_type": "deepseek_v3",
+            "architectures": ["DeepseekV3ForCausalLM"]
+        });
+
+        assert_eq!(model_architecture(&config), ModelArchitecture::DeepseekV3);
+    }
+
+    #[test]
+    fn model_architecture_detects_kimi_k2_as_deepseek_v3_runtime() {
+        let config = serde_json::json!({
+            "model_type": "kimi_k25",
+            "architectures": ["DeepseekV3ForCausalLM"]
+        });
+
+        assert_eq!(model_architecture(&config), ModelArchitecture::DeepseekV3);
+    }
+
+    #[test]
     fn glm4_config_parses_partial_rotary_factor() {
         let config: ModelConfig = serde_json::from_value(serde_json::json!({
             "model_type": "glm4",
@@ -2085,6 +2862,55 @@ mod tests {
 
         assert_eq!(config.partial_rotary_factor, Some(0.5));
         assert_eq!(config.head_dim, Some(128));
+    }
+
+    #[test]
+    fn deepseek_v3_config_parses_moe_and_mla_fields() {
+        let config: ModelConfig = serde_json::from_value(serde_json::json!({
+            "model_type": "deepseek_v3",
+            "hidden_size": 7168,
+            "num_hidden_layers": 61,
+            "intermediate_size": 18432,
+            "moe_intermediate_size": 2048,
+            "num_attention_heads": 128,
+            "num_key_value_heads": 128,
+            "n_shared_experts": 1,
+            "n_routed_experts": 256,
+            "routed_scaling_factor": 2.5,
+            "kv_lora_rank": 512,
+            "q_lora_rank": 1536,
+            "qk_rope_head_dim": 64,
+            "qk_nope_head_dim": 128,
+            "v_head_dim": 128,
+            "n_group": 8,
+            "topk_group": 4,
+            "num_experts_per_tok": 8,
+            "moe_layer_freq": 1,
+            "first_k_dense_replace": 3,
+            "vocab_size": 129280,
+            "rms_norm_eps": 0.000001,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 163840,
+            "tie_word_embeddings": false,
+            "quantization": {
+                "group_size": 64,
+                "bits": 4
+            },
+            "eos_token_id": [0, 1]
+        }))
+        .unwrap();
+
+        assert_eq!(config.moe_intermediate_size, Some(2048));
+        assert_eq!(config.n_routed_experts, Some(256));
+        assert_eq!(config.kv_lora_rank, Some(512));
+        assert_eq!(config.q_lora_rank, Some(1536));
+        assert_eq!(config.qk_rope_head_dim, Some(64));
+        assert_eq!(config.qk_nope_head_dim, Some(128));
+        assert_eq!(config.v_head_dim, Some(128));
+        assert_eq!(config.n_group, Some(8));
+        assert_eq!(config.topk_group, Some(4));
+        assert_eq!(config.num_experts_per_tok, Some(8));
+        assert_eq!(config.first_k_dense_replace, Some(3));
     }
 
     #[test]
