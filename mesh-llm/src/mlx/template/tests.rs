@@ -235,7 +235,7 @@ fn falls_back_when_template_uses_unsupported_python_method() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
         root.join("chat_template.jinja"),
-        "{% if messages[0].content.startswith('h') %}<bad>{% endif %}",
+        "{% if messages[0].content.removeprefix('h') %}<bad>{% endif %}",
     )
     .unwrap();
 

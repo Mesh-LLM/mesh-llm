@@ -260,6 +260,27 @@ fn build_hf_environment<'a>() -> Environment<'a> {
             Ok(Local::now().format(&format).to_string())
         },
     );
+    env.add_filter("startswith", |value: String, prefix: String| {
+        value.starts_with(&prefix)
+    });
+    env.add_filter("endswith", |value: String, suffix: String| {
+        value.ends_with(&suffix)
+    });
+    env.add_filter("split", |value: String, separator: String| {
+        value
+            .split(&separator)
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>()
+    });
+    env.add_filter("strip", |value: String, chars: Option<String>| {
+        strip_chars(&value, chars.as_deref(), true, true)
+    });
+    env.add_filter("lstrip", |value: String, chars: Option<String>| {
+        strip_chars(&value, chars.as_deref(), true, false)
+    });
+    env.add_filter("rstrip", |value: String, chars: Option<String>| {
+        strip_chars(&value, chars.as_deref(), false, true)
+    });
     env
 }
 
@@ -268,6 +289,8 @@ fn normalize_hf_template(template: &str) -> String {
         regex_lite::Regex::new(r#"\.get\(\s*'([^']+)'\s*(?:,\s*([^)]+?))?\s*\)"#).unwrap();
     let double_get_re =
         regex_lite::Regex::new(r#"\.get\(\s*\"([^\"]+)\"\s*(?:,\s*([^)]+?))?\s*\)"#).unwrap();
+    let split_index_re =
+        regex_lite::Regex::new(r#"\.split\(([^()]*)\)\s*\[\s*(-?1|0)\s*\]"#).unwrap();
     let mut normalized = single_get_re
         .replace_all(template, |caps: &regex_lite::Captures<'_>| {
             let key = &caps[1];
@@ -282,8 +305,47 @@ fn normalize_hf_template(template: &str) -> String {
             format!(r#"["{key}"]|default({default})"#)
         })
         .to_string();
+    normalized = split_index_re
+        .replace_all(&normalized, |caps: &regex_lite::Captures<'_>| {
+            let args = caps[1].trim();
+            let selector = if &caps[2] == "-1" { "last" } else { "first" };
+            format!(" | split({args}) | {selector}")
+        })
+        .to_string();
+    for (from, to) in [
+        (".lstrip(", " | lstrip("),
+        (".rstrip(", " | rstrip("),
+        (".startswith(", " | startswith("),
+        (".endswith(", " | endswith("),
+        (".split(", " | split("),
+        (".strip(", " | strip("),
+        (".keys()", " | items | map(attribute=0)"),
+        ("|items", "| items"),
+    ] {
+        normalized = normalized.replace(from, to);
+    }
 
     strip_tojson_kwargs(&normalized)
+}
+
+fn strip_chars(value: &str, chars: Option<&str>, left: bool, right: bool) -> String {
+    match chars {
+        Some(chars) => {
+            let predicate = |c: char| chars.contains(c);
+            match (left, right) {
+                (true, true) => value.trim_matches(predicate).to_string(),
+                (true, false) => value.trim_start_matches(predicate).to_string(),
+                (false, true) => value.trim_end_matches(predicate).to_string(),
+                (false, false) => value.to_string(),
+            }
+        }
+        None => match (left, right) {
+            (true, true) => value.trim().to_string(),
+            (true, false) => value.trim_start().to_string(),
+            (false, true) => value.trim_end().to_string(),
+            (false, false) => value.to_string(),
+        },
+    }
 }
 
 fn strip_tojson_kwargs(template: &str) -> String {

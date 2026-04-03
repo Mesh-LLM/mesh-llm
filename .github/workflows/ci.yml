@@ -14,8 +14,8 @@ env:
   # Tiny model for integration tests (~138MB Q8_0, has chat template)
   MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf
   MODEL_FILE: SmolLM2-135M-Instruct-Q8_0.gguf
-  MLX_MODEL_REPO: mlx-community/qwen2.5-0.5b-instruct-q2
-  MLX_MODEL_DIR: ~/.models/mlx-community-qwen2.5-0.5b-instruct-q2
+  MLX_MODEL_REPO: mlx-community/JOSIE-IT1-Qwen3-0.6B-4bit
+  MLX_MODEL_DIR: ~/.models/mlx-community-JOSIE-IT1-Qwen3-0.6B-4bit
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
@@ -246,15 +246,18 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.MLX_MODEL_DIR }}
-          key: model-mlx-qwen2.5-0.5b-instruct-q2
+          key: model-mlx-josie-it1-qwen3-0.6b-4bit
 
       - name: Download MLX model
         if: steps.cache-mlx-model.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$MLX_MODEL_DIR"
           BASE_URL="https://huggingface.co/${MLX_MODEL_REPO}/resolve/main"
-          for file in config.json tokenizer.json tokenizer_config.json model.safetensors; do
+          for file in config.json tokenizer.json model.safetensors; do
             curl -fSL "$BASE_URL/$file" -o "$MLX_MODEL_DIR/$file"
+          done
+          for optional in tokenizer_config.json chat_template.json chat_template.jinja; do
+            curl -fsSL "$BASE_URL/$optional" -o "$MLX_MODEL_DIR/$optional" || true
           done
           ls -lh "$MLX_MODEL_DIR"
 

@@ -101,7 +101,7 @@
   {
     "repo": "mlx-community/Qwen3-1.7B-4bit",
     "source_file": "tokenizer_config.json",
-    "expect_hf_render": false,
+    "expect_hf_render": true,
     "family": "qwen3",
     "bos_token": null,
     "eos_token": "<|im_end|>",
