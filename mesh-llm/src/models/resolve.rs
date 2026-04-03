@@ -582,11 +582,10 @@ async fn resolve_repo_artifact_ref(
     command_prefix: &str,
 ) -> Result<(String, Option<String>, String)> {
     let api = build_hf_tokio_api(false)?;
-    let repo_handle = Repo::with_revision(
-        repo.to_string(),
-        RepoType::Model,
-        revision.unwrap_or("main").to_string(),
-    );
+    let repo_handle = match revision {
+        Some(rev) => Repo::with_revision(repo.to_string(), RepoType::Model, rev.to_string()),
+        None => Repo::new(repo.to_string(), RepoType::Model),
+    };
     let detail = api
         .repo(repo_handle)
         .info()

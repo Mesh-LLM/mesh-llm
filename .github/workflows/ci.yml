@@ -344,7 +344,7 @@ jobs:
             template_source: chat_template.jinja
             cache_slug: mlx-community--LFM2-350M-4bit
             prompt: "Reply with exactly: blue"
-            expect_contains: "🔴"
+            expect_contains: blue
             forbid_contains: "{"
             thinking_mode: ""
     steps:

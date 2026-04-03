@@ -110,11 +110,11 @@ fn heuristic_prompt_behavior(config: &Value) -> Option<ModelPromptBehavior> {
 }
 
 fn inferred_default_system_prompt(config: Option<&Value>, template: &str) -> Option<String> {
-    if template.contains("You are a helpful assistant.") {
-        return Some("You are a helpful assistant.".to_string());
-    }
     if template.contains("You are Qwen, created by Alibaba Cloud. You are a helpful assistant.") {
         return Some("You are Qwen, created by Alibaba Cloud. You are a helpful assistant.".into());
+    }
+    if template.contains("You are a helpful assistant.") {
+        return Some("You are a helpful assistant.".to_string());
     }
     match config.and_then(model_family).as_deref() {
         Some("qwen") if template.contains("<|im_start|>system") => {

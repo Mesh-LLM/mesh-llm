@@ -182,6 +182,13 @@ async fn handle_connection(
         .unwrap_or(0);
 
     // Read remaining body if needed
+    // Guard against oversized requests (max 16 MiB) to prevent OOM from a
+    // malicious or accidental huge Content-Length.
+    const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
+    if content_length > MAX_BODY_SIZE {
+        send_response(&mut stream, 413, r#"{"error":"request body too large"}"#).await?;
+        return Ok(());
+    }
     let body_so_far = filled - header_end;
     if body_so_far < content_length {
         let remaining = content_length - body_so_far;
@@ -266,24 +273,22 @@ fn render_chat_prompt_from_request(
 }
 
 /// Handle POST /v1/completions — raw text completion.
+/// This endpoint is not implemented; return a structured 501 so clients get a clear error
+/// rather than a misleading chat-completion-shaped response.
 async fn handle_completions(
     stream: &mut tokio::net::TcpStream,
-    body: &[u8],
-    state: Arc<Mutex<InferState>>,
+    _body: &[u8],
+    _state: Arc<Mutex<InferState>>,
 ) -> Result<()> {
-    let req: serde_json::Value =
-        serde_json::from_slice(body).context("invalid JSON in completions request")?;
-
-    let prompt = req["prompt"].as_str().unwrap_or("").to_string();
-    let stream_mode = req["stream"].as_bool().unwrap_or(false);
-    let generation = parse_generation_config(&req);
-    let model_field = req["model"].as_str().unwrap_or("");
-
-    if stream_mode {
-        generate_streaming(stream, &prompt, generation, model_field, state).await
-    } else {
-        generate_blocking(stream, &prompt, generation, model_field, state).await
-    }
+    let resp = serde_json::json!({
+        "error": {
+            "message": "/v1/completions is not implemented by this server. Use /v1/chat/completions instead.",
+            "type": "not_implemented_error",
+            "param": null,
+            "code": "unsupported_endpoint"
+        }
+    });
+    send_response(stream, 501, &resp.to_string()).await
 }
 
 /// Non-streaming: run full generation, return one JSON response.

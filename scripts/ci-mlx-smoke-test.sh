@@ -123,9 +123,7 @@ if [ -n "$EXPECTED_TEMPLATE_SOURCE" ]; then
 fi
 
 echo "Testing /v1/chat/completions..."
-RESPONSE=$(curl -sf "http://localhost:${API_PORT}/v1/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "$(python3 - "$PROMPT_TEXT" <<'PY'
+CURL_BODY=$(python3 - "$PROMPT_TEXT" <<'PY'
 import json, sys
 prompt = sys.argv[1]
 print(json.dumps({
@@ -136,9 +134,10 @@ print(json.dumps({
     "enable_thinking": False
 }))
 PY
-)" 2>&1)
-
-if [ $? -ne 0 ]; then
+)
+if ! RESPONSE=$(curl -sf "http://localhost:${API_PORT}/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d "$CURL_BODY" 2>&1); then
     echo "❌ Inference request failed"
     echo "$RESPONSE"
     echo "--- Log tail ---"
