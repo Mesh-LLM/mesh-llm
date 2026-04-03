@@ -3556,21 +3556,15 @@ function DashboardPage({
                   </TableHeader>
                   <TableBody>
                     {peerRows.map((peer) => (
-                      <TableRow
-                        key={peer.id}
-                        className="cursor-pointer transition-colors hover:bg-muted/30"
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => openNodeDetail(peer.id)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter" || event.key === " ") {
-                            event.preventDefault();
-                            openNodeDetail(peer.id);
-                          }
-                        }}
-                      >
+                      <TableRow key={peer.id}>
                         <TableCell className="font-mono text-xs">
-                          {peer.id}
+                          <button
+                            type="button"
+                            className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                            onClick={() => openNodeDetail(peer.id)}
+                          >
+                            {peer.id}
+                          </button>
                         </TableCell>
                         <TableCell>{peer.role}</TableCell>
                         <TableCell>{peer.statusLabel}</TableCell>
@@ -3660,6 +3654,7 @@ function DashboardPage({
             <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
               <p className="text-sm text-muted-foreground">This node is no longer available.</p>
               <button
+                type="button"
                 className="text-xs underline hover:text-foreground"
                 onClick={detailPanelStack.length > 1 ? goBackDetailPanel : closeDetailPanel}
               >
@@ -3678,6 +3673,7 @@ function DashboardPage({
             <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
               <p className="text-sm text-muted-foreground">This model is no longer available.</p>
               <button
+                type="button"
                 className="text-xs underline hover:text-foreground"
                 onClick={detailPanelStack.length > 1 ? goBackDetailPanel : closeDetailPanel}
               >
@@ -5400,20 +5396,16 @@ function ModelSidebar({
                 </TableHeader>
                 <TableBody>
                   {activePeers.map((peer) => (
-                    <TableRow
-                      key={peer.id}
-                      role="button"
-                      tabIndex={0}
-                      className="cursor-pointer transition-colors hover:bg-muted/30"
-                      onClick={() => onOpenNode(peer.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          onOpenNode(peer.id);
-                        }
-                      }}
-                    >
-                      <TableCell className="font-mono text-xs">{peer.id}</TableCell>
+                    <TableRow key={peer.id}>
+                      <TableCell className="font-mono text-xs">
+                        <button
+                          type="button"
+                          className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                          onClick={() => onOpenNode(peer.id)}
+                        >
+                          {peer.id}
+                        </button>
+                      </TableCell>
                       <TableCell className="text-right">{peer.latencyLabel}</TableCell>
                       <TableCell className="text-right">{peer.vramLabel}</TableCell>
                       <TableCell className="text-right">{peer.shareLabel}</TableCell>
