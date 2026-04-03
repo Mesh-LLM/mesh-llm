@@ -173,7 +173,9 @@ pub async fn start_mlx_server(
 ) -> Result<InferenceServerProcess> {
     static WARN_ONCE: Once = Once::new();
     WARN_ONCE.call_once(|| {
-        eprintln!("⚠️ MLX backend is experimental. Expect rough edges; prefer GGUF for the most mature path.");
+        eprintln!(
+            "🧪 MLX backend is experimental. Expect rough edges; prefer GGUF for the most mature path. Please file an issue at https://github.com/michaelneale/mesh-llm/issues if you experience problems."
+        );
     });
 
     // Load model on a blocking thread (touches disk + GPU init)
