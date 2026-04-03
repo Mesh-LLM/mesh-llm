@@ -144,6 +144,19 @@ Read `mesh-llm/docs/TESTING.md` before running tests. It has all test scenarios,
 
 Before committing Rust changes, format only the changed Rust files from the repo root, for example with `cargo fmt --all -- path/to/file.rs`, and include those formatting changes in the commit.
 
+## Pull Requests
+
+Pull request titles and descriptions should be user-focused by default.
+
+- Title PRs around the user-visible change or capability, not the implementation detail.
+- Start the description with what the user can now do, see, or understand after the change.
+- Keep architectural refactors, internal state reshaping, and code-organization notes out of the opening summary unless they directly change user behavior.
+- If there are important architectural changes, add a separate `## Architecture` section.
+- If there are protocol or compatibility implications, add a separate `## Protocol` section that clearly calls out compatibility, migration, or breaking-change impact.
+- If the PR changes CLI behavior or touches user-facing CLI flows, include example commands and representative output in the PR description.
+- If the PR changes the UI, include at least one screenshot in the PR description.
+- Validation and screenshots should stay separate from the user-facing summary.
+
 ### Deploy to Remote
 
 ```bash

@@ -22,6 +22,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
+  ArrowLeft,
   Bot,
   Braces,
   ChevronDown,
@@ -120,6 +121,20 @@ import {
 import { BrandIcon } from "./components/brand-icon";
 import { MeshLlmWordmark } from "./components/mesh-llm-wordmark";
 import { cn } from "./lib/utils";
+import {
+  TOPOLOGY_LAYOUT_OPTIONS,
+  TOPOLOGY_LAYOUTS,
+  isTopologyLayoutMode,
+} from "./topology/layouts";
+import { TOPOLOGY_NODE_WIDTH } from "./topology/layouts/constants";
+import { estimateTopologyNodeHeight } from "./topology/layouts/elk";
+import type {
+  BucketedTopologyNode,
+  PositionedTopologyNode,
+  TopologyLayoutMode,
+  TopologyNode,
+  TopologyNodeInfo,
+} from "./topology/layouts/types";
 import githubBlackLogo from "./assets/icons/github-invertocat-black.svg";
 import githubWhiteLogo from "./assets/icons/github-invertocat-white.svg";
 
@@ -170,6 +185,35 @@ type ActivePeerRow = {
   latencyLabel: string;
   vramLabel: string;
   shareLabel: string;
+};
+
+type DetailPanelEntry =
+  | { kind: "node"; nodeId: string }
+  | { kind: "model"; modelName: string };
+
+type NodeSidebarRecord = {
+  id: string;
+  title: string;
+  hostname?: string;
+  self: boolean;
+  role: string;
+  statusLabel: string;
+  latencyLabel: string;
+  vramGb: number;
+  vramSharePct: number | null;
+  isSoc?: boolean;
+  gpus: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  hostedModels: string[];
+  hotModels: string[];
+  servingModels: string[];
+  requestedModels: string[];
+  availableModels: string[];
+  version?: string;
+  latestVersion?: string | null;
+  llamaReady?: boolean;
+  apiPort?: number;
+  inflightRequests?: number;
+  privacyLimited: boolean;
 };
 
 function modelDisplayName(model?: MeshModel | null) {
@@ -286,21 +330,6 @@ type AppRoute = {
   chatId: string | null;
 };
 
-type TopologyNode = {
-  id: string;
-  vram: number;
-  self: boolean;
-  host: boolean;
-  client: boolean;
-  serving: string;
-  servingModels: string[];
-  statusLabel: string;
-  latencyMs?: number | null;
-  hostname?: string;
-  isSoc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
-};
-
 type ThemeMode = "auto" | "light" | "dark";
 
 const THEME_STORAGE_KEY = "mesh-llm-theme";
@@ -345,6 +374,47 @@ function peerStatusLabel(peer: Peer): string {
     return "Assigned";
   if (peer.role === "Host") return "Host";
   return "Idle";
+}
+
+function topologyNodeRole(node: Pick<TopologyNode, "client" | "host" | "serving">): string {
+  if (node.client) return "Client";
+  if (node.host) return "Host";
+  if (node.serving && node.serving !== "(idle)") return "Worker";
+  return "Idle";
+}
+
+function nodeRoleTone(role: string): "good" | "info" | "neutral" {
+  if (role === "Host") return "good";
+  if (role === "Worker" || role === "Client") return "info";
+  return "neutral";
+}
+
+function uniqueModels(...groups: Array<string[] | undefined>): string[] {
+  return [
+    ...new Set(
+      groups
+        .flatMap((group) => group ?? [])
+        .filter((model) => !!model && model !== "(idle)"),
+    ),
+  ];
+}
+
+function formatGpuMemory(bytes?: number | null) {
+  if (!bytes || !Number.isFinite(bytes)) return "Unknown";
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(0)} GB`;
+}
+
+function trimGpuVendor(name: string) {
+  return name
+    .replace(/^NVIDIA GeForce\s+/i, "")
+    .replace(/^NVIDIA Quadro\s+/i, "")
+    .replace(/^NVIDIA\s+/i, "")
+    .replace(/^AMD Radeon\s+/i, "")
+    .replace(/^AMD\s+/i, "")
+    .replace(/^Intel Arc\s+/i, "")
+    .replace(/^Intel\s+/i, "")
+    .replace(/^Apple\s+/i, "")
+    .trim();
 }
 
 function sectionFromPathname(pathname: string): TopSection | null {
@@ -680,6 +750,7 @@ export function App() {
     [conversations, activeConversationId],
   );
   const messages = activeConversation?.messages ?? [];
+  const lastMessageId = messages[messages.length - 1]?.id ?? "";
   const meshModels = modelsPayload?.mesh_models ?? [];
 
   const warmModels = useMemo(() => {
@@ -1028,8 +1099,9 @@ export function App() {
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
+    if (!activeConversationId && !lastMessageId && !isSending) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, isSending, activeConversationId]);
+  }, [activeConversationId, isSending, lastMessageId]);
 
   useEffect(() => () => currentAbortRef.current?.abort(), []);
 
@@ -2231,6 +2303,7 @@ function ChatPage(props: {
   const [editingTitle, setEditingTitle] = useState("");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const editingTitleInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2272,9 +2345,17 @@ function ChatPage(props: {
   }
 
   useEffect(() => {
-    if (!canChat || isSending) return;
+    if (!activeConversationId || !canChat || isSending) return;
     chatInputRef.current?.focus();
   }, [activeConversationId, canChat, isSending]);
+
+  useEffect(() => {
+    if (!editingConversationId) return;
+    const frame = window.requestAnimationFrame(() => {
+      editingTitleInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editingConversationId]);
 
   function startInlineRename(conversation: ChatConversation) {
     setEditingConversationId(conversation.id);
@@ -2350,6 +2431,7 @@ function ChatPage(props: {
                 {isEditing ? (
                   <div className="min-w-0 flex-1 space-y-1">
                     <input
+                      ref={editingTitleInputRef}
                       value={editingTitle}
                       onChange={(e) => setEditingTitle(e.target.value)}
                       onKeyDown={(e) => {
@@ -2362,7 +2444,6 @@ function ChatPage(props: {
                         }
                       }}
                       className="h-7 w-full rounded-md border bg-background px-2 text-sm outline-none ring-offset-background focus:ring-2 focus:ring-ring"
-                      autoFocus
                     />
                     <div className="text-xs text-muted-foreground">
                       {conversation.messages.length} message
@@ -2722,6 +2803,7 @@ function ChatPage(props: {
                     className="h-20 rounded-md border object-cover"
                   />
                   <button
+                    type="button"
                     onClick={() => setPendingImage(null)}
                     className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs hover:bg-destructive/80"
                     aria-label="Remove image"
@@ -3064,8 +3146,11 @@ function DashboardPage({
   );
   const [isMeshOverviewFullscreen, setIsMeshOverviewFullscreen] =
     useState(false);
-  const [selectedCatalogModel, setSelectedCatalogModel] =
-    useState<MeshModel | null>(null);
+  const [detailPanelStack, setDetailPanelStack] = useState<DetailPanelEntry[]>(
+    [],
+  );
+  const [meshTopologyLayoutMode, setMeshTopologyLayoutMode] =
+    useState<TopologyLayoutMode>("elk");
   const topologyDiagramNodes = useMemo(
     () => topologyNodes.filter((node) => !node.client),
     [topologyNodes],
@@ -3115,11 +3200,13 @@ function DashboardPage({
     });
   }, [sortedPeers, totalMeshVramGb]);
   const activePeerRows = useMemo(() => {
-    if (
-      !selectedCatalogModel ||
-      selectedCatalogModel.status !== "warm" ||
-      !status
-    ) {
+    const currentDetail = detailPanelStack[detailPanelStack.length - 1];
+    const activeModelName =
+      currentDetail?.kind === "model" ? currentDetail.modelName : null;
+    const selectedCatalogModel = activeModelName
+      ? meshModelByName[activeModelName] ?? null
+      : null;
+    if (!selectedCatalogModel || selectedCatalogModel.status !== "warm" || !status) {
       return [] as ActivePeerRow[];
     }
     const targetModel = selectedCatalogModel.name;
@@ -3154,7 +3241,99 @@ function DashboardPage({
       });
     }
     return rows;
-  }, [peerRows, selectedCatalogModel, status]);
+  }, [detailPanelStack, meshModelByName, peerRows, status]);
+
+  const activeDetail = detailPanelStack[detailPanelStack.length - 1] ?? null;
+  const activeModel =
+    activeDetail?.kind === "model"
+      ? meshModelByName[activeDetail.modelName] ?? null
+      : null;
+  const activeNode = useMemo(() => {
+    if (!status || activeDetail?.kind !== "node") return null;
+    const topologyNode = topologyNodes.find((node) => node.id === activeDetail.nodeId);
+    if (!topologyNode) return null;
+    const peer = topologyNode.self
+      ? null
+      : status.peers.find((candidate) => candidate.id === topologyNode.id);
+    const hostedModels = topologyNode.self
+      ? uniqueModels(localRoutableModels(status))
+      : uniqueModels(peer ? peerRoutableModels(peer) : []);
+    const servingModels = topologyNode.self
+      ? uniqueModels(status.serving_models)
+      : uniqueModels(peer ? peerAssignedModels(peer) : []);
+    const requestedModels = topologyNode.self
+      ? uniqueModels(status.requested_models)
+      : uniqueModels(peer?.requested_models);
+    return {
+      id: topologyNode.id,
+      title: topologyNode.hostname || topologyNode.id,
+      hostname: topologyNode.hostname,
+      self: topologyNode.self,
+      role: topologyNodeRole(topologyNode),
+      statusLabel: topologyNode.statusLabel,
+      latencyLabel: topologyNode.self ? "local" : formatLatency(topologyNode.latencyMs),
+      vramGb: Math.max(0, topologyNode.vram),
+      vramSharePct:
+        topologyNode.client
+          ? null
+          : totalMeshVramGb <= 0
+            ? 0
+            : Math.round((Math.max(0, topologyNode.vram) / totalMeshVramGb) * 100),
+      isSoc: topologyNode.isSoc,
+      gpus: topologyNode.gpus ?? [],
+      hostedModels,
+      hotModels: uniqueModels(hostedModels, servingModels, requestedModels),
+      servingModels,
+      requestedModels,
+      availableModels: topologyNode.self
+        ? uniqueModels(status.available_models)
+        : uniqueModels(peer?.available_models),
+      version: topologyNode.self ? status.version : undefined,
+      latestVersion: topologyNode.self ? status.latest_version : undefined,
+      llamaReady: topologyNode.self ? status.llama_ready : undefined,
+      apiPort: topologyNode.self ? status.api_port : undefined,
+      inflightRequests: topologyNode.self ? status.inflight_requests : undefined,
+      privacyLimited:
+        !topologyNode.self &&
+        !topologyNode.hostname &&
+        !(topologyNode.gpus?.length ?? 0),
+    } satisfies NodeSidebarRecord;
+  }, [activeDetail, status, topologyNodes, totalMeshVramGb]);
+
+  function pushDetail(entry: DetailPanelEntry) {
+    setDetailPanelStack((prev) => {
+      const current = prev[prev.length - 1];
+      const isSameEntry =
+        !!current &&
+        ((current.kind === "node" &&
+          entry.kind === "node" &&
+          current.nodeId === entry.nodeId) ||
+          (current.kind === "model" &&
+            entry.kind === "model" &&
+            current.modelName === entry.modelName));
+      if (isSameEntry) {
+        return prev;
+      }
+      return [...prev, entry];
+    });
+  }
+
+  function openNodeDetail(nodeId: string) {
+    pushDetail({ kind: "node", nodeId });
+  }
+
+  function openModelDetail(modelName: string) {
+    if (!meshModelByName[modelName]) return;
+    pushDetail({ kind: "model", modelName });
+  }
+
+  function closeDetailPanel() {
+    setDetailPanelStack([]);
+  }
+
+  function goBackDetailPanel() {
+    setDetailPanelStack((prev) => prev.slice(0, -1));
+  }
 
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
@@ -3178,6 +3357,34 @@ function DashboardPage({
   function toggleMeshOverviewFullscreen() {
     setIsMeshOverviewFullscreen((prev) => !prev);
   }
+
+  const meshTopologyLayoutControl = (
+    <Select
+      value={meshTopologyLayoutMode}
+      onValueChange={(value) => {
+        if (isTopologyLayoutMode(value)) setMeshTopologyLayoutMode(value);
+      }}
+    >
+      <SelectTrigger
+        className="h-8 w-[118px] gap-1.5 px-2 text-xs"
+        aria-label="Select topology layout"
+        title="Select topology layout"
+      >
+        <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <SelectValue placeholder="Layout" />
+      </SelectTrigger>
+      <SelectContent
+        align="end"
+        className={isMeshOverviewFullscreen ? "z-[130]" : undefined}
+      >
+        {TOPOLOGY_LAYOUT_OPTIONS.map((option) => (
+          <SelectItem key={option.value} value={option.value} className="text-xs">
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 
   return (
     <div className="space-y-4">
@@ -3268,16 +3475,19 @@ function DashboardPage({
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-sm">Mesh Overview</CardTitle>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5"
-                  onClick={() => void toggleMeshOverviewFullscreen()}
-                >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                  Fullscreen
-                </Button>
+                <div className="flex items-center gap-2">
+                  {meshTopologyLayoutControl}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={() => void toggleMeshOverviewFullscreen()}
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    Fullscreen
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="pt-0">
@@ -3290,7 +3500,9 @@ function DashboardPage({
                   status={status}
                   nodes={topologyDiagramNodes}
                   selectedModel={selectedModel}
+                  layoutMode={meshTopologyLayoutMode}
                   themeMode={themeMode}
+                  onOpenNode={openNodeDetail}
                   fullscreen={false}
                   heightClass="h-[360px] md:h-[420px] lg:h-[460px] xl:h-[520px]"
                 />
@@ -3331,7 +3543,7 @@ function DashboardPage({
                     <button
                       key={model.name}
                       type="button"
-                      onClick={() => setSelectedCatalogModel(model)}
+                      onClick={() => openModelDetail(model.name)}
                       className="block w-full rounded-md border p-3 text-left transition-colors hover:border-primary/35 hover:bg-muted/30"
                     >
                       <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-start">
@@ -3454,7 +3666,13 @@ function DashboardPage({
                     {peerRows.map((peer) => (
                       <TableRow key={peer.id}>
                         <TableCell className="font-mono text-xs">
-                          {peer.id}
+                          <button
+                            type="button"
+                            className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                            onClick={() => openNodeDetail(peer.id)}
+                          >
+                            {peer.id}
+                          </button>
                         </TableCell>
                         <TableCell>{peer.role}</TableCell>
                         <TableCell>{peer.statusLabel}</TableCell>
@@ -3496,16 +3714,19 @@ function DashboardPage({
                   <CardHeader className="shrink-0 pb-2">
                     <div className="flex items-center justify-between gap-2">
                       <CardTitle className="text-sm">Mesh Overview</CardTitle>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 gap-1.5"
-                        onClick={() => void toggleMeshOverviewFullscreen()}
-                      >
-                        <Minimize2 className="h-3.5 w-3.5" />
-                        Exit Fullscreen
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        {meshTopologyLayoutControl}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => void toggleMeshOverviewFullscreen()}
+                        >
+                          <Minimize2 className="h-3.5 w-3.5" />
+                          Exit Fullscreen
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="flex min-h-0 flex-1 p-0">
@@ -3513,7 +3734,9 @@ function DashboardPage({
                       status={status}
                       nodes={topologyDiagramNodes}
                       selectedModel={selectedModel}
+                      layoutMode={meshTopologyLayoutMode}
                       themeMode={themeMode}
+                      onOpenNode={openNodeDetail}
                       fullscreen
                       heightClass="min-h-[420px]"
                       containerStyle={{
@@ -3530,19 +3753,45 @@ function DashboardPage({
           )
         : null}
 
-      <Sheet
-        open={!!selectedCatalogModel}
-        onOpenChange={(open) => !open && setSelectedCatalogModel(null)}
-      >
-        <SheetContent
-          side="right"
-          className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl"
-        >
-          {selectedCatalogModel ? (
-            <ModelSidebar
-              model={selectedCatalogModel}
-              activePeers={activePeerRows}
+      <Sheet open={detailPanelStack.length > 0} onOpenChange={(open) => !open && closeDetailPanel()}>
+        <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl">
+          {activeDetail?.kind === "node" && activeNode ? (
+            <NodeSidebar
+              node={activeNode}
+              meshModelByName={meshModelByName}
+              onOpenModel={openModelDetail}
+              onBack={detailPanelStack.length > 1 ? goBackDetailPanel : undefined}
             />
+          ) : activeDetail?.kind === "node" && !activeNode ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+              <p className="text-sm text-muted-foreground">This node is no longer available.</p>
+              <button
+                type="button"
+                className="text-xs underline hover:text-foreground"
+                onClick={detailPanelStack.length > 1 ? goBackDetailPanel : closeDetailPanel}
+              >
+                {detailPanelStack.length > 1 ? "Go back" : "Close"}
+              </button>
+            </div>
+          ) : null}
+          {activeDetail?.kind === "model" && activeModel ? (
+            <ModelSidebar
+              model={activeModel}
+              activePeers={activePeerRows}
+              onOpenNode={openNodeDetail}
+              onBack={detailPanelStack.length > 1 ? goBackDetailPanel : undefined}
+            />
+          ) : activeDetail?.kind === "model" && !activeModel ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+              <p className="text-sm text-muted-foreground">This model is no longer available.</p>
+              <button
+                type="button"
+                className="text-xs underline hover:text-foreground"
+                onClick={detailPanelStack.length > 1 ? goBackDetailPanel : closeDetailPanel}
+              >
+                {detailPanelStack.length > 1 ? "Go back" : "Close"}
+              </button>
+            </div>
           ) : null}
         </SheetContent>
       </Sheet>
@@ -3656,55 +3905,49 @@ function DashboardPage({
   );
 }
 
-type PositionedTopologyNode = TopologyNode & {
-  x: number;
-  y: number;
-  bucket: "center" | "serving" | "worker" | "client";
-};
-
-type TopologyNodeInfo = {
-  role: string;
-  statusLabel: string;
-  latencyMs?: number | null;
-  loadedModel: string;
-  loadedModels: string[];
-  vramGb: number;
-  vramSharePct: number;
-  hostname?: string;
-  isSoc?: boolean;
-  gpus?: { name: string; vram_bytes: number }[];
-};
-
 type TopologyFlowNodeData = {
   node: PositionedTopologyNode;
   info: TopologyNodeInfo;
   selected: boolean;
   sameModelAsCurrent: boolean;
+  layoutDirection: "horizontal" | "vertical";
 };
 
 type TopologyFlowDiagramNode = Node<TopologyFlowNodeData, "topologyNode">;
 
 function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
   const isCenter = data.node.bucket === "center";
+  const isHorizontal = data.layoutDirection === "horizontal";
   const dotClass = isCenter
     ? "bg-primary border-primary"
     : "bg-muted border-border";
   const dotCenterY = 22;
-  const edgeHandleStyle = {
+  const baseHandleStyle = {
     opacity: 0,
     width: 1,
     height: 1,
     border: 0,
     pointerEvents: "none" as const,
-    left: "50%",
-    top: dotCenterY,
-    transform: "translate(-50%, -50%)",
   };
+  const targetHandleStyle = isHorizontal
+    ? { ...baseHandleStyle, top: dotCenterY, transform: "translateY(-50%)" }
+    : { ...baseHandleStyle, left: "50%", top: dotCenterY, transform: "translate(-50%, -50%)" };
+  const sourceHandleStyle = isHorizontal
+    ? { ...baseHandleStyle, top: dotCenterY, transform: "translateY(-50%)" }
+    : { ...baseHandleStyle, left: "50%", bottom: dotCenterY, top: "auto", transform: "translate(-50%, 50%)" };
 
   return (
     <div className="relative w-[246px] pt-2">
-      <Handle type="target" position={Position.Top} style={edgeHandleStyle} />
-      <Handle type="source" position={Position.Top} style={edgeHandleStyle} />
+      <Handle
+        type="target"
+        position={isHorizontal ? Position.Left : Position.Top}
+        style={targetHandleStyle}
+      />
+      <Handle
+        type="source"
+        position={isHorizontal ? Position.Right : Position.Bottom}
+        style={sourceHandleStyle}
+      />
 
       <div className={cn("mx-auto h-7 w-7 rounded-full border-2", dotClass)} />
       <div className="mt-1 flex items-center justify-center gap-1 text-[10px] leading-3 text-foreground">
@@ -3763,7 +4006,7 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
           />
         </div>
 
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] leading-3">
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] leading-3">
           {data.info.hostname && (
             <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
               <Server className="h-3 w-3 text-muted-foreground" />
@@ -3800,6 +4043,13 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
             </span>
           </div>
           {data.info.gpus?.map((gpu, i) => {
+            const duplicateCount = data.info.gpus
+              ?.slice(0, i)
+              .filter(
+                (candidate) =>
+                  candidate.name === gpu.name &&
+                  candidate.vram_bytes === gpu.vram_bytes,
+              ).length ?? 0;
             const lower = gpu.name.toLowerCase();
             const isNvidia =
               lower.includes("nvidia") || lower.includes("jetson");
@@ -3812,21 +4062,12 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
                 : isIntel
                   ? "#0071C5"
                   : undefined;
-            const model = gpu.name
-              .replace(/^NVIDIA GeForce\s+/i, "")
-              .replace(/^NVIDIA Quadro\s+/i, "")
-              .replace(/^NVIDIA\s+/i, "")
-              .replace(/^AMD Radeon\s+/i, "")
-              .replace(/^AMD\s+/i, "")
-              .replace(/^Intel Arc\s+/i, "")
-              .replace(/^Intel\s+/i, "")
-              .replace(/^Apple\s+/i, "")
-              .trim();
+            const model = trimGpuVendor(gpu.name);
             const vramGb = gpu.vram_bytes / (1024 * 1024 * 1024);
             const GpuIcon = data.info.isSoc ? Cpu : Gpu;
             return (
               <div
-                key={`${gpu.name}-${i}`}
+                key={`${data.node.id}-${gpu.name}-${gpu.vram_bytes}-${duplicateCount}`}
                 className="group/gpu inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1"
               >
                 <GpuIcon
@@ -3853,11 +4094,54 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
 
 const topologyNodeTypes = { topologyNode: TopologyFlowNode } as NodeTypes;
 
+function positionedTopologyLayoutsEqual(
+  left: PositionedTopologyNode[],
+  right: PositionedTopologyNode[],
+) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.id !== b.id ||
+      a.bucket !== b.bucket ||
+      Math.abs(a.x - b.x) > 0.5 ||
+      Math.abs(a.y - b.y) > 0.5
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function topologyLayoutSignature(
+  nodes: Pick<BucketedTopologyNode, "id" | "bucket" | "width" | "height">[],
+  nodeRadius: number,
+) {
+  return `${nodeRadius}:${nodes
+    .map((node) => `${node.id}:${node.bucket}:${node.width}:${node.height}`)
+    .join(",")}`;
+}
+
+function positionedTopologySignature(nodes: PositionedTopologyNode[]) {
+  return nodes
+    .map(
+      (node) =>
+        `${node.id}:${node.bucket}:${Math.round(node.x)}:${Math.round(node.y)}`,
+    )
+    .join(",");
+}
+
 function MeshTopologyDiagram({
   status,
   nodes,
   selectedModel,
+  layoutMode,
   themeMode,
+  onOpenNode,
   fullscreen = false,
   heightClass,
   containerStyle,
@@ -3865,7 +4149,9 @@ function MeshTopologyDiagram({
   status: StatusPayload | null;
   nodes: TopologyNode[];
   selectedModel: string;
+  layoutMode: TopologyLayoutMode;
   themeMode: ThemeMode;
+  onOpenNode?: (nodeId: string) => void;
   fullscreen?: boolean;
   heightClass?: string;
   containerStyle?: CSSProperties;
@@ -3882,7 +4168,9 @@ function MeshTopologyDiagram({
       status={status}
       nodes={nodes}
       selectedModel={selectedModel}
+      layoutMode={layoutMode}
       themeMode={themeMode}
+      onOpenNode={onOpenNode}
       fullscreen={fullscreen}
       heightClass={heightClass}
       containerStyle={containerStyle}
@@ -3894,7 +4182,9 @@ function MeshTopologyFlow({
   status,
   nodes,
   selectedModel,
+  layoutMode,
   themeMode,
+  onOpenNode,
   fullscreen,
   heightClass,
   containerStyle,
@@ -3902,28 +4192,67 @@ function MeshTopologyFlow({
   status: StatusPayload;
   nodes: TopologyNode[];
   selectedModel: string;
+  layoutMode: TopologyLayoutMode;
   themeMode: ThemeMode;
+  onOpenNode?: (nodeId: string) => void;
   fullscreen: boolean;
   heightClass?: string;
   containerStyle?: CSSProperties;
 }) {
-  const center =
-    nodes.find((n) => n.host) || nodes.find((n) => n.self) || nodes[0];
-  const others = nodes
-    .filter((n) => n.id !== center.id)
-    .sort((a, b) => b.vram - a.vram || a.id.localeCompare(b.id));
-  const focusModel = selectedModel || status.model_name || "";
-  const serving = others.filter(
-    (n) =>
-      !n.client && !!n.serving && (!focusModel || n.serving === focusModel),
-  );
-  const servingIds = new Set(serving.map((n) => n.id));
-  const workers = others.filter((n) => !n.client && !servingIds.has(n.id));
+  const {
+    center,
+    serving,
+    workers,
+    clients,
+    nodeRadius,
+    clientEdgeStride,
+    meshVramGb,
+  } = useMemo(() => {
+    const center =
+      nodes.find((n) => n.host) || nodes.find((n) => n.self) || nodes[0];
+    const others = nodes
+      .filter((n) => n.id !== center.id)
+      .sort((a, b) => b.vram - a.vram || a.id.localeCompare(b.id));
+    const focusModel = selectedModel || status.model_name || "";
+    const serving = others.filter(
+      (n) =>
+        !n.client && !!n.serving && (!focusModel || n.serving === focusModel),
+    );
+    const servingIds = new Set(serving.map((n) => n.id));
+    const clients = others.filter((n) => n.client);
+    const workers = others.filter(
+      (n) => !n.client && !servingIds.has(n.id),
+    );
 
-  const positioned = layoutTopologyNodes(center, serving, workers);
-  const meshVramGb = nodes
-    .filter((n) => !n.client)
-    .reduce((sum, n) => sum + Math.max(0, n.vram), 0);
+    const total = nodes.length;
+    const nodeRadius =
+      total >= 500
+        ? 3.6
+        : total >= 280
+          ? 4.8
+          : total >= 160
+            ? 6.2
+            : total >= 90
+              ? 7.4
+              : total >= 50
+                ? 8.8
+                : 10.4;
+    const clientEdgeStride =
+      total > 320 ? 6 : total > 220 ? 4 : total > 120 ? 2 : 1;
+    const meshVramGb = nodes
+      .filter((n) => !n.client)
+      .reduce((sum, n) => sum + Math.max(0, n.vram), 0);
+
+    return {
+      center,
+      serving,
+      workers,
+      clients,
+      nodeRadius,
+      clientEdgeStride,
+      meshVramGb,
+    };
+  }, [nodes, selectedModel, status.model_name]);
   const currentNodeServingModel = useMemo(() => {
     const current = nodes.find((n) => n.self);
     if (
@@ -3992,6 +4321,98 @@ function MeshTopologyFlow({
     }
     return out;
   }, [nodes, meshVramGb]);
+  const activeLayout = TOPOLOGY_LAYOUTS[layoutMode];
+  const topologyLayoutNodes = useMemo<BucketedTopologyNode[]>(() => {
+    const toBucketedNode = (
+      node: TopologyNode,
+      bucket: BucketedTopologyNode["bucket"],
+    ): BucketedTopologyNode => ({
+      ...node,
+      bucket,
+      width: TOPOLOGY_NODE_WIDTH,
+      height: estimateTopologyNodeHeight(node, nodeInfoById.get(node.id)),
+    });
+
+    return [
+      toBucketedNode(center, "center"),
+      ...serving.map((node) => toBucketedNode(node, "serving")),
+      ...workers.map((node) => toBucketedNode(node, "worker")),
+      ...clients.map((node) => toBucketedNode(node, "client")),
+    ];
+  }, [center, clients, nodeInfoById, serving, workers]);
+  const layoutContext = useMemo(
+    () => ({
+      center,
+      serving,
+      workers,
+      clients,
+      nodeRadius,
+      nodes: topologyLayoutNodes,
+    }),
+    [center, clients, nodeRadius, serving, topologyLayoutNodes, workers],
+  );
+  const layoutInputSignature = useMemo(
+    () => topologyLayoutSignature(topologyLayoutNodes, nodeRadius),
+    [nodeRadius, topologyLayoutNodes],
+  );
+  const layoutInputSignatureRef = useRef(layoutInputSignature);
+  layoutInputSignatureRef.current = layoutInputSignature;
+  const layoutContextRef = useRef(layoutContext);
+  layoutContextRef.current = layoutContext;
+  const [positioned, setPositioned] = useState<PositionedTopologyNode[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const runSignature = layoutInputSignature;
+    const nextLayoutContext = layoutContextRef.current;
+
+    const immediateLayout = activeLayout.getImmediateLayout(nextLayoutContext);
+    setPositioned((previous) =>
+      positionedTopologyLayoutsEqual(previous, immediateLayout)
+        ? previous
+        : immediateLayout,
+    );
+
+    void activeLayout
+      .getLayout(nextLayoutContext)
+      .then((next) => {
+        if (
+          !cancelled &&
+          layoutInputSignatureRef.current === runSignature
+        ) {
+          setPositioned((previous) =>
+            positionedTopologyLayoutsEqual(previous, next) ? previous : next,
+          );
+        }
+      })
+      .catch(() => {
+        if (
+          !cancelled &&
+          layoutInputSignatureRef.current === runSignature
+        ) {
+          setPositioned((previous) =>
+            positionedTopologyLayoutsEqual(previous, immediateLayout)
+              ? previous
+              : immediateLayout,
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLayout, layoutInputSignature]);
+
+  const positionedIdsKey = useMemo(
+    () => positioned.map((node) => node.id).sort().join(","),
+    [positioned],
+  );
+  const expectedPositionIdsKey = useMemo(
+    () => topologyLayoutNodes.map((node) => node.id).sort().join(","),
+    [topologyLayoutNodes],
+  );
+  const layoutReady =
+    positioned.length > 0 && positionedIdsKey === expectedPositionIdsKey;
   const flowColorMode =
     themeMode === "auto"
       ? typeof document !== "undefined" &&
@@ -3999,38 +4420,52 @@ function MeshTopologyFlow({
         ? "dark"
         : "light"
       : themeMode;
-  const flowLayoutKey = useMemo(
+  const layoutFitSignature = useMemo(
     () =>
-      `${fullscreen ? "fs" : "std"}:${positioned
-        .map((p) => p.id)
-        .sort()
-        .join(",")}`,
-    [fullscreen, positioned],
+      `${fullscreen ? "fs" : "std"}:${layoutMode}:${positionedTopologySignature(positioned)}`,
+    [fullscreen, layoutMode, positioned],
   );
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
-  const flowInstanceRef = useRef<ReactFlowInstance<
-    TopologyFlowDiagramNode,
-    Edge
-  > | null>(null);
+  const flowInstanceRef = useRef<
+    ReactFlowInstance<TopologyFlowDiagramNode, Edge> | null
+  >(null);
+  const [flowReady, setFlowReady] = useState(false);
   const [containerReady, setContainerReady] = useState(false);
+  const [containerSizeSignature, setContainerSizeSignature] = useState("");
   const fitViewOptions = useMemo(() => ({ padding: 0.12, maxZoom: 1.45 }), []);
   const fitDuration = fullscreen ? 220 : 0;
 
   useEffect(() => {
-    if (!flowInstanceRef.current) return;
-    const fit = () => {
+    if (
+      !flowInstanceRef.current ||
+      !flowReady ||
+      !layoutReady ||
+      !containerReady ||
+      !layoutFitSignature ||
+      !containerSizeSignature
+    ) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
       flowInstanceRef.current?.fitView({
         ...fitViewOptions,
         duration: fitDuration,
       });
-    };
-    const frame = window.requestAnimationFrame(fit);
-    const timeout = window.setTimeout(fit, 180);
+    });
+
     return () => {
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
     };
-  }, [fitDuration, fitViewOptions, flowLayoutKey]);
+  }, [
+    containerReady,
+    containerSizeSignature,
+    fitDuration,
+    fitViewOptions,
+    flowReady,
+    layoutFitSignature,
+    layoutReady,
+  ]);
 
   useEffect(() => {
     const container = flowContainerRef.current;
@@ -4039,26 +4474,40 @@ function MeshTopologyFlow({
     const update = () => {
       const rect = container.getBoundingClientRect();
       const ready = rect.width > 8 && rect.height > 8;
-      setContainerReady(ready);
-      if (ready) {
-        flowInstanceRef.current?.fitView({ ...fitViewOptions, duration: 0 });
-      }
+      const size = ready
+        ? `${Math.round(rect.width)}x${Math.round(rect.height)}`
+        : "";
+
+      setContainerReady((previous) => (previous === ready ? previous : ready));
+      setContainerSizeSignature((previous) =>
+        previous === size ? previous : size,
+      );
     };
 
     update();
     const observer = new ResizeObserver(update);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [fitViewOptions, flowLayoutKey, containerStyle, heightClass]);
+  }, []);
+
+  useEffect(() => {
+    if (containerReady && layoutReady) return;
+    flowInstanceRef.current = null;
+    setFlowReady(false);
+  }, [containerReady, layoutReady]);
 
   const flowNodes = useMemo<TopologyFlowDiagramNode[]>(() => {
+    const isHorizontal = activeLayout.direction === "horizontal";
     return positioned.map((p) => ({
       id: p.id,
       type: "topologyNode",
       position: { x: p.x, y: p.y },
       origin: [0.5, 0],
+      sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
+      targetPosition: isHorizontal ? Position.Left : Position.Top,
       data: {
         node: p,
+        layoutDirection: activeLayout.direction,
         info: nodeInfoById.get(p.id) ?? {
           role: "Node",
           statusLabel: "n/a",
@@ -4080,6 +4529,7 @@ function MeshTopologyFlow({
       zIndex: p.id === center.id ? 10 : 1,
     }));
   }, [
+    activeLayout.direction,
     positioned,
     nodeInfoById,
     selectedNodeId,
@@ -4099,9 +4549,13 @@ function MeshTopologyFlow({
           id: `edge-${center.id}-${p.id}`,
           source: center.id,
           target: p.id,
-          type: "straight",
+          type: activeLayout.edgeType,
           className: `mesh-edge mesh-edge--${p.bucket}`,
           animated: false,
+          pathOptions:
+            activeLayout.edgeType === "smoothstep"
+              ? { borderRadius: 18, offset: 24 }
+              : undefined,
           style: {
             stroke,
             strokeWidth: 2.4,
@@ -4109,7 +4563,7 @@ function MeshTopologyFlow({
           },
         };
       });
-  }, [positioned, center.id]);
+  }, [activeLayout.edgeType, positioned, center.id]);
 
   return (
     <div
@@ -4120,17 +4574,14 @@ function MeshTopologyFlow({
       ref={flowContainerRef}
       style={containerStyle}
     >
-      {containerReady ? (
+      {containerReady && layoutReady ? (
         <ReactFlow<TopologyFlowDiagramNode, Edge>
-          key={flowLayoutKey}
           className="h-full w-full"
           style={{ width: "100%", height: "100%" }}
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={topologyNodeTypes}
           colorMode={flowColorMode}
-          fitView
-          fitViewOptions={fitViewOptions}
           minZoom={0.2}
           maxZoom={1.6}
           zoomOnScroll={false}
@@ -4142,11 +4593,12 @@ function MeshTopologyFlow({
           elementsSelectable={false}
           onInit={(instance) => {
             flowInstanceRef.current = instance;
-            window.requestAnimationFrame(() => {
-              instance.fitView({ ...fitViewOptions, duration: fitDuration });
-            });
+            setFlowReady(true);
           }}
-          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+          onNodeClick={(_, node) => {
+            setSelectedNodeId(node.id);
+            onOpenNode?.(node.id);
+          }}
           proOptions={{ hideAttribution: true }}
         >
           <Background
@@ -4166,111 +4618,6 @@ function MeshTopologyFlow({
   );
 }
 
-type TopologyRowBucket = "serving" | "worker";
-
-type TopologyRow = {
-  nodes: TopologyNode[];
-  bucket: TopologyRowBucket;
-};
-
-function layoutTopologyNodes(
-  center: TopologyNode,
-  serving: TopologyNode[],
-  workers: TopologyNode[],
-): PositionedTopologyNode[] {
-  const chunkRows = (
-    rowNodes: TopologyNode[],
-    bucket: TopologyRowBucket,
-    maxPerRow: number,
-  ): TopologyRow[] => {
-    if (!rowNodes.length) return [];
-    const rowCount = Math.ceil(rowNodes.length / maxPerRow);
-    const baseRowSize = Math.floor(rowNodes.length / rowCount);
-    const remainder = rowNodes.length % rowCount;
-    const rows: TopologyRow[] = [];
-    let offset = 0;
-    for (let i = 0; i < rowCount; i += 1) {
-      const rowSize = baseRowSize + (i < remainder ? 1 : 0);
-      rows.push({
-        nodes: rowNodes.slice(offset, offset + rowSize),
-        bucket,
-      });
-      offset += rowSize;
-    }
-    return rows;
-  };
-
-  const placeRow = (
-    row: TopologyRow,
-    y: number,
-    horizontalSpacing: number,
-    positioned: PositionedTopologyNode[],
-  ) => {
-    const startX = -((row.nodes.length - 1) * horizontalSpacing) / 2;
-    row.nodes.forEach((node, index) => {
-      positioned.push({
-        ...node,
-        bucket: row.bucket,
-        x: startX + index * horizontalSpacing,
-        y,
-      });
-    });
-  };
-
-  const positioned: PositionedTopologyNode[] = [
-    { ...center, x: 0, y: 0, bucket: "center" },
-  ];
-  const peerCount = serving.length + workers.length;
-  if (peerCount === 0) return positioned;
-
-  // Grow maxPerRow with ~sqrt(peerCount) so the layout stays roughly square
-  // (wider rows, fewer rows) rather than stacking many rows that force extreme
-  // zoom-out to see the full topology.
-  const maxPerRow = Math.max(2, Math.min(8, Math.ceil(Math.sqrt(peerCount))));
-  const topRows = chunkRows(serving, "serving", maxPerRow);
-  const bottomRows = chunkRows(workers, "worker", maxPerRow);
-
-  if (topRows.length === 0) {
-    const redistributedTop: TopologyRow[] = [];
-    const redistributedBottom: TopologyRow[] = [];
-    bottomRows.forEach((row, index) => {
-      (index % 2 === 0 ? redistributedTop : redistributedBottom).push(row);
-    });
-    topRows.push(...redistributedTop);
-    bottomRows.splice(0, bottomRows.length, ...redistributedBottom);
-  } else {
-    while (bottomRows.length > topRows.length + 1) {
-      const row = bottomRows.pop();
-      if (!row) break;
-      topRows.push(row);
-    }
-    while (topRows.length > bottomRows.length + 1) {
-      const row = topRows.pop();
-      if (!row) break;
-      bottomRows.push(row);
-    }
-  }
-
-  const horizontalSpacing =
-    peerCount <= 3 ? 324 : peerCount <= 8 ? 292 : peerCount <= 14 ? 274 : 262;
-  const bandOffset = peerCount <= 3 ? 232 : 216;
-  const rowStep = 204;
-
-  topRows.forEach((row, index) => {
-    placeRow(
-      row,
-      -(bandOffset + index * rowStep),
-      horizontalSpacing,
-      positioned,
-    );
-  });
-
-  bottomRows.forEach((row, index) => {
-    placeRow(row, bandOffset + index * rowStep, horizontalSpacing, positioned);
-  });
-
-  return positioned;
-}
 
 // KaTeX math renderer — loads from CDN on first use
 let katexCssLoaded = false;
@@ -4290,42 +4637,44 @@ const katexPromise = import(
   .catch(() => null);
 
 function KaTeXBlock({ math, display }: { math: string; display: boolean }) {
-  const [html, setHtml] = useState<string | null>(null);
+  const [rendered, setRendered] = useState(false);
+  const blockRef = useRef<HTMLDivElement | null>(null);
+  const inlineRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setRendered(false);
     katexPromise.then((katex) => {
-      if (cancelled || !katex) return;
+      const container = display ? blockRef.current : inlineRef.current;
+      if (cancelled || !katex || !container) return;
+      container.innerHTML = "";
       try {
-        const rendered = katex.renderToString(math, {
+        katex.render(math, container, {
           displayMode: display,
           throwOnError: false,
         });
-        if (!cancelled) setHtml(rendered);
-      } catch {
-        if (!cancelled) setHtml(null);
-      }
+        if (!cancelled) setRendered(true);
+      } catch {}
     });
     return () => {
       cancelled = true;
     };
   }, [math, display]);
 
-  if (html === null)
-    return display ? (
-      <div className="my-2 overflow-x-auto text-sm">
-        <code>{math}</code>
-      </div>
-    ) : (
-      <code>{math}</code>
-    );
   return display ? (
-    <div
-      className="my-2 overflow-x-auto"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <>
+      <div ref={blockRef} className={rendered ? "my-2 overflow-x-auto" : "hidden"} />
+      {!rendered && (
+        <div className="my-2 overflow-x-auto text-sm">
+          <code>{math}</code>
+        </div>
+      )}
+    </>
   ) : (
-    <span dangerouslySetInnerHTML={{ __html: html }} />
+    <>
+      <span ref={inlineRef} className={rendered ? undefined : "hidden"} />
+      {!rendered && <code>{math}</code>}
+    </>
   );
 }
 
@@ -4337,7 +4686,7 @@ const mermaidPromise = import(
     m.default.initialize({
       startOnLoad: false,
       theme: "dark",
-      securityLevel: "loose",
+      securityLevel: "antiscript",
     });
     return m.default;
   })
@@ -4349,10 +4698,20 @@ function MermaidBlock({ code }: { code: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!svg || !containerRef.current) return;
+    containerRef.current.innerHTML = svg;
+    return () => {
+      if (containerRef.current) containerRef.current.innerHTML = "";
+    };
+  }, [svg]);
+
+  useEffect(() => {
     let cancelled = false;
+    setError(null);
+    setSvg(null);
     mermaidPromise.then(async (mermaid) => {
       if (cancelled || !mermaid) {
-        setError("Mermaid failed to load");
+        if (!cancelled) setError("Mermaid failed to load");
         return;
       }
       try {
@@ -4382,11 +4741,11 @@ function MermaidBlock({ code }: { code: string }) {
         Rendering diagram…
       </div>
     );
+
   return (
     <div
       ref={containerRef}
       className="my-2 overflow-x-auto rounded-lg border border-border/70 bg-background/80 p-3 [&_svg]:max-w-full"
-      dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
 }
@@ -4612,7 +4971,12 @@ function StatCard({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div tabIndex={0}>{card}</div>
+        <button
+          type="button"
+          className="block w-full rounded-lg bg-transparent text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {card}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -4653,12 +5017,287 @@ function DashboardPanelEmpty({
   );
 }
 
+function NodeSidebar({
+  node,
+  meshModelByName,
+  onOpenModel,
+  onBack,
+}: {
+  node: NodeSidebarRecord;
+  meshModelByName: Record<string, MeshModel>;
+  onOpenModel: (modelName: string) => void;
+  onBack?: () => void;
+}) {
+  const modelRows = useMemo(() => {
+    const order = new Map<string, number>();
+    node.hotModels.forEach((name, index) => order.set(name, index));
+    node.servingModels.forEach((name, index) => {
+      if (!order.has(name)) order.set(name, node.hotModels.length + index);
+    });
+    node.requestedModels.forEach((name, index) => {
+      if (!order.has(name)) order.set(name, node.hotModels.length + node.servingModels.length + index);
+    });
+    return uniqueModels(node.hotModels, node.servingModels, node.requestedModels)
+      .map((name) => ({
+        name,
+        flags: [
+          node.servingModels.includes(name) ? "Serving" : null,
+          node.hostedModels.includes(name) ? "Hosted" : null,
+          node.requestedModels.includes(name) ? "Requested" : null,
+        ].filter(Boolean) as string[],
+        meshStatus: meshModelByName[name]?.status ?? "unknown",
+      }))
+      .sort((a, b) => (order.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.name) ?? Number.MAX_SAFE_INTEGER));
+  }, [meshModelByName, node]);
+
+  return (
+    <div className="flex min-h-full flex-col">
+      <div className="border-b bg-gradient-to-br from-emerald-50 via-background to-background px-6 pb-3 pt-3 dark:from-emerald-950/20">
+        <SheetHeader className="space-y-2 text-left">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border bg-background text-primary shadow-sm">
+              <Server className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <SheetTitle className="text-lg font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-xl">
+                  {node.title}
+                </SheetTitle>
+                {node.self ? (
+                  <Badge className="h-5 rounded-full border-sky-500/45 bg-sky-500/10 px-2 text-[10px] font-medium text-sky-700 dark:border-sky-400/55 dark:bg-sky-400/15 dark:text-sky-200">
+                    You
+                  </Badge>
+                ) : null}
+                <StatusPill
+                  label={node.role}
+                  tone={nodeRoleTone(node.role)}
+                  tooltip={nodeRoleTooltip(node.role)}
+                />
+                <StatusPill
+                  label={node.statusLabel}
+                  tone={topologyStatusTone(node.statusLabel)}
+                  dot
+                  tooltip={topologyStatusTooltip(node.statusLabel)}
+                />
+              </div>
+              <SheetDescription className="mt-1.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                {node.id}
+              </SheetDescription>
+            </div>
+            {onBack ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={onBack}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </Button>
+            ) : null}
+          </div>
+        </SheetHeader>
+      </div>
+
+      <div className="flex-1 space-y-5 px-6 py-5">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <ModelFactCard
+            title="Latency"
+            value={node.latencyLabel}
+            icon={<Wifi className="h-4 w-4" />}
+            tooltip={nodeLatencyTooltip(node.self)}
+          />
+          <ModelFactCard
+            title="Node VRAM"
+            value={`${node.vramGb.toFixed(1)} GB`}
+            icon={<MemoryStick className="h-4 w-4" />}
+            tooltip={nodeVramTooltip(node.role)}
+          />
+          <ModelFactCard
+            title="Mesh Share"
+            value={node.vramSharePct != null ? `${node.vramSharePct}%` : "n/a"}
+            icon={<Gauge className="h-4 w-4" />}
+            tooltip={nodeMeshShareTooltip(node.role)}
+          />
+          <ModelFactCard
+            title="Models"
+            value={`${modelRows.length}`}
+            icon={<Sparkles className="h-4 w-4" />}
+            tooltip={nodeHotModelsTooltip()}
+          />
+        </div>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <span>Models</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {modelRows.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead className="text-right">Mesh</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {modelRows.map((row) => {
+                    const modelExists = !!meshModelByName[row.name];
+                    return (
+                      <TableRow key={row.name}>
+                        <TableCell className="max-w-[260px]">
+                          {modelExists ? (
+                            <button
+                              type="button"
+                              className="truncate rounded-sm text-left text-sm font-medium underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                              onClick={() => onOpenModel(row.name)}
+                              title={row.name}
+                            >
+                              {shortName(modelDisplayName(meshModelByName[row.name]) || row.name)}
+                            </button>
+                          ) : (
+                            <span className="truncate text-sm font-medium" title={row.name}>
+                              {shortName(row.name)}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {row.flags.map((flag) => (
+                              <StatusPill
+                                key={flag}
+                                label={flag}
+                                tone={flag === "Serving" ? "good" : flag === "Requested" ? "warn" : "info"}
+                                tooltip={nodeModelFlagTooltip(flag)}
+                              />
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <StatusPill
+                            className="justify-end"
+                            label={
+                              row.meshStatus === "warm"
+                                ? "Warm"
+                                : row.meshStatus === "cold"
+                                  ? "Cold"
+                                  : row.meshStatus
+                            }
+                            tone={
+                              row.meshStatus === "warm"
+                                ? "warm"
+                                : row.meshStatus === "cold"
+                                  ? "cold"
+                                  : "neutral"
+                            }
+                            dot={row.meshStatus === "warm" || row.meshStatus === "cold"}
+                            tooltip={modelStatusTooltip(row.meshStatus)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No active model assignments on this node.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Cpu className="h-4 w-4 text-muted-foreground" />
+              <span>Hardware</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-0">
+            {node.hostname ? (
+              <ModelMetaItem
+                label="Hostname"
+                value={node.hostname}
+                icon={<Server className="h-3.5 w-3.5" />}
+              />
+            ) : null}
+            {node.gpus.length > 0 ? (
+              <div className="grid gap-3">
+                {node.gpus.map((gpu, index) => (
+                  <ModelMetaItem
+                    key={`${gpu.name}-${index}`}
+                    label={node.isSoc ? `SoC ${index + 1}` : `GPU ${index + 1}`}
+                    value={`${trimGpuVendor(gpu.name) || gpu.name} · ${formatGpuMemory(gpu.vram_bytes)}${gpu.bandwidth_gbps ? ` · ${gpu.bandwidth_gbps.toFixed(0)} GB/s` : ""}`}
+                    icon={node.isSoc ? <Cpu className="h-3.5 w-3.5" /> : <Gpu className="h-3.5 w-3.5" />}
+                  />
+                ))}
+              </div>
+            ) : node.privacyLimited ? (
+              <p className="text-sm leading-6 text-muted-foreground">
+                Hardware details are hidden by this peer&apos;s privacy settings.
+              </p>
+            ) : (
+              <p className="text-sm leading-6 text-muted-foreground">
+                No hardware details reported for this node.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {node.self ? (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Info className="h-4 w-4 text-muted-foreground" />
+                <span>Runtime</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2">
+              {node.version ? (
+                <ModelMetaItem label="Version" value={`v${node.version}`} />
+              ) : null}
+              {node.latestVersion ? (
+                <ModelMetaItem label="Latest" value={`v${node.latestVersion}`} />
+              ) : null}
+              {node.llamaReady != null ? (
+                <ModelMetaItem label="Llama Ready" value={node.llamaReady ? "Yes" : "No"} />
+              ) : null}
+              {node.apiPort != null ? (
+                <ModelMetaItem label="API Port" value={`${node.apiPort}`} />
+              ) : null}
+              {node.inflightRequests != null ? (
+                <ModelMetaItem label="Inflight" value={`${node.inflightRequests}`} />
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {node.availableModels.length > 0 && modelRows.length === 0 ? (
+          <div className="px-1 text-xs text-muted-foreground">
+            Available locally: {node.availableModels.map(shortName).join(", ")}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ModelSidebar({
   model,
   activePeers,
+  onOpenNode,
+  onBack,
 }: {
   model: MeshModel;
   activePeers: ActivePeerRow[];
+  onOpenNode: (nodeId: string) => void;
+  onBack?: () => void;
 }) {
   const fullFileName = modelFullFileName(model);
   const revisionFileName = modelRevisionFileName(model);
@@ -4705,6 +5344,18 @@ function ModelSidebar({
                 {model.name}
               </SheetDescription>
             </div>
+            {onBack ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={onBack}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </Button>
+            ) : null}
           </div>
         </SheetHeader>
       </div>
@@ -4936,17 +5587,17 @@ function ModelSidebar({
                   {activePeers.map((peer) => (
                     <TableRow key={peer.id}>
                       <TableCell className="font-mono text-xs">
-                        {peer.id}
+                        <button
+                          type="button"
+                          className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                          onClick={() => onOpenNode(peer.id)}
+                        >
+                          {peer.id}
+                        </button>
                       </TableCell>
-                      <TableCell className="text-right">
-                        {peer.latencyLabel}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {peer.vramLabel}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {peer.shareLabel}
-                      </TableCell>
+                      <TableCell className="text-right">{peer.latencyLabel}</TableCell>
+                      <TableCell className="text-right">{peer.vramLabel}</TableCell>
+                      <TableCell className="text-right">{peer.shareLabel}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -4989,9 +5640,12 @@ function CapabilityBadge({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex" tabIndex={0}>
+        <button
+          type="button"
+          className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {badge}
-        </span>
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -5028,7 +5682,12 @@ function ModelFactCard({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div tabIndex={0}>{card}</div>
+        <button
+          type="button"
+          className="block w-full rounded-lg bg-transparent text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {card}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -5156,9 +5815,12 @@ function StatusPill({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex" tabIndex={0}>
+        <button
+          type="button"
+          className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {badge}
-        </span>
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -5270,6 +5932,57 @@ function modelStatusTooltip(status?: string) {
     return "Downloaded locally, but not currently serving.";
   }
   return "Current model availability in the mesh.";
+}
+
+function nodeRoleTooltip(role: string) {
+  if (role === 'Host') {
+    return 'Coordinates requests and mesh routing for this node.';
+  }
+  if (role === 'Worker') {
+    return 'Contributes VRAM and compute capacity to the mesh.';
+  }
+  if (role === 'Client') {
+    return 'Sends requests, but does not contribute VRAM.';
+  }
+  return 'Connected to the mesh, but not actively serving a model.';
+}
+
+function nodeLatencyTooltip(self: boolean) {
+  if (self) {
+    return 'This is the local node.';
+  }
+  return 'Observed round-trip latency from your node to this peer.';
+}
+
+function nodeVramTooltip(role: string) {
+  if (role === 'Client') {
+    return 'Clients do not contribute serving VRAM to the mesh.';
+  }
+  return 'Serving VRAM contributed by this node to the mesh.';
+}
+
+function nodeMeshShareTooltip(role: string) {
+  if (role === 'Client') {
+    return 'Clients do not contribute serving VRAM, so they have no mesh share.';
+  }
+  return 'Approximate share of total serving VRAM contributed by this node.';
+}
+
+function nodeHotModelsTooltip() {
+  return 'Models this node is hosting, serving, or requesting right now.';
+}
+
+function nodeModelFlagTooltip(flag: string) {
+  if (flag === 'Serving') {
+    return 'This node is actively serving requests for this model.';
+  }
+  if (flag === 'Hosted') {
+    return 'This node has the model available locally for routing.';
+  }
+  if (flag === 'Requested') {
+    return 'This model has been requested on this node, but is not active yet.';
+  }
+  return 'Current model role on this node.';
 }
 
 function fitLabelTooltip(label?: string) {

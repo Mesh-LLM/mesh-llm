@@ -50,33 +50,47 @@ pub(crate) async fn check_for_update() {
         return;
     }
     if let Some(release) = latest_release_info().await {
-        if version_newer(&release.version, VERSION)
-            && release_has_any_platform_asset(
-                &release.assets,
-                std::env::consts::OS,
-                std::env::consts::ARCH,
-            )
-        {
-            let is_bundle_install = std::env::current_exe()
-                .ok()
-                .and_then(|exe| bundle_install_dir(&exe, None))
-                .is_some();
-            if is_bundle_install {
+        if !version_newer(&release.version, VERSION) {
+            return;
+        }
+        // Determine whether this is a bundle install and, if so, whether the
+        // specific installed flavor's asset is present in the new release.
+        let bundle_asset = std::env::current_exe().ok().and_then(|exe| {
+            let (_, flavor) = bundle_install_dir(&exe, None)?;
+            stable_release_asset_name(flavor)
+        });
+        match bundle_asset {
+            Some(ref asset) if release.assets.iter().any(|a| a == asset) => {
                 eprintln!(
                     "✨ New version: v{VERSION} -> v{}. Run 'mesh-llm update'.",
                     release.version
                 );
-            } else {
+            }
+            _ => {
+                // Either not a bundle install, or the installed flavor's asset
+                // is not published in the new release — fall back to generic guidance.
                 #[cfg(not(windows))]
-                eprintln!(
-                    "✨ New version: v{VERSION} -> v{}. Reinstall with: curl -fsSL {INSTALL_SCRIPT_URL} | bash",
-                    release.version
-                );
+                if release_has_any_platform_asset(
+                    &release.assets,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                ) {
+                    eprintln!(
+                        "✨ New version: v{VERSION} -> v{}. Reinstall with: curl -fsSL {INSTALL_SCRIPT_URL} | bash",
+                        release.version
+                    );
+                }
                 #[cfg(windows)]
-                eprintln!(
-                    "✨ New version: v{VERSION} -> v{}. Download from {RELEASES_URL}",
-                    release.version
-                );
+                if release_has_any_platform_asset(
+                    &release.assets,
+                    std::env::consts::OS,
+                    std::env::consts::ARCH,
+                ) {
+                    eprintln!(
+                        "✨ New version: v{VERSION} -> v{}. Download from {RELEASES_URL}",
+                        release.version
+                    );
+                }
             }
         }
     }
