@@ -841,9 +841,15 @@ async fn run_auto(
     node.set_blackboard_name(blackboard_display_name(&cli, &node))
         .await;
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
-    let plugin_manager =
-        plugin::PluginManager::start(&resolved_plugins, plugin_host_mode(&cli), plugin_mesh_tx)
-            .await?;
+    let (plugin_inference_tx, mut plugin_inference_rx) =
+        tokio::sync::mpsc::channel::<plugin::PluginInferenceEvent>(64);
+    let plugin_manager = plugin::PluginManager::start_with_inference(
+        &resolved_plugins,
+        plugin_host_mode(&cli),
+        plugin_mesh_tx,
+        Some(plugin_inference_tx),
+    )
+    .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
 
@@ -1451,6 +1457,69 @@ async fn run_auto(
         }
     }
 
+    // ── Lemonade integration ──
+    // If --lemonade or --lemonade-port is set, connect to a running Lemonade
+    // server and register its models as local inference targets.
+    // Also auto-discovers Lemonade on the default port when --lemonade is set.
+    let lemonade_port = cli.lemonade_port.unwrap_or(crate::inference::lemonade::DEFAULT_PORT);
+    let use_lemonade = cli.lemonade || cli.lemonade_port.is_some();
+    if use_lemonade {
+        match crate::inference::lemonade::connect_external(lemonade_port).await {
+            Ok(process) => {
+                match crate::inference::lemonade::list_models(lemonade_port).await {
+                    Ok(models) => {
+                        eprintln!("🍋 Lemonade connected on port {lemonade_port}");
+                        for model_name_l in &models {
+                            add_runtime_local_target(&target_tx, model_name_l, lemonade_port);
+                            add_serving_assignment(&node, &model_name, model_name_l).await;
+                            advertise_model_ready(&node, &model_name, model_name_l).await;
+                            eprintln!("  + {model_name_l} (lemonade)");
+                        }
+                        if let Some(ref cs) = console_state {
+                            for model_name_l in &models {
+                                cs.upsert_local_process(local_process_payload(
+                                    model_name_l,
+                                    "lemonade",
+                                    lemonade_port,
+                                    0,
+                                ))
+                                .await;
+                            }
+                        }
+                        // Store model names for cleanup, watch for death
+                        let lemonade_models: Vec<String> = models.clone();
+                        let death_target_tx = target_tx.clone();
+                        let death_node = node.clone();
+                        let death_console = console_state.clone();
+                        let death_event_tx = runtime_event_tx.clone();
+                        tokio::spawn(async move {
+                            let _ = process.death_rx.await;
+                            eprintln!("⚠️  Lemonade server disconnected");
+                            for name in &lemonade_models {
+                                remove_runtime_local_target(&death_target_tx, name, lemonade_port);
+                                withdraw_advertised_model(&death_node, name).await;
+                                remove_serving_assignment(&death_node, name).await;
+                                if let Some(ref cs) = death_console {
+                                    cs.remove_local_process(name).await;
+                                }
+                                let _ = death_event_tx.send(RuntimeEvent::Exited {
+                                    model: name.clone(),
+                                    port: lemonade_port,
+                                });
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️  Lemonade on port {lemonade_port} — failed to list models: {e}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("⚠️  Lemonade not available on port {lemonade_port}: {e}");
+            }
+        }
+    }
+
     // Nostr publish loop (if --publish) or watchdog (if --auto, to take over if publisher dies)
     let nostr_publisher = if cli.publish {
         let nostr_keys = nostr::load_or_create_keys()?;
@@ -1611,6 +1680,30 @@ async fn run_auto(
                                 cs.remove_local_process(&model).await;
                             }
                             eprintln!("⚠ Runtime model '{}' exited on :{}", model, port);
+                        }
+                    }
+                }
+            }
+            Some(event) = plugin_inference_rx.recv() => {
+                match event {
+                    plugin::PluginInferenceEvent::Register { plugin_id, model, port, backend } => {
+                        eprintln!("🔌 Plugin '{plugin_id}' registering model '{model}' on :{port} (backend: {backend})");
+                        add_runtime_local_target(&target_tx, &model, port);
+                        add_serving_assignment(&node, &primary_model_name, &model).await;
+                        advertise_model_ready(&node, &primary_model_name, &model).await;
+                        if let Some(ref cs) = console_state {
+                            cs.upsert_local_process(local_process_payload(
+                                &model, &backend, port, 0,
+                            )).await;
+                        }
+                    }
+                    plugin::PluginInferenceEvent::Unregister { plugin_id, model, port } => {
+                        eprintln!("🔌 Plugin '{plugin_id}' unregistering model '{model}' on :{port}");
+                        remove_runtime_local_target(&target_tx, &model, port);
+                        withdraw_advertised_model(&node, &model).await;
+                        remove_serving_assignment(&node, &model).await;
+                        if let Some(ref cs) = console_state {
+                            cs.remove_local_process(&model).await;
                         }
                     }
                 }

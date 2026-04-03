@@ -46,6 +46,25 @@ pub enum PluginMeshEvent {
     },
 }
 
+/// Events from plugins that affect the inference target map.
+/// Sent from the plugin notification handler to the runtime.
+#[derive(Clone, Debug)]
+pub enum PluginInferenceEvent {
+    /// Plugin is providing an inference backend at the given port.
+    Register {
+        plugin_id: String,
+        model: String,
+        port: u16,
+        backend: String,
+    },
+    /// Plugin is withdrawing an inference backend.
+    Unregister {
+        plugin_id: String,
+        model: String,
+        port: u16,
+    },
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ToolSummary {
     pub name: String,
@@ -111,6 +130,7 @@ struct PluginManagerInner {
     plugins: BTreeMap<String, ExternalPlugin>,
     inactive: BTreeMap<String, PluginSummary>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    inference_tx: Option<mpsc::Sender<PluginInferenceEvent>>,
 }
 
 impl PluginManager {
@@ -118,6 +138,15 @@ impl PluginManager {
         specs: &ResolvedPlugins,
         host_mode: PluginHostMode,
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    ) -> Result<Self> {
+        Self::start_with_inference(specs, host_mode, mesh_tx, None).await
+    }
+
+    pub async fn start_with_inference(
+        specs: &ResolvedPlugins,
+        host_mode: PluginHostMode,
+        mesh_tx: mpsc::Sender<PluginMeshEvent>,
+        inference_tx: Option<mpsc::Sender<PluginInferenceEvent>>,
     ) -> Result<Self> {
         if specs.externals.is_empty() {
             tracing::info!("Plugin manager: no plugins enabled");
@@ -151,6 +180,7 @@ impl PluginManager {
                 host_mode,
                 mesh_tx.clone(),
                 rpc_bridge.clone(),
+                inference_tx.clone(),
             )
             .await
             {
@@ -184,6 +214,7 @@ impl PluginManager {
                     .map(|summary| (summary.name.clone(), summary))
                     .collect(),
                 rpc_bridge,
+                inference_tx,
             }),
         };
         manager.start_supervisor();
@@ -332,6 +363,18 @@ impl PluginManager {
             plugin.send_mesh_event(event.clone()).await?;
         }
         Ok(())
+    }
+
+    /// Called by the notification handler when a plugin sends `inference/register`
+    /// or `inference/unregister`. Forwards to the runtime via the inference channel.
+    pub async fn dispatch_inference_event(&self, event: PluginInferenceEvent) {
+        if let Some(ref tx) = self.inner.inference_tx {
+            if let Err(err) = tx.send(event).await {
+                tracing::warn!("Failed to dispatch plugin inference event: {err}");
+            }
+        } else {
+            tracing::debug!("Plugin inference event dropped — no inference channel configured");
+        }
     }
 
     fn start_supervisor(&self) {

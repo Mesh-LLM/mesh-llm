@@ -2,8 +2,9 @@ use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
 use super::transport::{bind_local_listener, connection_loop};
 use super::{
-    parse_optional_json, proto, PluginMeshEvent, PluginRpcBridge, PluginSummary, ToolCallResult,
-    ToolSummary, CONNECT_TIMEOUT_SECS, PROTOCOL_VERSION, REQUEST_TIMEOUT_SECS,
+    parse_optional_json, proto, PluginInferenceEvent, PluginMeshEvent, PluginRpcBridge,
+    PluginSummary, ToolCallResult, ToolSummary, CONNECT_TIMEOUT_SECS, PROTOCOL_VERSION,
+    REQUEST_TIMEOUT_SECS,
 };
 use anyhow::{bail, Context, Result};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
@@ -27,6 +28,7 @@ pub(crate) struct ExternalPlugin {
     runtime: Arc<Mutex<Option<PluginRuntime>>>,
     mesh_tx: mpsc::Sender<super::PluginMeshEvent>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    inference_tx: Option<mpsc::Sender<PluginInferenceEvent>>,
     restart_lock: Arc<Mutex<()>>,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
@@ -46,6 +48,7 @@ impl ExternalPlugin {
         host_mode: PluginHostMode,
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+        inference_tx: Option<mpsc::Sender<PluginInferenceEvent>>,
     ) -> Result<Self> {
         let plugin = Self {
             spec: spec.clone(),
@@ -67,6 +70,7 @@ impl ExternalPlugin {
             runtime: Arc::new(Mutex::new(None)),
             mesh_tx,
             rpc_bridge,
+            inference_tx,
             restart_lock: Arc::new(Mutex::new(())),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
@@ -205,6 +209,7 @@ impl ExternalPlugin {
             self.runtime.clone(),
             outbound_tx_for_runtime,
             generation,
+            self.inference_tx.clone(),
         ));
 
         let (_, outbound_tx, pending) = self.runtime_handles().await?;

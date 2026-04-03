@@ -195,6 +195,8 @@ fn temp_log_path(name: &str) -> PathBuf {
 pub struct InferenceServerHandle {
     pid: u32,
     expected_exit: Arc<AtomicBool>,
+    /// When true, this handle does not own the process — shutdown is a no-op.
+    external: bool,
 }
 
 impl InferenceServerHandle {
@@ -202,7 +204,24 @@ impl InferenceServerHandle {
         self.pid
     }
 
+    /// Create a handle for an external process we don't own (e.g. Lemonade).
+    /// Shutdown is a no-op — the process lifecycle is managed externally.
+    pub fn external() -> Self {
+        Self {
+            pid: 0,
+            expected_exit: Arc::new(AtomicBool::new(true)),
+            external: true,
+        }
+    }
+
+    pub fn is_external(&self) -> bool {
+        self.external
+    }
+
     pub async fn shutdown(&self) {
+        if self.external {
+            return;
+        }
         self.expected_exit.store(true, Ordering::Relaxed);
         terminate_process(self.pid).await;
     }
@@ -806,6 +825,7 @@ pub async fn start_llama_server(
             let handle = InferenceServerHandle {
                 pid,
                 expected_exit: expected_exit.clone(),
+                external: false,
             };
             let (death_tx, death_rx) = tokio::sync::oneshot::channel();
             tokio::spawn(async move {

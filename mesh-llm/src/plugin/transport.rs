@@ -1,5 +1,5 @@
 use super::runtime::PluginRuntime;
-use super::{PluginMeshEvent, PluginRpcBridge, PluginSummary, PROTOCOL_VERSION};
+use super::{PluginInferenceEvent, PluginMeshEvent, PluginRpcBridge, PluginSummary, PROTOCOL_VERSION};
 use anyhow::{anyhow, bail, Context, Result};
 use rand::Rng;
 use rmcp::model::ErrorCode;
@@ -34,6 +34,7 @@ pub(crate) async fn connection_loop(
     runtime: Arc<Mutex<Option<PluginRuntime>>>,
     outbound_tx: mpsc::Sender<super::proto::Envelope>,
     generation: u64,
+    inference_tx: Option<mpsc::Sender<PluginInferenceEvent>>,
 ) {
     let result: Result<()> = async {
         loop {
@@ -83,11 +84,23 @@ pub(crate) async fn connection_loop(
                             );
                         }
                         Some(super::proto::envelope::Payload::RpcNotification(notification)) => {
-                            forward_plugin_notification(
-                                plugin_name.clone(),
-                                notification,
-                                rpc_bridge.clone(),
-                            );
+                            if let Some(event) = try_parse_inference_notification(
+                                &plugin_name,
+                                &notification,
+                            ) {
+                                if let Some(ref tx) = inference_tx {
+                                    let tx = tx.clone();
+                                    tokio::spawn(async move {
+                                        let _ = tx.send(event).await;
+                                    });
+                                }
+                            } else {
+                                forward_plugin_notification(
+                                    plugin_name.clone(),
+                                    notification,
+                                    rpc_bridge.clone(),
+                                );
+                            }
                         }
                         _ => {
                             let responder = pending.lock().await.remove(&request_id);
@@ -323,4 +336,56 @@ fn forward_plugin_notification(
                 .await;
         }
     });
+}
+
+/// Check if a plugin notification is an inference registration/unregistration.
+/// Returns Some(event) if it is, None otherwise (let it go to the RPC bridge).
+fn try_parse_inference_notification(
+    plugin_name: &str,
+    notification: &super::proto::RpcNotification,
+) -> Option<PluginInferenceEvent> {
+    match notification.method.as_str() {
+        "inference/register" => {
+            let params: serde_json::Value =
+                serde_json::from_str(&notification.params_json).ok()?;
+            let model = params.get("model")?.as_str()?.to_string();
+            let port = params.get("port")?.as_u64()? as u16;
+            let backend = params
+                .get("backend")
+                .and_then(|b| b.as_str())
+                .unwrap_or("plugin")
+                .to_string();
+            tracing::info!(
+                plugin = %plugin_name,
+                model = %model,
+                port = port,
+                backend = %backend,
+                "Plugin registering inference backend"
+            );
+            Some(PluginInferenceEvent::Register {
+                plugin_id: plugin_name.to_string(),
+                model,
+                port,
+                backend,
+            })
+        }
+        "inference/unregister" => {
+            let params: serde_json::Value =
+                serde_json::from_str(&notification.params_json).ok()?;
+            let model = params.get("model")?.as_str()?.to_string();
+            let port = params.get("port")?.as_u64()? as u16;
+            tracing::info!(
+                plugin = %plugin_name,
+                model = %model,
+                port = port,
+                "Plugin unregistering inference backend"
+            );
+            Some(PluginInferenceEvent::Unregister {
+                plugin_id: plugin_name.to_string(),
+                model,
+                port,
+            })
+        }
+        _ => None,
+    }
 }

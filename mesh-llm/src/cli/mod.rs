@@ -155,6 +155,15 @@ pub(crate) struct Cli {
     #[arg(long, hide = true)]
     pub(crate) config: Option<PathBuf>,
 
+    /// Connect to a running Lemonade server and serve its models.
+    /// Uses the default port (13305) unless --lemonade-port is set.
+    #[arg(long)]
+    pub(crate) lemonade: bool,
+
+    /// Lemonade server port (default: 13305). Implies --lemonade.
+    #[arg(long, hide = true)]
+    pub(crate) lemonade_port: Option<u16>,
+
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub(crate) nostr_discovery: bool,
