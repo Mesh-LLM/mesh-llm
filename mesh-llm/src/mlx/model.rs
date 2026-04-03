@@ -41,18 +41,19 @@ pub struct ModelConfig {
     #[serde(default)]
     pub partial_rotary_factor: Option<f32>,
     #[allow(dead_code)]
+    #[serde(alias = "model_max_length")]
     pub max_position_embeddings: i32,
     #[serde(default, deserialize_with = "deserialize_nullable_bool")]
     pub tie_word_embeddings: bool,
-    #[serde(default)]
+    #[serde(default, alias = "hidden_act")]
     pub hidden_activation: Option<String>,
     #[serde(default)]
     pub hidden_size_per_layer_input: Option<i32>,
     #[serde(default)]
     pub moe_intermediate_size: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "num_shared_experts")]
     pub n_shared_experts: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "num_experts")]
     pub n_routed_experts: Option<i32>,
     #[serde(default)]
     pub routed_scaling_factor: Option<f32>,
@@ -69,13 +70,13 @@ pub struct ModelConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub topk_method: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "moe_renormalize")]
     pub norm_topk_prob: Option<bool>,
-    #[serde(default)]
+    #[serde(default, alias = "num_expert_group")]
     pub n_group: Option<i32>,
     #[serde(default)]
     pub topk_group: Option<i32>,
-    #[serde(default)]
+    #[serde(default, alias = "num_experts_per_token")]
     pub num_experts_per_tok: Option<i32>,
     #[serde(default)]
     #[allow(dead_code)]
@@ -127,10 +128,26 @@ pub struct ModelConfig {
     pub block_auto_adjust_ff_dim: Option<bool>,
     #[serde(default)]
     pub full_attn_idxs: Option<Vec<i32>>,
+    #[serde(default)]
+    pub linear_attn_config: Option<LinearAttnConfig>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub moe_router_activation_func: Option<String>,
     pub quantization: Option<QuantConfig>,
     /// EOS token ID(s) — can be a single int or array in config.json.
     #[serde(default, deserialize_with = "deserialize_eos_token_id")]
     pub eos_token_id: Vec<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, Clone)]
+pub struct LinearAttnConfig {
+    #[allow(dead_code)]
+    pub full_attn_layers: Vec<i32>,
+    pub kda_layers: Vec<i32>,
+    pub num_heads: i32,
+    pub head_dim: i32,
+    #[serde(default)]
+    pub short_conv_kernel_size: Option<i32>,
 }
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -289,6 +306,12 @@ impl RMSNorm {
             Ok(mlx_rs::fast::rms_norm(x, &self.weight, self.eps)?)
         }
     }
+}
+
+fn unit_rms_norm(x: &Array, eps: f32) -> Result<Array> {
+    let width = x.shape()[x.shape().len() - 1];
+    let weight = mlx_rs::ops::ones::<f32>(&[width])?.as_dtype(x.dtype())?;
+    Ok(mlx_rs::fast::rms_norm(x, &weight, eps)?)
 }
 
 pub struct QuantizedMultiLinear {
@@ -1054,6 +1077,262 @@ impl GptOssMoE {
     }
 }
 
+pub struct KimiMlaAttention {
+    q_proj: QuantizedLinear,
+    kv_a_proj_with_mqa: QuantizedLinear,
+    kv_a_layernorm: RMSNorm,
+    embed_q: QuantizedMultiLinear,
+    unembed_out: QuantizedMultiLinear,
+    o_proj: QuantizedLinear,
+    num_heads: i32,
+    q_head_dim: i32,
+    qk_rope_head_dim: i32,
+    qk_nope_head_dim: i32,
+    kv_lora_rank: i32,
+    v_head_dim: i32,
+    scale: f32,
+}
+
+impl KimiMlaAttention {
+    pub fn forward_no_cache(&self, x: &Array) -> Result<Array> {
+        let shape = x.shape();
+        let (b, l) = (shape[0], shape[1]);
+
+        let q = self
+            .q_proj
+            .forward(x)?
+            .reshape(&[b, l, self.num_heads, self.q_head_dim])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+        let q_nope = q.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            ..self.qk_nope_head_dim,
+        ));
+        let q_pe = q.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            self.qk_nope_head_dim..,
+        ));
+
+        let compressed_kv = self.kv_a_proj_with_mqa.forward(x)?;
+        let kv_latent = compressed_kv.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            ..self.kv_lora_rank,
+        ));
+        let k_pe = compressed_kv.index((
+            std::ops::RangeFull,
+            std::ops::RangeFull,
+            self.kv_lora_rank..,
+        ));
+        let kv_latent = self.kv_a_layernorm.forward(&kv_latent)?.expand_dims(1)?;
+        let k_pe = k_pe
+            .reshape(&[b, l, 1, self.qk_rope_head_dim])?
+            .transpose_axes(&[0, 2, 1, 3])?;
+
+        let pe_scores = mlx_rs::ops::matmul(
+            &q_pe.multiply(&array!(self.scale))?,
+            &k_pe.transpose_axes(&[0, 1, 3, 2])?,
+        )?;
+
+        let output = if l == 1 {
+            let q_nope = self.embed_q.forward(&q_nope, true)?;
+            let scores = mlx_rs::ops::matmul(
+                &q_nope.multiply(&array!(self.scale))?,
+                &kv_latent.transpose_axes(&[0, 1, 3, 2])?,
+            )?
+            .add(&pe_scores)?;
+            let probs = mlx_rs::ops::softmax_axis(&scores, -1, true)?;
+            let output = mlx_rs::ops::matmul(&probs, &kv_latent)?;
+            self.unembed_out.forward(&output, true)?
+        } else {
+            let k = self.embed_q.forward(&kv_latent, false)?;
+            let v = self.unembed_out.forward(&kv_latent, true)?;
+            let mask = attention_mask(l, l, 0, None)?.context("expected kimi mla mask")?;
+            let scores = mlx_rs::ops::matmul(
+                &q_nope.multiply(&array!(self.scale))?,
+                &k.transpose_axes(&[0, 1, 3, 2])?,
+            )?
+            .add(&pe_scores)?;
+            let fill = array!(scores.dtype().finfo_min()? as f32).as_dtype(scores.dtype())?;
+            let scores = mlx_rs::ops::r#where(&mask, &scores, &fill)?;
+            let probs = mlx_rs::ops::softmax_axis(&scores, -1, true)?;
+            mlx_rs::ops::matmul(&probs, &v)?
+        };
+
+        let output = output.transpose_axes(&[0, 2, 1, 3])?.reshape(&[
+            b,
+            l,
+            self.num_heads * self.v_head_dim,
+        ])?;
+        self.o_proj.forward(&output)
+    }
+}
+
+pub struct KimiShortConv {
+    conv_weight: Array,
+    kernel_size: i32,
+    channels: i32,
+}
+
+impl KimiShortConv {
+    fn forward_no_cache(&self, x: &Array) -> Result<Array> {
+        let x = pad(
+            x,
+            &[(0, 0), (self.kernel_size - 1, 0), (0, 0)],
+            None::<Array>,
+            None::<mlx_rs::ops::PadMode>,
+        )?;
+        let x = conv1d(
+            &x,
+            &self.conv_weight,
+            None::<i32>,
+            None::<i32>,
+            None::<i32>,
+            Some(self.channels),
+        )?;
+        Ok(&mlx_rs::ops::sigmoid(&x)? * &x)
+    }
+}
+
+pub struct KimiDeltaAttention {
+    q_proj: QuantizedLinear,
+    k_proj: QuantizedLinear,
+    v_proj: QuantizedLinear,
+    q_conv: KimiShortConv,
+    k_conv: KimiShortConv,
+    v_conv: KimiShortConv,
+    f_a_proj: QuantizedLinear,
+    f_b_proj: QuantizedLinear,
+    b_proj: QuantizedLinear,
+    g_a_proj: QuantizedLinear,
+    g_b_proj: QuantizedLinear,
+    a_log: Array,
+    dt_bias: Array,
+    o_norm: RMSNorm,
+    o_proj: QuantizedLinear,
+    num_heads: i32,
+    head_dim: i32,
+    scale: f32,
+}
+
+impl KimiDeltaAttention {
+    fn gated_delta_update(
+        &self,
+        q: &Array,
+        k: &Array,
+        v: &Array,
+        a: &Array,
+        b: &Array,
+    ) -> Result<Array> {
+        let bsz = q.shape()[0];
+        let seq = q.shape()[1];
+        let heads = q.shape()[2];
+        let dim = q.shape()[3];
+        let mut state = mlx_rs::ops::zeros_dtype(&[bsz, heads, dim, dim], q.dtype())?;
+        let beta = mlx_rs::ops::sigmoid(b)?;
+        let a = a.add(
+            &self
+                .dt_bias
+                .reshape(&[1, 1, self.num_heads, self.head_dim])?,
+        )?;
+        let g = mlx_rs::ops::exp(&mlx_rs::ops::negative(
+            &mlx_rs::ops::exp(
+                &self
+                    .a_log
+                    .reshape(&[1, 1, self.num_heads, 1])?
+                    .as_dtype(Dtype::Float32)?,
+            )?
+            .multiply(&mlx_rs::nn::softplus(&a)?)?,
+        )?)?
+        .as_dtype(q.dtype())?;
+
+        let mut ys = Vec::with_capacity(seq as usize);
+        for t in 0..seq {
+            let q_t = q.index((
+                std::ops::RangeFull,
+                t,
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+            ));
+            let k_t = k.index((
+                std::ops::RangeFull,
+                t,
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+            ));
+            let v_t = v.index((
+                std::ops::RangeFull,
+                t,
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+            ));
+            let beta_t = beta.index((
+                std::ops::RangeFull,
+                t,
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+            ));
+            let g_t = g.index((
+                std::ops::RangeFull,
+                t,
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+            ));
+            state = state.multiply(&g_t.expand_dims(2)?)?;
+            let kv_mem = state
+                .multiply(&k_t.expand_dims(2)?)?
+                .sum_axes(&[-1], false)?;
+            let delta = v_t.subtract(&kv_mem)?.multiply(&beta_t)?;
+            state = state.add(&k_t.expand_dims(2)?.multiply(&delta.expand_dims(3)?)?)?;
+            ys.push(
+                state
+                    .multiply(&q_t.expand_dims(2)?)?
+                    .sum_axes(&[-1], false)?,
+            );
+        }
+        let y_refs: Vec<&Array> = ys.iter().collect();
+        Ok(mlx_rs::ops::stack(&y_refs)?.swap_axes(0, 1)?)
+    }
+
+    pub fn forward_no_cache(&self, x: &Array) -> Result<Array> {
+        let shape = x.shape();
+        let (b, l) = (shape[0], shape[1]);
+        let q_conv = self.q_conv.forward_no_cache(&self.q_proj.forward(x)?)?;
+        let k_conv = self.k_conv.forward_no_cache(&self.k_proj.forward(x)?)?;
+        let v_conv = self.v_conv.forward_no_cache(&self.v_proj.forward(x)?)?;
+
+        let mut q = q_conv.reshape(&[b, l, self.num_heads, self.head_dim])?;
+        let mut k = k_conv.reshape(&[b, l, self.num_heads, self.head_dim])?;
+        let v = v_conv.reshape(&[b, l, self.num_heads, self.head_dim])?;
+
+        q = unit_rms_norm(&q, 1e-6)?.multiply(&array!(self.scale * self.scale))?;
+        k = unit_rms_norm(&k, 1e-6)?.multiply(&array!(self.scale))?;
+
+        let a_logits = self
+            .f_b_proj
+            .forward(&self.f_a_proj.forward(x)?)?
+            .reshape(&[b, l, self.num_heads, self.head_dim])?;
+        let b_logits = self
+            .b_proj
+            .forward(x)?
+            .reshape(&[b, l, self.num_heads, 1])?;
+        let out = self.gated_delta_update(&q, &k, &v, &a_logits, &b_logits)?;
+        let gate = self
+            .g_b_proj
+            .forward(&self.g_a_proj.forward(x)?)?
+            .reshape(&[b, l, self.num_heads, self.head_dim])?;
+        let out = self
+            .o_norm
+            .forward(&out)?
+            .multiply(&mlx_rs::ops::sigmoid(&gate)?)?
+            .reshape(&[b, l, self.num_heads * self.head_dim])?;
+        self.o_proj.forward(&out)
+    }
+}
+
 pub struct Lfm2ShortConv {
     conv_weight: Array,
     in_proj: QuantizedLinear,
@@ -1100,6 +1379,8 @@ impl Lfm2ShortConv {
 pub enum AttentionKind {
     Standard(Attention),
     DeepseekV3(DeepseekV3Attention),
+    KimiMla(KimiMlaAttention),
+    KimiDelta(KimiDeltaAttention),
     Lfm2ShortConv(Lfm2ShortConv),
 }
 
@@ -1108,6 +1389,8 @@ impl AttentionKind {
         match self {
             Self::Standard(attn) => attn.forward_no_cache(x),
             Self::DeepseekV3(attn) => attn.forward_no_cache(x),
+            Self::KimiMla(attn) => attn.forward_no_cache(x),
+            Self::KimiDelta(attn) => attn.forward_no_cache(x),
             Self::Lfm2ShortConv(conv) => conv.forward_no_cache(x),
         }
     }
@@ -1121,6 +1404,9 @@ impl AttentionKind {
         match self {
             Self::Standard(attn) => attn.forward(x, cache, shared_cache),
             Self::DeepseekV3(attn) => attn.forward(x, cache),
+            Self::KimiMla(_) | Self::KimiDelta(_) => {
+                bail!("Kimi Linear currently requires cacheless generation")
+            }
             Self::Lfm2ShortConv(_) => {
                 bail!("LFM2 ShortConv currently requires cacheless generation")
             }
@@ -1131,6 +1417,7 @@ impl AttentionKind {
         match self {
             Self::Standard(attn) => attn.kv_shared_source,
             Self::DeepseekV3(_) => None,
+            Self::KimiMla(_) | Self::KimiDelta(_) => None,
             Self::Lfm2ShortConv(_) => None,
         }
     }
@@ -1580,7 +1867,7 @@ impl MlxModel {
             start.elapsed().as_secs_f64()
         );
         let prefixes = tensor_prefixes(&tensors)?;
-        if arch.is_deepseek_v3() {
+        if arch.is_deepseek_v3() || arch.is_kimi_linear() {
             transform_deepseek_v3_tensors(
                 &mut tensors,
                 &prefixes,
@@ -2047,6 +2334,189 @@ impl MlxModel {
                 });
                 continue;
             }
+            if arch.is_kimi_linear() {
+                let linear_cfg = config
+                    .linear_attn_config
+                    .as_ref()
+                    .context("missing linear_attn_config for Kimi Linear")?;
+                let is_linear_layer = linear_cfg.kda_layers.contains(&(i + 1));
+                let projection_dim = linear_cfg.num_heads * linear_cfg.head_dim;
+                let is_moe_layer = config.n_routed_experts.unwrap_or(0) > 0
+                    && (i >= config.first_k_dense_replace.unwrap_or(0))
+                    && (i % config.moe_layer_freq.unwrap_or(1) == 0);
+                let mlp = if is_moe_layer {
+                    MlpKind::DeepseekV3MoE(DeepseekV3MoE {
+                        switch_gate_proj: load_switch_linear(&format!(
+                            "{p}.mlp.switch_mlp.gate_proj"
+                        ))?,
+                        switch_up_proj: load_switch_linear(&format!("{p}.mlp.switch_mlp.up_proj"))?,
+                        switch_down_proj: load_switch_linear(&format!(
+                            "{p}.mlp.switch_mlp.down_proj"
+                        ))?,
+                        gate_weight: tensors
+                            .get(&format!("{p}.mlp.gate.weight"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.mlp.gate.weight"))?,
+                        gate_bias: tensors
+                            .get(&format!("{p}.mlp.e_score_correction_bias"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.mlp.e_score_correction_bias"))?,
+                        top_k: config.num_experts_per_tok.unwrap_or(1),
+                        n_group: config.n_group.unwrap_or(1),
+                        topk_group: config.topk_group.unwrap_or(1),
+                        routed_scaling_factor: config.routed_scaling_factor.unwrap_or(1.0),
+                        norm_topk_prob: config.norm_topk_prob.unwrap_or(true),
+                        shared_experts: config
+                            .n_shared_experts
+                            .filter(|n| *n > 0)
+                            .map(|_| -> Result<MLP> {
+                                Ok(MLP {
+                                    gate_up_proj: None,
+                                    gate_proj: Some(load_qlinear(&format!(
+                                        "{p}.mlp.shared_experts.gate_proj"
+                                    ))?),
+                                    up_proj: Some(load_qlinear(&format!(
+                                        "{p}.mlp.shared_experts.up_proj"
+                                    ))?),
+                                    down_proj: load_qlinear(&format!(
+                                        "{p}.mlp.shared_experts.down_proj"
+                                    ))?,
+                                    activation: Activation::Silu,
+                                })
+                            })
+                            .transpose()?,
+                    })
+                } else {
+                    MlpKind::Dense(MLP {
+                        gate_up_proj: None,
+                        gate_proj: Some(load_qlinear(&format!("{p}.mlp.gate_proj"))?),
+                        up_proj: Some(load_qlinear(&format!("{p}.mlp.up_proj"))?),
+                        down_proj: load_qlinear(&format!("{p}.mlp.down_proj"))?,
+                        activation: Activation::Silu,
+                    })
+                };
+
+                let attn = if is_linear_layer {
+                    AttentionKind::KimiDelta(KimiDeltaAttention {
+                        q_proj: load_qlinear(&format!("{p}.self_attn.q_proj"))?,
+                        k_proj: load_qlinear(&format!("{p}.self_attn.k_proj"))?,
+                        v_proj: load_qlinear(&format!("{p}.self_attn.v_proj"))?,
+                        q_conv: KimiShortConv {
+                            conv_weight: load_lfm2_conv_weight(&format!(
+                                "{p}.self_attn.q_conv.conv"
+                            ))?,
+                            kernel_size: linear_cfg.short_conv_kernel_size.unwrap_or(4),
+                            channels: projection_dim,
+                        },
+                        k_conv: KimiShortConv {
+                            conv_weight: load_lfm2_conv_weight(&format!(
+                                "{p}.self_attn.k_conv.conv"
+                            ))?,
+                            kernel_size: linear_cfg.short_conv_kernel_size.unwrap_or(4),
+                            channels: projection_dim,
+                        },
+                        v_conv: KimiShortConv {
+                            conv_weight: load_lfm2_conv_weight(&format!(
+                                "{p}.self_attn.v_conv.conv"
+                            ))?,
+                            kernel_size: linear_cfg.short_conv_kernel_size.unwrap_or(4),
+                            channels: projection_dim,
+                        },
+                        f_a_proj: load_qlinear(&format!("{p}.self_attn.f_a_proj"))?,
+                        f_b_proj: load_qlinear(&format!("{p}.self_attn.f_b_proj"))?,
+                        b_proj: load_qlinear(&format!("{p}.self_attn.b_proj"))?,
+                        g_a_proj: load_qlinear(&format!("{p}.self_attn.g_a_proj"))?,
+                        g_b_proj: load_qlinear(&format!("{p}.self_attn.g_b_proj"))?,
+                        a_log: tensors
+                            .get(&format!("{p}.self_attn.A_log"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.self_attn.A_log"))?,
+                        dt_bias: tensors
+                            .get(&format!("{p}.self_attn.dt_bias"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.self_attn.dt_bias"))?,
+                        o_norm: RMSNorm {
+                            weight: tensors
+                                .get(&format!("{p}.self_attn.o_norm.weight"))
+                                .cloned()
+                                .with_context(|| format!("missing {p}.self_attn.o_norm.weight"))?,
+                            eps: config.rms_norm_eps,
+                            add_unit_offset: false,
+                        },
+                        o_proj: load_qlinear(&format!("{p}.self_attn.o_proj"))?,
+                        num_heads: linear_cfg.num_heads,
+                        head_dim: linear_cfg.head_dim,
+                        scale: (linear_cfg.head_dim as f32).powf(-0.5),
+                    })
+                } else {
+                    let qk_nope_head_dim = config
+                        .qk_nope_head_dim
+                        .context("missing qk_nope_head_dim for Kimi Linear MLA")?;
+                    let qk_rope_head_dim = config
+                        .qk_rope_head_dim
+                        .context("missing qk_rope_head_dim for Kimi Linear MLA")?;
+                    let kv_lora_rank = config
+                        .kv_lora_rank
+                        .context("missing kv_lora_rank for Kimi Linear MLA")?;
+                    let v_head_dim = config
+                        .v_head_dim
+                        .context("missing v_head_dim for Kimi Linear MLA")?;
+                    AttentionKind::KimiMla(KimiMlaAttention {
+                        q_proj: load_qlinear(&format!("{p}.self_attn.q_proj"))?,
+                        kv_a_proj_with_mqa: load_qlinear(&format!(
+                            "{p}.self_attn.kv_a_proj_with_mqa"
+                        ))?,
+                        kv_a_layernorm: RMSNorm {
+                            weight: tensors
+                                .get(&format!("{p}.self_attn.kv_a_layernorm.weight"))
+                                .cloned()
+                                .with_context(|| {
+                                    format!("missing {p}.self_attn.kv_a_layernorm.weight")
+                                })?,
+                            eps: config.rms_norm_eps,
+                            add_unit_offset: false,
+                        },
+                        embed_q: load_multi_linear(&format!("{p}.self_attn.embed_q"))?,
+                        unembed_out: load_multi_linear(&format!("{p}.self_attn.unembed_out"))?,
+                        o_proj: load_qlinear(&format!("{p}.self_attn.o_proj"))?,
+                        num_heads: config.num_attention_heads,
+                        q_head_dim: qk_nope_head_dim + qk_rope_head_dim,
+                        qk_rope_head_dim,
+                        qk_nope_head_dim,
+                        kv_lora_rank,
+                        v_head_dim,
+                        scale: 1.0 / ((qk_nope_head_dim + qk_rope_head_dim) as f32).sqrt(),
+                    })
+                };
+
+                layers.push(Layer {
+                    attn,
+                    mlp,
+                    attn_in_norm: RMSNorm {
+                        weight: tensors
+                            .get(&format!("{p}.input_layernorm.weight"))
+                            .cloned()
+                            .with_context(|| format!("missing {p}.input_layernorm.weight"))?,
+                        eps: config.rms_norm_eps,
+                        add_unit_offset: false,
+                    },
+                    attn_out_norm: None,
+                    mlp_in_norm: RMSNorm {
+                        weight: tensors
+                            .get(&format!("{p}.post_attention_layernorm.weight"))
+                            .cloned()
+                            .with_context(|| {
+                                format!("missing {p}.post_attention_layernorm.weight")
+                            })?,
+                        eps: config.rms_norm_eps,
+                        add_unit_offset: false,
+                    },
+                    mlp_out_norm: None,
+                    per_layer_input: None,
+                    layer_scalar: None,
+                });
+                continue;
+            }
             if arch.is_gpt_oss() {
                 let window_size = if matches!(layer_type, Some("sliding_attention")) {
                     Some(
@@ -2351,7 +2821,10 @@ impl MlxModel {
             tokenizer,
             prompt_template,
             tokenwise_prefill: arch.is_gemma2() || arch.is_gemma4(),
-            cacheless_generation: arch.is_gemma2() || arch.is_gpt_oss() || arch.is_lfm2(),
+            cacheless_generation: arch.is_gemma2()
+                || arch.is_gpt_oss()
+                || arch.is_kimi_linear()
+                || arch.is_lfm2(),
         })
     }
 
@@ -2531,6 +3004,7 @@ enum ModelArchitecture {
     LlamaLike,
     DeepseekV3,
     GptOss,
+    KimiLinear,
     Lfm2,
     Glm4,
     Gemma2,
@@ -2549,6 +3023,10 @@ impl ModelArchitecture {
 
     fn is_gpt_oss(self) -> bool {
         matches!(self, Self::GptOss)
+    }
+
+    fn is_kimi_linear(self) -> bool {
+        matches!(self, Self::KimiLinear)
     }
 
     fn is_lfm2(self) -> bool {
@@ -2598,6 +3076,8 @@ fn model_architecture(config: &Value) -> ModelArchitecture {
         ModelArchitecture::Glm4
     } else if model_type.starts_with("gpt_oss") {
         ModelArchitecture::GptOss
+    } else if model_type.starts_with("kimi_linear") {
+        ModelArchitecture::KimiLinear
     } else if model_type.starts_with("deepseek_v3")
         || model_type.starts_with("kimi_k2")
         || model_type.starts_with("kimi_k25")
@@ -2793,6 +3273,7 @@ fn config_supports_mlx(config: &Value) -> bool {
                 | "qwen2"
                 | "qwen3"
                 | "gpt_oss"
+                | "kimi_linear"
                 | "gemma2"
                 | "gemma3"
                 | "gemma3_text"
@@ -2805,6 +3286,7 @@ fn config_supports_mlx(config: &Value) -> bool {
                 | "qwen2forcausallm"
                 | "qwen3forcausallm"
                 | "gptossforcausallm"
+                | "kimilinearforcausallm"
                 | "gemma2forcausallm"
                 | "gemma3forcausallm"
                 | "gemma3forconditionalgeneration"
@@ -2848,7 +3330,7 @@ fn ensure_supported_mlx_model(dir: &Path, config: &Value) -> Result<()> {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "none".to_string());
     bail!(
-        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/DeepSeekV3/GPT-OSS/LFM2/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
+        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/DeepSeekV3/GPT-OSS/Kimi-Linear/LFM2/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
         dir.display(),
         model_type,
         architectures,
@@ -2978,6 +3460,10 @@ mod tests {
             "model_type": "gpt_oss",
             "architectures": ["GptOssForCausalLM"]
         });
+        let kimi_linear: Value = serde_json::json!({
+            "model_type": "kimi_linear",
+            "architectures": ["KimiLinearForCausalLM"]
+        });
         let llama: Value = serde_json::json!({
             "model_type": "llama",
             "architectures": ["LlamaForCausalLM"]
@@ -3002,6 +3488,7 @@ mod tests {
         assert!(config_supports_mlx(&lfm2));
         assert!(config_supports_mlx(&qwen));
         assert!(config_supports_mlx(&gpt_oss));
+        assert!(config_supports_mlx(&kimi_linear));
         assert!(config_supports_mlx(&llama));
         assert!(config_supports_mlx(&gemma2));
         assert!(config_supports_mlx(&gemma3));
@@ -3014,17 +3501,12 @@ mod tests {
             "model_type": "glm",
             "architectures": ["GlmForCausalLM"]
         });
-        let kimi_linear: Value = serde_json::json!({
-            "model_type": "kimi_linear",
-            "architectures": ["KimiLinearForCausalLM"]
-        });
         let lfm2: Value = serde_json::json!({
             "model_type": "lfm2_moe",
             "architectures": ["Lfm2MoeForCausalLM"]
         });
 
         assert!(!config_supports_mlx(&glm));
-        assert!(!config_supports_mlx(&kimi_linear));
         assert!(!config_supports_mlx(&lfm2));
     }
 
@@ -3092,10 +3574,6 @@ mod tests {
             serde_json::json!({
                 "model_type": "glm",
                 "architectures": ["GlmForCausalLM"]
-            }),
-            serde_json::json!({
-                "model_type": "kimi_linear",
-                "architectures": ["KimiLinearForCausalLM"]
             }),
             serde_json::json!({
                 "model_type": "lfm2_moe",
@@ -3208,6 +3686,16 @@ mod tests {
         });
 
         assert_eq!(model_architecture(&config), ModelArchitecture::GptOss);
+    }
+
+    #[test]
+    fn model_architecture_detects_kimi_linear() {
+        let config = serde_json::json!({
+            "model_type": "kimi_linear",
+            "architectures": ["KimiLinearForCausalLM"]
+        });
+
+        assert_eq!(model_architecture(&config), ModelArchitecture::KimiLinear);
     }
 
     #[test]
