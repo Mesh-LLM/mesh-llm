@@ -11,10 +11,9 @@ REMOTE_PORT=23632
 LOCAL_BIN="$(dirname "$0")/target/release/mesh-llm"
 LOCAL_BIN_DIR="$(dirname "$0")/../llama.cpp/build/bin"
 REMOTE_BIN="~/bin/mesh-llm"
-MODEL_NAME="Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-HF_CACHE_DIR="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
-REMOTE_MODEL='${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}/'"$MODEL_NAME"
-LOCAL_MODEL="$HF_CACHE_DIR/$MODEL_NAME"
+MODEL_NAME="Qwen2.5-3B-Instruct-Q4_K_M"
+REMOTE_MODEL="$MODEL_NAME"
+LOCAL_MODEL="$MODEL_NAME"
 LOCAL_HTTP=8080
 REMOTE_LOG="/tmp/mesh-test.log"
 LOCAL_LOG="/tmp/mesh-test-local.log"
@@ -30,6 +29,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== Mode: $MODE ==="
+echo "=== Ensuring local model is downloaded ==="
+"$LOCAL_BIN" download "$MODEL_NAME"
+
 echo "=== Killing old processes ==="
 ssh -p $REMOTE_PORT $REMOTE "pkill -f mesh-llm; pkill -f rpc-server; pkill -f llama-server" 2>/dev/null || true
 pkill -f "mesh-llm" 2>/dev/null || true

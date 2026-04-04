@@ -12,11 +12,11 @@
 # Usage:
 #   ./tests/test_reasoning_compat.sh [model_path]
 #
-# If no model path given, tries the standard Hugging Face cache path.
+# If no model path given, downloads Qwen3-8B-Q4_K_M via mesh-llm.
 set -e
 
-HF_CACHE_DIR="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
-MODEL="${1:-$HF_CACHE_DIR/Qwen3-8B-Q4_K_M.gguf}"
+MODEL_STEM="Qwen3-8B-Q4_K_M"
+MODEL="${1:-}"
 PORT=18099
 PASS=0
 FAIL=0
@@ -24,9 +24,19 @@ FAIL=0
 total_pass() { PASS=$((PASS + 1)); echo "  ✅ $1"; }
 total_fail() { FAIL=$((FAIL + 1)); echo "  ❌ $1: $2"; }
 
-if [ ! -f "$MODEL" ]; then
-    echo "ERROR: Model not found: $MODEL"
+if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
+    MESH_BIN="$(dirname "$0")/../../target/release/mesh-llm"
+    [ -x "$MESH_BIN" ] || MESH_BIN="mesh-llm"
+    echo "Downloading $MODEL_STEM via mesh-llm..."
+    set +e
+    MODEL=$("$MESH_BIN" models download "$MODEL_STEM" | grep "^   " | head -1 | xargs)
+    set -e
+fi
+
+if [ -z "${MODEL:-}" ] || [ ! -f "$MODEL" ]; then
+    echo "ERROR: Model not found."
     echo "Usage: $0 [model_path]"
+    echo "Or download first: mesh-llm models download $MODEL_STEM"
     echo "Needs a thinking-capable model (Qwen3, MiniMax, etc.)"
     exit 1
 fi
