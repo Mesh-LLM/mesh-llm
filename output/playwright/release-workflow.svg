@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080">
+  <style>
+    .bg { fill: #f8f8fb; }
+    .title { font: 700 34px Georgia, serif; fill: #222337; }
+    .subtitle { font: 500 18px Georgia, serif; fill: #595c72; }
+    .box { fill: #ffffff; stroke: #3d4160; stroke-width: 3; rx: 18; ry: 18; }
+    .accent { fill: #eceafd; stroke: #5e52b5; stroke-width: 3; rx: 18; ry: 18; }
+    .warn { fill: #fbeee8; stroke: #a0582d; stroke-width: 3; rx: 18; ry: 18; }
+    .text { font: 600 22px Helvetica, Arial, sans-serif; fill: #23263a; }
+    .small { font: 500 18px Helvetica, Arial, sans-serif; fill: #474c63; }
+    .arrow { stroke: #3d4160; stroke-width: 4; fill: none; marker-end: url(#arrowhead); }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <polygon points="0 0, 10 4, 0 8" fill="#3d4160"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1600" height="1080"/>
+  <text class="title" x="70" y="70">Release Workflow</text>
+  <text class="subtitle" x="70" y="105">Tag builds still publish all release artifacts, but exact validation must pass before bundle publish proceeds.</text>
+
+  <rect class="accent" x="70" y="150" width="250" height="90"/>
+  <text class="text" x="115" y="205">push tag v*</text>
+
+  <rect class="box" x="110" y="330" width="360" height="220"/>
+  <text class="text" x="216" y="380">build (Linux CPU)</text>
+  <text class="small" x="172" y="420">release-build</text>
+  <text class="small" x="148" y="455">run exact matrix backend = gguf</text>
+  <text class="small" x="136" y="490">upload exact artifacts: release-exact-gguf</text>
+  <text class="small" x="172" y="525">then bundle release-linux-cpu</text>
+
+  <rect class="box" x="560" y="330" width="360" height="220"/>
+  <text class="text" x="675" y="380">build (macOS)</text>
+  <text class="small" x="622" y="420">release-build</text>
+  <text class="small" x="598" y="455">run exact matrix backend = mlx</text>
+  <text class="small" x="586" y="490">upload exact artifacts: release-exact-mlx</text>
+  <text class="small" x="622" y="525">then bundle release-macos</text>
+
+  <rect class="warn" x="1010" y="330" width="430" height="320"/>
+  <text class="text" x="1100" y="380">Other release builds</text>
+  <text class="small" x="1065" y="420">build_linux_cuda</text>
+  <text class="small" x="1065" y="455">build_linux_amd</text>
+  <text class="small" x="1065" y="490">build_linux_vulkan</text>
+  <text class="small" x="1065" y="525">these still build and upload release artifacts</text>
+  <text class="small" x="1065" y="560">they do not run the exact matrix gate</text>
+  <text class="small" x="1065" y="595">publish still waits for all release build jobs</text>
+
+  <rect class="accent" x="460" y="760" width="680" height="180"/>
+  <text class="text" x="700" y="815">publish</text>
+  <text class="small" x="536" y="855">downloads release-* artifacts only after build jobs succeed</text>
+  <text class="small" x="553" y="890">softprops/action-gh-release publishes the release</text>
+
+  <path class="arrow" d="M195 240 L290 330"/>
+  <path class="arrow" d="M210 240 L740 330"/>
+  <path class="arrow" d="M220 240 L1225 330"/>
+  <path class="arrow" d="M290 550 L620 760"/>
+  <path class="arrow" d="M740 550 L800 760"/>
+  <path class="arrow" d="M1225 650 L980 760"/>
+</svg>

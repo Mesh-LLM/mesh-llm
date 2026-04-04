@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080">
+  <style>
+    .bg { fill: #f4f7fb; }
+    .title { font: 700 34px Georgia, serif; fill: #1f2430; }
+    .subtitle { font: 500 18px Georgia, serif; fill: #55606e; }
+    .box { fill: #ffffff; stroke: #30475e; stroke-width: 3; rx: 18; ry: 18; }
+    .accent { fill: #e7eefb; stroke: #315d9b; stroke-width: 3; rx: 18; ry: 18; }
+    .warn { fill: #fdf1e7; stroke: #a56a2a; stroke-width: 3; rx: 18; ry: 18; }
+    .text { font: 600 22px Helvetica, Arial, sans-serif; fill: #1b2732; }
+    .small { font: 500 18px Helvetica, Arial, sans-serif; fill: #41505f; }
+    .arrow { stroke: #30475e; stroke-width: 4; fill: none; marker-end: url(#arrowhead); }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <polygon points="0 0, 10 4, 0 8" fill="#30475e"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1600" height="1080"/>
+  <text class="title" x="70" y="70">Behavior Regression Workflow</text>
+  <text class="subtitle" x="70" y="105">Runs nightly, manually, or only when behavior-affecting code changes.</text>
+
+  <rect class="accent" x="70" y="150" width="400" height="130"/>
+  <text class="text" x="120" y="200">Workflow triggers</text>
+  <text class="small" x="104" y="235">nightly schedule</text>
+  <text class="small" x="104" y="262">workflow_dispatch</text>
+
+  <rect class="warn" x="540" y="150" width="470" height="210"/>
+  <text class="text" x="600" y="200">Push / PR only when these change</text>
+  <text class="small" x="575" y="235">llama pin / build surfaces</text>
+  <text class="small" x="575" y="262">MLX runtime, models, templates, launch</text>
+  <text class="small" x="575" y="289">proxy / prompt shaping paths</text>
+  <text class="small" x="575" y="316">validation harness or matrix definitions</text>
+
+  <rect class="box" x="1120" y="170" width="350" height="140"/>
+  <text class="text" x="1198" y="220">linux_build</text>
+  <text class="small" x="1162" y="255">build release binaries for behavior</text>
+  <text class="small" x="1190" y="282">upload behavior-linux-binaries</text>
+
+  <rect class="box" x="1120" y="380" width="350" height="140"/>
+  <text class="text" x="1195" y="430">macos_build</text>
+  <text class="small" x="1162" y="465">build release binaries for behavior</text>
+  <text class="small" x="1191" y="492">upload behavior-macos-binaries</text>
+
+  <rect class="box" x="220" y="520" width="430" height="250"/>
+  <text class="text" x="360" y="570">gguf_behavior</text>
+  <text class="small" x="290" y="610">full MT-Bench behavior suite</text>
+  <text class="small" x="275" y="645">repetition, garbling, empty outputs, leaks</text>
+  <text class="small" x="278" y="680">one report artifact per model row</text>
+  <text class="small" x="265" y="715">slow, broad, informative but not PR-gating by default</text>
+
+  <rect class="box" x="820" y="520" width="430" height="250"/>
+  <text class="text" x="966" y="570">mlx_behavior</text>
+  <text class="small" x="892" y="610">full MT-Bench behavior suite</text>
+  <text class="small" x="877" y="645">same heuristics on Metal / MLX backend</text>
+  <text class="small" x="890" y="680">one report artifact per model row</text>
+  <text class="small" x="884" y="715">used to detect behavior drift, not exact drift</text>
+
+  <rect class="accent" x="420" y="850" width="760" height="150"/>
+  <text class="text" x="641" y="900">Outcome</text>
+  <text class="small" x="478" y="935">good signal when backend loading, templating, reasoning, or decoding changes break model behavior</text>
+  <text class="small" x="601" y="968">review artifacts when summary diverges</text>
+
+  <path class="arrow" d="M470 215 L540 215"/>
+  <path class="arrow" d="M1010 240 L1120 240"/>
+  <path class="arrow" d="M1010 310 L1120 450"/>
+  <path class="arrow" d="M1295 310 L1035 520"/>
+  <path class="arrow" d="M1295 520 L1035 520"/>
+  <path class="arrow" d="M1120 450 L1035 520"/>
+  <path class="arrow" d="M1120 240 L435 520"/>
+  <path class="arrow" d="M435 770 L740 850"/>
+  <path class="arrow" d="M1035 770 L860 850"/>
+</svg>

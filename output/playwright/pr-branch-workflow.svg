@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080">
+  <style>
+    .bg { fill: #f6f3ea; }
+    .title { font: 700 34px Georgia, serif; fill: #1e2a2f; }
+    .subtitle { font: 500 18px Georgia, serif; fill: #4a575c; }
+    .box { fill: #fffdf8; stroke: #27424d; stroke-width: 3; rx: 18; ry: 18; }
+    .accent { fill: #e5f1ec; stroke: #2a6b52; stroke-width: 3; rx: 18; ry: 18; }
+    .warn { fill: #f7efe0; stroke: #9a6b1f; stroke-width: 3; rx: 18; ry: 18; }
+    .text { font: 600 22px Helvetica, Arial, sans-serif; fill: #122027; }
+    .small { font: 500 18px Helvetica, Arial, sans-serif; fill: #2f3f46; }
+    .arrow { stroke: #27424d; stroke-width: 4; fill: none; marker-end: url(#arrowhead); }
+  </style>
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+      <polygon points="0 0, 10 4, 0 8" fill="#27424d"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1600" height="1080"/>
+  <text class="title" x="70" y="70">PR / Branch Push Workflow</text>
+  <text class="subtitle" x="70" y="105">Exact validation gates live here. Behavior does not.</text>
+
+  <rect class="accent" x="70" y="150" width="270" height="90"/>
+  <text class="text" x="105" y="205">PR or branch push</text>
+
+  <rect class="box" x="420" y="150" width="230" height="90"/>
+  <text class="text" x="480" y="205">changes</text>
+
+  <rect class="box" x="130" y="330" width="260" height="110"/>
+  <text class="text" x="205" y="377">linux</text>
+  <text class="small" x="164" y="412">build, unit tests, smoke, split, CLI</text>
+
+  <rect class="box" x="470" y="330" width="260" height="110"/>
+  <text class="text" x="552" y="377">macos</text>
+  <text class="small" x="504" y="412">build, smoke, split, CLI, auto</text>
+
+  <rect class="warn" x="810" y="330" width="260" height="110"/>
+  <text class="text" x="874" y="377">linux_cuda</text>
+  <text class="small" x="840" y="412">CUDA compile / bundle confidence</text>
+
+  <rect class="box" x="210" y="560" width="320" height="250"/>
+  <text class="text" x="278" y="605">gguf_smokes</text>
+  <text class="small" x="257" y="640">runs exact matrix only</text>
+  <text class="small" x="252" y="680">qwen25, qwen3, josie, llama32</text>
+  <text class="small" x="241" y="715">gemma2, gemma3, gemma4, glm4, lfm2</text>
+  <text class="small" x="257" y="750">compare to checked-in baselines</text>
+  <text class="small" x="274" y="785">upload exact result artifacts</text>
+
+  <rect class="box" x="620" y="560" width="320" height="250"/>
+  <text class="text" x="692" y="605">macos_mlx</text>
+  <text class="small" x="667" y="640">runs exact matrix only</text>
+  <text class="small" x="662" y="680">qwen25, qwen3, josie, llama32</text>
+  <text class="small" x="651" y="715">gemma2, gemma3, gemma4, glm4, lfm2</text>
+  <text class="small" x="667" y="750">compare to checked-in baselines</text>
+  <text class="small" x="684" y="785">upload exact result artifacts</text>
+
+  <rect class="accent" x="1060" y="560" width="340" height="180"/>
+  <text class="text" x="1112" y="610">PR status checks</text>
+  <text class="small" x="1098" y="650">exact regressions fail CI</text>
+  <text class="small" x="1094" y="685">release-risk integration drift blocked</text>
+
+  <path class="arrow" d="M340 195 L420 195"/>
+  <path class="arrow" d="M520 240 L260 330"/>
+  <path class="arrow" d="M535 240 L600 330"/>
+  <path class="arrow" d="M565 240 L940 330"/>
+  <path class="arrow" d="M260 440 L370 560"/>
+  <path class="arrow" d="M600 440 L780 560"/>
+  <path class="arrow" d="M530 440 L370 560"/>
+  <path class="arrow" d="M940 440 L780 560"/>
+  <path class="arrow" d="M530 685 L1060 650"/>
+  <path class="arrow" d="M940 685 L1060 685"/>
+
+  <rect class="warn" x="1060" y="780" width="360" height="160"/>
+  <text class="text" x="1133" y="828">Not in this workflow</text>
+  <text class="small" x="1100" y="865">MT-Bench behavior matrix stays out</text>
+  <text class="small" x="1117" y="900">nightly / release handles that</text>
+</svg>
