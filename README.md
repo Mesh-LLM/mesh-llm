@@ -178,16 +178,16 @@ This is the practical support snapshot for the backends in this branch. The `�
 | Gemma 4 | `gemma-4-E4B-it-Q4_K_M` | ✅ | `Gemma-4-E4B-it-MLX` | ✅ | Text path only on MLX |
 | GLM4 | `GLM-4.7-Flash-Q4_K_M` | ✅ | `GLM-4-9B-0414-MLX` | ✅ | Dense text |
 | LFM2 | — | — | `LFM2-350M-MLX` | ✅ | MLX-only today in this repo |
-| DeepSeekV3 / Kimi-K2 | — | — | `mlx-community/Kimi-K2-Instruct-4bit` | ✅ | Implemented on MLX, not in live smoke matrix |
+| DeepSeekV3 / Kimi-K2 | — | — | `mlx-community/Kimi-K2-Instruct-4bit` | ✅ | Smallest public GGUF is ~261GB; not practical to smoke locally |
 | gpt-oss | — | — | `openai/gpt-oss` MLX repos | ✅ | Implemented on MLX, not in live smoke matrix |
-| Kimi Linear | — | — | `kimi_linear` MLX repos | ✅ | Separate MLX family, not in live smoke matrix |
+| Kimi Linear | `Kimi-Linear-48B-A3B-Instruct-jp-imatrix.Q4_K_M` | ✅ | `kimi_linear` MLX repos | ✅ | MoE 48B (3B active) |
 
 Current MLX limitations:
 
 - experimental
 - macOS only
 - text only
-- larger families like DeepSeekV3 / Kimi-K2, `gpt-oss`, and `Kimi Linear` are implemented but not yet part of the live macOS smoke matrix
+- larger families like DeepSeekV3 / Kimi-K2 and `gpt-oss` are implemented but not yet part of the live macOS smoke matrix
 - distributed/split MLX serving is still future work
 
 Useful commands:
