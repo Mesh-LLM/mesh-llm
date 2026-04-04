@@ -1174,8 +1174,9 @@ async fn run_auto(
         let port = launch::start_rpc_server(
             &bin_dir,
             cli.llama_flavor,
-            cli.device.as_deref(),
-            Some(&model),
+            &crate::inference::provider::InferenceWorkerRequest::default()
+                .with_device_hint(cli.device.as_deref())
+                .with_model_path(Some(&model)),
         )
         .await?;
         tracing::info!("rpc-server on 127.0.0.1:{port} serving {model_name}");

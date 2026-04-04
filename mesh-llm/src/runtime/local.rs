@@ -202,26 +202,13 @@ pub(super) async fn start_runtime_local_model(
     let (backend, process) = if let Some(process) = mlx_process {
         ("mlx", process)
     } else {
+        let request =
+            provider::InferenceEndpointRequest::local(model_path, port, model_bytes, my_vram)
+                .with_mmproj_path(mmproj_path.as_deref())
+                .with_ctx_size_override(ctx_size_override);
         (
             "llama",
-            launch::start_llama_server(
-                bin_dir,
-                binary_flavor,
-                launch::ModelLaunchSpec {
-                    model: model_path,
-                    http_port: port,
-                    tunnel_ports: &[],
-                    tensor_split: None,
-                    draft: None,
-                    draft_max: 0,
-                    model_bytes,
-                    my_vram,
-                    mmproj: mmproj_path.as_deref(),
-                    ctx_size_override,
-                    total_group_vram: None,
-                },
-            )
-            .await?,
+            launch::start_llama_server(bin_dir, binary_flavor, &request).await?,
         )
     };
 
