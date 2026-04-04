@@ -148,9 +148,13 @@ fn ranking_for_key(key: Option<&str>) -> Vec<u32> {
     }
 }
 
-/// Get the canonical managed model root (the Hugging Face hub cache).
+/// Get the canonical managed model root.
+///
+/// Returns the `MESH_LLM_MODELS_DIR` override when set, otherwise the
+/// Hugging Face hub cache root.
 pub fn models_dir() -> PathBuf {
-    crate::models::huggingface_hub_cache_dir()
+    crate::models::custom_models_dir()
+        .unwrap_or_else(crate::models::huggingface_hub_cache_dir)
 }
 
 /// Find a catalog model by name (case-insensitive partial match)

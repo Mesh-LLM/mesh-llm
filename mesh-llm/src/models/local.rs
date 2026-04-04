@@ -15,12 +15,30 @@ pub struct HuggingFaceModelIdentity {
     pub local_file_name: String,
 }
 
+/// Returns the path configured via `MESH_LLM_MODELS_DIR`, if set and non-empty.
+///
+/// When present this directory is used for both model discovery and as the
+/// download destination, in place of the Hugging Face hub cache root.
+pub fn custom_models_dir() -> Option<PathBuf> {
+    let path = std::env::var("MESH_LLM_MODELS_DIR").ok()?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
 /// Directories to scan for GGUF models.
 pub fn model_dirs() -> Vec<PathBuf> {
     let canonical = huggingface_hub_cache_dir();
     let legacy = legacy_models_dir();
     let mut dirs = vec![canonical];
-    if legacy.exists() {
+    if let Some(custom) = custom_models_dir() {
+        if custom.exists() && !dirs.contains(&custom) {
+            dirs.push(custom);
+        }
+    } else if legacy.exists() {
         dirs.push(legacy);
     }
     dirs
@@ -53,12 +71,6 @@ pub fn huggingface_hub_cache_dir() -> PathBuf {
 }
 
 pub fn legacy_models_dir() -> PathBuf {
-    if let Ok(path) = std::env::var("MESH_LLM_MODELS_DIR") {
-        let trimmed = path.trim();
-        if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
-        }
-    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".models")
@@ -665,6 +677,43 @@ mod tests {
         assert!(find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model).is_none());
 
         let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    #[serial]
+    fn custom_models_dir_returns_env_var_path() {
+        let prev = std::env::var_os("MESH_LLM_MODELS_DIR");
+        std::env::set_var("MESH_LLM_MODELS_DIR", "/tmp/my-models");
+        assert_eq!(custom_models_dir(), Some(PathBuf::from("/tmp/my-models")));
+        restore_env("MESH_LLM_MODELS_DIR", prev);
+    }
+
+    #[test]
+    #[serial]
+    fn custom_models_dir_returns_none_when_empty() {
+        let prev = std::env::var_os("MESH_LLM_MODELS_DIR");
+        std::env::set_var("MESH_LLM_MODELS_DIR", "   ");
+        assert_eq!(custom_models_dir(), None);
+        restore_env("MESH_LLM_MODELS_DIR", prev);
+    }
+
+    #[test]
+    #[serial]
+    fn custom_models_dir_returns_none_when_unset() {
+        let prev = std::env::var_os("MESH_LLM_MODELS_DIR");
+        std::env::remove_var("MESH_LLM_MODELS_DIR");
+        assert_eq!(custom_models_dir(), None);
+        restore_env("MESH_LLM_MODELS_DIR", prev);
+    }
+
+    #[test]
+    #[serial]
+    fn legacy_models_dir_unaffected_by_env_var() {
+        let prev = std::env::var_os("MESH_LLM_MODELS_DIR");
+        std::env::set_var("MESH_LLM_MODELS_DIR", "/tmp/my-models");
+        let expected = dirs::home_dir().unwrap().join(".models");
+        assert_eq!(legacy_models_dir(), expected);
+        restore_env("MESH_LLM_MODELS_DIR", prev);
     }
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
