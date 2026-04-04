@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import re
 import signal
 import socket
@@ -137,9 +138,37 @@ def build_launch_command(args: argparse.Namespace, api_port: int, console_port: 
     return command
 
 
+def behavior_case_dir() -> Path | None:
+    raw = os.environ.get("VALIDATION_CASE_DIR", "").strip()
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def sync_runtime_logs(case_dir: Path | None, mesh_log_path: Path) -> None:
+    if case_dir is None:
+        return
+
+    case_dir.mkdir(parents=True, exist_ok=True)
+
+    if mesh_log_path.exists():
+        shutil.copyfile(mesh_log_path, case_dir / "mesh.log")
+
+    temp_dir = Path(tempfile.gettempdir())
+    for source_name, target_name in (
+        ("mesh-llm-llama-server.log", "llama-server.log"),
+        ("mesh-llm-rpc-server.log", "rpc-server.log"),
+    ):
+        source_path = temp_dir / source_name
+        if source_path.exists():
+            shutil.copyfile(source_path, case_dir / target_name)
+
+
 def wait_until_ready(process: subprocess.Popen[str], console_port: int, log_path: Path, timeout: int) -> None:
     status_url = f"http://127.0.0.1:{console_port}/api/status"
+    case_dir = behavior_case_dir()
     for second in range(1, timeout + 1):
+        sync_runtime_logs(case_dir, log_path)
         if process.poll() is not None:
             print("❌ mesh-llm exited unexpectedly", file=sys.stderr)
             print(log_path.read_text(encoding="utf-8", errors="replace")[-8000:], file=sys.stderr)
@@ -152,8 +181,9 @@ def wait_until_ready(process: subprocess.Popen[str], console_port: int, log_path
         except Exception:
             pass
         if second % 15 == 0:
-            print(f"  Still waiting... ({second}s)")
+            print(f"  Still waiting... ({second}s)", flush=True)
         time.sleep(1)
+    sync_runtime_logs(case_dir, log_path)
     print(f"❌ Model failed to load within {timeout}s", file=sys.stderr)
     print(log_path.read_text(encoding="utf-8", errors="replace")[-8000:], file=sys.stderr)
     raise SystemExit(1)
@@ -192,15 +222,18 @@ def main() -> int:
     if args.backend == "gguf" and not args.bin_dir:
         parser.error("--bin-dir is required for gguf backend")
 
-    print("=== MT-Bench Behavior Smoke ===")
-    print(f"  backend: {args.backend}")
-    print(f"  model:   {args.model}")
-    print(f"  dataset: {args.dataset}")
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+
+    print("=== MT-Bench Behavior Smoke ===", flush=True)
+    print(f"  backend: {args.backend}", flush=True)
+    print(f"  model:   {args.model}", flush=True)
+    print(f"  dataset: {args.dataset}", flush=True)
 
     prompts = fetch_mt_bench_prompts(args.dataset)
     if args.max_prompts > 0:
         prompts = prompts[: args.max_prompts]
-    print(f"  prompts: {len(prompts)}")
+    print(f"  prompts: {len(prompts)}", flush=True)
 
     api_port = pick_free_port()
     console_port = pick_free_port()
@@ -219,6 +252,7 @@ def main() -> int:
             env={**os.environ, "RUST_LOG": os.environ.get("RUST_LOG", "info")},
         )
         try:
+            sync_runtime_logs(behavior_case_dir(), log_path)
             wait_until_ready(process, console_port, log_path, args.wait_seconds)
 
             results: list[dict[str, Any]] = []
@@ -275,7 +309,11 @@ def main() -> int:
                     }
                 )
                 status = "PASS" if not row_failed else "FAIL"
-                print(f"[{index:02d}/{len(prompts):02d}] {status} {row.get('category')}#{row.get('prompt_id')}")
+                print(
+                    f"[{index:02d}/{len(prompts):02d}] {status} {row.get('category')}#{row.get('prompt_id')}",
+                    flush=True,
+                )
+                sync_runtime_logs(behavior_case_dir(), log_path)
 
             output = {
                 "label": args.label or args.model,
@@ -296,6 +334,7 @@ def main() -> int:
                     log_path.read_text(encoding="utf-8", errors="replace"),
                     encoding="utf-8",
                 )
+            sync_runtime_logs(behavior_case_dir(), log_path)
 
             if failed:
                 print(f"❌ Behavior smoke failed: {failed} prompt(s) flagged", file=sys.stderr)
@@ -310,6 +349,7 @@ def main() -> int:
             except (ProcessLookupError, PermissionError):
                 pass
             time.sleep(2)
+            sync_runtime_logs(behavior_case_dir(), log_path)
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
@@ -318,6 +358,7 @@ def main() -> int:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
+            sync_runtime_logs(behavior_case_dir(), log_path)
             log_file.close()
 
 

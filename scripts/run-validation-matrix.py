@@ -151,38 +151,46 @@ def run_exact_case(
     run(["just", "stop"], env=env)
 
     prompt_suite_json = json.dumps(exact_defaults["prompt_suite"], separators=(",", ":"))
+    cmd = [
+        str(REPO_ROOT / "scripts" / "run-validation-case.sh"),
+        backend,
+        case_id,
+        "python3",
+        str(REPO_ROOT / "scripts" / "ci-exact-smoke.py"),
+        "--backend",
+        backend,
+        "--mesh-llm",
+        "target/release/mesh-llm",
+        "--prompt",
+        exact_defaults["prompt"],
+        "--expect-contains",
+        exact_defaults["expect_contains"],
+        "--forbid-contains",
+        exact_defaults["forbid_contains"],
+        "--expect-exact",
+        exact_defaults["expect_exact"],
+        "--prompt-suite-json",
+        prompt_suite_json,
+    ]
     if backend == "gguf":
         gguf_path = download_gguf_path(backend_cfg["model_ref"])
-        cmd = [
-            str(REPO_ROOT / "scripts" / "run-validation-case.sh"),
-            backend,
-            case_id,
-            str(REPO_ROOT / "scripts" / "ci-gguf-smoke-test.sh"),
-            "target/release/mesh-llm",
-            "llama.cpp/build/bin",
-            gguf_path,
-            exact_defaults["prompt"],
-            exact_defaults["expect_contains"],
-            exact_defaults["forbid_contains"],
-            exact_defaults["expect_exact"],
-            prompt_suite_json,
-        ]
+        cmd.extend(
+            [
+                "--bin-dir",
+                "llama.cpp/build/bin",
+                "--model",
+                gguf_path,
+            ]
+        )
     else:
-        cmd = [
-            str(REPO_ROOT / "scripts" / "run-validation-case.sh"),
-            backend,
-            case_id,
-            str(REPO_ROOT / "scripts" / "ci-mlx-smoke-test.sh"),
-            "target/release/mesh-llm",
-            backend_cfg["model_ref"],
-            backend_cfg["template_source"],
-            exact_defaults["prompt"],
-            exact_defaults["expect_contains"],
-            exact_defaults["forbid_contains"],
-            "",
-            exact_defaults["expect_exact"],
-            prompt_suite_json,
-        ]
+        cmd.extend(
+            [
+                "--model",
+                backend_cfg["model_ref"],
+                "--expected-template-source",
+                backend_cfg["template_source"],
+            ]
+        )
 
     rc = run(cmd, env=env).returncode
     append_tsv(

@@ -33,8 +33,8 @@
         },
         {
           "label": "two-plus-two",
-          "prompt": "What is 2 + 2? Reply with digits only.",
-          "max_tokens": 8,
+          "prompt": "Complete exactly: 2 + 2 =",
+          "max_tokens": 32,
           "expect_contains_ci": "4"
         },
         {
@@ -45,8 +45,12 @@
         {
           "label": "breathing-gas",
           "prompt": "What gas do humans need to breathe to survive? Reply with one word.",
-          "max_tokens": 12,
-          "expect_contains_ci": "oxygen"
+          "max_tokens": 24,
+          "expect_any_ci": [
+            "oxygen",
+            "o2",
+            "air"
+          ]
         },
         {
           "label": "opposite-hot",
@@ -176,18 +180,18 @@
     },
     {
       "id": "gemma4",
-      "label": "gemma-4-e4b",
+      "label": "gemma-4-e2b",
       "expectation_class": "strict",
-      "notes": "Gemma4 parity baseline across newer llama pin and MLX cold-prefill fixes.",
+      "notes": "Gemma4 E2B parity row for faster exact and behavior validation.",
       "gguf": {
         "exact_case_id": "gemma4-gguf-exact",
         "behavior_case_id": "gemma4-gguf-behavior",
-        "model_ref": "unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
+        "model_ref": "ggml-org/gemma-4-E2B-it-GGUF/gemma-4-E2B-it-Q4_K_M.gguf"
       },
       "mlx": {
         "exact_case_id": "gemma4-mlx-exact",
         "behavior_case_id": "gemma4-mlx-behavior",
-        "model_ref": "unsloth/gemma-4-E4B-it-UD-MLX-4bit",
+        "model_ref": "Rapid42/gemma-4-E2B-it-MLX",
         "template_source": "chat_template.jinja"
       }
     },

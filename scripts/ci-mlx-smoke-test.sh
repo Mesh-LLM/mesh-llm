@@ -97,8 +97,9 @@ record_chat_artifact() {
     local expect_contains="$7"
     local expect_contains_ci="$8"
     local expect_contains_all_ci_json="$9"
-    local forbid_contains="${10}"
-    local expect_exact="${11}"
+    local expect_any_ci_json="${10}"
+    local forbid_contains="${11}"
+    local expect_exact="${12}"
 
     if [ -z "$ARTIFACT_DIR" ]; then
         return
@@ -114,6 +115,7 @@ record_chat_artifact() {
     EXPECT_CONTAINS="$expect_contains" \
     EXPECT_CONTAINS_CI="$expect_contains_ci" \
     EXPECT_CONTAINS_ALL_CI_JSON="$expect_contains_all_ci_json" \
+    EXPECT_ANY_CI_JSON="$expect_any_ci_json" \
     FORBID_CONTAINS="$forbid_contains" \
     EXPECT_EXACT="$expect_exact" \
     ARTIFACT_PATH="$ARTIFACT_DIR/chat/${artifact_name}.json" \
@@ -130,6 +132,7 @@ payload = {
         "expect_contains": os.environ["EXPECT_CONTAINS"],
         "expect_contains_ci": os.environ["EXPECT_CONTAINS_CI"],
         "expect_contains_all_ci": json.loads(os.environ["EXPECT_CONTAINS_ALL_CI_JSON"] or "[]"),
+        "expect_any_ci": json.loads(os.environ["EXPECT_ANY_CI_JSON"] or "[]"),
         "forbid_contains": os.environ["FORBID_CONTAINS"],
         "expect_exact": os.environ["EXPECT_EXACT"],
     },
@@ -183,11 +186,12 @@ run_chat_case() {
     local expect_contains="$2"
     local expect_contains_ci="$3"
     local expect_contains_all_ci_json="$4"
-    local forbid_contains="$5"
-    local thinking_mode="$6"
-    local expect_exact="$7"
-    local case_label="$8"
-    local max_tokens="${9:-32}"
+    local expect_any_ci_json="$5"
+    local forbid_contains="$6"
+    local thinking_mode="$7"
+    local expect_exact="$8"
+    local case_label="$9"
+    local max_tokens="${10:-32}"
 
     echo "Testing /v1/chat/completions ($case_label)..."
     local curl_body
@@ -278,6 +282,20 @@ PY
         fi
     fi
 
+    if [ -n "$expect_any_ci_json" ]; then
+        if ! CONTENT="$content" EXPECT_ANY_CI_JSON="$expect_any_ci_json" python3 - <<'PY'
+import json, os
+content = os.environ["CONTENT"].lower()
+needles = json.loads(os.environ["EXPECT_ANY_CI_JSON"])
+raise SystemExit(0 if any(needle.lower() in content for needle in needles) else 1)
+PY
+        then
+            echo "❌ Response did not contain any expected text (case-insensitive): $expect_any_ci_json"
+            echo "Content: $content"
+            exit 1
+        fi
+    fi
+
     if [ -n "$expect_exact" ]; then
         local normalized_content normalized_expected
         normalized_content=$(printf '%s' "$content" | python3 -c "import sys; print(sys.stdin.read().strip())")
@@ -304,7 +322,7 @@ PY
         exit 1
     fi
 
-    record_chat_artifact "$case_label" "$prompt_text" "$curl_body" "$response" "$content" "$finish_reason" "$expect_contains" "$expect_contains_ci" "$expect_contains_all_ci_json" "$forbid_contains" "$expect_exact"
+    record_chat_artifact "$case_label" "$prompt_text" "$curl_body" "$response" "$content" "$finish_reason" "$expect_contains" "$expect_contains_ci" "$expect_contains_all_ci_json" "$expect_any_ci_json" "$forbid_contains" "$expect_exact"
 
     echo "✅ Inference response: $content"
 
@@ -374,16 +392,16 @@ print(json.dumps({
     "enable_thinking": True
 }))
 PY
-)" "$thinking_response" "$thinking_content" "stop" "" "" "[]" "" ""
+)" "$thinking_response" "$thinking_content" "stop" "" "" "[]" "[]" "" ""
         echo "✅ Explicit reasoning response: $thinking_content"
     fi
 }
 
-run_chat_case "$PROMPT_TEXT" "$EXPECT_CONTAINS" "" "" "$FORBID_CONTAINS" "$THINKING_MODE" "$EXPECT_EXACT" "primary" "32"
+run_chat_case "$PROMPT_TEXT" "$EXPECT_CONTAINS" "" "" "" "$FORBID_CONTAINS" "$THINKING_MODE" "$EXPECT_EXACT" "primary" "32"
 
 if [ -n "$PROMPT_SUITE_JSON" ]; then
     echo "Running extra prompt suite..."
-    python3 - "$PROMPT_SUITE_JSON" <<'PY' | while IFS=$'\t' read -r label prompt expect_contains expect_contains_ci expect_contains_all_ci_json forbid_contains thinking_mode expect_exact max_tokens; do
+    python3 - "$PROMPT_SUITE_JSON" <<'PY' | while IFS=$'\t' read -r label prompt expect_contains expect_contains_ci expect_contains_all_ci_json expect_any_ci_json forbid_contains thinking_mode expect_exact max_tokens; do
 import json, sys
 suite = json.loads(sys.argv[1])
 EMPTY = "__EMPTY__"
@@ -394,6 +412,7 @@ for index, case in enumerate(suite, start=1):
         str(case.get("expect_contains", "")) or EMPTY,
         str(case.get("expect_contains_ci", "")) or EMPTY,
         json.dumps(case.get("expect_contains_all_ci", []), separators=(",", ":")) if "expect_contains_all_ci" in case else EMPTY,
+        json.dumps(case.get("expect_any_ci", []), separators=(",", ":")) if "expect_any_ci" in case else EMPTY,
         str(case.get("forbid_contains", "")) or EMPTY,
         str(case.get("thinking_mode", "")) or EMPTY,
         str(case.get("expect_exact", "")) or EMPTY,
@@ -405,12 +424,13 @@ PY
         [ "$expect_contains" = "__EMPTY__" ] && expect_contains=""
         [ "$expect_contains_ci" = "__EMPTY__" ] && expect_contains_ci=""
         [ "$expect_contains_all_ci_json" = "__EMPTY__" ] && expect_contains_all_ci_json=""
+        [ "$expect_any_ci_json" = "__EMPTY__" ] && expect_any_ci_json=""
         [ "$forbid_contains" = "__EMPTY__" ] && forbid_contains=""
         [ "$thinking_mode" = "__EMPTY__" ] && thinking_mode=""
         [ "$expect_exact" = "__EMPTY__" ] && expect_exact=""
         [ "$max_tokens" = "__EMPTY__" ] && max_tokens=""
         [ -z "$max_tokens" ] && max_tokens="32"
-        run_chat_case "$prompt" "$expect_contains" "$expect_contains_ci" "$expect_contains_all_ci_json" "$forbid_contains" "$thinking_mode" "$expect_exact" "$label" "$max_tokens"
+        run_chat_case "$prompt" "$expect_contains" "$expect_contains_ci" "$expect_contains_all_ci_json" "$expect_any_ci_json" "$forbid_contains" "$thinking_mode" "$expect_exact" "$label" "$max_tokens"
     done
 fi
 
