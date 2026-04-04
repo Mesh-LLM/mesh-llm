@@ -5,13 +5,12 @@ mod runtime;
 mod support;
 mod transport;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 pub use mesh_llm_plugin::proto;
+use rmcp::model::ErrorCode;
 use rmcp::model::ServerInfo;
 use serde::Serialize;
-use std::collections::BTreeMap;
-#[cfg(test)]
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -302,7 +301,7 @@ impl PluginManager {
             let result = bridge
                 .handle_request(plugin_name.to_string(), method.to_string(), params_json)
                 .await
-                .map_err(|err| anyhow!("{}", err.message))?;
+                .map_err(|err| self::support::plugin_error(plugin_name, method, &err))?;
             return serde_json::from_str(&result.result_json)
                 .with_context(|| format!("Decode response from test plugin '{plugin_name}'"));
         }
@@ -343,16 +342,57 @@ impl PluginManager {
     }
 
     pub async fn managed_inference_endpoints(&self) -> Result<Vec<ManagedInferenceEndpoint>> {
+        #[cfg(test)]
+        let plugin_names = {
+            let mut plugin_names = self
+                .inner
+                .plugins
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<String>>();
+            plugin_names.extend(self.inner.bridged_plugins.iter().cloned());
+            plugin_names
+        };
+        #[cfg(not(test))]
+        let plugin_names = self
+            .inner
+            .plugins
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<String>>();
+
         let mut endpoints = Vec::new();
-        #[cfg(target_os = "macos")]
-        if self.is_available(MLX_PLUGIN_ID) {
-            endpoints.push(ManagedInferenceEndpoint {
-                plugin_name: MLX_PLUGIN_ID.to_string(),
-                endpoint_id: "local-mlx".into(),
-                address: None,
-                supports_streaming: true,
-            });
+        for plugin_name in plugin_names {
+            let descriptors = match self
+                .mcp_request::<Vec<mesh_llm_plugin::InferenceEndpointDescriptor>, _>(
+                    &plugin_name,
+                    "inference/list_endpoints",
+                    serde_json::json!({}),
+                )
+                .await
+            {
+                Ok(descriptors) => descriptors,
+                Err(err) if is_method_not_found_error(&err) => continue,
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!("List managed inference endpoints for '{plugin_name}'")
+                    });
+                }
+            };
+            for descriptor in descriptors {
+                endpoints.push(ManagedInferenceEndpoint {
+                    plugin_name: plugin_name.clone(),
+                    endpoint_id: descriptor.endpoint_id,
+                    address: descriptor.address,
+                    supports_streaming: descriptor.supports_streaming,
+                });
+            }
         }
+        endpoints.sort_by(|a, b| {
+            a.plugin_name
+                .cmp(&b.plugin_name)
+                .then_with(|| a.endpoint_id.cmp(&b.endpoint_id))
+        });
         Ok(endpoints)
     }
 
@@ -467,6 +507,11 @@ impl PluginManager {
             }
         });
     }
+}
+
+fn is_method_not_found_error(err: &anyhow::Error) -> bool {
+    err.to_string()
+        .contains(&format!("(code {})", ErrorCode::METHOD_NOT_FOUND.0))
 }
 
 pub async fn run_plugin_process(name: String) -> Result<()> {
@@ -605,23 +650,41 @@ mod tests {
         ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
             Box::pin(async move {
                 assert_eq!(plugin_name, MLX_PLUGIN_ID);
-                assert_eq!(method, "inference/ensure_endpoint");
-                let request: mesh_llm_plugin::EnsureInferenceEndpointRequest =
-                    serde_json::from_str(&params_json).unwrap();
-                assert_eq!(request.endpoint_id, "local-mlx");
-                Ok(RpcResult {
-                    result_json: serde_json::to_string(
-                        &mesh_llm_plugin::EnsureInferenceEndpointResponse {
-                            address: format!(
-                                "http://127.0.0.1:{}",
-                                request.requested_port.unwrap_or(8123)
-                            ),
-                            backend_label: "mlx".into(),
-                            context_length: 32768,
-                        },
-                    )
-                    .unwrap(),
-                })
+                match method.as_str() {
+                    "inference/list_endpoints" => Ok(RpcResult {
+                        result_json: serde_json::to_string(&vec![
+                            mesh_llm_plugin::InferenceEndpointDescriptor {
+                                endpoint_id: "local-mlx".into(),
+                                address: None,
+                                supports_streaming: true,
+                            },
+                        ])
+                        .unwrap(),
+                    }),
+                    "inference/ensure_endpoint" => {
+                        let request: mesh_llm_plugin::EnsureInferenceEndpointRequest =
+                            serde_json::from_str(&params_json).unwrap();
+                        assert_eq!(request.endpoint_id, "local-mlx");
+                        Ok(RpcResult {
+                            result_json: serde_json::to_string(
+                                &mesh_llm_plugin::EnsureInferenceEndpointResponse {
+                                    address: format!(
+                                        "http://127.0.0.1:{}",
+                                        request.requested_port.unwrap_or(8123)
+                                    ),
+                                    backend_label: "mlx".into(),
+                                    context_length: 32768,
+                                },
+                            )
+                            .unwrap(),
+                        })
+                    }
+                    _ => Err(proto::ErrorResponse {
+                        code: ErrorCode::METHOD_NOT_FOUND.0,
+                        message: format!("Unsupported plugin method '{method}'"),
+                        data_json: String::new(),
+                    }),
+                }
             })
         }
 
@@ -650,6 +713,45 @@ mod tests {
                 supports_streaming: true,
             }]
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    struct NoInferenceEndpointBridge;
+
+    #[cfg(target_os = "macos")]
+    impl PluginRpcBridge for NoInferenceEndpointBridge {
+        fn handle_request(
+            &self,
+            _plugin_name: String,
+            method: String,
+            _params_json: String,
+        ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
+            Box::pin(async move {
+                Err(proto::ErrorResponse {
+                    code: ErrorCode::METHOD_NOT_FOUND.0,
+                    message: format!("Unsupported plugin method '{method}'"),
+                    data_json: String::new(),
+                })
+            })
+        }
+
+        fn handle_notification(
+            &self,
+            _plugin_name: String,
+            _method: String,
+            _params_json: String,
+        ) -> BridgeFuture<()> {
+            Box::pin(async move {})
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn managed_inference_endpoints_skip_plugins_without_inference_support() {
+        let plugin_manager =
+            PluginManager::for_test_bridge(&["demo"], Arc::new(NoInferenceEndpointBridge));
+        let endpoints = plugin_manager.managed_inference_endpoints().await.unwrap();
+        assert!(endpoints.is_empty());
     }
 
     #[cfg(target_os = "macos")]

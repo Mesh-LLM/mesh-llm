@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use mesh_llm_plugin::{
     async_trait, plugin_server_info, EnsureInferenceEndpointRequest,
-    EnsureInferenceEndpointResponse, Plugin, PluginContext, PluginResult, PluginRuntime,
+    EnsureInferenceEndpointResponse, InferenceEndpointDescriptor, Plugin, PluginContext,
+    PluginResult, PluginRuntime,
 };
 use rmcp::model::ServerInfo;
 use std::path::{Path, PathBuf};
@@ -153,6 +154,20 @@ impl Plugin for MlxPlugin {
         Ok(Some(self.ensure_endpoint(request).await.map_err(
             |err| mesh_llm_plugin::PluginError::internal(err.to_string()),
         )?))
+    }
+
+    async fn list_inference_endpoints(
+        &mut self,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<Vec<InferenceEndpointDescriptor>>> {
+        Ok(Some(vec![InferenceEndpointDescriptor {
+            endpoint_id: "local-mlx".into(),
+            address: self
+                .active
+                .as_ref()
+                .map(|active| format!("http://127.0.0.1:{}", active.port)),
+            supports_streaming: true,
+        }]))
     }
 }
 

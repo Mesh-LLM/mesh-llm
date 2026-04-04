@@ -84,6 +84,13 @@ pub struct EnsureInferenceEndpointResponse {
     pub context_length: u32,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct InferenceEndpointDescriptor {
+    pub endpoint_id: String,
+    pub address: Option<String>,
+    pub supports_streaming: bool,
+}
+
 #[derive(Clone)]
 pub struct PluginMetadata {
     plugin_id: String,
@@ -327,6 +334,13 @@ pub trait Plugin: Send {
         Ok(None)
     }
 
+    async fn list_inference_endpoints(
+        &mut self,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<Vec<InferenceEndpointDescriptor>>> {
+        Ok(None)
+    }
+
     async fn handle_rpc(
         &mut self,
         request: proto::RpcRequest,
@@ -471,6 +485,15 @@ pub trait Plugin: Send {
                     Some(result) => json_response(&result),
                     None => Err(PluginError::method_not_found(
                         "Unsupported plugin method 'inference/ensure_endpoint'",
+                    )),
+                }
+            }
+            "inference/list_endpoints" => {
+                let _params: Option<serde_json::Value> = parse_rpc_params(&request)?;
+                match self.list_inference_endpoints(context).await? {
+                    Some(result) => json_response(&result),
+                    None => Err(PluginError::method_not_found(
+                        "Unsupported plugin method 'inference/list_endpoints'",
                     )),
                 }
             }
