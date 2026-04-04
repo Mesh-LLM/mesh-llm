@@ -446,7 +446,9 @@ pub async fn download_model(model: &CatalogModel) -> Result<PathBuf> {
             .find(|path| {
                 path.file_name()
                     .and_then(|value| value.to_str())
-                    .is_some_and(|name| name == url_filename || name.eq_ignore_ascii_case(&model.file))
+                    .is_some_and(|name| {
+                        name == url_filename || name.eq_ignore_ascii_case(&model.file)
+                    })
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -961,5 +963,15 @@ mod tests {
         assert!(files[0].1.contains("-00001-of-"));
         assert!(files[1].1.contains("-00002-of-"));
         assert!(files[2].1.contains("-00003-of-"));
+    }
+
+    #[test]
+    fn qwen_catalog_has_case_mismatch_between_file_and_url() {
+        // Qwen HF repos use lowercase filenames but the catalog stores PascalCase.
+        // This is the mismatch that the case-insensitive fallback in download_model fixes.
+        let model = find_model("Qwen2.5-3B-Instruct-Q4_K_M").unwrap();
+        let url_file = model.source_file().unwrap();
+        assert_ne!(model.file.as_str(), url_file);
+        assert!(model.file.eq_ignore_ascii_case(url_file));
     }
 }

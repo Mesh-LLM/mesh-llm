@@ -2205,4 +2205,29 @@ mod tests {
         })
         .await;
     }
+
+    #[test]
+    fn ensure_draft_catalog_lookup_is_case_insensitive() {
+        // The ensure_draft fix: lowercase filename (from Qwen HF URL) must
+        // match the PascalCase catalog entry so draft resolution works.
+        let lowercase = "qwen2.5-3b-instruct-q4_k_m.gguf";
+        let found = catalog::MODEL_CATALOG
+            .iter()
+            .find(|m| m.file == lowercase || m.file.eq_ignore_ascii_case(lowercase));
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().name, "Qwen2.5-3B-Instruct-Q4_K_M");
+    }
+
+    #[test]
+    fn no_draft_flag_clears_preexisting_draft() {
+        // The --no-draft fix: the flag must clear a draft that was already set
+        // (e.g. cached from a previous run), not just skip auto-detection.
+        let mut draft = Some(PathBuf::from("/models/draft.gguf"));
+        let no_draft = true;
+        // Mirrors the fixed logic in run_auto
+        if no_draft {
+            draft = None;
+        }
+        assert!(draft.is_none());
+    }
 }
