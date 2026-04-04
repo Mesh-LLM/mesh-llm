@@ -1,9 +1,9 @@
 use crate::cli::models::ModelsCommand;
 use crate::models::{
     capabilities, catalog, download_exact_ref, find_catalog_model_exact, huggingface_hub_cache_dir,
-    installed_model_capabilities, legacy_models_dir, legacy_models_present,
-    path_is_in_legacy_models_dir, scan_installed_models, search_catalog_models, search_huggingface,
-    show_exact_model, ResolveFormatPreference, SearchProgress,
+    legacy_models_dir, legacy_models_present, path_is_in_legacy_models_dir,
+    scan_installed_model_entries, search_catalog_models, search_huggingface, show_exact_model,
+    InstalledModelEntry, InstalledModelKind, ResolveFormatPreference, SearchProgress,
 };
 use crate::system::hardware;
 use anyhow::{anyhow, Result};
@@ -133,7 +133,7 @@ pub fn run_model_recommended() {
 }
 
 pub fn run_model_installed() {
-    let installed = scan_installed_models();
+    let installed = scan_installed_model_entries();
     if installed.is_empty() {
         println!("📦 No installed models found");
         println!("   HF cache: {}", huggingface_hub_cache_dir().display());
@@ -153,37 +153,50 @@ pub fn run_model_installed() {
         );
     }
     println!();
-    for name in installed {
-        let path = crate::models::find_model_path(&name);
-        let size = std::fs::metadata(&path).map(|meta| meta.len()).ok();
-        let source = if path_is_in_legacy_models_dir(path.as_path()) {
-            "⚠️ legacy"
-        } else {
-            "🤗 HF cache"
-        };
-        let catalog_model = find_catalog_model_exact(&name);
-        let model_capabilities = installed_model_capabilities(&name);
+    for (index, entry) in installed.iter().enumerate() {
+        let display_name = installed_entry_display_name(entry);
+        let size = installed_entry_size_bytes(entry);
+        println!(
+            "{}. 📦 {}",
+            index + 1,
+            match size {
+                Some(bytes) => format!("{display_name}  {}", format_installed_size(bytes)),
+                None => display_name,
+            }
+        );
+        println!("   type: {}", installed_entry_type_label(entry));
+        println!("   source: {}", installed_entry_source_label(entry));
+        println!("   path: {}", entry.path.display());
 
-        match size {
-            Some(bytes) => println!("• {}  {}", name, format_installed_size(bytes)),
-            None => println!("• {}", name),
+        let capabilities = capabilities::infer_local_model_capabilities(
+            &entry.name,
+            &entry.path,
+            installed_catalog_model(entry),
+        );
+        let mut caps = vec!["💬 text".to_string()];
+        if let Some(label) = capabilities.vision_label() {
+            caps.push(format!("👁️ vision ({label})"));
         }
-        println!("  {}", source);
-        println!("  {}", path.display());
-        if let Some(model) = catalog_model {
-            println!("  {}", model.description);
-            if let Some(draft) = model.draft.as_deref() {
-                println!("  🧠 Draft: {}", draft);
-            }
-            if model.moe.is_some() {
-                println!("  🧩 MoE: yes");
-            }
+        if let Some(label) = capabilities.reasoning_label() {
+            caps.push(format!("🧠 reasoning ({label})"));
         }
-        if let Some(label) = model_capabilities.vision_label() {
-            println!("  👁️ Vision: {}", label);
+        if let Some(label) = capabilities.tool_use_label() {
+            caps.push(format!("🛠️ tool use ({label})"));
         }
-        if let Some(label) = model_capabilities.reasoning_label() {
-            println!("  🧠 Reasoning: {}", label);
+        if capabilities.moe {
+            caps.push("🧩 moe".to_string());
+        }
+        println!("   capabilities: {}", caps.join("  "));
+
+        if let Some(exact_ref) = installed_entry_exact_ref(entry) {
+            println!("   ref: {}", exact_ref);
+            println!("   show: mesh-llm models show {}", exact_ref);
+            println!("   download: mesh-llm models download {}", exact_ref);
+        }
+
+        if let Some(model) = installed_catalog_model(entry) {
+            println!("   ⭐ Recommended: {} ({})", model.name, model.size);
+            println!("   {}", model.description);
         }
         println!();
     }
@@ -278,6 +291,101 @@ fn format_installed_size(bytes: u64) -> String {
     } else {
         format!("{}B", bytes)
     }
+}
+
+fn installed_entry_type_label(entry: &InstalledModelEntry) -> &'static str {
+    match entry.kind {
+        InstalledModelKind::Gguf => "gguf",
+        InstalledModelKind::Mlx => "mlx",
+    }
+}
+
+fn installed_entry_source_label(entry: &InstalledModelEntry) -> &'static str {
+    if path_is_in_legacy_models_dir(entry.path.as_path()) {
+        "⚠️ legacy"
+    } else {
+        "🤗 HF cache"
+    }
+}
+
+fn installed_entry_size_bytes(entry: &InstalledModelEntry) -> Option<u64> {
+    match entry.kind {
+        InstalledModelKind::Gguf => std::fs::metadata(&entry.path).map(|meta| meta.len()).ok(),
+        InstalledModelKind::Mlx => Some(dir_size_bytes(entry.path.as_path())),
+    }
+}
+
+fn dir_size_bytes(root: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() || file_type.is_symlink() {
+                total =
+                    total.saturating_add(std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
+            }
+        }
+    }
+    total
+}
+
+fn installed_entry_exact_ref(entry: &InstalledModelEntry) -> Option<String> {
+    match entry.kind {
+        InstalledModelKind::Gguf => crate::models::huggingface_identity_for_path(&entry.path)
+            .map(|identity| identity.canonical_ref),
+        InstalledModelKind::Mlx => {
+            let identity =
+                crate::models::huggingface_identity_for_path(&entry.path.join("config.json"))?;
+            let artifact = if entry.path.join("model.safetensors.index.json").exists() {
+                "model.safetensors.index.json"
+            } else if entry.path.join("model.safetensors").exists() {
+                "model.safetensors"
+            } else {
+                return None;
+            };
+            Some(format!(
+                "{}@{}/{}",
+                identity.repo_id, identity.revision, artifact
+            ))
+        }
+    }
+}
+
+fn installed_catalog_model(entry: &InstalledModelEntry) -> Option<&'static catalog::CatalogModel> {
+    find_catalog_model_exact(&entry.name).or_else(|| match entry.kind {
+        InstalledModelKind::Gguf => {
+            let file_name = entry.path.file_name()?.to_str()?;
+            catalog::MODEL_CATALOG
+                .iter()
+                .find(|model| model.file == file_name)
+        }
+        InstalledModelKind::Mlx => {
+            let identity =
+                crate::models::huggingface_identity_for_path(&entry.path.join("config.json"))?;
+            catalog::MODEL_CATALOG.iter().find(|model| {
+                model.source_repo() == Some(identity.repo_id.as_str())
+                    && matches!(
+                        model.source_file(),
+                        Some("model.safetensors") | Some("model.safetensors.index.json")
+                    )
+            })
+        }
+    })
+}
+
+fn installed_entry_display_name(entry: &InstalledModelEntry) -> String {
+    installed_catalog_model(entry)
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| entry.name.clone())
 }
 
 fn format_count(value: u64) -> String {

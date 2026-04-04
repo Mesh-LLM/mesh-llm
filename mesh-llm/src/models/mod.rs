@@ -19,7 +19,8 @@ pub use inventory::{scan_local_inventory_snapshot_with_progress, LocalModelInven
 pub use local::{
     find_model_path, huggingface_hub_cache, huggingface_hub_cache_dir,
     huggingface_identity_for_path, legacy_models_dir, legacy_models_present, model_dirs,
-    path_is_in_legacy_models_dir, scan_installed_models, scan_local_models,
+    path_is_in_legacy_models_dir, scan_installed_model_entries, scan_local_models,
+    InstalledModelEntry, InstalledModelKind,
 };
 pub use maintenance::{run_migrate, run_update, warn_about_updates_for_paths};
 pub use prompt::{infer_prompt_behavior_for_dir, ModelPromptBehavior};

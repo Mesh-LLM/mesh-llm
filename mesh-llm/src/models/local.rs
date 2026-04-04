@@ -15,6 +15,19 @@ pub struct HuggingFaceModelIdentity {
     pub local_file_name: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InstalledModelKind {
+    Gguf,
+    Mlx,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InstalledModelEntry {
+    pub name: String,
+    pub path: PathBuf,
+    pub kind: InstalledModelKind,
+}
+
 /// Directories to scan for GGUF models.
 pub fn model_dirs() -> Vec<PathBuf> {
     let canonical = huggingface_hub_cache_dir();
@@ -265,6 +278,91 @@ fn push_model_name(
     }
 }
 
+fn push_installed_model_entry(
+    path: &Path,
+    entries: &mut Vec<InstalledModelEntry>,
+    seen: &mut HashSet<String>,
+    min_size_bytes: u64,
+) {
+    if path.extension().and_then(|ext| ext.to_str()) == Some("gguf") {
+        let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+            return;
+        };
+        if stem.contains("mmproj") {
+            return;
+        }
+        let size = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+        if size <= min_size_bytes {
+            return;
+        }
+        let name = split_gguf_base_name(stem).unwrap_or(stem).to_string();
+        let key = format!("gguf:{name}");
+        if seen.insert(key) {
+            entries.push(InstalledModelEntry {
+                name,
+                path: path.to_path_buf(),
+                kind: InstalledModelKind::Gguf,
+            });
+        }
+        return;
+    }
+
+    if path.is_dir() && crate::mlx::is_mlx_model_dir(path) {
+        let size = dir_size_bytes(path);
+        if size <= min_size_bytes {
+            return;
+        }
+        let name = if let Some(identity) = huggingface_identity_for_path(&path.join("config.json"))
+        {
+            identity
+                .repo_id
+                .rsplit('/')
+                .next()
+                .unwrap_or(identity.repo_id.as_str())
+                .to_string()
+        } else if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
+            name.to_string()
+        } else {
+            return;
+        };
+        let key = if let Some(identity) = huggingface_identity_for_path(&path.join("config.json")) {
+            format!("mlx:{}", identity.repo_id)
+        } else {
+            format!("mlx:{}", path.display())
+        };
+        if seen.insert(key) {
+            entries.push(InstalledModelEntry {
+                name,
+                path: path.to_path_buf(),
+                kind: InstalledModelKind::Mlx,
+            });
+        }
+    }
+}
+
+fn dir_size_bytes(root: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() || file_type.is_symlink() {
+                total =
+                    total.saturating_add(std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0));
+            }
+        }
+    }
+    total
+}
+
 fn tree_contains_gguf(root: &Path) -> bool {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -307,6 +405,62 @@ fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min
                 }
                 let path = cache_scanned_file_path(&cache_root, repo, revision, file);
                 push_model_name(&path, names, seen, min_size_bytes);
+            }
+        }
+    }
+}
+
+fn scan_hf_cache_installed_entries(
+    entries: &mut Vec<InstalledModelEntry>,
+    seen: &mut HashSet<String>,
+    min_size_bytes: u64,
+) {
+    let cache = huggingface_hub_cache();
+    let cache_root = cache.path().clone();
+    let Ok(cache_info) = CacheInfo::scan_dir(Some(cache.path())) else {
+        return;
+    };
+    for repo in &cache_info.repos {
+        if !repo.cache_id().starts_with("model/") {
+            continue;
+        }
+        for revision in &repo.revisions {
+            let snapshot = &revision.snapshot_path;
+            if crate::mlx::is_mlx_model_dir(snapshot) {
+                push_installed_model_entry(snapshot, entries, seen, min_size_bytes);
+            }
+            for file in &revision.files {
+                if !file.file_name.ends_with(".gguf") {
+                    continue;
+                }
+                let path = cache_scanned_file_path(&cache_root, repo, revision, file);
+                push_installed_model_entry(&path, entries, seen, min_size_bytes);
+            }
+        }
+    }
+}
+
+fn scan_model_tree_entries(
+    root: &Path,
+    entries: &mut Vec<InstalledModelEntry>,
+    seen: &mut HashSet<String>,
+    min_size_bytes: u64,
+) {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        push_installed_model_entry(&dir, entries, seen, min_size_bytes);
+        let Ok(read_dir) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() || file_type.is_symlink() {
+                push_installed_model_entry(&path, entries, seen, min_size_bytes);
             }
         }
     }
@@ -357,9 +511,19 @@ pub fn scan_local_models() -> Vec<String> {
     scan_models_with_min_size(500_000_000)
 }
 
-/// Scan installed GGUF models, including small draft models.
-pub fn scan_installed_models() -> Vec<String> {
-    scan_models_with_min_size(0)
+pub fn scan_installed_model_entries() -> Vec<InstalledModelEntry> {
+    let mut entries = Vec::new();
+    let mut seen = HashSet::new();
+    let canonical_dir = huggingface_hub_cache_dir();
+    if canonical_dir.exists() {
+        scan_hf_cache_installed_entries(&mut entries, &mut seen, 0);
+    }
+    let legacy_dir = legacy_models_dir();
+    if legacy_dir.exists() {
+        scan_model_tree_entries(&legacy_dir, &mut entries, &mut seen, 0);
+    }
+    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    entries
 }
 
 fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
@@ -536,6 +700,43 @@ mod tests {
         assert_eq!(split_gguf_base_name("Qwen3-8B-Q4_K_M"), None);
         assert_eq!(split_gguf_base_name("model-001-of-003"), None);
         assert_eq!(split_gguf_base_name("model-00001-of-00003"), Some("model"));
+    }
+
+    #[test]
+    #[serial]
+    fn scan_installed_model_entries_includes_mlx_snapshot_dirs() {
+        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
+        let prev_hf_home = std::env::var_os("HF_HOME");
+        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-installed-mlx-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let snapshot = temp
+            .join("models--mlx-community--Qwen3-0.6B-4bit")
+            .join("snapshots")
+            .join("abc123");
+        std::fs::create_dir_all(&snapshot).unwrap();
+        std::fs::write(snapshot.join("config.json"), br#"{"model_type":"qwen3"}"#).unwrap();
+        std::fs::write(snapshot.join("tokenizer.json"), b"{}").unwrap();
+        std::fs::write(snapshot.join("model.safetensors"), vec![0u8; 16]).unwrap();
+
+        std::env::set_var("HF_HUB_CACHE", &temp);
+        std::env::remove_var("HF_HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
+
+        let entries = scan_installed_model_entries();
+        assert!(entries.iter().any(|entry| {
+            entry.kind == InstalledModelKind::Mlx && entry.name == "Qwen3-0.6B-4bit"
+        }));
+
+        restore_env("HF_HUB_CACHE", prev_hub_cache);
+        restore_env("HF_HOME", prev_hf_home);
+        restore_env("XDG_CACHE_HOME", prev_xdg);
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]
