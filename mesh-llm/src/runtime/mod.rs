@@ -1118,9 +1118,9 @@ async fn run_auto(
     node.regossip().await;
 
     // Ensure draft model is available (downloads if needed, <1GB)
-    if cli.no_draft {
-        cli.draft = None;
-    } else if cli.draft.is_none() {
+    // `--no-draft` disables automatic draft detection, but should not
+    // override an explicitly supplied `--draft` value.
+    if !cli.no_draft && cli.draft.is_none() {
         if let Some(draft_path) = ensure_draft(&model).await {
             eprintln!("Auto-detected draft model: {}", draft_path.display());
             cli.draft = Some(draft_path);
