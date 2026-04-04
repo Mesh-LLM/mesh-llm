@@ -385,6 +385,64 @@ def aggregate(root: Path, stamp: str, models: list[dict[str, Any]]) -> None:
     aggregate_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def planned_cases(models: list[dict[str, Any]], backend_filter: str, suite: str) -> list[dict[str, str]]:
+    backend_order = ["gguf", "mlx"] if backend_filter == "both" else [backend_filter]
+    cases: list[dict[str, str]] = []
+    if suite in ("exact", "all"):
+        for backend in backend_order:
+            for model in models:
+                if backend not in requested_backends(model, backend_filter):
+                    continue
+                cases.append(
+                    {
+                        "suite": "exact",
+                        "backend": backend,
+                        "model_id": model["id"],
+                        "label": model["label"],
+                        "case_id": model[backend]["exact_case_id"],
+                    }
+                )
+    if suite in ("behavior", "all"):
+        for backend in backend_order:
+            for model in models:
+                if backend not in requested_backends(model, backend_filter):
+                    continue
+                cases.append(
+                    {
+                        "suite": "behavior",
+                        "backend": backend,
+                        "model_id": model["id"],
+                        "label": model["label"],
+                        "case_id": model[backend]["behavior_case_id"],
+                    }
+                )
+    return cases
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def write_overall_progress(
+    root: Path,
+    stamp: str,
+    *,
+    total_cases: int,
+    completed_cases: int,
+    current: dict[str, Any] | None,
+    overall_rc: int,
+) -> None:
+    payload = {
+        "total_cases": total_cases,
+        "completed_cases": completed_cases,
+        "completion_ratio": (completed_cases / total_cases) if total_cases else 0.0,
+        "current_case": current,
+        "overall_exit_code": overall_rc,
+    }
+    write_json(root / stamp / "overall-progress.json", payload)
+
+
 def compare_exact_against_baseline(
     baseline_cfg: dict[str, Any],
     root: Path,
@@ -735,21 +793,81 @@ def main() -> int:
 
     overall_rc = 0
     backend_order = ["gguf", "mlx"] if args.backend == "both" else [args.backend]
+    cases = planned_cases(models, args.backend, args.suite)
+    total_cases = len(cases)
+    completed_cases = 0
+    current_case_path = root / stamp / "current-case.json"
+    write_overall_progress(
+        root,
+        stamp,
+        total_cases=total_cases,
+        completed_cases=completed_cases,
+        current=None,
+        overall_rc=overall_rc,
+    )
 
     if args.suite in ("exact", "all"):
         for backend in backend_order:
             for model in models:
                 if backend not in requested_backends(model, args.backend):
                     continue
+                current = {
+                    "suite": "exact",
+                    "backend": backend,
+                    "model_id": model["id"],
+                    "label": model["label"],
+                    "case_id": model[backend]["exact_case_id"],
+                    "status": "running",
+                }
+                write_json(current_case_path, current)
+                write_overall_progress(
+                    root,
+                    stamp,
+                    total_cases=total_cases,
+                    completed_cases=completed_cases,
+                    current=current,
+                    overall_rc=overall_rc,
+                )
                 print(f"\n=== Running {model[backend]['exact_case_id']} ({backend}) ===")
                 rc = run_exact_case(root, stamp, matrix, model, backend)
                 overall_rc = overall_rc or rc
+                completed_cases += 1
+                aggregate(root, stamp, models)
+                compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_parity_to_canonical(baselines, root, stamp, models)
+                baseline_divergence_report(baselines, root, stamp, models)
+                write_overall_progress(
+                    root,
+                    stamp,
+                    total_cases=total_cases,
+                    completed_cases=completed_cases,
+                    current={**current, "status": "completed", "exit_code": rc},
+                    overall_rc=overall_rc,
+                )
 
     if args.suite in ("behavior", "all"):
         for backend in backend_order:
             for model in models:
                 if backend not in requested_backends(model, args.backend):
                     continue
+                current = {
+                    "suite": "behavior",
+                    "backend": backend,
+                    "model_id": model["id"],
+                    "label": model["label"],
+                    "case_id": model[backend]["behavior_case_id"],
+                    "status": "running",
+                }
+                write_json(current_case_path, current)
+                write_overall_progress(
+                    root,
+                    stamp,
+                    total_cases=total_cases,
+                    completed_cases=completed_cases,
+                    current=current,
+                    overall_rc=overall_rc,
+                )
                 print(f"\n=== Running {model[backend]['behavior_case_id']} ({backend}) ===")
                 rc = run_behavior_case(
                     root,
@@ -763,6 +881,20 @@ def main() -> int:
                     wait_seconds=args.wait_seconds,
                 )
                 overall_rc = overall_rc or rc
+                completed_cases += 1
+                aggregate(root, stamp, models)
+                compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_parity_to_canonical(baselines, root, stamp, models)
+                baseline_divergence_report(baselines, root, stamp, models)
+                write_overall_progress(
+                    root,
+                    stamp,
+                    total_cases=total_cases,
+                    completed_cases=completed_cases,
+                    current={**current, "status": "completed", "exit_code": rc},
+                    overall_rc=overall_rc,
+                )
 
     aggregate(root, stamp, models)
     compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
@@ -807,6 +939,23 @@ def main() -> int:
     if divergence_path.exists():
         print("\n=== Baseline divergence ===")
         print(divergence_path.read_text(encoding="utf-8"), end="")
+    write_json(
+        current_case_path,
+        {
+            "status": "idle",
+            "completed_cases": completed_cases,
+            "total_cases": total_cases,
+            "overall_exit_code": overall_rc,
+        },
+    )
+    write_overall_progress(
+        root,
+        stamp,
+        total_cases=total_cases,
+        completed_cases=completed_cases,
+        current=None,
+        overall_rc=overall_rc,
+    )
     print(f"\nRaw artifacts: {root / stamp}")
     return overall_rc
 

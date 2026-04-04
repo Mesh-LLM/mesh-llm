@@ -24,6 +24,16 @@ printf '%s\n' "$PWD" > "$CASE_DIR/cwd.txt"
 printf '%q ' "$@" > "$CASE_DIR/command.sh"
 printf '\n' >> "$CASE_DIR/command.sh"
 
+STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$CASE_DIR/state.json" <<EOF
+{
+  "backend": "$BACKEND",
+  "case_id": "$CASE_ID",
+  "status": "running",
+  "started_at": "$STARTED_AT"
+}
+EOF
+
 set +e
 "$@" > >(tee "$CASE_DIR/stdout.log") 2> >(tee "$CASE_DIR/stderr.log" >&2)
 STATUS=$?
@@ -43,6 +53,18 @@ cat > "$CASE_DIR/meta.json" <<EOF
 {
   "backend": "$BACKEND",
   "case_id": "$CASE_ID",
+  "exit_code": $STATUS
+}
+EOF
+
+FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$CASE_DIR/state.json" <<EOF
+{
+  "backend": "$BACKEND",
+  "case_id": "$CASE_ID",
+  "status": "completed",
+  "started_at": "$STARTED_AT",
+  "finished_at": "$FINISHED_AT",
   "exit_code": $STATUS
 }
 EOF

@@ -164,6 +164,33 @@ def sync_runtime_logs(case_dir: Path | None, mesh_log_path: Path) -> None:
             shutil.copyfile(source_path, case_dir / target_name)
 
 
+def write_case_progress(
+    case_dir: Path | None,
+    *,
+    status: str,
+    backend: str,
+    model: str,
+    prompt_count: int,
+    completed_prompts: int,
+    failed_prompts: int,
+    current_prompt_id: str = "",
+    current_category: str = "",
+) -> None:
+    if case_dir is None:
+        return
+    payload = {
+        "status": status,
+        "backend": backend,
+        "model": model,
+        "prompt_count": prompt_count,
+        "completed_prompts": completed_prompts,
+        "failed_prompt_count": failed_prompts,
+        "current_prompt_id": current_prompt_id,
+        "current_category": current_category,
+    }
+    (case_dir / "progress.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def wait_until_ready(process: subprocess.Popen[str], console_port: int, log_path: Path, timeout: int) -> None:
     status_url = f"http://127.0.0.1:{console_port}/api/status"
     case_dir = behavior_case_dir()
@@ -234,6 +261,16 @@ def main() -> int:
     if args.max_prompts > 0:
         prompts = prompts[: args.max_prompts]
     print(f"  prompts: {len(prompts)}", flush=True)
+    case_dir = behavior_case_dir()
+    write_case_progress(
+        case_dir,
+        status="starting",
+        backend=args.backend,
+        model=args.label or args.model,
+        prompt_count=len(prompts),
+        completed_prompts=0,
+        failed_prompts=0,
+    )
 
     api_port = pick_free_port()
     console_port = pick_free_port()
@@ -252,8 +289,17 @@ def main() -> int:
             env={**os.environ, "RUST_LOG": os.environ.get("RUST_LOG", "info")},
         )
         try:
-            sync_runtime_logs(behavior_case_dir(), log_path)
+            sync_runtime_logs(case_dir, log_path)
             wait_until_ready(process, console_port, log_path, args.wait_seconds)
+            write_case_progress(
+                case_dir,
+                status="running",
+                backend=args.backend,
+                model=args.label or args.model,
+                prompt_count=len(prompts),
+                completed_prompts=0,
+                failed_prompts=0,
+            )
 
             results: list[dict[str, Any]] = []
             failed = 0
@@ -313,7 +359,18 @@ def main() -> int:
                     f"[{index:02d}/{len(prompts):02d}] {status} {row.get('category')}#{row.get('prompt_id')}",
                     flush=True,
                 )
-                sync_runtime_logs(behavior_case_dir(), log_path)
+                sync_runtime_logs(case_dir, log_path)
+                write_case_progress(
+                    case_dir,
+                    status="running",
+                    backend=args.backend,
+                    model=args.label or args.model,
+                    prompt_count=len(prompts),
+                    completed_prompts=index,
+                    failed_prompts=failed,
+                    current_prompt_id=str(row.get("prompt_id", "")),
+                    current_category=str(row.get("category", "")),
+                )
 
             output = {
                 "label": args.label or args.model,
@@ -334,7 +391,16 @@ def main() -> int:
                     log_path.read_text(encoding="utf-8", errors="replace"),
                     encoding="utf-8",
                 )
-            sync_runtime_logs(behavior_case_dir(), log_path)
+            sync_runtime_logs(case_dir, log_path)
+            write_case_progress(
+                case_dir,
+                status="completed",
+                backend=args.backend,
+                model=args.label or args.model,
+                prompt_count=len(prompts),
+                completed_prompts=len(prompts),
+                failed_prompts=failed,
+            )
 
             if failed:
                 print(f"❌ Behavior smoke failed: {failed} prompt(s) flagged", file=sys.stderr)
@@ -349,7 +415,7 @@ def main() -> int:
             except (ProcessLookupError, PermissionError):
                 pass
             time.sleep(2)
-            sync_runtime_logs(behavior_case_dir(), log_path)
+            sync_runtime_logs(case_dir, log_path)
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
@@ -358,7 +424,7 @@ def main() -> int:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
-            sync_runtime_logs(behavior_case_dir(), log_path)
+            sync_runtime_logs(case_dir, log_path)
             log_file.close()
 
 
