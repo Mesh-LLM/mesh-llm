@@ -182,6 +182,30 @@ pub struct InferenceProviderCapabilities {
     pub supports_moe_shard_runtime: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct InferenceProviderDescriptor {
+    selection: InferenceProviderSelection,
+    matches_local_endpoint: fn(&InferenceEndpointRequest) -> bool,
+    matches_distributed_endpoint: fn(&InferenceEndpointRequest) -> bool,
+    matches_worker_runtime: fn(&InferenceWorkerRequest) -> bool,
+}
+
+impl InferenceProviderDescriptor {
+    pub const fn new(
+        selection: InferenceProviderSelection,
+        matches_local_endpoint: fn(&InferenceEndpointRequest) -> bool,
+        matches_distributed_endpoint: fn(&InferenceEndpointRequest) -> bool,
+        matches_worker_runtime: fn(&InferenceWorkerRequest) -> bool,
+    ) -> Self {
+        Self {
+            selection,
+            matches_local_endpoint,
+            matches_distributed_endpoint,
+            matches_worker_runtime,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct InferenceProviderSelection {
     provider_id: &'static str,
@@ -229,6 +253,62 @@ impl PartialEq for InferenceProviderSelection {
 }
 
 impl Eq for InferenceProviderSelection {}
+
+#[derive(Clone, Copy, Debug)]
+pub struct InferenceProviderRegistry {
+    providers: &'static [InferenceProviderDescriptor],
+}
+
+impl InferenceProviderRegistry {
+    pub const fn new(providers: &'static [InferenceProviderDescriptor]) -> Self {
+        Self { providers }
+    }
+
+    pub fn select_local_endpoint_provider(
+        &self,
+        request: &InferenceEndpointRequest,
+    ) -> InferenceProviderSelection {
+        self.providers
+            .iter()
+            .find(|descriptor| {
+                descriptor.selection.capabilities().supports_local_runtime
+                    && (descriptor.matches_local_endpoint)(request)
+            })
+            .map(|descriptor| descriptor.selection)
+            .expect("at least one local inference provider must be registered")
+    }
+
+    pub fn select_distributed_endpoint_provider(
+        &self,
+        request: &InferenceEndpointRequest,
+    ) -> InferenceProviderSelection {
+        self.providers
+            .iter()
+            .find(|descriptor| {
+                descriptor
+                    .selection
+                    .capabilities()
+                    .supports_distributed_host_runtime
+                    && (descriptor.matches_distributed_endpoint)(request)
+            })
+            .map(|descriptor| descriptor.selection)
+            .expect("at least one distributed inference provider must be registered")
+    }
+
+    pub fn select_worker_provider(
+        &self,
+        request: &InferenceWorkerRequest,
+    ) -> InferenceProviderSelection {
+        self.providers
+            .iter()
+            .find(|descriptor| {
+                descriptor.selection.capabilities().requires_worker_runtime
+                    && (descriptor.matches_worker_runtime)(request)
+            })
+            .map(|descriptor| descriptor.selection)
+            .expect("at least one worker inference provider must be registered")
+    }
+}
 
 pub trait InferenceProvider: Send + Sync {
     fn backend_label(&self) -> &'static str;
@@ -298,21 +378,45 @@ impl InferenceProvider for BuiltinLlamaProvider {
 static BUILTIN_LLAMA_PROVIDER: BuiltinLlamaProvider = BuiltinLlamaProvider;
 static BUILTIN_LLAMA_SELECTION: InferenceProviderSelection =
     InferenceProviderSelection::new("builtin.llama", &BUILTIN_LLAMA_PROVIDER);
+static BUILTIN_LLAMA_DESCRIPTOR: InferenceProviderDescriptor = InferenceProviderDescriptor::new(
+    BUILTIN_LLAMA_SELECTION,
+    always_match_local_endpoint,
+    always_match_distributed_endpoint,
+    always_match_worker_runtime,
+);
+static BUILTIN_PROVIDER_REGISTRY: InferenceProviderRegistry =
+    InferenceProviderRegistry::new(&[BUILTIN_LLAMA_DESCRIPTOR]);
+
+const fn always_match_local_endpoint(_request: &InferenceEndpointRequest) -> bool {
+    true
+}
+
+const fn always_match_distributed_endpoint(_request: &InferenceEndpointRequest) -> bool {
+    true
+}
+
+const fn always_match_worker_runtime(_request: &InferenceWorkerRequest) -> bool {
+    true
+}
+
+pub fn provider_registry() -> &'static InferenceProviderRegistry {
+    &BUILTIN_PROVIDER_REGISTRY
+}
 
 pub fn select_local_endpoint_provider(
-    _request: &InferenceEndpointRequest,
+    request: &InferenceEndpointRequest,
 ) -> InferenceProviderSelection {
-    BUILTIN_LLAMA_SELECTION
+    provider_registry().select_local_endpoint_provider(request)
 }
 
 pub fn select_distributed_endpoint_provider(
-    _request: &InferenceEndpointRequest,
+    request: &InferenceEndpointRequest,
 ) -> InferenceProviderSelection {
-    BUILTIN_LLAMA_SELECTION
+    provider_registry().select_distributed_endpoint_provider(request)
 }
 
-pub fn select_worker_provider(_request: &InferenceWorkerRequest) -> InferenceProviderSelection {
-    BUILTIN_LLAMA_SELECTION
+pub fn select_worker_provider(request: &InferenceWorkerRequest) -> InferenceProviderSelection {
+    provider_registry().select_worker_provider(request)
 }
 
 pub fn provider_requires_worker_runtime(model_path: &Path) -> bool {
