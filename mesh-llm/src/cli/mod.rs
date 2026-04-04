@@ -42,6 +42,10 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) gguf: Vec<PathBuf>,
 
+    /// Explicit mmproj sidecar to pass to llama-server for the primary served model.
+    #[arg(long, hide = true)]
+    pub(crate) mmproj: Option<PathBuf>,
+
     /// API port (default: 9337).
     #[arg(long, default_value = "9337")]
     pub(crate) port: u16,

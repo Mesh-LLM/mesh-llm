@@ -7,7 +7,6 @@ mod maintenance;
 mod resolve;
 pub mod search;
 pub mod topology;
-mod warnings;
 
 use anyhow::{Context, Result};
 use hf_hub::api::sync::{Api, ApiBuilder};
@@ -17,8 +16,7 @@ pub use capabilities::{CapabilityLevel, ModelCapabilities};
 pub use inventory::{scan_local_inventory_snapshot_with_progress, LocalModelInventorySnapshot};
 pub use local::{
     find_mmproj_path, find_model_path, huggingface_hub_cache, huggingface_hub_cache_dir,
-    huggingface_identity_for_path, legacy_models_dir, legacy_models_present, model_dirs,
-    path_is_in_legacy_models_dir, scan_installed_models, scan_local_models,
+    huggingface_identity_for_path, resolve_mmproj_path, scan_installed_models, scan_local_models,
 };
 pub use maintenance::{run_migrate, run_update, warn_about_updates_for_paths};
 pub use resolve::{
@@ -27,7 +25,6 @@ pub use resolve::{
 };
 pub use search::{search_catalog_models, search_huggingface, SearchProgress};
 pub use topology::{infer_local_model_topology, ModelMoeInfo, ModelTopology};
-pub use warnings::warn_about_legacy_model_usage;
 
 fn build_hf_api(progress: bool) -> Result<Api> {
     let mut builder = ApiBuilder::from_cache(huggingface_hub_cache()).with_progress(progress);

@@ -141,6 +141,7 @@ mesh-llm --model Qwen3-8B-Q4_K_M
 mesh-llm --model https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
 mesh-llm --model bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf
 mesh-llm --gguf ~/my-models/custom-model.gguf
+mesh-llm --gguf ~/my-models/qwen3.5-4b.gguf --mmproj ~/my-models/mmproj-BF16.gguf
 ```
 
 Useful model commands:
@@ -162,7 +163,8 @@ mesh-llm models updates Qwen/Qwen3-8B-GGUF
 ## Model storage
 
 - Hugging Face repo snapshots are the canonical managed model store.
-- `~/.models/` is deprecated and will be removed in a future release.
+- Flat `~/.models/` storage is no longer scanned for managed models.
+- If you still have legacy files there, use `mesh-llm models migrate --apply`.
 - Arbitrary local GGUF files still work through `--gguf`.
 - MoE split artifacts are cached under `~/.cache/mesh-llm/splits/`.
 

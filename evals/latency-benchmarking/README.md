@@ -57,8 +57,8 @@ Models must be GGUF format with an architecture llama.cpp supports.
 ### Option A: Download from HuggingFace
 
 ```bash
-mkdir -p ~/.models
-curl -L -o ~/.models/GLM-4.7-Flash-Q4_K_M.gguf \
+mkdir -p "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
+curl -L -o "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}/GLM-4.7-Flash-Q4_K_M.gguf" \
   "https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF/resolve/main/GLM-4.7-Flash-Q4_K_M.gguf"
 ```
 
@@ -117,7 +117,7 @@ Point `llama-server` at the model and both RPC endpoints:
 ```bash
 cd /Users/micn/Documents/code/deez/llama.cpp/build
 ./bin/llama-server \
-  -m ~/.models/GLM-4.7-Flash-Q4_K_M.gguf \
+  -m "${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}/GLM-4.7-Flash-Q4_K_M.gguf" \
   --rpc 127.0.0.1:50052,127.0.0.1:50053 \
   -ngl 99 \
   --host 0.0.0.0 \
@@ -148,8 +148,8 @@ It exposes a standard OpenAI-compatible API (`/v1/chat/completions`, `/v1/comple
 `demo.sh` automates all of the above (build, download, start servers):
 
 ```bash
-./demo.sh glm           # GLM-4.7-Flash (downloads to ~/.models/ if needed)
-./demo.sh qwen3         # Qwen3-Coder-30B-A3B (downloads to ~/.models/ if needed)
+./demo.sh glm           # GLM-4.7-Flash (downloads to the HF cache if needed)
+./demo.sh qwen3         # Qwen3-Coder-30B-A3B (downloads to the HF cache if needed)
 ./demo.sh /path/to.gguf # any GGUF
 ./demo.sh stop          # kill everything
 ```
@@ -179,7 +179,7 @@ Override proportions with `--tensor-split 0.5,0.5,0`.
 | GLM-4.7-Flash Q4_K_M | [unsloth](https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF) | 17GB | deepseek2 | ~61 tok/s |
 | Qwen3-Coder-30B-A3B Q4_K_M | [unsloth](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF) | 18GB | qwen3moe | ~44 tok/s |
 
-Both are downloaded to `~/.models/` by `demo.sh`.
+Both are downloaded to the standard Hugging Face cache by `demo.sh`.
 
 ## Latency Simulation
 

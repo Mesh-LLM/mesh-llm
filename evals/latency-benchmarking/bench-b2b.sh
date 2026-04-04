@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MODEL="$HOME/.models/GLM-4.7-Flash-Q4_K_M.gguf"
+HF_CACHE_DIR="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
+MODEL="$HF_CACHE_DIR/GLM-4.7-Flash-Q4_K_M.gguf"
 SERVER_PORT=8080
 RPC_BASE_PORT=50052
 PROXY_BASE_PORT=60052

@@ -30,8 +30,8 @@ Fetch model files directly from mesh peers instead of HuggingFace. Peers already
 **Why:** LAN transfers are massively faster than HuggingFace downloads. Two machines on the same network could transfer a 47GB model in minutes instead of an hour. Also works when HF is slow, rate-limited, or down.
 
 **Design:**
-- New bi-stream type (`STREAM_FILE_TRANSFER`): requester sends filename + resume offset, responder reads from `~/.models/` and streams back
-- Only serve files from `~/.models/` — no path traversal
+- New bi-stream type (`STREAM_FILE_TRANSFER`): requester sends filename + resume offset, responder reads from the Hugging Face cache and streams back
+- Only serve files from the managed Hugging Face cache — no path traversal
 - Resume support via byte offset
 - Prefer low-RTT peers (LAN) over high-RTT (relay)
 - Download logic tries peers first, falls back to HuggingFace

@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use super::local::{
-    gguf_metadata_cache_path, huggingface_hub_cache, huggingface_hub_cache_dir, legacy_models_dir,
-};
+use super::local::{gguf_metadata_cache_path, huggingface_hub_cache, huggingface_hub_cache_dir};
 
 #[derive(Clone, Debug, Default)]
 pub struct LocalModelInventorySnapshot {
@@ -97,29 +95,6 @@ impl CachedCompactModelMetadata {
     }
 }
 
-fn push_gguf_files_recursive(dir: &Path, out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            push_gguf_files_recursive(&path, out, seen);
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("gguf") {
-            continue;
-        }
-        let normalized = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if seen.insert(normalized) {
-            out.push(path);
-        }
-    }
-}
-
 fn local_gguf_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -149,12 +124,6 @@ fn local_gguf_paths() -> Vec<PathBuf> {
                 }
             }
         }
-    }
-
-    // Walk legacy models dir (user-placed files, not HF cache).
-    let legacy_dir = legacy_models_dir();
-    if legacy_dir.exists() {
-        push_gguf_files_recursive(&legacy_dir, &mut out, &mut seen);
     }
 
     out.sort();

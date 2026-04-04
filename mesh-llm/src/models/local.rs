@@ -15,17 +15,6 @@ pub struct HuggingFaceModelIdentity {
     pub local_file_name: String,
 }
 
-/// Directories to scan for GGUF models.
-pub fn model_dirs() -> Vec<PathBuf> {
-    let canonical = huggingface_hub_cache_dir();
-    let legacy = legacy_models_dir();
-    let mut dirs = vec![canonical];
-    if legacy.exists() {
-        dirs.push(legacy);
-    }
-    dirs
-}
-
 fn hf_hub_cache_override() -> Option<PathBuf> {
     let path = std::env::var("HF_HUB_CACHE").ok()?;
     let trimmed = path.trim();
@@ -52,7 +41,7 @@ pub fn huggingface_hub_cache_dir() -> PathBuf {
     huggingface_hub_cache().path().clone()
 }
 
-pub fn legacy_models_dir() -> PathBuf {
+pub(crate) fn legacy_models_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".models")
@@ -70,14 +59,6 @@ pub fn mesh_llm_cache_dir() -> PathBuf {
 
 pub fn model_metadata_cache_dir() -> PathBuf {
     mesh_llm_cache_dir().join("model-meta")
-}
-
-pub fn legacy_models_present() -> bool {
-    let legacy_dir = legacy_models_dir();
-    if !legacy_dir.exists() {
-        return false;
-    }
-    tree_contains_gguf(&legacy_dir)
 }
 
 fn parse_model_repo_folder_name(folder: &str) -> Option<String> {
@@ -219,10 +200,6 @@ pub fn gguf_metadata_cache_path(path: &Path) -> Option<PathBuf> {
     Some(model_metadata_cache_dir().join(format!("{digest:x}.json")))
 }
 
-pub fn path_is_in_legacy_models_dir(path: &Path) -> bool {
-    path.starts_with(legacy_models_dir())
-}
-
 fn cache_scanned_file_path(
     cache_root: &Path,
     repo: &hf_hub::cache::CachedRepo,
@@ -265,31 +242,6 @@ fn push_model_name(
     }
 }
 
-fn tree_contains_gguf(root: &Path) -> bool {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if (file_type.is_file() || file_type.is_symlink())
-                && path.extension().and_then(|ext| ext.to_str()) == Some("gguf")
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min_size_bytes: u64) {
     let cache = huggingface_hub_cache();
     let cache_root = cache.path().clone();
@@ -312,41 +264,12 @@ fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min
     }
 }
 
-fn scan_model_tree(
-    root: &Path,
-    names: &mut Vec<String>,
-    seen: &mut HashSet<String>,
-    min_size_bytes: u64,
-) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-            } else if file_type.is_file() || file_type.is_symlink() {
-                push_model_name(&path, names, seen, min_size_bytes);
-            }
-        }
-    }
-}
-
 fn scan_models_with_min_size(min_size_bytes: u64) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     let canonical_dir = huggingface_hub_cache_dir();
     if canonical_dir.exists() {
         scan_hf_cache_models(&mut names, &mut seen, min_size_bytes);
-    }
-    let legacy_dir = legacy_models_dir();
-    if legacy_dir.exists() {
-        scan_model_tree(&legacy_dir, &mut names, &mut seen, min_size_bytes);
     }
     names.sort();
     names
@@ -397,34 +320,6 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
     None
 }
 
-fn find_model_tree_path(root: &Path, stem: &str) -> Option<PathBuf> {
-    let filename = format!("{stem}.gguf");
-    let split_prefix = format!("{stem}-00001-of-");
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if name == filename || (name.starts_with(&split_prefix) && name.ends_with(".gguf")) {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
-
 /// Extract the base model name from a split GGUF stem.
 /// "GLM-5-UD-IQ2_XXS-00001-of-00006" → Some("GLM-5-UD-IQ2_XXS")
 /// "Qwen3-8B-Q4_K_M" → None (not a split file)
@@ -442,18 +337,12 @@ fn split_gguf_base_name(stem: &str) -> Option<&str> {
     Some(&stem[..dash])
 }
 
-/// Find a GGUF model file by stem name, searching all model directories.
-/// Returns the first match found (prefers the Hugging Face cache, then legacy ~/.models).
+/// Find a GGUF model file by stem name in the Hugging Face cache.
 /// For split GGUFs, finds the first part (name-00001-of-NNNNN.gguf).
 pub fn find_model_path(stem: &str) -> PathBuf {
     let filename = format!("{stem}.gguf");
     let canonical_dir = huggingface_hub_cache_dir();
     if let Some(found) = find_hf_cache_model_path(&canonical_dir, stem) {
-        return found;
-    }
-
-    let legacy_dir = legacy_models_dir();
-    if let Some(found) = find_model_tree_path(&legacy_dir, stem) {
         return found;
     }
 
@@ -492,6 +381,16 @@ pub fn find_mmproj_path(model_name: &str, model_path: &Path) -> Option<PathBuf> 
         return None;
     }
     Some(candidate)
+}
+
+pub fn resolve_mmproj_path(
+    model_name: &str,
+    model_path: &Path,
+    explicit_mmproj: Option<&Path>,
+) -> Option<PathBuf> {
+    explicit_mmproj
+        .map(Path::to_path_buf)
+        .or_else(|| find_mmproj_path(model_name, model_path))
 }
 
 #[cfg(test)]
@@ -537,24 +436,6 @@ mod tests {
         restore_env("HF_HUB_CACHE", prev_hub_cache);
         restore_env("HF_HOME", prev_hf_home);
         restore_env("XDG_CACHE_HOME", prev_xdg);
-    }
-
-    #[test]
-    fn legacy_tree_detection_finds_nested_gguf_files() {
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-legacy-detect-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let nested = temp.join("nested").join("models");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("Qwen3-8B-Q4_K_M.gguf"), b"gguf").unwrap();
-
-        assert!(tree_contains_gguf(&temp));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
@@ -657,6 +538,33 @@ mod tests {
         std::fs::write(&mmproj_b, b"mmproj").unwrap();
 
         assert!(find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model).is_none());
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_mmproj_path_prefers_explicit_override() {
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-mmproj-override-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let sibling = temp.join("mmproj-sibling.gguf");
+        let explicit = temp.join("mmproj-explicit.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&sibling, b"mmproj").unwrap();
+        std::fs::write(&explicit, b"mmproj").unwrap();
+
+        let found = resolve_mmproj_path(
+            "Qwen3VL-2B-Instruct-Q4_K_M",
+            &model,
+            Some(explicit.as_path()),
+        );
+        assert_eq!(found.as_deref(), Some(explicit.as_path()));
 
         let _ = std::fs::remove_dir_all(&temp);
     }

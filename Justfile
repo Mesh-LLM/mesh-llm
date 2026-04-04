@@ -5,7 +5,9 @@ build_dir := llama_dir / "build"
 mesh_dir := "mesh-llm"
 ui_dir := mesh_dir / "ui"
 home_dir := if os_family() == "windows" { env("USERPROFILE") } else { env("HOME") }
-models_dir := home_dir / ".models"
+xdg_cache_dir := env("XDG_CACHE_HOME", home_dir / ".cache")
+hf_home := env("HF_HOME", xdg_cache_dir / "huggingface")
+models_dir := env("HF_HUB_CACHE", hf_home / "hub")
 model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 
 # Build for the current platform (macOS→Metal, Linux/Windows→auto backend)

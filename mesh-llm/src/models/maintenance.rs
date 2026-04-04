@@ -1,8 +1,9 @@
 use super::catalog;
+use super::local::legacy_models_dir;
 use super::resolve::{catalog_hf_asset_ref, catalog_hf_match, catalog_match, parse_hf_resolve_url};
 use super::{
     build_hf_api, format_size_bytes, huggingface_hub_cache, huggingface_hub_cache_dir,
-    legacy_models_dir, short_revision,
+    short_revision,
 };
 use anyhow::{Context, Result};
 use hf_hub::api::sync::Api;

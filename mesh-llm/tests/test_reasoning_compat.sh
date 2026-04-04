@@ -12,10 +12,11 @@
 # Usage:
 #   ./tests/test_reasoning_compat.sh [model_path]
 #
-# If no model path given, tries ~/.models/Qwen3-8B-Q4_K_M.gguf
+# If no model path given, tries the standard Hugging Face cache path.
 set -e
 
-MODEL="${1:-$HOME/.models/Qwen3-8B-Q4_K_M.gguf}"
+HF_CACHE_DIR="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
+MODEL="${1:-$HF_CACHE_DIR/Qwen3-8B-Q4_K_M.gguf}"
 PORT=18099
 PASS=0
 FAIL=0
