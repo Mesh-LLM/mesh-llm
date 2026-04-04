@@ -132,19 +132,20 @@ jobs:
             "${CACHE_FLAGS[@]}"
           cmake --build llama.cpp/build --config Release -j$(nproc) --target rpc-server llama-server
 
-      - name: Package Linux GGUF smoke binaries
+      - name: Package Linux binaries
         run: |
-          mkdir -p ci-artifacts
-          tar -czf ci-artifacts/linux-gguf-smoke-bins.tgz \
-            target/release/mesh-llm \
-            llama.cpp/build/bin/rpc-server \
-            llama.cpp/build/bin/llama-server
+          mkdir -p ci-artifacts/linux-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-binaries.tgz -C ci-artifacts linux-binaries
 
-      - name: Upload Linux GGUF smoke binaries
+      - name: Upload Linux binaries
         uses: actions/upload-artifact@v4
         with:
-          name: linux-gguf-smoke-bins
-          path: ci-artifacts/linux-gguf-smoke-bins.tgz
+          name: linux-binaries
+          path: ci-artifacts/linux-binaries.tgz
           if-no-files-found: error
 
       # ── Download model ──
@@ -279,19 +280,21 @@ jobs:
             "${CACHE_FLAGS[@]}"
           cmake --build llama.cpp/build --config Release -j$(sysctl -n hw.ncpu) --target rpc-server llama-server
 
-      - name: Package macOS MLX smoke binaries
+      - name: Package macOS binaries
         run: |
-          mkdir -p ci-artifacts
-          tar -czf ci-artifacts/macos-mlx-smoke-bins.tgz \
-            target/release/mesh-llm \
-            llama.cpp/build/bin/rpc-server \
-            llama.cpp/build/bin/llama-server
+          mkdir -p ci-artifacts/macos-binaries
+          cp target/release/mesh-llm ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/macos-binaries/ 2>/dev/null || true
+          cp llama.cpp/build/bin/*.dylib ci-artifacts/macos-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/macos-binaries.tgz -C ci-artifacts macos-binaries
 
-      - name: Upload macOS MLX smoke binaries
+      - name: Upload macOS binaries
         uses: actions/upload-artifact@v4
         with:
-          name: macos-mlx-smoke-bins
-          path: ci-artifacts/macos-mlx-smoke-bins.tgz
+          name: macos-binaries
+          path: ci-artifacts/macos-binaries.tgz
           if-no-files-found: error
 
       # ── Download model ──
@@ -429,14 +432,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download macOS MLX smoke binaries
+      - name: Download macOS binaries
         uses: actions/download-artifact@v4
         with:
-          name: macos-mlx-smoke-bins
+          name: macos-binaries
           path: ci-artifacts
 
-      - name: Extract macOS MLX smoke binaries
-        run: tar -xzf ci-artifacts/macos-mlx-smoke-bins.tgz
+      - name: Extract macOS binaries
+        run: tar -xzf ci-artifacts/macos-binaries.tgz
 
       - name: Cache MLX model repo
         uses: actions/cache@v5
@@ -631,6 +634,23 @@ jobs:
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
 
+      - name: Package Linux CUDA binaries
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/linux-cuda-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-cuda-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-cuda-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-cuda-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-cuda-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-cuda-binaries.tgz -C ci-artifacts linux-cuda-binaries
+
+      - name: Upload Linux CUDA binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cuda-binaries
+          path: ci-artifacts/linux-cuda-binaries.tgz
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -699,6 +719,23 @@ jobs:
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
 
+      - name: Package Linux ROCm binaries
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/linux-rocm-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-rocm-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-rocm-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-rocm-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-rocm-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-rocm-binaries.tgz -C ci-artifacts linux-rocm-binaries
+
+      - name: Upload Linux ROCm binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rocm-binaries
+          path: ci-artifacts/linux-rocm-binaries.tgz
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -766,6 +803,23 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Package Linux Vulkan binaries
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/linux-vulkan-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-vulkan-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-vulkan-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-vulkan-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-vulkan-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-vulkan-binaries.tgz -C ci-artifacts linux-vulkan-binaries
+
+      - name: Upload Linux Vulkan binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-vulkan-binaries
+          path: ci-artifacts/linux-vulkan-binaries.tgz
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()
