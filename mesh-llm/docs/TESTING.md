@@ -73,6 +73,44 @@ Baseline policy:
   only stable facts such as exit code, failed prompt count, and flagged prompt
   ids/categories after you accept a behavior run.
 
+## CI structure
+
+The validation matrix is split across CI by cost and signal.
+
+For pull requests and branch pushes:
+
+- Keep the current job names:
+  - `changes`
+  - `linux`
+  - `macos`
+  - `macos_mlx`
+  - `gguf_smokes`
+  - `linux_cuda`
+- `linux` and `macos` remain the foundation/build jobs.
+- `gguf_smokes` and `macos_mlx` should be treated as the exact-matrix PR gates.
+- `linux_cuda` remains a build / flavor confidence job, not part of the parity
+  matrix.
+- Exact regressions should fail PR CI.
+
+For nightly / scheduled validation and release validation:
+
+- Keep the full MT-Bench-derived behavior suite in `behavior.yml`.
+- Do not use the behavior suite as a routine PR gate.
+- Compare behavior results against the checked-in summary baselines and review
+  artifacts when they diverge.
+
+Execution order matters:
+
+- When running `--suite all --backend both`, execute grouped phases rather than
+  alternating per model:
+  1. all `gguf` exact rows
+  2. all `mlx` exact rows
+  3. all `gguf` behavior rows
+  4. all `mlx` behavior rows
+
+That grouped order is the expected orchestration for local and remote matrix
+runs.
+
 ## Single-model permutations
 
 ### 1. Solo (single node)

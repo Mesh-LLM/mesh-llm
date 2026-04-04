@@ -3,7 +3,8 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - '**'
   pull_request:
 
 concurrency:
@@ -15,10 +16,6 @@ env:
   # Tiny model for integration tests (~138MB Q8_0, has chat template)
   MODEL_URL: https://huggingface.co/unsloth/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf
   MODEL_FILE: SmolLM2-135M-Instruct-Q8_0.gguf
-  GGUF_PROMPT_MODEL_URL: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
-  GGUF_PROMPT_MODEL_FILE: qwen2.5-0.5b-instruct-q4_k_m.gguf
-  MLX_PROMPT_MODEL_REPO: mlx-community/Qwen3-0.6B-4bit
-  MLX_PROMPT_MODEL_CACHE_SLUG: mlx-community--Qwen3-0.6B-4bit
   SCCACHE_GHA_ENABLED: "true"
 
 jobs:
@@ -163,20 +160,6 @@ jobs:
           curl -fSL "$MODEL_URL" -o ~/.models/$MODEL_FILE
           ls -lh ~/.models/$MODEL_FILE
 
-      - name: Cache GGUF prompt model
-        id: cache-gguf-prompt-model
-        uses: actions/cache@v5
-        with:
-          path: ~/.models/${{ env.GGUF_PROMPT_MODEL_FILE }}
-          key: model-${{ env.GGUF_PROMPT_MODEL_FILE }}
-
-      - name: Download GGUF prompt model
-        if: steps.cache-gguf-prompt-model.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.models
-          curl -fSL "$GGUF_PROMPT_MODEL_URL" -o ~/.models/$GGUF_PROMPT_MODEL_FILE
-          ls -lh ~/.models/$GGUF_PROMPT_MODEL_FILE
-
       # ── Integration smoke test ──
       - name: Smoke test (real inference)
         run: |
@@ -184,18 +167,6 @@ jobs:
             target/release/mesh-llm \
             llama.cpp/build/bin \
             ~/.models/$MODEL_FILE
-
-      - name: GGUF prompt suite
-        run: |
-          scripts/ci-gguf-smoke-test.sh \
-            target/release/mesh-llm \
-            llama.cpp/build/bin \
-            ~/.models/$GGUF_PROMPT_MODEL_FILE \
-            "Reply with exactly: blue" \
-            "blue" \
-            "" \
-            "blue" \
-            '[{"label":"alt-color","prompt":"Reply with exactly: green","expect_exact":"green"},{"label":"alt-red","prompt":"Reply with exactly: red","expect_exact":"red"}]'
 
       - name: OpenAI Python compat smoke
         run: |
@@ -349,86 +320,32 @@ jobs:
       matrix:
         include:
           - name: qwen2.5-0.5b
-            repo: mlx-community/Qwen2.5-0.5B-Instruct-4bit
-            template_source: tokenizer_config.json
+            id: qwen25
             cache_slug: mlx-community--Qwen2.5-0.5B-Instruct-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
-            thinking_mode: ""
-            expect_exact: blue
           - name: qwen3-0.6b
-            repo: mlx-community/Qwen3-0.6B-4bit
-            template_source: tokenizer_config.json
+            id: qwen3
             cache_slug: mlx-community--Qwen3-0.6B-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
-            thinking_mode: tagged
-            expect_exact: blue
           - name: qwen3-josie-0.6b
-            repo: mlx-community/JOSIE-IT1-Qwen3-0.6B-4bit
-            template_source: chat_template.jinja
+            id: josie
             cache_slug: mlx-community--JOSIE-IT1-Qwen3-0.6B-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
-            thinking_mode: multiline
-            expect_exact: blue
           - name: llama-3.2-1b
-            repo: mlx-community/Llama-3.2-1B-Instruct-4bit
-            template_source: tokenizer_config.json
+            id: llama32
             cache_slug: mlx-community--Llama-3.2-1B-Instruct-4bit
-            prompt: "Say hi."
-            expect_contains: ""
-            forbid_contains: ""
-            thinking_mode: ""
-            expect_exact: ""
           - name: gemma-3-1b
-            repo: mlx-community/gemma-3-1b-it-qat-4bit
-            template_source: ""
+            id: gemma3
             cache_slug: mlx-community--gemma-3-1b-it-qat-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
-            thinking_mode: ""
-            expect_exact: blue
           - name: gemma-2-2b
-            repo: mlx-community/gemma-2-2b-it-4bit
-            template_source: tokenizer_config.json
+            id: gemma2
             cache_slug: mlx-community--gemma-2-2b-it-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: "{"
-            thinking_mode: ""
-            expect_exact: blue
           - name: glm-4-9b
-            repo: mlx-community/GLM-4-9B-0414-4bit
-            template_source: tokenizer_config.json
+            id: glm4
             cache_slug: mlx-community--GLM-4-9B-0414-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: "{"
-            thinking_mode: ""
-            expect_exact: blue
-          - name: gemma-4-e4b
-            repo: unsloth/gemma-4-E4B-it-UD-MLX-4bit
-            template_source: chat_template.jinja
-            cache_slug: unsloth--gemma-4-E4B-it-UD-MLX-4bit
-            prompt: "Say the word blue."
-            expect_contains: Blue
-            forbid_contains: "{"
-            thinking_mode: ""
-            expect_exact: Blue
+          - name: gemma-4-e2b
+            id: gemma4
+            cache_slug: Rapid42--gemma-4-E2B-it-MLX
           - name: lfm2-350m
-            repo: mlx-community/LFM2-350M-4bit
-            template_source: chat_template.jinja
+            id: lfm2
             cache_slug: mlx-community--LFM2-350M-4bit
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: "{"
-            thinking_mode: ""
-            expect_exact: blue
     steps:
       - uses: actions/checkout@v5
 
@@ -441,37 +358,38 @@ jobs:
       - name: Extract macOS binaries
         run: tar -xzf ci-artifacts/macos-binaries.tgz
 
+      - name: Stage binaries for validation runner
+        run: |
+          mkdir -p target/release llama.cpp/build/bin
+          cp macos-binaries/mesh-llm target/release/mesh-llm
+          cp macos-binaries/rpc-server llama.cpp/build/bin/rpc-server
+          cp macos-binaries/llama-server llama.cpp/build/bin/llama-server
+          if ls macos-binaries/*.dylib >/dev/null 2>&1; then
+            cp macos-binaries/*.dylib llama.cpp/build/bin/
+          fi
+
       - name: Cache MLX model repo
         uses: actions/cache@v5
         with:
           path: ~/.cache/huggingface/hub/models--${{ matrix.cache_slug }}
-          key: mlx-hub-${{ matrix.name }}
+          key: mlx-hub-${{ matrix.cache_slug }}
 
-      - name: MLX smoke test (real inference)
+      - name: MLX exact matrix
         run: |
-          scripts/ci-mlx-smoke-test.sh \
-            macos-binaries/mesh-llm \
-            "${{ matrix.repo }}" \
-            "${{ matrix.template_source }}" \
-            "${{ matrix.prompt }}" \
-            "${{ matrix.expect_contains }}" \
-            "${{ matrix.forbid_contains }}" \
-            "${{ matrix.thinking_mode }}" \
-            "${{ matrix.expect_exact }}"
+          python3 scripts/run-validation-matrix.py \
+            --suite exact \
+            --backend mlx \
+            --skip-build \
+            --cases "${{ matrix.id }}" \
+            --stamp "ci-macos-mlx-${{ matrix.id }}"
 
-      - name: MLX prompt suite
-        if: ${{ matrix.name == 'qwen3-0.6b' }}
-        run: |
-          scripts/ci-mlx-smoke-test.sh \
-            macos-binaries/mesh-llm \
-            "${{ env.MLX_PROMPT_MODEL_REPO }}" \
-            "tokenizer_config.json" \
-            "Reply with exactly: blue" \
-            "blue" \
-            "" \
-            "tagged" \
-            "blue" \
-            '[{"label":"alt-color","prompt":"Reply with exactly: green","expect_exact":"green"},{"label":"alt-red","prompt":"Reply with exactly: red","expect_exact":"red"}]'
+      - name: Upload MLX exact results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-exact-${{ matrix.id }}
+          path: MLX_VALIDATION_RESULTS/ci-macos-mlx-${{ matrix.id }}
+          if-no-files-found: warn
 
   gguf_smokes:
     needs: [changes, linux]
@@ -483,53 +401,32 @@ jobs:
       matrix:
         include:
           - name: qwen2.5-0.5b
-            url: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
-            file: qwen2.5-0.5b-instruct-q4_k_m.gguf
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
+            id: qwen25
+            cache_slug: Qwen--Qwen2.5-0.5B-Instruct-GGUF
           - name: qwen3-0.6b
-            url: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
-            file: Qwen3-0.6B-Q8_0.gguf
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
+            id: qwen3
+            cache_slug: Qwen--Qwen3-0.6B-GGUF
           - name: qwen3-josie-0.6b
-            url: https://huggingface.co/mradermacher/JOSIE-IT1-Qwen3-0.6B-GGUF/resolve/main/JOSIE-IT1-Qwen3-0.6B.Q4_K_M.gguf
-            file: JOSIE-IT1-Qwen3-0.6B.Q4_K_M.gguf
-            prompt: "What is 2+2? Reply with one word only."
-            expect_contains: "4"
-            forbid_contains: ""
+            id: josie
+            cache_slug: mradermacher--JOSIE-IT1-Qwen3-0.6B-GGUF
           - name: llama-3.2-1b
-            url: https://huggingface.co/llmware/llama-3.2-1b-gguf/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf
-            file: Llama-3.2-1B-Instruct-Q4_K_M.gguf
-            prompt: "Say hi."
-            expect_contains: ""
-            forbid_contains: ""
+            id: llama32
+            cache_slug: llmware--llama-3.2-1b-gguf
           - name: gemma-3-1b
-            url: https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf
-            file: gemma-3-1b-it-Q4_K_M.gguf
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: ""
+            id: gemma3
+            cache_slug: ggml-org--gemma-3-1b-it-GGUF
           - name: gemma-2-2b
-            url: https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf
-            file: gemma-2-2b-it-Q4_K_M.gguf
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: "{"
+            id: gemma2
+            cache_slug: bartowski--gemma-2-2b-it-GGUF
           - name: glm-4-9b
-            url: https://huggingface.co/lmstudio-community/GLM-4-9B-0414-GGUF/resolve/main/GLM-4-9B-0414-Q4_K_M.gguf
-            file: GLM-4-9B-0414-Q4_K_M.gguf
-            prompt: "Reply with exactly: blue"
-            expect_contains: blue
-            forbid_contains: "{"
-          - name: gemma-4-e4b
-            url: https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf
-            file: gemma-4-E4B-it-Q4_K_M.gguf
-            prompt: "Say the word blue."
-            expect_contains: Blue
-            forbid_contains: "{"
+            id: glm4
+            cache_slug: lmstudio-community--GLM-4-9B-0414-GGUF
+          - name: gemma-4-e2b
+            id: gemma4
+            cache_slug: ggml-org--gemma-4-E2B-it-GGUF
+          - name: lfm2-350m
+            id: lfm2
+            cache_slug: LiquidAI--LFM2-350M-GGUF
     steps:
       - uses: actions/checkout@v5
 
@@ -542,29 +439,35 @@ jobs:
       - name: Extract Linux GGUF smoke binaries
         run: tar -xzf ci-artifacts/linux-binaries.tgz
 
+      - name: Stage binaries for validation runner
+        run: |
+          mkdir -p target/release llama.cpp/build/bin
+          cp linux-binaries/mesh-llm target/release/mesh-llm
+          cp linux-binaries/rpc-server llama.cpp/build/bin/rpc-server
+          cp linux-binaries/llama-server llama.cpp/build/bin/llama-server
+
       - name: Cache GGUF model
-        id: cache-gguf-model
         uses: actions/cache@v5
         with:
-          path: ~/.models/${{ matrix.file }}
-          key: gguf-model-${{ matrix.name }}
+          path: ~/.cache/huggingface/hub/models--${{ matrix.cache_slug }}
+          key: gguf-hub-${{ matrix.cache_slug }}
 
-      - name: Download GGUF model
-        if: steps.cache-gguf-model.outputs.cache-hit != 'true'
+      - name: GGUF exact matrix
         run: |
-          mkdir -p ~/.models
-          curl -fSL "${{ matrix.url }}" -o ~/.models/${{ matrix.file }}
-          ls -lh ~/.models/${{ matrix.file }}
+          python3 scripts/run-validation-matrix.py \
+            --suite exact \
+            --backend gguf \
+            --skip-build \
+            --cases "${{ matrix.id }}" \
+            --stamp "ci-gguf-${{ matrix.id }}"
 
-      - name: GGUF smoke test (real inference)
-        run: |
-          scripts/ci-gguf-smoke-test.sh \
-            linux-binaries/mesh-llm \
-            linux-binaries \
-            ~/.models/${{ matrix.file }} \
-            "${{ matrix.prompt }}" \
-            "${{ matrix.expect_contains }}" \
-            "${{ matrix.forbid_contains }}"
+      - name: Upload GGUF exact results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gguf-exact-${{ matrix.id }}
+          path: MLX_VALIDATION_RESULTS/ci-gguf-${{ matrix.id }}
+          if-no-files-found: warn
 
       - name: Show sccache stats
         if: always()

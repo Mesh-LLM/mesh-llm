@@ -734,13 +734,22 @@ def main() -> int:
     ensure_build(args.skip_build)
 
     overall_rc = 0
-    for model in models:
-        for backend in requested_backends(model, args.backend):
-            if args.suite in ("exact", "all"):
+    backend_order = ["gguf", "mlx"] if args.backend == "both" else [args.backend]
+
+    if args.suite in ("exact", "all"):
+        for backend in backend_order:
+            for model in models:
+                if backend not in requested_backends(model, args.backend):
+                    continue
                 print(f"\n=== Running {model[backend]['exact_case_id']} ({backend}) ===")
                 rc = run_exact_case(root, stamp, matrix, model, backend)
                 overall_rc = overall_rc or rc
-            if args.suite in ("behavior", "all"):
+
+    if args.suite in ("behavior", "all"):
+        for backend in backend_order:
+            for model in models:
+                if backend not in requested_backends(model, args.backend):
+                    continue
                 print(f"\n=== Running {model[backend]['behavior_case_id']} ({backend}) ===")
                 rc = run_behavior_case(
                     root,
