@@ -1022,6 +1022,25 @@ async fn run_auto(
         None
     };
 
+    // ── Lemonade-only mode ──
+    // When --lemonade is set with no --model, skip model resolution and election.
+    // Lemonade manages all backends (GPU llama.cpp, NPU FLM/RyzenAI, whisper, SD, TTS).
+    // We just proxy to it.
+    let use_lemonade = cli.lemonade || cli.lemonade_port.is_some();
+    if use_lemonade && resolved_models.is_empty() {
+        return run_lemonade_only(
+            cli,
+            node,
+            channels,
+            api_port,
+            console_port,
+            plugin_manager,
+            plugin_inference_rx,
+            affinity_router,
+        )
+        .await;
+    }
+
     // Decide which model THIS node will serve
     let model = if !resolved_models.is_empty() {
         // First --model is what we serve (already resolved/downloaded)
@@ -1747,6 +1766,226 @@ async fn run_auto(
     node.set_hosted_models(Vec::new()).await;
     launch::kill_llama_server().await;
     launch::kill_orphan_rpc_servers().await;
+    Ok(())
+}
+
+/// Lemonade-only mode: no local model, no election. Lemonade manages all backends
+/// (GPU via llama.cpp, NPU via FLM/RyzenAI, whisper, stable-diffusion, TTS).
+/// We run the API proxy and forward everything to Lemonade.
+async fn run_lemonade_only(
+    cli: Cli,
+    node: mesh::Node,
+    _channels: mesh::TunnelChannels,
+    api_port: u16,
+    console_port: Option<u16>,
+    plugin_manager: plugin::PluginManager,
+    mut plugin_inference_rx: tokio::sync::mpsc::Receiver<plugin::PluginInferenceEvent>,
+    affinity_router: affinity::AffinityRouter,
+) -> Result<()> {
+    let lemonade_port = cli.lemonade_port.unwrap_or(crate::inference::lemonade::DEFAULT_PORT);
+
+    // Connect to Lemonade
+    let process = crate::inference::lemonade::connect_external(lemonade_port)
+        .await
+        .context(format!(
+            "Lemonade not available on port {lemonade_port}. \
+             Is it running? Start with: lemonade-server serve"
+        ))?;
+
+    let models = crate::inference::lemonade::list_models(lemonade_port)
+        .await
+        .context("Failed to list Lemonade models")?;
+
+    if models.is_empty() {
+        eprintln!("⚠️  Lemonade is running but has no models loaded.");
+        eprintln!("   Pull a model: lemonade-server pull <model-name>");
+        eprintln!("   List models:  lemonade-server list");
+        return Ok(());
+    }
+
+    // Use first model as the "primary" for gossip bookkeeping
+    let primary_model_name = models[0].clone();
+
+    eprintln!("🍋 Lemonade-only mode — all inference delegated to Lemonade on port {lemonade_port}");
+    eprintln!("   Lemonade manages GPU (llama.cpp), NPU (FLM, RyzenAI), whisper, SD, TTS");
+    for m in &models {
+        eprintln!("  + {m}");
+    }
+
+    // Announce models to mesh
+    node.set_serving_models(models.clone()).await;
+    node.set_models(models.clone()).await;
+    node.regossip().await;
+
+    // Election target map — populated directly, no election loop needed
+    let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
+    let target_tx = std::sync::Arc::new(target_tx);
+
+    for m in &models {
+        add_runtime_local_target(&target_tx, m, lemonade_port);
+        add_serving_assignment(&node, &primary_model_name, m).await;
+        advertise_model_ready(&node, &primary_model_name, m).await;
+    }
+
+    // Runtime control for load/unload
+    let (control_tx, mut control_rx) =
+        tokio::sync::mpsc::unbounded_channel::<api::RuntimeControlRequest>();
+    let (runtime_event_tx, mut runtime_event_rx) =
+        tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
+
+    // API proxy
+    let proxy_node = node.clone();
+    let proxy_rx = target_rx.clone();
+    let proxy_affinity = affinity_router.clone();
+    let api_control_tx = control_tx.clone();
+    tokio::spawn(async move {
+        proxy::api_proxy(
+            proxy_node,
+            api_port,
+            proxy_rx,
+            api_control_tx,
+            None,
+            cli.listen_all,
+            proxy_affinity,
+        )
+        .await;
+    });
+
+    // Console
+    let console_state = if let Some(cport) = console_port {
+        let cs = api::MeshApi::new(
+            node.clone(),
+            primary_model_name.clone(),
+            api_port,
+            0,
+            plugin_manager.clone(),
+            affinity_router.clone(),
+        );
+        cs.set_primary_backend("lemonade".into()).await;
+        cs.set_runtime_control(control_tx.clone()).await;
+        if let Some(ref name) = cli.mesh_name {
+            cs.set_mesh_name(name.clone()).await;
+        }
+        let cs2 = cs.clone();
+        let console_rx = target_rx.clone();
+        let mn = primary_model_name.clone();
+        tokio::spawn(async move {
+            let (adapted_tx, adapted_rx) =
+                tokio::sync::watch::channel(election::InferenceTarget::None);
+            tokio::spawn(async move {
+                let mut rx = console_rx;
+                loop {
+                    let targets = rx.borrow().clone();
+                    let target = targets.get(&mn);
+                    adapted_tx.send_replace(target);
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            });
+            api::start(cport, cs2, adapted_rx, cli.listen_all).await;
+        });
+        Some(cs)
+    } else {
+        None
+    };
+
+    // Show ready message
+    eprintln!();
+    eprintln!("  API:     http://localhost:{api_port}");
+    if let Some(cp) = console_port {
+        eprintln!("  Console: http://localhost:{cp}");
+    }
+    update_pi_models_json(&primary_model_name, api_port);
+    eprintln!();
+
+    // Death watchdog for Lemonade
+    let lemonade_models = models.clone();
+    let death_target_tx = target_tx.clone();
+    let death_node = node.clone();
+    let death_console = console_state.clone();
+    tokio::spawn(async move {
+        let _ = process.death_rx.await;
+        eprintln!("⚠️  Lemonade server disconnected — no backends available");
+        for name in &lemonade_models {
+            remove_runtime_local_target(&death_target_tx, name, lemonade_port);
+            withdraw_advertised_model(&death_node, name).await;
+            remove_serving_assignment(&death_node, name).await;
+            if let Some(ref cs) = death_console {
+                cs.remove_local_process(name).await;
+            }
+        }
+    });
+
+    // Console: register Lemonade processes
+    if let Some(ref cs) = console_state {
+        for m in &models {
+            cs.upsert_local_process(local_process_payload(m, "lemonade", lemonade_port, 0))
+                .await;
+        }
+    }
+
+    // Main control loop
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nShutting down...");
+                break;
+            }
+            Some(cmd) = control_rx.recv() => {
+                match cmd {
+                    api::RuntimeControlRequest::Load { spec: _, resp } => {
+                        // In lemonade-only mode, load/unload should go through Lemonade
+                        let _ = resp.send(Err(anyhow::anyhow!(
+                            "In Lemonade-only mode. Use Lemonade to manage models: \
+                             lemonade-server pull <model>"
+                        )));
+                    }
+                    api::RuntimeControlRequest::Unload { model: _, resp } => {
+                        let _ = resp.send(Err(anyhow::anyhow!(
+                            "In Lemonade-only mode. Use Lemonade to manage models."
+                        )));
+                    }
+                }
+            }
+            Some(event) = runtime_event_rx.recv() => {
+                match event {
+                    RuntimeEvent::Exited { model, port } => {
+                        eprintln!("⚠ Lemonade model '{}' exited on :{}", model, port);
+                    }
+                }
+            }
+            Some(event) = plugin_inference_rx.recv() => {
+                match event {
+                    plugin::PluginInferenceEvent::Register { plugin_id, model, port, backend } => {
+                        eprintln!("🔌 Plugin '{plugin_id}' registering model '{model}' on :{port} (backend: {backend})");
+                        add_runtime_local_target(&target_tx, &model, port);
+                        add_serving_assignment(&node, &primary_model_name, &model).await;
+                        advertise_model_ready(&node, &primary_model_name, &model).await;
+                        if let Some(ref cs) = console_state {
+                            cs.upsert_local_process(local_process_payload(
+                                &model, &backend, port, 0,
+                            )).await;
+                        }
+                    }
+                    plugin::PluginInferenceEvent::Unregister { plugin_id, model, port } => {
+                        eprintln!("🔌 Plugin '{plugin_id}' unregistering model '{model}' on :{port}");
+                        remove_runtime_local_target(&target_tx, &model, port);
+                        withdraw_advertised_model(&node, &model).await;
+                        remove_serving_assignment(&node, &model).await;
+                        if let Some(ref cs) = console_state {
+                            cs.remove_local_process(&model).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Cleanup
+    node.broadcast_leaving().await;
+    node.set_serving_models(Vec::new()).await;
+    node.set_hosted_models(Vec::new()).await;
     Ok(())
 }
 
