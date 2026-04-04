@@ -107,8 +107,7 @@ impl InferenceEndpointRequest {
         self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn with_preferred_provider_id(
         mut self,
         preferred_provider_id: Option<impl Into<String>>,
@@ -180,7 +179,7 @@ impl InferenceWorkerRequest {
         self
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn with_preferred_provider_id(
         mut self,
         preferred_provider_id: Option<impl Into<String>>,
@@ -205,7 +204,7 @@ pub struct InferenceProviderCapabilities {
     pub supports_moe_shard_runtime: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct InferenceProviderDescriptor {
     selection: InferenceProviderSelection,
     matches_local_endpoint: fn(&InferenceEndpointRequest) -> bool,
@@ -229,41 +228,50 @@ impl InferenceProviderDescriptor {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct InferenceProviderSelection {
-    provider_id: &'static str,
-    provider: &'static dyn InferenceProvider,
+    provider_id: Arc<str>,
+    backend_label: Arc<str>,
+    capabilities: InferenceProviderCapabilities,
+    provider: Arc<dyn InferenceProvider>,
 }
 
 impl InferenceProviderSelection {
-    pub const fn new(provider_id: &'static str, provider: &'static dyn InferenceProvider) -> Self {
+    pub fn new(
+        provider_id: impl Into<Arc<str>>,
+        backend_label: impl Into<Arc<str>>,
+        capabilities: InferenceProviderCapabilities,
+        provider: Arc<dyn InferenceProvider>,
+    ) -> Self {
         Self {
-            provider_id,
+            provider_id: provider_id.into(),
+            backend_label: backend_label.into(),
+            capabilities,
             provider,
         }
     }
 
-    pub fn provider_id(&self) -> &'static str {
-        self.provider_id
+    pub fn provider_id(&self) -> &str {
+        &self.provider_id
     }
 
-    pub fn backend_label(&self) -> &'static str {
-        self.provider.backend_label()
+    pub fn backend_label(&self) -> &str {
+        &self.backend_label
     }
 
     pub fn capabilities(&self) -> InferenceProviderCapabilities {
-        self.provider.capabilities()
+        self.capabilities
     }
 
-    pub fn provider(&self) -> &'static dyn InferenceProvider {
-        self.provider
+    pub fn provider(&self) -> &dyn InferenceProvider {
+        self.provider.as_ref()
     }
 }
 
 impl std::fmt::Debug for InferenceProviderSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InferenceProviderSelection")
-            .field("provider_id", &self.provider_id)
+            .field("provider_id", &self.provider_id())
             .field("backend_label", &self.backend_label())
             .finish()
     }
@@ -271,19 +279,19 @@ impl std::fmt::Debug for InferenceProviderSelection {
 
 impl PartialEq for InferenceProviderSelection {
     fn eq(&self, other: &Self) -> bool {
-        self.provider_id == other.provider_id
+        self.provider_id() == other.provider_id()
     }
 }
 
 impl Eq for InferenceProviderSelection {}
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct InferenceProviderRegistry {
-    builtin_providers: &'static [InferenceProviderDescriptor],
+    builtin_providers: Vec<InferenceProviderDescriptor>,
 }
 
 impl InferenceProviderRegistry {
-    pub const fn new(builtin_providers: &'static [InferenceProviderDescriptor]) -> Self {
+    pub fn new(builtin_providers: Vec<InferenceProviderDescriptor>) -> Self {
         Self { builtin_providers }
     }
 
@@ -318,7 +326,7 @@ impl InferenceProviderRegistry {
                 capability_filter(descriptor.selection.capabilities())
                     && dynamic_matches(descriptor)
             })
-            .map(|descriptor| descriptor.selection)
+            .map(|descriptor| descriptor.selection.clone())
         {
             return selection;
         }
@@ -329,7 +337,7 @@ impl InferenceProviderRegistry {
                 capability_filter(descriptor.selection.capabilities())
                     && builtin_matches(descriptor)
             })
-            .map(|descriptor| descriptor.selection)
+            .map(|descriptor| descriptor.selection.clone())
             .expect(empty_message)
     }
 
@@ -348,7 +356,7 @@ impl InferenceProviderRegistry {
                 descriptor.selection.provider_id() == preferred_provider_id
                     && capability_filter(descriptor.selection.capabilities())
             })
-            .map(|descriptor| descriptor.selection)
+            .map(|descriptor| descriptor.selection.clone())
         {
             return Some(selection);
         }
@@ -359,7 +367,7 @@ impl InferenceProviderRegistry {
                 descriptor.selection.provider_id() == preferred_provider_id
                     && capability_filter(descriptor.selection.capabilities())
             })
-            .map(|descriptor| descriptor.selection)
+            .map(|descriptor| descriptor.selection.clone())
     }
 
     pub fn select_local_endpoint_provider(
@@ -403,10 +411,6 @@ impl InferenceProviderRegistry {
 }
 
 pub trait InferenceProvider: Send + Sync {
-    fn backend_label(&self) -> &'static str;
-
-    fn capabilities(&self) -> InferenceProviderCapabilities;
-
     fn start_endpoint<'a>(
         &'a self,
         bin_dir: &'a Path,
@@ -431,19 +435,6 @@ pub trait InferenceProvider: Send + Sync {
 pub struct BuiltinLlamaProvider;
 
 impl InferenceProvider for BuiltinLlamaProvider {
-    fn backend_label(&self) -> &'static str {
-        "llama"
-    }
-
-    fn capabilities(&self) -> InferenceProviderCapabilities {
-        InferenceProviderCapabilities {
-            supports_local_runtime: true,
-            supports_distributed_host_runtime: true,
-            requires_worker_runtime: true,
-            supports_moe_shard_runtime: true,
-        }
-    }
-
     fn start_endpoint<'a>(
         &'a self,
         bin_dir: &'a Path,
@@ -467,18 +458,6 @@ impl InferenceProvider for BuiltinLlamaProvider {
     }
 }
 
-static BUILTIN_LLAMA_PROVIDER: BuiltinLlamaProvider = BuiltinLlamaProvider;
-static BUILTIN_LLAMA_SELECTION: InferenceProviderSelection =
-    InferenceProviderSelection::new("builtin.llama", &BUILTIN_LLAMA_PROVIDER);
-static BUILTIN_LLAMA_DESCRIPTOR: InferenceProviderDescriptor = InferenceProviderDescriptor::new(
-    BUILTIN_LLAMA_SELECTION,
-    always_match_local_endpoint,
-    always_match_distributed_endpoint,
-    always_match_worker_runtime,
-);
-static BUILTIN_PROVIDER_REGISTRY: InferenceProviderRegistry =
-    InferenceProviderRegistry::new(&[BUILTIN_LLAMA_DESCRIPTOR]);
-
 const fn always_match_local_endpoint(_request: &InferenceEndpointRequest) -> bool {
     true
 }
@@ -491,8 +470,75 @@ const fn always_match_worker_runtime(_request: &InferenceWorkerRequest) -> bool 
     true
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Debug)]
+pub struct PluginInferenceProviderRegistration {
+    provider_id: String,
+    backend_label: String,
+    capabilities: InferenceProviderCapabilities,
+}
+
+impl PluginInferenceProviderRegistration {
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn new(
+        provider_id: impl Into<String>,
+        backend_label: impl Into<String>,
+        capabilities: InferenceProviderCapabilities,
+    ) -> Self {
+        Self {
+            provider_id: provider_id.into(),
+            backend_label: backend_label.into(),
+            capabilities,
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn into_descriptor(
+        self,
+        provider: Arc<dyn InferenceProvider>,
+    ) -> InferenceProviderDescriptor {
+        InferenceProviderDescriptor::new(
+            InferenceProviderSelection::new(
+                self.provider_id,
+                self.backend_label,
+                self.capabilities,
+                provider,
+            ),
+            never_match_local_endpoint,
+            never_match_distributed_endpoint,
+            never_match_worker_runtime,
+        )
+    }
+}
+
+fn builtin_llama_selection() -> InferenceProviderSelection {
+    InferenceProviderSelection::new(
+        "builtin.llama",
+        "llama",
+        InferenceProviderCapabilities {
+            supports_local_runtime: true,
+            supports_distributed_host_runtime: true,
+            requires_worker_runtime: true,
+            supports_moe_shard_runtime: true,
+        },
+        Arc::new(BuiltinLlamaProvider),
+    )
+}
+
+fn builtin_provider_registry() -> &'static InferenceProviderRegistry {
+    static BUILTIN_PROVIDER_REGISTRY: OnceLock<InferenceProviderRegistry> = OnceLock::new();
+    BUILTIN_PROVIDER_REGISTRY.get_or_init(|| {
+        InferenceProviderRegistry::new(vec![InferenceProviderDescriptor::new(
+            builtin_llama_selection(),
+            always_match_local_endpoint,
+            always_match_distributed_endpoint,
+            always_match_worker_runtime,
+        )])
+    })
+}
+
 pub fn provider_registry() -> &'static InferenceProviderRegistry {
-    &BUILTIN_PROVIDER_REGISTRY
+    builtin_provider_registry()
 }
 
 fn registered_provider_descriptors() -> &'static RwLock<Vec<InferenceProviderDescriptor>> {
@@ -504,6 +550,29 @@ fn registered_provider_descriptors() -> &'static RwLock<Vec<InferenceProviderDes
 #[cfg_attr(not(test), allow(dead_code))]
 pub fn register_provider(descriptor: InferenceProviderDescriptor) {
     provider_registry().register_provider(descriptor);
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn register_plugin_provider(
+    registration: PluginInferenceProviderRegistration,
+    provider: Arc<dyn InferenceProvider>,
+) {
+    register_provider(registration.into_descriptor(provider));
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+const fn never_match_local_endpoint(_request: &InferenceEndpointRequest) -> bool {
+    false
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+const fn never_match_distributed_endpoint(_request: &InferenceEndpointRequest) -> bool {
+    false
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+const fn never_match_worker_runtime(_request: &InferenceWorkerRequest) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -541,9 +610,11 @@ pub fn primary_backend_label_for_model(
     model_path: &Path,
     model_bytes: u64,
     local_vram_bytes: u64,
-) -> &'static str {
+) -> String {
     let request = InferenceEndpointRequest::local(model_path, 0, model_bytes, local_vram_bytes);
-    select_local_endpoint_provider(&request).backend_label()
+    select_local_endpoint_provider(&request)
+        .backend_label()
+        .to_string()
 }
 
 /// Start a distributed-host endpoint through the selected inference provider.
@@ -766,19 +837,6 @@ mod tests {
     struct TestLocalProvider;
 
     impl InferenceProvider for TestLocalProvider {
-        fn backend_label(&self) -> &'static str {
-            "test-local"
-        }
-
-        fn capabilities(&self) -> InferenceProviderCapabilities {
-            InferenceProviderCapabilities {
-                supports_local_runtime: true,
-                supports_distributed_host_runtime: false,
-                requires_worker_runtime: false,
-                supports_moe_shard_runtime: false,
-            }
-        }
-
         fn start_endpoint<'a>(
             &'a self,
             _bin_dir: &'a Path,
@@ -798,16 +856,6 @@ mod tests {
         }
     }
 
-    static TEST_LOCAL_PROVIDER: TestLocalProvider = TestLocalProvider;
-    static TEST_LOCAL_SELECTION: InferenceProviderSelection =
-        InferenceProviderSelection::new("test.local", &TEST_LOCAL_PROVIDER);
-    static TEST_LOCAL_DESCRIPTOR: InferenceProviderDescriptor = InferenceProviderDescriptor::new(
-        TEST_LOCAL_SELECTION,
-        always_match_local_endpoint,
-        never_match_distributed_endpoint_for_tests,
-        never_match_worker_runtime_for_tests,
-    );
-
     const fn never_match_distributed_endpoint_for_tests(
         _request: &InferenceEndpointRequest,
     ) -> bool {
@@ -823,13 +871,32 @@ mod tests {
         TEST_LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    fn test_local_descriptor() -> InferenceProviderDescriptor {
+        InferenceProviderDescriptor::new(
+            InferenceProviderSelection::new(
+                "test.local",
+                "test-local",
+                InferenceProviderCapabilities {
+                    supports_local_runtime: true,
+                    supports_distributed_host_runtime: false,
+                    requires_worker_runtime: false,
+                    supports_moe_shard_runtime: false,
+                },
+                Arc::new(TestLocalProvider),
+            ),
+            always_match_local_endpoint,
+            never_match_distributed_endpoint_for_tests,
+            never_match_worker_runtime_for_tests,
+        )
+    }
+
     #[test]
     fn registered_provider_takes_precedence_over_builtin_for_matching_local_runtime() {
         let _guard = provider_registry_test_lock()
             .lock()
             .expect("provider registry test lock poisoned");
         clear_registered_providers_for_tests();
-        register_provider(TEST_LOCAL_DESCRIPTOR);
+        register_provider(test_local_descriptor());
 
         let request = InferenceEndpointRequest::local("/tmp/model.gguf", 8080, 1, 1);
         let selection = select_local_endpoint_provider(&request);
@@ -846,7 +913,7 @@ mod tests {
             .lock()
             .expect("provider registry test lock poisoned");
         clear_registered_providers_for_tests();
-        register_provider(TEST_LOCAL_DESCRIPTOR);
+        register_provider(test_local_descriptor());
 
         let request = InferenceEndpointRequest::local("/tmp/model.gguf", 8080, 1, 1)
             .with_preferred_provider_id(Some("test.local"));
@@ -854,6 +921,44 @@ mod tests {
 
         assert_eq!(selection.provider_id(), "test.local");
         assert_eq!(selection.backend_label(), "test-local");
+
+        clear_registered_providers_for_tests();
+    }
+
+    #[test]
+    fn plugin_registration_creates_preferred_only_provider_descriptor() {
+        let _guard = provider_registry_test_lock()
+            .lock()
+            .expect("provider registry test lock poisoned");
+        clear_registered_providers_for_tests();
+        register_plugin_provider(
+            PluginInferenceProviderRegistration::new(
+                "plugin.notes",
+                "plugin-notes",
+                InferenceProviderCapabilities {
+                    supports_local_runtime: true,
+                    supports_distributed_host_runtime: false,
+                    requires_worker_runtime: false,
+                    supports_moe_shard_runtime: false,
+                },
+            ),
+            Arc::new(TestLocalProvider),
+        );
+
+        let default_selection = select_local_endpoint_provider(&InferenceEndpointRequest::local(
+            "/tmp/model.gguf",
+            8080,
+            1,
+            1,
+        ));
+        assert_eq!(default_selection.provider_id(), "builtin.llama");
+
+        let explicit_selection = select_local_endpoint_provider(
+            &InferenceEndpointRequest::local("/tmp/model.gguf", 8080, 1, 1)
+                .with_preferred_provider_id(Some("plugin.notes")),
+        );
+        assert_eq!(explicit_selection.provider_id(), "plugin.notes");
+        assert_eq!(explicit_selection.backend_label(), "plugin-notes");
 
         clear_registered_providers_for_tests();
     }
