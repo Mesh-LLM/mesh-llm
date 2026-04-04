@@ -5,6 +5,7 @@
 //! Every mesh change: kill llama-server, re-elect, winner starts fresh.
 //! mesh-llm owns :api_port and proxies to the right host by model name.
 
+use crate::inference::provider;
 use crate::inference::{launch, moe};
 use crate::mesh;
 use crate::models;
@@ -1186,7 +1187,7 @@ pub async fn election_loop(
     let mut last_worker_set: Vec<iroh::EndpointId> = vec![];
     let mut currently_host = false;
     let mut current_local_port: Option<u16> = None;
-    let mut llama_process: Option<launch::InferenceServerProcess> = None;
+    let mut llama_process: Option<provider::InferenceServerProcess> = None;
 
     // Initial settle
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1626,7 +1627,7 @@ async fn moe_election_loop(
     let mut peer_rx = node.peer_change_rx.clone();
     let mut currently_running = false;
     let mut last_plan: Option<MoePlacementPlan> = None;
-    let mut llama_process: Option<launch::InferenceServerProcess> = None;
+    let mut llama_process: Option<provider::InferenceServerProcess> = None;
     let mut current_local_port: Option<u16> = None;
     let mut last_plan_change_at = tokio::time::Instant::now();
 
@@ -2284,7 +2285,7 @@ async fn start_llama(
     force_split: bool,
     binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
-) -> Option<(u16, launch::InferenceServerProcess)> {
+) -> Option<(u16, provider::InferenceServerProcess)> {
     let my_vram = node.vram_bytes();
     let model_bytes = total_model_bytes(model);
     let min_vram = (model_bytes as f64 * 1.1) as u64;
