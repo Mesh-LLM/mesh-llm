@@ -3,6 +3,37 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[cfg(target_os = "macos")]
+fn builtin_mlx_model_path(path: &Path) -> bool {
+    crate::mlx::is_mlx_model_dir(path)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn builtin_mlx_model_path(_path: &Path) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn builtin_mlx_model_name(path: &Path) -> String {
+    if let Some(dir) = crate::mlx::mlx_model_dir(path) {
+        if let Some(identity) =
+            crate::models::huggingface_identity_for_path(&dir.join("config.json"))
+        {
+            if let Some(name) = identity.repo_id.rsplit('/').next() {
+                return name.to_string();
+            }
+        }
+        if let Some(name) = dir.file_name().and_then(|value| value.to_str()) {
+            return name.to_string();
+        }
+    }
+
+    path.file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Backend-neutral runtime handle for a serving instance.
 ///
 /// This sits above any concrete backend implementation:
@@ -197,19 +228,53 @@ impl BuiltinLlamaProvider {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct BuiltinMlxProvider;
+
+impl BuiltinMlxProvider {
+    pub async fn start_endpoint(
+        self,
+        _bin_dir: &Path,
+        _binary_flavor: Option<crate::inference::launch::BinaryFlavor>,
+        request: &InferenceEndpointRequest,
+    ) -> Result<InferenceServerProcess> {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(model_dir) = crate::mlx::mlx_model_dir(request.model_path.as_path()) else {
+                anyhow::bail!(
+                    "MLX provider expected a normalized MLX model path, got {}",
+                    request.model_path.display()
+                );
+            };
+            let model_name = builtin_mlx_model_name(request.model_path.as_path());
+            return crate::mlx::start_mlx_server(model_dir, model_name, request.listen_port).await;
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = request;
+            anyhow::bail!("MLX provider is only available on macOS");
+        }
+    }
+}
+
 /// Named backend selection seam for built-in inference providers.
 ///
-/// Today this only resolves to the llama.cpp path on this branch, but the
-/// call sites no longer need to know which concrete provider they are using.
+/// Call sites do not need to know which concrete built-in provider they are
+/// using. This branch wires both llama.cpp and MLX through the same seam.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinProviderKind {
     Llama,
+    #[cfg(target_os = "macos")]
+    Mlx,
 }
 
 impl BuiltinProviderKind {
     pub fn backend_label(self) -> &'static str {
         match self {
             BuiltinProviderKind::Llama => "llama",
+            #[cfg(target_os = "macos")]
+            BuiltinProviderKind::Mlx => "mlx",
         }
     }
 
@@ -222,6 +287,12 @@ impl BuiltinProviderKind {
         match self {
             BuiltinProviderKind::Llama => {
                 BuiltinLlamaProvider
+                    .start_endpoint(bin_dir, binary_flavor, request)
+                    .await
+            }
+            #[cfg(target_os = "macos")]
+            BuiltinProviderKind::Mlx => {
+                BuiltinMlxProvider
                     .start_endpoint(bin_dir, binary_flavor, request)
                     .await
             }
@@ -240,11 +311,21 @@ impl BuiltinProviderKind {
                     .start_worker(bin_dir, binary_flavor, request)
                     .await
             }
+            #[cfg(target_os = "macos")]
+            BuiltinProviderKind::Mlx => {
+                let _ = (bin_dir, binary_flavor, request);
+                anyhow::bail!("MLX does not use a worker helper runtime")
+            }
         }
     }
 }
 
-pub fn select_local_endpoint_provider(_request: &InferenceEndpointRequest) -> BuiltinProviderKind {
+pub fn select_local_endpoint_provider(request: &InferenceEndpointRequest) -> BuiltinProviderKind {
+    #[cfg(target_os = "macos")]
+    if builtin_mlx_model_path(request.model_path.as_path()) {
+        return BuiltinProviderKind::Mlx;
+    }
+
     BuiltinProviderKind::Llama
 }
 
@@ -256,4 +337,8 @@ pub fn select_distributed_endpoint_provider(
 
 pub fn select_worker_provider(_request: &InferenceWorkerRequest) -> BuiltinProviderKind {
     BuiltinProviderKind::Llama
+}
+
+pub fn provider_requires_worker_runtime(model_path: &Path) -> bool {
+    !builtin_mlx_model_path(model_path)
 }

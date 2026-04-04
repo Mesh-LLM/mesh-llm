@@ -188,38 +188,19 @@ pub(super) async fn start_runtime_local_model(
 
     let port = alloc_local_port().await?;
     let mmproj_path = mmproj_path_for_model(&model_name);
-    #[cfg(target_os = "macos")]
-    let mlx_process = if crate::mlx::is_mlx_model_dir(model_path) {
-        let dir = crate::mlx::mlx_model_dir(model_path)
-            .expect("mlx path should normalize after compatibility check");
-        Some(crate::mlx::start_mlx_server(dir, model_name.clone(), port).await?)
-    } else {
-        None
-    };
-    #[cfg(not(target_os = "macos"))]
-    let mlx_process: Option<provider::InferenceServerProcess> = None;
-
-    let (backend, process) = if let Some(process) = mlx_process {
-        ("mlx", process)
-    } else {
-        let request =
-            provider::InferenceEndpointRequest::local(model_path, port, model_bytes, my_vram)
-                .with_mmproj_path(mmproj_path.as_deref())
-                .with_ctx_size_override(ctx_size_override);
-        let selected_provider = provider::select_local_endpoint_provider(&request);
-        (
-            selected_provider.backend_label(),
-            selected_provider
-                .start_endpoint(bin_dir, binary_flavor, &request)
-                .await?,
-        )
-    };
+    let request = provider::InferenceEndpointRequest::local(model_path, port, model_bytes, my_vram)
+        .with_mmproj_path(mmproj_path.as_deref())
+        .with_ctx_size_override(ctx_size_override);
+    let selected_provider = provider::select_local_endpoint_provider(&request);
+    let process = selected_provider
+        .start_endpoint(bin_dir, binary_flavor, &request)
+        .await?;
 
     Ok((
         model_name,
         LocalRuntimeModelHandle {
             port,
-            backend: backend.into(),
+            backend: selected_provider.backend_label().into(),
             process: process.handle,
             context_length: process.context_length,
         },

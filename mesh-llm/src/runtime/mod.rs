@@ -1162,28 +1162,28 @@ async fn run_auto(
     // Clean up stale processes from previous runs
     launch::kill_orphan_rpc_servers().await;
 
-    #[cfg(target_os = "macos")]
-    let is_mlx = crate::mlx::is_mlx_model_dir(&model);
-    #[cfg(not(target_os = "macos"))]
-    let is_mlx = false;
-
-    let rpc_port: Option<u16> = if is_mlx {
-        tracing::info!("MLX model detected — skipping rpc-server");
-        None
-    } else {
-        let worker_request = crate::inference::provider::InferenceWorkerRequest::default()
-            .with_device_hint(cli.device.as_deref())
-            .with_model_path(Some(&model));
-        let worker_provider = crate::inference::provider::select_worker_provider(&worker_request);
-        let port = worker_provider
-            .start_worker(&bin_dir, cli.llama_flavor, &worker_request)
-            .await?;
-        tracing::info!(
-            "{} worker runtime on 127.0.0.1:{port} serving {model_name}",
-            worker_provider.backend_label()
-        );
-        Some(port)
-    };
+    let rpc_port: Option<u16> =
+        if !crate::inference::provider::provider_requires_worker_runtime(&model) {
+            tracing::info!(
+                "provider does not require a worker runtime for {}",
+                model_name
+            );
+            None
+        } else {
+            let worker_request = crate::inference::provider::InferenceWorkerRequest::default()
+                .with_device_hint(cli.device.as_deref())
+                .with_model_path(Some(&model));
+            let worker_provider =
+                crate::inference::provider::select_worker_provider(&worker_request);
+            let port = worker_provider
+                .start_worker(&bin_dir, cli.llama_flavor, &worker_request)
+                .await?;
+            tracing::info!(
+                "{} worker runtime on 127.0.0.1:{port} serving {model_name}",
+                worker_provider.backend_label()
+            );
+            Some(port)
+        };
 
     let tunnel_mgr = tunnel::Manager::start(
         node.clone(),

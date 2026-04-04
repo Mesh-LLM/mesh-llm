@@ -1080,32 +1080,47 @@ async fn start_llama(
     binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
 ) -> Option<(u16, provider::InferenceServerProcess)> {
-    // ── MLX native backend: if model normalizes to a safetensors directory, run in-process ──
+    let my_vram = node.vram_bytes();
+    let model_bytes = total_model_bytes(model);
     #[cfg(target_os = "macos")]
-    if let Some(dir) = crate::mlx::mlx_model_dir(model) {
-        if crate::mlx::is_mlx_model_dir(dir) {
-            let llama_port = match find_free_port().await {
+    {
+        let direct_request =
+            provider::InferenceEndpointRequest::local(model, 0, model_bytes, my_vram)
+                .with_ctx_size_override(ctx_size_override);
+        let local_provider = provider::select_local_endpoint_provider(&direct_request);
+        if matches!(local_provider, provider::BuiltinProviderKind::Mlx) {
+            let listen_port = match find_free_port().await {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("  Failed to find free port: {e}");
                     return None;
                 }
             };
-            eprintln!("🍎 MLX native backend: loading {model_name}...");
-            match crate::mlx::start_mlx_server(dir, model_name.to_string(), llama_port).await {
+            let request =
+                provider::InferenceEndpointRequest::local(model, listen_port, model_bytes, my_vram)
+                    .with_ctx_size_override(ctx_size_override);
+            eprintln!(
+                "🍎 {} native backend: loading {model_name}...",
+                local_provider.backend_label()
+            );
+            match local_provider
+                .start_endpoint(bin_dir, binary_flavor, &request)
+                .await
+            {
                 Ok(process) => {
-                    eprintln!("✅ MLX server ready on port {llama_port}");
-                    return Some((llama_port, process));
+                    eprintln!(
+                        "✅ {} server ready on port {listen_port}",
+                        local_provider.backend_label()
+                    );
+                    return Some((listen_port, process));
                 }
                 Err(e) => {
-                    eprintln!("  ❌ MLX server failed: {e}");
+                    eprintln!("  ❌ {} server failed: {e}", local_provider.backend_label());
                     return None;
                 }
             }
         }
     }
-    let my_vram = node.vram_bytes();
-    let model_bytes = total_model_bytes(model);
     let min_vram = (model_bytes as f64 * 1.1) as u64;
 
     // Decide whether to split: only if model doesn't fit on host alone, or --split forced
