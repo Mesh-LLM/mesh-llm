@@ -174,6 +174,7 @@ The following no-behavior-change groundwork is already in place on this branch:
 - worker helper launch sites now build `InferenceWorkerRequest`
 - a built-in `BuiltinLlamaProvider` adapter now owns the call from core into llama launch code
 - provider selection now goes through a named built-in provider seam instead of hard-coding llama at the orchestration call sites
+- the provider contract now advertises explicit capabilities so orchestration can ask what a backend supports instead of inferring it indirectly
 
 ## Sync Branches
 

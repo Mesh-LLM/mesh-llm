@@ -174,8 +174,18 @@ impl InferenceWorkerRequest {
 
 type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct InferenceProviderCapabilities {
+    pub supports_local_runtime: bool,
+    pub supports_distributed_host_runtime: bool,
+    pub requires_worker_runtime: bool,
+    pub supports_moe_shard_runtime: bool,
+}
+
 pub trait InferenceProvider: Send + Sync {
     fn backend_label(&self) -> &'static str;
+
+    fn capabilities(&self) -> InferenceProviderCapabilities;
 
     fn start_endpoint<'a>(
         &'a self,
@@ -203,6 +213,15 @@ pub struct BuiltinLlamaProvider;
 impl InferenceProvider for BuiltinLlamaProvider {
     fn backend_label(&self) -> &'static str {
         "llama"
+    }
+
+    fn capabilities(&self) -> InferenceProviderCapabilities {
+        InferenceProviderCapabilities {
+            supports_local_runtime: true,
+            supports_distributed_host_runtime: true,
+            requires_worker_runtime: true,
+            supports_moe_shard_runtime: true,
+        }
     }
 
     fn start_endpoint<'a>(
@@ -244,6 +263,15 @@ pub fn select_distributed_endpoint_provider(
 
 pub fn select_worker_provider(_request: &InferenceWorkerRequest) -> &'static dyn InferenceProvider {
     &BUILTIN_LLAMA_PROVIDER
+}
+
+pub fn primary_backend_label_for_model(
+    model_path: &Path,
+    model_bytes: u64,
+    local_vram_bytes: u64,
+) -> &'static str {
+    let request = InferenceEndpointRequest::local(model_path, 0, model_bytes, local_vram_bytes);
+    select_local_endpoint_provider(&request).backend_label()
 }
 
 /// Start a distributed-host endpoint through the selected inference provider.
@@ -421,6 +449,17 @@ pub async fn start_distributed_host(
     .with_ctx_size_override(ctx_size_override)
     .with_total_group_vram_bytes(group_vram);
     let selected_provider = select_distributed_endpoint_provider(&request);
+    if !selected_provider
+        .capabilities()
+        .supports_distributed_host_runtime
+    {
+        eprintln!(
+            "  {} does not support distributed host runtime for {}",
+            selected_provider.backend_label(),
+            model_name
+        );
+        return None;
+    }
     match selected_provider
         .start_endpoint(bin_dir, binary_flavor, &request)
         .await

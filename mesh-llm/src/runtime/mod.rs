@@ -11,8 +11,8 @@ use self::local::{
 };
 use self::proxy::{api_proxy, bootstrap_proxy};
 use crate::api;
-use crate::cli::Cli;
-use crate::inference::{election, launch, moe};
+use crate::cli::{Cli, Command};
+use crate::inference::{election, launch, moe, provider};
 use crate::mesh;
 use crate::mesh::NodeRole;
 use crate::models;
@@ -1065,10 +1065,10 @@ async fn run_auto(
     launch::kill_orphan_rpc_servers().await;
 
     // Start rpc-server
-    let worker_request = crate::inference::provider::InferenceWorkerRequest::default()
+    let worker_request = provider::InferenceWorkerRequest::default()
         .with_device_hint(cli.device.as_deref())
         .with_model_path(Some(&model));
-    let worker_provider = crate::inference::provider::select_worker_provider(&worker_request);
+    let worker_provider = provider::select_worker_provider(&worker_request);
     let rpc_port = worker_provider
         .start_worker(&bin_dir, cli.llama_flavor, &worker_request)
         .await?;
@@ -1132,7 +1132,12 @@ async fn run_auto(
             plugin_manager.clone(),
             affinity_router.clone(),
         );
-        cs.set_primary_backend("llama".into()).await;
+        let primary_backend = provider::primary_backend_label_for_model(
+            &model,
+            election::total_model_bytes(&model),
+            node.vram_bytes(),
+        );
+        cs.set_primary_backend(primary_backend.into()).await;
         cs.set_runtime_control(control_tx.clone()).await;
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
         cs.set_nostr_discovery(cli.nostr_discovery).await;
