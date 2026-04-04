@@ -160,7 +160,7 @@ Move toward provider ownership for:
 
 The next concrete tasks are:
 
-1. Replace remaining direct backend-launch assumptions with a named provider selection seam.
+1. Teach the provider registry seam to admit non-built-in providers.
 2. Add a built-in MLX provider adapter on the same endpoint-provider contract.
 3. Start separating distributed worker launch from llama-specific orchestration details.
 4. Mirror neutral contract refactors onto the sync branches as they land.
@@ -176,6 +176,7 @@ The following no-behavior-change groundwork is already in place on this branch:
 - provider selection now goes through a named built-in provider seam instead of hard-coding llama at the orchestration call sites
 - this MLX sync branch now also has a built-in `BuiltinMlxProvider` for local endpoint startup
 - provider selection now returns an explicit selection object with provider id, label, and capabilities rather than a bare runtime handle
+- provider lookup now goes through a small registry-shaped seam rather than direct selector logic, so plugin-backed providers can slot in later without another call-site rewrite
 - the provider contract now advertises explicit capabilities so orchestration can ask what a backend supports instead of inferring it indirectly
 - worker-runtime startup is now gated by provider capabilities instead of being assumed unconditionally in the shared runtime path
 
