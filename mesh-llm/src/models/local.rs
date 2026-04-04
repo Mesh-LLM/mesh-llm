@@ -307,7 +307,7 @@ fn push_installed_model_entry(
         return;
     }
 
-    if path.is_dir() && crate::mlx::is_mlx_model_dir(path) {
+    if path.is_dir() && snapshot_is_mlx_model_dir(path) {
         let size = dir_size_bytes(path);
         if size <= min_size_bytes {
             return;

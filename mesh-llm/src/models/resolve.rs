@@ -406,7 +406,7 @@ fn matching_catalog_primary_for_url(url: &str) -> Option<&'static catalog::Catal
 }
 
 #[cfg(test)]
-mod tests {
+mod repo_artifact_tests {
     use super::*;
 
     #[test]
