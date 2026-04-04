@@ -22,6 +22,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import {
+  ArrowLeft,
   Bot,
   Braces,
   ChevronDown,
@@ -120,6 +121,20 @@ import {
 import { BrandIcon } from "./components/brand-icon";
 import { MeshLlmWordmark } from "./components/mesh-llm-wordmark";
 import { cn } from "./lib/utils";
+import {
+  TOPOLOGY_LAYOUT_OPTIONS,
+  TOPOLOGY_LAYOUTS,
+  isTopologyLayoutMode,
+} from "./topology/layouts";
+import { TOPOLOGY_NODE_WIDTH } from "./topology/layouts/constants";
+import { estimateTopologyNodeHeight } from "./topology/layouts/elk";
+import type {
+  BucketedTopologyNode,
+  PositionedTopologyNode,
+  TopologyLayoutMode,
+  TopologyNode,
+  TopologyNodeInfo,
+} from "./topology/layouts/types";
 import githubBlackLogo from "./assets/icons/github-invertocat-black.svg";
 import githubWhiteLogo from "./assets/icons/github-invertocat-white.svg";
 
@@ -170,6 +185,35 @@ type ActivePeerRow = {
   latencyLabel: string;
   vramLabel: string;
   shareLabel: string;
+};
+
+type DetailPanelEntry =
+  | { kind: "node"; nodeId: string }
+  | { kind: "model"; modelName: string };
+
+type NodeSidebarRecord = {
+  id: string;
+  title: string;
+  hostname?: string;
+  self: boolean;
+  role: string;
+  statusLabel: string;
+  latencyLabel: string;
+  vramGb: number;
+  vramSharePct: number | null;
+  isSoc?: boolean;
+  gpus: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  hostedModels: string[];
+  hotModels: string[];
+  servingModels: string[];
+  requestedModels: string[];
+  availableModels: string[];
+  version?: string;
+  latestVersion?: string | null;
+  llamaReady?: boolean;
+  apiPort?: number;
+  inflightRequests?: number;
+  privacyLimited: boolean;
 };
 
 function modelDisplayName(model?: MeshModel | null) {
@@ -286,21 +330,6 @@ type AppRoute = {
   chatId: string | null;
 };
 
-type TopologyNode = {
-  id: string;
-  vram: number;
-  self: boolean;
-  host: boolean;
-  client: boolean;
-  serving: string;
-  servingModels: string[];
-  statusLabel: string;
-  latencyMs?: number | null;
-  hostname?: string;
-  isSoc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
-};
-
 type ThemeMode = "auto" | "light" | "dark";
 
 const THEME_STORAGE_KEY = "mesh-llm-theme";
@@ -334,7 +363,7 @@ function localRoutableModels(status: StatusPayload | null): string[] {
 }
 
 function peerPrimaryModel(peer: Peer): string {
-  return peerRoutableModels(peer)[0] ?? peerAssignedModels(peer)[0] ?? '';
+  return peerRoutableModels(peer)[0] ?? peerAssignedModels(peer)[0] ?? "";
 }
 
 function peerStatusLabel(peer: Peer): string {
@@ -345,6 +374,47 @@ function peerStatusLabel(peer: Peer): string {
     return "Assigned";
   if (peer.role === "Host") return "Host";
   return "Idle";
+}
+
+function topologyNodeRole(node: Pick<TopologyNode, "client" | "host" | "serving">): string {
+  if (node.client) return "Client";
+  if (node.host) return "Host";
+  if (node.serving && node.serving !== "(idle)") return "Worker";
+  return "Idle";
+}
+
+function nodeRoleTone(role: string): "good" | "info" | "neutral" {
+  if (role === "Host") return "good";
+  if (role === "Worker" || role === "Client") return "info";
+  return "neutral";
+}
+
+function uniqueModels(...groups: Array<string[] | undefined>): string[] {
+  return [
+    ...new Set(
+      groups
+        .flatMap((group) => group ?? [])
+        .filter((model) => !!model && model !== "(idle)"),
+    ),
+  ];
+}
+
+function formatGpuMemory(bytes?: number | null) {
+  if (!bytes || !Number.isFinite(bytes)) return "Unknown";
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(0)} GB`;
+}
+
+function trimGpuVendor(name: string) {
+  return name
+    .replace(/^NVIDIA GeForce\s+/i, "")
+    .replace(/^NVIDIA Quadro\s+/i, "")
+    .replace(/^NVIDIA\s+/i, "")
+    .replace(/^AMD Radeon\s+/i, "")
+    .replace(/^AMD\s+/i, "")
+    .replace(/^Intel Arc\s+/i, "")
+    .replace(/^Intel\s+/i, "")
+    .replace(/^Apple\s+/i, "")
+    .trim();
 }
 
 function sectionFromPathname(pathname: string): TopSection | null {
@@ -652,7 +722,9 @@ export function App() {
   );
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
   const [status, setStatus] = useState<StatusPayload | null>(null);
-  const [modelsPayload, setModelsPayload] = useState<ModelsPayload | null>(null);
+  const [modelsPayload, setModelsPayload] = useState<ModelsPayload | null>(
+    null,
+  );
   const [modelsLoading, setModelsLoading] = useState(false);
   const [chatState, setChatState] = useState<ChatState>(() =>
     createInitialChatState(),
@@ -678,6 +750,7 @@ export function App() {
     [conversations, activeConversationId],
   );
   const messages = activeConversation?.messages ?? [];
+  const lastMessageId = messages[messages.length - 1]?.id ?? "";
   const meshModels = modelsPayload?.mesh_models ?? [];
 
   const warmModels = useMemo(() => {
@@ -702,9 +775,9 @@ export function App() {
       if (model && model !== "(idle)") addServingNode(model, status.my_vram_gb);
     }
     for (const peer of status.peers ?? []) {
-      if (peer.role === 'Client') continue;
+      if (peer.role === "Client") continue;
       for (const model of new Set(peerRoutableModels(peer))) {
-        if (model && model !== '(idle)') addServingNode(model, peer.vram_gb);
+        if (model && model !== "(idle)") addServingNode(model, peer.vram_gb);
       }
     }
 
@@ -730,9 +803,7 @@ export function App() {
     return meshModels.some((m) => m.status === "warm" && m.vision);
   }, [meshModels, selectedModel, visionModels]);
   const meshModelByName = useMemo(() => {
-    const entries = meshModels.map(
-      (model) => [model.name, model] as const,
-    );
+    const entries = meshModels.map((model) => [model.name, model] as const);
     return Object.fromEntries(entries) as Record<string, MeshModel>;
   }, [meshModels]);
   const selectedModelStat = selectedChatModel
@@ -1028,8 +1099,9 @@ export function App() {
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el) return;
+    if (!activeConversationId && !lastMessageId && !isSending) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, isSending, activeConversationId]);
+  }, [activeConversationId, isSending, lastMessageId]);
 
   useEffect(() => () => currentAbortRef.current?.abort(), []);
 
@@ -1446,13 +1518,18 @@ export function App() {
         self: true,
         host: status.is_host,
         client: status.is_client,
-        serving: status.model_name || '',
-        servingModels: (status.hosted_models && status.hosted_models.length > 0)
-          ? status.hosted_models
-          : (status.serving_models && status.serving_models.length > 0)
-            ? status.serving_models
-          : (status.model_name ? [status.model_name] : []),
-        statusLabel: status.node_status || (status.is_client ? 'Client' : status.is_host ? 'Host' : 'Idle'),
+        serving: status.model_name || "",
+        servingModels:
+          status.hosted_models && status.hosted_models.length > 0
+            ? status.hosted_models
+            : status.serving_models && status.serving_models.length > 0
+              ? status.serving_models
+              : status.model_name
+                ? [status.model_name]
+                : [],
+        statusLabel:
+          status.node_status ||
+          (status.is_client ? "Client" : status.is_host ? "Host" : "Idle"),
         latencyMs: null,
         hostname: status.my_hostname,
         isSoc: status.my_is_soc,
@@ -1460,13 +1537,16 @@ export function App() {
       });
     }
     for (const p of status.peers ?? []) {
-      const pModels = peerRoutableModels(p).length > 0 ? peerRoutableModels(p) : peerAssignedModels(p);
+      const pModels =
+        peerRoutableModels(p).length > 0
+          ? peerRoutableModels(p)
+          : peerAssignedModels(p);
       nodes.push({
         id: p.id,
         vram: overviewVramGb(p.role === "Client", p.vram_gb),
         self: false,
         host: /^Host/.test(p.role),
-        client: p.role === 'Client',
+        client: p.role === "Client",
         serving: peerPrimaryModel(p),
         servingModels: pModels,
         statusLabel: peerStatusLabel(p),
@@ -1502,136 +1582,137 @@ export function App() {
     <TooltipProvider>
       <div className="h-screen overflow-hidden bg-background [height:100svh] [padding-top:env(safe-area-inset-top)] [padding-bottom:env(safe-area-inset-bottom)]">
         <div className="flex h-full min-h-0 flex-col">
-        <AppHeader
-          sections={sections}
-          section={section}
-          setSection={navigateToSection}
-          themeMode={themeMode}
-          setThemeMode={setThemeMode}
-          statusError={statusError}
-          inviteWithModelCommand={inviteWithModelCommand}
-          inviteWithModelName={inviteWithModelName}
-          inviteClientCommand={inviteClientCommand}
-          inviteToken={inviteToken}
-          apiDirectUrl={apiDirectUrl}
-          isPublicMesh={status?.nostr_discovery ?? false}
-        />
+          <AppHeader
+            sections={sections}
+            section={section}
+            setSection={navigateToSection}
+            themeMode={themeMode}
+            setThemeMode={setThemeMode}
+            statusError={statusError}
+            inviteWithModelCommand={inviteWithModelCommand}
+            inviteWithModelName={inviteWithModelName}
+            inviteClientCommand={inviteClientCommand}
+            inviteToken={inviteToken}
+            apiDirectUrl={apiDirectUrl}
+            isPublicMesh={status?.nostr_discovery ?? false}
+          />
 
-        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {section === "chat" ? (
-            <div className="mx-auto flex min-h-0 min-w-0 w-full max-w-7xl flex-1 flex-col overflow-hidden p-2 md:p-4">
-              <ChatPage
-                status={status}
-                inviteToken={status?.token ?? ""}
-                isPublicMesh={status?.nostr_discovery ?? false}
-                isFlyHosted={isFlyHosted}
-                inflightRequests={status?.inflight_requests ?? 0}
-                warmModels={warmModels}
-                meshModelByName={meshModelByName}
-                modelStatsByName={modelStatsByName}
-                selectedModel={selectedModel}
-                setSelectedModel={setSelectedModel}
-                selectedModelNodeCount={selectedModelNodeCount}
-                selectedModelVramGb={selectedModelVramGb}
-                selectedModelVision={selectedModelVision}
-                visionModels={visionModels}
-                pendingImage={pendingImage}
-                setPendingImage={setPendingImage}
-                conversations={conversations}
-                activeConversationId={activeConversationId}
-                onConversationCreate={createNewConversation}
-                onConversationSelect={selectConversation}
-                onConversationRename={renameConversation}
-                onConversationDelete={deleteConversation}
-                onConversationsClear={clearAllConversations}
-                messages={messages}
-                reasoningOpen={reasoningOpen}
-                setReasoningOpen={setReasoningOpen}
-                chatScrollRef={chatScrollRef}
-                input={input}
-                setInput={setInput}
-                isSending={isSending}
-                canChat={canChat}
-                canRegenerate={canRegenerate}
-                onStop={stopStreaming}
-                onRegenerate={regenerateLastResponse}
-                onSubmit={handleSubmit}
-              />
-            </div>
-          ) : null}
-
-          {section === "dashboard" ? (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-7xl p-4">
-                <DashboardPage
+          <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            {section === "chat" ? (
+              <div className="mx-auto flex min-h-0 min-w-0 w-full max-w-7xl flex-1 flex-col overflow-hidden p-2 md:p-4">
+                <ChatPage
                   status={status}
-                  meshModels={meshModels}
-                  modelsLoading={modelsLoading}
-                  topologyNodes={topologyNodes}
-                  selectedModel={selectedModel || status?.model_name || ""}
-                  meshModelByName={meshModelByName}
-                  themeMode={themeMode}
+                  inviteToken={status?.token ?? ""}
                   isPublicMesh={status?.nostr_discovery ?? false}
-                  inviteToken={inviteToken}
-                  isLocalhost={isLocalhost}
+                  isFlyHosted={isFlyHosted}
+                  inflightRequests={status?.inflight_requests ?? 0}
+                  warmModels={warmModels}
+                  meshModelByName={meshModelByName}
+                  modelStatsByName={modelStatsByName}
+                  selectedModel={selectedModel}
+                  setSelectedModel={setSelectedModel}
+                  selectedModelNodeCount={selectedModelNodeCount}
+                  selectedModelVramGb={selectedModelVramGb}
+                  selectedModelVision={selectedModelVision}
+                  visionModels={visionModels}
+                  pendingImage={pendingImage}
+                  setPendingImage={setPendingImage}
+                  conversations={conversations}
+                  activeConversationId={activeConversationId}
+                  onConversationCreate={createNewConversation}
+                  onConversationSelect={selectConversation}
+                  onConversationRename={renameConversation}
+                  onConversationDelete={deleteConversation}
+                  onConversationsClear={clearAllConversations}
+                  messages={messages}
+                  reasoningOpen={reasoningOpen}
+                  setReasoningOpen={setReasoningOpen}
+                  chatScrollRef={chatScrollRef}
+                  input={input}
+                  setInput={setInput}
+                  isSending={isSending}
+                  canChat={canChat}
+                  canRegenerate={canRegenerate}
+                  onStop={stopStreaming}
+                  onRegenerate={regenerateLastResponse}
+                  onSubmit={handleSubmit}
                 />
               </div>
-            </div>
-          ) : null}
-        </main>
-        <footer
-          className={cn(
-            "shrink-0 bg-card/70",
-            section === "chat" ? "hidden md:block" : "",
-          )}
-        >
-          <div className="mx-auto flex h-8 w-full max-w-7xl items-center justify-center gap-2 px-4 text-xs text-muted-foreground">
-            Mesh LLM{" "}
-            {status?.version ? `v${status.version}` : "version loading..."}
-            {status?.latest_version ? (
-              <>
-                <span>·</span>
-                <a
-                  href="https://github.com/michaelneale/mesh-llm/releases"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline-offset-2 hover:text-foreground hover:underline"
-                  title="A newer mesh-llm version is available"
-                >
-                  {status?.version
-                    ? `Update available: v${status.version} -> v${status.latest_version}`
-                    : `Update available: v${status.latest_version}`}
-                </a>
-              </>
+
             ) : null}
-            <span>·</span>
-            <a
-              href="https://github.com/michaelneale/mesh-llm"
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex h-5 w-5 items-center justify-center hover:text-foreground"
-              aria-label="GitHub repository"
-              title="GitHub repository"
-            >
-              <span className="relative h-4 w-4">
-                <img
-                  src={githubBlackLogo}
-                  alt=""
-                  aria-hidden="true"
-                  className="h-4 w-4 dark:hidden"
-                />
-                <img
-                  src={githubWhiteLogo}
-                  alt=""
-                  aria-hidden="true"
-                  className="hidden h-4 w-4 dark:block"
-                />
-              </span>
-            </a>
-          </div>
-        </footer>
+
+            {section === "dashboard" ? (
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="mx-auto w-full max-w-7xl p-4">
+                  <DashboardPage
+                    status={status}
+                    meshModels={meshModels}
+                    modelsLoading={modelsLoading}
+                    topologyNodes={topologyNodes}
+                    selectedModel={selectedModel || status?.model_name || ""}
+                    meshModelByName={meshModelByName}
+                    themeMode={themeMode}
+                    isPublicMesh={status?.nostr_discovery ?? false}
+                    inviteToken={inviteToken}
+                    isLocalhost={isLocalhost}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </main>
+          <footer
+            className={cn(
+              "shrink-0 bg-card/70",
+              section === "chat" ? "hidden md:block" : "",
+            )}
+          >
+            <div className="mx-auto flex h-8 w-full max-w-7xl items-center justify-center gap-2 px-4 text-xs text-muted-foreground">
+              Mesh LLM{" "}
+              {status?.version ? `v${status.version}` : "version loading..."}
+              {status?.latest_version ? (
+                <>
+                  <span>·</span>
+                  <a
+                    href="https://github.com/michaelneale/mesh-llm/releases"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline-offset-2 hover:text-foreground hover:underline"
+                    title="A newer mesh-llm version is available"
+                  >
+                    {status?.version
+                      ? `Update available: v${status.version} -> v${status.latest_version}`
+                      : `Update available: v${status.latest_version}`}
+                  </a>
+                </>
+              ) : null}
+              <span>·</span>
+              <a
+                href="https://github.com/michaelneale/mesh-llm"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-5 w-5 items-center justify-center hover:text-foreground"
+                aria-label="GitHub repository"
+                title="GitHub repository"
+              >
+                <span className="relative h-4 w-4">
+                  <img
+                    src={githubBlackLogo}
+                    alt=""
+                    aria-hidden="true"
+                    className="h-4 w-4 dark:hidden"
+                  />
+                  <img
+                    src={githubWhiteLogo}
+                    alt=""
+                    aria-hidden="true"
+                    className="hidden h-4 w-4 dark:block"
+                  />
+                </span>
+              </a>
+            </div>
+          </footer>
+        </div>
       </div>
-    </div>
     </TooltipProvider>
   );
 }
@@ -1761,253 +1842,280 @@ function AppHeader({
           </NavigationMenuList>
         </NavigationMenu>
         <div className="ml-auto flex items-center gap-2">
-            <Popover>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PopoverTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      aria-label="API access"
-                    >
-                      <Braces className="h-4 w-4" />
-                    </Button>
-                  </PopoverTrigger>
-                </TooltipTrigger>
-                <TooltipContent>API</TooltipContent>
-              </Tooltip>
-              <PopoverContent
-                className="w-[calc(100vw-2rem)] max-w-[420px] space-y-3"
-                align="end"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <Braces className="h-4 w-4 text-muted-foreground" />
-                    <span>API Access</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    OpenAI-compatible endpoint — works with any app that speaks
-                    the OpenAI API.
-                  </div>
+          <Popover>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label="API access"
+                  >
+                    <Braces className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>API</TooltipContent>
+            </Tooltip>
+            <PopoverContent
+              className="w-[calc(100vw-2rem)] max-w-[420px] space-y-3"
+              align="end"
+            >
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Braces className="h-4 w-4 text-muted-foreground" />
+                  <span>API Access</span>
                 </div>
-                {apiDirectUrl ? (
+                <div className="text-xs text-muted-foreground">
+                  OpenAI-compatible endpoint — works with any app that speaks
+                  the OpenAI API.
+                </div>
+              </div>
+              {apiDirectUrl ? (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
+                  <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
+                    {apiDirectUrl}
+                  </code>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 shrink-0"
+                    aria-label="Copy endpoint URL"
+                    onClick={() => void copyApiDirectUrl()}
+                  >
+                    {apiDirectCopied ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="text-xs text-muted-foreground">
+                    Run mesh-llm locally to get an OpenAI-compatible API on your
+                    machine:
+                  </div>
                   <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
                     <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                      {apiDirectUrl}
+                      {isPublicMesh
+                        ? "mesh-llm --auto"
+                        : `mesh-llm --auto --join ${inviteToken || "(token)"}`}
                     </code>
                     <Button
                       type="button"
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 shrink-0"
-                      aria-label="Copy endpoint URL"
-                      onClick={() => void copyApiDirectUrl()}
+                      className="h-6 w-6 shrink-0"
+                      aria-label="Copy command"
+                      onClick={() =>
+                        void navigator.clipboard.writeText(
+                          isPublicMesh
+                            ? "mesh-llm --auto"
+                            : `mesh-llm --auto --join ${inviteToken || ""}`,
+                        )
+                      }
                     >
-                      {apiDirectCopied ? (
-                        <Check className="h-3.5 w-3.5" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
+                      <Copy className="h-3 w-3" />
                     </Button>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    <div className="text-xs text-muted-foreground">
-                      Run mesh-llm locally to get an OpenAI-compatible API on
-                      your machine:
-                    </div>
-                    <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
-                      <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                        {isPublicMesh
-                          ? "mesh-llm --auto"
-                          : `mesh-llm --auto --join ${inviteToken || "(token)"}`}
-                      </code>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-6 w-6 shrink-0"
-                        aria-label="Copy command"
-                        onClick={() =>
-                          void navigator.clipboard.writeText(
-                            isPublicMesh
-                              ? "mesh-llm --auto"
-                              : `mesh-llm --auto --join ${inviteToken || ""}`,
-                          )
-                        }
+                  <div className="text-xs text-muted-foreground">
+                    This gives you{" "}
+                    <code className="text-[0.7rem]">
+                      http://127.0.0.1:9337/v1
+                    </code>{" "}
+                    locally — point any OpenAI-compatible app at it.
+                  </div>
+                </div>
+              )}
+              <div className="space-y-2 pt-1">
+                <div className="text-xs font-medium">Use with agents</div>
+                <div className="space-y-1">
+                  {["claude", "goose"].map((agent) => {
+                    const cmd = isPublicMesh
+                      ? `mesh-llm ${agent}`
+                      : `mesh-llm ${agent} --join ${inviteToken || "(token)"}`;
+                    return (
+                      <div
+                        key={agent}
+                        className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5"
                       >
-                        <Copy className="h-3 w-3" />
-                      </Button>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      This gives you{" "}
-                      <code className="text-[0.7rem]">
-                        http://127.0.0.1:9337/v1
-                      </code>{" "}
-                      locally — point any OpenAI-compatible app at it.
-                    </div>
-                  </div>
-                )}
-                <div className="space-y-2 pt-1">
-                  <div className="text-xs font-medium">Use with agents</div>
-                  <div className="space-y-1">
-                    {["claude", "goose"].map((agent) => {
-                      const cmd = isPublicMesh
-                        ? `mesh-llm ${agent}`
-                        : `mesh-llm ${agent} --join ${inviteToken || "(token)"}`;
-                      return (
-                        <div
-                          key={agent}
-                          className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5"
+                        <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
+                          {cmd}
+                        </code>
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-6 w-6 shrink-0"
+                          aria-label={`Copy ${agent} command`}
+                          onClick={() =>
+                            void navigator.clipboard.writeText(cmd)
+                          }
                         >
-                          <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                            {cmd}
-                          </code>
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-6 w-6 shrink-0"
-                            aria-label={`Copy ${agent} command`}
-                            onClick={() =>
-                              void navigator.clipboard.writeText(cmd)
-                            }
-                          >
-                            <Copy className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Also works with pi and any OpenAI-compatible client.{" "}
-                    <a
-                      href={`${DOCS_URL}/#agents`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline hover:text-foreground"
-                    >
-                      Setup guide →
-                    </a>
-                  </div>
+                          <Copy className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="text-xs text-muted-foreground pt-1">
-                  Don't have it yet?{" "}
+                <div className="text-xs text-muted-foreground">
+                  Also works with pi and any OpenAI-compatible client.{" "}
                   <a
-                    href={`${DOCS_URL}/#install`}
+                    href={`${DOCS_URL}/#agents`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline hover:text-foreground"
                   >
-                    Install mesh-llm →
+                    Setup guide →
                   </a>
                 </div>
-                <div className="text-xs text-muted-foreground pt-1">
-                  Agents can gossip too —{" "}
-                  <code className="text-[0.9em]">
-                    mesh-llm blackboard install-skill
-                  </code>{" "}
-                  <a
-                    href={`${DOCS_URL}/#blackboard`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="underline hover:text-foreground"
+              </div>
+              <div className="text-xs text-muted-foreground pt-1">
+                Don't have it yet?{" "}
+                <a
+                  href={`${DOCS_URL}/#install`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  Install mesh-llm →
+                </a>
+              </div>
+              <div className="text-xs text-muted-foreground pt-1">
+                Agents can gossip too —{" "}
+                <code className="text-[0.9em]">
+                  mesh-llm blackboard install-skill
+                </code>{" "}
+                <a
+                  href={`${DOCS_URL}/#blackboard`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  →
+                </a>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Popover>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    aria-label="Invite"
+                    disabled={!inviteToken}
                   >
-                    →
-                  </a>
+                    <UserPlus className="h-4 w-4" />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Invite</TooltipContent>
+            </Tooltip>
+            <PopoverContent
+              className="w-[calc(100vw-2rem)] max-w-[420px] space-y-3"
+              align="end"
+            >
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <UserPlus className="h-4 w-4 text-muted-foreground" />
+                  <span>Invite to this mesh</span>
                 </div>
-              </PopoverContent>
-            </Popover>
-            <Popover>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PopoverTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      aria-label="Invite"
-                      disabled={!inviteToken}
-                    >
-                      <UserPlus className="h-4 w-4" />
-                    </Button>
-                  </PopoverTrigger>
-                </TooltipTrigger>
-                <TooltipContent>Invite</TooltipContent>
-              </Tooltip>
-              <PopoverContent
-                className="w-[calc(100vw-2rem)] max-w-[420px] space-y-3"
-                align="end"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-sm font-medium">
-                    <UserPlus className="h-4 w-4 text-muted-foreground" />
-                    <span>Invite to this mesh</span>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Invite with a model loaded to add compute, or invite as a
-                    client for API-only access.
-                  </div>
+                <div className="text-xs text-muted-foreground">
+                  Invite with a model loaded to add compute, or invite as a
+                  client for API-only access.
                 </div>
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-xs font-medium">
-                    <span>Contribute compute</span>
-                    <Badge className="h-5 gap-1 border-emerald-500/40 bg-emerald-500/10 px-2 text-[10px] text-emerald-700 dark:text-emerald-300">
-                      <Sparkles className="h-3 w-3" />
-                      Recommended
-                    </Badge>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    Joins and serves the model{" "}
-                    {inviteWithModelName || "selected model"}
-                  </div>
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 text-xs font-medium">
+                  <span>Contribute compute</span>
+                  <Badge className="h-5 gap-1 border-emerald-500/40 bg-emerald-500/10 px-2 text-[10px] text-emerald-700 dark:text-emerald-300">
+                    <Sparkles className="h-3 w-3" />
+                    Recommended
+                  </Badge>
                 </div>
-                {inviteWithModelCommand ? (
+                <div className="text-xs text-muted-foreground">
+                  Joins and serves the model{" "}
+                  {inviteWithModelName || "selected model"}
+                </div>
+              </div>
+              {inviteWithModelCommand ? (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
+                  <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
+                    {inviteWithModelCommand}
+                  </code>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 shrink-0"
+                    aria-label="Copy model command"
+                    onClick={() => void copyInviteWithModelCommand()}
+                  >
+                    {inviteWithModelCopied ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground">
+                  No warm model selected yet.
+                </div>
+              )}
+              <div className="space-y-1 pt-1">
+                <div className="text-xs font-medium">Join as client</div>
+                <div className="text-xs text-muted-foreground">
+                  Connects for API access without loading a model.
+                </div>
+              </div>
+              {inviteClientCommand ? (
+                <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
+                  <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
+                    {inviteClientCommand}
+                  </code>
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7 shrink-0"
+                    aria-label="Copy client command"
+                    onClick={() => void copyInviteClientCommand()}
+                  >
+                    {inviteClientCopied ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground">
+                  No invite token available yet.
+                </div>
+              )}
+              <div className="space-y-1 pt-1">
+                <div className="text-xs font-medium">Invite token</div>
+                {inviteToken ? (
                   <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
                     <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                      {inviteWithModelCommand}
+                      {inviteToken}
                     </code>
                     <Button
                       type="button"
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7 shrink-0"
-                      aria-label="Copy model command"
-                      onClick={() => void copyInviteWithModelCommand()}
+                      aria-label="Copy invite token"
+                      onClick={() => void copyInviteToken()}
                     >
-                      {inviteWithModelCopied ? (
-                        <Check className="h-3.5 w-3.5" />
-                      ) : (
-                        <Copy className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="text-xs text-muted-foreground">
-                    No warm model selected yet.
-                  </div>
-                )}
-                <div className="space-y-1 pt-1">
-                  <div className="text-xs font-medium">Join as client</div>
-                  <div className="text-xs text-muted-foreground">
-                    Connects for API access without loading a model.
-                  </div>
-                </div>
-                {inviteClientCommand ? (
-                  <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
-                    <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                      {inviteClientCommand}
-                    </code>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      className="h-7 w-7 shrink-0"
-                      aria-label="Copy client command"
-                      onClick={() => void copyInviteClientCommand()}
-                    >
-                      {inviteClientCopied ? (
+                      {tokenCopied ? (
                         <Check className="h-3.5 w-3.5" />
                       ) : (
                         <Copy className="h-3.5 w-3.5" />
@@ -2019,117 +2127,86 @@ function AppHeader({
                     No invite token available yet.
                   </div>
                 )}
-                <div className="space-y-1 pt-1">
-                  <div className="text-xs font-medium">Invite token</div>
-                  {inviteToken ? (
-                    <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2 py-1.5">
-                      <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-xs">
-                        {inviteToken}
-                      </code>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 shrink-0"
-                        aria-label="Copy invite token"
-                        onClick={() => void copyInviteToken()}
-                      >
-                        {tokenCopied ? (
-                          <Check className="h-3.5 w-3.5" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="text-xs text-muted-foreground">
-                      No invite token available yet.
-                    </div>
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
-            <Popover
-              open={isThemePopoverOpen}
-              onOpenChange={setIsThemePopoverOpen}
-            >
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <PopoverTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-9 gap-1 px-2"
-                      aria-label={`Theme: ${themeMode}`}
-                    >
-                      {themeMode === "auto" ? (
-                        <Laptop className="h-4 w-4" />
-                      ) : null}
-                      {themeMode === "light" ? (
-                        <Sun className="h-4 w-4" />
-                      ) : null}
-                      {themeMode === "dark" ? (
-                        <Moon className="h-4 w-4" />
-                      ) : null}
-                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                    </Button>
-                  </PopoverTrigger>
-                </TooltipTrigger>
-                <TooltipContent>Theme</TooltipContent>
-              </Tooltip>
-              <PopoverContent className="w-40 space-y-1 p-1" align="end">
-                <button
-                  type="button"
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted",
-                    themeMode === "auto" ? "bg-muted" : "",
-                  )}
-                  onClick={() => selectThemeMode("auto")}
-                >
-                  <span className="flex items-center gap-2">
-                    <Laptop className="h-3.5 w-3.5" />
-                    Auto
-                  </span>
-                  {themeMode === "auto" ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : null}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted",
-                    themeMode === "light" ? "bg-muted" : "",
-                  )}
-                  onClick={() => selectThemeMode("light")}
-                >
-                  <span className="flex items-center gap-2">
-                    <Sun className="h-3.5 w-3.5" />
-                    Light
-                  </span>
-                  {themeMode === "light" ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : null}
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted",
-                    themeMode === "dark" ? "bg-muted" : "",
-                  )}
-                  onClick={() => selectThemeMode("dark")}
-                >
-                  <span className="flex items-center gap-2">
-                    <Moon className="h-3.5 w-3.5" />
-                    Dark
-                  </span>
-                  {themeMode === "dark" ? (
-                    <Check className="h-3.5 w-3.5" />
-                  ) : null}
-                </button>
-              </PopoverContent>
-            </Popover>
-          </div>
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Popover
+            open={isThemePopoverOpen}
+            onOpenChange={setIsThemePopoverOpen}
+          >
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 gap-1 px-2"
+                    aria-label={`Theme: ${themeMode}`}
+                  >
+                    {themeMode === "auto" ? (
+                      <Laptop className="h-4 w-4" />
+                    ) : null}
+                    {themeMode === "light" ? <Sun className="h-4 w-4" /> : null}
+                    {themeMode === "dark" ? <Moon className="h-4 w-4" /> : null}
+                    <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Theme</TooltipContent>
+            </Tooltip>
+            <PopoverContent className="w-40 space-y-1 p-1" align="end">
+              <button
+                type="button"
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted",
+                  themeMode === "auto" ? "bg-muted" : "",
+                )}
+                onClick={() => selectThemeMode("auto")}
+              >
+                <span className="flex items-center gap-2">
+                  <Laptop className="h-3.5 w-3.5" />
+                  Auto
+                </span>
+                {themeMode === "auto" ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted",
+                  themeMode === "light" ? "bg-muted" : "",
+                )}
+                onClick={() => selectThemeMode("light")}
+              >
+                <span className="flex items-center gap-2">
+                  <Sun className="h-3.5 w-3.5" />
+                  Light
+                </span>
+                {themeMode === "light" ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md px-2 py-1.5 text-xs hover:bg-muted",
+                  themeMode === "dark" ? "bg-muted" : "",
+                )}
+                onClick={() => selectThemeMode("dark")}
+              >
+                <span className="flex items-center gap-2">
+                  <Moon className="h-3.5 w-3.5" />
+                  Dark
+                </span>
+                {themeMode === "dark" ? (
+                  <Check className="h-3.5 w-3.5" />
+                ) : null}
+              </button>
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
       {statusError ? (
         <div className="mx-auto w-full max-w-7xl px-4 pb-3">
@@ -2226,6 +2303,7 @@ function ChatPage(props: {
   const [editingTitle, setEditingTitle] = useState("");
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const editingTitleInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -2267,9 +2345,17 @@ function ChatPage(props: {
   }
 
   useEffect(() => {
-    if (!canChat || isSending) return;
+    if (!activeConversationId || !canChat || isSending) return;
     chatInputRef.current?.focus();
   }, [activeConversationId, canChat, isSending]);
+
+  useEffect(() => {
+    if (!editingConversationId) return;
+    const frame = window.requestAnimationFrame(() => {
+      editingTitleInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [editingConversationId]);
 
   function startInlineRename(conversation: ChatConversation) {
     setEditingConversationId(conversation.id);
@@ -2345,6 +2431,7 @@ function ChatPage(props: {
                 {isEditing ? (
                   <div className="min-w-0 flex-1 space-y-1">
                     <input
+                      ref={editingTitleInputRef}
                       value={editingTitle}
                       onChange={(e) => setEditingTitle(e.target.value)}
                       onKeyDown={(e) => {
@@ -2357,7 +2444,6 @@ function ChatPage(props: {
                         }
                       }}
                       className="h-7 w-full rounded-md border bg-background px-2 text-sm outline-none ring-offset-background focus:ring-2 focus:ring-ring"
-                      autoFocus
                     />
                     <div className="text-xs text-muted-foreground">
                       {conversation.messages.length} message
@@ -2515,8 +2601,9 @@ function ChatPage(props: {
                     ? "✨ Auto (router picks best)"
                     : selectedModelValue
                       ? shortName(
-                          modelDisplayName(meshModelByName[selectedModelValue]) ||
-                            selectedModelValue,
+                          modelDisplayName(
+                            meshModelByName[selectedModelValue],
+                          ) || selectedModelValue,
                         )
                       : undefined}
                 </SelectValue>
@@ -2716,6 +2803,7 @@ function ChatPage(props: {
                     className="h-20 rounded-md border object-cover"
                   />
                   <button
+                    type="button"
                     onClick={() => setPendingImage(null)}
                     className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs hover:bg-destructive/80"
                     aria-label="Remove image"
@@ -3056,8 +3144,17 @@ function DashboardPage({
   const [modelFilter, setModelFilter] = useState<"all" | "warm" | "cold">(
     "all",
   );
-  const [isMeshOverviewFullscreen, setIsMeshOverviewFullscreen] = useState(false);
-  const [selectedCatalogModel, setSelectedCatalogModel] = useState<MeshModel | null>(null);
+  const [isMeshOverviewFullscreen, setIsMeshOverviewFullscreen] =
+    useState(false);
+  const [detailPanelStack, setDetailPanelStack] = useState<DetailPanelEntry[]>(
+    [],
+  );
+  const [meshTopologyLayoutMode, setMeshTopologyLayoutMode] =
+    useState<TopologyLayoutMode>("elk");
+  const topologyDiagramNodes = useMemo(
+    () => topologyNodes.filter((node) => !node.client),
+    [topologyNodes],
+  );
   const filteredModels = useMemo(() => {
     const models = meshModels;
     return [...models]
@@ -3076,11 +3173,13 @@ function DashboardPage({
   }, [status?.peers]);
   const peerRows = useMemo(() => {
     return sortedPeers.map((peer) => {
-      const statusLabel = peer.role === 'Client'
-        ? 'Client'
-        : peerStatusLabel(peer);
+      const statusLabel =
+        peer.role === "Client" ? "Client" : peerStatusLabel(peer);
       const primaryModel = peerPrimaryModel(peer);
-      const modelLabel = primaryModel && primaryModel !== '(idle)' ? shortName(primaryModel) : 'idle';
+      const modelLabel =
+        primaryModel && primaryModel !== "(idle)"
+          ? shortName(primaryModel)
+          : "idle";
       const latencyLabel = formatLatency(peer.rtt_ms);
       const displayVramGb = overviewVramGb(
         peer.role === "Client",
@@ -3101,6 +3200,12 @@ function DashboardPage({
     });
   }, [sortedPeers, totalMeshVramGb]);
   const activePeerRows = useMemo(() => {
+    const currentDetail = detailPanelStack[detailPanelStack.length - 1];
+    const activeModelName =
+      currentDetail?.kind === "model" ? currentDetail.modelName : null;
+    const selectedCatalogModel = activeModelName
+      ? meshModelByName[activeModelName] ?? null
+      : null;
     if (!selectedCatalogModel || selectedCatalogModel.status !== "warm" || !status) {
       return [] as ActivePeerRow[];
     }
@@ -3115,7 +3220,9 @@ function DashboardPage({
         latencyLabel: "local",
         vramLabel: `${localVram.toFixed(1)} GB`,
         shareLabel:
-          totalModelVram > 0 ? `${Math.round((localVram / totalModelVram) * 100)}%` : "n/a",
+          totalModelVram > 0
+            ? `${Math.round((localVram / totalModelVram) * 100)}%`
+            : "n/a",
       });
     }
     for (const peer of peerRows) {
@@ -3128,11 +3235,105 @@ function DashboardPage({
         latencyLabel: peer.latencyLabel,
         vramLabel: `${peer.displayVramGb.toFixed(1)} GB`,
         shareLabel:
-          totalModelVram > 0 ? `${Math.round((peer.displayVramGb / totalModelVram) * 100)}%` : "n/a",
+          totalModelVram > 0
+            ? `${Math.round((peer.displayVramGb / totalModelVram) * 100)}%`
+            : "n/a",
       });
     }
     return rows;
-  }, [peerRows, selectedCatalogModel, status]);
+  }, [detailPanelStack, meshModelByName, peerRows, status]);
+
+  const activeDetail = detailPanelStack[detailPanelStack.length - 1] ?? null;
+  const activeModel =
+    activeDetail?.kind === "model"
+      ? meshModelByName[activeDetail.modelName] ?? null
+      : null;
+  const activeNode = useMemo(() => {
+    if (!status || activeDetail?.kind !== "node") return null;
+    const topologyNode = topologyNodes.find((node) => node.id === activeDetail.nodeId);
+    if (!topologyNode) return null;
+    const peer = topologyNode.self
+      ? null
+      : status.peers.find((candidate) => candidate.id === topologyNode.id);
+    const hostedModels = topologyNode.self
+      ? uniqueModels(localRoutableModels(status))
+      : uniqueModels(peer ? peerRoutableModels(peer) : []);
+    const servingModels = topologyNode.self
+      ? uniqueModels(status.serving_models)
+      : uniqueModels(peer ? peerAssignedModels(peer) : []);
+    const requestedModels = topologyNode.self
+      ? uniqueModels(status.requested_models)
+      : uniqueModels(peer?.requested_models);
+    return {
+      id: topologyNode.id,
+      title: topologyNode.hostname || topologyNode.id,
+      hostname: topologyNode.hostname,
+      self: topologyNode.self,
+      role: topologyNodeRole(topologyNode),
+      statusLabel: topologyNode.statusLabel,
+      latencyLabel: topologyNode.self ? "local" : formatLatency(topologyNode.latencyMs),
+      vramGb: Math.max(0, topologyNode.vram),
+      vramSharePct:
+        topologyNode.client
+          ? null
+          : totalMeshVramGb <= 0
+            ? 0
+            : Math.round((Math.max(0, topologyNode.vram) / totalMeshVramGb) * 100),
+      isSoc: topologyNode.isSoc,
+      gpus: topologyNode.gpus ?? [],
+      hostedModels,
+      hotModels: uniqueModels(hostedModels, servingModels, requestedModels),
+      servingModels,
+      requestedModels,
+      availableModels: topologyNode.self
+        ? uniqueModels(status.available_models)
+        : uniqueModels(peer?.available_models),
+      version: topologyNode.self ? status.version : undefined,
+      latestVersion: topologyNode.self ? status.latest_version : undefined,
+      llamaReady: topologyNode.self ? status.llama_ready : undefined,
+      apiPort: topologyNode.self ? status.api_port : undefined,
+      inflightRequests: topologyNode.self ? status.inflight_requests : undefined,
+      privacyLimited:
+        !topologyNode.self &&
+        !topologyNode.hostname &&
+        !(topologyNode.gpus?.length ?? 0),
+    } satisfies NodeSidebarRecord;
+  }, [activeDetail, status, topologyNodes, totalMeshVramGb]);
+
+  function pushDetail(entry: DetailPanelEntry) {
+    setDetailPanelStack((prev) => {
+      const current = prev[prev.length - 1];
+      const isSameEntry =
+        !!current &&
+        ((current.kind === "node" &&
+          entry.kind === "node" &&
+          current.nodeId === entry.nodeId) ||
+          (current.kind === "model" &&
+            entry.kind === "model" &&
+            current.modelName === entry.modelName));
+      if (isSameEntry) {
+        return prev;
+      }
+      return [...prev, entry];
+    });
+  }
+
+  function openNodeDetail(nodeId: string) {
+    pushDetail({ kind: "node", nodeId });
+  }
+
+  function openModelDetail(modelName: string) {
+    if (!meshModelByName[modelName]) return;
+    pushDetail({ kind: "model", modelName });
+  }
+
+  function closeDetailPanel() {
+    setDetailPanelStack([]);
+  }
+
+  function goBackDetailPanel() {
+    setDetailPanelStack((prev) => prev.slice(0, -1));
+  }
 
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
@@ -3156,6 +3357,34 @@ function DashboardPage({
   function toggleMeshOverviewFullscreen() {
     setIsMeshOverviewFullscreen((prev) => !prev);
   }
+
+  const meshTopologyLayoutControl = (
+    <Select
+      value={meshTopologyLayoutMode}
+      onValueChange={(value) => {
+        if (isTopologyLayoutMode(value)) setMeshTopologyLayoutMode(value);
+      }}
+    >
+      <SelectTrigger
+        className="h-8 w-[118px] gap-1.5 px-2 text-xs"
+        aria-label="Select topology layout"
+        title="Select topology layout"
+      >
+        <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <SelectValue placeholder="Layout" />
+      </SelectTrigger>
+      <SelectContent
+        align="end"
+        className={isMeshOverviewFullscreen ? "z-[130]" : undefined}
+      >
+        {TOPOLOGY_LAYOUT_OPTIONS.map((option) => (
+          <SelectItem key={option.value} value={option.value} className="text-xs">
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
 
   return (
     <div className="space-y-4">
@@ -3201,44 +3430,44 @@ function DashboardPage({
         </Alert>
       ) : null}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard
-            title="Node ID"
-            value={status?.node_id ?? "n/a"}
-            valueSuffix={
-              <StatusPill
-                label={status?.node_status ?? "n/a"}
-                tone={topologyStatusTone(status?.node_status ?? "n/a")}
-                tooltip={topologyStatusTooltip(status?.node_status ?? "n/a")}
-              />
-            }
-            icon={<Hash className="h-4 w-4" />}
-            tooltip="Current node identifier in this mesh."
-          />
-          <StatCard
-            title="Active Models"
-            value={`${meshModels.filter((m) => m.status === "warm").length}`}
-            icon={<Sparkles className="h-4 w-4" />}
-            tooltip="Models currently loaded and serving across the mesh."
-          />
-          <StatCard
-            title="Mesh VRAM"
-            value={`${meshGpuVram(status).toFixed(1)} GB`}
-            icon={<Cpu className="h-4 w-4" />}
-            tooltip="Total GPU VRAM across non-client nodes in the mesh."
-          />
-          <StatCard
-            title="Nodes"
-            value={`${topologyNodes.length}`}
-            icon={<Network className="h-4 w-4" />}
-            tooltip="Total nodes currently visible in topology."
-          />
-          <StatCard
-            title="Inflight"
-            value={`${status?.inflight_requests ?? 0}`}
-            icon={<Gauge className="h-4 w-4" />}
-            tooltip="Current in-flight request count."
-          />
-        </div>
+        <StatCard
+          title="Node ID"
+          value={status?.node_id ?? "n/a"}
+          valueSuffix={
+            <StatusPill
+              label={status?.node_status ?? "n/a"}
+              tone={topologyStatusTone(status?.node_status ?? "n/a")}
+              tooltip={topologyStatusTooltip(status?.node_status ?? "n/a")}
+            />
+          }
+          icon={<Hash className="h-4 w-4" />}
+          tooltip="Current node identifier in this mesh."
+        />
+        <StatCard
+          title="Active Models"
+          value={`${meshModels.filter((m) => m.status === "warm").length}`}
+          icon={<Sparkles className="h-4 w-4" />}
+          tooltip="Models currently loaded and serving across the mesh."
+        />
+        <StatCard
+          title="Mesh VRAM"
+          value={`${meshGpuVram(status).toFixed(1)} GB`}
+          icon={<Cpu className="h-4 w-4" />}
+          tooltip="Total GPU VRAM across non-client nodes in the mesh."
+        />
+        <StatCard
+          title="Nodes"
+          value={`${topologyDiagramNodes.length}`}
+          icon={<Network className="h-4 w-4" />}
+          tooltip="Total nodes currently visible in topology."
+        />
+        <StatCard
+          title="Inflight"
+          value={`${status?.inflight_requests ?? 0}`}
+          icon={<Gauge className="h-4 w-4" />}
+          tooltip="Current in-flight request count."
+        />
+      </div>
 
       <div className="grid items-start gap-4 lg:grid-cols-7">
         <div className="lg:col-span-5">
@@ -3246,16 +3475,19 @@ function DashboardPage({
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-sm">Mesh Overview</CardTitle>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5"
-                  onClick={() => void toggleMeshOverviewFullscreen()}
-                >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                  Fullscreen
-                </Button>
+                <div className="flex items-center gap-2">
+                  {meshTopologyLayoutControl}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5"
+                    onClick={() => void toggleMeshOverviewFullscreen()}
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    Fullscreen
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="pt-0">
@@ -3266,9 +3498,11 @@ function DashboardPage({
               ) : (
                 <MeshTopologyDiagram
                   status={status}
-                  nodes={topologyNodes}
+                  nodes={topologyDiagramNodes}
                   selectedModel={selectedModel}
+                  layoutMode={meshTopologyLayoutMode}
                   themeMode={themeMode}
+                  onOpenNode={openNodeDetail}
                   fullscreen={false}
                   heightClass="h-[360px] md:h-[420px] lg:h-[460px] xl:h-[520px]"
                 />
@@ -3309,7 +3543,7 @@ function DashboardPage({
                     <button
                       key={model.name}
                       type="button"
-                      onClick={() => setSelectedCatalogModel(model)}
+                      onClick={() => openModelDetail(model.name)}
                       className="block w-full rounded-md border p-3 text-left transition-colors hover:border-primary/35 hover:bg-muted/30"
                     >
                       <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-start">
@@ -3318,26 +3552,64 @@ function DashboardPage({
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-medium leading-5 [overflow-wrap:anywhere]">{shortName(modelDisplayName(model))}</div>
+                            <div className="text-sm font-medium leading-5 [overflow-wrap:anywhere]">
+                              {shortName(modelDisplayName(model))}
+                            </div>
                             <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                              {model.vision ? <span role="img" aria-label="Vision">👁</span> : null}
-                              {model.reasoning ? <span role="img" aria-label="Reasoning">🧠</span> : null}
-                              {model.moe ? <span role="img" aria-label="Mixture of Experts">🧩</span> : null}
+                              {model.vision ? (
+                                <span role="img" aria-label="Vision">
+                                  👁
+                                </span>
+                              ) : null}
+                              {model.reasoning ? (
+                                <span role="img" aria-label="Reasoning">
+                                  🧠
+                                </span>
+                              ) : null}
+                              {model.moe ? (
+                                <span
+                                  role="img"
+                                  aria-label="Mixture of Experts"
+                                >
+                                  🧩
+                                </span>
+                              ) : null}
                             </div>
                           </div>
-                          <div className="text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]">{model.name}</div>
+                          <div className="text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]">
+                            {model.name}
+                          </div>
                         </div>
                         <StatusPill
                           className="self-start"
-                          label={model.status === 'warm' ? 'Warm' : model.status === 'cold' ? 'Cold' : model.status}
-                          tone={model.status === 'warm' ? 'warm' : model.status === 'cold' ? 'cold' : 'neutral'}
+                          label={
+                            model.status === "warm"
+                              ? "Warm"
+                              : model.status === "cold"
+                                ? "Cold"
+                                : model.status
+                          }
+                          tone={
+                            model.status === "warm"
+                              ? "warm"
+                              : model.status === "cold"
+                                ? "cold"
+                                : "neutral"
+                          }
                           dot
                         />
                       </div>
                       <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span>{model.node_count} node{model.node_count === 1 ? '' : 's'}</span>
+                        <span>
+                          {model.node_count} node
+                          {model.node_count === 1 ? "" : "s"}
+                        </span>
                         <span className="flex items-center gap-2">
-                          {model.vision && <span role="img" aria-label="Vision">👁</span>}
+                          {model.vision && (
+                            <span role="img" aria-label="Vision">
+                              👁
+                            </span>
+                          )}
                           {model.size_gb.toFixed(1)} GB
                         </span>
                       </div>
@@ -3394,7 +3666,13 @@ function DashboardPage({
                     {peerRows.map((peer) => (
                       <TableRow key={peer.id}>
                         <TableCell className="font-mono text-xs">
-                          {peer.id}
+                          <button
+                            type="button"
+                            className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                            onClick={() => openNodeDetail(peer.id)}
+                          >
+                            {peer.id}
+                          </button>
                         </TableCell>
                         <TableCell>{peer.role}</TableCell>
                         <TableCell>{peer.statusLabel}</TableCell>
@@ -3436,24 +3714,29 @@ function DashboardPage({
                   <CardHeader className="shrink-0 pb-2">
                     <div className="flex items-center justify-between gap-2">
                       <CardTitle className="text-sm">Mesh Overview</CardTitle>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-8 gap-1.5"
-                        onClick={() => void toggleMeshOverviewFullscreen()}
-                      >
-                        <Minimize2 className="h-3.5 w-3.5" />
-                        Exit Fullscreen
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        {meshTopologyLayoutControl}
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1.5"
+                          onClick={() => void toggleMeshOverviewFullscreen()}
+                        >
+                          <Minimize2 className="h-3.5 w-3.5" />
+                          Exit Fullscreen
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
                   <CardContent className="flex min-h-0 flex-1 p-0">
                     <MeshTopologyDiagram
                       status={status}
-                      nodes={topologyNodes}
+                      nodes={topologyDiagramNodes}
                       selectedModel={selectedModel}
+                      layoutMode={meshTopologyLayoutMode}
                       themeMode={themeMode}
+                      onOpenNode={openNodeDetail}
                       fullscreen
                       heightClass="min-h-[420px]"
                       containerStyle={{
@@ -3470,13 +3753,45 @@ function DashboardPage({
           )
         : null}
 
-      <Sheet open={!!selectedCatalogModel} onOpenChange={(open) => !open && setSelectedCatalogModel(null)}>
-      <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl">
-          {selectedCatalogModel ? (
-            <ModelSidebar
-              model={selectedCatalogModel}
-              activePeers={activePeerRows}
+      <Sheet open={detailPanelStack.length > 0} onOpenChange={(open) => !open && closeDetailPanel()}>
+        <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl">
+          {activeDetail?.kind === "node" && activeNode ? (
+            <NodeSidebar
+              node={activeNode}
+              meshModelByName={meshModelByName}
+              onOpenModel={openModelDetail}
+              onBack={detailPanelStack.length > 1 ? goBackDetailPanel : undefined}
             />
+          ) : activeDetail?.kind === "node" && !activeNode ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+              <p className="text-sm text-muted-foreground">This node is no longer available.</p>
+              <button
+                type="button"
+                className="text-xs underline hover:text-foreground"
+                onClick={detailPanelStack.length > 1 ? goBackDetailPanel : closeDetailPanel}
+              >
+                {detailPanelStack.length > 1 ? "Go back" : "Close"}
+              </button>
+            </div>
+          ) : null}
+          {activeDetail?.kind === "model" && activeModel ? (
+            <ModelSidebar
+              model={activeModel}
+              activePeers={activePeerRows}
+              onOpenNode={openNodeDetail}
+              onBack={detailPanelStack.length > 1 ? goBackDetailPanel : undefined}
+            />
+          ) : activeDetail?.kind === "model" && !activeModel ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+              <p className="text-sm text-muted-foreground">This model is no longer available.</p>
+              <button
+                type="button"
+                className="text-xs underline hover:text-foreground"
+                onClick={detailPanelStack.length > 1 ? goBackDetailPanel : closeDetailPanel}
+              >
+                {detailPanelStack.length > 1 ? "Go back" : "Close"}
+              </button>
+            </div>
           ) : null}
         </SheetContent>
       </Sheet>
@@ -3590,63 +3905,55 @@ function DashboardPage({
   );
 }
 
-type PositionedTopologyNode = TopologyNode & {
-  x: number;
-  y: number;
-  bucket: "center" | "serving" | "worker" | "client";
-};
-
-type TopologyNodeInfo = {
-  role: string;
-  statusLabel: string;
-  latencyMs?: number | null;
-  loadedModel: string;
-  loadedModels: string[];
-  vramGb: number;
-  vramSharePct: number;
-  hostname?: string;
-  isSoc?: boolean;
-  gpus?: { name: string; vram_bytes: number }[];
-};
-
 type TopologyFlowNodeData = {
   node: PositionedTopologyNode;
   info: TopologyNodeInfo;
   selected: boolean;
   sameModelAsCurrent: boolean;
+  layoutDirection: "horizontal" | "vertical";
 };
 
 type TopologyFlowDiagramNode = Node<TopologyFlowNodeData, "topologyNode">;
 
 function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
   const isCenter = data.node.bucket === "center";
+  const isHorizontal = data.layoutDirection === "horizontal";
   const dotClass = isCenter
     ? "bg-primary border-primary"
     : "bg-muted border-border";
   const dotCenterY = 22;
-  const edgeHandleStyle = {
+  const baseHandleStyle = {
     opacity: 0,
     width: 1,
     height: 1,
     border: 0,
     pointerEvents: "none" as const,
-    left: "50%",
-    top: dotCenterY,
-    transform: "translate(-50%, -50%)",
   };
+  const targetHandleStyle = isHorizontal
+    ? { ...baseHandleStyle, top: dotCenterY, transform: "translateY(-50%)" }
+    : { ...baseHandleStyle, left: "50%", top: dotCenterY, transform: "translate(-50%, -50%)" };
+  const sourceHandleStyle = isHorizontal
+    ? { ...baseHandleStyle, top: dotCenterY, transform: "translateY(-50%)" }
+    : { ...baseHandleStyle, left: "50%", bottom: dotCenterY, top: "auto", transform: "translate(-50%, 50%)" };
 
   return (
     <div className="relative w-[246px] pt-2">
-      <Handle type="target" position={Position.Top} style={edgeHandleStyle} />
-      <Handle type="source" position={Position.Top} style={edgeHandleStyle} />
+      <Handle
+        type="target"
+        position={isHorizontal ? Position.Left : Position.Top}
+        style={targetHandleStyle}
+      />
+      <Handle
+        type="source"
+        position={isHorizontal ? Position.Right : Position.Bottom}
+        style={sourceHandleStyle}
+      />
 
       <div className={cn("mx-auto h-7 w-7 rounded-full border-2", dotClass)} />
       <div className="mt-1 flex items-center justify-center gap-1 text-[10px] leading-3 text-foreground">
         <span className="break-all">{data.node.id}</span>
         {data.node.self ? (
-          <Badge
-            className="h-4 rounded-full border-sky-500/45 bg-sky-500/10 px-1.5 text-[9px] font-medium text-sky-700 dark:border-sky-400/55 dark:bg-sky-400/15 dark:text-sky-200"
-          >
+          <Badge className="h-4 rounded-full border-sky-500/45 bg-sky-500/10 px-1.5 text-[9px] font-medium text-sky-700 dark:border-sky-400/55 dark:bg-sky-400/15 dark:text-sky-200">
             You
           </Badge>
         ) : null}
@@ -3699,7 +4006,7 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
           />
         </div>
 
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] leading-3">
+          <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] leading-3">
           {data.info.hostname && (
             <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
               <Server className="h-3 w-3 text-muted-foreground" />
@@ -3736,6 +4043,13 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
             </span>
           </div>
           {data.info.gpus?.map((gpu, i) => {
+            const duplicateCount = data.info.gpus
+              ?.slice(0, i)
+              .filter(
+                (candidate) =>
+                  candidate.name === gpu.name &&
+                  candidate.vram_bytes === gpu.vram_bytes,
+              ).length ?? 0;
             const lower = gpu.name.toLowerCase();
             const isNvidia =
               lower.includes("nvidia") || lower.includes("jetson");
@@ -3748,21 +4062,12 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
                 : isIntel
                   ? "#0071C5"
                   : undefined;
-            const model = gpu.name
-              .replace(/^NVIDIA GeForce\s+/i, "")
-              .replace(/^NVIDIA Quadro\s+/i, "")
-              .replace(/^NVIDIA\s+/i, "")
-              .replace(/^AMD Radeon\s+/i, "")
-              .replace(/^AMD\s+/i, "")
-              .replace(/^Intel Arc\s+/i, "")
-              .replace(/^Intel\s+/i, "")
-              .replace(/^Apple\s+/i, "")
-              .trim();
+            const model = trimGpuVendor(gpu.name);
             const vramGb = gpu.vram_bytes / (1024 * 1024 * 1024);
             const GpuIcon = data.info.isSoc ? Cpu : Gpu;
             return (
               <div
-                key={`${gpu.name}-${i}`}
+                key={`${data.node.id}-${gpu.name}-${gpu.vram_bytes}-${duplicateCount}`}
                 className="group/gpu inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1"
               >
                 <GpuIcon
@@ -3789,11 +4094,54 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
 
 const topologyNodeTypes = { topologyNode: TopologyFlowNode } as NodeTypes;
 
+function positionedTopologyLayoutsEqual(
+  left: PositionedTopologyNode[],
+  right: PositionedTopologyNode[],
+) {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+
+  for (let index = 0; index < left.length; index += 1) {
+    const a = left[index];
+    const b = right[index];
+    if (
+      a.id !== b.id ||
+      a.bucket !== b.bucket ||
+      Math.abs(a.x - b.x) > 0.5 ||
+      Math.abs(a.y - b.y) > 0.5
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function topologyLayoutSignature(
+  nodes: Pick<BucketedTopologyNode, "id" | "bucket" | "width" | "height">[],
+  nodeRadius: number,
+) {
+  return `${nodeRadius}:${nodes
+    .map((node) => `${node.id}:${node.bucket}:${node.width}:${node.height}`)
+    .join(",")}`;
+}
+
+function positionedTopologySignature(nodes: PositionedTopologyNode[]) {
+  return nodes
+    .map(
+      (node) =>
+        `${node.id}:${node.bucket}:${Math.round(node.x)}:${Math.round(node.y)}`,
+    )
+    .join(",");
+}
+
 function MeshTopologyDiagram({
   status,
   nodes,
   selectedModel,
+  layoutMode,
   themeMode,
+  onOpenNode,
   fullscreen = false,
   heightClass,
   containerStyle,
@@ -3801,13 +4149,18 @@ function MeshTopologyDiagram({
   status: StatusPayload | null;
   nodes: TopologyNode[];
   selectedModel: string;
+  layoutMode: TopologyLayoutMode;
   themeMode: ThemeMode;
+  onOpenNode?: (nodeId: string) => void;
   fullscreen?: boolean;
   heightClass?: string;
   containerStyle?: CSSProperties;
 }) {
-  if (!status || !nodes.length) {
+  if (!status) {
     return <EmptyPanel text="No topology data yet." />;
+  }
+  if (!nodes.length) {
+    return <EmptyPanel text="No host or worker nodes visible yet." />;
   }
 
   return (
@@ -3815,7 +4168,9 @@ function MeshTopologyDiagram({
       status={status}
       nodes={nodes}
       selectedModel={selectedModel}
+      layoutMode={layoutMode}
       themeMode={themeMode}
+      onOpenNode={onOpenNode}
       fullscreen={fullscreen}
       heightClass={heightClass}
       containerStyle={containerStyle}
@@ -3827,7 +4182,9 @@ function MeshTopologyFlow({
   status,
   nodes,
   selectedModel,
+  layoutMode,
   themeMode,
+  onOpenNode,
   fullscreen,
   heightClass,
   containerStyle,
@@ -3835,50 +4192,67 @@ function MeshTopologyFlow({
   status: StatusPayload;
   nodes: TopologyNode[];
   selectedModel: string;
+  layoutMode: TopologyLayoutMode;
   themeMode: ThemeMode;
+  onOpenNode?: (nodeId: string) => void;
   fullscreen: boolean;
   heightClass?: string;
   containerStyle?: CSSProperties;
 }) {
-  const center =
-    nodes.find((n) => n.host) || nodes.find((n) => n.self) || nodes[0];
-  const others = nodes
-    .filter((n) => n.id !== center.id)
-    .sort((a, b) => b.vram - a.vram || a.id.localeCompare(b.id));
-  const focusModel = selectedModel || status.model_name || "";
-  const serving = others.filter(
-    (n) =>
-      !n.client && !!n.serving && (!focusModel || n.serving === focusModel),
-  );
-  const servingIds = new Set(serving.map((n) => n.id));
-  const clients = others.filter((n) => n.client);
-  const workers = others.filter((n) => !n.client && !servingIds.has(n.id));
-
-  const total = nodes.length;
-  const nodeRadius =
-    total >= 500
-      ? 3.6
-      : total >= 280
-        ? 4.8
-        : total >= 160
-          ? 6.2
-          : total >= 90
-            ? 7.4
-            : total >= 50
-              ? 8.8
-              : 10.4;
-  const positioned = layoutTopologyNodes(
+  const {
     center,
     serving,
     workers,
     clients,
     nodeRadius,
-  );
-  const clientEdgeStride =
-    total > 320 ? 6 : total > 220 ? 4 : total > 120 ? 2 : 1;
-  const meshVramGb = nodes
-    .filter((n) => !n.client)
-    .reduce((sum, n) => sum + Math.max(0, n.vram), 0);
+    clientEdgeStride,
+    meshVramGb,
+  } = useMemo(() => {
+    const center =
+      nodes.find((n) => n.host) || nodes.find((n) => n.self) || nodes[0];
+    const others = nodes
+      .filter((n) => n.id !== center.id)
+      .sort((a, b) => b.vram - a.vram || a.id.localeCompare(b.id));
+    const focusModel = selectedModel || status.model_name || "";
+    const serving = others.filter(
+      (n) =>
+        !n.client && !!n.serving && (!focusModel || n.serving === focusModel),
+    );
+    const servingIds = new Set(serving.map((n) => n.id));
+    const clients = others.filter((n) => n.client);
+    const workers = others.filter(
+      (n) => !n.client && !servingIds.has(n.id),
+    );
+
+    const total = nodes.length;
+    const nodeRadius =
+      total >= 500
+        ? 3.6
+        : total >= 280
+          ? 4.8
+          : total >= 160
+            ? 6.2
+            : total >= 90
+              ? 7.4
+              : total >= 50
+                ? 8.8
+                : 10.4;
+    const clientEdgeStride =
+      total > 320 ? 6 : total > 220 ? 4 : total > 120 ? 2 : 1;
+    const meshVramGb = nodes
+      .filter((n) => !n.client)
+      .reduce((sum, n) => sum + Math.max(0, n.vram), 0);
+
+    return {
+      center,
+      serving,
+      workers,
+      clients,
+      nodeRadius,
+      clientEdgeStride,
+      meshVramGb,
+    };
+  }, [nodes, selectedModel, status.model_name]);
   const currentNodeServingModel = useMemo(() => {
     const current = nodes.find((n) => n.self);
     if (
@@ -3947,6 +4321,98 @@ function MeshTopologyFlow({
     }
     return out;
   }, [nodes, meshVramGb]);
+  const activeLayout = TOPOLOGY_LAYOUTS[layoutMode];
+  const topologyLayoutNodes = useMemo<BucketedTopologyNode[]>(() => {
+    const toBucketedNode = (
+      node: TopologyNode,
+      bucket: BucketedTopologyNode["bucket"],
+    ): BucketedTopologyNode => ({
+      ...node,
+      bucket,
+      width: TOPOLOGY_NODE_WIDTH,
+      height: estimateTopologyNodeHeight(node, nodeInfoById.get(node.id)),
+    });
+
+    return [
+      toBucketedNode(center, "center"),
+      ...serving.map((node) => toBucketedNode(node, "serving")),
+      ...workers.map((node) => toBucketedNode(node, "worker")),
+      ...clients.map((node) => toBucketedNode(node, "client")),
+    ];
+  }, [center, clients, nodeInfoById, serving, workers]);
+  const layoutContext = useMemo(
+    () => ({
+      center,
+      serving,
+      workers,
+      clients,
+      nodeRadius,
+      nodes: topologyLayoutNodes,
+    }),
+    [center, clients, nodeRadius, serving, topologyLayoutNodes, workers],
+  );
+  const layoutInputSignature = useMemo(
+    () => topologyLayoutSignature(topologyLayoutNodes, nodeRadius),
+    [nodeRadius, topologyLayoutNodes],
+  );
+  const layoutInputSignatureRef = useRef(layoutInputSignature);
+  layoutInputSignatureRef.current = layoutInputSignature;
+  const layoutContextRef = useRef(layoutContext);
+  layoutContextRef.current = layoutContext;
+  const [positioned, setPositioned] = useState<PositionedTopologyNode[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const runSignature = layoutInputSignature;
+    const nextLayoutContext = layoutContextRef.current;
+
+    const immediateLayout = activeLayout.getImmediateLayout(nextLayoutContext);
+    setPositioned((previous) =>
+      positionedTopologyLayoutsEqual(previous, immediateLayout)
+        ? previous
+        : immediateLayout,
+    );
+
+    void activeLayout
+      .getLayout(nextLayoutContext)
+      .then((next) => {
+        if (
+          !cancelled &&
+          layoutInputSignatureRef.current === runSignature
+        ) {
+          setPositioned((previous) =>
+            positionedTopologyLayoutsEqual(previous, next) ? previous : next,
+          );
+        }
+      })
+      .catch(() => {
+        if (
+          !cancelled &&
+          layoutInputSignatureRef.current === runSignature
+        ) {
+          setPositioned((previous) =>
+            positionedTopologyLayoutsEqual(previous, immediateLayout)
+              ? previous
+              : immediateLayout,
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeLayout, layoutInputSignature]);
+
+  const positionedIdsKey = useMemo(
+    () => positioned.map((node) => node.id).sort().join(","),
+    [positioned],
+  );
+  const expectedPositionIdsKey = useMemo(
+    () => topologyLayoutNodes.map((node) => node.id).sort().join(","),
+    [topologyLayoutNodes],
+  );
+  const layoutReady =
+    positioned.length > 0 && positionedIdsKey === expectedPositionIdsKey;
   const flowColorMode =
     themeMode === "auto"
       ? typeof document !== "undefined" &&
@@ -3954,37 +4420,52 @@ function MeshTopologyFlow({
         ? "dark"
         : "light"
       : themeMode;
-  const flowLayoutKey = useMemo(
+  const layoutFitSignature = useMemo(
     () =>
-      `${fullscreen ? "fs" : "std"}:${positioned
-        .map((p) => p.id)
-        .sort()
-        .join(",")}`,
-    [fullscreen, positioned],
+      `${fullscreen ? "fs" : "std"}:${layoutMode}:${positionedTopologySignature(positioned)}`,
+    [fullscreen, layoutMode, positioned],
   );
   const flowContainerRef = useRef<HTMLDivElement | null>(null);
   const flowInstanceRef = useRef<
     ReactFlowInstance<TopologyFlowDiagramNode, Edge> | null
   >(null);
+  const [flowReady, setFlowReady] = useState(false);
   const [containerReady, setContainerReady] = useState(false);
+  const [containerSizeSignature, setContainerSizeSignature] = useState("");
   const fitViewOptions = useMemo(() => ({ padding: 0.12, maxZoom: 1.45 }), []);
   const fitDuration = fullscreen ? 220 : 0;
 
   useEffect(() => {
-    if (!flowInstanceRef.current) return;
-    const fit = () => {
+    if (
+      !flowInstanceRef.current ||
+      !flowReady ||
+      !layoutReady ||
+      !containerReady ||
+      !layoutFitSignature ||
+      !containerSizeSignature
+    ) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
       flowInstanceRef.current?.fitView({
         ...fitViewOptions,
         duration: fitDuration,
       });
-    };
-    const frame = window.requestAnimationFrame(fit);
-    const timeout = window.setTimeout(fit, 180);
+    });
+
     return () => {
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
     };
-  }, [fitDuration, fitViewOptions, flowLayoutKey]);
+  }, [
+    containerReady,
+    containerSizeSignature,
+    fitDuration,
+    fitViewOptions,
+    flowReady,
+    layoutFitSignature,
+    layoutReady,
+  ]);
 
   useEffect(() => {
     const container = flowContainerRef.current;
@@ -3993,26 +4474,40 @@ function MeshTopologyFlow({
     const update = () => {
       const rect = container.getBoundingClientRect();
       const ready = rect.width > 8 && rect.height > 8;
-      setContainerReady(ready);
-      if (ready) {
-        flowInstanceRef.current?.fitView({ ...fitViewOptions, duration: 0 });
-      }
+      const size = ready
+        ? `${Math.round(rect.width)}x${Math.round(rect.height)}`
+        : "";
+
+      setContainerReady((previous) => (previous === ready ? previous : ready));
+      setContainerSizeSignature((previous) =>
+        previous === size ? previous : size,
+      );
     };
 
     update();
     const observer = new ResizeObserver(update);
     observer.observe(container);
     return () => observer.disconnect();
-  }, [fitViewOptions, flowLayoutKey, containerStyle, heightClass]);
+  }, []);
+
+  useEffect(() => {
+    if (containerReady && layoutReady) return;
+    flowInstanceRef.current = null;
+    setFlowReady(false);
+  }, [containerReady, layoutReady]);
 
   const flowNodes = useMemo<TopologyFlowDiagramNode[]>(() => {
+    const isHorizontal = activeLayout.direction === "horizontal";
     return positioned.map((p) => ({
       id: p.id,
       type: "topologyNode",
       position: { x: p.x, y: p.y },
       origin: [0.5, 0],
+      sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
+      targetPosition: isHorizontal ? Position.Left : Position.Top,
       data: {
         node: p,
+        layoutDirection: activeLayout.direction,
         info: nodeInfoById.get(p.id) ?? {
           role: "Node",
           statusLabel: "n/a",
@@ -4034,6 +4529,7 @@ function MeshTopologyFlow({
       zIndex: p.id === center.id ? 10 : 1,
     }));
   }, [
+    activeLayout.direction,
     positioned,
     nodeInfoById,
     selectedNodeId,
@@ -4042,33 +4538,32 @@ function MeshTopologyFlow({
   ]);
 
   const flowEdges = useMemo<Edge[]>(() => {
-    const outer = positioned.filter((p) => p.id !== center.id);
-    return outer
-      .filter(
-        (p, idx) => !(p.bucket === "client" && idx % clientEdgeStride !== 0),
-      )
+    return positioned
+      .filter((p) => p.id !== center.id)
       .map((p) => {
         const stroke =
           p.bucket === "serving"
             ? "rgba(34,197,94,0.35)"
-            : p.bucket === "worker"
-              ? "rgba(56,189,248,0.3)"
-              : "rgba(148,163,184,0.22)";
+            : "rgba(56,189,248,0.3)";
         return {
           id: `edge-${center.id}-${p.id}`,
           source: center.id,
           target: p.id,
-          type: "straight",
+          type: activeLayout.edgeType,
           className: `mesh-edge mesh-edge--${p.bucket}`,
           animated: false,
+          pathOptions:
+            activeLayout.edgeType === "smoothstep"
+              ? { borderRadius: 18, offset: 24 }
+              : undefined,
           style: {
             stroke,
-            strokeWidth: p.bucket === "client" ? 1.8 : 2.4,
-            strokeDasharray: p.bucket === "client" ? "2 8" : "2 6",
+            strokeWidth: 2.4,
+            strokeDasharray: "2 6",
           },
         };
       });
-  }, [positioned, center.id, clientEdgeStride]);
+  }, [activeLayout.edgeType, positioned, center.id]);
 
   return (
     <div
@@ -4079,17 +4574,14 @@ function MeshTopologyFlow({
       ref={flowContainerRef}
       style={containerStyle}
     >
-      {containerReady ? (
+      {containerReady && layoutReady ? (
         <ReactFlow<TopologyFlowDiagramNode, Edge>
-          key={flowLayoutKey}
           className="h-full w-full"
           style={{ width: "100%", height: "100%" }}
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={topologyNodeTypes}
           colorMode={flowColorMode}
-          fitView
-          fitViewOptions={fitViewOptions}
           minZoom={0.2}
           maxZoom={1.6}
           zoomOnScroll={false}
@@ -4101,11 +4593,12 @@ function MeshTopologyFlow({
           elementsSelectable={false}
           onInit={(instance) => {
             flowInstanceRef.current = instance;
-            window.requestAnimationFrame(() => {
-              instance.fitView({ ...fitViewOptions, duration: fitDuration });
-            });
+            setFlowReady(true);
           }}
-          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+          onNodeClick={(_, node) => {
+            setSelectedNodeId(node.id);
+            onOpenNode?.(node.id);
+          }}
           proOptions={{ hideAttribution: true }}
         >
           <Background
@@ -4125,149 +4618,6 @@ function MeshTopologyFlow({
   );
 }
 
-function layoutTopologyNodes(
-  center: TopologyNode,
-  serving: TopologyNode[],
-  workers: TopologyNode[],
-  clients: TopologyNode[],
-  nodeRadius: number,
-): PositionedTopologyNode[] {
-  const placeRow = (
-    row: TopologyNode[],
-    bucket: PositionedTopologyNode["bucket"],
-    y: number,
-    horizontalSpacing: number,
-    positioned: PositionedTopologyNode[],
-  ) => {
-    const startX = -((row.length - 1) * horizontalSpacing) / 2;
-    row.forEach((node, index) => {
-      positioned.push({
-        ...node,
-        bucket,
-        x: startX + index * horizontalSpacing,
-        y,
-      });
-    });
-  };
-
-  const all: Array<PositionedTopologyNode> = [
-    ...serving.map((n) => ({ ...n, bucket: "serving" as const, x: 0, y: 0 })),
-    ...workers.map((n) => ({ ...n, bucket: "worker" as const, x: 0, y: 0 })),
-    ...clients.map((n) => ({ ...n, bucket: "client" as const, x: 0, y: 0 })),
-  ];
-
-  const positioned: PositionedTopologyNode[] = [
-    { ...center, x: 0, y: 0, bucket: "center" },
-  ];
-  const peerCount = all.length;
-  if (peerCount === 0) return positioned;
-
-  if (peerCount <= 6) {
-    const horizontalSpacing = 270;
-    const bandOffset = 215;
-    const rowStep = 118;
-    const topRows: Array<{
-      nodes: TopologyNode[];
-      bucket: PositionedTopologyNode["bucket"];
-    }> = [];
-    const bottomRows: Array<{
-      nodes: TopologyNode[];
-      bucket: PositionedTopologyNode["bucket"];
-    }> = [];
-
-    if (serving.length) {
-      topRows.push({ nodes: serving, bucket: "serving" });
-    }
-
-    if (workers.length) {
-      if (serving.length === 0) {
-        topRows.push({ nodes: workers, bucket: "worker" });
-      } else {
-        bottomRows.push({ nodes: workers, bucket: "worker" });
-      }
-    }
-
-    if (clients.length) {
-      bottomRows.push({ nodes: clients, bucket: "client" });
-    }
-
-    topRows.forEach((row, index) => {
-      const distanceFromCenter =
-        bandOffset + (topRows.length - index - 1) * rowStep;
-      placeRow(
-        row.nodes,
-        row.bucket,
-        -distanceFromCenter,
-        horizontalSpacing,
-        positioned,
-      );
-    });
-
-    bottomRows.forEach((row, index) => {
-      const distanceFromCenter = bandOffset + index * rowStep;
-      placeRow(
-        row.nodes,
-        row.bucket,
-        distanceFromCenter,
-        horizontalSpacing,
-        positioned,
-      );
-    });
-
-    return positioned;
-  }
-
-  // Small meshes get a larger first ring so the graph uses the available canvas.
-  const baseRadius =
-    peerCount <= 3
-      ? 190
-      : peerCount <= 6
-        ? 220
-        : peerCount <= 10
-          ? 250
-          : Math.max(200, nodeRadius * 9 + 96);
-  const ringSpacing =
-    peerCount <= 10 ? 120 : Math.max(102, nodeRadius * 7 + 58);
-  const minArcLength = Math.max(110, nodeRadius * 7 + 54);
-
-  if (peerCount <= 10) {
-    for (let i = 0; i < peerCount; i += 1) {
-      const angle = -Math.PI / 2 + (2 * Math.PI * i) / peerCount;
-      const node = all[i];
-      positioned.push({
-        ...node,
-        x: Math.cos(angle) * baseRadius,
-        y: Math.sin(angle) * baseRadius,
-      });
-    }
-    return positioned;
-  }
-
-  let offset = 0;
-  let ring = 0;
-  while (offset < peerCount) {
-    const radius = baseRadius + ring * ringSpacing;
-    const capacity = Math.max(
-      8,
-      Math.floor((2 * Math.PI * radius) / minArcLength),
-    );
-    const take = Math.min(capacity, peerCount - offset);
-    const phase = ring % 2 === 0 ? 0 : Math.PI / Math.max(6, take);
-    for (let i = 0; i < take; i += 1) {
-      const angle = -Math.PI / 2 + phase + (2 * Math.PI * i) / take;
-      const node = all[offset + i];
-      positioned.push({
-        ...node,
-        x: Math.cos(angle) * radius,
-        y: Math.sin(angle) * radius,
-      });
-    }
-    offset += take;
-    ring += 1;
-  }
-
-  return positioned;
-}
 
 // KaTeX math renderer — loads from CDN on first use
 let katexCssLoaded = false;
@@ -4287,42 +4637,44 @@ const katexPromise = import(
   .catch(() => null);
 
 function KaTeXBlock({ math, display }: { math: string; display: boolean }) {
-  const [html, setHtml] = useState<string | null>(null);
+  const [rendered, setRendered] = useState(false);
+  const blockRef = useRef<HTMLDivElement | null>(null);
+  const inlineRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    setRendered(false);
     katexPromise.then((katex) => {
-      if (cancelled || !katex) return;
+      const container = display ? blockRef.current : inlineRef.current;
+      if (cancelled || !katex || !container) return;
+      container.innerHTML = "";
       try {
-        const rendered = katex.renderToString(math, {
+        katex.render(math, container, {
           displayMode: display,
           throwOnError: false,
         });
-        if (!cancelled) setHtml(rendered);
-      } catch {
-        if (!cancelled) setHtml(null);
-      }
+        if (!cancelled) setRendered(true);
+      } catch {}
     });
     return () => {
       cancelled = true;
     };
   }, [math, display]);
 
-  if (html === null)
-    return display ? (
-      <div className="my-2 overflow-x-auto text-sm">
-        <code>{math}</code>
-      </div>
-    ) : (
-      <code>{math}</code>
-    );
   return display ? (
-    <div
-      className="my-2 overflow-x-auto"
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    <>
+      <div ref={blockRef} className={rendered ? "my-2 overflow-x-auto" : "hidden"} />
+      {!rendered && (
+        <div className="my-2 overflow-x-auto text-sm">
+          <code>{math}</code>
+        </div>
+      )}
+    </>
   ) : (
-    <span dangerouslySetInnerHTML={{ __html: html }} />
+    <>
+      <span ref={inlineRef} className={rendered ? undefined : "hidden"} />
+      {!rendered && <code>{math}</code>}
+    </>
   );
 }
 
@@ -4334,7 +4686,7 @@ const mermaidPromise = import(
     m.default.initialize({
       startOnLoad: false,
       theme: "dark",
-      securityLevel: "loose",
+      securityLevel: "antiscript",
     });
     return m.default;
   })
@@ -4346,10 +4698,20 @@ function MermaidBlock({ code }: { code: string }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!svg || !containerRef.current) return;
+    containerRef.current.innerHTML = svg;
+    return () => {
+      if (containerRef.current) containerRef.current.innerHTML = "";
+    };
+  }, [svg]);
+
+  useEffect(() => {
     let cancelled = false;
+    setError(null);
+    setSvg(null);
     mermaidPromise.then(async (mermaid) => {
       if (cancelled || !mermaid) {
-        setError("Mermaid failed to load");
+        if (!cancelled) setError("Mermaid failed to load");
         return;
       }
       try {
@@ -4379,11 +4741,11 @@ function MermaidBlock({ code }: { code: string }) {
         Rendering diagram…
       </div>
     );
+
   return (
     <div
       ref={containerRef}
       className="my-2 overflow-x-auto rounded-lg border border-border/70 bg-background/80 p-3 [&_svg]:max-w-full"
-      dangerouslySetInnerHTML={{ __html: svg }}
     />
   );
 }
@@ -4609,7 +4971,12 @@ function StatCard({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div tabIndex={0}>{card}</div>
+        <button
+          type="button"
+          className="block w-full rounded-lg bg-transparent text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {card}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -4650,12 +5017,287 @@ function DashboardPanelEmpty({
   );
 }
 
+function NodeSidebar({
+  node,
+  meshModelByName,
+  onOpenModel,
+  onBack,
+}: {
+  node: NodeSidebarRecord;
+  meshModelByName: Record<string, MeshModel>;
+  onOpenModel: (modelName: string) => void;
+  onBack?: () => void;
+}) {
+  const modelRows = useMemo(() => {
+    const order = new Map<string, number>();
+    node.hotModels.forEach((name, index) => order.set(name, index));
+    node.servingModels.forEach((name, index) => {
+      if (!order.has(name)) order.set(name, node.hotModels.length + index);
+    });
+    node.requestedModels.forEach((name, index) => {
+      if (!order.has(name)) order.set(name, node.hotModels.length + node.servingModels.length + index);
+    });
+    return uniqueModels(node.hotModels, node.servingModels, node.requestedModels)
+      .map((name) => ({
+        name,
+        flags: [
+          node.servingModels.includes(name) ? "Serving" : null,
+          node.hostedModels.includes(name) ? "Hosted" : null,
+          node.requestedModels.includes(name) ? "Requested" : null,
+        ].filter(Boolean) as string[],
+        meshStatus: meshModelByName[name]?.status ?? "unknown",
+      }))
+      .sort((a, b) => (order.get(a.name) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.name) ?? Number.MAX_SAFE_INTEGER));
+  }, [meshModelByName, node]);
+
+  return (
+    <div className="flex min-h-full flex-col">
+      <div className="border-b bg-gradient-to-br from-emerald-50 via-background to-background px-6 pb-3 pt-3 dark:from-emerald-950/20">
+        <SheetHeader className="space-y-2 text-left">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border bg-background text-primary shadow-sm">
+              <Server className="h-3.5 w-3.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <SheetTitle className="text-lg font-semibold leading-tight tracking-tight [overflow-wrap:anywhere] sm:text-xl">
+                  {node.title}
+                </SheetTitle>
+                {node.self ? (
+                  <Badge className="h-5 rounded-full border-sky-500/45 bg-sky-500/10 px-2 text-[10px] font-medium text-sky-700 dark:border-sky-400/55 dark:bg-sky-400/15 dark:text-sky-200">
+                    You
+                  </Badge>
+                ) : null}
+                <StatusPill
+                  label={node.role}
+                  tone={nodeRoleTone(node.role)}
+                  tooltip={nodeRoleTooltip(node.role)}
+                />
+                <StatusPill
+                  label={node.statusLabel}
+                  tone={topologyStatusTone(node.statusLabel)}
+                  dot
+                  tooltip={topologyStatusTooltip(node.statusLabel)}
+                />
+              </div>
+              <SheetDescription className="mt-1.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                {node.id}
+              </SheetDescription>
+            </div>
+            {onBack ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={onBack}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </Button>
+            ) : null}
+          </div>
+        </SheetHeader>
+      </div>
+
+      <div className="flex-1 space-y-5 px-6 py-5">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <ModelFactCard
+            title="Latency"
+            value={node.latencyLabel}
+            icon={<Wifi className="h-4 w-4" />}
+            tooltip={nodeLatencyTooltip(node.self)}
+          />
+          <ModelFactCard
+            title="Node VRAM"
+            value={`${node.vramGb.toFixed(1)} GB`}
+            icon={<MemoryStick className="h-4 w-4" />}
+            tooltip={nodeVramTooltip(node.role)}
+          />
+          <ModelFactCard
+            title="Mesh Share"
+            value={node.vramSharePct != null ? `${node.vramSharePct}%` : "n/a"}
+            icon={<Gauge className="h-4 w-4" />}
+            tooltip={nodeMeshShareTooltip(node.role)}
+          />
+          <ModelFactCard
+            title="Models"
+            value={`${modelRows.length}`}
+            icon={<Sparkles className="h-4 w-4" />}
+            tooltip={nodeHotModelsTooltip()}
+          />
+        </div>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Sparkles className="h-4 w-4 text-muted-foreground" />
+              <span>Models</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {modelRows.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Model</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead className="text-right">Mesh</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {modelRows.map((row) => {
+                    const modelExists = !!meshModelByName[row.name];
+                    return (
+                      <TableRow key={row.name}>
+                        <TableCell className="max-w-[260px]">
+                          {modelExists ? (
+                            <button
+                              type="button"
+                              className="truncate rounded-sm text-left text-sm font-medium underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                              onClick={() => onOpenModel(row.name)}
+                              title={row.name}
+                            >
+                              {shortName(modelDisplayName(meshModelByName[row.name]) || row.name)}
+                            </button>
+                          ) : (
+                            <span className="truncate text-sm font-medium" title={row.name}>
+                              {shortName(row.name)}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {row.flags.map((flag) => (
+                              <StatusPill
+                                key={flag}
+                                label={flag}
+                                tone={flag === "Serving" ? "good" : flag === "Requested" ? "warn" : "info"}
+                                tooltip={nodeModelFlagTooltip(flag)}
+                              />
+                            ))}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <StatusPill
+                            className="justify-end"
+                            label={
+                              row.meshStatus === "warm"
+                                ? "Warm"
+                                : row.meshStatus === "cold"
+                                  ? "Cold"
+                                  : row.meshStatus
+                            }
+                            tone={
+                              row.meshStatus === "warm"
+                                ? "warm"
+                                : row.meshStatus === "cold"
+                                  ? "cold"
+                                  : "neutral"
+                            }
+                            dot={row.meshStatus === "warm" || row.meshStatus === "cold"}
+                            tooltip={modelStatusTooltip(row.meshStatus)}
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No active model assignments on this node.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Cpu className="h-4 w-4 text-muted-foreground" />
+              <span>Hardware</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 pt-0">
+            {node.hostname ? (
+              <ModelMetaItem
+                label="Hostname"
+                value={node.hostname}
+                icon={<Server className="h-3.5 w-3.5" />}
+              />
+            ) : null}
+            {node.gpus.length > 0 ? (
+              <div className="grid gap-3">
+                {node.gpus.map((gpu, index) => (
+                  <ModelMetaItem
+                    key={`${gpu.name}-${index}`}
+                    label={node.isSoc ? `SoC ${index + 1}` : `GPU ${index + 1}`}
+                    value={`${trimGpuVendor(gpu.name) || gpu.name} · ${formatGpuMemory(gpu.vram_bytes)}${gpu.bandwidth_gbps ? ` · ${gpu.bandwidth_gbps.toFixed(0)} GB/s` : ""}`}
+                    icon={node.isSoc ? <Cpu className="h-3.5 w-3.5" /> : <Gpu className="h-3.5 w-3.5" />}
+                  />
+                ))}
+              </div>
+            ) : node.privacyLimited ? (
+              <p className="text-sm leading-6 text-muted-foreground">
+                Hardware details are hidden by this peer&apos;s privacy settings.
+              </p>
+            ) : (
+              <p className="text-sm leading-6 text-muted-foreground">
+                No hardware details reported for this node.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+
+        {node.self ? (
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Info className="h-4 w-4 text-muted-foreground" />
+                <span>Runtime</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3 sm:grid-cols-2">
+              {node.version ? (
+                <ModelMetaItem label="Version" value={`v${node.version}`} />
+              ) : null}
+              {node.latestVersion ? (
+                <ModelMetaItem label="Latest" value={`v${node.latestVersion}`} />
+              ) : null}
+              {node.llamaReady != null ? (
+                <ModelMetaItem label="Llama Ready" value={node.llamaReady ? "Yes" : "No"} />
+              ) : null}
+              {node.apiPort != null ? (
+                <ModelMetaItem label="API Port" value={`${node.apiPort}`} />
+              ) : null}
+              {node.inflightRequests != null ? (
+                <ModelMetaItem label="Inflight" value={`${node.inflightRequests}`} />
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {node.availableModels.length > 0 && modelRows.length === 0 ? (
+          <div className="px-1 text-xs text-muted-foreground">
+            Available locally: {node.availableModels.map(shortName).join(", ")}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function ModelSidebar({
   model,
   activePeers,
+  onOpenNode,
+  onBack,
 }: {
   model: MeshModel;
   activePeers: ActivePeerRow[];
+  onOpenNode: (nodeId: string) => void;
+  onBack?: () => void;
 }) {
   const fullFileName = modelFullFileName(model);
   const revisionFileName = modelRevisionFileName(model);
@@ -4692,25 +5334,42 @@ function ModelSidebar({
                   tooltip={modelStatusTooltip(model.status)}
                 />
                 <StatusPill
-                  label={headerFitLabel(model.fit_label ?? 'Unknown')}
-                  tone={fitLabelTone(model.fit_label ?? 'Unknown')}
+                  label={headerFitLabel(model.fit_label ?? "Unknown")}
+                  tone={fitLabelTone(model.fit_label ?? "Unknown")}
                   icon={<Check className="h-3 w-3" />}
-                  tooltip={fitLabelTooltip(model.fit_label ?? 'Unknown')}
+                  tooltip={fitLabelTooltip(model.fit_label ?? "Unknown")}
                 />
               </div>
               <SheetDescription className="mt-1.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                 {model.name}
               </SheetDescription>
             </div>
+            {onBack ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={onBack}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </Button>
+            ) : null}
           </div>
         </SheetHeader>
       </div>
 
       <div className="flex-1 space-y-5 px-6 py-5">
-        <div className={cn('grid gap-3', model.context_length ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
+        <div
+          className={cn(
+            "grid gap-3",
+            model.context_length ? "sm:grid-cols-4" : "sm:grid-cols-3",
+          )}
+        >
           <ModelFactCard
             title="Mesh Availability"
-            value={`${model.node_count} node${model.node_count === 1 ? '' : 's'}`}
+            value={`${model.node_count} node${model.node_count === 1 ? "" : "s"}`}
             icon={<Network className="h-4 w-4" />}
             tooltip="Warm nodes currently serving this model."
           />
@@ -4722,7 +5381,9 @@ function ModelSidebar({
           />
           <ModelFactCard
             title="File size"
-            value={model.size_gb > 0 ? `${model.size_gb.toFixed(1)} GB` : 'Unknown'}
+            value={
+              model.size_gb > 0 ? `${model.size_gb.toFixed(1)} GB` : "Unknown"
+            }
             icon={<MemoryStick className="h-4 w-4" />}
             tooltip={fileSizeTooltip(model.source_file)}
           />
@@ -4782,14 +5443,14 @@ function ModelSidebar({
           </CardContent>
         </Card>
 
-        {(model.description
-          || model.architecture
-          || model.quantization
-          || model.draft_model
-          || model.source_ref
-          || model.source_revision
-          || model.expert_count
-          || model.used_expert_count) ? (
+        {model.description ||
+        model.architecture ||
+        model.quantization ||
+        model.draft_model ||
+        model.source_ref ||
+        model.source_revision ||
+        model.expert_count ||
+        model.used_expert_count ? (
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-sm">
@@ -4798,7 +5459,11 @@ function ModelSidebar({
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {model.description ? <p className="leading-7 text-muted-foreground">{model.description}</p> : null}
+              {model.description ? (
+                <p className="leading-7 text-muted-foreground">
+                  {model.description}
+                </p>
+              ) : null}
               <div className="grid gap-3 sm:grid-cols-2">
                 {model.architecture ? (
                   <ModelMetaItem
@@ -4832,10 +5497,19 @@ function ModelSidebar({
                   <ModelMetaLinkItem
                     label="Model Source"
                     href={model.source_page_url}
-                    text={huggingFacePathFromUrl(model.source_page_url) ?? model.source_ref ?? model.name}
+                    text={
+                      huggingFacePathFromUrl(model.source_page_url) ??
+                      model.source_ref ??
+                      model.name
+                    }
                     icon={
                       isHuggingFaceUrl(model.source_page_url) ? (
-                        <span aria-hidden="true" className="text-sm leading-none">🤗</span>
+                        <span
+                          aria-hidden="true"
+                          className="text-sm leading-none"
+                        >
+                          🤗
+                        </span>
                       ) : (
                         <ExternalLink className="h-3.5 w-3.5" />
                       )
@@ -4853,7 +5527,7 @@ function ModelSidebar({
           </Card>
         ) : null}
 
-        {(model.name || fullFileName || revisionFileName) ? (
+        {model.name || fullFileName || revisionFileName ? (
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-2 text-sm">
@@ -4863,15 +5537,28 @@ function ModelSidebar({
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <p className="text-sm leading-6 text-muted-foreground">
-                The same model file shown as the mesh shorthand, repository path, and pinned revision.
+                The same model file shown as the mesh shorthand, repository
+                path, and pinned revision.
               </p>
               <div className="grid gap-3">
-                <ModelMetaItem label="Shorthand" value={model.name} copyValue={model.name} />
+                <ModelMetaItem
+                  label="Shorthand"
+                  value={model.name}
+                  copyValue={model.name}
+                />
                 {fullFileName ? (
-                  <ModelMetaItem label="Full name" value={fullFileName} copyValue={fullFileName} />
+                  <ModelMetaItem
+                    label="Full name"
+                    value={fullFileName}
+                    copyValue={fullFileName}
+                  />
                 ) : null}
                 {revisionFileName ? (
-                  <ModelMetaItem label="Revision" value={revisionFileName} copyValue={revisionFileName} />
+                  <ModelMetaItem
+                    label="Revision"
+                    value={revisionFileName}
+                    copyValue={revisionFileName}
+                  />
                 ) : null}
               </div>
             </CardContent>
@@ -4899,7 +5586,15 @@ function ModelSidebar({
                 <TableBody>
                   {activePeers.map((peer) => (
                     <TableRow key={peer.id}>
-                      <TableCell className="font-mono text-xs">{peer.id}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <button
+                          type="button"
+                          className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
+                          onClick={() => onOpenNode(peer.id)}
+                        >
+                          {peer.id}
+                        </button>
+                      </TableCell>
                       <TableCell className="text-right">{peer.latencyLabel}</TableCell>
                       <TableCell className="text-right">{peer.vramLabel}</TableCell>
                       <TableCell className="text-right">{peer.shareLabel}</TableCell>
@@ -4913,8 +5608,12 @@ function ModelSidebar({
 
         {model.request_count != null || model.last_active_secs_ago != null ? (
           <div className="px-1 text-xs text-muted-foreground">
-            {model.request_count != null ? `${model.request_count} requests seen` : 'No request count'}
-            {model.last_active_secs_ago != null ? ` · active ${formatAge(model.last_active_secs_ago)} ago` : ''}
+            {model.request_count != null
+              ? `${model.request_count} requests seen`
+              : "No request count"}
+            {model.last_active_secs_ago != null
+              ? ` · active ${formatAge(model.last_active_secs_ago)} ago`
+              : ""}
           </div>
         ) : null}
       </div>
@@ -4932,9 +5631,7 @@ function CapabilityBadge({
   tooltip?: string;
 }) {
   const badge = (
-    <Badge
-      className="gap-1.5 rounded-full border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-foreground dark:border-sky-900 dark:bg-sky-950/30"
-    >
+    <Badge className="gap-1.5 rounded-full border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-foreground dark:border-sky-900 dark:bg-sky-950/30">
       {icon}
       {label}
     </Badge>
@@ -4943,7 +5640,12 @@ function CapabilityBadge({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex" tabIndex={0}>{badge}</span>
+        <button
+          type="button"
+          className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {badge}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -4980,7 +5682,12 @@ function ModelFactCard({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div tabIndex={0}>{card}</div>
+        <button
+          type="button"
+          className="block w-full rounded-lg bg-transparent text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {card}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -5028,13 +5735,19 @@ function ModelMetaItem({
             className="h-6 w-6 rounded-full p-0 text-muted-foreground hover:text-foreground"
             onClick={() => void copy()}
             aria-label={copied ? `${label} copied` : `Copy ${label}`}
-            title={copied ? 'Copied' : `Copy ${label}`}
+            title={copied ? "Copied" : `Copy ${label}`}
           >
-            {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copied ? (
+              <Check className="h-3 w-3" />
+            ) : (
+              <Copy className="h-3 w-3" />
+            )}
           </Button>
         ) : null}
       </div>
-      <div className="mt-1 text-sm font-medium [overflow-wrap:anywhere]">{value}</div>
+      <div className="mt-1 text-sm font-medium [overflow-wrap:anywhere]">
+        {value}
+      </div>
     </div>
   );
 }
@@ -5078,14 +5791,21 @@ function StatusPill({
   tooltip,
 }: {
   label: string;
-  tone: 'warm' | 'cold' | 'good' | 'info' | 'warn' | 'bad' | 'neutral';
+  tone: "warm" | "cold" | "good" | "info" | "warn" | "bad" | "neutral";
   dot?: boolean;
   icon?: ReactNode;
   className?: string;
   tooltip?: string;
 }) {
   const badge = (
-    <Badge className={cn('h-5 shrink-0 rounded-full px-2 text-[10px] font-medium', statusPillToneClass(tone), (dot || icon) ? 'gap-1' : '', className)}>
+    <Badge
+      className={cn(
+        "h-5 shrink-0 rounded-full px-2 text-[10px] font-medium",
+        statusPillToneClass(tone),
+        dot || icon ? "gap-1" : "",
+        className,
+      )}
+    >
       {dot ? <span className="h-1.5 w-1.5 rounded-full bg-current" /> : null}
       {icon}
       {label}
@@ -5095,7 +5815,12 @@ function StatusPill({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex" tabIndex={0}>{badge}</span>
+        <button
+          type="button"
+          className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {badge}
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -5126,9 +5851,7 @@ function shortName(name: string) {
 
 function huggingFacePathFromUrl(url?: string) {
   if (!url) return null;
-  return url
-    .replace(/^https?:\/\/huggingface\.co\//, '')
-    .replace(/\/$/, '');
+  return url.replace(/^https?:\/\/huggingface\.co\//, "").replace(/\/$/, "");
 }
 
 function isHuggingFaceUrl(url?: string) {
@@ -5156,14 +5879,14 @@ function modelRevisionFileName(model?: MeshModel | null) {
 }
 
 function formatAge(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 60) return 'just now';
+  if (!Number.isFinite(seconds) || seconds < 60) return "just now";
   if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
   if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
   return `${Math.round(seconds / 86400)}d`;
 }
 
 function formatContextLength(value?: number) {
-  if (!value || !Number.isFinite(value)) return 'Unknown';
+  if (!value || !Number.isFinite(value)) return "Unknown";
   if (value >= 1000) {
     const rounded = value / 1000;
     return Number.isInteger(rounded) ? `${rounded}K` : `${rounded.toFixed(1)}K`;
@@ -5179,112 +5902,169 @@ function formatLatency(value?: number | null) {
 }
 
 function headerFitLabel(label?: string) {
-  if (label === 'Likely comfortable' || label === 'Likely fits') {
-    return 'Suitable for this node';
+  if (label === "Likely comfortable" || label === "Likely fits") {
+    return "Suitable for this node";
   }
-  if (label === 'Possible with tradeoffs') {
-    return 'May fit this node';
+  if (label === "Possible with tradeoffs") {
+    return "May fit this node";
   }
-  if (label === 'Likely too large') {
-    return 'Too large for this node';
+  if (label === "Likely too large") {
+    return "Too large for this node";
   }
-  return 'Check fit';
+  return "Check fit";
 }
 
-function fitLabelTone(label?: string): 'good' | 'info' | 'warn' | 'bad' | 'neutral' {
-  if (label === 'Likely comfortable') return 'good';
-  if (label === 'Likely fits') return 'good';
-  if (label === 'Possible with tradeoffs') return 'warn';
-  if (label === 'Likely too large') return 'bad';
-  return 'neutral';
+function fitLabelTone(
+  label?: string,
+): "good" | "info" | "warn" | "bad" | "neutral" {
+  if (label === "Likely comfortable") return "good";
+  if (label === "Likely fits") return "good";
+  if (label === "Possible with tradeoffs") return "warn";
+  if (label === "Likely too large") return "bad";
+  return "neutral";
 }
 
 function modelStatusTooltip(status?: string) {
-  if (status === 'warm') {
-    return 'Loaded and serving in the mesh.';
+  if (status === "warm") {
+    return "Loaded and serving in the mesh.";
   }
-  if (status === 'cold') {
-    return 'Downloaded locally, but not currently serving.';
+  if (status === "cold") {
+    return "Downloaded locally, but not currently serving.";
   }
-  return 'Current model availability in the mesh.';
+  return "Current model availability in the mesh.";
+}
+
+function nodeRoleTooltip(role: string) {
+  if (role === 'Host') {
+    return 'Coordinates requests and mesh routing for this node.';
+  }
+  if (role === 'Worker') {
+    return 'Contributes VRAM and compute capacity to the mesh.';
+  }
+  if (role === 'Client') {
+    return 'Sends requests, but does not contribute VRAM.';
+  }
+  return 'Connected to the mesh, but not actively serving a model.';
+}
+
+function nodeLatencyTooltip(self: boolean) {
+  if (self) {
+    return 'This is the local node.';
+  }
+  return 'Observed round-trip latency from your node to this peer.';
+}
+
+function nodeVramTooltip(role: string) {
+  if (role === 'Client') {
+    return 'Clients do not contribute serving VRAM to the mesh.';
+  }
+  return 'Serving VRAM contributed by this node to the mesh.';
+}
+
+function nodeMeshShareTooltip(role: string) {
+  if (role === 'Client') {
+    return 'Clients do not contribute serving VRAM, so they have no mesh share.';
+  }
+  return 'Approximate share of total serving VRAM contributed by this node.';
+}
+
+function nodeHotModelsTooltip() {
+  return 'Models this node is hosting, serving, or requesting right now.';
+}
+
+function nodeModelFlagTooltip(flag: string) {
+  if (flag === 'Serving') {
+    return 'This node is actively serving requests for this model.';
+  }
+  if (flag === 'Hosted') {
+    return 'This node has the model available locally for routing.';
+  }
+  if (flag === 'Requested') {
+    return 'This model has been requested on this node, but is not active yet.';
+  }
+  return 'Current model role on this node.';
 }
 
 function fitLabelTooltip(label?: string) {
-  if (label === 'Likely comfortable') {
-    return 'Should run comfortably on this node.';
+  if (label === "Likely comfortable") {
+    return "Should run comfortably on this node.";
   }
-  if (label === 'Likely fits') {
-    return 'Should fit on this node, but tightly.';
+  if (label === "Likely fits") {
+    return "Should fit on this node, but tightly.";
   }
-  if (label === 'Possible with tradeoffs') {
-    return 'May fit, with tighter memory or performance tradeoffs.';
+  if (label === "Possible with tradeoffs") {
+    return "May fit, with tighter memory or performance tradeoffs.";
   }
-  if (label === 'Likely too large') {
-    return 'Likely too large for this node alone.';
+  if (label === "Likely too large") {
+    return "Likely too large for this node alone.";
   }
-  return 'Estimated fit for this node.';
+  return "Estimated fit for this node.";
 }
 
 function fileSizeTooltip(fileName?: string) {
-  const ext = fileName?.split('.').pop()?.toUpperCase();
-  if (ext === 'GGUF') return 'GGUF model file size on disk.';
+  const ext = fileName?.split(".").pop()?.toUpperCase();
+  if (ext === "GGUF") return "GGUF model file size on disk.";
   if (ext) return `${ext} model file size on disk.`;
-  return 'Primary model file size on disk.';
+  return "Primary model file size on disk.";
 }
 
 function toolUseTooltip(status?: string) {
-  if (status === 'supported') {
-    return 'Supports tool or function calling.';
+  if (status === "supported") {
+    return "Supports tool or function calling.";
   }
-  if (status === 'likely') {
-    return 'Likely supports tool or function calling.';
+  if (status === "likely") {
+    return "Likely supports tool or function calling.";
   }
-  return 'Tool or function calling support.';
+  return "Tool or function calling support.";
 }
 
-function topologyStatusTone(status: string): 'good' | 'info' | 'warn' | 'bad' | 'neutral' {
-  if (status === 'Serving' || status === 'Serving (split)') return 'good';
-  if (status === 'Client') return 'info';
-  if (status === 'Host') return 'info';
-  if (status === 'Idle' || status === 'Standby') return 'neutral';
-  if (status === 'Worker (split)') return 'warn';
-  return 'neutral';
+function topologyStatusTone(
+  status: string,
+): "good" | "info" | "warn" | "bad" | "neutral" {
+  if (status === "Serving" || status === "Serving (split)") return "good";
+  if (status === "Client") return "info";
+  if (status === "Host") return "info";
+  if (status === "Idle" || status === "Standby") return "neutral";
+  if (status === "Worker (split)") return "warn";
+  return "neutral";
 }
 
 function topologyStatusTooltip(status: string) {
-  if (status === 'Serving') {
-    return 'Actively serving a model.';
+  if (status === "Serving") {
+    return "Actively serving a model.";
   }
-  if (status === 'Serving (split)') {
-    return 'Serving a split model with the mesh.';
+  if (status === "Serving (split)") {
+    return "Serving a split model with the mesh.";
   }
-  if (status === 'Worker (split)') {
-    return 'Contributing compute to a split model.';
+  if (status === "Worker (split)") {
+    return "Contributing compute to a split model.";
   }
-  if (status === 'Host') {
-    return 'Coordinating requests for the mesh.';
+  if (status === "Host") {
+    return "Coordinating requests for the mesh.";
   }
-  if (status === 'Client') {
-    return 'Sends requests, but does not contribute VRAM.';
+  if (status === "Client") {
+    return "Sends requests, but does not contribute VRAM.";
   }
-  if (status === 'Idle' || status === 'Standby') {
-    return 'Connected, but not serving a model.';
+  if (status === "Idle" || status === "Standby") {
+    return "Connected, but not serving a model.";
   }
-  return 'Current serving role.';
+  return "Current serving role.";
 }
 
-function statusPillToneClass(tone: 'warm' | 'cold' | 'good' | 'info' | 'warn' | 'bad' | 'neutral') {
-  if (tone === 'warm' || tone === 'good') {
-    return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
+function statusPillToneClass(
+  tone: "warm" | "cold" | "good" | "info" | "warn" | "bad" | "neutral",
+) {
+  if (tone === "warm" || tone === "good") {
+    return "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
   }
-  if (tone === 'cold' || tone === 'info') {
-    return 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300';
+  if (tone === "cold" || tone === "info") {
+    return "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300";
   }
-  if (tone === 'warn') {
-    return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+  if (tone === "warn") {
+    return "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   }
-  if (tone === 'bad') {
-    return 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300';
+  if (tone === "bad") {
+    return "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300";
   }
   return "border-border bg-muted text-foreground";
 }

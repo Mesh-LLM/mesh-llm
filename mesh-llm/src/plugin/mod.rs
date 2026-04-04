@@ -427,7 +427,6 @@ mod tests {
     #[test]
     fn blackboard_can_be_disabled() {
         let config = MeshConfig {
-            self_update: None,
             plugins: vec![PluginConfigEntry {
                 name: BLACKBOARD_PLUGIN_ID.into(),
                 enabled: Some(false),
@@ -457,7 +456,6 @@ mod tests {
     #[test]
     fn resolves_external_plugin() {
         let config = MeshConfig {
-            self_update: None,
             plugins: vec![PluginConfigEntry {
                 name: "demo".into(),
                 enabled: Some(true),
@@ -469,13 +467,6 @@ mod tests {
         assert_eq!(resolved.externals.len(), 2);
         assert_eq!(resolved.externals[1].name, "demo");
         assert!(resolved.inactive.is_empty());
-    }
-
-    #[test]
-    fn self_update_defaults_to_enabled() {
-        assert!(MeshConfig::default().self_update_enabled());
-        let config: MeshConfig = toml::from_str("self_update = false").unwrap();
-        assert!(!config.self_update_enabled());
     }
 
     #[test]

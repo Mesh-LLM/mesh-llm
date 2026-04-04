@@ -7,16 +7,8 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct MeshConfig {
-    #[serde(default)]
-    pub self_update: Option<bool>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
-}
-
-impl MeshConfig {
-    pub fn self_update_enabled(&self) -> bool {
-        self.self_update.unwrap_or(true)
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
