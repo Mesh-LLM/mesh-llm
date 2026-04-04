@@ -472,20 +472,19 @@ pub async fn download_model(model: &CatalogModel) -> Result<PathBuf> {
         .map(hf_asset_from_url)
         .collect();
     if let Some(assets) = hf_assets {
-        // The primary asset filename comes from the parsed source URL and may
-        // differ in case from model.file (e.g. Qwen repos use lowercase
-        // filenames). Use the URL-derived basename for the cache lookup so
-        // we find the actual file regardless of case or nested paths.
         let source = model.source_file().unwrap_or(model.file.as_str());
-        let url_filename = source.rsplit('/').next().unwrap_or(source);
         let mut paths = download_hf_assets(&model.name, assets).await?;
         paths.sort();
+        if let Some(path) = paths
+            .iter()
+            .find(|path| path_file_name_matches(path, source))
+            .cloned()
+        {
+            return Ok(path);
+        }
         return paths
             .into_iter()
-            .find(|path| {
-                path_file_name_matches(path, url_filename)
-                    || path_file_name_matches(path, &model.file)
-            })
+            .find(|path| path_file_name_matches(path, &model.file))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Downloaded model path not found in cache for {}",
@@ -587,10 +586,32 @@ pub async fn download_url(url: &str, dest: &Path) -> Result<()> {
 }
 
 fn path_file_name_matches(path: &Path, expected: &str) -> bool {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case(expected))
-        .unwrap_or(false)
+    let expected_parts = expected
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+
+    if expected_parts.is_empty() {
+        return false;
+    }
+
+    let mut path_parts = path.iter().rev();
+
+    for expected_part in expected_parts.iter().rev() {
+        let Some(path_part) = path_parts.next() else {
+            return false;
+        };
+
+        let Some(path_part) = path_part.to_str() else {
+            return false;
+        };
+
+        if !path_part.eq_ignore_ascii_case(expected_part) {
+            return false;
+        }
+    }
+
+    true
 }
 
 /// Download a HuggingFace GGUF URL, auto-detecting split files (-00001-of-NNNNN.gguf).
@@ -1009,17 +1030,15 @@ mod tests {
     }
 
     #[test]
-    fn url_basename_strips_nested_path() {
-        let source = "Qwen3-Coder-Next-Q4_K_M/model-00001-of-00004.gguf";
-        let basename = source.rsplit('/').next().unwrap_or(source);
-        assert_eq!(basename, "model-00001-of-00004.gguf");
+    fn path_file_name_matches_nested_path_ignore_case() {
+        let path = Path::new("/tmp/cache/Subdir/Model.Q4_K_M.gguf");
+        assert!(path_file_name_matches(path, "subdir/model.q4_k_m.gguf"));
     }
 
     #[test]
-    fn url_basename_handles_flat_path() {
-        let source = "Qwen3-4B-Q4_K_M.gguf";
-        let basename = source.rsplit('/').next().unwrap_or(source);
-        assert_eq!(basename, "Qwen3-4B-Q4_K_M.gguf");
+    fn path_file_name_matches_rejects_wrong_suffix() {
+        let path = Path::new("/tmp/cache/other/Model.Q4_K_M.gguf");
+        assert!(!path_file_name_matches(path, "subdir/model.q4_k_m.gguf"));
     }
 
     #[tokio::test]
@@ -1071,6 +1090,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn download_hf_repo_file_matches_nested_cache_path_case_insensitively() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let cached_file = std::env::temp_dir()
+            .join(format!("mesh-llm-hf-nested-repo-{unique}"))
+            .join("nested")
+            .join("Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf");
+        std::fs::create_dir_all(cached_file.parent().unwrap()).unwrap();
+        std::fs::write(&cached_file, b"gguf").unwrap();
+
+        let label =
+            "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/nested/qwen2.5-coder-7b-instruct-q4_k_m.gguf@main"
+                .to_string();
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label,
+            Box::new({
+                let cached = cached_file.clone();
+                move |_, _| Ok(vec![cached.clone()])
+            }),
+        );
+
+        let resolved = download_hf_repo_file(
+            "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF",
+            Some("main"),
+            "nested/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved, cached_file);
+    }
+
+    #[tokio::test]
     async fn download_model_matches_hf_cache_file_case_insensitively() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1112,5 +1165,45 @@ mod tests {
             let _guard = DownloadHfAssetsOverrideGuard::set(label, Box::new(|_, _| Ok(Vec::new())));
             assert!(download_model(&model).await.is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn download_model_prefers_nested_source_path_over_same_basename() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("mesh-llm-hf-nested-model-{unique}"));
+        let wrong_file = root.join("another").join("model.gguf");
+        let expected_file = root.join("nested").join("model.gguf");
+        std::fs::create_dir_all(wrong_file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(expected_file.parent().unwrap()).unwrap();
+        std::fs::write(&wrong_file, b"wrong").unwrap();
+        std::fs::write(&expected_file, b"right").unwrap();
+
+        let model = CatalogModel {
+            name: "Nested-Path-Model".to_string(),
+            file: "model.gguf".to_string(),
+            url: "https://huggingface.co/org/repo/resolve/main/nested/MODEL.gguf".to_string(),
+            size: "1GB".to_string(),
+            description: "".to_string(),
+            draft: None,
+            moe: None,
+            extra_files: Vec::new(),
+            mmproj: None,
+        };
+
+        let label = model.name.clone();
+        let _guard = DownloadHfAssetsOverrideGuard::set(
+            label,
+            Box::new({
+                let wrong = wrong_file.clone();
+                let expected = expected_file.clone();
+                move |_, _| Ok(vec![wrong.clone(), expected.clone()])
+            }),
+        );
+
+        let resolved = download_model(&model).await.unwrap();
+        assert_eq!(resolved, expected_file);
     }
 }

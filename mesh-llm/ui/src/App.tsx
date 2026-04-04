@@ -6357,9 +6357,7 @@ function CapabilityBadge({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
+        <span className="inline-flex rounded-full bg-transparent p-0">
           {badge}
         </span>
       </TooltipTrigger>
@@ -6531,9 +6529,7 @@ function StatusPill({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span
-          className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        >
+        <span className="inline-flex rounded-full bg-transparent p-0">
           {badge}
         </span>
       </TooltipTrigger>
