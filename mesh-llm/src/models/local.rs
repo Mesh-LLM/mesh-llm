@@ -53,6 +53,12 @@ pub fn huggingface_hub_cache_dir() -> PathBuf {
 }
 
 pub fn legacy_models_dir() -> PathBuf {
+    if let Ok(path) = std::env::var("MESH_LLM_MODELS_DIR") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".models")
