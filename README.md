@@ -153,6 +153,23 @@ mesh-llm                                   # no args — prints --help and exits
 ```
 Does not start the console or bind any ports. Use the CLI flags shown in `--help` to start or join a mesh.
 
+### Lemonade (GPU + NPU backends)
+
+[Lemonade](https://github.com/AnswerDotAI/lemonade) is a local inference server that manages multiple backends — llama.cpp on GPU, FastFlowLM and RyzenAI on AMD NPUs, plus whisper, stable-diffusion, and TTS. mesh-llm can proxy to a running Lemonade server, making all its models available through the mesh.
+
+```bash
+# Lemonade-only mode — no --model needed, all inference via Lemonade
+mesh-llm --lemonade-port 8000
+
+# Alongside a local model
+mesh-llm --model Qwen3-8B --lemonade-port 8000
+
+# Default Lemonade port (13305)
+mesh-llm --lemonade
+```
+
+On AMD Ryzen AI hardware, Lemonade automatically routes to NPU backends (FLM, RyzenAI) — mesh-llm just proxies the requests. Models appear in `/v1/models` and are routable to other mesh peers.
+
 ## Background service
 
 To install it as a per-user background service:

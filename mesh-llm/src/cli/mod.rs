@@ -155,13 +155,14 @@ pub(crate) struct Cli {
     #[arg(long, hide = true)]
     pub(crate) config: Option<PathBuf>,
 
-    /// Connect to a running Lemonade server and serve its models.
-    /// Uses the default port (13305) unless --lemonade-port is set.
+    /// Connect to a running Lemonade server and serve its models through the mesh.
+    /// Lemonade manages GPU (llama.cpp), NPU (FLM/RyzenAI), whisper, SD, and TTS.
+    /// Default port: 13305 (override with --lemonade-port).
     #[arg(long)]
     pub(crate) lemonade: bool,
 
-    /// Lemonade server port (default: 13305). Implies --lemonade.
-    #[arg(long, hide = true)]
+    /// Lemonade server port (implies --lemonade) [default: 13305]
+    #[arg(long)]
     pub(crate) lemonade_port: Option<u16>,
 
     /// Internal: set when this node joined via Nostr discovery (not --join).
