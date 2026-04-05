@@ -85,7 +85,7 @@ mesh-llm --model Qwen2.5-3B --model GLM-4.7-Flash
 mesh-llm --join <TOKEN>
 ```
 
-- Joiner scans the Hugging Face cache first (with deprecated `~/.models/` as legacy fallback), picks an unserved model already on disk
+- Joiner scans the Hugging Face cache and picks an unserved model already on disk
 - Log: "Assigned to serve GLM-4.7-Flash (needed by mesh, already on disk)"
 
 ### 8. Lite client with multi-model

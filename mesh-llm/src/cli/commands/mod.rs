@@ -1,3 +1,4 @@
+mod auth;
 mod benchmark;
 mod blackboard;
 mod discover;
@@ -19,7 +20,7 @@ use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::plugin::run_plugin_command;
 use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 use crate::cli::commands::update::run_update;
-use crate::cli::{Cli, Command};
+use crate::cli::{AuthCommand, Cli, Command};
 use crate::network::nostr;
 
 pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
@@ -86,6 +87,14 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
         }
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => dispatch_benchmark_command(command).await,
+        Command::Auth { command } => match command {
+            AuthCommand::Init {
+                owner_key,
+                force,
+                no_passphrase,
+            } => auth::run_init(owner_key.clone(), *force, *no_passphrase),
+            AuthCommand::Status { owner_key } => auth::run_status(owner_key.clone()),
+        },
     }?;
     Ok(true)
 }

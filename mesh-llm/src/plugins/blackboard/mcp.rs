@@ -83,8 +83,8 @@ impl BlackboardServer {
     )]
     async fn post(&self, Parameters(params): Parameters<PostParams>) -> String {
         // Local PII scrub before sending
-        let clean = crate::blackboard::pii_scrub(&params.text);
-        let issues = crate::blackboard::pii_check(&clean);
+        let clean = super::pii_scrub(&params.text);
+        let issues = super::pii_check(&clean);
         if !issues.is_empty() {
             return format!(
                 "Blocked — PII/secret issues detected:\n{}",
@@ -135,7 +135,7 @@ impl BlackboardServer {
             .await
         {
             Ok(resp) if resp.status().is_success() => {
-                match resp.json::<Vec<crate::blackboard::BlackboardItem>>().await {
+                match resp.json::<Vec<super::BlackboardItem>>().await {
                     Ok(items) if items.is_empty() => "No results.".into(),
                     Ok(items) => format_items(&items),
                     Err(e) => format!("Failed to parse response: {e}"),
@@ -183,7 +183,7 @@ impl BlackboardServer {
             .await
         {
             Ok(resp) if resp.status().is_success() => {
-                match resp.json::<Vec<crate::blackboard::BlackboardItem>>().await {
+                match resp.json::<Vec<super::BlackboardItem>>().await {
                     Ok(items) if items.is_empty() => "Blackboard is empty.".into(),
                     Ok(items) => format_items(&items),
                     Err(e) => format!("Failed to parse response: {e}"),
@@ -224,7 +224,7 @@ impl ServerHandler for BlackboardServer {
 }
 
 /// Format blackboard items as readable text for the agent.
-fn format_items(items: &[crate::blackboard::BlackboardItem]) -> String {
+fn format_items(items: &[super::BlackboardItem]) -> String {
     let mut out = String::new();
     for item in items {
         let ago = {
@@ -260,8 +260,8 @@ pub async fn run_mcp_server(port: u16) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::BlackboardItem;
     use super::*;
-    use crate::blackboard::BlackboardItem;
 
     #[test]
     fn test_format_items_empty() {

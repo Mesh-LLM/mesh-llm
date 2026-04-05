@@ -1,4 +1,4 @@
-use super::{PluginSummary, BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID};
+use super::{PluginSummary, BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, LEMONADE_PLUGIN_ID};
 use anyhow::{bail, Context, Result};
 use mesh_llm_plugin::MeshVisibility;
 use serde::Deserialize;
@@ -67,6 +67,7 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut names = BTreeMap::<String, ()>::new();
     let mut blackboard_enabled = true;
     let mut blobstore_enabled = true;
+    let mut lemonade_enabled = false;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
@@ -92,6 +93,16 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             blobstore_enabled = enabled;
             continue;
         }
+        if entry.name == LEMONADE_PLUGIN_ID {
+            if entry.command.is_some() || !entry.args.is_empty() {
+                bail!(
+                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
+                    LEMONADE_PLUGIN_ID
+                );
+            }
+            lemonade_enabled = enabled;
+            continue;
+        }
         if !enabled {
             continue;
         }
@@ -108,6 +119,9 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
 
     if blackboard_enabled {
         externals.insert(0, blackboard_plugin_spec()?);
+    }
+    if lemonade_enabled {
+        externals.push(lemonade_plugin_spec()?);
     }
     if blobstore_enabled {
         externals.push(blobstore_plugin_spec()?);
@@ -140,5 +154,17 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
         name: BLOBSTORE_PLUGIN_ID.to_string(),
         command,
         args: vec!["--plugin".into(), BLOBSTORE_PLUGIN_ID.into()],
+    })
+}
+
+pub fn lemonade_plugin_spec() -> Result<ExternalPluginSpec> {
+    let command = std::env::current_exe()
+        .context("Cannot determine mesh-llm executable path")?
+        .display()
+        .to_string();
+    Ok(ExternalPluginSpec {
+        name: LEMONADE_PLUGIN_ID.to_string(),
+        command,
+        args: vec!["--plugin".into(), LEMONADE_PLUGIN_ID.into()],
     })
 }

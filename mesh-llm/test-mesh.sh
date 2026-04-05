@@ -8,12 +8,15 @@ set -euo pipefail
 MODE="${1:-client}"
 REMOTE="mic@home.dwyer.au"
 REMOTE_PORT=23632
-LOCAL_BIN="$(dirname "$0")/target/release/mesh-llm"
-LOCAL_BIN_DIR="$(dirname "$0")/../llama.cpp/build/bin"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOCAL_BIN="${WORKSPACE_ROOT}/target/release/mesh-llm"
+[ -x "$LOCAL_BIN" ] || LOCAL_BIN="mesh-llm"
+LOCAL_BIN_DIR="${WORKSPACE_ROOT}/../llama.cpp/build/bin"
 REMOTE_BIN="~/bin/mesh-llm"
-MODEL_NAME="Qwen2.5-3B-Instruct-Q4_K_M.gguf"
-REMOTE_MODEL="~/.models/$MODEL_NAME"
-LOCAL_MODEL="$HOME/.models/$MODEL_NAME"
+MODEL_NAME="Qwen2.5-3B-Instruct-Q4_K_M"
+REMOTE_MODEL="$MODEL_NAME"
+LOCAL_MODEL="$MODEL_NAME"
 LOCAL_HTTP=8080
 REMOTE_LOG="/tmp/mesh-test.log"
 LOCAL_LOG="/tmp/mesh-test-local.log"
@@ -29,6 +32,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "=== Mode: $MODE ==="
+echo "=== Ensuring local model is downloaded ==="
+"$LOCAL_BIN" models download "$MODEL_NAME"
+
 echo "=== Killing old processes ==="
 ssh -p $REMOTE_PORT $REMOTE "pkill -f mesh-llm; pkill -f rpc-server; pkill -f llama-server" 2>/dev/null || true
 pkill -f "mesh-llm" 2>/dev/null || true

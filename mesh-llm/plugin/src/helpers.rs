@@ -52,6 +52,8 @@ impl ToolCallRequest {
     }
 }
 
+pub type OperationRequest = ToolCallRequest;
+
 pub fn json_string<T: Serialize>(value: &T) -> PluginResult<String> {
     serde_json::to_string(value).map_err(|err| PluginError::internal(err.to_string()))
 }
@@ -68,6 +70,10 @@ pub fn structured_tool_result<T: Serialize>(value: T) -> PluginResult<CallToolRe
 
 pub fn tool_error(message: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![Content::text(message.into())])
+}
+
+pub fn operation_error(message: impl Into<String>) -> CallToolResult {
+    tool_error(message)
 }
 
 pub fn list_tools(tools: Vec<Tool>) -> ListToolsResult {
@@ -263,11 +269,26 @@ pub fn tool_with_schema(
     Tool::new(name.into(), description.into(), Arc::new(schema))
 }
 
+pub fn operation_with_schema(
+    name: impl Into<String>,
+    description: impl Into<String>,
+    schema: serde_json::Map<String, serde_json::Value>,
+) -> Tool {
+    tool_with_schema(name, description, schema)
+}
+
 pub fn json_schema_tool<T: JsonSchema>(
     name: impl Into<String>,
     description: impl Into<String>,
 ) -> Tool {
     tool_with_schema(name, description, json_schema_for::<T>())
+}
+
+pub fn json_schema_operation<T: JsonSchema>(
+    name: impl Into<String>,
+    description: impl Into<String>,
+) -> Tool {
+    json_schema_tool::<T>(name, description)
 }
 
 pub fn channel_message(
@@ -489,6 +510,8 @@ pub fn parse_read_resource_request(
 
 pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<CallToolResult>> + Send + 'a>>;
 pub type JsonToolFuture<'a, T> = Pin<Box<dyn Future<Output = PluginResult<T>> + Send + 'a>>;
+pub type OperationFuture<'a> = ToolFuture<'a>;
+pub type JsonOperationFuture<'a, T> = JsonToolFuture<'a, T>;
 pub type PromptFuture<'a> =
     Pin<Box<dyn Future<Output = PluginResult<GetPromptResult>> + Send + 'a>>;
 pub type ResourceFuture<'a> =
@@ -514,6 +537,8 @@ pub struct ToolRouter {
     tools: Vec<Tool>,
     handlers: HashMap<String, ToolHandler>,
 }
+
+pub type OperationRouter = ToolRouter;
 
 impl ToolRouter {
     pub fn new() -> Self {

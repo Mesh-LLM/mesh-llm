@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ci-smoke-test.sh — start mesh-llm with a tiny model, run one inference request, shut down.
 #
-# Usage: scripts/ci-smoke-test.sh <mesh-llm-binary> <bin-dir> <model-path>
+# Usage: scripts/ci-smoke-test.sh <mesh-llm-binary> <bin-dir> <model-path> [mmproj-path]
 #
 # Expects llama-server and rpc-server in <bin-dir>.
 # Exits 0 on success, 1 on failure.
@@ -11,6 +11,7 @@ set -euo pipefail
 MESH_LLM="$1"
 BIN_DIR="$2"
 MODEL="$3"
+MMPROJ="${4:-}"
 API_PORT=9337
 CONSOLE_PORT=3131
 MAX_WAIT=180  # seconds to wait for model load on CPU
@@ -20,6 +21,9 @@ echo "=== CI Smoke Test ==="
 echo "  mesh-llm:  $MESH_LLM"
 echo "  bin-dir:   $BIN_DIR"
 echo "  model:     $MODEL"
+if [ -n "$MMPROJ" ]; then
+    echo "  mmproj:    $MMPROJ"
+fi
 echo "  api port:  $API_PORT"
 echo "  os:        $(uname -s)"
 
@@ -31,15 +35,21 @@ if [ ! -f "$MESH_LLM" ]; then
 fi
 
 # Start mesh-llm in background
+ARGS=(
+    --model "$MODEL"
+    --no-draft
+    --bin-dir "$BIN_DIR"
+    --device CPU
+    --port "$API_PORT"
+    --console "$CONSOLE_PORT"
+)
+
+if [ -n "$MMPROJ" ]; then
+    ARGS+=(--mmproj "$MMPROJ")
+fi
+
 echo "Starting mesh-llm..."
-"$MESH_LLM" \
-    --model "$MODEL" \
-    --no-draft \
-    --bin-dir "$BIN_DIR" \
-    --device CPU \
-    --port "$API_PORT" \
-    --console "$CONSOLE_PORT" \
-    > "$LOG" 2>&1 &
+"$MESH_LLM" "${ARGS[@]}" > "$LOG" 2>&1 &
 MESH_PID=$!
 echo "  PID: $MESH_PID"
 

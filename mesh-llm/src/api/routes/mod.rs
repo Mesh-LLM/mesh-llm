@@ -1,4 +1,3 @@
-mod blackboard;
 mod chat;
 mod discover;
 mod objects;
@@ -8,6 +7,39 @@ mod runtime;
 use super::MeshApi;
 use tokio::net::TcpStream;
 
+/// Legacy `/api/blackboard/*` routes are thin aliases onto the blackboard
+/// plugin's declared HTTP bindings at `/api/plugins/blackboard/http/*`.
+/// Rewrite the path and hand off to the plugin stapler.
+async fn dispatch_blackboard(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    method: &str,
+    path: &str,
+    path_only: &str,
+    body: &str,
+    raw_request: &[u8],
+) -> anyhow::Result<()> {
+    const PREFIX: &str = "/api/blackboard/";
+    const PLUGIN_PREFIX: &str = "/api/plugins/blackboard/http/";
+    let suffix = path_only.strip_prefix(PREFIX).unwrap_or("");
+    let new_path_only = format!("{PLUGIN_PREFIX}{suffix}");
+    let new_path = if let Some(query_start) = path.find('?') {
+        format!("{new_path_only}{}", &path[query_start..])
+    } else {
+        new_path_only.clone()
+    };
+    plugins::handle(
+        stream,
+        state,
+        method,
+        &new_path,
+        &new_path_only,
+        body,
+        raw_request,
+    )
+    .await
+}
+
 pub(super) async fn dispatch_request(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -16,6 +48,7 @@ pub(super) async fn dispatch_request(
     path_only: &str,
     body: &str,
     req: &str,
+    raw_request: &[u8],
 ) -> anyhow::Result<bool> {
     match (method, path_only) {
         ("GET", "/api/discover") => {
@@ -25,6 +58,7 @@ pub(super) async fn dispatch_request(
         ("GET", "/api/status")
         | ("GET", "/api/models")
         | ("GET", "/api/runtime")
+        | ("GET", "/api/runtime/endpoints")
         | ("GET", "/api/runtime/processes")
         | ("POST", "/api/runtime/models")
         | ("GET", "/api/events") => {
@@ -36,21 +70,44 @@ pub(super) async fn dispatch_request(
             Ok(true)
         }
         ("GET", "/api/plugins") => {
-            plugins::handle(stream, state, method, path_only, body).await?;
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
+            Ok(true)
+        }
+        ("GET", "/api/plugins/endpoints") => {
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
+            Ok(true)
+        }
+        ("GET", "/api/plugins/providers") => {
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
+            Ok(true)
+        }
+        ("GET", p) if p.starts_with("/api/plugins/providers/") => {
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
+            Ok(true)
+        }
+        ("GET", p) if p.starts_with("/api/plugins/") && p.ends_with("/manifest") => {
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
             Ok(true)
         }
         ("GET", p) if p.starts_with("/api/plugins/") && p.ends_with("/tools") => {
-            plugins::handle(stream, state, method, path_only, body).await?;
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
             Ok(true)
         }
         ("POST", p) if p.starts_with("/api/plugins/") && p.contains("/tools/") => {
-            plugins::handle(stream, state, method, path_only, body).await?;
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
+            Ok(true)
+        }
+        (m, p)
+            if p.starts_with("/api/plugins/")
+                && matches!(m, "GET" | "POST" | "PUT" | "PATCH" | "DELETE") =>
+        {
+            plugins::handle(stream, state, method, path, path_only, body, raw_request).await?;
             Ok(true)
         }
         ("GET", "/api/blackboard/feed")
         | ("GET", "/api/blackboard/search")
         | ("POST", "/api/blackboard/post") => {
-            blackboard::handle(stream, state, method, path, body).await?;
+            dispatch_blackboard(stream, state, method, path, path_only, body, raw_request).await?;
             Ok(true)
         }
         ("POST", "/api/objects")

@@ -7,8 +7,7 @@ pub mod mcp;
 
 use anyhow::Result;
 use mesh_llm_plugin::{
-    json_schema_tool, plugin_server_info, PluginMetadata, PluginRuntime, PluginStartupPolicy,
-    SimplePlugin, ToolRouter,
+    capability, plugin_server_info, PluginMetadata, PluginRuntime, PluginStartupPolicy,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -54,7 +53,7 @@ fn next_item_id() -> u64 {
 }
 
 /// A single blackboard item — just text from someone at a time.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize, Deserialize)]
 pub struct BlackboardItem {
     /// Unique ID (timestamp nanos + random bits to avoid collision).
     pub id: u64,
@@ -80,6 +79,7 @@ pub struct FeedRequest {
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct SearchRequest {
+    #[serde(alias = "q")]
     pub query: String,
     #[serde(default)]
     pub since: u64,
@@ -304,80 +304,17 @@ pub(crate) async fn run_plugin(name: String) -> anyhow::Result<()> {
     PluginRuntime::run(build_blackboard_plugin(name)).await
 }
 
-fn tool_router(store: BlackboardStore) -> ToolRouter {
-    let mut router = ToolRouter::new();
-
-    let feed_store = store.clone();
-    router.add_json_default::<FeedRequest, Vec<BlackboardItem>, _>(
-        json_schema_tool::<FeedRequest>("feed", "Read the recent blackboard feed."),
-        move |request, _context| {
-            let store = feed_store.clone();
-            Box::pin(async move {
-                Ok(store
-                    .feed(request.since, request.from.as_deref(), request.limit)
-                    .await)
-            })
-        },
-    );
-
-    let search_store = store.clone();
-    router.add_json::<SearchRequest, Vec<BlackboardItem>, _>(
-        json_schema_tool::<SearchRequest>("search", "Search blackboard messages."),
-        move |request, _context| {
-            let store = search_store.clone();
-            Box::pin(async move {
-                let mut items = store.search(&request.query, request.since).await;
-                items.truncate(request.limit.max(1));
-                Ok(items)
-            })
-        },
-    );
-
-    router.add_json::<PostRequest, BlackboardItem, _>(
-        json_schema_tool::<PostRequest>("post", "Post a blackboard message."),
-        move |request, context| {
-            let store = store.clone();
-            Box::pin(async move {
-                let from = if request.from.trim().is_empty() {
-                    "mcp".to_string()
-                } else {
-                    request.from
-                };
-                let peer_id = if request.peer_id.trim().is_empty() {
-                    "mcp".to_string()
-                } else {
-                    request.peer_id
-                };
-                let item = BlackboardItem::new(from, peer_id, request.text);
-                let posted = store
-                    .post(item)
-                    .await
-                    .map_err(mesh_llm_plugin::PluginError::invalid_params)?;
-                context
-                    .send_json_channel(
-                        BLACKBOARD_CHANNEL,
-                        String::new(),
-                        "blackboard",
-                        &BlackboardMessage::Post(posted.clone()),
-                    )
-                    .await
-                    .map_err(mesh_llm_plugin::PluginError::from)?;
-                Ok(posted)
-            })
-        },
-    );
-
-    router
-}
-
-fn build_blackboard_plugin(name: String) -> SimplePlugin {
+fn build_blackboard_plugin(name: String) -> mesh_llm_plugin::SimplePlugin {
     let store = BlackboardStore::new(true);
     let health_store = store.clone();
     let sync_store = store.clone();
     let channel_store = store.clone();
+    let feed_store = store.clone();
+    let search_store = store.clone();
+    let post_store = store.clone();
 
-    SimplePlugin::new(
-        PluginMetadata::new(
+    mesh_llm_plugin::plugin! {
+        metadata: PluginMetadata::new(
             name,
             crate::VERSION,
             plugin_server_info(
@@ -389,87 +326,174 @@ fn build_blackboard_plugin(name: String) -> SimplePlugin {
                     "Use blackboard.feed to inspect the recent feed, blackboard.search to find relevant posts, and blackboard.post to share findings.",
                 ),
             ),
-        )
-        .with_capabilities(vec!["channel:blackboard".into()])
-        .with_startup_policy(PluginStartupPolicy::PrivateMeshOnly),
-    )
-    .with_tool_router(tool_router(store))
-    .with_health(move |_context| {
-        let store = health_store.clone();
-        Box::pin(async move { Ok(format!("items={}", store.all().await.len())) })
-    })
-    .on_initialized(move |context| {
-        Box::pin(async move {
-            context
-                .send_json_channel(
-                    BLACKBOARD_CHANNEL,
-                    String::new(),
-                    "blackboard",
-                    &BlackboardMessage::SyncRequest,
-                )
-                .await
-        })
-    })
-    .on_channel_message(move |message, context| {
-        let store = channel_store.clone();
-        let sync_store = sync_store.clone();
-        Box::pin(async move {
-            if message.channel != BLACKBOARD_CHANNEL {
-                return Ok(());
-            }
+        ),
+        startup_policy: PluginStartupPolicy::PrivateMeshOnly,
+        provides: [
+            capability("blackboard.v1"),
+        ],
+        mesh: [
+            mesh_llm_plugin::mesh::channel(BLACKBOARD_CHANNEL),
+        ],
+        events: [
+            mesh_llm_plugin::events::peer_up(),
+        ],
+        http: [
+            mesh_llm_plugin::http::get("/feed")
+                .binding_id("feed")
+                .description("Read the recent blackboard feed.")
+                .input::<FeedRequest>()
+                .output::<Vec<BlackboardItem>>()
+                .handle(move |request, _context| {
+                    let store = feed_store.clone();
+                    Box::pin(async move {
+                        Ok(store
+                            .feed(request.since, request.from.as_deref(), request.limit)
+                            .await)
+                    })
+                }),
+            mesh_llm_plugin::http::get("/search")
+                .binding_id("search")
+                .description("Search blackboard messages by keyword.")
+                .input::<SearchRequest>()
+                .output::<Vec<BlackboardItem>>()
+                .handle(move |request, _context| {
+                    let store = search_store.clone();
+                    Box::pin(async move {
+                        let mut items = store.search(&request.query, request.since).await;
+                        items.truncate(request.limit.max(1));
+                        Ok(items)
+                    })
+                }),
+            mesh_llm_plugin::http::post("/post")
+                .binding_id("post")
+                .description("Post a new blackboard message.")
+                .input::<PostRequest>()
+                .output::<BlackboardItem>()
+                .handle(move |request, context| {
+                    let store = post_store.clone();
+                    Box::pin(async move {
+                        let from = if request.from.trim().is_empty() {
+                            "mcp".to_string()
+                        } else {
+                            request.from
+                        };
+                        let peer_id = if request.peer_id.trim().is_empty() {
+                            "mcp".to_string()
+                        } else {
+                            request.peer_id
+                        };
+                        let item = BlackboardItem::new(from, peer_id, request.text);
+                        let posted = store
+                            .post(item)
+                            .await
+                            .map_err(mesh_llm_plugin::PluginError::invalid_params)?;
+                        context
+                            .send_json_channel(
+                                BLACKBOARD_CHANNEL,
+                                String::new(),
+                                "blackboard",
+                                &BlackboardMessage::Post(posted.clone()),
+                            )
+                            .await
+                            .map_err(mesh_llm_plugin::PluginError::from)?;
+                        Ok(posted)
+                    })
+                }),
+        ],
+        health: move |_context| {
+            let store = health_store.clone();
+            Box::pin(async move { Ok(format!("items={}", store.all().await.len())) })
+        },
+        on_initialized: move |context| {
+            Box::pin(async move {
+                context
+                    .send_json_channel(
+                        BLACKBOARD_CHANNEL,
+                        String::new(),
+                        "blackboard",
+                        &BlackboardMessage::SyncRequest,
+                    )
+                    .await
+            })
+        },
+        on_channel_message: move |message, context| {
+            let store = channel_store.clone();
+            let sync_store = sync_store.clone();
+            Box::pin(async move {
+                if message.channel != BLACKBOARD_CHANNEL {
+                    return Ok(());
+                }
 
-            let payload: BlackboardMessage = serde_json::from_slice(&message.body)?;
-            match payload {
-                BlackboardMessage::Post(item) => {
-                    let _ = store.insert(item).await;
-                }
-                BlackboardMessage::SyncRequest => {
-                    let ids = sync_store.ids().await;
-                    context
-                        .send_json_channel(
-                            BLACKBOARD_CHANNEL,
-                            message.source_peer_id,
-                            "blackboard",
-                            &BlackboardMessage::SyncDigest(ids),
-                        )
-                        .await?;
-                }
-                BlackboardMessage::SyncDigest(ids) => {
-                    let our_ids = sync_store.ids().await;
-                    let missing: Vec<u64> =
-                        ids.into_iter().filter(|id| !our_ids.contains(id)).collect();
-                    if !missing.is_empty() {
+                let payload: BlackboardMessage = serde_json::from_slice(&message.body)?;
+                match payload {
+                    BlackboardMessage::Post(item) => {
+                        let _ = store.insert(item).await;
+                    }
+                    BlackboardMessage::SyncRequest => {
+                        let ids = sync_store.ids().await;
                         context
                             .send_json_channel(
                                 BLACKBOARD_CHANNEL,
                                 message.source_peer_id,
                                 "blackboard",
-                                &BlackboardMessage::FetchRequest(missing),
+                                &BlackboardMessage::SyncDigest(ids),
+                            )
+                            .await?;
+                    }
+                    BlackboardMessage::SyncDigest(ids) => {
+                        let our_ids = sync_store.ids().await;
+                        let missing: Vec<u64> =
+                            ids.into_iter().filter(|id| !our_ids.contains(id)).collect();
+                        if !missing.is_empty() {
+                            context
+                                .send_json_channel(
+                                    BLACKBOARD_CHANNEL,
+                                    message.source_peer_id,
+                                    "blackboard",
+                                    &BlackboardMessage::FetchRequest(missing),
+                                )
+                                .await?;
+                        }
+                    }
+                    BlackboardMessage::FetchRequest(ids) => {
+                        let items = sync_store.get_by_ids(&ids).await;
+                        context
+                            .send_json_channel(
+                                BLACKBOARD_CHANNEL,
+                                message.source_peer_id,
+                                "blackboard",
+                                &BlackboardMessage::FetchResponse(items),
+                            )
+                            .await?;
+                    }
+                    BlackboardMessage::FetchResponse(items) => {
+                        for item in items {
+                            let _ = store.insert(item).await;
+                        }
+                    }
+                }
+
+                Ok(())
+            })
+        },
+        on_mesh_event: move |event, context| {
+            Box::pin(async move {
+                if event.kind() == mesh_llm_plugin::proto::mesh_event::Kind::PeerUp {
+                    if let Some(peer) = event.peer {
+                        context
+                            .send_json_channel(
+                                BLACKBOARD_CHANNEL,
+                                peer.peer_id,
+                                "blackboard",
+                                &BlackboardMessage::SyncRequest,
                             )
                             .await?;
                     }
                 }
-                BlackboardMessage::FetchRequest(ids) => {
-                    let items = sync_store.get_by_ids(&ids).await;
-                    context
-                        .send_json_channel(
-                            BLACKBOARD_CHANNEL,
-                            message.source_peer_id,
-                            "blackboard",
-                            &BlackboardMessage::FetchResponse(items),
-                        )
-                        .await?;
-                }
-                BlackboardMessage::FetchResponse(items) => {
-                    for item in items {
-                        let _ = store.insert(item).await;
-                    }
-                }
-            }
-
-            Ok(())
-        })
-    })
+                Ok(())
+            })
+        },
+    }
 }
 // ── PII filter ──
 
@@ -585,6 +609,7 @@ fn shannon_entropy(s: &str) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mesh_llm_plugin::Plugin;
 
     #[test]
     fn test_pii_check_email() {
@@ -650,6 +675,31 @@ mod tests {
             let item = BlackboardItem::new("alice".into(), "abc".into(), format!("hello {i}"));
             assert!(ids.insert(item.id), "duplicate id generated: {}", item.id);
         }
+    }
+
+    #[test]
+    fn manifest_declares_blackboard_capability_and_bindings() {
+        let plugin = build_blackboard_plugin("blackboard".into());
+        let manifest = plugin.manifest().expect("manifest");
+        assert!(manifest
+            .capabilities
+            .iter()
+            .any(|cap| cap == "blackboard.v1"));
+        assert_eq!(manifest.mesh_channels.len(), 1);
+        assert_eq!(manifest.mesh_channels[0].name, BLACKBOARD_CHANNEL);
+        assert_eq!(manifest.mesh_event_subscriptions.len(), 1);
+        assert!(manifest
+            .http_bindings
+            .iter()
+            .any(|binding| binding.binding_id == "feed"));
+        assert!(manifest
+            .http_bindings
+            .iter()
+            .any(|binding| binding.binding_id == "search"));
+        assert!(manifest
+            .http_bindings
+            .iter()
+            .any(|binding| binding.binding_id == "post"));
     }
 
     #[tokio::test]

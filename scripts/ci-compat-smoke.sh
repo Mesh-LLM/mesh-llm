@@ -5,13 +5,14 @@
 # all work correctly against mesh-llm's OpenAI-compatible API. It uses a solo node
 # (no split, no mesh) since split-mode routing is already tested by ci-split-test.sh.
 #
-# Usage: scripts/ci-compat-smoke.sh <mesh-llm-binary> <bin-dir> <model-path>
+# Usage: scripts/ci-compat-smoke.sh <mesh-llm-binary> <bin-dir> <model-path> [mmproj-path]
 
 set -euo pipefail
 
 MESH_LLM="$1"
 BIN_DIR="$2"
 MODEL="$3"
+MMPROJ="${4:-}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 NODE_BIN="${NODE_BIN:-node}"
 NPM_BIN="${NPM_BIN:-npm}"
@@ -29,6 +30,9 @@ echo "=== Compat Smoke Test ==="
 echo "  mesh-llm:   $MESH_LLM"
 echo "  bin-dir:    $BIN_DIR"
 echo "  model:      $MODEL"
+if [ -n "$MMPROJ" ]; then
+    echo "  mmproj:     $MMPROJ"
+fi
 echo "  workdir:    $WORKDIR"
 
 if [ ! -f "$MESH_LLM" ]; then
@@ -71,14 +75,18 @@ assert_pid_alive() {
 # ── Start solo node ──
 
 echo "Starting mesh-llm (solo)..."
-"$MESH_LLM" \
-    --model "$MODEL" \
-    --no-draft \
-    --bin-dir "$BIN_DIR" \
-    --device CPU \
-    --port "$API_PORT" \
-    --console "$CONSOLE_PORT" \
-    >"$LOG" 2>&1 &
+ARGS=(
+    --model "$MODEL"
+    --no-draft
+    --bin-dir "$BIN_DIR"
+    --device CPU
+    --port "$API_PORT"
+    --console "$CONSOLE_PORT"
+)
+if [ -n "$MMPROJ" ]; then
+    ARGS+=(--mmproj "$MMPROJ")
+fi
+"$MESH_LLM" "${ARGS[@]}" >"$LOG" 2>&1 &
 MESH_PID=$!
 
 echo "Waiting for model to load (up to ${MAX_WAIT}s)..."

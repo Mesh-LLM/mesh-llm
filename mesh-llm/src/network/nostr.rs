@@ -1579,6 +1579,7 @@ mod smart_auto_tests {
 #[cfg(test)]
 mod rotate_key_tests {
     use super::*;
+    use serial_test::serial;
     use std::fs;
 
     // rotate_keys uses hardcoded paths (~/.mesh-llm/), so we test the logic
@@ -1590,6 +1591,7 @@ mod rotate_key_tests {
     // same files.
 
     #[test]
+    #[serial]
     fn rotate_deletes_both_keys_and_handles_missing() {
         let dir = dirs::home_dir().unwrap().join(".mesh-llm");
         fs::create_dir_all(&dir).ok();

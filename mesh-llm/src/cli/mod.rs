@@ -4,6 +4,28 @@ use std::path::PathBuf;
 use crate::cli::benchmark::BenchmarkCommand;
 use crate::cli::runtime::RuntimeCommand;
 
+#[derive(Subcommand, Debug)]
+pub(crate) enum AuthCommand {
+    /// Generate a new owner keypair and save to keystore.
+    Init {
+        /// Path to the keystore file (default: ~/.mesh-llm/owner-keystore.json).
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
+        /// Overwrite an existing keystore.
+        #[arg(long)]
+        force: bool,
+        /// Skip passphrase prompt (store keys unencrypted).
+        #[arg(long)]
+        no_passphrase: bool,
+    },
+    /// Show current owner identity status.
+    Status {
+        /// Path to the keystore file.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
+    },
+}
+
 pub(crate) mod benchmark;
 pub(crate) mod commands;
 pub mod models;
@@ -43,6 +65,10 @@ pub(crate) struct Cli {
     /// Raw local GGUF file to serve directly (repeatable).
     #[arg(long)]
     pub(crate) gguf: Vec<PathBuf>,
+
+    /// Explicit mmproj sidecar to pass to llama-server for the primary served model.
+    #[arg(long, hide = true)]
+    pub(crate) mmproj: Option<PathBuf>,
 
     /// API port (default: 9337).
     #[arg(long, default_value = "9337")]
@@ -299,6 +325,11 @@ pub(crate) enum Command {
     Benchmark {
         #[command(subcommand)]
         command: BenchmarkCommand,
+    },
+    /// Manage owner identity and keystore.
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
     },
 }
 

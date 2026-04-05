@@ -4,7 +4,7 @@ use clap::Subcommand;
 pub enum ModelsCommand {
     /// List built-in recommended models.
     Recommended,
-    /// List installed local models from the HF cache or legacy storage.
+    /// List installed local models from the HF cache.
     Installed,
     /// List built-in catalog models.
     #[command(hide = true)]

@@ -21,6 +21,13 @@ message Envelope {
     ErrorResponse error_response = 20;
     ChannelMessage channel_message = 21;
     BulkTransferMessage bulk_transfer_message = 22;
+    OpenStreamRequest open_stream_request = 23;
+    OpenStreamResponse open_stream_response = 24;
+    CancelStreamNotification cancel_stream_notification = 25;
+    CloseStreamNotification close_stream_notification = 26;
+    StreamError stream_error = 27;
+    InvokeServiceRequest invoke_service_request = 28;
+    InvokeServiceResponse invoke_service_response = 29;
   }
 }
 
@@ -45,6 +52,7 @@ message InitializeResponse {
   string plugin_version = 3;
   string server_info_json = 4;
   repeated string capabilities = 5;
+  PluginManifest manifest = 6;
 }
 
 message HealthRequest {}
@@ -162,6 +170,193 @@ message MeshBulkFrame {
   string plugin_id = 1;
   string message_id = 2;
   BulkTransferMessage message = 3;
+}
+
+message PluginManifest {
+  repeated OperationManifest operations = 1;
+  repeated ResourceManifest resources = 2;
+  repeated ResourceTemplateManifest resource_templates = 3;
+  repeated PromptManifest prompts = 4;
+  repeated CompletionManifest completions = 5;
+  repeated HttpBindingManifest http_bindings = 6;
+  repeated EndpointManifest endpoints = 7;
+  repeated string capabilities = 8;
+  repeated MeshChannelManifest mesh_channels = 9;
+  repeated MeshEventSubscriptionManifest mesh_event_subscriptions = 10;
+}
+
+message MeshChannelManifest {
+  string name = 1;
+}
+
+message MeshEventSubscriptionManifest {
+  MeshEvent.Kind kind = 1;
+}
+
+enum ServiceKind {
+  SERVICE_KIND_UNSPECIFIED = 0;
+  SERVICE_KIND_OPERATION = 1;
+  SERVICE_KIND_PROMPT = 2;
+  SERVICE_KIND_RESOURCE = 3;
+  SERVICE_KIND_COMPLETION = 4;
+}
+
+message InvokeServiceRequest {
+  ServiceKind kind = 1;
+  string service_name = 2;
+  string input_json = 3;
+}
+
+message InvokeServiceResponse {
+  string output_json = 1;
+  bool is_error = 2;
+}
+
+message OperationManifest {
+  string name = 1;
+  string description = 2;
+  string input_schema_json = 3;
+  optional string output_schema_json = 4;
+  optional string title = 5;
+}
+
+message ResourceManifest {
+  string uri = 1;
+  string name = 2;
+  optional string description = 3;
+  optional string mime_type = 4;
+}
+
+message ResourceTemplateManifest {
+  string uri_template = 1;
+  string name = 2;
+  optional string description = 3;
+  optional string mime_type = 4;
+}
+
+message PromptManifest {
+  string name = 1;
+  optional string description = 2;
+}
+
+message CompletionManifest {
+  string argument_ref = 1;
+  optional string description = 2;
+}
+
+enum HttpMethod {
+  HTTP_METHOD_UNSPECIFIED = 0;
+  HTTP_METHOD_GET = 1;
+  HTTP_METHOD_POST = 2;
+  HTTP_METHOD_PUT = 3;
+  HTTP_METHOD_PATCH = 4;
+  HTTP_METHOD_DELETE = 5;
+}
+
+enum HttpBodyMode {
+  HTTP_BODY_MODE_UNSPECIFIED = 0;
+  HTTP_BODY_MODE_BUFFERED = 1;
+  HTTP_BODY_MODE_STREAMED = 2;
+}
+
+message HttpBindingManifest {
+  string binding_id = 1;
+  HttpMethod method = 2;
+  string path = 3;
+  optional string operation_name = 4;
+  HttpBodyMode request_body_mode = 5;
+  HttpBodyMode response_body_mode = 6;
+  optional string request_schema_json = 7;
+  optional string response_schema_json = 8;
+}
+
+enum EndpointKind {
+  ENDPOINT_KIND_UNSPECIFIED = 0;
+  ENDPOINT_KIND_INFERENCE = 1;
+  ENDPOINT_KIND_MCP = 2;
+}
+
+enum EndpointTransportKind {
+  ENDPOINT_TRANSPORT_KIND_UNSPECIFIED = 0;
+  ENDPOINT_TRANSPORT_HTTP = 1;
+  ENDPOINT_TRANSPORT_UNIX_SOCKET = 2;
+  ENDPOINT_TRANSPORT_STDIO = 3;
+  ENDPOINT_TRANSPORT_NAMED_PIPE = 4;
+  ENDPOINT_TRANSPORT_TCP = 5;
+}
+
+message EndpointManifest {
+  string endpoint_id = 1;
+  EndpointKind kind = 2;
+  EndpointTransportKind transport_kind = 3;
+  optional string protocol = 4;
+  optional string address = 5;
+  repeated string args = 6;
+  optional string namespace = 7;
+  bool supports_streaming = 8;
+  bool managed_by_plugin = 9;
+}
+
+enum StreamPurpose {
+  STREAM_PURPOSE_UNSPECIFIED = 0;
+  STREAM_PURPOSE_GENERIC = 1;
+  STREAM_PURPOSE_HTTP_REQUEST_BODY = 2;
+  STREAM_PURPOSE_HTTP_RESPONSE_BODY = 3;
+  STREAM_PURPOSE_BULK_TRANSFER = 4;
+  STREAM_PURPOSE_MCP = 5;
+}
+
+enum StreamMode {
+  STREAM_MODE_UNSPECIFIED = 0;
+  STREAM_MODE_RAW_BYTES = 1;
+  STREAM_MODE_HTTP1 = 2;
+  STREAM_MODE_EVENT_STREAM = 3;
+  STREAM_MODE_CHUNKED_BYTES = 4;
+}
+
+enum StreamTransportKind {
+  STREAM_TRANSPORT_KIND_UNSPECIFIED = 0;
+  STREAM_UNIX_SOCKET = 1;
+  STREAM_NAMED_PIPE = 2;
+  STREAM_TCP = 3;
+}
+
+message OpenStreamRequest {
+  string stream_id = 1;
+  StreamPurpose purpose = 2;
+  StreamMode mode = 3;
+  bool bidirectional = 4;
+  optional string content_type = 5;
+  optional string correlation_id = 6;
+  optional string metadata_json = 7;
+  optional uint64 expected_bytes = 8;
+  optional uint64 idle_timeout_ms = 9;
+}
+
+message OpenStreamResponse {
+  string stream_id = 1;
+  bool accepted = 2;
+  StreamTransportKind transport_kind = 3;
+  optional string endpoint = 4;
+  optional string token = 5;
+  optional uint64 expires_at_unix_ms = 6;
+  optional string message = 7;
+}
+
+message CancelStreamNotification {
+  string stream_id = 1;
+  optional string reason = 2;
+}
+
+message CloseStreamNotification {
+  string stream_id = 1;
+  optional string reason = 2;
+}
+
+message StreamError {
+  string stream_id = 1;
+  int32 code = 2;
+  string message = 3;
 }
 
 message ErrorResponse {

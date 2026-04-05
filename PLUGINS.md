@@ -1,574 +1,723 @@
 # Plugins
 
-This document is the reference for the `mesh-llm` plugin system.
+This document defines the `mesh-llm` plugin architecture.
 
-It is written for two audiences:
+It describes the target architecture, not just the code as it exists today.
 
-- Mesh users and operators who want to enable, disable, inspect, and use plugins.
-- Plugin developers, whether human or agent, who want to build a plugin that `mesh-llm` can launch and talk to.
+As implementation lands, this document should be updated to match the intended end state and the concrete protocol and runtime decisions that have been made.
 
-## What A Plugin Is
+The main goals are:
 
-A plugin is a local executable process launched by `mesh-llm`.
+- keep `mesh-llm` decoupled from specific plugins
+- let bundled plugins be auto-registered without special-casing product behavior
+- make MCP and HTTP first-class host projections
+- support large request and response bodies without blocking control traffic
+- keep plugin author boilerplate low
 
-`mesh-llm` owns:
+## Design Summary
 
-- mesh transport
-- peer routing
-- local plugin process launch
-- plugin IPC
-- management API exposure
-- MCP exposure
+A plugin is a local service process launched by `mesh-llm`.
+
+The system has three core pieces:
+
+- one long-lived control connection per plugin process
+- zero or more short-lived negotiated streams for large or streaming data
+- one declarative plugin manifest that the host `stapler` projects into MCP, HTTP, and optional promoted product APIs
+
+`mesh-llm` remains the owner of:
+
+- plugin lifecycle
+- local IPC
+- stapling manifest-declared services onto host-facing protocols
+- HTTP serving
+- MCP serving
+- capability routing
+- mesh participation and peer-to-peer transport
 
 A plugin owns:
 
 - its own feature logic
-- its tool implementations
-- any plugin-local state
-- any plugin-specific `ChannelMessage` payloads
+- local state
+- operation handlers
+- resource handlers
+- prompt handlers
+- plugin-specific mesh channel semantics
 
-`blackboard` is the reference plugin. It is auto-registered by the host and launched as:
+Plugins do not need to implement raw MCP or raw HTTP servers.
 
-```text
-mesh-llm --plugin blackboard
-```
+The `stapler` is the host projection layer that turns plugin manifests into exposed MCP and HTTP surfaces.
 
-## For Mesh Users
+## High-Level Model
 
-### Default Behavior
+The plugin system is projection-oriented at the DSL level and service-oriented at the runtime level.
 
-`blackboard` is enabled by default.
+Plugin authors think in terms of the host surfaces they contribute to:
 
-You do not install it separately. `mesh-llm` auto-registers it unless you disable it in config.
+- `mcp`
+- `http`
+- `inference`
+- `provides`
 
-### Config File
+The host runtime still executes native service invocations internally, but the author-facing DSL is organized by the surface the plugin contributes to.
 
-Default config path:
+This means:
 
-```text
-~/.mesh-llm/config.toml
-```
+- local MCP tools, resources, prompts, and completions live under `mcp`
+- attached external MCP servers also live under `mcp`
+- local HTTP routes live under `http`
+- attached or plugin-hosted inference backends live under `inference`
+- stable product capabilities live under `provides`
 
-Override for development:
+There is no separate top-level `services` section in the preferred DSL.
 
-```text
-MESH_LLM_CONFIG=/some/other/path/config.toml
-```
+## Core Principles
 
-### Config Shape
+### 1. Bundled Plugins Are Allowed
 
-Plugins are configured explicitly.
+Plugins shipped in this source tree may be auto-registered by the host.
+
+That is acceptable coupling.
+
+What is not acceptable is embedding one plugin's runtime behavior directly into core mesh logic. Core mesh transport and state should stay generic.
+
+### 2. One Control Connection, Many Data Streams
+
+Each plugin process has one long-lived control connection.
+
+Use the control connection for:
+
+- initialize / health / shutdown
+- manifest registration
+- small RPC-style requests
+- mesh event delivery
+- stream negotiation
+- cancellation
+
+Do not use the control connection for large uploads, downloads, or long-lived streaming responses.
+
+For large or streaming payloads, the host and plugin negotiate a short-lived side stream.
+
+### 3. MCP Is A Host Projection
+
+`mesh-llm` is the MCP server.
+
+Plugins do not need to implement MCP JSON-RPC directly. They declare MCP-facing services in the manifest, and the host `stapler` exposes them over MCP.
+
+### 4. HTTP Is A Host Projection
+
+`mesh-llm` owns the HTTP server.
+
+Plugins may declare HTTP bindings, but they do not need to run an HTTP server themselves. The host `stapler` maps HTTP requests onto plugin operations and resources.
+
+### 5. Capabilities Are Stable Product Contracts
+
+When `mesh-llm` wants a stable product API such as `/api/objects`, core should depend on a named capability like `object-store.v1`, not on a specific plugin ID like `blobstore`.
+
+## Architecture
+
+### Control Session
+
+There is one long-lived control session between host and plugin.
+
+The control session is used for:
+
+- plugin startup and manifest exchange
+- health checks
+- native service invocation requests and responses
+- plugin-to-host notifications
+- host-to-plugin mesh events
+- opening and closing streams
+- cancellation and error reporting
+
+The control session should stay responsive even while the plugin is sending or receiving large payloads.
+
+The native runtime contract is service-oriented, not MCP-oriented.
+
+The host invokes services such as:
+
+- operations
+- prompts
+- resources
+- completions
+
+MCP method names like `tools/call` and `prompts/get` are projection-layer concerns. They are not the preferred host/plugin runtime contract.
+
+### Streams
+
+Streams are short-lived negotiated channels for a single request, response, or transfer.
+
+They are opened via the control session and then carry data independently.
+
+Streams are used for:
+
+- large HTTP request bodies
+- large HTTP responses
+- streaming uploads and downloads
+- server-sent events or similar long-lived responses
+- future bulk data flows between host and plugin
+
+On Unix, streams map to short-lived Unix sockets.
+
+On Windows, streams map to short-lived named pipes.
+
+The protocol concept is `stream`, not `socket`, so the transport binding remains platform-specific.
+
+### Why Streams Exist
+
+The current single-socket framed-envelope design is vulnerable to head-of-line blocking. Even chunked transfer traffic still competes with health checks, tool calls, mesh events, and other control messages on the same queue.
+
+This architecture avoids that by separating:
+
+- control plane traffic
+- bulk and streaming data traffic
+
+## Manifest
+
+On startup, a plugin returns a manifest that declares what it provides to the host.
+
+Conceptually, the manifest contains:
+
+- plugin identity and version
+- provided capabilities
+- MCP contributions
+- HTTP contributions
+- inference contributions
+- any mesh channel declarations the plugin needs
+
+The manifest is the source of truth for host projections.
+
+## Plugin Author Experience
+
+The primary design goal is very low boilerplate.
+
+The preferred DSL is surface-first:
+
+- `provides`
+- `mcp`
+- `http`
+- `inference`
+- `mesh`
+- `events`
+
+Lifecycle hooks stay local to the plugin definition rather than becoming manifest items:
+
+- `startup_policy`
+- `health`
+- `on_initialized`
+- `on_channel_message`
+- `on_mesh_event`
+
+Each section is self-contained. If a plugin contributes something to a host surface, it is declared in the section for that surface.
 
 Example:
 
-```toml
-[[plugin]]
-name = "blackboard"
-enabled = false
+```rust
+use mesh_llm_plugin::{
+    capability, plugin_server_info, PluginMetadata,
+    http::{get, post},
+    inference::openai_http,
+    mcp::{external_stdio, prompt, resource, tool},
+    PluginStartupPolicy,
+};
 
-[[plugin]]
-name = "notes"
-command = "/Users/jdumay/.mesh-llm/plugin/notes-plugin"
-args = ["--workspace", "default"]
-enabled = true
+let plugin = mesh_llm_plugin::plugin! {
+    metadata: PluginMetadata::new(
+        "notes",
+        "1.0.0",
+        plugin_server_info(
+            "notes",
+            "1.0.0",
+            "Notes",
+            "Shared notes services",
+            None::<String>,
+        ),
+    ),
+
+    startup_policy: PluginStartupPolicy::PrivateMeshOnly,
+
+    provides: [
+        capability("notes.v1"),
+        capability("search.v1"),
+    ],
+
+    mesh: [
+        mesh_llm_plugin::mesh::channel("notes.v1"),
+    ],
+
+    events: [
+        mesh_llm_plugin::events::peer_up(),
+    ],
+
+    mcp: [
+        tool("search")
+            .description("Search notes")
+            .input::<SearchArgs>()
+            .handle(search),
+
+        resource("notes://latest")
+            .name("Latest Notes")
+            .handle(read_latest),
+
+        prompt("summarize_notes")
+            .description("Summarize recent notes")
+            .handle(summarize_notes),
+
+        external_stdio("filesystem", "npx")
+            .arg("-y")
+            .arg("@modelcontextprotocol/server-filesystem"),
+    ],
+
+    http: [
+        get("/search")
+            .description("Search notes")
+            .input::<SearchArgs>()
+            .handle(search),
+
+        post("/notes")
+            .description("Create a note")
+            .input::<PostArgs>()
+            .handle(post_note),
+    ],
+
+    inference: [
+        openai_http("local-llm", "http://127.0.0.1:8080/v1")
+            .managed_by_plugin(false),
+    ],
+
+    health: |_context| {
+        Box::pin(async move { Ok("ok".to_string()) })
+    },
+
+    on_initialized: |context| {
+        Box::pin(async move {
+            context
+                .send_json_channel(
+                    "notes.v1",
+                    String::new(),
+                    "notes",
+                    &NotesMessage::SyncRequest,
+                )
+                .await
+        })
+    },
+
+    on_channel_message: |message, context| {
+        Box::pin(async move {
+            handle_notes_channel(message, context).await
+        })
+    },
+
+    on_mesh_event: |event, context| {
+        Box::pin(async move {
+            handle_notes_mesh_event(event, context).await
+        })
+    },
+};
 ```
 
-Field meanings:
+In this model:
 
-- `name`: expected runtime plugin identity.
-- `enabled`: whether the plugin is active on this node. Omit to use the default.
-- `command`: executable to launch for a custom plugin.
-- `args`: startup arguments passed to that executable.
+- `mcp` contains both local MCP contributions and attached external MCP servers
+- `http` contains local HTTP contributions
+- `inference` contains both attached external inference endpoints and plugin-hosted inference providers
+- `provides` declares stable capability contracts that core product routes can depend on
+- `mesh` declares which mesh channels the plugin is allowed to receive and send
+- `events` declares which mesh events the host may deliver to the plugin
 
-### Built-In Default Plugins
+Event delivery is allowlist-based:
 
-`blackboard` is a host-provided default plugin spec.
+- no `mesh` declaration means no channel delivery
+- no `events` declaration means no mesh events
+- plugins only receive the event kinds they explicitly declare
 
-To disable it:
+The runtime and `stapler` handle:
 
-```toml
-[[plugin]]
-name = "blackboard"
-enabled = false
-```
+- schema exposure
+- MCP projection
+- HTTP projection
+- request validation
+- stream negotiation
+- transport details
+- host-side routing and aggregation
 
-`blackboard` may not override `command` or `args` in config because it is served by the main `mesh-llm` binary.
+Plugin authors should not manually implement:
 
-### Suggested Plugin Binary Location
+- MCP `tools/list`
+- MCP `tools/call`
+- MCP `resources/read`
+- HTTP routing
+- control-plane socket negotiation
 
-External plugin binaries can live anywhere, but the suggested location is:
+## Internal RPC Plugins
 
-```text
-~/.mesh-llm/plugin/
-```
+Most plugins should use `plugin!`.
+
+Host-private plumbing services that need raw RPC methods rather than surfaced MCP, HTTP, or inference declarations should use `InternalRpcPluginBuilder`.
+
+This is the escape hatch for internal-only services such as blobstore. It keeps raw host RPC separate from the normal manifest-driven plugin surface.
+
+### Streaming
+
+Streaming is explicit in the DSL.
+
+For HTTP bindings, the preferred modifiers are:
+
+- `.stream_request()`
+- `.stream_response()`
+- `.sse()`
+
+These declare whether the request body, response body, or response format requires side-stream transport.
+
+## External Endpoints
+
+Plugins may register external services without proxying all traffic through the plugin process.
+
+This is a control-plane declaration, not a request proxying requirement.
+
+In practice:
+
+- attached external MCP servers are declared in the `mcp` section
+- attached or plugin-hosted inference backends are declared in the `inference` section
+
+`mesh-llm` then talks to those services directly when appropriate.
+
+This keeps heavy data-plane traffic out of plugin IPC.
+
+### MCP Contributions
+
+The `mcp` section may contain both:
+
+- local MCP-facing items implemented by the plugin
+- attached external MCP servers
+
+Preferred external forms include:
+
+- `external_stdio(...)`
+- `external_http(...)`
+- `external_tcp(...)`
+- `external_unix_socket(...)`
+
+External MCP names are namespaced as:
+
+- `plugin_name.method`
+
+### Inference Contributions
+
+The `inference` section may contain both:
+
+- attached external OpenAI-compatible endpoints
+- plugin-hosted inference providers
+
+Preferred forms include:
+
+- `openai_http(...)` for attached external endpoints
+- `provider(...)` for plugin-hosted backends
+
+### Why Endpoint Registration Exists
+
+Some services already speak a protocol that `mesh-llm` knows how to use directly.
 
 Examples:
 
-```text
-~/.mesh-llm/plugin/notes
-~/.mesh-llm/plugin/tickets
-```
+- a local OpenAI-compatible inference server
+- an external MCP server reachable over stdio, streamable HTTP, Unix socket, named pipe, or TCP
+- a plugin-hosted inference runtime such as an MLX-backed local server
 
-This is only a convenience location. It is not an auto-discovery mechanism.
+In these cases, the plugin should remain the control-plane owner for:
 
-### Listing Plugins
+- discovery
+- lifecycle
+- readiness
+- availability
 
-To see the resolved plugin specs for the current node:
+But `mesh-llm` should own the data plane when possible.
 
-```text
-mesh-llm plugin list
-```
+### Health And Availability
 
-### Management API
+Endpoint health is separate from plugin health.
 
-Running plugins are exposed through the management API.
+If an endpoint health check fails:
 
-Endpoints:
+- the endpoint becomes unavailable
+- the endpoint is removed from routing or aggregation
+- the plugin remains loaded
+- the plugin is not marked disabled
+- the host keeps checking health
 
-- `GET /api/plugins`
-- `GET /api/plugins/<name>/tools`
-- `POST /api/plugins/<name>/tools/<tool-name>`
+If health returns:
 
-The POST body is passed through as the plugin tool's `arguments_json`.
+- the endpoint becomes available again automatically
 
-### MCP Exposure
+This is important because a plugin may be healthy while its managed or discovered service is:
 
-`mesh-llm` can also expose plugin tools over MCP.
+- starting
+- restarting
+- temporarily unhealthy
+- reloading a model
+- intentionally stopped
 
-Current blackboard entry point:
+The host should treat plugin liveness and endpoint liveness as separate concerns.
 
-```text
-mesh-llm --client --join <token> blackboard --mcp
-```
+### Recommended State Model
 
-Protocol boundary:
+Conceptually, the system should track at least:
 
-- MCP client to `mesh-llm`: JSON-RPC
-- `mesh-llm` to plugin process: framed protobuf over local IPC
-- mesh peer to mesh peer plugin traffic: framed protobuf over QUIC streams
+- plugin state
+- endpoint state
+- model or route availability
 
-Important rule:
+Suggested plugin states:
 
-- MCP is JSON-RPC only at the outer edge.
-- Inside the system, plugin traffic stays on the protobuf plugin protocol.
-- The MCP adapter does not proxy through `/api/plugins`.
+- `starting`
+- `running`
+- `degraded`
+- `disconnected`
+- `failed`
 
-### Crash Behavior Today
+Suggested endpoint states:
 
-Today, plugin crash handling is basic.
+- `unknown`
+- `starting`
+- `healthy`
+- `unhealthy`
+- `unavailable`
 
-If a plugin process exits or disconnects:
+Suggested routed availability states:
 
-- in-flight requests fail
-- future tool calls fail
-- the plugin is not automatically restarted
+- `advertised`
+- `routable`
+- `draining`
+- `unavailable`
 
-In practice, that means a crashed plugin stays dead until `mesh-llm` is restarted.
+Routing decisions should depend on endpoint health, not just plugin process health.
 
-## For Plugin Developers
+## MCP
 
-### Mental Model
+MCP is implemented by the host, not by individual plugins.
 
-A plugin is a named executable that speaks the `mesh-llm` plugin protocol over a local IPC stream.
+The plugin author marks which services should appear in MCP:
 
-The plugin executable does not join the mesh directly. `mesh-llm` remains the mesh node and forwards plugin channel traffic on the plugin's behalf.
+- `tool(...)`
+- `resource(...)`
+- `resource_template_service(...)`
+- `prompt(...)`
+- `completion(...)`
 
-### Runtime Identity
-
-Config is authoritative for what should be launched.
-
-Handshake is authoritative for what was actually launched.
-
-Startup rule:
-
-1. `mesh-llm` resolves enabled plugins from config plus host defaults.
-2. `mesh-llm` launches the configured executable.
-3. `mesh-llm` sends `InitializeRequest`.
-4. The plugin returns `InitializeResponse`.
-5. `InitializeResponse.plugin_id` must match the configured `name`.
-6. If it does not match, the host rejects the plugin.
-
-### Compatibility Policy
-
-When changing the plugin protocol, always consider compatibility.
-
-- If a change may be breaking, confirm whether that break is intended.
-- If a change is not intended to be breaking, the previous protocol version must continue to be supported.
-- Do not silently strand older hosts or plugins.
-
-This applies both to the protobuf schema and to the semantic meaning of existing messages and fields.
-
-### Launch Environment
-
-The host launches the plugin and sets:
-
-- `MESH_LLM_PLUGIN_ENDPOINT`
-- `MESH_LLM_PLUGIN_TRANSPORT`
-- `MESH_LLM_PLUGIN_NAME`
-
-The plugin connects back to the host using those values.
-
-### Local IPC Transport
-
-The transport depends on the operating system.
-
-macOS and Linux:
-
-- Unix domain sockets
-- recommended socket path: `~/.mesh-llm/run/plugins/<plugin-name>.sock`
-
-Windows:
-
-- named pipes
-- recommended pipe name: `\\.\pipe\mesh-llm-<plugin-name>`
-
-The transport changes by OS, but the framing and protobuf schema stay the same.
-
-### Framing
-
-Every message is sent as:
-
-1. `u32` little-endian frame length
-2. protobuf payload bytes
-
-This is intentionally simpler than gRPC for local subprocess IPC.
-
-### Wire Schema
-
-The canonical schema lives in:
-
-- [`mesh-llm/proto/plugin.proto`](/Users/jdumay/.codex/worktrees/16af/decentralized-inference/mesh-llm/proto/plugin.proto)
-
-Rust code generation in this repo uses `prost`.
-
-Core message families:
-
-- initialize
-- health
-- shutdown
-- MCP RPC requests
-- MCP RPC responses
-- MCP RPC notifications
-- channel messages
-- bulk transfer
-- mesh events
-- structured errors
-
-### Handshake
-
-During initialization:
-
-- host sends `InitializeRequest`
-- plugin returns `InitializeResponse`
-
-The plugin must provide:
-
-- `plugin_id`
-- `plugin_protocol_version`
-- `plugin_version`
-- `server_info_json`
-- `capabilities`
-
-The host currently requires protocol version equality.
-
-Current state:
-
-- the host speaks `meshllm.plugin.v1`
-- `PROTOCOL_VERSION` is `1`
-
-This is currently an explicit breaking change, not a compatibility bridge.
-
-### Mesh Events
-
-The host can send `MeshEvent` envelopes into every running plugin.
-
-Current event kinds:
-
-- `PEER_UP`
-- `PEER_DOWN`
-- `PEER_UPDATED`
-- `LOCAL_ACCEPTING`
-- `LOCAL_STANDBY`
-- `MESH_ID_UPDATED`
-
-Peer events carry a `MeshPeer` snapshot. Local-state events populate the mesh-level fields and leave
-`peer` empty.
-
-The current `MeshPeer` payload includes:
-
-- `peer_id`
-- `version`
-- `role`
-- `vram_bytes`
-- `models`
-- `serving_models`
-- `available_models`
-- `requested_models`
-- `hosted_models`
-- `hosted_models_known`
-- `rtt_ms`
-- `model_source`
-
-Every `MeshEvent` also carries:
-
-- `local_peer_id`
-- `mesh_id`
-- `detail_json`
-
-Plugins should treat these events as advisory runtime state from the local host.
-
-On initial attach, the host now sends:
-
-- one local readiness event: `LOCAL_ACCEPTING` or `LOCAL_STANDBY`
-- `MESH_ID_UPDATED` when the node already knows its mesh id
-- a `PEER_UP` snapshot for every known peer
-
-At runtime, external plugins are supervised by the host. If the plugin disconnects, stops
-responding, or fails health checks, the host marks it as restarting and attempts to relaunch it on
-the next supervision round before redelivering control, bulk, or mesh events.
-
-### MCP RPC
-
-Plugins expose standard MCP server methods through generic RPC envelopes.
-
-Common methods include:
+The host then synthesizes:
 
 - `tools/list`
 - `tools/call`
+- `resources/list`
+- `resources/read`
 - `prompts/list`
 - `prompts/get`
-- `resources/list`
-- `resources/templates/list`
-- `resources/read`
-- `resources/subscribe`
-- `resources/unsubscribe`
-- `completion/complete`
-- `logging/setLevel`
-- task methods such as `tasks/list`, `tasks/get`, `tasks/result`, and `tasks/cancel`
+- completions where applicable
 
-Plugins can also send host-directed MCP client requests and notifications over the same envelope
-surface, including:
+External MCP endpoints may also be aggregated into the host's MCP surface via the `endpoints:` declarations described above.
 
-- `roots/list`
-- `sampling/createMessage`
-- `elicitation/create`
-- standard MCP notifications such as resource updates and list-changed events
+### MCP Naming
 
-The `server_info_json` field in `InitializeResponse` carries the canonical MCP capability
-declaration for the plugin. The host uses that MCP server info for:
+By default, tool, resource, and prompt names should be plugin-namespaced.
 
-- management API discovery
-- aggregated MCP server exposure
+Examples:
 
-### Tool Calls
+- tool: `blackboard.feed`
+- tool: `blackboard.post`
+- resource: `blackboard://snapshot`
+- prompt: `blackboard.status_brief`
 
-Tool execution is now standard MCP:
+Friendly aliases may be added for bundled plugins, but the canonical identity should remain namespaced to avoid collisions.
 
-- `tools/list`
-- `tools/call`
+### MCP Streaming
 
-`arguments_json` is passed through as JSON text.
+MCP-facing operations may be:
 
-The plugin returns:
+- buffered
+- streaming input
+- streaming output
+- streaming input and output
 
-- `content_json`
-- `is_error`
+For streaming operations, the host uses negotiated side streams internally rather than pushing large data through the control connection.
 
-Guidance for plugin authors:
+## HTTP Bindings
 
-- keep tool inputs and outputs JSON-friendly
-- return stable JSON shapes
-- prefer explicit validation errors over ambiguous failures
+Plugins may declare HTTP bindings as part of the manifest.
 
-### Channel Messages
+These bindings let a plugin feel native over HTTP without requiring custom host route code for each plugin.
 
-Plugins can send and receive `ChannelMessage` values through the host.
+### Default Mounting
 
-This is the mechanism for plugin-defined mesh traffic.
+Plugin-defined HTTP bindings should be mounted under a plugin-owned namespace by default.
 
-Each `ChannelMessage` contains:
+Examples:
 
-- `channel`
-- `source_peer_id`
-- `target_peer_id`
-- `content_type`
-- `body`
-- `message_kind`
-- `correlation_id`
-- `metadata_json`
+- `/api/plugins/blackboard/feed`
+- `/api/plugins/blackboard/post`
+- `/api/plugins/object-store/objects`
 
-The host wraps these in `MeshChannelFrame` for mesh-wide forwarding.
+This avoids collisions and keeps plugin-specific APIs out of the top-level product namespace unless explicitly promoted.
 
-### Bulk Transfer
+### Promoted Product Routes
 
-Plugins can also send and receive `BulkTransferMessage` values through the host.
+Some routes may become stable product APIs owned by `mesh-llm`, for example:
 
-This is the generic path for larger payloads where ordinary control messages are
-not a good fit.
+- `/api/objects`
 
-Each `BulkTransferMessage` contains:
+These routes should be backed by named capabilities, not by hard-coded plugin IDs.
 
-- `kind`
-- `transfer_id`
-- `channel`
-- `source_peer_id`
-- `target_peer_id`
-- `content_type`
-- `correlation_id`
-- `metadata_json`
-- `total_bytes`
-- `offset`
-- `body`
-- `final_chunk`
+Example:
 
-The host wraps these in `MeshBulkFrame` for mesh-wide forwarding.
+- top-level route: `/api/objects`
+- required capability: `object-store.v1`
+- provider plugin: whichever plugin the host resolves for that capability
 
-### Mesh-Wide Forwarding
+This keeps product APIs stable while allowing the backing plugin to change.
 
-The host reserves generic mesh streams for plugin traffic.
+External endpoints do not automatically become HTTP routes. They are service registrations that the host may use for routing or aggregation according to their endpoint kind.
 
-Every forwarded frame contains:
+### Buffered vs Streamed HTTP
 
-- `plugin_id`
-- `message_id`
-- `ChannelMessage`
+HTTP bindings may be declared as:
 
-For bulk transfer, every forwarded frame contains:
+- buffered request / buffered response
+- streamed request / buffered response
+- buffered request / streamed response
+- streamed request / streamed response
 
-- `plugin_id`
-- `message_id`
-- `BulkTransferMessage`
+The host decides whether to keep the invocation on the control channel or negotiate a side stream based on the binding mode and payload size.
 
-Forwarding behavior:
+## Streams And Large Transfers
 
-- `message_id` is deduplicated at each node
-- a message is delivered locally if `target_peer_id` is empty or matches the local peer
-- a message is forwarded outward if it is a broadcast or is targeted at another peer
+Large payloads must not ride the main control connection.
 
-This is how the external blackboard plugin replicates across the mesh.
+Instead, the control session negotiates a short-lived stream for the transfer.
 
-### Health And Shutdown
+Conceptual flow:
 
-The protocol includes:
+1. host sends `OpenStream`
+2. plugin accepts
+3. host and plugin establish a short-lived local stream
+4. request or response bytes flow on that stream
+5. either side may cancel
+6. stream is torn down and cleaned up
 
-- `HealthRequest`
-- `HealthResponse`
-- `ShutdownRequest`
-- `ShutdownResponse`
+This design supports:
 
-Current implementation note:
+- 10 GB uploads
+- large downloads
+- long-lived streaming responses
+- future websocket-like or SSE-style responses
 
-- these messages exist
-- health supervision and automatic restart policy are not fully implemented yet
+without blocking health checks or other control traffic.
 
-### Current Failure Semantics
+## Suggested Control Messages
 
-Today, if the plugin crashes or disconnects:
+The exact wire format is still open, but the protocol should support concepts like:
 
-- the host connection loop exits
-- pending requests fail as disconnected
-- later requests fail because the plugin is no longer accepting requests
-- the host does not automatically restart the plugin
+- `Initialize`
+- `InitializeResponse { manifest }`
+- `Health`
+- `Shutdown`
+- `Invoke`
+- `InvokeResult`
+- `Notify`
+- `MeshEvent`
+- `OpenStream`
+- `OpenStreamResult`
+- `CancelStream`
+- `StreamError`
 
-Plugin authors should assume:
+The stream protocol itself may be raw bytes or lightly framed bytes, depending on the use case.
 
-- abrupt disconnects surface as request failures
-- reconnect is not currently supported without restarting the host
+## Capabilities
 
-### Why This Uses Protobuf Framing Instead Of gRPC
+Capabilities let core depend on behavior rather than on plugin names.
 
-This system intentionally does not use full gRPC.
+Examples:
 
-Reasons:
+- `object-store.v1`
+- `mesh-blackboard.v1`
+- `artifact-cache.v1`
+- `model-catalog-provider.v1`
 
-- plugins are local subprocesses, not network services
-- HTTP/2 is unnecessary overhead here
-- framed protobuf is enough for the needed RPC surface
-- host supervision stays simpler
+Capabilities are used when:
 
-The stack is:
+- core needs a stable product contract
+- multiple plugins could satisfy the same role
+- the host wants to promote a route into the top-level API
 
-- protobuf schema
-- `prost` codegen
-- manual framed reads and writes
+Capabilities are not required for every plugin. They are mainly for shared contracts that `mesh-llm` itself depends on.
 
-Not:
+Endpoint registration is related but distinct:
 
-- `tonic`
-- HTTP/2
-- full gRPC transport
+- capabilities express stable contracts that core may depend on
+- endpoints express concrete service instances that the host can talk to directly
 
-### Why This Does Not Use `dlopen`
+An endpoint may satisfy a capability, but the two ideas should remain separate in the design.
 
-Shared-library loading is not the preferred plugin model.
+## Mesh Channels
 
-Reasons:
+Plugins may declare mesh channels for plugin-specific peer-to-peer coordination.
 
-- weak crash isolation
-- Rust ABI stability concerns
-- harder compatibility and upgrade handling
-- harder debugging and restart behavior
+These should use the generic plugin mesh transport rather than dedicated core stream types for individual plugins.
 
-The subprocess model is safer and easier to evolve.
+Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
 
-## Blackboard Reference Plugin
+## What The Host Owns
 
-`blackboard` is the first real plugin using this system.
+The host is responsible for:
 
-It is:
+- launching plugins
+- registering bundled plugins
+- validating plugin identity
+- keeping the control session alive
+- stream negotiation and cleanup
+- request validation
+- HTTP mounting
+- MCP exposure
+- capability resolution
+- route collision detection
+- permissions and policy enforcement
 
-- auto-registered by the host
-- launched as `mesh-llm --plugin blackboard`
-- synchronized across the mesh through plugin `ChannelMessage` forwarding
-- exposed through both the management API and MCP
+## What Plugins Own
 
-The runtime reuses shared blackboard data types from:
+A plugin is responsible for:
 
-- [`mesh-llm/src/plugins/blackboard/mod.rs`](/Users/jdumay/code/mesh-llm/mesh-llm/src/plugins/blackboard/mod.rs)
+- declaring its manifest
+- implementing handlers
+- handling its own local state
+- reading and writing stream payloads when invoked
+- implementing any plugin-specific business logic
 
-The generic MCP adapter for plugins is in:
+## Non-Goals
 
-- [`mesh-llm/src/plugin_mcp.rs`](/Users/jdumay/code/mesh-llm/mesh-llm/src/plugin_mcp.rs)
+The plugin system should not require each plugin to:
 
-## Example Surface Plugin
+- run its own HTTP server
+- run its own MCP server
+- manually negotiate Unix socket paths in application code
+- hard-code core route registration in `mesh-llm`
 
-The repo also includes a standalone example plugin executable under:
+The plugin system should also avoid:
 
-- [`mesh-llm/examples/plugin-surface`](/Users/jdumay/code/mesh-llm/mesh-llm/examples/plugin-surface)
+- top-level product APIs that are secretly bound to one plugin ID
+- plugin-specific core mesh stream types when generic plugin channels are sufficient
 
-It demonstrates:
+## Open Questions
 
-- tool schemas and tool calls
-- MCP exposure through the generic plugin MCP adapter
-- targeted and broadcast `ChannelMessage` delivery
-- targeted and broadcast `BulkTransferMessage` delivery
-- inbound mesh event observation
+The following are intentionally left open for implementation design:
 
-It is useful for validating plugin behavior on a real mesh without inventing a new production feature first.
+- exact manifest schema
+- exact control protocol message shapes
+- exact stream framing format
+- capability provider selection when multiple plugins implement the same capability
+- whether promoted product routes are configured statically or negotiated dynamically
+- how auth and policy rules are expressed for plugin-defined HTTP bindings
 
-It is not built into `mesh-llm`, and it is not part of the normal `mesh-llm` distribution. To use it, compile the example executable separately and point a config entry at that binary.
+## Architecture Baseline
 
-## Implementation Checklist For New Plugins
-
-If you are building a new plugin, the minimum checklist is:
-
-1. Implement an executable that can be launched locally.
-2. Read the host-provided environment variables.
-3. Connect to the host over the provided local IPC transport.
-4. Speak the framed protobuf protocol from [`plugin.proto`](/Users/jdumay/code/mesh-llm/mesh-llm/proto/plugin.proto).
-5. Respond correctly to `InitializeRequest`.
-6. Return stable tool schemas and tool outputs.
-7. If using mesh traffic, define a stable `channel` name and message body format.
-8. Decide whether any protocol changes you need are breaking or non-breaking before changing the shared protocol.
-
-## Current Gaps
-
-The current plugin system is functional, but not finished.
-
-Known gaps:
-
-1. Mesh events currently cover peer lifecycle snapshots, but broader topology and cluster-level signaling is still limited.
-2. Restart policy and crash supervision are not implemented.
-3. A standalone example plugin outside the main `mesh-llm` executable is still missing.
-4. Cross-platform transport testing, especially Windows named pipes, needs more coverage.
-5. Plugin protocol version negotiation is strict equality today; v1 plugins are intentionally not supported by the current host.
+- bundled plugins may be auto-registered
+- core mesh logic remains plugin-agnostic
+- MCP and HTTP are first-class host projections
+- product APIs depend on capabilities, not plugin IDs
+- large data flows use negotiated side streams, not the control socket

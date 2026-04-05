@@ -17,6 +17,7 @@ pub(super) async fn handle(
         ("GET", "/api/status") => handle_status(stream, state).await,
         ("GET", "/api/models") => handle_models(stream, state).await,
         ("GET", "/api/runtime") => handle_runtime_status(stream, state).await,
+        ("GET", "/api/runtime/endpoints") => handle_runtime_endpoints(stream, state).await,
         ("GET", "/api/runtime/processes") => handle_runtime_processes(stream, state).await,
         ("POST", "/api/runtime/models") => handle_load_model(stream, state, body).await,
         ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
@@ -62,6 +63,16 @@ async fn handle_runtime_processes(stream: &mut TcpStream, state: &MeshApi) -> an
             )
             .await
         }
+    }
+}
+
+async fn handle_runtime_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
+    match plugin_manager.endpoints().await {
+        Ok(endpoints) => {
+            respond_json(stream, 200, &serde_json::json!({ "endpoints": endpoints })).await
+        }
+        Err(err) => respond_error(stream, 500, &err.to_string()).await,
     }
 }
 

@@ -9,6 +9,8 @@ use crate::inference::{launch, moe};
 use crate::mesh;
 use crate::models;
 use crate::network::tunnel;
+use crate::system::hardware;
+use launch::{BinaryFlavor, SplitMode};
 use mesh::NodeRole;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
@@ -18,6 +20,45 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::watch;
+
+/// Returns `true` when `flavor` and `gpu_count` together call for row-split
+/// tensor parallelism.
+///
+/// Row split requires a backend that implements `ggml_backend_split_buffer_type`
+/// (CUDA and ROCm).  When no flavor is specified the binary may still be a CUDA
+/// or ROCm build discovered automatically, so `None` is treated as potentially
+/// supported; if the binary turns out to be CPU/Metal/Vulkan, llama.cpp falls
+/// back safely.
+fn should_use_row_split(flavor: Option<BinaryFlavor>, gpu_count: u8) -> bool {
+    let backend_supported = matches!(
+        flavor,
+        Some(BinaryFlavor::Cuda) | Some(BinaryFlavor::Rocm) | None
+    );
+    backend_supported && gpu_count > 1
+}
+
+/// Returns `Some(SplitMode::Row)` when the local machine has multiple GPUs and
+/// the llama.cpp backend supports row-level tensor parallelism (CUDA, ROCm).
+///
+/// Row split shards weight matrices across local GPUs so all GPUs are active on
+/// every token — faster than layer (pipeline) split where GPUs take turns.
+/// This does NOT work over RPC (network) — only for GPUs on the same machine.
+///
+/// When no explicit flavor is provided the resolved binary may still be CUDA/ROCm
+/// (auto-detected from the binary name), so `None` is treated as potentially
+/// supported.
+pub(crate) fn local_multi_gpu_split_mode(flavor: Option<BinaryFlavor>) -> Option<SplitMode> {
+    let hw = hardware::query(&[hardware::Metric::GpuCount]);
+    if should_use_row_split(flavor, hw.gpu_count) {
+        tracing::info!(
+            "Local multi-GPU detected ({} GPUs) — using row split for tensor parallelism",
+            hw.gpu_count
+        );
+        Some(SplitMode::Row)
+    } else {
+        None
+    }
+}
 
 /// Calculate total model size, summing all split files if present.
 /// Split files follow the pattern: name-00001-of-00004.gguf
@@ -1122,6 +1163,7 @@ pub async fn election_loop(
     bin_dir: std::path::PathBuf,
     model: std::path::PathBuf,
     model_name: String,
+    explicit_mmproj: Option<std::path::PathBuf>,
     draft: Option<std::path::PathBuf>,
     draft_max: u16,
     force_split: bool,
@@ -1426,6 +1468,7 @@ pub async fn election_loop(
                 &model,
                 &model_name,
                 peers_for_launch,
+                explicit_mmproj.as_deref(),
                 draft.as_deref(),
                 draft_max,
                 force_split,
@@ -1815,6 +1858,7 @@ async fn moe_election_loop(
                     http_port: llama_port,
                     tunnel_ports: &[],
                     tensor_split: None,
+                    split_mode: None,
                     draft: None,
                     draft_max: 0,
                     model_bytes,
@@ -1897,6 +1941,7 @@ async fn moe_election_loop(
                         http_port: llama_port,
                         tunnel_ports: &[],
                         tensor_split: None,
+                        split_mode: local_multi_gpu_split_mode(binary_flavor),
                         draft: None,
                         draft_max: 0,
                         model_bytes: mb,
@@ -2037,6 +2082,7 @@ async fn moe_election_loop(
                     http_port: llama_port,
                     tunnel_ports: &[],
                     tensor_split: None,
+                    split_mode: local_multi_gpu_split_mode(binary_flavor),
                     draft: None,
                     draft_max: 0,
                     model_bytes: shard_bytes,
@@ -2232,6 +2278,7 @@ async fn start_llama(
     model: &Path,
     model_name: &str,
     model_peers: &[mesh::PeerInfo],
+    explicit_mmproj: Option<&Path>,
     draft: Option<&Path>,
     draft_max: u16,
     force_split: bool,
@@ -2389,7 +2436,8 @@ async fn start_llama(
     };
 
     // Look up mmproj for vision models
-    let mmproj_path = crate::models::find_mmproj_path(model_name, model);
+    let mmproj_path =
+        crate::models::resolve_mmproj_path(model_name, model, explicit_mmproj.as_deref());
 
     // In split mode (pipeline parallel), pass total group VRAM so context size
     // accounts for the host only holding its share of layers. KV cache is also
@@ -2408,6 +2456,13 @@ async fn start_llama(
             http_port: llama_port,
             tunnel_ports: &rpc_ports,
             tensor_split: split.as_deref(),
+            // Row split only works for local multi-GPU — not over RPC.
+            // When we have RPC workers, llama.cpp uses layer (pipeline) split.
+            split_mode: if rpc_ports.is_empty() {
+                local_multi_gpu_split_mode(binary_flavor)
+            } else {
+                None
+            },
             draft,
             draft_max,
             model_bytes,
@@ -2978,5 +3033,46 @@ mod tests {
         let targets = ModelTargets::default();
         let result = targets.pick_from(&[]);
         assert_eq!(result, InferenceTarget::None);
+    }
+
+    // ── Row-split / tensor-parallelism selection ──
+
+    #[test]
+    fn row_split_enabled_for_cuda_multi_gpu() {
+        assert!(should_use_row_split(Some(BinaryFlavor::Cuda), 2));
+        assert!(should_use_row_split(Some(BinaryFlavor::Cuda), 8));
+    }
+
+    #[test]
+    fn row_split_enabled_for_rocm_multi_gpu() {
+        assert!(should_use_row_split(Some(BinaryFlavor::Rocm), 2));
+    }
+
+    #[test]
+    fn row_split_enabled_for_unknown_flavor_multi_gpu() {
+        // None means auto-detected; the resolved binary may still be CUDA/ROCm.
+        assert!(should_use_row_split(None, 2));
+        assert!(should_use_row_split(None, 4));
+    }
+
+    #[test]
+    fn row_split_disabled_for_single_gpu() {
+        assert!(!should_use_row_split(Some(BinaryFlavor::Cuda), 1));
+        assert!(!should_use_row_split(Some(BinaryFlavor::Rocm), 1));
+        assert!(!should_use_row_split(None, 1));
+    }
+
+    #[test]
+    fn row_split_disabled_for_zero_gpus() {
+        assert!(!should_use_row_split(Some(BinaryFlavor::Cuda), 0));
+        assert!(!should_use_row_split(None, 0));
+    }
+
+    #[test]
+    fn row_split_disabled_for_non_cuda_backends() {
+        // Metal, Vulkan, CPU don't support ggml_backend_split_buffer_type.
+        assert!(!should_use_row_split(Some(BinaryFlavor::Metal), 8));
+        assert!(!should_use_row_split(Some(BinaryFlavor::Vulkan), 4));
+        assert!(!should_use_row_split(Some(BinaryFlavor::Cpu), 4));
     }
 }

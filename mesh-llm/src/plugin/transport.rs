@@ -1,5 +1,5 @@
 use super::runtime::PluginRuntime;
-use super::{PluginMeshEvent, PluginRpcBridge, PluginSummary, PROTOCOL_VERSION};
+use super::{proto, PluginMeshEvent, PluginRpcBridge, PluginSummary, PROTOCOL_VERSION};
 use anyhow::{anyhow, bail, Context, Result};
 use rand::Rng;
 use rmcp::model::ErrorCode;
@@ -14,6 +14,8 @@ pub(crate) enum LocalStream {
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
     PipeServer(tokio::net::windows::named_pipe::NamedPipeServer),
+    #[cfg(windows)]
+    PipeClient(tokio::net::windows::named_pipe::NamedPipeClient),
 }
 
 pub(crate) enum LocalListener {
@@ -172,14 +174,40 @@ impl LocalListener {
 }
 
 impl LocalStream {
-    async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+    pub(crate) async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         match self {
             #[cfg(unix)]
             LocalStream::Unix(stream) => stream.write_all(bytes).await?,
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => stream.write_all(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.write_all(bytes).await?,
         }
         Ok(())
+    }
+
+    pub(crate) async fn shutdown(&mut self) -> Result<()> {
+        match self {
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => stream.shutdown().await?,
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => stream.shutdown().await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.shutdown().await?,
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn read(&mut self, bytes: &mut [u8]) -> Result<usize> {
+        let read = match self {
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => stream.read(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => stream.read(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.read(bytes).await?,
+        };
+        Ok(read)
     }
 
     async fn read_exact(&mut self, bytes: &mut [u8]) -> Result<()> {
@@ -190,6 +218,10 @@ impl LocalStream {
             }
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => {
                 let _ = stream.read_exact(bytes).await?;
             }
         }
@@ -223,6 +255,32 @@ pub(crate) async fn bind_local_listener(instance_id: &str, name: &str) -> Result
     }
 }
 
+pub(crate) async fn connect_side_stream(
+    endpoint: &str,
+    transport_kind: i32,
+) -> Result<LocalStream> {
+    match proto::StreamTransportKind::try_from(transport_kind)
+        .unwrap_or(proto::StreamTransportKind::Unspecified)
+    {
+        #[cfg(unix)]
+        proto::StreamTransportKind::StreamUnixSocket => Ok(LocalStream::Unix(
+            tokio::net::UnixStream::connect(endpoint)
+                .await
+                .with_context(|| format!("Failed to connect side stream socket {endpoint}"))?,
+        )),
+        #[cfg(windows)]
+        proto::StreamTransportKind::StreamNamedPipe => Ok(LocalStream::PipeClient(
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(endpoint)
+                .with_context(|| format!("Failed to connect side stream pipe {endpoint}"))?,
+        )),
+        _ => bail!(
+            "Unsupported side stream transport kind '{}'",
+            transport_kind
+        ),
+    }
+}
+
 #[cfg(unix)]
 fn runtime_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Cannot determine home directory")?;
@@ -241,7 +299,7 @@ pub(crate) fn unix_socket_path(instance_id: &str, name: &str) -> Result<PathBuf>
 }
 
 #[cfg(windows)]
-fn windows_pipe_name(instance_id: &str, name: &str) -> String {
+pub(crate) fn windows_pipe_name(instance_id: &str, name: &str) -> String {
     format!(r"\\.\pipe\mesh-llm-{instance_id}-{name}")
 }
 
@@ -323,4 +381,51 @@ fn forward_plugin_notification(
                 .await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn host_can_connect_to_plugin_side_stream() {
+        let request = proto::OpenStreamRequest {
+            stream_id: "stream-test".into(),
+            purpose: proto::StreamPurpose::HttpResponseBody as i32,
+            mode: proto::StreamMode::RawBytes as i32,
+            bidirectional: true,
+            content_type: Some("application/octet-stream".into()),
+            correlation_id: None,
+            metadata_json: None,
+            expected_bytes: None,
+            idle_timeout_ms: None,
+        };
+
+        let listener = mesh_llm_plugin::bind_side_stream("demo-plugin", &request.stream_id)
+            .await
+            .unwrap();
+        let response = listener.open_stream_response(&request);
+
+        let accept_task = tokio::spawn(async move {
+            let mut plugin_stream = listener.accept().await.unwrap();
+            let mut incoming = [0u8; 5];
+            plugin_stream.read_exact_bytes(&mut incoming).await.unwrap();
+            assert_eq!(&incoming, b"hello");
+            plugin_stream.write_all_bytes(b"world").await.unwrap();
+        });
+
+        let mut host_stream = connect_side_stream(
+            response.endpoint.as_deref().unwrap(),
+            response.transport_kind,
+        )
+        .await
+        .unwrap();
+        host_stream.write_all(b"hello").await.unwrap();
+        let mut reply = [0u8; 5];
+        host_stream.read_exact(&mut reply).await.unwrap();
+        assert_eq!(&reply, b"world");
+
+        accept_task.await.unwrap();
+    }
 }

@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use super::local::{
-    gguf_metadata_cache_path, huggingface_hub_cache, huggingface_hub_cache_dir, legacy_models_dir,
+    direct_hf_cache_root_gguf_paths, gguf_metadata_cache_path, huggingface_hub_cache,
+    huggingface_hub_cache_dir,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -97,29 +98,6 @@ impl CachedCompactModelMetadata {
     }
 }
 
-fn push_gguf_files_recursive(dir: &Path, out: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
-        if file_type.is_dir() {
-            push_gguf_files_recursive(&path, out, seen);
-            continue;
-        }
-        if path.extension().and_then(|e| e.to_str()) != Some("gguf") {
-            continue;
-        }
-        let normalized = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if seen.insert(normalized) {
-            out.push(path);
-        }
-    }
-}
-
 fn local_gguf_paths() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -129,6 +107,13 @@ fn local_gguf_paths() -> Vec<PathBuf> {
     // lock files, and other non-model subdirectories that are expensive to scan).
     let hf_cache_dir = huggingface_hub_cache_dir();
     if hf_cache_dir.exists() {
+        for path in direct_hf_cache_root_gguf_paths(&hf_cache_dir) {
+            let normalized = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if seen.insert(normalized) {
+                out.push(path);
+            }
+        }
+
         let cache = huggingface_hub_cache();
         if let Ok(cache_info) = hf_hub::cache::CacheInfo::scan_dir(Some(cache.path())) {
             for repo in &cache_info.repos {
@@ -151,14 +136,53 @@ fn local_gguf_paths() -> Vec<PathBuf> {
         }
     }
 
-    // Walk legacy models dir (user-placed files, not HF cache).
-    let legacy_dir = legacy_models_dir();
-    if legacy_dir.exists() {
-        push_gguf_files_recursive(&legacy_dir, &mut out, &mut seen);
-    }
-
     out.sort();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
+        if let Some(value) = value {
+            std::env::set_var(key, value);
+        } else {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn local_gguf_paths_includes_direct_hf_cache_root_files() {
+        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
+        let prev_hf_home = std::env::var_os("HF_HOME");
+        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-inventory-direct-cache-root-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let model = temp.join("Inventory-Root-Q4_K_M.gguf");
+        std::fs::write(&model, b"gguf").unwrap();
+
+        std::env::set_var("HF_HUB_CACHE", &temp);
+        std::env::remove_var("HF_HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
+
+        let paths = local_gguf_paths();
+        assert!(paths.iter().any(|path| path == &model));
+
+        let _ = std::fs::remove_dir_all(&temp);
+        restore_env("HF_HUB_CACHE", prev_hub_cache);
+        restore_env("HF_HOME", prev_hf_home);
+        restore_env("XDG_CACHE_HOME", prev_xdg);
+    }
 }
 
 pub(crate) fn derive_quantization_type(stem: &str) -> String {

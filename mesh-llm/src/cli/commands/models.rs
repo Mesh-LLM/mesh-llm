@@ -1,8 +1,7 @@
 use crate::cli::models::ModelsCommand;
 use crate::models::{
     capabilities, catalog, download_exact_ref, find_catalog_model_exact, huggingface_hub_cache_dir,
-    installed_model_capabilities, legacy_models_dir, legacy_models_present,
-    path_is_in_legacy_models_dir, scan_installed_models, search_catalog_models, search_huggingface,
+    installed_model_capabilities, scan_installed_models, search_catalog_models, search_huggingface,
     show_exact_model, SearchProgress,
 };
 use crate::system::hardware;
@@ -146,30 +145,15 @@ pub fn run_model_installed() {
     if installed.is_empty() {
         println!("📦 No installed models found");
         println!("   HF cache: {}", huggingface_hub_cache_dir().display());
-        let legacy = legacy_models_dir();
-        if legacy.exists() {
-            println!("   legacy: {}", legacy.display());
-        }
         return;
     }
 
     println!("💾 Installed models");
     println!("📁 HF cache: {}", huggingface_hub_cache_dir().display());
-    if legacy_models_present() {
-        println!(
-            "⚠️ Legacy storage detected: {}",
-            legacy_models_dir().display()
-        );
-    }
     println!();
     for name in installed {
         let path = crate::models::find_model_path(&name);
         let size = std::fs::metadata(&path).map(|meta| meta.len()).ok();
-        let source = if path_is_in_legacy_models_dir(path.as_path()) {
-            "⚠️ legacy"
-        } else {
-            "🤗 HF cache"
-        };
         let catalog_model = find_catalog_model_exact(&name);
         let model_capabilities = installed_model_capabilities(&name);
 
@@ -177,7 +161,7 @@ pub fn run_model_installed() {
             Some(bytes) => println!("• {}  {}", name, format_installed_size(bytes)),
             None => println!("• {}", name),
         }
-        println!("  {}", source);
+        println!("  🤗 HF cache");
         println!("  {}", path.display());
         if let Some(model) = catalog_model {
             println!("  {}", model.description);

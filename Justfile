@@ -5,7 +5,9 @@ build_dir := llama_dir / "build"
 mesh_dir := "mesh-llm"
 ui_dir := mesh_dir / "ui"
 home_dir := if os_family() == "windows" { env("USERPROFILE") } else { env("HOME") }
-models_dir := home_dir / ".models"
+xdg_cache_dir := env("XDG_CACHE_HOME", home_dir / ".cache")
+hf_home := env("HF_HOME", xdg_cache_dir / "huggingface")
+models_dir := env("HF_HUB_CACHE", hf_home / "hub")
 model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 
 # Build for the current platform (macOS→Metal, Linux/Windows→auto backend)
@@ -322,8 +324,8 @@ test port="9337":
         | python3 -c "import sys,json; d=json.load(sys.stdin); t=d['timings']; print(d['choices'][0]['message'].get('content','')[:200]); print(f\"  prompt: {t['prompt_per_second']:.1f} tok/s  gen: {t['predicted_per_second']:.1f} tok/s ({t['predicted_n']} tok)\")"
 
 # Optional SDK compatibility smoke: 2 mesh nodes + 1 lite client.
-compat-smoke model:
-    scripts/ci-compat-smoke.sh "target/release/mesh-llm" "llama.cpp/build/bin" "{{ model }}"
+compat-smoke model mmproj="":
+    scripts/ci-compat-smoke.sh "target/release/mesh-llm" "llama.cpp/build/bin" "{{ model }}" "{{ mmproj }}"
 
 # Direct splitter smoke for the MoE families we actively use.
 moe-split-smoke families="all":

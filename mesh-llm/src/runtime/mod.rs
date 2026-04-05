@@ -253,6 +253,18 @@ pub(crate) async fn run() -> Result<()> {
     if cli.client && (!cli.model.is_empty() || !cli.gguf.is_empty()) {
         anyhow::bail!("--client and --model are mutually exclusive");
     }
+    if let Some(mmproj) = &cli.mmproj {
+        anyhow::ensure!(!cli.client, "--mmproj cannot be used with --client");
+        anyhow::ensure!(
+            !cli.model.is_empty() || !cli.gguf.is_empty(),
+            "--mmproj requires an explicit primary model via --model or --gguf"
+        );
+        anyhow::ensure!(
+            mmproj.is_file(),
+            "mmproj path is not a file: {}",
+            mmproj.display()
+        );
+    }
     // --- Resolve models from CLI ---
     // All --model entries get resolved/downloaded. First is primary (gets rpc/tunnel).
     // Additional models run as solo llama-servers (must fit in VRAM independently).
@@ -267,7 +279,6 @@ pub(crate) async fn run() -> Result<()> {
     for m in &cli.model {
         resolved_models.push(resolve_model(m).await?);
     }
-    models::warn_about_legacy_model_usage(&resolved_models);
     models::warn_about_updates_for_paths(&resolved_models);
 
     // Build requested model names from all resolved models
@@ -648,7 +659,7 @@ fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
     }
 }
 
-fn blackboard_display_name(cli: &Cli, node: &mesh::Node) -> String {
+fn node_display_name(cli: &Cli, node: &mesh::Node) -> String {
     cli.name
         .clone()
         .or_else(|| std::env::var("USER").ok())
@@ -715,8 +726,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     )
     .await?;
     node.start_accepting();
-    node.set_blackboard_name(blackboard_display_name(cli, &node))
-        .await;
+    node.set_display_name(node_display_name(cli, &node)).await;
     node.start_heartbeat();
     join_mesh_for_mcp(cli, &node).await?;
 
@@ -774,8 +784,7 @@ async fn run_auto(
     .await?;
     node.start_accepting();
     let token = node.invite_token();
-    node.set_blackboard_name(blackboard_display_name(&cli, &node))
-        .await;
+    node.set_display_name(node_display_name(&cli, &node)).await;
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
     let plugin_manager =
         plugin::PluginManager::start(&resolved_plugins, plugin_host_mode(&cli), plugin_mesh_tx)
@@ -1194,6 +1203,7 @@ async fn run_auto(
     let primary_task = tokio::spawn(async move {
         election::election_loop(
             node2, tunnel_mgr2, api_port, rpc_port, bin_dir2, model2, model_name_for_election,
+            cli.mmproj.clone(),
             draft2, draft_max, force_split, llama_flavor, cli.ctx_size, moe_runtime_options, primary_target_tx,
             primary_stop_rx,
             move |is_host, llama_ready| {
@@ -1327,6 +1337,7 @@ async fn run_auto(
             let extra_task = tokio::spawn(async move {
                 election::election_loop(
                     extra_node, extra_tunnel, api_port_extra, 0, extra_bin, extra_path, extra_model_name.clone(),
+                    None,
                     None, 8, false, extra_llama_flavor, cli.ctx_size, extra_moe_runtime_options, extra_target_tx,
                     extra_stop_rx,
                     move |is_host, llama_ready| {
@@ -1610,8 +1621,7 @@ async fn run_passive(
 ) -> Result<Option<String>> {
     let local_port = cli.port;
     let affinity_router = affinity::AffinityRouter::new();
-    node.set_blackboard_name(blackboard_display_name(cli, &node))
-        .await;
+    node.set_display_name(node_display_name(cli, &node)).await;
 
     // Nostr publishing (if --publish, for standby GPU nodes advertising capacity)
     if cli.publish && !is_client {
@@ -2030,7 +2040,9 @@ mod tests {
     #[test]
     fn test_build_serving_list_explicit_single_model() {
         // --model Qwen3-30B: resolved_models has the model
-        let resolved = vec![PathBuf::from("/home/.models/Qwen3-30B-A3B-Q4_K_M.gguf")];
+        let resolved = vec![PathBuf::from(
+            "/home/.cache/huggingface/hub/Qwen3-30B-A3B-Q4_K_M.gguf",
+        )];
         let result = build_serving_list(&resolved, "Qwen3-30B-A3B-Q4_K_M");
         assert_eq!(result, vec!["Qwen3-30B-A3B-Q4_K_M"]);
         // No duplicate
@@ -2041,8 +2053,8 @@ mod tests {
     fn test_build_serving_list_explicit_multi_model() {
         // --model A --model B: both resolved
         let resolved = vec![
-            PathBuf::from("/home/.models/Qwen3-30B-A3B-Q4_K_M.gguf"),
-            PathBuf::from("/home/.models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"),
+            PathBuf::from("/home/.cache/huggingface/hub/Qwen3-30B-A3B-Q4_K_M.gguf"),
+            PathBuf::from("/home/.cache/huggingface/hub/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"),
         ];
         let result = build_serving_list(&resolved, "Qwen3-30B-A3B-Q4_K_M");
         assert_eq!(
@@ -2056,7 +2068,7 @@ mod tests {
         // Split GGUF: file is "MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf"
         // Serving list should strip the split suffix
         let resolved = vec![PathBuf::from(
-            "/home/.models/MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf",
+            "/home/.cache/huggingface/hub/MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf",
         )];
         let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M");
         assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M"]);
@@ -2067,7 +2079,7 @@ mod tests {
     fn test_build_serving_list_split_gguf_model_name_also_has_suffix() {
         // If model_name also has the suffix (from dynamic pick), strip it too
         let resolved = vec![PathBuf::from(
-            "/home/.models/MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf",
+            "/home/.cache/huggingface/hub/MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf",
         )];
         let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M-00001-of-00004");
         assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M"]);

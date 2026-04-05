@@ -52,7 +52,15 @@ pub(super) async fn api_proxy(
                 Ok(request) => {
                     let body_json = request.body_json.as_ref();
                     if proxy::is_models_list_request(&request.method, &request.path) {
-                        let models: Vec<String> = targets.targets.keys().cloned().collect();
+                        let mut models: Vec<String> = targets.targets.keys().cloned().collect();
+                        if let Some(plugin_manager) = plugin_manager.as_ref() {
+                            if let Ok(mut external_models) = plugin_manager.inference_models().await
+                            {
+                                models.append(&mut external_models);
+                            }
+                        }
+                        models.sort();
+                        models.dedup();
                         let _ = proxy::send_models_list(tcp_stream, &models).await;
                         return;
                     }
@@ -123,9 +131,23 @@ pub(super) async fn api_proxy(
                     {
                         if let Some(body_json) = body_json {
                             let cl = router::classify(body_json);
-                            let available: Vec<(&str, f64)> = targets
-                                .targets
-                                .keys()
+                            let mut available_models: Vec<String> =
+                                targets.targets.keys().cloned().collect();
+                            if let Some(plugin_manager) = plugin_manager.as_ref() {
+                                if let Ok(external_models) = plugin_manager.inference_models().await
+                                {
+                                    for name in external_models {
+                                        if !available_models
+                                            .iter()
+                                            .any(|existing| existing == &name)
+                                        {
+                                            available_models.push(name);
+                                        }
+                                    }
+                                }
+                            }
+                            let available: Vec<(&str, f64)> = available_models
+                                .iter()
                                 .map(|name| (name.as_str(), 0.0))
                                 .collect();
                             let picked = router::pick_model_classified(&cl, &available);
@@ -242,8 +264,50 @@ pub(super) async fn api_proxy(
                         first_available_target(&targets)
                     } else if let Some(ref name) = effective_model {
                         if targets.candidates(name).is_empty() {
-                            tracing::debug!("Model '{}' not found, trying first available", name);
-                            first_available_target(&targets)
+                            if let Some(plugin_manager) = plugin_manager.as_ref() {
+                                match plugin_manager.inference_endpoint_for_model(name).await {
+                                    Ok(Some(endpoint)) => {
+                                        let routed = proxy::route_http_endpoint_request(
+                                            &mut tcp_stream,
+                                            &endpoint.address,
+                                            &request.raw,
+                                            &request.path,
+                                            request.response_adapter,
+                                        )
+                                        .await;
+                                        proxy::release_request_objects(
+                                            &node,
+                                            &request.request_object_request_ids,
+                                        )
+                                        .await;
+                                        if !routed {
+                                            let _ = proxy::send_503(tcp_stream).await;
+                                        }
+                                        return;
+                                    }
+                                    Ok(None) => {
+                                        tracing::debug!(
+                                            "Model '{}' not found, trying first available",
+                                            name
+                                        );
+                                        first_available_target(&targets)
+                                    }
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "API proxy: failed to resolve external endpoint for model '{}': {}",
+                                            name,
+                                            err
+                                        );
+                                        first_available_target(&targets)
+                                    }
+                                }
+                            } else {
+                                tracing::debug!(
+                                    "Model '{}' not found, trying first available",
+                                    name
+                                );
+                                first_available_target(&targets)
+                            }
                         } else {
                             let routed = proxy::route_model_request(
                                 node.clone(),

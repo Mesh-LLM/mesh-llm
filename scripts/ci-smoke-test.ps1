@@ -4,7 +4,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$BinDir,
     [Parameter(Mandatory = $true)]
-    [string]$ModelPath
+    [string]$ModelPath,
+    [Parameter(Mandatory = $false)]
+    [string]$MmprojPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +30,9 @@ Write-Host "=== CI Smoke Test ==="
 Write-Host "  mesh-llm:  $MeshLlm"
 Write-Host "  bin-dir:   $BinDir"
 Write-Host "  model:     $ModelPath"
+if (-not [string]::IsNullOrWhiteSpace($MmprojPath)) {
+    Write-Host "  mmproj:    $MmprojPath"
+}
 Write-Host "  api port:  $apiPort"
 Write-Host "  os:        Windows"
 
@@ -48,6 +53,10 @@ try {
         "--port", "$apiPort",
         "--console", "$consolePort"
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($MmprojPath)) {
+        $arguments += @("--mmproj", $MmprojPath)
+    }
 
     Write-Host "Starting mesh-llm..."
     $process = Start-Process `

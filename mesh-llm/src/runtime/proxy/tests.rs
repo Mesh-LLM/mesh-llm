@@ -1,6 +1,7 @@
 use super::*;
 use crate::plugin;
 use crate::plugins::blobstore::BlobStore;
+use base64::Engine;
 use rmcp::model::ErrorCode;
 use serde_json::json;
 use std::collections::HashMap;
@@ -59,8 +60,12 @@ async fn spawn_api_proxy_test_harness_with_plugin_manager(
 
 #[derive(Clone)]
 struct BlobstoreTestBridge {
+    plugin_name: String,
     store: BlobStore,
 }
+
+#[derive(Clone, Default)]
+struct NoopTestBridge;
 
 impl BlobstoreTestBridge {
     fn error_response(message: impl Into<String>) -> plugin::proto::ErrorResponse {
@@ -72,6 +77,32 @@ impl BlobstoreTestBridge {
     }
 }
 
+impl plugin::PluginRpcBridge for NoopTestBridge {
+    fn handle_request(
+        &self,
+        plugin_name: String,
+        method: String,
+        _params_json: String,
+    ) -> plugin::BridgeFuture<Result<plugin::RpcResult, plugin::proto::ErrorResponse>> {
+        Box::pin(async move {
+            Err(plugin::proto::ErrorResponse {
+                code: ErrorCode::METHOD_NOT_FOUND.0,
+                message: format!("Noop test bridge cannot handle {plugin_name}:{method}"),
+                data_json: String::new(),
+            })
+        })
+    }
+
+    fn handle_notification(
+        &self,
+        _plugin_name: String,
+        _method: String,
+        _params_json: String,
+    ) -> plugin::BridgeFuture<()> {
+        Box::pin(async {})
+    }
+}
+
 impl plugin::PluginRpcBridge for BlobstoreTestBridge {
     fn handle_request(
         &self,
@@ -79,18 +110,70 @@ impl plugin::PluginRpcBridge for BlobstoreTestBridge {
         method: String,
         params_json: String,
     ) -> plugin::BridgeFuture<Result<plugin::RpcResult, plugin::proto::ErrorResponse>> {
+        let expected_plugin_name = self.plugin_name.clone();
         let store = self.store.clone();
         Box::pin(async move {
-            if plugin_name != plugin::BLOBSTORE_PLUGIN_ID {
+            if plugin_name != expected_plugin_name {
                 return Err(Self::error_response(format!(
                     "Unsupported test plugin '{}'",
                     plugin_name
                 )));
             }
 
+            if method == "tools/call" {
+                let request: mesh_llm_plugin::OperationRequest = serde_json::from_str(&params_json)
+                    .map_err(|err| Self::error_response(err.to_string()))?;
+                let result_json = match request.name.as_str() {
+                    crate::plugins::blobstore::PUT_REQUEST_OBJECT_TOOL => {
+                        let request: crate::plugins::blobstore::PutRequestObjectRequest =
+                            serde_json::from_value(request.arguments)
+                                .map_err(|err| Self::error_response(err.to_string()))?;
+                        let response = store
+                            .put_request_object(request)
+                            .map_err(|err| Self::error_response(err.to_string()))?;
+                        let value = serde_json::to_value(response)
+                            .map_err(|err| Self::error_response(err.to_string()))?;
+                        serde_json::to_string(&rmcp::model::CallToolResult::structured(value))
+                            .map_err(|err| Self::error_response(err.to_string()))?
+                    }
+                    crate::plugins::blobstore::GET_REQUEST_OBJECT_TOOL => {
+                        let request: crate::plugins::blobstore::GetRequestObjectRequest =
+                            serde_json::from_value(request.arguments)
+                                .map_err(|err| Self::error_response(err.to_string()))?;
+                        let response = store
+                            .get_request_object(request)
+                            .map_err(|err| Self::error_response(err.to_string()))?;
+                        let value = serde_json::to_value(response)
+                            .map_err(|err| Self::error_response(err.to_string()))?;
+                        serde_json::to_string(&rmcp::model::CallToolResult::structured(value))
+                            .map_err(|err| Self::error_response(err.to_string()))?
+                    }
+                    crate::plugins::blobstore::COMPLETE_REQUEST_TOOL
+                    | crate::plugins::blobstore::ABORT_REQUEST_TOOL => {
+                        let request: crate::plugins::blobstore::FinishRequestRequest =
+                            serde_json::from_value(request.arguments)
+                                .map_err(|err| Self::error_response(err.to_string()))?;
+                        let response = store
+                            .finish_request(&request.request_id)
+                            .map_err(|err| Self::error_response(err.to_string()))?;
+                        let value = serde_json::to_value(response)
+                            .map_err(|err| Self::error_response(err.to_string()))?;
+                        serde_json::to_string(&rmcp::model::CallToolResult::structured(value))
+                            .map_err(|err| Self::error_response(err.to_string()))?
+                    }
+                    _ => {
+                        return Err(Self::error_response(format!(
+                            "Unsupported blobstore tool '{}'",
+                            request.name
+                        )));
+                    }
+                };
+                return Ok(plugin::RpcResult { result_json });
+            }
+
             let result_json = match method.as_str() {
-                plugin::blobstore::PUT_REQUEST_OBJECT_METHOD => {
-                    let request: plugin::blobstore::PutRequestObjectRequest =
+                crate::plugins::blobstore::PUT_REQUEST_OBJECT_METHOD => {
+                    let request: crate::plugins::blobstore::PutRequestObjectRequest =
                         serde_json::from_str(&params_json)
                             .map_err(|err| Self::error_response(err.to_string()))?;
                     let response = store
@@ -99,8 +182,8 @@ impl plugin::PluginRpcBridge for BlobstoreTestBridge {
                     serde_json::to_string(&response)
                         .map_err(|err| Self::error_response(err.to_string()))?
                 }
-                plugin::blobstore::GET_REQUEST_OBJECT_METHOD => {
-                    let request: plugin::blobstore::GetRequestObjectRequest =
+                crate::plugins::blobstore::GET_REQUEST_OBJECT_METHOD => {
+                    let request: crate::plugins::blobstore::GetRequestObjectRequest =
                         serde_json::from_str(&params_json)
                             .map_err(|err| Self::error_response(err.to_string()))?;
                     let response = store
@@ -109,8 +192,8 @@ impl plugin::PluginRpcBridge for BlobstoreTestBridge {
                     serde_json::to_string(&response)
                         .map_err(|err| Self::error_response(err.to_string()))?
                 }
-                plugin::blobstore::COMPLETE_REQUEST_METHOD => {
-                    let request: plugin::blobstore::FinishRequestRequest =
+                crate::plugins::blobstore::COMPLETE_REQUEST_METHOD => {
+                    let request: crate::plugins::blobstore::FinishRequestRequest =
                         serde_json::from_str(&params_json)
                             .map_err(|err| Self::error_response(err.to_string()))?;
                     let response = store
@@ -119,8 +202,8 @@ impl plugin::PluginRpcBridge for BlobstoreTestBridge {
                     serde_json::to_string(&response)
                         .map_err(|err| Self::error_response(err.to_string()))?
                 }
-                plugin::blobstore::ABORT_REQUEST_METHOD => {
-                    let request: plugin::blobstore::FinishRequestRequest =
+                crate::plugins::blobstore::ABORT_REQUEST_METHOD => {
+                    let request: crate::plugins::blobstore::FinishRequestRequest =
                         serde_json::from_str(&params_json)
                             .map_err(|err| Self::error_response(err.to_string()))?;
                     let response = store
@@ -159,14 +242,51 @@ fn temp_blobstore_root(name: &str) -> std::path::PathBuf {
 }
 
 async fn start_blobstore_plugin_manager() -> (plugin::PluginManager, std::path::PathBuf) {
+    start_blobstore_plugin_manager_for(
+        plugin::BLOBSTORE_PLUGIN_ID,
+        vec!["internal:blobstore".into(), "object-store.v1".into()],
+    )
+    .await
+}
+
+async fn start_blobstore_plugin_manager_for(
+    plugin_name: &str,
+    capabilities: Vec<String>,
+) -> (plugin::PluginManager, std::path::PathBuf) {
     let root = temp_blobstore_root("blobstore");
     let bridge = BlobstoreTestBridge {
+        plugin_name: plugin_name.to_string(),
         store: BlobStore::new(root.clone()),
     };
-    (
-        plugin::PluginManager::for_test_bridge(&[plugin::BLOBSTORE_PLUGIN_ID], Arc::new(bridge)),
-        root,
-    )
+    let plugin_manager = plugin::PluginManager::for_test_bridge(&[plugin_name], Arc::new(bridge));
+    let mut manifests = HashMap::new();
+    manifests.insert(
+        plugin_name.to_string(),
+        mesh_llm_plugin::proto::PluginManifest {
+            capabilities,
+            ..Default::default()
+        },
+    );
+    plugin_manager
+        .set_test_manifests(manifests.into_iter().collect())
+        .await;
+    (plugin_manager, root)
+}
+
+async fn start_inference_endpoint_plugin_manager(
+    address: String,
+    models: Vec<String>,
+) -> plugin::PluginManager {
+    let plugin_manager = plugin::PluginManager::for_test_bridge(&[], Arc::new(NoopTestBridge));
+    plugin_manager
+        .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
+            plugin_name: plugin::LEMONADE_PLUGIN_ID.into(),
+            endpoint_id: "lemonade".into(),
+            address,
+            models,
+        }])
+        .await;
+    plugin_manager
 }
 
 async fn spawn_capturing_upstream(
@@ -533,9 +653,9 @@ async fn test_moe_remote_failure_removes_peer_for_faildown() {
 #[tokio::test]
 async fn test_api_proxy_rewrites_image_blob_url_to_data_url() {
     let (plugin_manager, blobstore_root) = start_blobstore_plugin_manager().await;
-    let put = plugin::blobstore::put_request_object(
+    let put = crate::plugins::blobstore::put_request_object(
         &plugin_manager,
-        plugin::blobstore::PutRequestObjectRequest {
+        crate::plugins::blobstore::PutRequestObjectRequest {
             request_id: "req-image-smoke".into(),
             mime_type: "image/png".into(),
             file_name: Some("smoke.png".into()),
@@ -581,9 +701,9 @@ async fn test_api_proxy_rewrites_image_blob_url_to_data_url() {
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(raw.contains("data:image/png;base64,aGVsbG8="));
     assert!(!raw.contains(&format!("mesh://blob/{client_id}/{}", put.token)));
-    assert!(plugin::blobstore::get_request_object(
+    assert!(crate::plugins::blobstore::get_request_object(
         &plugin_manager,
-        plugin::blobstore::GetRequestObjectRequest {
+        crate::plugins::blobstore::GetRequestObjectRequest {
             token: put.token.clone(),
             request_id: Some("req-image-smoke".into()),
         },
@@ -597,11 +717,166 @@ async fn test_api_proxy_rewrites_image_blob_url_to_data_url() {
 }
 
 #[tokio::test]
+async fn test_blobstore_helper_resolves_object_store_capability() {
+    let (plugin_manager, blobstore_root) =
+        start_blobstore_plugin_manager_for("alt-store", vec!["object-store.v1".into()]).await;
+
+    let response = crate::plugins::blobstore::put_request_object(
+        &plugin_manager,
+        crate::plugins::blobstore::PutRequestObjectRequest {
+            request_id: "req-capability".into(),
+            mime_type: "text/plain".into(),
+            file_name: Some("note.txt".into()),
+            bytes_base64: base64::engine::general_purpose::STANDARD.encode("hello"),
+            expires_in_secs: Some(60),
+            uses_remaining: Some(1),
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.request_id, "req-capability");
+
+    let _ = std::fs::remove_dir_all(blobstore_root);
+}
+
+#[tokio::test]
+async fn test_api_proxy_routes_to_registered_inference_endpoint() {
+    let (upstream_port, upstream_rx, upstream_handle) =
+        spawn_capturing_upstream(r#"{"id":"chatcmpl","object":"chat.completion","choices":[]}"#)
+            .await;
+    let plugin_manager = start_inference_endpoint_plugin_manager(
+        format!("http://127.0.0.1:{upstream_port}/api/v1"),
+        vec!["lemonade-test".into()],
+    )
+    .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), plugin_manager).await;
+
+    let body = json!({
+        "model": "lemonade-test",
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(raw.starts_with("POST /api/v1/chat/completions HTTP/1.1"));
+    assert!(raw.contains(r#""model":"lemonade-test""#));
+
+    proxy_handle.abort();
+    let _ = upstream_handle.await;
+}
+
+#[tokio::test]
+async fn test_api_proxy_lists_registered_inference_models() {
+    let plugin_manager = start_inference_endpoint_plugin_manager(
+        "http://127.0.0.1:8000/api/v1".into(),
+        vec!["lemonade-test".into()],
+    )
+    .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), plugin_manager).await;
+
+    let response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    let json: serde_json::Value = serde_json::from_str(body).unwrap();
+    let entries = json["data"].as_array().cloned().unwrap_or_default();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(entries.iter().any(|entry| entry["id"] == "lemonade-test"));
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
+async fn test_api_proxy_lemonade_integration_when_enabled() {
+    if std::env::var("MESH_LLM_TEST_LEMONADE").ok().as_deref() != Some("1") {
+        return;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap();
+    let models_response = client
+        .get("http://localhost:8000/api/v1/models")
+        .send()
+        .await
+        .expect("Lemonade should be reachable when MESH_LLM_TEST_LEMONADE=1")
+        .error_for_status()
+        .expect("Lemonade /models should succeed")
+        .json::<serde_json::Value>()
+        .await
+        .expect("Lemonade /models should return JSON");
+    let models = models_response["data"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| entry["id"].as_str().map(ToOwned::to_owned))
+        .collect::<Vec<_>>();
+    assert!(
+        !models.is_empty(),
+        "Lemonade reported no models at http://localhost:8000/api/v1/models"
+    );
+    let model = models[0].clone();
+
+    let plugin_manager = start_inference_endpoint_plugin_manager(
+        "http://localhost:8000/api/v1".into(),
+        models.clone(),
+    )
+    .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), plugin_manager).await;
+
+    let models_response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    let models_body = models_response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    let models_json: serde_json::Value = serde_json::from_str(models_body).unwrap();
+    let model_entries = models_json["data"].as_array().cloned().unwrap_or_default();
+    assert!(model_entries.iter().any(|entry| entry["id"] == model));
+
+    let body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with the word ok."}],
+        "stream": false,
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "unexpected Lemonade proxy response: {response}"
+    );
+
+    proxy_handle.abort();
+}
+
+#[tokio::test]
 async fn test_api_proxy_rewrites_audio_blob_url_to_data_url() {
     let (plugin_manager, blobstore_root) = start_blobstore_plugin_manager().await;
-    let put = plugin::blobstore::put_request_object(
+    let put = crate::plugins::blobstore::put_request_object(
         &plugin_manager,
-        plugin::blobstore::PutRequestObjectRequest {
+        crate::plugins::blobstore::PutRequestObjectRequest {
             request_id: "req-audio-smoke".into(),
             mime_type: "audio/wav".into(),
             file_name: Some("smoke.wav".into()),
@@ -647,9 +922,9 @@ async fn test_api_proxy_rewrites_audio_blob_url_to_data_url() {
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(raw.contains("data:audio/wav;base64,UklGRg=="));
     assert!(!raw.contains(&format!("mesh://blob/{client_id}/{}", put.token)));
-    assert!(plugin::blobstore::get_request_object(
+    assert!(crate::plugins::blobstore::get_request_object(
         &plugin_manager,
-        plugin::blobstore::GetRequestObjectRequest {
+        crate::plugins::blobstore::GetRequestObjectRequest {
             token: put.token.clone(),
             request_id: Some("req-audio-smoke".into()),
         },
@@ -665,9 +940,9 @@ async fn test_api_proxy_rewrites_audio_blob_url_to_data_url() {
 #[tokio::test]
 async fn test_api_proxy_rewrites_input_audio_blob_url_to_inline_audio() {
     let (plugin_manager, blobstore_root) = start_blobstore_plugin_manager().await;
-    let put = plugin::blobstore::put_request_object(
+    let put = crate::plugins::blobstore::put_request_object(
         &plugin_manager,
-        plugin::blobstore::PutRequestObjectRequest {
+        crate::plugins::blobstore::PutRequestObjectRequest {
             request_id: "req-input-audio-smoke".into(),
             mime_type: "audio/wav".into(),
             file_name: Some("smoke.wav".into()),
@@ -716,9 +991,9 @@ async fn test_api_proxy_rewrites_input_audio_blob_url_to_inline_audio() {
     assert!(raw.contains(r#""format":"wav""#));
     assert!(raw.contains(r#""mime_type":"audio/wav""#));
     assert!(!raw.contains(&format!("mesh://blob/{client_id}/{}", put.token)));
-    assert!(plugin::blobstore::get_request_object(
+    assert!(crate::plugins::blobstore::get_request_object(
         &plugin_manager,
-        plugin::blobstore::GetRequestObjectRequest {
+        crate::plugins::blobstore::GetRequestObjectRequest {
             token: put.token.clone(),
             request_id: Some("req-input-audio-smoke".into()),
         },
@@ -734,9 +1009,9 @@ async fn test_api_proxy_rewrites_input_audio_blob_url_to_inline_audio() {
 #[tokio::test]
 async fn test_api_proxy_translates_responses_image_request() {
     let (plugin_manager, blobstore_root) = start_blobstore_plugin_manager().await;
-    let put = plugin::blobstore::put_request_object(
+    let put = crate::plugins::blobstore::put_request_object(
         &plugin_manager,
-        plugin::blobstore::PutRequestObjectRequest {
+        crate::plugins::blobstore::PutRequestObjectRequest {
             request_id: "req-responses-image".into(),
             mime_type: "image/png".into(),
             file_name: Some("smoke.png".into()),
@@ -812,9 +1087,9 @@ async fn test_api_proxy_translates_responses_image_request() {
 #[tokio::test]
 async fn test_api_proxy_translates_responses_audio_request() {
     let (plugin_manager, blobstore_root) = start_blobstore_plugin_manager().await;
-    let put = plugin::blobstore::put_request_object(
+    let put = crate::plugins::blobstore::put_request_object(
         &plugin_manager,
-        plugin::blobstore::PutRequestObjectRequest {
+        crate::plugins::blobstore::PutRequestObjectRequest {
             request_id: "req-responses-audio".into(),
             mime_type: "audio/wav".into(),
             file_name: Some("smoke.wav".into()),

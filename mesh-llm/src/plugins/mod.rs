@@ -1,2 +1,3 @@
 pub mod blackboard;
 pub mod blobstore;
+pub mod lemonade;

@@ -90,12 +90,6 @@ pub async fn resolve_model_spec(input: &Path) -> Result<PathBuf> {
     }
 
     if !raw.contains('/') {
-        for dir in super::model_dirs() {
-            let candidate = dir.join(input);
-            if candidate.exists() {
-                return Ok(candidate);
-            }
-        }
         let installed_name = raw.strip_suffix(".gguf").unwrap_or(&raw);
         let installed_path = find_model_path(installed_name);
         if installed_path.exists() {
@@ -105,7 +99,7 @@ pub async fn resolve_model_spec(input: &Path) -> Result<PathBuf> {
             return catalog::download_model(entry).await;
         }
         bail!(
-            "Model not found: {raw}\nNot a local file, not in the Hugging Face cache or legacy ~/.models, not in catalog.\n\
+            "Model not found: {raw}\nNot a local file, not in the Hugging Face cache, not in catalog.\n\
              Use a path, a catalog name (run `mesh-llm download` to list), or a Hugging Face exact ref/URL."
         );
     }

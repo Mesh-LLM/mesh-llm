@@ -6411,12 +6411,14 @@ function CapabilityBadge({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
+        {/* eslint-disable-next-line jsx-a11y/prefer-tag-over-role -- span avoids nested <button> when used inside StatCard */}
+        <span
+          role="button"
+          tabIndex={0}
           className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {badge}
-        </button>
+        </span>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
@@ -6586,12 +6588,14 @@ function StatusPill({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <button
-          type="button"
+        {/* eslint-disable-next-line jsx-a11y/prefer-tag-over-role -- span avoids nested <button> when used inside StatCard */}
+        <span
+          role="button"
+          tabIndex={0}
           className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {badge}
-        </button>
+        </span>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}

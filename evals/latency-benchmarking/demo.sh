@@ -16,14 +16,15 @@ set -euo pipefail
 #   TENSOR_SPLIT="0.33,0.33,0.34" ./demo.sh glm  # force even 3-way split
 #   VERBOSE=1 ./demo.sh glm                       # verbose logging (shows layer assignments)
 #
-# Models are downloaded to ~/.models/ if not already present.
+# Models are downloaded to the standard Hugging Face cache if not already present.
 # See notes.md for full details on how RPC split inference works.
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/llama.cpp/build"
-MODELS_DIR="$HOME/.models"
+HF_CACHE_DIR="${HF_HUB_CACHE:-${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}/hub}"
+MODELS_DIR="$HF_CACHE_DIR"
 
 RPC_PORT_1=50052
 RPC_PORT_2=50053
@@ -321,7 +322,7 @@ case "$MODEL_ARG" in
         echo "  TENSOR_SPLIT=\"0.33,0.33,0.34\" ./demo.sh glm  # force layer split ratio"
         echo "  VERBOSE=1 ./demo.sh glm                       # verbose layer assignment logging"
         echo ""
-        echo "Models are downloaded to ~/.models/ if not already present."
+        echo "Models are downloaded to the Hugging Face cache if not already present."
         exit 1
         ;;
 esac

@@ -15,17 +15,6 @@ pub struct HuggingFaceModelIdentity {
     pub local_file_name: String,
 }
 
-/// Directories to scan for GGUF models.
-pub fn model_dirs() -> Vec<PathBuf> {
-    let canonical = huggingface_hub_cache_dir();
-    let legacy = legacy_models_dir();
-    let mut dirs = vec![canonical];
-    if legacy.exists() {
-        dirs.push(legacy);
-    }
-    dirs
-}
-
 fn hf_hub_cache_override() -> Option<PathBuf> {
     let path = std::env::var("HF_HUB_CACHE").ok()?;
     let trimmed = path.trim();
@@ -52,7 +41,7 @@ pub fn huggingface_hub_cache_dir() -> PathBuf {
     huggingface_hub_cache().path().clone()
 }
 
-pub fn legacy_models_dir() -> PathBuf {
+pub(crate) fn legacy_models_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".models")
@@ -70,14 +59,6 @@ pub fn mesh_llm_cache_dir() -> PathBuf {
 
 pub fn model_metadata_cache_dir() -> PathBuf {
     mesh_llm_cache_dir().join("model-meta")
-}
-
-pub fn legacy_models_present() -> bool {
-    let legacy_dir = legacy_models_dir();
-    if !legacy_dir.exists() {
-        return false;
-    }
-    tree_contains_gguf(&legacy_dir)
 }
 
 fn parse_model_repo_folder_name(folder: &str) -> Option<String> {
@@ -219,8 +200,31 @@ pub fn gguf_metadata_cache_path(path: &Path) -> Option<PathBuf> {
     Some(model_metadata_cache_dir().join(format!("{digest:x}.json")))
 }
 
-pub fn path_is_in_legacy_models_dir(path: &Path) -> bool {
-    path.starts_with(legacy_models_dir())
+pub(crate) fn direct_hf_cache_root_gguf_paths(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !(file_type.is_file() || file_type.is_symlink()) {
+            continue;
+        }
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("gguf"))
+            != Some(true)
+        {
+            continue;
+        }
+        out.push(path);
+    }
+    out.sort();
+    out
 }
 
 fn cache_scanned_file_path(
@@ -265,34 +269,14 @@ fn push_model_name(
     }
 }
 
-fn tree_contains_gguf(root: &Path) -> bool {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if (file_type.is_file() || file_type.is_symlink())
-                && path.extension().and_then(|ext| ext.to_str()) == Some("gguf")
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min_size_bytes: u64) {
     let cache = huggingface_hub_cache();
     let cache_root = cache.path().clone();
+
+    for path in direct_hf_cache_root_gguf_paths(&cache_root) {
+        push_model_name(&path, names, seen, min_size_bytes);
+    }
+
     let Ok(cache_info) = CacheInfo::scan_dir(Some(cache.path())) else {
         return;
     };
@@ -312,41 +296,12 @@ fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min
     }
 }
 
-fn scan_model_tree(
-    root: &Path,
-    names: &mut Vec<String>,
-    seen: &mut HashSet<String>,
-    min_size_bytes: u64,
-) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-            } else if file_type.is_file() || file_type.is_symlink() {
-                push_model_name(&path, names, seen, min_size_bytes);
-            }
-        }
-    }
-}
-
 fn scan_models_with_min_size(min_size_bytes: u64) -> Vec<String> {
     let mut names = Vec::new();
     let mut seen = HashSet::new();
     let canonical_dir = huggingface_hub_cache_dir();
     if canonical_dir.exists() {
         scan_hf_cache_models(&mut names, &mut seen, min_size_bytes);
-    }
-    let legacy_dir = legacy_models_dir();
-    if legacy_dir.exists() {
-        scan_model_tree(&legacy_dir, &mut names, &mut seen, min_size_bytes);
     }
     names.sort();
     names
@@ -397,34 +352,6 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
     None
 }
 
-fn find_model_tree_path(root: &Path, stem: &str) -> Option<PathBuf> {
-    let filename = format!("{stem}.gguf");
-    let split_prefix = format!("{stem}-00001-of-");
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if name == filename || (name.starts_with(&split_prefix) && name.ends_with(".gguf")) {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
-
 /// Extract the base model name from a split GGUF stem.
 /// "GLM-5-UD-IQ2_XXS-00001-of-00006" → Some("GLM-5-UD-IQ2_XXS")
 /// "Qwen3-8B-Q4_K_M" → None (not a split file)
@@ -442,18 +369,12 @@ fn split_gguf_base_name(stem: &str) -> Option<&str> {
     Some(&stem[..dash])
 }
 
-/// Find a GGUF model file by stem name, searching all model directories.
-/// Returns the first match found (prefers the Hugging Face cache, then legacy ~/.models).
+/// Find a GGUF model file by stem name in the Hugging Face cache.
 /// For split GGUFs, finds the first part (name-00001-of-NNNNN.gguf).
 pub fn find_model_path(stem: &str) -> PathBuf {
     let filename = format!("{stem}.gguf");
     let canonical_dir = huggingface_hub_cache_dir();
     if let Some(found) = find_hf_cache_model_path(&canonical_dir, stem) {
-        return found;
-    }
-
-    let legacy_dir = legacy_models_dir();
-    if let Some(found) = find_model_tree_path(&legacy_dir, stem) {
         return found;
     }
 
@@ -478,6 +399,99 @@ fn strip_quant_suffix(stem: &str) -> &str {
         }
     }
     stem
+}
+
+/// Extract the quantization suffix from a lowercased model stem, if present.
+/// e.g. "qwen3vl-2b-instruct-q4_k_m" → Some("q4_k_m")
+///      "my-model"                    → None
+fn extract_quant_suffix(stem: &str) -> Option<String> {
+    let stripped = strip_quant_suffix(stem);
+    if stripped.len() < stem.len() {
+        // +1 to skip the '-' separator; use .get() for safe UTF-8 slicing
+        stem.get(stripped.len() + 1..).map(|s| s.to_string())
+    } else {
+        None
+    }
+}
+
+/// Return the sole candidate from `candidates` whose lowercased filename
+/// contains `quant`, or `None` if zero or multiple candidates match.
+fn pick_quant_match(candidates: &[PathBuf], quant: &str) -> Option<PathBuf> {
+    let mut matches: Vec<_> = candidates
+        .iter()
+        .filter(|path| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_ascii_lowercase().contains(quant))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+    if matches.len() == 1 {
+        matches.pop()
+    } else {
+        None
+    }
+}
+
+fn is_named_mmproj_match(lower: &str, model_base: &str, model_stem: &str) -> bool {
+    // Try pattern: <model>-mmproj... (model name before mmproj)
+    if let Some((prefix, _)) = lower
+        .split_once("-mmproj")
+        .or_else(|| lower.split_once("_mmproj"))
+    {
+        if model_base.starts_with(prefix) || model_stem.starts_with(prefix) {
+            return true;
+        }
+    }
+    // Try pattern: mmproj-<model>... (model name after mmproj)
+    if let Some(after) = lower
+        .strip_prefix("mmproj-")
+        .or_else(|| lower.strip_prefix("mmproj_"))
+    {
+        let mmproj_model_base = strip_quant_suffix(after);
+        if model_base.starts_with(mmproj_model_base) || mmproj_model_base.starts_with(model_base) {
+            return true;
+        }
+    }
+    false
+}
+
+fn mmproj_precision_variant_key(path: &Path) -> Option<(String, u8)> {
+    let stem = path.file_stem()?.to_str()?.to_ascii_lowercase();
+    let split = stem.rfind(['-', '_'])?;
+    let base = stem[..split].trim_end_matches(['-', '_']).to_string();
+    let precision = &stem[split + 1..];
+    let rank = match precision {
+        "bf16" => 0,
+        "f16" => 1,
+        "f32" => 2,
+        _ => return None,
+    };
+    Some((base, rank))
+}
+
+fn choose_mmproj_candidate(candidates: &[PathBuf]) -> Option<PathBuf> {
+    if candidates.is_empty() {
+        return None;
+    }
+    if candidates.len() == 1 {
+        return Some(candidates[0].clone());
+    }
+
+    let parsed: Vec<_> = candidates
+        .iter()
+        .map(|path| mmproj_precision_variant_key(path).map(|(base, rank)| (path, base, rank)))
+        .collect::<Option<Vec<_>>>()?;
+    let base = &parsed.first()?.1;
+    if parsed.iter().any(|(_, other_base, _)| other_base != base) {
+        return None;
+    }
+
+    parsed
+        .into_iter()
+        .min_by_key(|(_, _, rank)| *rank)
+        .map(|(path, _, _)| path.clone())
 }
 
 pub fn find_mmproj_path(model_name: &str, model_path: &Path) -> Option<PathBuf> {
@@ -505,12 +519,14 @@ pub fn find_mmproj_path(model_name: &str, model_path: &Path) -> Option<PathBuf> 
     // This is safe for the HF hub cache because each model lives in its own
     // isolated snapshot subdirectory alongside only its companion files.
     //
-    // The mmproj filename must contain both "mmproj" AND a model-name component
-    // that matches the model being loaded.
-    //
-    // Supported naming patterns:
-    //   <model>-mmproj[-<quant>].gguf   e.g. Qwen3.5-0.8B-mmproj-BF16.gguf
-    //   mmproj-<model>[-<quant>].gguf   e.g. mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf
+    // Preferred resolution order within that exact directory:
+    // 1. Model-name-aware matches (single → return immediately).
+    // 2. Among multiple name-matched candidates: quant-aware selection —
+    //    prefer the mmproj whose filename contains the same quantization as
+    //    the model (e.g. Q4_K_M), matching LM Studio's heuristic.
+    // 3. Precision-variant fallback: if all remaining candidates are the same
+    //    projector in different precisions, prefer BF16 over F16 over F32.
+    // 4. Return None when the choice is genuinely ambiguous.
     let parent = model_path.parent()?;
     let model_stem = model_path
         .file_stem()
@@ -519,7 +535,10 @@ pub fn find_mmproj_path(model_name: &str, model_path: &Path) -> Option<PathBuf> 
     // Strip the quant suffix from the model stem to get the base model name
     // e.g. "qwen3vl-2b-instruct-q4_k_m" → "qwen3vl-2b-instruct"
     let model_base = strip_quant_suffix(&model_stem);
-    let mut candidates = std::fs::read_dir(parent)
+    // Extract the quantization suffix for quant-aware matching below
+    // e.g. "qwen3vl-2b-instruct-q4_k_m" → Some("q4_k_m")
+    let model_quant = extract_quant_suffix(&model_stem);
+    let mmproj_siblings: Vec<PathBuf> = std::fs::read_dir(parent)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
@@ -530,40 +549,57 @@ pub fn find_mmproj_path(model_name: &str, model_path: &Path) -> Option<PathBuf> 
                 .and_then(|stem| stem.to_str())
                 .map(|stem| {
                     let lower = stem.to_ascii_lowercase();
-                    if !lower.contains("mmproj") {
-                        return false;
-                    }
-                    // Try pattern: <model>-mmproj... (model name before mmproj)
-                    if let Some((prefix, _)) = lower
-                        .split_once("-mmproj")
-                        .or_else(|| lower.split_once("_mmproj"))
-                    {
-                        if model_base.starts_with(prefix) || model_stem.starts_with(prefix) {
-                            return true;
-                        }
-                    }
-                    // Try pattern: mmproj-<model>... (model name after mmproj)
-                    if let Some(after) = lower
-                        .strip_prefix("mmproj-")
-                        .or_else(|| lower.strip_prefix("mmproj_"))
-                    {
-                        let mmproj_model_base = strip_quant_suffix(after);
-                        if model_base.starts_with(mmproj_model_base)
-                            || mmproj_model_base.starts_with(model_base)
-                        {
-                            return true;
-                        }
-                    }
-                    false
+                    lower.contains("mmproj")
                 })
                 .unwrap_or(false)
-        });
+        })
+        .collect();
 
-    let candidate = candidates.next()?;
-    if candidates.next().is_some() {
-        return None;
+    let named_matches: Vec<PathBuf> = mmproj_siblings
+        .iter()
+        .filter(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|stem| {
+                    is_named_mmproj_match(&stem.to_ascii_lowercase(), model_base, &model_stem)
+                })
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+
+    if !named_matches.is_empty() {
+        // Multiple named matches: try quant-aware selection before precision fallback
+        if named_matches.len() > 1 {
+            if let Some(ref quant) = model_quant {
+                if let Some(candidate) = pick_quant_match(&named_matches, quant) {
+                    return Some(candidate);
+                }
+            }
+        }
+        // Single named match, or quant-match failed: precision-variant pick or None
+        return choose_mmproj_candidate(&named_matches);
     }
-    Some(candidate)
+
+    // No named matches: try quant-aware selection among all siblings, then precision fallback
+    if mmproj_siblings.len() > 1 {
+        if let Some(ref quant) = model_quant {
+            if let Some(candidate) = pick_quant_match(&mmproj_siblings, quant) {
+                return Some(candidate);
+            }
+        }
+    }
+    choose_mmproj_candidate(&mmproj_siblings)
+}
+
+pub fn resolve_mmproj_path(
+    model_name: &str,
+    model_path: &Path,
+    explicit_mmproj: Option<&Path>,
+) -> Option<PathBuf> {
+    explicit_mmproj
+        .map(Path::to_path_buf)
+        .or_else(|| find_mmproj_path(model_name, model_path))
 }
 
 #[cfg(test)]
@@ -609,24 +645,6 @@ mod tests {
         restore_env("HF_HUB_CACHE", prev_hub_cache);
         restore_env("HF_HOME", prev_hf_home);
         restore_env("XDG_CACHE_HOME", prev_xdg);
-    }
-
-    #[test]
-    fn legacy_tree_detection_finds_nested_gguf_files() {
-        let temp = std::env::temp_dir().join(format!(
-            "mesh-llm-legacy-detect-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let nested = temp.join("nested").join("models");
-        std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join("Qwen3-8B-Q4_K_M.gguf"), b"gguf").unwrap();
-
-        assert!(tree_contains_gguf(&temp));
-
-        let _ = std::fs::remove_dir_all(&temp);
     }
 
     #[test]
@@ -734,10 +752,62 @@ mod tests {
     }
 
     #[test]
+    fn mmproj_path_prefers_bf16_generic_precision_variants() {
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-mmproj-precision-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let model = temp.join("Qwen3.5-0.8B-Q4_K_M.gguf");
+        let f32 = temp.join("mmproj-F32.gguf");
+        let f16 = temp.join("mmproj-F16.gguf");
+        let bf16 = temp.join("mmproj-BF16.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&f32, b"mmproj").unwrap();
+        std::fs::write(&f16, b"mmproj").unwrap();
+        std::fs::write(&bf16, b"mmproj").unwrap();
+
+        let found = find_mmproj_path("Qwen3.5-0.8B-Q4_K_M", &model);
+        assert_eq!(found.as_deref(), Some(bf16.as_path()));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn resolve_mmproj_path_prefers_explicit_override() {
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-mmproj-override-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let sibling = temp.join("mmproj-sibling.gguf");
+        let explicit = temp.join("mmproj-explicit.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&sibling, b"mmproj").unwrap();
+        std::fs::write(&explicit, b"mmproj").unwrap();
+
+        let found = resolve_mmproj_path(
+            "Qwen3VL-2B-Instruct-Q4_K_M",
+            &model,
+            Some(explicit.as_path()),
+        );
+        assert_eq!(found.as_deref(), Some(explicit.as_path()));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
     #[serial]
     fn mmproj_path_skips_scan_inside_legacy_dir() {
         // Models inside ~/.models/ must never trigger the sibling scan, even
-        // when a matching-named mmproj file sits right beside them.  The flat
+        // when a matching-named mmproj file sits right beside them. The flat
         // directory mixes models from many families and reliable matching is
         // impossible, so we bail out early for that layout.
         let temp = std::env::temp_dir().join(format!(
@@ -760,10 +830,10 @@ mod tests {
         let prev_home = std::env::var_os("HOME");
         std::env::set_var("HOME", &fake_home);
 
-        // Sibling scan is skipped entirely for the legacy dir → no mmproj returned.
+        // Sibling scan is skipped entirely for the legacy dir -> no mmproj returned.
         assert!(find_mmproj_path("Hermes-2-Pro-Mistral-7B-Q4_K_M", &model).is_none());
 
-        // Also verify that even a correctly-named matching mmproj is ignored.
+        // Also verify that even a correctly named matching mmproj is ignored.
         let matching_mmproj = legacy.join("Hermes-2-Pro-Mistral-7B-mmproj-BF16.gguf");
         std::fs::write(&matching_mmproj, b"mmproj").unwrap();
         assert!(find_mmproj_path("Hermes-2-Pro-Mistral-7B-Q4_K_M", &model).is_none());
@@ -772,11 +842,93 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp);
     }
 
+    #[test]
+    #[serial]
+    fn scan_installed_models_includes_direct_hf_cache_root_files() {
+        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
+        let prev_hf_home = std::env::var_os("HF_HOME");
+        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-direct-cache-root-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        std::fs::write(temp.join("Direct-Root-Q4_K_M.gguf"), b"gguf").unwrap();
+
+        std::env::set_var("HF_HUB_CACHE", &temp);
+        std::env::remove_var("HF_HOME");
+        std::env::remove_var("XDG_CACHE_HOME");
+
+        let installed = scan_installed_models();
+        assert!(installed.iter().any(|name| name == "Direct-Root-Q4_K_M"));
+
+        let _ = std::fs::remove_dir_all(&temp);
+        restore_env("HF_HUB_CACHE", prev_hub_cache);
+        restore_env("HF_HOME", prev_hf_home);
+        restore_env("XDG_CACHE_HOME", prev_xdg);
+    }
+
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
             std::env::set_var(key, value);
         } else {
             std::env::remove_var(key);
         }
+    }
+
+    #[test]
+    fn mmproj_path_prefers_quant_matched_named_candidate() {
+        // When multiple named mmproj candidates exist (model-name prefix matches
+        // both), quant-aware selection should pick the one whose filename contains
+        // the same quantization as the model (Q4_K_M in this case).
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-mmproj-quant-named-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let model = temp.join("Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let q4_mmproj = temp.join("mmproj-Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+        let q8_mmproj = temp.join("mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&q4_mmproj, b"mmproj").unwrap();
+        std::fs::write(&q8_mmproj, b"mmproj").unwrap();
+
+        let found = find_mmproj_path("Qwen3VL-2B-Instruct-Q4_K_M", &model);
+        assert_eq!(found.as_deref(), Some(q4_mmproj.as_path()));
+
+        let _ = std::fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn mmproj_path_prefers_quant_matched_generic_sibling() {
+        // When there are no model-name-aware matches but the siblings include
+        // a projector with the same quant as the model, select that one.
+        let temp = std::env::temp_dir().join(format!(
+            "mesh-llm-mmproj-quant-sibling-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp).unwrap();
+        let model = temp.join("my-model-Q4_K_M.gguf");
+        // Generic projector names without a matching model prefix
+        let q4_mmproj = temp.join("mmproj-Q4_K_M.gguf");
+        let q8_mmproj = temp.join("mmproj-Q8_0.gguf");
+        std::fs::write(&model, b"model").unwrap();
+        std::fs::write(&q4_mmproj, b"mmproj").unwrap();
+        std::fs::write(&q8_mmproj, b"mmproj").unwrap();
+
+        let found = find_mmproj_path("my-model-Q4_K_M", &model);
+        assert_eq!(found.as_deref(), Some(q4_mmproj.as_path()));
+
+        let _ = std::fs::remove_dir_all(&temp);
     }
 }

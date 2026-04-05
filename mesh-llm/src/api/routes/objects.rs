@@ -2,10 +2,9 @@ use super::super::{
     http::{respond_error, respond_json},
     MeshApi,
 };
-use crate::plugin;
-use crate::plugin::blobstore::{
-    abort_request, complete_request, put_request_object, FinishRequestRequest,
-    PutRequestObjectRequest,
+use crate::plugins::blobstore::{
+    abort_request, complete_request, object_store_available, put_request_object,
+    FinishRequestRequest, PutRequestObjectRequest,
 };
 use tokio::net::TcpStream;
 
@@ -38,8 +37,8 @@ pub(super) async fn handle(
 
 async fn handle_put(stream: &mut TcpStream, state: &MeshApi, body: &str) -> anyhow::Result<()> {
     let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    if !plugin_manager.is_available(plugin::BLOBSTORE_PLUGIN_ID) {
-        respond_error(stream, 404, "Blobstore is disabled on this node").await?;
+    if !object_store_available(&plugin_manager).await {
+        respond_error(stream, 404, "Object store is unavailable on this node").await?;
         return Ok(());
     }
 
@@ -75,8 +74,8 @@ async fn handle_finish(
     complete: bool,
 ) -> anyhow::Result<()> {
     let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    if !plugin_manager.is_available(plugin::BLOBSTORE_PLUGIN_ID) {
-        respond_error(stream, 404, "Blobstore is disabled on this node").await?;
+    if !object_store_available(&plugin_manager).await {
+        respond_error(stream, 404, "Object store is unavailable on this node").await?;
         return Ok(());
     }
 

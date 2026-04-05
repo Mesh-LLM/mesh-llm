@@ -7,6 +7,8 @@ use rmcp::model::{
     ReadResourceRequestParams, ReadResourceResult, ServerInfo, SetLevelRequestParams,
     SubscribeRequestParams, UnsubscribeRequestParams,
 };
+use serde::de::DeserializeOwned;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -75,6 +77,7 @@ pub struct PluginMetadata {
     plugin_version: String,
     server_info: ServerInfo,
     capabilities: Vec<String>,
+    manifest: Option<proto::PluginManifest>,
     startup_policy: PluginStartupPolicy,
 }
 
@@ -89,12 +92,18 @@ impl PluginMetadata {
             plugin_version: plugin_version.into(),
             server_info,
             capabilities: Vec::new(),
+            manifest: None,
             startup_policy: PluginStartupPolicy::Any,
         }
     }
 
     pub fn with_capabilities(mut self, capabilities: Vec<String>) -> Self {
         self.capabilities = capabilities;
+        self
+    }
+
+    pub fn with_manifest(mut self, manifest: proto::PluginManifest) -> Self {
+        self.manifest = Some(manifest);
         self
     }
 
@@ -107,6 +116,9 @@ impl PluginMetadata {
 type InitializeFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>>;
 type InitFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 type HealthFuture<'a> = Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>>;
+type OpenStreamFuture<'a> =
+    Pin<Box<dyn Future<Output = PluginResult<Option<proto::OpenStreamResponse>>> + Send + 'a>>;
+type RpcMethodFuture<'a> = Pin<Box<dyn Future<Output = PluginRpcResult> + Send + 'a>>;
 type SubscribeFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>>;
 type SetLogLevelFuture<'a> = Pin<Box<dyn Future<Output = PluginResult<()>> + Send + 'a>>;
 
@@ -158,6 +170,40 @@ type MeshEventHandler = Arc<
         + Send
         + Sync,
 >;
+type RpcMethodHandler = Arc<
+    dyn for<'a, 'ctx> Fn(proto::RpcRequest, &'a mut PluginContext<'ctx>) -> RpcMethodFuture<'a>
+        + Send
+        + Sync,
+>;
+type OpenStreamHandler = Arc<
+    dyn for<'a, 'ctx> Fn(
+            proto::OpenStreamRequest,
+            &'a mut PluginContext<'ctx>,
+        ) -> OpenStreamFuture<'a>
+        + Send
+        + Sync,
+>;
+type CancelStreamHandler = Arc<
+    dyn for<'a, 'ctx> Fn(
+            proto::CancelStreamNotification,
+            &'a mut PluginContext<'ctx>,
+        ) -> InitFuture<'a>
+        + Send
+        + Sync,
+>;
+type CloseStreamHandler = Arc<
+    dyn for<'a, 'ctx> Fn(
+            proto::CloseStreamNotification,
+            &'a mut PluginContext<'ctx>,
+        ) -> InitFuture<'a>
+        + Send
+        + Sync,
+>;
+type StreamErrorHandler = Arc<
+    dyn for<'a, 'ctx> Fn(proto::StreamError, &'a mut PluginContext<'ctx>) -> InitFuture<'a>
+        + Send
+        + Sync,
+>;
 
 #[crate::async_trait]
 pub trait Plugin: Send {
@@ -167,6 +213,10 @@ pub trait Plugin: Send {
 
     fn capabilities(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn manifest(&self) -> Option<proto::PluginManifest> {
+        None
     }
 
     async fn initialize(
@@ -302,6 +352,63 @@ pub trait Plugin: Send {
         _context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<CancelTaskResult>> {
         Ok(None)
+    }
+
+    async fn invoke_service(
+        &mut self,
+        request: proto::InvokeServiceRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<proto::InvokeServiceResponse>> {
+        match proto::ServiceKind::try_from(request.kind).unwrap_or(proto::ServiceKind::Unspecified)
+        {
+            proto::ServiceKind::Operation => {
+                let arguments = parse_service_input::<serde_json::Value>(&request.input_json)?;
+                let tool_request = ToolCallRequest {
+                    name: request.service_name,
+                    arguments,
+                };
+                match self.call_tool(tool_request, context).await? {
+                    Some(result) => Ok(Some(proto::InvokeServiceResponse {
+                        output_json: normalize_call_tool_output(&result)?,
+                        is_error: result.is_error.unwrap_or(false),
+                    })),
+                    None => Ok(None),
+                }
+            }
+            proto::ServiceKind::Prompt => {
+                let params = parse_service_input::<GetPromptRequestParams>(&request.input_json)?;
+                match self.get_prompt(params, context).await? {
+                    Some(result) => Ok(Some(proto::InvokeServiceResponse {
+                        output_json: serialize_service_output(&result)?,
+                        is_error: false,
+                    })),
+                    None => Ok(None),
+                }
+            }
+            proto::ServiceKind::Resource => {
+                let params = parse_service_input::<ReadResourceRequestParams>(&request.input_json)?;
+                match self.read_resource(params, context).await? {
+                    Some(result) => Ok(Some(proto::InvokeServiceResponse {
+                        output_json: serialize_service_output(&result)?,
+                        is_error: false,
+                    })),
+                    None => Ok(None),
+                }
+            }
+            proto::ServiceKind::Completion => {
+                let params = parse_service_input::<CompleteRequestParams>(&request.input_json)?;
+                match self.complete(params, context).await? {
+                    Some(result) => Ok(Some(proto::InvokeServiceResponse {
+                        output_json: serialize_service_output(&result)?,
+                        is_error: false,
+                    })),
+                    None => Ok(None),
+                }
+            }
+            proto::ServiceKind::Unspecified => Err(PluginError::invalid_request(
+                "Service invocation kind is required",
+            )),
+        }
     }
 
     async fn handle_rpc(
@@ -481,6 +588,38 @@ pub trait Plugin: Send {
         Ok(())
     }
 
+    async fn open_stream(
+        &mut self,
+        _request: proto::OpenStreamRequest,
+        _context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<proto::OpenStreamResponse>> {
+        Ok(None)
+    }
+
+    async fn on_cancel_stream(
+        &mut self,
+        _notification: proto::CancelStreamNotification,
+        _context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn on_close_stream(
+        &mut self,
+        _notification: proto::CloseStreamNotification,
+        _context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn on_stream_error(
+        &mut self,
+        _error: proto::StreamError,
+        _context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn on_host_error(
         &mut self,
         error: proto::ErrorResponse,
@@ -492,7 +631,7 @@ pub trait Plugin: Send {
 
 pub struct SimplePlugin {
     metadata: PluginMetadata,
-    tool_router: Option<ToolRouter>,
+    operation_router: Option<ToolRouter>,
     prompt_router: Option<PromptRouter>,
     resource_router: Option<ResourceRouter>,
     completion_router: Option<CompletionRouter>,
@@ -506,13 +645,17 @@ pub struct SimplePlugin {
     channel_handler: Option<ChannelHandler>,
     bulk_handler: Option<BulkHandler>,
     mesh_event_handler: Option<MeshEventHandler>,
+    open_stream_handler: Option<OpenStreamHandler>,
+    cancel_stream_handler: Option<CancelStreamHandler>,
+    close_stream_handler: Option<CloseStreamHandler>,
+    stream_error_handler: Option<StreamErrorHandler>,
 }
 
 impl SimplePlugin {
     pub fn new(metadata: PluginMetadata) -> Self {
         Self {
             metadata,
-            tool_router: None,
+            operation_router: None,
             prompt_router: None,
             resource_router: None,
             completion_router: None,
@@ -526,11 +669,30 @@ impl SimplePlugin {
             channel_handler: None,
             bulk_handler: None,
             mesh_event_handler: None,
+            open_stream_handler: None,
+            cancel_stream_handler: None,
+            close_stream_handler: None,
+            stream_error_handler: None,
         }
     }
 
-    pub fn with_tool_router(mut self, router: ToolRouter) -> Self {
-        self.tool_router = Some(router);
+    pub fn with_capabilities(mut self, capabilities: Vec<String>) -> Self {
+        self.metadata = self.metadata.with_capabilities(capabilities);
+        self
+    }
+
+    pub fn with_manifest(mut self, manifest: proto::PluginManifest) -> Self {
+        self.metadata = self.metadata.with_manifest(manifest);
+        self
+    }
+
+    pub fn with_startup_policy(mut self, startup_policy: PluginStartupPolicy) -> Self {
+        self.metadata = self.metadata.with_startup_policy(startup_policy);
+        self
+    }
+
+    pub fn with_operation_router(mut self, router: ToolRouter) -> Self {
+        self.operation_router = Some(router);
         self
     }
 
@@ -664,6 +826,192 @@ impl SimplePlugin {
         self.mesh_event_handler = Some(Arc::new(handler));
         self
     }
+
+    pub fn on_open_stream<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(
+                proto::OpenStreamRequest,
+                &'a mut PluginContext<'ctx>,
+            ) -> OpenStreamFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.open_stream_handler = Some(Arc::new(handler));
+        self
+    }
+
+    pub fn on_cancel_stream<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(
+                proto::CancelStreamNotification,
+                &'a mut PluginContext<'ctx>,
+            ) -> InitFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.cancel_stream_handler = Some(Arc::new(handler));
+        self
+    }
+
+    pub fn on_close_stream<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(
+                proto::CloseStreamNotification,
+                &'a mut PluginContext<'ctx>,
+            ) -> InitFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.close_stream_handler = Some(Arc::new(handler));
+        self
+    }
+
+    pub fn on_stream_error<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(proto::StreamError, &'a mut PluginContext<'ctx>) -> InitFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.stream_error_handler = Some(Arc::new(handler));
+        self
+    }
+}
+
+pub struct InternalRpcPluginBuilder {
+    plugin: SimplePlugin,
+    rpc_handlers: BTreeMap<String, RpcMethodHandler>,
+}
+
+impl InternalRpcPluginBuilder {
+    pub fn new(metadata: PluginMetadata) -> Self {
+        Self {
+            plugin: SimplePlugin::new(metadata),
+            rpc_handlers: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_capabilities(mut self, capabilities: Vec<String>) -> Self {
+        self.plugin = self.plugin.with_capabilities(capabilities);
+        self
+    }
+
+    pub fn with_manifest(mut self, manifest: proto::PluginManifest) -> Self {
+        self.plugin = self.plugin.with_manifest(manifest);
+        self
+    }
+
+    pub fn with_startup_policy(mut self, startup_policy: PluginStartupPolicy) -> Self {
+        self.plugin = self.plugin.with_startup_policy(startup_policy);
+        self
+    }
+
+    pub fn with_operation_router(mut self, router: ToolRouter) -> Self {
+        self.plugin = self.plugin.with_operation_router(router);
+        self
+    }
+
+    pub fn with_health<F>(mut self, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(&'a mut PluginContext<'ctx>) -> HealthFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.plugin = self.plugin.with_health(handler);
+        self
+    }
+
+    pub fn rpc_method<F>(mut self, method: impl Into<String>, handler: F) -> Self
+    where
+        F: for<'a, 'ctx> Fn(proto::RpcRequest, &'a mut PluginContext<'ctx>) -> RpcMethodFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.rpc_handlers.insert(method.into(), Arc::new(handler));
+        self
+    }
+
+    pub fn build(self) -> InternalRpcPlugin {
+        InternalRpcPlugin {
+            plugin: self.plugin,
+            rpc_handlers: self.rpc_handlers,
+        }
+    }
+}
+
+pub struct InternalRpcPlugin {
+    plugin: SimplePlugin,
+    rpc_handlers: BTreeMap<String, RpcMethodHandler>,
+}
+
+#[crate::async_trait]
+impl Plugin for InternalRpcPlugin {
+    fn plugin_id(&self) -> &str {
+        self.plugin.plugin_id()
+    }
+
+    fn plugin_version(&self) -> String {
+        self.plugin.plugin_version()
+    }
+
+    fn server_info(&self) -> ServerInfo {
+        self.plugin.server_info()
+    }
+
+    fn capabilities(&self) -> Vec<String> {
+        self.plugin.capabilities()
+    }
+
+    fn manifest(&self) -> Option<proto::PluginManifest> {
+        self.plugin.manifest()
+    }
+
+    async fn initialize(
+        &mut self,
+        request: PluginInitializeRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<()> {
+        self.plugin.initialize(request, context).await
+    }
+
+    async fn on_initialized(&mut self, context: &mut PluginContext<'_>) -> Result<()> {
+        <SimplePlugin as Plugin>::on_initialized(&mut self.plugin, context).await
+    }
+
+    async fn health(&mut self, context: &mut PluginContext<'_>) -> Result<String> {
+        self.plugin.health(context).await
+    }
+
+    async fn list_tools(
+        &mut self,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<ListToolsResult>> {
+        self.plugin.list_tools(context).await
+    }
+
+    async fn call_tool(
+        &mut self,
+        request: ToolCallRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<CallToolResult>> {
+        self.plugin.call_tool(request, context).await
+    }
+
+    async fn handle_rpc(
+        &mut self,
+        request: proto::RpcRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginRpcResult {
+        if let Some(handler) = self.rpc_handlers.get(&request.method).cloned() {
+            return handler(request, context).await;
+        }
+        self.plugin.handle_rpc(request, context).await
+    }
 }
 
 #[crate::async_trait]
@@ -682,6 +1030,10 @@ impl Plugin for SimplePlugin {
 
     fn capabilities(&self) -> Vec<String> {
         self.metadata.capabilities.clone()
+    }
+
+    fn manifest(&self) -> Option<proto::PluginManifest> {
+        self.metadata.manifest.clone()
     }
 
     async fn initialize(
@@ -734,7 +1086,7 @@ impl Plugin for SimplePlugin {
         _context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<ListToolsResult>> {
         Ok(self
-            .tool_router
+            .operation_router
             .as_ref()
             .map(|router| router.list_tools_result()))
     }
@@ -744,7 +1096,7 @@ impl Plugin for SimplePlugin {
         request: ToolCallRequest,
         context: &mut PluginContext<'_>,
     ) -> PluginResult<Option<CallToolResult>> {
-        match &self.tool_router {
+        match &self.operation_router {
             Some(router) => Ok(Some(router.call(request, context).await?)),
             None => Ok(None),
         }
@@ -925,6 +1277,50 @@ impl Plugin for SimplePlugin {
             None => Ok(()),
         }
     }
+
+    async fn open_stream(
+        &mut self,
+        request: proto::OpenStreamRequest,
+        context: &mut PluginContext<'_>,
+    ) -> PluginResult<Option<proto::OpenStreamResponse>> {
+        match &self.open_stream_handler {
+            Some(handler) => handler(request, context).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn on_cancel_stream(
+        &mut self,
+        notification: proto::CancelStreamNotification,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        match &self.cancel_stream_handler {
+            Some(handler) => handler(notification, context).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn on_close_stream(
+        &mut self,
+        notification: proto::CloseStreamNotification,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        match &self.close_stream_handler {
+            Some(handler) => handler(notification, context).await,
+            None => Ok(()),
+        }
+    }
+
+    async fn on_stream_error(
+        &mut self,
+        error: proto::StreamError,
+        context: &mut PluginContext<'_>,
+    ) -> Result<()> {
+        match &self.stream_error_handler {
+            Some(handler) => handler(error, context).await,
+            None => Ok(()),
+        }
+    }
 }
 
 pub struct PluginRuntime;
@@ -975,6 +1371,7 @@ impl PluginRuntime {
                                 plugin_version: plugin.plugin_version(),
                                 server_info_json: serde_json::to_string(&plugin.server_info())?,
                                 capabilities: plugin.capabilities(),
+                                manifest: plugin.manifest(),
                             },
                         )),
                     };
@@ -1042,6 +1439,36 @@ impl PluginRuntime {
                     )
                     .await?;
                 }
+                Some(proto::envelope::Payload::InvokeServiceRequest(request)) => {
+                    let payload = {
+                        let mut context = PluginContext {
+                            stream: &mut stream,
+                            plugin_id: &plugin_id,
+                        };
+                        match plugin.invoke_service(request, &mut context).await {
+                            Ok(Some(response)) => {
+                                proto::envelope::Payload::InvokeServiceResponse(response)
+                            }
+                            Ok(None) => proto::envelope::Payload::ErrorResponse(
+                                PluginError::method_not_found("Unsupported service invocation")
+                                    .into_error_response(),
+                            ),
+                            Err(err) => {
+                                proto::envelope::Payload::ErrorResponse(err.into_error_response())
+                            }
+                        }
+                    };
+                    write_envelope(
+                        &mut stream,
+                        &proto::Envelope {
+                            protocol_version: PROTOCOL_VERSION,
+                            plugin_id: plugin_id.clone(),
+                            request_id,
+                            payload: Some(payload),
+                        },
+                    )
+                    .await?;
+                }
                 Some(proto::envelope::Payload::RpcNotification(notification)) => {
                     let mut context = PluginContext {
                         stream: &mut stream,
@@ -1074,6 +1501,59 @@ impl PluginRuntime {
                     };
                     plugin.on_mesh_event(event, &mut context).await?;
                 }
+                Some(proto::envelope::Payload::OpenStreamRequest(request)) => {
+                    let payload = {
+                        let mut context = PluginContext {
+                            stream: &mut stream,
+                            plugin_id: &plugin_id,
+                        };
+                        match plugin.open_stream(request, &mut context).await {
+                            Ok(Some(response)) => {
+                                proto::envelope::Payload::OpenStreamResponse(response)
+                            }
+                            Ok(None) => proto::envelope::Payload::ErrorResponse(
+                                PluginError::method_not_found(
+                                    "Unsupported stream control message 'open_stream'",
+                                )
+                                .into_error_response(),
+                            ),
+                            Err(err) => {
+                                proto::envelope::Payload::ErrorResponse(err.into_error_response())
+                            }
+                        }
+                    };
+                    write_envelope(
+                        &mut stream,
+                        &proto::Envelope {
+                            protocol_version: PROTOCOL_VERSION,
+                            plugin_id: plugin_id.clone(),
+                            request_id,
+                            payload: Some(payload),
+                        },
+                    )
+                    .await?;
+                }
+                Some(proto::envelope::Payload::CancelStreamNotification(notification)) => {
+                    let mut context = PluginContext {
+                        stream: &mut stream,
+                        plugin_id: &plugin_id,
+                    };
+                    plugin.on_cancel_stream(notification, &mut context).await?;
+                }
+                Some(proto::envelope::Payload::CloseStreamNotification(notification)) => {
+                    let mut context = PluginContext {
+                        stream: &mut stream,
+                        plugin_id: &plugin_id,
+                    };
+                    plugin.on_close_stream(notification, &mut context).await?;
+                }
+                Some(proto::envelope::Payload::StreamError(error)) => {
+                    let mut context = PluginContext {
+                        stream: &mut stream,
+                        plugin_id: &plugin_id,
+                    };
+                    plugin.on_stream_error(error, &mut context).await?;
+                }
                 Some(proto::envelope::Payload::ErrorResponse(error)) => {
                     let mut context = PluginContext {
                         stream: &mut stream,
@@ -1086,5 +1566,180 @@ impl PluginRuntime {
         }
 
         Ok(())
+    }
+}
+
+fn parse_service_input<T: DeserializeOwned>(input_json: &str) -> PluginResult<T> {
+    let input = if input_json.trim().is_empty() {
+        "null"
+    } else {
+        input_json
+    };
+    serde_json::from_str(input)
+        .map_err(|err| PluginError::invalid_params(format!("Invalid service input JSON: {err}")))
+}
+
+fn serialize_service_output<T: Serialize>(value: &T) -> PluginResult<String> {
+    serde_json::to_string(value)
+        .map_err(|err| PluginError::internal(format!("Serialize service output: {err}")))
+}
+
+fn normalize_call_tool_output(result: &CallToolResult) -> PluginResult<String> {
+    if let Some(value) = &result.structured_content {
+        return serialize_service_output(value);
+    }
+    if let Some(text) = result.content.first().and_then(|content| content.as_text()) {
+        return Ok(text.text.clone());
+    }
+    serialize_service_output(&result.content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{mcp, plugin, plugin_server_info};
+    use rmcp::model::{
+        ArgumentInfo, PromptMessage, PromptMessageContent, PromptMessageRole, Reference,
+    };
+    use serde_json::json;
+
+    #[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+    struct DemoArgs {
+        #[serde(default)]
+        message: String,
+    }
+
+    async fn disconnected_stream() -> LocalStream {
+        #[cfg(unix)]
+        {
+            let (client, _server) = tokio::net::UnixStream::pair().unwrap();
+            return LocalStream::Unix(client);
+        }
+        #[cfg(windows)]
+        {
+            panic!("runtime tests are only implemented for unix");
+        }
+    }
+
+    #[tokio::test]
+    async fn invoke_service_dispatches_operation_prompt_resource_and_completion() {
+        let mut plugin = plugin! {
+            metadata: PluginMetadata::new(
+                "demo",
+                "1.0.0",
+                plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+            ),
+            mcp: [
+                mcp::tool("echo")
+                    .description("Echo input")
+                    .input::<DemoArgs>()
+                    .handle(|args, _context| Box::pin(async move {
+                        Ok(json!({ "echo": args.message }))
+                    })),
+                mcp::resource("demo://state")
+                    .name("State")
+                    .handle(|request, _context| Box::pin(async move {
+                        Ok(crate::read_resource_result(vec![
+                            rmcp::model::ResourceContents::text("state", request.uri),
+                        ]))
+                    })),
+                mcp::prompt("brief")
+                    .description("Brief")
+                    .handle(|request, _context| Box::pin(async move {
+                        Ok(crate::get_prompt_result(vec![PromptMessage::new(
+                            PromptMessageRole::User,
+                            PromptMessageContent::text(format!("brief:{}", request.name)),
+                        )]))
+                    })),
+                mcp::completion("prompt.brief.topic")
+                    .handle(|_request, _context| Box::pin(async move {
+                        crate::complete_result(vec!["alpha".into()])
+                    })),
+            ],
+        };
+
+        let mut stream = disconnected_stream().await;
+        let mut context = PluginContext {
+            stream: &mut stream,
+            plugin_id: "demo",
+        };
+
+        let op = plugin
+            .invoke_service(
+                proto::InvokeServiceRequest {
+                    kind: proto::ServiceKind::Operation as i32,
+                    service_name: "echo".into(),
+                    input_json: json!({ "message": "hello" }).to_string(),
+                },
+                &mut context,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&op.output_json).unwrap(),
+            json!({"echo": "hello"})
+        );
+
+        let prompt = plugin
+            .invoke_service(
+                proto::InvokeServiceRequest {
+                    kind: proto::ServiceKind::Prompt as i32,
+                    service_name: "brief".into(),
+                    input_json: serde_json::to_string(&GetPromptRequestParams::new("brief"))
+                        .unwrap(),
+                },
+                &mut context,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let prompt_result: GetPromptResult = serde_json::from_str(&prompt.output_json).unwrap();
+        assert_eq!(prompt_result.messages.len(), 1);
+
+        let resource = plugin
+            .invoke_service(
+                proto::InvokeServiceRequest {
+                    kind: proto::ServiceKind::Resource as i32,
+                    service_name: "demo://state".into(),
+                    input_json: serde_json::to_string(&ReadResourceRequestParams::new(
+                        "demo://state",
+                    ))
+                    .unwrap(),
+                },
+                &mut context,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let resource_result: ReadResourceResult =
+            serde_json::from_str(&resource.output_json).unwrap();
+        assert_eq!(resource_result.contents.len(), 1);
+
+        let completion = plugin
+            .invoke_service(
+                proto::InvokeServiceRequest {
+                    kind: proto::ServiceKind::Completion as i32,
+                    service_name: "brief".into(),
+                    input_json: serde_json::to_string(&CompleteRequestParams::new(
+                        Reference::for_prompt("brief"),
+                        ArgumentInfo {
+                            name: "topic".into(),
+                            value: "a".into(),
+                        },
+                    ))
+                    .unwrap(),
+                },
+                &mut context,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let completion_result: CompleteResult =
+            serde_json::from_str(&completion.output_json).unwrap();
+        assert_eq!(
+            completion_result.completion.values,
+            vec![String::from("alpha")]
+        );
     }
 }

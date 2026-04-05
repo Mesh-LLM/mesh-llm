@@ -15,6 +15,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use url::Url;
 
 const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
@@ -841,7 +842,7 @@ async fn resolve_request_object_references(
     };
 
     let mut request_ids = Vec::new();
-    let mut blob_cache: HashMap<String, plugin::blobstore::GetRequestObjectResponse> =
+    let mut blob_cache: HashMap<String, crate::plugins::blobstore::GetRequestObjectResponse> =
         HashMap::new();
     for message in messages.iter_mut() {
         let Some(blocks) = message
@@ -857,9 +858,9 @@ async fn resolve_request_object_references(
             let blob = if let Some(cached) = blob_cache.get(&token) {
                 cached.clone()
             } else {
-                let fetched = plugin::blobstore::get_request_object(
+                let fetched = crate::plugins::blobstore::get_request_object(
                     plugin_manager,
-                    plugin::blobstore::GetRequestObjectRequest {
+                    crate::plugins::blobstore::GetRequestObjectRequest {
                         token: token.clone(),
                         request_id: request_id.clone(),
                     },
@@ -931,9 +932,9 @@ pub async fn release_request_objects(node: &mesh::Node, request_ids: &[String]) 
         return;
     };
     for request_id in request_ids {
-        if let Err(err) = plugin::blobstore::complete_request(
+        if let Err(err) = crate::plugins::blobstore::complete_request(
             &plugin_manager,
-            plugin::blobstore::FinishRequestRequest {
+            crate::plugins::blobstore::FinishRequestRequest {
                 request_id: request_id.clone(),
             },
         )
@@ -1719,6 +1720,172 @@ async fn route_remote_attempt(
     }
 }
 
+async fn route_http_endpoint_attempt(
+    tcp_stream: &mut TcpStream,
+    base_url: &str,
+    prefetched: &[u8],
+    request_path: &str,
+    retry_context_overflow: bool,
+    response_adapter: ResponseAdapter,
+) -> RouteAttemptResult {
+    let url = match Url::parse(base_url) {
+        Ok(url) => url,
+        Err(err) => {
+            tracing::warn!("API proxy: invalid external inference endpoint '{base_url}': {err}");
+            return RouteAttemptResult::RetryableUnavailable;
+        }
+    };
+    if url.scheme() != "http" {
+        tracing::warn!(
+            "API proxy: unsupported external inference endpoint scheme '{}' for {}",
+            url.scheme(),
+            base_url
+        );
+        return RouteAttemptResult::RetryableUnavailable;
+    }
+
+    let host = match url.host_str() {
+        Some(host) => host,
+        None => {
+            tracing::warn!("API proxy: missing host in external inference endpoint {base_url}");
+            return RouteAttemptResult::RetryableUnavailable;
+        }
+    };
+    let port = url.port_or_known_default().unwrap_or(80);
+    let forward_path = endpoint_forward_path(&url, request_path);
+    let forwarded = match rewrite_http_request_target(prefetched, &forward_path, host, port) {
+        Ok(forwarded) => forwarded,
+        Err(err) => {
+            tracing::warn!(
+                "API proxy: failed to rewrite buffered request for external endpoint {}: {}",
+                base_url,
+                err
+            );
+            return RouteAttemptResult::RetryableUnavailable;
+        }
+    };
+
+    match TcpStream::connect(format!("{host}:{port}")).await {
+        Ok(mut upstream) => {
+            let _ = upstream.set_nodelay(true);
+            if let Err(err) = upstream.write_all(&forwarded).await {
+                tracing::warn!(
+                    "API proxy: failed to forward buffered request to external endpoint {}: {}",
+                    base_url,
+                    err
+                );
+                return RouteAttemptResult::RetryableUnavailable;
+            }
+            match probe_http_response(&mut upstream).await {
+                Ok(probe) => {
+                    let status_code = probe.status_code;
+                    match relay_probed_response(
+                        tcp_stream,
+                        &mut upstream,
+                        probe,
+                        retry_context_overflow,
+                        response_adapter,
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(err) => {
+                            tracing::debug!(
+                                "API proxy (external endpoint) ended after commit: {err}"
+                            );
+                            RouteAttemptResult::Delivered { status_code }
+                        }
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        "API proxy: failed to read response from external endpoint {}: {}",
+                        base_url,
+                        err
+                    );
+                    RouteAttemptResult::RetryableUnavailable
+                }
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "API proxy: can't reach external inference endpoint {}: {}",
+                base_url,
+                err
+            );
+            RouteAttemptResult::RetryableUnavailable
+        }
+    }
+}
+
+fn endpoint_forward_path(base_url: &Url, request_path: &str) -> String {
+    let (path_only, query) = request_path
+        .split_once('?')
+        .map(|(path, query)| (path, Some(query)))
+        .unwrap_or((request_path, None));
+    let base_path = base_url.path().trim_end_matches('/');
+    let mapped_path = if base_path.is_empty() || base_path == "/" {
+        path_only.to_string()
+    } else if let Some(suffix) = path_only.strip_prefix("/v1") {
+        if base_path.ends_with("/v1") {
+            format!("{base_path}{suffix}")
+        } else {
+            format!("{base_path}/v1{suffix}")
+        }
+    } else if let Some(suffix) = path_only.strip_prefix("/models") {
+        format!("{base_path}{suffix}")
+    } else {
+        format!("{base_path}{path_only}")
+    };
+    match query {
+        Some(query) if !query.is_empty() => format!("{mapped_path}?{query}"),
+        _ => mapped_path,
+    }
+}
+
+fn rewrite_http_request_target(
+    raw: &[u8],
+    new_path: &str,
+    host: &str,
+    port: u16,
+) -> Result<Vec<u8>> {
+    let header_end = raw
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|idx| idx + 4)
+        .context("missing HTTP header terminator")?;
+    let header_text =
+        std::str::from_utf8(&raw[..header_end - 4]).context("invalid HTTP headers")?;
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines.next().context("missing HTTP request line")?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().context("missing HTTP method")?;
+    let _old_path = request_parts.next().context("missing HTTP path")?;
+    let version = request_parts.next().unwrap_or("HTTP/1.1");
+
+    let mut rebuilt = format!("{method} {new_path} {version}\r\n");
+    let mut saw_host = false;
+    for line in lines {
+        if let Some((name, _value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("host") {
+                rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+                saw_host = true;
+                continue;
+            }
+        }
+        rebuilt.push_str(line);
+        rebuilt.push_str("\r\n");
+    }
+    if !saw_host {
+        rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+    }
+    rebuilt.push_str("\r\n");
+
+    let mut bytes = rebuilt.into_bytes();
+    bytes.extend_from_slice(&raw[header_end..]);
+    Ok(bytes)
+}
+
 fn should_learn_affinity(status_code: u16) -> bool {
     (200..400).contains(&status_code)
 }
@@ -2193,6 +2360,30 @@ pub async fn route_to_target(
                 node.handle_peer_death(moe_host_id).await;
             }
             let _ = send_503(tcp_stream).await;
+            false
+        }
+    }
+}
+
+pub async fn route_http_endpoint_request(
+    tcp_stream: &mut TcpStream,
+    base_url: &str,
+    prefetched: &[u8],
+    request_path: &str,
+    response_adapter: ResponseAdapter,
+) -> bool {
+    match route_http_endpoint_attempt(
+        tcp_stream,
+        base_url,
+        prefetched,
+        request_path,
+        false,
+        response_adapter,
+    )
+    .await
+    {
+        RouteAttemptResult::Delivered { .. } => true,
+        RouteAttemptResult::RetryableContextOverflow | RouteAttemptResult::RetryableUnavailable => {
             false
         }
     }
@@ -2684,6 +2875,25 @@ mod tests {
         assert!(!is_retryable_context_overflow_response(
             br#"{"error":{"message":"missing required field: messages"}}"#
         ));
+    }
+
+    #[test]
+    fn test_endpoint_forward_path_maps_v1_requests_onto_api_v1_base() {
+        let url = Url::parse("http://localhost:8000/api/v1").unwrap();
+        let forwarded = endpoint_forward_path(&url, "/v1/chat/completions?stream=true");
+        assert_eq!(forwarded, "/api/v1/chat/completions?stream=true");
+    }
+
+    #[test]
+    fn test_rewrite_http_request_target_updates_request_line_and_host() {
+        let raw = b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost:9337\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}";
+        let rewritten =
+            rewrite_http_request_target(raw, "/api/v1/chat/completions", "localhost", 8000)
+                .unwrap();
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(rewritten.starts_with("POST /api/v1/chat/completions HTTP/1.1\r\n"));
+        assert!(rewritten.contains("\r\nHost: localhost:8000\r\n"));
+        assert!(rewritten.ends_with("\r\n\r\n{}"));
     }
 
     #[tokio::test]
