@@ -57,19 +57,31 @@ def run_streaming(
         cmd,
         cwd=cwd,
         env=env,
-        text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        bufsize=1,
+        bufsize=0,
     )
-    chunks: list[str] = []
+    chunks: list[bytes] = []
     assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stderr.write(line)
-        sys.stderr.flush()
-        chunks.append(line)
+    stderr_buffer = getattr(sys.stderr, "buffer", None)
+    while True:
+        chunk = proc.stdout.read(4096)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        if stderr_buffer is not None:
+            stderr_buffer.write(chunk)
+            stderr_buffer.flush()
+        else:
+            sys.stderr.write(chunk.decode("utf-8", errors="replace"))
+            sys.stderr.flush()
     returncode = proc.wait()
-    return subprocess.CompletedProcess(cmd, returncode, "".join(chunks), "")
+    return subprocess.CompletedProcess(
+        cmd,
+        returncode,
+        b"".join(chunks).decode("utf-8", errors="replace"),
+        "",
+    )
 
 
 def ensure_build(skip_build: bool) -> None:
