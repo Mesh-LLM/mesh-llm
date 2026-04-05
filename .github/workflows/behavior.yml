@@ -123,8 +123,8 @@ jobs:
       matrix:
         include:
           - name: qwen2.5-0.5b
-            url: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf
-            file: qwen2.5-0.5b-instruct-q4_k_m.gguf
+            url: https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q8_0.gguf
+            file: qwen2.5-0.5b-instruct-q8_0.gguf
           - name: qwen3-0.6b
             url: https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
             file: Qwen3-0.6B-Q8_0.gguf
@@ -273,11 +273,11 @@ jobs:
       matrix:
         include:
           - name: qwen2.5-0.5b
-            repo: mlx-community/Qwen2.5-0.5B-Instruct-4bit
-            cache_slug: mlx-community--Qwen2.5-0.5B-Instruct-4bit
+            repo: mlx-community/Qwen2.5-0.5B-Instruct-8bit
+            cache_slug: mlx-community--Qwen2.5-0.5B-Instruct-8bit
           - name: qwen3-0.6b
-            repo: mlx-community/Qwen3-0.6B-4bit
-            cache_slug: mlx-community--Qwen3-0.6B-4bit
+            repo: mlx-community/Qwen3-0.6B-bf16
+            cache_slug: mlx-community--Qwen3-0.6B-bf16
           - name: qwen3-josie-0.6b
             repo: mlx-community/JOSIE-IT1-Qwen3-0.6B-4bit
             cache_slug: mlx-community--JOSIE-IT1-Qwen3-0.6B-4bit

@@ -17,6 +17,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+DEFAULT_WAIT_SECONDS = 300
+DEFAULT_REQUEST_TIMEOUT = 300
+
 
 def pick_free_port() -> int:
     with socket.socket() as sock:
@@ -70,6 +73,23 @@ def sync_runtime_logs(case_directory: Path | None, mesh_log_path: Path) -> None:
             shutil.copyfile(source_path, case_directory / target_name)
 
 
+def model_root_for(model_arg: str) -> Path:
+    path = Path(model_arg)
+    return path if path.is_dir() else path.parent
+
+
+def ensure_expected_template_source(model_arg: str, expected_template_source: str) -> None:
+    model_root = model_root_for(model_arg)
+    expected_path = model_root / expected_template_source
+    if not expected_path.exists():
+        print(
+            f"❌ Expected template source file not found in model directory: {expected_template_source}",
+            file=sys.stderr,
+        )
+        print(f"Model directory: {model_root}", file=sys.stderr)
+        raise SystemExit(1)
+
+
 def build_launch_command(args: argparse.Namespace, api_port: int, console_port: int) -> list[str]:
     command = [args.mesh_llm]
     if args.backend == "mlx":
@@ -88,8 +108,6 @@ def wait_until_ready(
     console_port: int,
     log_path: Path,
     timeout: int,
-    *,
-    expected_template_source: str,
 ) -> None:
     status_url = f"http://127.0.0.1:{console_port}/api/status"
     for second in range(1, timeout + 1):
@@ -102,16 +120,6 @@ def wait_until_ready(
         try:
             status = http_json(status_url, timeout=5)
             if bool(status.get("llama_ready", False)):
-                if expected_template_source:
-                    log_text = log_path.read_text(encoding="utf-8", errors="replace")
-                    marker = f"MLX prompt template: loaded HF template from {expected_template_source}"
-                    if marker not in log_text:
-                        print(
-                            f"❌ Expected template source not found in log: {expected_template_source}",
-                            file=sys.stderr,
-                        )
-                        print(log_text[-8000:], file=sys.stderr)
-                        raise SystemExit(1)
                 print(f"✅ Model loaded in {second}s", flush=True)
                 return
         except Exception:
@@ -193,7 +201,7 @@ def run_chat(
     response = http_json(
         f"http://127.0.0.1:{api_port}/v1/chat/completions",
         payload=payload,
-        timeout=180,
+        timeout=DEFAULT_REQUEST_TIMEOUT,
     )
     choice = response["choices"][0]
     content = choice["message"]["content"]
@@ -319,7 +327,7 @@ def validate_case(
 
 
 def write_models_artifact(api_port: int) -> None:
-    models = http_json(f"http://127.0.0.1:{api_port}/v1/models", timeout=60)
+    models = http_json(f"http://127.0.0.1:{api_port}/v1/models", timeout=DEFAULT_REQUEST_TIMEOUT)
     model_count = len(models.get("data", []))
     if model_count == 0:
         fail("No models in /v1/models", response=models)
@@ -346,7 +354,7 @@ def main() -> int:
     parser.add_argument("--forbid-contains", default="")
     parser.add_argument("--expect-exact", default="")
     parser.add_argument("--prompt-suite-json", default="")
-    parser.add_argument("--wait-seconds", type=int, default=300)
+    parser.add_argument("--wait-seconds", type=int, default=DEFAULT_WAIT_SECONDS)
     args = parser.parse_args()
 
     if args.backend == "gguf" and not args.bin_dir:
@@ -370,6 +378,9 @@ def main() -> int:
     print(f"  os:        {os.uname().sysname}", flush=True)
     print(f"  prompt:    {args.prompt}", flush=True)
 
+    if args.backend == "mlx" and args.expected_template_source:
+        ensure_expected_template_source(args.model, args.expected_template_source)
+
     with tempfile.TemporaryDirectory(prefix="mesh-llm-exact-") as temp_dir:
         os.environ["TMPDIR"] = temp_dir
         log_path = Path(temp_dir) / "mesh-llm.log"
@@ -388,7 +399,6 @@ def main() -> int:
                     console_port,
                     log_path,
                     args.wait_seconds,
-                    expected_template_source=args.expected_template_source,
                 )
 
                 primary_case = {

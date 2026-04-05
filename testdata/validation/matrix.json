@@ -84,12 +84,12 @@
       "gguf": {
         "exact_case_id": "qwen25-gguf-exact",
         "behavior_case_id": "qwen25-gguf-behavior",
-        "model_ref": "Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        "model_ref": "Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf"
       },
       "mlx": {
         "exact_case_id": "qwen25-mlx-exact",
         "behavior_case_id": "qwen25-mlx-behavior",
-        "model_ref": "mlx-community/Qwen2.5-0.5B-Instruct-4bit",
+        "model_ref": "mlx-community/Qwen2.5-0.5B-Instruct-8bit",
         "template_source": "tokenizer_config.json"
       }
     },
@@ -106,7 +106,7 @@
       "mlx": {
         "exact_case_id": "qwen3-mlx-exact",
         "behavior_case_id": "qwen3-mlx-behavior",
-        "model_ref": "mlx-community/Qwen3-0.6B-4bit",
+        "model_ref": "mlx-community/Qwen3-0.6B-bf16",
         "template_source": "tokenizer_config.json"
       }
     },

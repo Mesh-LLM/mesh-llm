@@ -321,10 +321,10 @@ jobs:
         include:
           - name: qwen2.5-0.5b
             id: qwen25
-            cache_slug: mlx-community--Qwen2.5-0.5B-Instruct-4bit
+            cache_slug: mlx-community--Qwen2.5-0.5B-Instruct-8bit
           - name: qwen3-0.6b
             id: qwen3
-            cache_slug: mlx-community--Qwen3-0.6B-4bit
+            cache_slug: mlx-community--Qwen3-0.6B-bf16
           - name: qwen3-josie-0.6b
             id: josie
             cache_slug: mlx-community--JOSIE-IT1-Qwen3-0.6B-4bit

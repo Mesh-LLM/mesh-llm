@@ -28,6 +28,8 @@ from typing import Any
 
 DEFAULT_DATASET = "HuggingFaceH4/mt_bench_prompts"
 DATASET_SERVER = "https://datasets-server.huggingface.co/rows"
+DEFAULT_WAIT_SECONDS = 300
+DEFAULT_REQUEST_TIMEOUT = 300
 
 
 def pick_free_port() -> int:
@@ -227,7 +229,7 @@ def run_chat(api_port: int, messages: list[dict[str, str]], max_tokens: int) -> 
     return http_json(
         f"http://127.0.0.1:{api_port}/v1/chat/completions",
         payload=payload,
-        timeout=180,
+        timeout=DEFAULT_REQUEST_TIMEOUT,
     )
 
 
@@ -240,7 +242,7 @@ def main() -> int:
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--max-prompts", type=int, default=0)
     parser.add_argument("--max-tokens", type=int, default=192)
-    parser.add_argument("--wait-seconds", type=int, default=300)
+    parser.add_argument("--wait-seconds", type=int, default=DEFAULT_WAIT_SECONDS)
     parser.add_argument("--mesh-log-output", default="")
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--label", default="")

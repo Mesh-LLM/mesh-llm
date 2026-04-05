@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX = REPO_ROOT / "testdata" / "validation" / "matrix.json"
 DEFAULT_BASELINES = REPO_ROOT / "testdata" / "validation" / "baselines.json"
 DEFAULT_ROOT = REPO_ROOT / "MLX_VALIDATION_RESULTS"
+DEFAULT_WAIT_SECONDS = 300
 
 
 def log(message: str) -> None:
@@ -897,7 +898,7 @@ def main() -> int:
     parser.add_argument("--dataset", default="")
     parser.add_argument("--max-prompts", type=int, default=0)
     parser.add_argument("--max-tokens", type=int, default=0)
-    parser.add_argument("--wait-seconds", type=int, default=0)
+    parser.add_argument("--wait-seconds", type=int, default=DEFAULT_WAIT_SECONDS)
     parser.add_argument("--promote-baseline", action="store_true")
     args = parser.parse_args()
 
