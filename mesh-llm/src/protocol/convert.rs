@@ -252,6 +252,7 @@ pub(crate) fn local_ann_to_proto_ann(
         served_model_identities,
         served_model_descriptors,
         served_model_runtime,
+        agent: None,
     }
 }
 

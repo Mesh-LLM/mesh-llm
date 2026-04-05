@@ -1,3 +1,4 @@
+mod agent;
 mod auth;
 mod blackboard;
 mod discover;
@@ -10,6 +11,7 @@ mod update;
 
 use anyhow::Result;
 
+use crate::cli::commands::agent::dispatch_agent_command;
 use crate::cli::commands::blackboard::{install_skill, run_blackboard};
 use crate::cli::commands::discover::{run_discover, run_stop};
 use crate::cli::commands::download::dispatch_download_command;
@@ -18,7 +20,7 @@ use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::plugin::run_plugin_command;
 use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 use crate::cli::commands::update::run_update;
-use crate::cli::{AuthCommand, Cli, Command};
+use crate::cli::{AgentCommand, AuthCommand, Cli, Command};
 use crate::network::nostr;
 
 pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
@@ -83,6 +85,7 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
                 .await
             }
         }
+        Command::Agent { command } => dispatch_agent_command(command).await,
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Auth { command } => match command {
             AuthCommand::Init {

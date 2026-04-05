@@ -999,6 +999,9 @@ pub struct Node {
     tunnel_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
     tunnel_http_tx:
         tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
+    /// Channel for incoming ACP session streams. `None` if no agent provider is running.
+    acp_tx:
+        Option<tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>>,
     plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     display_name: Arc<Mutex<Option<String>>>,
     pub enumerate_host: bool,
@@ -1324,6 +1327,7 @@ impl Node {
             inflight_change_tx,
             tunnel_tx,
             tunnel_http_tx,
+            acp_tx: None,
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             enumerate_host,
@@ -1410,6 +1414,7 @@ impl Node {
             inflight_change_tx,
             tunnel_tx,
             tunnel_http_tx,
+            acp_tx: None,
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             enumerate_host: false,
@@ -2808,6 +2813,61 @@ impl Node {
         result
     }
 
+    /// Open an ACP tunnel bi-stream to a peer (tagged STREAM_ACP).
+    pub async fn open_acp_tunnel(
+        &self,
+        peer_id: EndpointId,
+    ) -> Result<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)> {
+        let conn = {
+            let state = self.state.lock().await;
+            match state.connections.get(&peer_id).cloned() {
+                Some(c) => c,
+                None => {
+                    let addr = state.peers.get(&peer_id).map(|p| p.addr.clone());
+                    drop(state);
+                    if let Some(addr) = addr {
+                        let c = tokio::time::timeout(
+                            std::time::Duration::from_secs(10),
+                            connect_mesh(&self.endpoint, addr),
+                        )
+                        .await
+                        .map_err(|_| {
+                            anyhow::anyhow!("Timeout connecting to {}", peer_id.fmt_short())
+                        })?
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to connect to {}: {e}", peer_id.fmt_short())
+                        })?;
+                        self.state
+                            .lock()
+                            .await
+                            .connections
+                            .insert(peer_id, c.clone());
+                        c
+                    } else {
+                        anyhow::bail!("No connection or address for {}", peer_id.fmt_short());
+                    }
+                }
+            }
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let (mut send, recv) = conn.open_bi().await?;
+            send.write_all(&[STREAM_ACP]).await?;
+            Ok::<_, anyhow::Error>((send, recv))
+        })
+        .await
+        .map_err(|_| anyhow::anyhow!("Timeout opening ACP tunnel to {}", peer_id.fmt_short()))?;
+
+        if result.is_err() {
+            tracing::info!(
+                "ACP tunnel to {} failed, broadcasting death",
+                peer_id.fmt_short()
+            );
+            self.handle_peer_death(peer_id).await;
+        }
+
+        result
+    }
+
     pub async fn set_tunnel_port(&self, id: EndpointId, port: u16) {
         if let Some(peer) = self.state.lock().await.peers.get_mut(&id) {
             peer.tunnel_port = Some(port);
@@ -3377,6 +3437,18 @@ impl Node {
                             );
                         }
                     });
+                }
+                STREAM_ACP => {
+                    if let Some(ref acp_tx) = self.acp_tx {
+                        if acp_tx.send((send, recv)).await.is_err() {
+                            tracing::warn!("ACP session receiver dropped");
+                        }
+                    } else {
+                        tracing::debug!(
+                            "Received STREAM_ACP from {} but no agent provider is running",
+                            remote.fmt_short()
+                        );
+                    }
                 }
                 other => {
                     tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short());
@@ -4043,6 +4115,7 @@ mod tests {
             inflight_change_tx,
             tunnel_tx,
             tunnel_http_tx,
+            acp_tx: None,
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
             enumerate_host: false,

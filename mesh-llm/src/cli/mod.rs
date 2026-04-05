@@ -313,6 +313,15 @@ pub(crate) enum Command {
         #[arg(long)]
         mcp: bool,
     },
+    /// Share and use AI agents across the mesh via ACP (Agent Client Protocol).
+    ///
+    /// Serve:   mesh-llm agent serve goose
+    /// Connect: mesh-llm agent connect --join <token>
+    /// List:    mesh-llm agent list
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
     /// Plugin management.
     Plugin {
         #[command(subcommand)]
@@ -322,6 +331,42 @@ pub(crate) enum Command {
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum AgentCommand {
+    /// Share a local ACP agent with the mesh.
+    ///
+    /// Examples:
+    ///   mesh-llm agent serve goose
+    ///   mesh-llm agent serve claude-acp
+    ///   mesh-llm agent serve gemini
+    ///   mesh-llm agent serve -- /path/to/custom-agent --flag
+    Serve {
+        /// Agent type: goose, claude-acp, gemini, or path to a custom ACP binary.
+        agent_type: String,
+        /// Extra arguments passed to the agent command.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+        /// Max concurrent ACP sessions (default: unlimited).
+        #[arg(long)]
+        max_sessions: Option<u32>,
+    },
+    /// Connect to a shared agent on the mesh via stdio.
+    ///
+    /// Bridges stdin/stdout JSON-RPC to a remote ACP agent on the mesh.
+    /// Use as an editor's agent command (e.g. Zed agent_servers).
+    Connect {
+        /// Reserved for future HTTP mode (currently unused — stdio only).
+        #[arg(long, default_value = "3284", hide = true)]
+        port: u16,
+    },
+    /// List available agents on the mesh.
+    List {
+        /// Console/API port of the running mesh-llm instance (default: 3131).
+        #[arg(long, default_value = "3131")]
+        port: u16,
     },
 }
 

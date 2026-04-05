@@ -57,8 +57,11 @@ Single QUIC connection per peer, multiplexed by 1-byte prefix:
 | 0x05 | ROUTE_REQUEST | Routing table for passive nodes (hosts + models) | protobuf `RouteTableRequest` / `RouteTable` |
 | 0x06 | PEER_DOWN | Death broadcast (immediate, from any node that detects a death) | protobuf `PeerDown` |
 | 0x07 | PEER_LEAVING | Clean shutdown broadcast (ctrl-c) | protobuf `PeerLeaving` |
+| 0x08 | PLUGIN_CHANNEL | Plugin mesh channel messages | protobuf plugin frames |
+| 0x09 | PLUGIN_BULK_TRANSFER | Plugin bulk data transfer | protobuf plugin frames |
+| 0x0A | ACP | ACP agent session relay (JSON-RPC) | 4-byte LE length-prefixed UTF-8 JSON |
 
-Streams 0x02 and 0x04 are raw TCP relay tunnels and are not subject to protobuf framing or generation validation.
+Streams 0x02, 0x04, and 0x0A are relay tunnels and are not subject to protobuf framing or generation validation.
 
 ## Multi-Model
 

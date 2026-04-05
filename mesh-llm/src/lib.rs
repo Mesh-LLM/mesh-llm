@@ -1,3 +1,4 @@
+mod agent;
 mod api;
 mod cli;
 pub mod crypto;
