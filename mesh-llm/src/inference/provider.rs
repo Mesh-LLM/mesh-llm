@@ -213,6 +213,75 @@ impl InferenceWorkerRequest {
 
 type ProviderFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
+#[derive(Clone, Debug)]
+pub struct FullAnalyzeRankingRequest {
+    pub bin_dir: PathBuf,
+    pub model_name: String,
+    pub model_path: PathBuf,
+    pub cached_path: PathBuf,
+}
+
+impl FullAnalyzeRankingRequest {
+    pub fn new(
+        bin_dir: impl Into<PathBuf>,
+        model_name: impl Into<String>,
+        model_path: impl Into<PathBuf>,
+        cached_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            bin_dir: bin_dir.into(),
+            model_name: model_name.into(),
+            model_path: model_path.into(),
+            cached_path: cached_path.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MicroAnalyzeRankingRequest {
+    pub bin_dir: PathBuf,
+    pub model_name: String,
+    pub model_path: PathBuf,
+    pub options: crate::inference::moe::MoeRuntimeOptions,
+}
+
+impl MicroAnalyzeRankingRequest {
+    pub fn new(
+        bin_dir: impl Into<PathBuf>,
+        model_name: impl Into<String>,
+        model_path: impl Into<PathBuf>,
+        options: crate::inference::moe::MoeRuntimeOptions,
+    ) -> Self {
+        Self {
+            bin_dir: bin_dir.into(),
+            model_name: model_name.into(),
+            model_path: model_path.into(),
+            options,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct HeuristicRankingRequest {
+    pub model_path: PathBuf,
+    pub expert_count: u32,
+    pub method: crate::inference::moe::HeuristicScoreMethod,
+}
+
+impl HeuristicRankingRequest {
+    pub fn new(
+        model_path: impl Into<PathBuf>,
+        expert_count: u32,
+        method: crate::inference::moe::HeuristicScoreMethod,
+    ) -> Self {
+        Self {
+            model_path: model_path.into(),
+            expert_count,
+            method,
+        }
+    }
+}
+
 pub trait MoeRankingProvider: Send + Sync {
     fn detect_moe(&self, model_path: &Path) -> Option<crate::models::gguf::GgufMoeInfo>;
 
@@ -231,25 +300,17 @@ pub trait MoeRankingProvider: Send + Sync {
 
     fn ensure_full_analyze_ranking(
         &self,
-        bin_dir: &Path,
-        model_name: &str,
-        model_path: &Path,
-        cached_path: &Path,
+        request: &FullAnalyzeRankingRequest,
     ) -> Result<crate::inference::moe::SharedRankingArtifact>;
 
     fn ensure_micro_analyze_ranking(
         &self,
-        bin_dir: &Path,
-        model_name: &str,
-        model_path: &Path,
-        options: &crate::inference::moe::MoeRuntimeOptions,
+        request: &MicroAnalyzeRankingRequest,
     ) -> Result<crate::inference::moe::SharedRankingArtifact>;
 
     fn resolve_heuristic_ranking(
         &self,
-        model_path: &Path,
-        expert_count: u32,
-        method: crate::inference::moe::HeuristicScoreMethod,
+        request: &HeuristicRankingRequest,
     ) -> Result<(Vec<u32>, String, String)>;
 }
 
@@ -543,11 +604,12 @@ impl MoeRankingProvider for BuiltinLlamaMoeRankingProvider {
 
     fn ensure_full_analyze_ranking(
         &self,
-        bin_dir: &Path,
-        model_name: &str,
-        model_path: &Path,
-        cached_path: &Path,
+        request: &FullAnalyzeRankingRequest,
     ) -> Result<crate::inference::moe::SharedRankingArtifact> {
+        let bin_dir = request.bin_dir.as_path();
+        let model_name = request.model_name.as_str();
+        let model_path = request.model_path.as_path();
+        let cached_path = request.cached_path.as_path();
         if let Some(artifact) = crate::inference::moe::load_shared_ranking_artifact(
             cached_path,
             crate::inference::moe::SharedRankingKind::Analyze,
@@ -643,11 +705,12 @@ impl MoeRankingProvider for BuiltinLlamaMoeRankingProvider {
 
     fn ensure_micro_analyze_ranking(
         &self,
-        bin_dir: &Path,
-        model_name: &str,
-        model_path: &Path,
-        options: &crate::inference::moe::MoeRuntimeOptions,
+        request: &MicroAnalyzeRankingRequest,
     ) -> Result<crate::inference::moe::SharedRankingArtifact> {
+        let bin_dir = request.bin_dir.as_path();
+        let model_name = request.model_name.as_str();
+        let model_path = request.model_path.as_path();
+        let options = &request.options;
         let cached_path = crate::inference::moe::micro_ranking_cache_path(
             model_path,
             options.micro_prompt_count,
@@ -689,10 +752,11 @@ impl MoeRankingProvider for BuiltinLlamaMoeRankingProvider {
 
     fn resolve_heuristic_ranking(
         &self,
-        model_path: &Path,
-        expert_count: u32,
-        method: crate::inference::moe::HeuristicScoreMethod,
+        request: &HeuristicRankingRequest,
     ) -> Result<(Vec<u32>, String, String)> {
+        let model_path = request.model_path.as_path();
+        let expert_count = request.expert_count;
+        let method = request.method;
         let cached =
             crate::inference::moe::heuristic_ranking_cache_path_for_method(model_path, method);
         if let Some(ranking) = crate::inference::moe::load_cached_ranking(&cached) {
@@ -1290,6 +1354,8 @@ pub fn ensure_full_analyze_ranking_for_model(
     cached_path: &Path,
     preferred_provider_id: Option<&str>,
 ) -> Result<crate::inference::moe::SharedRankingArtifact> {
+    let request =
+        FullAnalyzeRankingRequest::new(bin_dir, model_name.to_string(), model_path, cached_path);
     let selection =
         select_moe_ranking_provider(model_path, preferred_provider_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -1300,7 +1366,7 @@ pub fn ensure_full_analyze_ranking_for_model(
     selection
         .moe_ranking_provider()
         .expect("selection should include a MoE ranking provider")
-        .ensure_full_analyze_ranking(bin_dir, model_name, model_path, cached_path)
+        .ensure_full_analyze_ranking(&request)
 }
 
 pub fn ensure_micro_analyze_ranking_for_model(
@@ -1310,6 +1376,12 @@ pub fn ensure_micro_analyze_ranking_for_model(
     options: &crate::inference::moe::MoeRuntimeOptions,
     preferred_provider_id: Option<&str>,
 ) -> Result<crate::inference::moe::SharedRankingArtifact> {
+    let request = MicroAnalyzeRankingRequest::new(
+        bin_dir,
+        model_name.to_string(),
+        model_path,
+        options.clone(),
+    );
     let selection =
         select_moe_ranking_provider(model_path, preferred_provider_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -1320,7 +1392,7 @@ pub fn ensure_micro_analyze_ranking_for_model(
     selection
         .moe_ranking_provider()
         .expect("selection should include a MoE ranking provider")
-        .ensure_micro_analyze_ranking(bin_dir, model_name, model_path, options)
+        .ensure_micro_analyze_ranking(&request)
 }
 
 pub fn resolve_heuristic_ranking_for_model(
@@ -1329,6 +1401,7 @@ pub fn resolve_heuristic_ranking_for_model(
     method: crate::inference::moe::HeuristicScoreMethod,
     preferred_provider_id: Option<&str>,
 ) -> Result<(Vec<u32>, String, String)> {
+    let request = HeuristicRankingRequest::new(model_path, expert_count, method);
     let selection =
         select_moe_ranking_provider(model_path, preferred_provider_id).ok_or_else(|| {
             anyhow::anyhow!(
@@ -1339,7 +1412,7 @@ pub fn resolve_heuristic_ranking_for_model(
     selection
         .moe_ranking_provider()
         .expect("selection should include a MoE ranking provider")
-        .resolve_heuristic_ranking(model_path, expert_count, method)
+        .resolve_heuristic_ranking(&request)
 }
 
 /// Start a distributed-host endpoint through the selected inference provider.

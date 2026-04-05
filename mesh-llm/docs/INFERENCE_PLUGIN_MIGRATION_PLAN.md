@@ -190,6 +190,7 @@ The following no-behavior-change groundwork is already in place on this branch:
 - plugin-managed MoE shard preparation now has a host/plugin handshake (`inference/prepare_moe_shard`) and the provider contract uses it instead of calling split logic directly
 - managed provider manifests can now declare selection metadata and provider capabilities, so host registration no longer hard-codes those properties
 - managed-provider model-path matchers now apply across local runtime, distributed-host runtime, and worker-runtime selection, not just local runtime
+- MoE ranking operations now use provider-owned request shapes instead of loose parameter lists, which gives the future plugin transport a clean contract for full-analyze, micro-analyze, and heuristic ranking work
 
 ## Sync Branches
 
