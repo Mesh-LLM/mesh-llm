@@ -678,6 +678,62 @@ impl PluginManager {
             .await
     }
 
+    pub async fn prepare_managed_moe_shard(
+        &self,
+        plugin_name: &str,
+        model_path: &std::path::Path,
+        output_path: &std::path::Path,
+        assignment: &crate::inference::moe::NodeAssignment,
+    ) -> Result<()> {
+        let request = mesh_llm_plugin::PrepareMoeShardRequest {
+            model_path: model_path.display().to_string(),
+            output_path: output_path.display().to_string(),
+            experts: assignment.experts.clone(),
+            n_shared: assignment.n_shared as u32,
+            n_unique: assignment.n_unique as u32,
+        };
+
+        #[cfg(test)]
+        if self.inner.plugins.is_empty() && self.inner.bridged_plugins.contains(plugin_name) {
+            let bridge = self
+                .inner
+                .rpc_bridge
+                .lock()
+                .await
+                .clone()
+                .context("No active test RPC bridge")?;
+            let params_json = serde_json::to_string(&request)?;
+            bridge
+                .handle_request(
+                    plugin_name.to_string(),
+                    "inference/prepare_moe_shard".into(),
+                    params_json,
+                )
+                .await
+                .map_err(|err| {
+                    self::support::plugin_error(plugin_name, "inference/prepare_moe_shard", &err)
+                })?;
+            return Ok(());
+        }
+
+        if let Some(summary) = self.inner.inactive.get(plugin_name) {
+            bail!(
+                "Plugin '{}' is disabled: {}",
+                plugin_name,
+                summary.error.as_deref().unwrap_or("unavailable")
+            );
+        }
+        let plugin = self
+            .inner
+            .plugins
+            .get(plugin_name)
+            .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
+        let _: mesh_llm_plugin::PrepareMoeShardResponse = plugin
+            .mcp_request("inference/prepare_moe_shard", request)
+            .await?;
+        Ok(())
+    }
+
     pub async fn capability_providers(&self) -> Result<Vec<PluginCapabilityProvider>> {
         let summaries = self.list().await;
         let endpoint_health = self.inner.endpoint_health.lock().await.clone();
@@ -1614,6 +1670,19 @@ mod tests {
                             .unwrap(),
                         })
                     }
+                    "inference/prepare_moe_shard" => {
+                        let request: mesh_llm_plugin::PrepareMoeShardRequest =
+                            serde_json::from_str(&params_json).unwrap();
+                        assert_eq!(request.experts, vec![1, 2, 5]);
+                        assert_eq!(request.n_shared, 1);
+                        assert_eq!(request.n_unique, 2);
+                        Ok(RpcResult {
+                            result_json: serde_json::to_string(
+                                &mesh_llm_plugin::PrepareMoeShardResponse::default(),
+                            )
+                            .unwrap(),
+                        })
+                    }
                     _ => Ok(RpcResult {
                         result_json: "{}".into(),
                     }),
@@ -2181,5 +2250,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(port, 19091);
+    }
+
+    #[tokio::test]
+    async fn plugin_managed_provider_can_prepare_moe_shard_via_plugin_rpc() {
+        let plugin_manager =
+            PluginManager::for_test_bridge(&["mlx"], Arc::new(EnsureEndpointTestBridge));
+        let provider = provider::PluginManagedEndpointProvider::new(
+            "plugin.mlx.local-mlx",
+            "mlx",
+            "local-mlx",
+            plugin_manager,
+        );
+
+        let root = std::env::temp_dir().join(format!(
+            "mesh-llm-plugin-managed-shard-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let model_path = root.join("model.gguf");
+        let output_path = root.join("node-0.gguf");
+        std::fs::write(&model_path, b"gguf").unwrap();
+
+        provider
+            .prepare_moe_shard(
+                std::path::Path::new("."),
+                &model_path,
+                &crate::inference::moe::NodeAssignment {
+                    experts: vec![1, 2, 5],
+                    n_shared: 1,
+                    n_unique: 2,
+                },
+                &output_path,
+            )
+            .await
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

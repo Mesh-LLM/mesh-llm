@@ -44,7 +44,8 @@ pub use manifest::{
 pub use runtime::{
     EnsureInferenceEndpointRequest, EnsureInferenceEndpointResponse, EnsureInferenceWorkerRequest,
     EnsureInferenceWorkerResponse, MeshVisibility, Plugin, PluginInitializeRequest, PluginMetadata,
-    PluginRuntime, PluginStartupPolicy, SimplePlugin,
+    PluginRuntime, PluginStartupPolicy, PrepareMoeShardRequest, PrepareMoeShardResponse,
+    SimplePlugin,
 };
 
 #[allow(dead_code)]
