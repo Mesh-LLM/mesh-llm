@@ -14,6 +14,8 @@ pub(crate) enum LocalStream {
     Unix(tokio::net::UnixStream),
     #[cfg(windows)]
     PipeServer(tokio::net::windows::named_pipe::NamedPipeServer),
+    #[cfg(windows)]
+    PipeClient(tokio::net::windows::named_pipe::NamedPipeClient),
 }
 
 pub(crate) enum LocalListener {
@@ -178,6 +180,8 @@ impl LocalStream {
             LocalStream::Unix(stream) => stream.write_all(bytes).await?,
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => stream.write_all(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.write_all(bytes).await?,
         }
         Ok(())
     }
@@ -188,6 +192,8 @@ impl LocalStream {
             LocalStream::Unix(stream) => stream.shutdown().await?,
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => stream.shutdown().await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.shutdown().await?,
         }
         Ok(())
     }
@@ -198,6 +204,8 @@ impl LocalStream {
             LocalStream::Unix(stream) => stream.read(bytes).await?,
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => stream.read(bytes).await?,
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => stream.read(bytes).await?,
         };
         Ok(read)
     }
@@ -210,6 +218,10 @@ impl LocalStream {
             }
             #[cfg(windows)]
             LocalStream::PipeServer(stream) => {
+                let _ = stream.read_exact(bytes).await?;
+            }
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => {
                 let _ = stream.read_exact(bytes).await?;
             }
         }
@@ -257,10 +269,10 @@ pub(crate) async fn connect_side_stream(
                 .with_context(|| format!("Failed to connect side stream socket {endpoint}"))?,
         )),
         #[cfg(windows)]
-        proto::StreamTransportKind::StreamNamedPipe => Ok(LocalStream::PipeServer(
-            tokio::net::windows::named_pipe::ServerOptions::new()
-                .create(endpoint)
-                .with_context(|| format!("Failed to create side stream pipe {endpoint}"))?,
+        proto::StreamTransportKind::StreamNamedPipe => Ok(LocalStream::PipeClient(
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(endpoint)
+                .with_context(|| format!("Failed to connect side stream pipe {endpoint}"))?,
         )),
         _ => bail!(
             "Unsupported side stream transport kind '{}'",

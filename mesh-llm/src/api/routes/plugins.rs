@@ -150,7 +150,7 @@ async fn handle_manifest(
             respond_error(stream, 404, "Plugin did not publish a manifest").await?;
         }
         Err(e) => {
-            respond_error(stream, 404, &e.to_string()).await?;
+            respond_error(stream, 500, &e.to_string()).await?;
         }
     }
     Ok(())
@@ -213,7 +213,7 @@ async fn handle_stapled_http(
             return Ok(());
         }
         Err(err) => {
-            respond_error(stream, 404, &err.to_string()).await?;
+            respond_error(stream, 500, &err.to_string()).await?;
             return Ok(());
         }
     };
@@ -369,9 +369,15 @@ fn rewrite_http_request_path(raw_request: &[u8], path: &str) -> anyhow::Result<V
 
     let method = req.method.unwrap_or("GET");
     let version = req.version.unwrap_or(1);
+    let original_path = req.path.unwrap_or("/");
+    let query = original_path
+        .find('?')
+        .map(|i| &original_path[i..])
+        .unwrap_or("");
     let mut rebuilt = format!(
-        "{method} {} HTTP/1.{version}\r\n",
-        normalized_http_path(path)
+        "{method} {}{} HTTP/1.{version}\r\n",
+        normalized_http_path(path),
+        query
     );
 
     for header in req.headers.iter() {
@@ -497,10 +503,18 @@ mod tests {
         let raw = b"POST /api/plugins/demo/http/feed?x=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 7\r\nConnection: keep-alive\r\n\r\n{\"a\":1}";
         let rewritten = rewrite_http_request_path(raw, "/feed").unwrap();
         let text = String::from_utf8(rewritten).unwrap();
-        assert!(text.starts_with("POST /feed HTTP/1.1\r\n"));
+        assert!(text.starts_with("POST /feed?x=1 HTTP/1.1\r\n"));
         assert!(text.contains("Host: localhost\r\n"));
         assert!(text.contains("Connection: close\r\n"));
         assert!(text.ends_with("\r\n\r\n{\"a\":1}"));
+    }
+
+    #[test]
+    fn rewrite_http_request_path_without_query_string() {
+        let raw = b"GET /api/plugins/demo/http/items HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let rewritten = rewrite_http_request_path(raw, "/items").unwrap();
+        let text = String::from_utf8(rewritten).unwrap();
+        assert!(text.starts_with("GET /items HTTP/1.1\r\n"));
     }
 
     #[test]
