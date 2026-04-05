@@ -579,19 +579,18 @@ pub struct BuiltinLlamaMoeRankingProvider;
 
 impl MoeRankingProvider for BuiltinLlamaMoeRankingProvider {
     fn detect_moe(&self, model_path: &Path) -> Option<crate::models::gguf::GgufMoeInfo> {
-        crate::models::gguf::detect_moe(model_path)
+        builtin_llama_detect_moe(model_path)
     }
 
     fn load_cached_ranking(&self, model_path: &Path) -> Option<Vec<u32>> {
-        let ranking_path = crate::inference::moe::ranking_cache_path(model_path);
-        crate::inference::moe::load_cached_ranking(&ranking_path)
+        builtin_llama_load_cached_ranking(model_path)
     }
 
     fn best_shared_ranking_artifact(
         &self,
         model_path: &Path,
     ) -> Option<crate::inference::moe::SharedRankingArtifact> {
-        crate::inference::moe::best_shared_ranking_artifact(model_path)
+        builtin_llama_best_shared_ranking_artifact(model_path)
     }
 
     fn import_shared_ranking_artifact(
@@ -599,185 +598,224 @@ impl MoeRankingProvider for BuiltinLlamaMoeRankingProvider {
         model_path: &Path,
         artifact: &crate::inference::moe::SharedRankingArtifact,
     ) -> Result<bool> {
-        crate::inference::moe::cache_shared_ranking_if_stronger(model_path, artifact)
+        builtin_llama_import_shared_ranking_artifact(model_path, artifact)
     }
 
     fn ensure_full_analyze_ranking(
         &self,
         request: &FullAnalyzeRankingRequest,
     ) -> Result<crate::inference::moe::SharedRankingArtifact> {
-        let bin_dir = request.bin_dir.as_path();
-        let model_name = request.model_name.as_str();
-        let model_path = request.model_path.as_path();
-        let cached_path = request.cached_path.as_path();
-        if let Some(artifact) = crate::inference::moe::load_shared_ranking_artifact(
-            cached_path,
-            crate::inference::moe::SharedRankingKind::Analyze,
-            crate::inference::moe::SharedRankingOrigin::LegacyCache,
-            None,
-            None,
-            None,
-        ) {
-            eprintln!(
-                "🧩 [{model_name}] Using cached MoE ranking mode=full-analyze origin={} cache={}",
-                artifact.origin.label(),
-                cached_path.display()
-            );
-            return Ok(artifact);
-        }
-        if let Some(parent) = cached_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let analyze_bin = resolve_analyze_binary(bin_dir)?;
-        let started = std::time::Instant::now();
-        eprintln!(
-            "🧩 [{model_name}] MoE analysis mode=full-analyze cache={}",
-            cached_path.display()
-        );
-        let progress = Arc::new(Mutex::new(MoeAnalyzeProgressState::default()));
-        let spinner = spawn_moe_analysis_spinner(
-            model_name.to_string(),
-            "full-analyze",
-            Arc::clone(&progress),
-            started,
-        );
-        let mut child = Command::new(&analyze_bin)
-            .args([
-                "-m",
-                &model_path.to_string_lossy(),
-                "--all-layers",
-                "--export-ranking",
-                &cached_path.to_string_lossy(),
-                "-n",
-                "32",
-                "-c",
-                "4096",
-                "-ngl",
-                "99",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        let stdout_relay = child.stdout.take().map(|stdout| {
-            spawn_moe_analyze_log_relay(stdout, model_name.to_string(), Arc::clone(&progress))
-        });
-        let stderr_relay = child.stderr.take().map(|stderr| {
-            spawn_moe_analyze_log_relay(stderr, model_name.to_string(), Arc::clone(&progress))
-        });
-        let status = child.wait()?;
-        if let Some(handle) = stdout_relay {
-            let _ = handle.join();
-        }
-        if let Some(handle) = stderr_relay {
-            let _ = handle.join();
-        }
-        if let Ok(mut state) = progress.lock() {
-            if let Some(total) = state.total_prompts {
-                state.current_prompt = total;
-            }
-            state.done = true;
-        }
-        let _ = spinner.join();
-        anyhow::ensure!(status.success(), "llama-moe-analyze exited with {status}");
-        let ranking = crate::inference::moe::load_cached_ranking(cached_path).ok_or_else(|| {
-            anyhow::anyhow!(
-                "No ranking produced by full analyze at {}",
-                cached_path.display()
-            )
-        })?;
-        let artifact = crate::inference::moe::SharedRankingArtifact {
-            kind: crate::inference::moe::SharedRankingKind::Analyze,
-            origin: crate::inference::moe::SharedRankingOrigin::LocalFullAnalyze,
-            ranking,
-            micro_prompt_count: None,
-            micro_tokens: None,
-            micro_layer_scope: None,
-        };
-        crate::inference::moe::cache_shared_ranking_if_stronger(model_path, &artifact)?;
-        eprintln!(
-            "  Full moe-analyze cached at {} in {:.1}s (origin={})",
-            cached_path.display(),
-            started.elapsed().as_secs_f64(),
-            artifact.origin.label()
-        );
-        Ok(artifact)
+        builtin_llama_ensure_full_analyze_ranking(request)
     }
 
     fn ensure_micro_analyze_ranking(
         &self,
         request: &MicroAnalyzeRankingRequest,
     ) -> Result<crate::inference::moe::SharedRankingArtifact> {
-        let bin_dir = request.bin_dir.as_path();
-        let model_name = request.model_name.as_str();
-        let model_path = request.model_path.as_path();
-        let options = &request.options;
-        let cached_path = crate::inference::moe::micro_ranking_cache_path(
-            model_path,
-            options.micro_prompt_count,
-            options.micro_tokens,
-            options.micro_layer_scope,
-        );
-        if let Some(artifact) = crate::inference::moe::load_shared_ranking_artifact(
-            &cached_path,
-            crate::inference::moe::SharedRankingKind::MicroAnalyze,
-            crate::inference::moe::SharedRankingOrigin::LegacyCache,
-            Some(options.micro_prompt_count),
-            Some(options.micro_tokens),
-            Some(options.micro_layer_scope),
-        ) {
-            eprintln!(
-                "🧩 [{model_name}] Using cached MoE ranking mode=micro-analyze origin={} cache={}",
-                artifact.origin.label(),
-                cached_path.display()
-            );
-            return Ok(artifact);
-        }
-        let ranking = run_micro_analyze_ranking(bin_dir, model_name, model_path, options)?;
-        let artifact = crate::inference::moe::SharedRankingArtifact {
-            kind: crate::inference::moe::SharedRankingKind::MicroAnalyze,
-            origin: crate::inference::moe::SharedRankingOrigin::LocalMicroAnalyze,
-            ranking,
-            micro_prompt_count: Some(options.micro_prompt_count),
-            micro_tokens: Some(options.micro_tokens),
-            micro_layer_scope: Some(options.micro_layer_scope),
-        };
-        crate::inference::moe::cache_shared_ranking_if_stronger(model_path, &artifact)?;
-        eprintln!(
-            "  Micro moe-analyze cached at {} (origin={})",
-            cached_path.display(),
-            artifact.origin.label()
-        );
-        Ok(artifact)
+        builtin_llama_ensure_micro_analyze_ranking(request)
     }
 
     fn resolve_heuristic_ranking(
         &self,
         request: &HeuristicRankingRequest,
     ) -> Result<(Vec<u32>, String, String)> {
-        let model_path = request.model_path.as_path();
-        let expert_count = request.expert_count;
-        let method = request.method;
-        let cached =
-            crate::inference::moe::heuristic_ranking_cache_path_for_method(model_path, method);
-        if let Some(ranking) = crate::inference::moe::load_cached_ranking(&cached) {
-            return Ok((
-                ranking,
-                format!("heuristic-{}", method.cache_suffix()),
-                "local-heuristic-cache".to_string(),
-            ));
+        builtin_llama_resolve_heuristic_ranking(request)
+    }
+}
+
+fn builtin_llama_detect_moe(model_path: &Path) -> Option<crate::models::gguf::GgufMoeInfo> {
+    crate::models::gguf::detect_moe(model_path)
+}
+
+fn builtin_llama_load_cached_ranking(model_path: &Path) -> Option<Vec<u32>> {
+    let ranking_path = crate::inference::moe::ranking_cache_path(model_path);
+    crate::inference::moe::load_cached_ranking(&ranking_path)
+}
+
+fn builtin_llama_best_shared_ranking_artifact(
+    model_path: &Path,
+) -> Option<crate::inference::moe::SharedRankingArtifact> {
+    crate::inference::moe::best_shared_ranking_artifact(model_path)
+}
+
+fn builtin_llama_import_shared_ranking_artifact(
+    model_path: &Path,
+    artifact: &crate::inference::moe::SharedRankingArtifact,
+) -> Result<bool> {
+    crate::inference::moe::cache_shared_ranking_if_stronger(model_path, artifact)
+}
+
+fn builtin_llama_ensure_full_analyze_ranking(
+    request: &FullAnalyzeRankingRequest,
+) -> Result<crate::inference::moe::SharedRankingArtifact> {
+    let bin_dir = request.bin_dir.as_path();
+    let model_name = request.model_name.as_str();
+    let model_path = request.model_path.as_path();
+    let cached_path = request.cached_path.as_path();
+    if let Some(artifact) = crate::inference::moe::load_shared_ranking_artifact(
+        cached_path,
+        crate::inference::moe::SharedRankingKind::Analyze,
+        crate::inference::moe::SharedRankingOrigin::LegacyCache,
+        None,
+        None,
+        None,
+    ) {
+        eprintln!(
+            "🧩 [{model_name}] Using cached MoE ranking mode=full-analyze origin={} cache={}",
+            artifact.origin.label(),
+            cached_path.display()
+        );
+        return Ok(artifact);
+    }
+    if let Some(parent) = cached_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let analyze_bin = resolve_analyze_binary(bin_dir)?;
+    let started = std::time::Instant::now();
+    eprintln!(
+        "🧩 [{model_name}] MoE analysis mode=full-analyze cache={}",
+        cached_path.display()
+    );
+    let progress = Arc::new(Mutex::new(MoeAnalyzeProgressState::default()));
+    let spinner = spawn_moe_analysis_spinner(
+        model_name.to_string(),
+        "full-analyze",
+        Arc::clone(&progress),
+        started,
+    );
+    let mut child = Command::new(&analyze_bin)
+        .args([
+            "-m",
+            &model_path.to_string_lossy(),
+            "--all-layers",
+            "--export-ranking",
+            &cached_path.to_string_lossy(),
+            "-n",
+            "32",
+            "-c",
+            "4096",
+            "-ngl",
+            "99",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let stdout_relay = child.stdout.take().map(|stdout| {
+        spawn_moe_analyze_log_relay(stdout, model_name.to_string(), Arc::clone(&progress))
+    });
+    let stderr_relay = child.stderr.take().map(|stderr| {
+        spawn_moe_analyze_log_relay(stderr, model_name.to_string(), Arc::clone(&progress))
+    });
+    let status = child.wait()?;
+    if let Some(handle) = stdout_relay {
+        let _ = handle.join();
+    }
+    if let Some(handle) = stderr_relay {
+        let _ = handle.join();
+    }
+    if let Ok(mut state) = progress.lock() {
+        if let Some(total) = state.total_prompts {
+            state.current_prompt = total;
         }
-        let ranking = crate::inference::moe::compute_heuristic_ranking_with_method(
-            model_path,
-            expert_count,
-            method,
-        )?;
-        crate::inference::moe::write_cached_ranking(&cached, &ranking)?;
-        Ok((
+        state.done = true;
+    }
+    let _ = spinner.join();
+    anyhow::ensure!(status.success(), "llama-moe-analyze exited with {status}");
+    let ranking = crate::inference::moe::load_cached_ranking(cached_path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No ranking produced by full analyze at {}",
+            cached_path.display()
+        )
+    })?;
+    let artifact = crate::inference::moe::SharedRankingArtifact {
+        kind: crate::inference::moe::SharedRankingKind::Analyze,
+        origin: crate::inference::moe::SharedRankingOrigin::LocalFullAnalyze,
+        ranking,
+        micro_prompt_count: None,
+        micro_tokens: None,
+        micro_layer_scope: None,
+    };
+    crate::inference::moe::cache_shared_ranking_if_stronger(model_path, &artifact)?;
+    eprintln!(
+        "  Full moe-analyze cached at {} in {:.1}s (origin={})",
+        cached_path.display(),
+        started.elapsed().as_secs_f64(),
+        artifact.origin.label()
+    );
+    Ok(artifact)
+}
+
+fn builtin_llama_ensure_micro_analyze_ranking(
+    request: &MicroAnalyzeRankingRequest,
+) -> Result<crate::inference::moe::SharedRankingArtifact> {
+    let bin_dir = request.bin_dir.as_path();
+    let model_name = request.model_name.as_str();
+    let model_path = request.model_path.as_path();
+    let options = &request.options;
+    let cached_path = crate::inference::moe::micro_ranking_cache_path(
+        model_path,
+        options.micro_prompt_count,
+        options.micro_tokens,
+        options.micro_layer_scope,
+    );
+    if let Some(artifact) = crate::inference::moe::load_shared_ranking_artifact(
+        &cached_path,
+        crate::inference::moe::SharedRankingKind::MicroAnalyze,
+        crate::inference::moe::SharedRankingOrigin::LegacyCache,
+        Some(options.micro_prompt_count),
+        Some(options.micro_tokens),
+        Some(options.micro_layer_scope),
+    ) {
+        eprintln!(
+            "🧩 [{model_name}] Using cached MoE ranking mode=micro-analyze origin={} cache={}",
+            artifact.origin.label(),
+            cached_path.display()
+        );
+        return Ok(artifact);
+    }
+    let ranking = run_micro_analyze_ranking(bin_dir, model_name, model_path, options)?;
+    let artifact = crate::inference::moe::SharedRankingArtifact {
+        kind: crate::inference::moe::SharedRankingKind::MicroAnalyze,
+        origin: crate::inference::moe::SharedRankingOrigin::LocalMicroAnalyze,
+        ranking,
+        micro_prompt_count: Some(options.micro_prompt_count),
+        micro_tokens: Some(options.micro_tokens),
+        micro_layer_scope: Some(options.micro_layer_scope),
+    };
+    crate::inference::moe::cache_shared_ranking_if_stronger(model_path, &artifact)?;
+    eprintln!(
+        "  Micro moe-analyze cached at {} (origin={})",
+        cached_path.display(),
+        artifact.origin.label()
+    );
+    Ok(artifact)
+}
+
+fn builtin_llama_resolve_heuristic_ranking(
+    request: &HeuristicRankingRequest,
+) -> Result<(Vec<u32>, String, String)> {
+    let model_path = request.model_path.as_path();
+    let expert_count = request.expert_count;
+    let method = request.method;
+    let cached = crate::inference::moe::heuristic_ranking_cache_path_for_method(model_path, method);
+    if let Some(ranking) = crate::inference::moe::load_cached_ranking(&cached) {
+        return Ok((
             ranking,
             format!("heuristic-{}", method.cache_suffix()),
-            "local-heuristic".to_string(),
-        ))
+            "local-heuristic-cache".to_string(),
+        ));
     }
+    let ranking = crate::inference::moe::compute_heuristic_ranking_with_method(
+        model_path,
+        expert_count,
+        method,
+    )?;
+    crate::inference::moe::write_cached_ranking(&cached, &ranking)?;
+    Ok((
+        ranking,
+        format!("heuristic-{}", method.cache_suffix()),
+        "local-heuristic".to_string(),
+    ))
 }
 
 impl InferenceProvider for BuiltinLlamaProvider {

@@ -191,6 +191,7 @@ The following no-behavior-change groundwork is already in place on this branch:
 - managed provider manifests can now declare selection metadata and provider capabilities, so host registration no longer hard-codes those properties
 - managed-provider model-path matchers now apply across local runtime, distributed-host runtime, and worker-runtime selection, not just local runtime
 - MoE ranking operations now use provider-owned request shapes instead of loose parameter lists, which gives the future plugin transport a clean contract for full-analyze, micro-analyze, and heuristic ranking work
+- built-in llama ranking behavior now delegates to reusable backend-specific helper functions, so a future llama plugin can reuse the same GGUF/analyze implementation instead of copying logic out of the provider trait impl
 
 ## Sync Branches
 
