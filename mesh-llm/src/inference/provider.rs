@@ -945,6 +945,17 @@ pub fn sync_plugin_provider_descriptors(descriptors: Vec<InferenceProviderDescri
     provider_registry().replace_plugin_providers(descriptors);
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn sync_plugin_moe_ranking_provider_descriptors(
+    descriptors: Vec<MoeRankingProviderDescriptor>,
+) {
+    let mut providers = registered_moe_ranking_provider_descriptors()
+        .write()
+        .expect("registered moe ranking provider lock poisoned");
+    providers.retain(|existing| !existing.selection.provider_id().starts_with("plugin."));
+    providers.extend(descriptors);
+}
+
 pub fn plugin_provider_id(plugin_name: &str, endpoint_id: &str) -> String {
     format!("plugin.{plugin_name}.{endpoint_id}")
 }
@@ -1706,6 +1717,35 @@ mod tests {
             load_cached_moe_ranking_for_model(Path::new("/tmp/model.gguf"), None),
             Some(vec![9, 4, 1])
         );
+
+        clear_registered_providers_for_tests();
+    }
+
+    #[test]
+    fn sync_plugin_moe_ranking_provider_descriptors_replaces_plugin_entries() {
+        let _guard = provider_registry_test_lock()
+            .lock()
+            .expect("provider registry test lock poisoned");
+        clear_registered_providers_for_tests();
+
+        register_plugin_moe_ranking_provider(
+            PluginMoeRankingProviderRegistration::new("plugin.old", "plugin-old"),
+            Arc::new(TestRankingProvider),
+        );
+
+        sync_plugin_moe_ranking_provider_descriptors(vec![
+            PluginMoeRankingProviderRegistration::new("plugin.synced", "plugin-synced")
+                .into_descriptor(Arc::new(TestRankingProvider)),
+        ]);
+
+        let fallback =
+            select_moe_ranking_provider(Path::new("/tmp/model.gguf"), Some("plugin.old"))
+                .expect("fallback ranking provider");
+        assert_ne!(fallback.provider_id(), "plugin.old");
+        let selection =
+            select_moe_ranking_provider(Path::new("/tmp/model.gguf"), Some("plugin.synced"))
+                .expect("synced ranking provider");
+        assert_eq!(selection.provider_id(), "plugin.synced");
 
         clear_registered_providers_for_tests();
     }
