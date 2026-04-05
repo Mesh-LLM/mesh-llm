@@ -429,7 +429,7 @@ fn enrich_topology_with_local_shared_ranking(
     let Some(moe_info) = topology.as_mut().and_then(|value| value.moe.as_mut()) else {
         return;
     };
-    let Some(artifact) = moe::best_shared_ranking_artifact(path) else {
+    let Some(artifact) = provider::best_shared_moe_ranking_artifact_for_model(path, None) else {
         return;
     };
     moe_info.ranking_source = Some(artifact.kind.label().to_string());
