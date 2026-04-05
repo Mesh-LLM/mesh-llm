@@ -2247,10 +2247,12 @@ mod tests {
             })
             .collect();
         for (registration, provider) in registrations {
-            provider::register_provider(
-                registration
-                    .into_descriptor_with_local_match(provider, provider::matches_mlx_model_dir),
-            );
+            provider::register_provider(registration.into_descriptor_with_runtime_matchers(
+                provider,
+                provider::matches_mlx_model_dir,
+                provider::matches_mlx_model_dir,
+                provider::matches_mlx_worker_runtime,
+            ));
         }
 
         let root =

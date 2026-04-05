@@ -8,8 +8,7 @@ use tokio::net::TcpListener;
 use url::Url;
 
 #[cfg(target_os = "macos")]
-pub(crate) fn matches_mlx_model_dir(request: &InferenceEndpointRequest) -> bool {
-    let model_path = request.model_path.as_path();
+fn is_mlx_model_dir(model_path: &Path) -> bool {
     model_path.is_dir()
         && model_path.join("config.json").exists()
         && model_path.join("tokenizer.json").exists()
@@ -27,8 +26,27 @@ pub(crate) fn matches_mlx_model_dir(request: &InferenceEndpointRequest) -> bool 
             })
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn matches_mlx_model_dir(request: &InferenceEndpointRequest) -> bool {
+    is_mlx_model_dir(request.model_path.as_path())
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn matches_mlx_model_dir(_request: &InferenceEndpointRequest) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn matches_mlx_worker_runtime(request: &InferenceWorkerRequest) -> bool {
+    request
+        .model_path
+        .as_deref()
+        .map(is_mlx_model_dir)
+        .unwrap_or(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn matches_mlx_worker_runtime(_request: &InferenceWorkerRequest) -> bool {
     false
 }
 
@@ -594,6 +612,21 @@ impl PluginInferenceProviderRegistration {
         provider: Arc<dyn InferenceProvider>,
         matches_local_endpoint: fn(&InferenceEndpointRequest) -> bool,
     ) -> InferenceProviderDescriptor {
+        self.into_descriptor_with_runtime_matchers(
+            provider,
+            matches_local_endpoint,
+            never_match_distributed_endpoint,
+            never_match_worker_runtime,
+        )
+    }
+
+    pub fn into_descriptor_with_runtime_matchers(
+        self,
+        provider: Arc<dyn InferenceProvider>,
+        matches_local_endpoint: fn(&InferenceEndpointRequest) -> bool,
+        matches_distributed_endpoint: fn(&InferenceEndpointRequest) -> bool,
+        matches_worker_runtime: fn(&InferenceWorkerRequest) -> bool,
+    ) -> InferenceProviderDescriptor {
         InferenceProviderDescriptor::new(
             InferenceProviderSelection::new(
                 self.provider_id,
@@ -602,8 +635,8 @@ impl PluginInferenceProviderRegistration {
                 provider,
             ),
             matches_local_endpoint,
-            never_match_distributed_endpoint,
-            never_match_worker_runtime,
+            matches_distributed_endpoint,
+            matches_worker_runtime,
         )
     }
 }
@@ -1182,6 +1215,60 @@ mod tests {
         assert_eq!(selection.provider_id(), "test.local");
         assert_eq!(selection.backend_label(), "test-local");
 
+        clear_registered_providers_for_tests();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn runtime_matchers_select_plugin_provider_for_distributed_and_worker_runtime() {
+        let _guard = provider_registry_test_lock()
+            .lock()
+            .expect("provider registry test lock poisoned");
+        clear_registered_providers_for_tests();
+
+        let root = std::env::temp_dir().join(format!(
+            "mesh-llm-provider-runtime-matchers-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create test model dir");
+        std::fs::write(
+            root.join("config.json"),
+            r#"{"model_type":"deepseek_v3","architectures":["DeepseekV3ForCausalLM"]}"#,
+        )
+        .expect("write config");
+        std::fs::write(root.join("tokenizer.json"), "{}").expect("write tokenizer");
+        std::fs::write(root.join("model.safetensors"), b"placeholder").expect("write weights");
+
+        register_provider(
+            PluginInferenceProviderRegistration::new(
+                "plugin.mlx.local-mlx",
+                "mlx",
+                InferenceProviderCapabilities {
+                    supports_local_runtime: true,
+                    supports_distributed_host_runtime: true,
+                    requires_worker_runtime: true,
+                    supports_moe_shard_runtime: false,
+                },
+            )
+            .into_descriptor_with_runtime_matchers(
+                Arc::new(TestLocalProvider),
+                matches_mlx_model_dir,
+                matches_mlx_model_dir,
+                matches_mlx_worker_runtime,
+            ),
+        );
+
+        let distributed = select_distributed_endpoint_provider(
+            &InferenceEndpointRequest::distributed_host(&root, 8123, vec![7001], 1, 1),
+        );
+        assert_eq!(distributed.provider_id(), "plugin.mlx.local-mlx");
+
+        let worker =
+            select_worker_provider(&InferenceWorkerRequest::default().with_model_path(Some(&root)));
+        assert_eq!(worker.provider_id(), "plugin.mlx.local-mlx");
+
+        let _ = std::fs::remove_dir_all(&root);
         clear_registered_providers_for_tests();
     }
 
