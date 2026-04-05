@@ -131,6 +131,7 @@ pub enum InferenceLocalModelMatcher {
     #[default]
     Never,
     MlxModelDir,
+    GgufModelFile,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

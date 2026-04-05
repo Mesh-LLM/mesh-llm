@@ -68,6 +68,13 @@ async fn sync_plugin_managed_inference_providers(
                     provider::matches_mlx_model_dir,
                     provider::matches_mlx_worker_runtime,
                 ),
+            mesh_llm_plugin::InferenceLocalModelMatcher::GgufModelFile => registration
+                .into_descriptor_with_runtime_matchers(
+                    provider,
+                    provider::matches_gguf_model_file,
+                    provider::matches_gguf_model_file,
+                    provider::matches_gguf_worker_runtime,
+                ),
             _ => {
                 registration.into_descriptor_with_local_match(provider, never_match_local_endpoint)
             }
