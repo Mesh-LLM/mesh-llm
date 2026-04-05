@@ -75,6 +75,13 @@ pub struct EnsureInferenceEndpointRequest {
     pub model_path: String,
     pub requested_port: Option<u16>,
     pub ctx_size_override: Option<u32>,
+    #[serde(default)]
+    pub worker_tunnel_ports: Vec<u16>,
+    pub tensor_split: Option<String>,
+    pub draft_model_path: Option<String>,
+    pub draft_max: Option<u16>,
+    pub mmproj_path: Option<String>,
+    pub total_group_vram_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

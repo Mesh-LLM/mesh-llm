@@ -598,13 +598,7 @@ impl InferenceProvider for PluginManagedEndpointProvider {
         Box::pin(async move {
             let ensured = self
                 .plugin_manager
-                .ensure_managed_inference_endpoint(
-                    &self.plugin_name,
-                    &self.endpoint_id,
-                    request.model_path.as_path(),
-                    Some(request.listen_port),
-                    request.ctx_size_override,
-                )
+                .ensure_managed_inference_endpoint(&self.plugin_name, &self.endpoint_id, request)
                 .await?;
             let listen_port = parse_endpoint_port(&ensured.address).with_context(|| {
                 format!(

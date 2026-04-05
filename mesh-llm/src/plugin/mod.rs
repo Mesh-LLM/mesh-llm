@@ -326,21 +326,28 @@ impl PluginManager {
         &self,
         plugin_name: &str,
         endpoint_id: &str,
-        model_path: &std::path::Path,
-        requested_port: Option<u16>,
-        ctx_size_override: Option<u32>,
+        request: &crate::inference::provider::InferenceEndpointRequest,
     ) -> Result<mesh_llm_plugin::EnsureInferenceEndpointResponse> {
-        self.mcp_request(
-            plugin_name,
-            "inference/ensure_endpoint",
-            mesh_llm_plugin::EnsureInferenceEndpointRequest {
-                endpoint_id: endpoint_id.to_string(),
-                model_path: model_path.display().to_string(),
-                requested_port,
-                ctx_size_override,
-            },
-        )
-        .await
+        let payload = mesh_llm_plugin::EnsureInferenceEndpointRequest {
+            endpoint_id: endpoint_id.to_string(),
+            model_path: request.model_path.display().to_string(),
+            requested_port: Some(request.listen_port),
+            ctx_size_override: request.ctx_size_override,
+            worker_tunnel_ports: request.worker_tunnel_ports.clone(),
+            tensor_split: request.tensor_split.clone(),
+            draft_model_path: request
+                .draft_model_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            draft_max: Some(request.draft_max),
+            mmproj_path: request
+                .mmproj_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            total_group_vram_bytes: request.total_group_vram_bytes,
+        };
+        self.mcp_request(plugin_name, "inference/ensure_endpoint", payload)
+            .await
     }
 
     pub async fn ensure_managed_inference_worker(
@@ -695,6 +702,17 @@ mod tests {
                         let request: mesh_llm_plugin::EnsureInferenceEndpointRequest =
                             serde_json::from_str(&params_json).unwrap();
                         assert_eq!(request.endpoint_id, "local-mlx");
+                        if !request.worker_tunnel_ports.is_empty() {
+                            assert_eq!(request.worker_tunnel_ports, vec![7001, 7002]);
+                            assert_eq!(request.tensor_split.as_deref(), Some("3,5"));
+                            assert_eq!(
+                                request.draft_model_path.as_deref(),
+                                Some("/tmp/draft.gguf")
+                            );
+                            assert_eq!(request.draft_max, Some(8));
+                            assert_eq!(request.mmproj_path.as_deref(), Some("/tmp/mmproj.gguf"));
+                            assert_eq!(request.total_group_vram_bytes, Some(48_000_000_000));
+                        }
                         Ok(RpcResult {
                             result_json: serde_json::to_string(
                                 &mesh_llm_plugin::EnsureInferenceEndpointResponse {
@@ -811,15 +829,46 @@ mod tests {
             .ensure_managed_inference_endpoint(
                 MLX_PLUGIN_ID,
                 "local-mlx",
-                std::path::Path::new("/tmp/model"),
-                Some(8123),
-                Some(32768),
+                &crate::inference::provider::InferenceEndpointRequest::local(
+                    "/tmp/model",
+                    8123,
+                    1,
+                    1,
+                )
+                .with_ctx_size_override(Some(32768)),
             )
             .await
             .unwrap();
         assert_eq!(response.address, "http://127.0.0.1:8123");
         assert_eq!(response.backend_label, "mlx");
         assert_eq!(response.context_length, 32768);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn ensure_managed_inference_endpoint_forwards_distributed_shape() {
+        let plugin_manager =
+            PluginManager::for_test_bridge(&[MLX_PLUGIN_ID], Arc::new(EnsureEndpointTestBridge));
+        let response = plugin_manager
+            .ensure_managed_inference_endpoint(
+                MLX_PLUGIN_ID,
+                "local-mlx",
+                &crate::inference::provider::InferenceEndpointRequest::distributed_host(
+                    "/tmp/model.gguf",
+                    8124,
+                    vec![7001, 7002],
+                    1,
+                    1,
+                )
+                .with_tensor_split(Some("3,5"))
+                .with_draft_model_path(Some("/tmp/draft.gguf"))
+                .with_draft_max(8)
+                .with_mmproj_path(Some("/tmp/mmproj.gguf"))
+                .with_total_group_vram_bytes(Some(48_000_000_000)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.address, "http://127.0.0.1:8124");
     }
 
     #[cfg(target_os = "macos")]
