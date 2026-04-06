@@ -224,38 +224,7 @@ pub(super) fn catalog_hf_match(
 )> {
     let model = catalog_match(path)?;
     let file_name = path.file_name()?.to_str()?;
-    if model.file == file_name {
-        if let (Some(repo), revision, Some(file)) = (
-            model.source_repo(),
-            model.source_revision(),
-            model.source_file(),
-        ) {
-            return Some((
-                model,
-                repo.to_string(),
-                revision.map(str::to_string),
-                file.to_string(),
-            ));
-        }
-        return None;
-    }
-
-    let source_url = if let Some(asset) = model
-        .extra_files
-        .iter()
-        .find(|asset| asset.file == file_name)
-    {
-        asset.url.as_str()
-    } else if let Some(asset) = model.mmproj.as_ref() {
-        if asset.file == file_name {
-            asset.url.as_str()
-        } else {
-            return None;
-        }
-    } else {
-        return None;
-    };
-
+    let source_url = source_url_for_legacy_file(model, file_name)?;
     let (repo, revision, file) = parse_hf_resolve_url(source_url)?;
     Some((model, repo, revision, file))
 }
@@ -264,47 +233,40 @@ pub(super) fn catalog_hf_asset_ref(
     model: &'static catalog::CatalogModel,
     file_name: &str,
 ) -> Option<(String, Option<String>, String)> {
-    if model.file == file_name {
-        return Some((
-            model.source_repo()?.to_string(),
-            model.source_revision().map(str::to_string),
-            model.source_file()?.to_string(),
-        ));
-    }
-
-    let source_url = if let Some(asset) = model
-        .extra_files
-        .iter()
-        .find(|asset| asset.file == file_name)
-    {
-        asset.url.as_str()
-    } else if let Some(asset) = model.mmproj.as_ref() {
-        if asset.file == file_name {
-            asset.url.as_str()
-        } else {
-            return None;
-        }
-    } else {
-        return None;
-    };
-
+    let source_url = source_url_for_legacy_file(model, file_name)?;
     parse_hf_resolve_url(source_url)
 }
 
 pub(super) fn catalog_match(path: &Path) -> Option<&'static catalog::CatalogModel> {
     let file_name = path.file_name()?.to_str()?;
-    catalog::MODEL_CATALOG.iter().find(|model| {
-        model.file == file_name
-            || model
-                .extra_files
-                .iter()
-                .any(|asset| asset.file == file_name)
-            || model
-                .mmproj
-                .as_ref()
-                .map(|asset| asset.file == file_name)
-                .unwrap_or(false)
+    catalog::MODEL_CATALOG
+        .iter()
+        .find(|model| source_url_for_legacy_file(model, file_name).is_some())
+}
+
+fn source_url_for_legacy_file(
+    model: &'static catalog::CatalogModel,
+    file_name: &str,
+) -> Option<&'static str> {
+    if source_url_matches_legacy_file(model.url.as_str(), model.file.as_str(), file_name) {
+        return Some(model.url.as_str());
+    }
+    if let Some(asset) = model.extra_files.iter().find(|asset| {
+        source_url_matches_legacy_file(asset.url.as_str(), asset.file.as_str(), file_name)
+    }) {
+        return Some(asset.url.as_str());
+    }
+    model.mmproj.as_ref().and_then(|asset| {
+        source_url_matches_legacy_file(asset.url.as_str(), asset.file.as_str(), file_name)
+            .then_some(asset.url.as_str())
     })
+}
+
+fn source_url_matches_legacy_file(source_url: &str, asset_file: &str, legacy_file: &str) -> bool {
+    asset_file.eq_ignore_ascii_case(legacy_file)
+        || parse_hf_resolve_url(source_url)
+            .map(|(_, _, source_file)| source_file.eq_ignore_ascii_case(legacy_file))
+            .unwrap_or(false)
 }
 
 pub(super) fn matching_catalog_model_for_huggingface(
@@ -431,6 +393,19 @@ mod tests {
             "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf",
         )
         .is_none());
+    }
+
+    #[test]
+    fn catalog_match_accepts_hf_source_basename_for_legacy_file() {
+        let path = Path::new("/Users/test/.models/qwen2.5-0.5b-instruct-q4_k_m.gguf");
+        let model = catalog_match(path).expect("legacy HF basename should map to catalog model");
+        assert_eq!(model.name, "Qwen2.5-0.5B-Instruct-Q4_K_M");
+
+        let (_, repo, revision, file) =
+            catalog_hf_match(path).expect("legacy HF basename should expose canonical HF asset");
+        assert_eq!(repo, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+        assert_eq!(revision.as_deref(), Some("main"));
+        assert_eq!(file, "qwen2.5-0.5b-instruct-q4_k_m.gguf");
     }
 }
 
