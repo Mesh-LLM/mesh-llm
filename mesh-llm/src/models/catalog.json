@@ -271,7 +271,7 @@
   {
     "name": "Qwen3.5-27B-Q4_K_M",
     "file": "Qwen3.5-27B-Q4_K_M.gguf",
-    "url": "https://registry.ollama.ai/v2/library/qwen3.5/blobs/sha256:d4b8b4f4c350f5d322dc8235175eeae02d32c6f3fd70bdb9ea481e3abb7d7fc4",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-Q4_K_M.gguf",
     "size": "17GB",
     "description": "Qwen3.5 27B, vision + text, strong reasoning and coding",
     "draft": "Qwen3-0.6B-Q4_K_M",
@@ -423,11 +423,39 @@
     }
   },
   {
+    "name": "Qwen3.5-0.8B-UD-Q8_K_XL",
+    "file": "Qwen3.5-0.8B-UD-Q8_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-UD-Q8_K_XL.gguf",
+    "size": "1.1GB",
+    "description": "Tiny vision model with Unsloth Dynamic 2.0 quantization",
+    "draft": null,
+    "moe": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "Qwen3.5-0.8B-mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
     "name": "Qwen3.5-4B-Vision-Q4_K_M",
     "file": "Qwen3.5-4B-Q4_K_M.gguf",
     "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
     "size": "2.7GB",
     "description": "Small vision model, good quality/size balance",
+    "draft": null,
+    "moe": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "Qwen3.5-4B-mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
+    "name": "Qwen3.5-4B-UD-Q4_K_XL",
+    "file": "Qwen3.5-4B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-UD-Q4_K_XL.gguf",
+    "size": "2.9GB",
+    "description": "Small vision model with Unsloth Dynamic 2.0 quantization",
     "draft": null,
     "moe": null,
     "extra_files": [],
@@ -448,6 +476,34 @@
     "mmproj": {
       "file": "Qwen3.5-9B-mmproj-BF16.gguf",
       "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
+    "name": "Qwen3.5-9B-UD-Q4_K_XL",
+    "file": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "size": "6.0GB",
+    "description": "Vision + text with Unsloth Dynamic 2.0 quantization",
+    "draft": null,
+    "moe": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "Qwen3.5-9B-mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-BF16.gguf"
+    }
+  },
+  {
+    "name": "Qwen3.5-27B-UD-Q4_K_XL",
+    "file": "Qwen3.5-27B-UD-Q4_K_XL.gguf",
+    "url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/Qwen3.5-27B-UD-Q4_K_XL.gguf",
+    "size": "18GB",
+    "description": "Qwen3.5 27B vision model with Unsloth Dynamic 2.0 quantization",
+    "draft": "Qwen3-0.6B-Q4_K_M",
+    "moe": null,
+    "extra_files": [],
+    "mmproj": {
+      "file": "Qwen3.5-27B-mmproj-BF16.gguf",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-27B-GGUF/resolve/main/mmproj-BF16.gguf"
     }
   },
   {
@@ -478,6 +534,17 @@
     "url": "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
     "size": "760MB",
     "description": "Draft for Llama 3.x and Llama 4 models",
+    "draft": null,
+    "moe": null,
+    "extra_files": [],
+    "mmproj": null
+  },
+  {
+    "name": "SmolLM2-135M-Instruct-Q8_0",
+    "file": "SmolLM2-135M-Instruct-Q8_0.gguf",
+    "url": "https://huggingface.co/lmstudio-community/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q8_0.gguf",
+    "size": "145MB",
+    "description": "Tiny instruct model for lightweight local tests and drafts",
     "draft": null,
     "moe": null,
     "extra_files": [],

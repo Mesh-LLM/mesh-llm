@@ -407,6 +407,60 @@ mod tests {
         assert_eq!(revision.as_deref(), Some("main"));
         assert_eq!(file, "qwen2.5-0.5b-instruct-q4_k_m.gguf");
     }
+
+    #[test]
+    fn catalog_match_recognizes_newly_cataloged_legacy_hf_entries() {
+        let cases = [
+            (
+                "/Users/test/.models/Qwen3.5-27B-Q4_K_M.gguf",
+                "Qwen3.5-27B-Q4_K_M",
+                "unsloth/Qwen3.5-27B-GGUF",
+                "Qwen3.5-27B-Q4_K_M.gguf",
+            ),
+            (
+                "/Users/test/.models/Qwen3.5-0.8B-UD-Q8_K_XL.gguf",
+                "Qwen3.5-0.8B-UD-Q8_K_XL",
+                "unsloth/Qwen3.5-0.8B-GGUF",
+                "Qwen3.5-0.8B-UD-Q8_K_XL.gguf",
+            ),
+            (
+                "/Users/test/.models/Qwen3.5-4B-UD-Q4_K_XL.gguf",
+                "Qwen3.5-4B-UD-Q4_K_XL",
+                "unsloth/Qwen3.5-4B-GGUF",
+                "Qwen3.5-4B-UD-Q4_K_XL.gguf",
+            ),
+            (
+                "/Users/test/.models/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+                "Qwen3.5-9B-UD-Q4_K_XL",
+                "unsloth/Qwen3.5-9B-GGUF",
+                "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+            ),
+            (
+                "/Users/test/.models/Qwen3.5-27B-UD-Q4_K_XL.gguf",
+                "Qwen3.5-27B-UD-Q4_K_XL",
+                "unsloth/Qwen3.5-27B-GGUF",
+                "Qwen3.5-27B-UD-Q4_K_XL.gguf",
+            ),
+            (
+                "/Users/test/.models/SmolLM2-135M-Instruct-Q8_0.gguf",
+                "SmolLM2-135M-Instruct-Q8_0",
+                "lmstudio-community/SmolLM2-135M-Instruct-GGUF",
+                "SmolLM2-135M-Instruct-Q8_0.gguf",
+            ),
+        ];
+
+        for (path, model_name, repo, file) in cases {
+            let path = Path::new(path);
+            let model = catalog_match(path).expect("legacy filename should map to catalog model");
+            assert_eq!(model.name, model_name);
+
+            let (_, resolved_repo, revision, resolved_file) =
+                catalog_hf_match(path).expect("legacy filename should expose canonical HF asset");
+            assert_eq!(resolved_repo, repo);
+            assert_eq!(revision.as_deref(), Some("main"));
+            assert_eq!(resolved_file, file);
+        }
+    }
 }
 
 fn matching_catalog_model_by_basename(repo_file: &str) -> Option<&'static catalog::CatalogModel> {
