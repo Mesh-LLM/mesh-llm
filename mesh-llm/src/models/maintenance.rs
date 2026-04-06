@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use hf_hub::api::sync::Api;
 use hf_hub::api::RepoInfo;
 use hf_hub::{Repo, RepoType};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
@@ -47,12 +48,107 @@ struct CachedRepo {
 struct MigrationCounts {
     adopted: usize,
     downloaded: usize,
+    ambiguous: usize,
+    historical: usize,
 }
 
 #[derive(Default)]
 struct UpdateCounts {
     refreshed: usize,
     missing_meta: usize,
+}
+
+enum AdoptionResult {
+    Adopted(PathBuf),
+    AdoptedHistorical { path: PathBuf, commit_hash: String },
+    DownloadRequired(DownloadReason),
+}
+
+enum DownloadReason {
+    VerificationUnavailable(String),
+    AmbiguousLegacyCandidates {
+        file: String,
+        paths: Vec<PathBuf>,
+    },
+    SizeMismatch {
+        legacy_path: PathBuf,
+        legacy_size: u64,
+        remote_size: u64,
+    },
+    ChecksumMismatch {
+        legacy_path: PathBuf,
+    },
+}
+
+#[derive(Deserialize)]
+struct RemoteRepoInfo {
+    sha: String,
+    siblings: Vec<RemoteSibling>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteSibling {
+    rfilename: String,
+    size: Option<u64>,
+    blob_id: Option<String>,
+    lfs: Option<RemoteLfsInfo>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteLfsInfo {
+    sha256: String,
+    size: u64,
+}
+
+struct RemoteFileMetadata {
+    commit_hash: String,
+    size: u64,
+    blob_id: String,
+    sha256: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RepoCommit {
+    id: String,
+}
+
+struct LegacyCandidates<'a> {
+    by_name: BTreeMap<String, Vec<&'a MigrationEntry>>,
+    has_flat_layout: bool,
+    has_nested_layout: bool,
+}
+
+impl DownloadReason {
+    fn describe(&self) -> String {
+        match self {
+            Self::VerificationUnavailable(err) => {
+                format!("could not verify remote metadata ({err})")
+            }
+            Self::AmbiguousLegacyCandidates { file, paths } => format!(
+                "multiple legacy candidates found for {file}: {}",
+                paths
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::SizeMismatch {
+                legacy_path,
+                legacy_size,
+                remote_size,
+            } => format!(
+                "size mismatch for {} (legacy {}, remote {})",
+                legacy_path.display(),
+                format_size_bytes(*legacy_size),
+                format_size_bytes(*remote_size)
+            ),
+            Self::ChecksumMismatch { legacy_path } => {
+                format!("checksum mismatch for {}", legacy_path.display())
+            }
+        }
+    }
 }
 
 pub fn run_migrate(apply: bool, prune: bool) -> Result<()> {
@@ -135,6 +231,8 @@ pub fn run_migrate(apply: bool, prune: bool) -> Result<()> {
         let counts = migrate_catalog_model(&api, model, grouped_entries)?;
         totals.adopted += counts.adopted;
         totals.downloaded += counts.downloaded;
+        totals.ambiguous += counts.ambiguous;
+        totals.historical += counts.historical;
         migrated += 1;
     }
 
@@ -142,6 +240,8 @@ pub fn run_migrate(apply: bool, prune: bool) -> Result<()> {
     eprintln!("✅ Migration complete");
     eprintln!("   model groups migrated: {migrated}");
     eprintln!("   adopted local files: {}", totals.adopted);
+    eprintln!("   historical checksum matches: {}", totals.historical);
+    eprintln!("   ambiguous legacy files: {}", totals.ambiguous);
     eprintln!("   downloaded files: {}", totals.downloaded);
     eprintln!("   destination: {}", huggingface_hub_cache_dir().display());
     eprintln!("   legacy files were left in place");
@@ -361,10 +461,56 @@ fn migrate_catalog_model(
     entries: &[&MigrationEntry],
 ) -> Result<MigrationCounts> {
     let mut counts = MigrationCounts::default();
-    let legacy_files: BTreeMap<String, &PathBuf> = entries
+    let mut adopted_files = Vec::new();
+    let mut historical_files = Vec::new();
+    let mut downloaded_files = Vec::new();
+    let mut ambiguous_files = Vec::new();
+    let mut split_downloads = Vec::new();
+    let legacy_root = legacy_models_dir();
+    let legacy_files = collect_legacy_candidates(entries, &legacy_root);
+    let duplicate_legacy_files = duplicate_legacy_files(&legacy_files);
+    let expected_split_files = expected_split_gguf_files(model);
+    let present_split_files: Vec<String> = expected_split_files
         .iter()
-        .map(|entry| (entry.file_name().to_lowercase(), &entry.path))
+        .filter(|file| legacy_files.by_name.contains_key(&file.to_lowercase()))
+        .cloned()
         .collect();
+    let missing_split_files: Vec<String> = expected_split_files
+        .iter()
+        .filter(|file| !legacy_files.by_name.contains_key(&file.to_lowercase()))
+        .cloned()
+        .collect();
+
+    if legacy_files.has_flat_layout && legacy_files.has_nested_layout {
+        eprintln!(
+            "   ⚠️ mixed legacy layout detected; both flat ~/.models files and nested subdirectories exist for this model"
+        );
+    }
+    if !duplicate_legacy_files.is_empty() {
+        eprintln!(
+            "   ⚠️ duplicate legacy basenames detected; automatic adoption will be skipped for ambiguous files"
+        );
+        for (file, paths) in &duplicate_legacy_files {
+            eprintln!("      {file}:");
+            for path in paths {
+                eprintln!("         {}", path.display());
+            }
+        }
+    }
+
+    if !expected_split_files.is_empty() {
+        eprintln!(
+            "   📦 legacy split parts present: {}/{}",
+            present_split_files.len(),
+            expected_split_files.len()
+        );
+        if !present_split_files.is_empty() && !missing_split_files.is_empty() {
+            eprintln!(
+                "   ⚠️ partial split set detected; missing legacy parts: {}",
+                missing_split_files.join(", ")
+            );
+        }
+    }
 
     let mut config_downloaded = BTreeSet::new();
     for url in model
@@ -383,26 +529,71 @@ fn migrate_catalog_model(
             revision.clone().unwrap_or_else(|| "main".to_string()),
         );
         let api_repo = api.repo(repo.clone());
-        if let Some(legacy_path) = legacy_files.get(&file.to_lowercase()) {
-            match adopt_legacy_asset_into_hf_cache(api, &repo, &file, legacy_path)? {
-                Some(path) => {
-                    eprintln!("   🔁 adopted {}", path.display());
-                    counts.adopted += 1;
-                }
-                None => {
-                    let path = api_repo
-                        .download(&file)
-                        .with_context(|| format!("Download {repo_id}/{file}"))?;
-                    eprintln!("   ✅ downloaded {}", path.display());
-                    counts.downloaded += 1;
+        match legacy_candidate_for_file(&legacy_files, &file) {
+            LegacyCandidateSelection::Unique(legacy_path) => {
+                match adopt_legacy_asset_into_hf_cache(api, &repo, &file, legacy_path)? {
+                    AdoptionResult::Adopted(path) => {
+                        eprintln!("   🔁 adopted {}", path.display());
+                        counts.adopted += 1;
+                        adopted_files.push(file.clone());
+                    }
+                    AdoptionResult::AdoptedHistorical { path, commit_hash } => {
+                        eprintln!(
+                            "   🔁 adopted {} from historical revision {}",
+                            path.display(),
+                            short_revision(&commit_hash)
+                        );
+                        counts.adopted += 1;
+                        counts.historical += 1;
+                        adopted_files.push(file.clone());
+                        historical_files.push(format!("{}@{}", file, short_revision(&commit_hash)));
+                    }
+                    AdoptionResult::DownloadRequired(reason) => {
+                        eprintln!("   ↪️ downloading {file} because {}", reason.describe());
+                        if is_split_gguf_file(&file) {
+                            split_downloads.push(file.clone());
+                            eprintln!(
+                                "   ⚠️ split GGUF part {file} did not match the expected Hugging Face asset"
+                            );
+                        }
+                        let path = api_repo
+                            .download(&file)
+                            .with_context(|| format!("Download {repo_id}/{file}"))?;
+                        eprintln!("   ✅ downloaded {}", path.display());
+                        counts.downloaded += 1;
+                        downloaded_files.push(file.clone());
+                    }
                 }
             }
-        } else {
-            let path = api_repo
-                .download(&file)
-                .with_context(|| format!("Download {repo_id}/{file}"))?;
-            eprintln!("   ✅ downloaded {}", path.display());
-            counts.downloaded += 1;
+            LegacyCandidateSelection::Ambiguous(paths) => {
+                let reason = DownloadReason::AmbiguousLegacyCandidates {
+                    file: file.clone(),
+                    paths,
+                };
+                eprintln!("   ↪️ downloading {file} because {}", reason.describe());
+                if is_split_gguf_file(&file) {
+                    split_downloads.push(file.clone());
+                }
+                counts.ambiguous += 1;
+                ambiguous_files.push(file.clone());
+                let path = api_repo
+                    .download(&file)
+                    .with_context(|| format!("Download {repo_id}/{file}"))?;
+                eprintln!("   ✅ downloaded {}", path.display());
+                counts.downloaded += 1;
+                downloaded_files.push(file.clone());
+            }
+            LegacyCandidateSelection::Missing => {
+                if is_split_gguf_file(&file) {
+                    eprintln!("   ↪️ downloading missing split GGUF part {file}");
+                }
+                let path = api_repo
+                    .download(&file)
+                    .with_context(|| format!("Download {repo_id}/{file}"))?;
+                eprintln!("   ✅ downloaded {}", path.display());
+                counts.downloaded += 1;
+                downloaded_files.push(file.clone());
+            }
         }
 
         if config_downloaded.insert((repo_id.clone(), revision.clone())) {
@@ -419,7 +610,119 @@ fn migrate_catalog_model(
         }
     }
 
+    if !split_downloads.is_empty() {
+        split_downloads.sort();
+        split_downloads.dedup();
+        eprintln!(
+            "   ⚠️ split migration required downloading {} part(s): {}",
+            split_downloads.len(),
+            split_downloads.join(", ")
+        );
+    }
+
+    eprintln!("   📌 model outcome");
+    eprintln!("      adopted local files: {}", counts.adopted);
+    if !adopted_files.is_empty() {
+        eprintln!("      adopted files: {}", adopted_files.join(", "));
+    }
+    if !historical_files.is_empty() {
+        eprintln!(
+            "      historical checksum matches adopted: {}",
+            historical_files.join(", ")
+        );
+    }
+    eprintln!("      downloaded files: {}", counts.downloaded);
+    if !downloaded_files.is_empty() {
+        eprintln!(
+            "      downloaded file names: {}",
+            downloaded_files.join(", ")
+        );
+    }
+    if !ambiguous_files.is_empty() {
+        eprintln!(
+            "      ambiguous legacy files: {}",
+            ambiguous_files.join(", ")
+        );
+    }
+    if !expected_split_files.is_empty() {
+        eprintln!(
+            "      split parts in legacy storage: {}/{}",
+            present_split_files.len(),
+            expected_split_files.len()
+        );
+        if !missing_split_files.is_empty() {
+            eprintln!(
+                "      missing split parts: {}",
+                missing_split_files.join(", ")
+            );
+        }
+    }
+
     Ok(counts)
+}
+
+enum LegacyCandidateSelection<'a> {
+    Missing,
+    Unique(&'a Path),
+    Ambiguous(Vec<PathBuf>),
+}
+
+fn collect_legacy_candidates<'a>(
+    entries: &[&'a MigrationEntry],
+    legacy_root: &Path,
+) -> LegacyCandidates<'a> {
+    let mut by_name = BTreeMap::<String, Vec<&MigrationEntry>>::new();
+    let mut has_flat_layout = false;
+    let mut has_nested_layout = false;
+
+    for entry in entries {
+        by_name
+            .entry(entry.file_name().to_lowercase())
+            .or_default()
+            .push(entry);
+        if is_flat_legacy_path(&entry.path, legacy_root) {
+            has_flat_layout = true;
+        } else {
+            has_nested_layout = true;
+        }
+    }
+
+    LegacyCandidates {
+        by_name,
+        has_flat_layout,
+        has_nested_layout,
+    }
+}
+
+fn duplicate_legacy_files(candidates: &LegacyCandidates<'_>) -> Vec<(String, Vec<PathBuf>)> {
+    let mut duplicates = Vec::new();
+    for (file, entries) in &candidates.by_name {
+        if entries.len() <= 1 {
+            continue;
+        }
+        let mut paths: Vec<PathBuf> = entries.iter().map(|entry| entry.path.clone()).collect();
+        paths.sort();
+        duplicates.push((file.clone(), paths));
+    }
+    duplicates.sort_by(|left, right| left.0.cmp(&right.0));
+    duplicates
+}
+
+fn legacy_candidate_for_file<'a>(
+    candidates: &LegacyCandidates<'a>,
+    file: &str,
+) -> LegacyCandidateSelection<'a> {
+    match candidates.by_name.get(&file.to_lowercase()) {
+        Some(entries) if entries.len() == 1 => LegacyCandidateSelection::Unique(&entries[0].path),
+        Some(entries) => LegacyCandidateSelection::Ambiguous(
+            entries.iter().map(|entry| entry.path.clone()).collect(),
+        ),
+        None => LegacyCandidateSelection::Missing,
+    }
+}
+
+fn is_flat_legacy_path(path: &Path, legacy_root: &Path) -> bool {
+    path.parent() == Some(legacy_root)
 }
 
 fn run_prune(entries: &[MigrationEntry]) -> Result<()> {
@@ -475,57 +778,92 @@ fn adopt_legacy_asset_into_hf_cache(
     repo: &Repo,
     file: &str,
     legacy_path: &Path,
-) -> Result<Option<PathBuf>> {
-    let url = api.repo(repo.clone()).url(file);
-    let metadata = match api.metadata(&url) {
-        Ok(metadata) => metadata,
+) -> Result<AdoptionResult> {
+    let remote = match remote_file_metadata(api, repo, file) {
+        Ok(remote) => remote,
         Err(err) => {
-            eprintln!("   ⚠️ could not verify {file} for adoption: {err}");
-            return Ok(None);
+            return Ok(AdoptionResult::DownloadRequired(
+                DownloadReason::VerificationUnavailable(err.to_string()),
+            ))
         }
     };
 
     let cache = huggingface_hub_cache();
     let cache_repo = cache.repo(repo.clone());
-    let etag = metadata.etag();
-    let blob_path = cache_repo.blob_path(etag);
+    let blob_path = cache_repo.blob_path(&remote.blob_id);
     if blob_path.exists() {
-        return materialize_cached_snapshot_pointer(
+        let path = materialize_cached_snapshot_pointer(
             &cache_repo,
-            metadata.commit_hash(),
+            &remote.commit_hash,
             file,
             &blob_path,
-        );
+        )?;
+        return Ok(AdoptionResult::Adopted(path));
     }
 
     let legacy_size = std::fs::metadata(legacy_path)
         .with_context(|| format!("Read {}", legacy_path.display()))?
         .len();
-    if legacy_size != metadata.size() as u64 {
-        eprintln!(
-            "   ⚠️ size mismatch for {} (legacy {}, remote {})",
-            legacy_path.display(),
-            format_size_bytes(legacy_size),
-            format_size_bytes(metadata.size() as u64)
-        );
-        return Ok(None);
+    if legacy_size != remote.size {
+        return Ok(AdoptionResult::DownloadRequired(
+            DownloadReason::SizeMismatch {
+                legacy_path: legacy_path.to_path_buf(),
+                legacy_size,
+                remote_size: remote.size,
+            },
+        ));
     }
 
-    if etag.len() == 64 && etag.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        let display_name = legacy_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(file);
-        let digest = sha256_file_hex(legacy_path, display_name, legacy_size)?;
-        eprintln!(
-            "   ✅ verified {} ({})",
-            display_name,
-            format_size_bytes(legacy_size)
-        );
-        if !digest.eq_ignore_ascii_case(etag) {
-            eprintln!("   ⚠️ checksum mismatch for {}", legacy_path.display());
-            return Ok(None);
+    let Some(remote_sha256) = remote.sha256.as_deref() else {
+        return Ok(AdoptionResult::DownloadRequired(
+            DownloadReason::VerificationUnavailable(
+                "remote file is not LFS-backed, so no SHA-256 is available".to_string(),
+            ),
+        ));
+    };
+
+    let display_name = legacy_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(file);
+    let digest = sha256_file_hex(legacy_path, display_name, legacy_size)?;
+    eprintln!(
+        "   ✅ verified {} ({})",
+        display_name,
+        format_size_bytes(legacy_size)
+    );
+    if !digest.eq_ignore_ascii_case(remote_sha256) {
+        if let Some(historical) = find_historical_remote_match(
+            api,
+            repo,
+            file,
+            legacy_size,
+            &digest,
+            &remote.commit_hash,
+        )? {
+            let historical_blob_path = cache_repo.blob_path(&historical.blob_id);
+            if let Some(parent) = historical_blob_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("Create {}", parent.display()))?;
+            }
+            link_or_copy_file(legacy_path, &historical_blob_path)?;
+
+            let path = materialize_cached_snapshot_pointer(
+                &cache_repo,
+                &historical.commit_hash,
+                file,
+                &historical_blob_path,
+            )?;
+            return Ok(AdoptionResult::AdoptedHistorical {
+                path,
+                commit_hash: historical.commit_hash,
+            });
         }
+        return Ok(AdoptionResult::DownloadRequired(
+            DownloadReason::ChecksumMismatch {
+                legacy_path: legacy_path.to_path_buf(),
+            },
+        ));
     }
 
     if let Some(parent) = blob_path.parent() {
@@ -533,7 +871,149 @@ fn adopt_legacy_asset_into_hf_cache(
     }
     link_or_copy_file(legacy_path, &blob_path)?;
 
-    materialize_cached_snapshot_pointer(&cache_repo, metadata.commit_hash(), file, &blob_path)
+    let path =
+        materialize_cached_snapshot_pointer(&cache_repo, &remote.commit_hash, file, &blob_path)?;
+    Ok(AdoptionResult::Adopted(path))
+}
+
+fn remote_file_metadata(api: &Api, repo: &Repo, file: &str) -> Result<RemoteFileMetadata> {
+    let mut response = api
+        .repo(repo.clone())
+        .info_request()
+        .query("blobs", "true")
+        .call()
+        .map_err(Box::new)
+        .with_context(|| format!("Fetch repo info for {}", repo.url()))?;
+    let info: RemoteRepoInfo = response
+        .body_mut()
+        .read_json()
+        .map_err(Box::new)
+        .with_context(|| format!("Parse repo info for {}", repo.url()))?;
+    let sibling = info
+        .siblings
+        .into_iter()
+        .find(|sibling| sibling.rfilename == file)
+        .with_context(|| format!("Remote file metadata missing for {}/{}", repo.url(), file))?;
+    let size = sibling
+        .lfs
+        .as_ref()
+        .map(|lfs| lfs.size)
+        .or(sibling.size)
+        .with_context(|| format!("Remote file size missing for {}/{}", repo.url(), file))?;
+    let blob_id = sibling
+        .lfs
+        .as_ref()
+        .map(|lfs| lfs.sha256.clone())
+        .or(sibling.blob_id)
+        .with_context(|| format!("Remote blob id missing for {}/{}", repo.url(), file))?;
+    let sha256 = sibling.lfs.map(|lfs| lfs.sha256);
+
+    Ok(RemoteFileMetadata {
+        commit_hash: info.sha,
+        size,
+        blob_id,
+        sha256,
+    })
+}
+
+fn find_historical_remote_match(
+    api: &Api,
+    repo: &Repo,
+    file: &str,
+    legacy_size: u64,
+    digest: &str,
+    current_commit_hash: &str,
+) -> Result<Option<RemoteFileMetadata>> {
+    let commits = fetch_recent_repo_commits(&repo.url(), repo.revision(), 20)?;
+    for commit in commits {
+        if commit.id == current_commit_hash {
+            continue;
+        }
+        let historical_repo = Repo::with_revision(repo.url(), RepoType::Model, commit.id);
+        let Ok(remote) = remote_file_metadata(api, &historical_repo, file) else {
+            continue;
+        };
+        if remote_metadata_matches_checksum(&remote, legacy_size, digest) {
+            return Ok(Some(remote));
+        }
+    }
+    Ok(None)
+}
+
+fn remote_metadata_matches_checksum(
+    remote: &RemoteFileMetadata,
+    legacy_size: u64,
+    digest: &str,
+) -> bool {
+    remote.size == legacy_size
+        && remote
+            .sha256
+            .as_deref()
+            .map(|sha256| sha256.eq_ignore_ascii_case(digest))
+            .unwrap_or(false)
+}
+
+fn fetch_recent_repo_commits(
+    repo_id: &str,
+    revision: &str,
+    limit: usize,
+) -> Result<Vec<RepoCommit>> {
+    let endpoint = hf_endpoint();
+    let token = hf_token_override();
+    let repo_id = repo_id.to_string();
+    let revision = revision.to_string();
+
+    let join = std::thread::spawn(move || -> Result<Vec<RepoCommit>> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("Build Tokio runtime for Hugging Face commit lookup")?;
+        runtime.block_on(async move {
+            let client = reqwest::Client::new();
+            let url = format!(
+                "{}/api/models/{}/commits/{}?limit={limit}",
+                endpoint,
+                urlencoding::encode(&repo_id),
+                urlencoding::encode(&revision)
+            );
+            let mut request = client.get(url);
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            request
+                .send()
+                .await
+                .context("Fetch Hugging Face commit history")?
+                .error_for_status()
+                .context("Hugging Face commit history request failed")?
+                .json::<Vec<RepoCommit>>()
+                .await
+                .context("Parse Hugging Face commit history")
+        })
+    });
+
+    join.join()
+        .map_err(|_| anyhow::anyhow!("Hugging Face commit lookup thread panicked"))?
+}
+
+fn hf_endpoint() -> String {
+    std::env::var("HF_ENDPOINT")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://huggingface.co".to_string())
+}
+
+fn hf_token_override() -> Option<String> {
+    for key in ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"] {
+        if let Ok(token) = std::env::var(key) {
+            let token = token.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn materialize_cached_snapshot_pointer(
@@ -541,7 +1021,7 @@ fn materialize_cached_snapshot_pointer(
     commit_hash: &str,
     file: &str,
     blob_path: &Path,
-) -> Result<Option<PathBuf>> {
+) -> Result<PathBuf> {
     let mut pointer_path = cache_repo.pointer_path(commit_hash);
     pointer_path.push(file);
     if let Some(parent) = pointer_path.parent() {
@@ -552,7 +1032,7 @@ fn materialize_cached_snapshot_pointer(
         .create_ref(commit_hash)
         .context("Write cache ref")?;
 
-    Ok(Some(pointer_path))
+    Ok(pointer_path)
 }
 
 fn link_or_copy_file(src: &Path, dst: &Path) -> Result<()> {
@@ -567,6 +1047,23 @@ fn link_or_copy_file(src: &Path, dst: &Path) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn is_split_gguf_file(file: &str) -> bool {
+    regex_lite::Regex::new(r"-\d{5}-of-\d{5}\.gguf$")
+        .unwrap()
+        .is_match(file)
+}
+
+fn expected_split_gguf_files(model: &catalog::CatalogModel) -> Vec<String> {
+    let mut files: Vec<String> = std::iter::once(model.file.as_str())
+        .chain(model.extra_files.iter().map(|asset| asset.file.as_str()))
+        .filter(|file| is_split_gguf_file(file))
+        .map(str::to_string)
+        .collect();
+    files.sort();
+    files.dedup();
+    files
 }
 
 fn sha256_file_hex(path: &Path, label: &str, total_bytes: u64) -> Result<String> {
@@ -884,4 +1381,94 @@ fn collect_snapshot_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> R
         files.push(rel);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_entry(path: PathBuf) -> MigrationEntry {
+        MigrationEntry {
+            path,
+            status: MigrationStatus::Rehydratable,
+            detail: String::new(),
+            catalog: None,
+        }
+    }
+
+    #[test]
+    fn collect_legacy_candidates_detects_duplicates_and_mixed_layout() {
+        let root = PathBuf::from("/tmp/.models");
+        let flat = test_entry(root.join("MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf"));
+        let nested = test_entry(
+            root.join("minimax-hf")
+                .join("Q4_K_M")
+                .join("MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf"),
+        );
+        let entries = vec![&flat, &nested];
+
+        let candidates = collect_legacy_candidates(&entries, &root);
+        let duplicates = duplicate_legacy_files(&candidates);
+
+        assert!(candidates.has_flat_layout);
+        assert!(candidates.has_nested_layout);
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].0, "minimax-m2.5-q4_k_m-00001-of-00004.gguf");
+        assert_eq!(duplicates[0].1.len(), 2);
+    }
+
+    #[test]
+    fn legacy_candidate_for_file_returns_ambiguous_for_duplicate_basename() {
+        let root = PathBuf::from("/tmp/.models");
+        let flat = test_entry(root.join("foo.gguf"));
+        let nested = test_entry(root.join("nested").join("foo.gguf"));
+        let entries = vec![&flat, &nested];
+        let candidates = collect_legacy_candidates(&entries, &root);
+
+        match legacy_candidate_for_file(&candidates, "foo.gguf") {
+            LegacyCandidateSelection::Ambiguous(paths) => {
+                assert_eq!(paths.len(), 2);
+            }
+            _ => panic!("expected ambiguous legacy selection"),
+        }
+    }
+
+    #[test]
+    fn remote_metadata_checksum_match_requires_size_and_sha256() {
+        let remote = RemoteFileMetadata {
+            commit_hash: "abc123".to_string(),
+            size: 42,
+            blob_id: "deadbeef".to_string(),
+            sha256: Some("0123456789abcdef".to_string()),
+        };
+
+        assert!(remote_metadata_matches_checksum(
+            &remote,
+            42,
+            "0123456789ABCDEF"
+        ));
+        assert!(!remote_metadata_matches_checksum(
+            &remote,
+            41,
+            "0123456789abcdef"
+        ));
+        assert!(!remote_metadata_matches_checksum(
+            &remote,
+            42,
+            "ffffffffffffffff"
+        ));
+    }
+
+    #[test]
+    fn expected_split_gguf_files_includes_all_catalog_parts() {
+        let model = catalog::MODEL_CATALOG
+            .iter()
+            .find(|model| model.name == "MiniMax-M2.5-Q4_K_M")
+            .unwrap();
+        let files = expected_split_gguf_files(model);
+
+        assert_eq!(files.len(), 4);
+        assert!(files.contains(&"MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf".to_string()));
+        assert!(files.contains(&"MiniMax-M2.5-Q4_K_M-00004-of-00004.gguf".to_string()));
+    }
 }
