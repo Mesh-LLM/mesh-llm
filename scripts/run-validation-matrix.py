@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -181,16 +182,7 @@ def parse_downloaded_model_path(output: str) -> str:
     raise RuntimeError("could not determine downloaded model path")
 
 
-def is_existing_local_model_ref(model_ref: str) -> bool:
-    return Path(model_ref).expanduser().is_absolute() and Path(model_ref).exists()
-
-
 def download_model_ref(model_ref: str, backend: str) -> str:
-    if is_existing_local_model_ref(model_ref):
-        local_path = Path(model_ref).expanduser().resolve().as_posix()
-        log(f"✅ Preflight local reference detected [{backend}] {model_ref}")
-        log(f"   ↳ {local_path}")
-        return local_path
     flag = "--gguf" if backend == "gguf" else "--mlx"
     log(f"📥 Preflight download start [{backend}] {model_ref}")
     proc = run_streaming(
@@ -298,6 +290,97 @@ def run_exact_case(
 
 def behavior_report_path(root: Path, stamp: str, case_id: str) -> Path:
     return case_dir(root, stamp, "behavior", case_id) / "report.json"
+
+
+def exact_chat_dir(root: Path, stamp: str, case_id: str) -> Path:
+    return case_dir(root, stamp, "exact", case_id) / "chat"
+
+
+def normalize_exact_output(text: str) -> str:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip().lower()
+    normalized = normalized.replace("**", "").replace("__", "").replace("`", "")
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip(" \t\n\r.,;:!?")
+
+
+def load_exact_prompt_artifacts(root: Path, stamp: str, case_id: str) -> dict[str, dict[str, Any]]:
+    chat_dir = exact_chat_dir(root, stamp, case_id)
+    artifacts: dict[str, dict[str, Any]] = {}
+    if not chat_dir.exists():
+        return artifacts
+    for path in sorted(chat_dir.glob("*.json")):
+        if path.stem.endswith(".thinking"):
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        label = str(payload.get("label", path.stem))
+        artifacts[label] = payload
+    return artifacts
+
+
+def exact_artifact_content(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if content is not None:
+        return str(content)
+    response_text = payload.get("response_text")
+    if response_text is not None:
+        return str(response_text)
+    return ""
+
+
+def exact_prompt_snapshot(root: Path, stamp: str, case_id: str) -> dict[str, str]:
+    return {
+        label: normalize_exact_output(exact_artifact_content(payload))
+        for label, payload in load_exact_prompt_artifacts(root, stamp, case_id).items()
+    }
+
+
+def satisfied_expectation_buckets(payload: dict[str, Any]) -> set[str]:
+    expectations = payload.get("expectations", {})
+    content = exact_artifact_content(payload)
+    normalized_content = normalize_exact_output(content)
+    buckets: set[str] = set()
+
+    expect_exact = str(expectations.get("expect_exact", ""))
+    if expect_exact and normalized_content == normalize_exact_output(expect_exact):
+        buckets.add("expect_exact")
+
+    expect_contains = str(expectations.get("expect_contains", ""))
+    if expect_contains and expect_contains in content:
+        buckets.add("expect_contains")
+
+    expect_contains_ci = str(expectations.get("expect_contains_ci", ""))
+    if expect_contains_ci and normalize_exact_output(expect_contains_ci) in normalized_content:
+        buckets.add("expect_contains_ci")
+
+    expect_contains_all_ci = [str(item) for item in expectations.get("expect_contains_all_ci", [])]
+    if expect_contains_all_ci and all(normalize_exact_output(item) in normalized_content for item in expect_contains_all_ci):
+        buckets.add("expect_contains_all_ci")
+
+    expect_any_ci = [str(item) for item in expectations.get("expect_any_ci", [])]
+    if expect_any_ci and any(normalize_exact_output(item) in normalized_content for item in expect_any_ci):
+        buckets.add("expect_any_ci")
+
+    return buckets
+
+
+def compare_exact_prompt_payloads(
+    gguf_payload: dict[str, Any],
+    mlx_payload: dict[str, Any],
+) -> tuple[str, str]:
+    gguf_content = exact_artifact_content(gguf_payload)
+    mlx_content = exact_artifact_content(mlx_payload)
+    gguf_normalized = normalize_exact_output(gguf_content)
+    mlx_normalized = normalize_exact_output(mlx_content)
+    if gguf_normalized == mlx_normalized:
+        return ("same-output", gguf_normalized)
+
+    gguf_buckets = satisfied_expectation_buckets(gguf_payload)
+    mlx_buckets = satisfied_expectation_buckets(mlx_payload)
+    shared_buckets = sorted(gguf_buckets & mlx_buckets)
+    if shared_buckets:
+        return ("same-bucket", ",".join(shared_buckets))
+
+    return ("backend-differs", f"gguf={gguf_content!r} mlx={mlx_content!r}")
 
 
 def flagged_prompt_summary(report_path: Path) -> list[str]:
@@ -635,6 +718,7 @@ def compare_exact_against_baseline(
         "case_id",
         "expected_exit",
         "actual_exit",
+        "output_status",
         "status",
     ]
     lines = ["\t".join(header)]
@@ -652,6 +736,7 @@ def compare_exact_against_baseline(
                             actual[0] if actual else "",
                             "",
                             actual[1] if actual else "",
+                            "",
                             status,
                         ]
                     )
@@ -659,7 +744,19 @@ def compare_exact_against_baseline(
                 continue
             expected_exit = str(expected.get("exit", ""))
             actual_exit = actual[1] if actual else ""
-            status = "match" if actual_exit == expected_exit else "mismatch"
+            output_status = ""
+            if actual is not None:
+                expected_outputs = expected.get("prompt_outputs")
+                if expected_outputs:
+                    actual_outputs = exact_prompt_snapshot(root, stamp, actual[0])
+                    output_status = "match" if actual_outputs == expected_outputs else "mismatch"
+                else:
+                    output_status = "no-output-baseline"
+            status = (
+                "match"
+                if actual_exit == expected_exit and output_status in ("", "match", "no-output-baseline")
+                else "mismatch"
+            )
             lines.append(
                 "\t".join(
                     [
@@ -668,6 +765,7 @@ def compare_exact_against_baseline(
                         actual[0] if actual else expected.get("case_id", ""),
                         expected_exit,
                         actual_exit,
+                        output_status,
                         status,
                     ]
                 )
@@ -812,6 +910,75 @@ def compare_parity_to_canonical(
     compare_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def compare_cross_backend_exact_parity(
+    root: Path,
+    stamp: str,
+    models: list[dict[str, Any]],
+) -> None:
+    compare_path = root / stamp / "exact-cross-backend-parity.tsv"
+    header = [
+        "model_id",
+        "label",
+        "gguf_case_id",
+        "mlx_case_id",
+        "compared_prompts",
+        "missing_labels",
+        "status",
+        "details",
+    ]
+    lines = ["\t".join(header)]
+
+    for model in models:
+        if "gguf" not in model or "mlx" not in model:
+            continue
+        gguf_case_id = model["gguf"].get("exact_case_id", "")
+        mlx_case_id = model["mlx"].get("exact_case_id", "")
+        if not gguf_case_id or not mlx_case_id:
+            continue
+
+        gguf_artifacts = load_exact_prompt_artifacts(root, stamp, gguf_case_id)
+        mlx_artifacts = load_exact_prompt_artifacts(root, stamp, mlx_case_id)
+        gguf_labels = set(gguf_artifacts)
+        mlx_labels = set(mlx_artifacts)
+        compared_labels = sorted(gguf_labels & mlx_labels)
+        missing_labels = sorted(gguf_labels ^ mlx_labels)
+
+        prompt_results: list[str] = []
+        prompt_statuses: list[str] = []
+        for prompt_label in compared_labels:
+            status, detail = compare_exact_prompt_payloads(gguf_artifacts[prompt_label], mlx_artifacts[prompt_label])
+            prompt_statuses.append(status)
+            prompt_results.append(f"{prompt_label}={status}({detail})")
+
+        if not compared_labels:
+            overall_status = "no-shared-prompts"
+        elif missing_labels:
+            overall_status = "backend-differs"
+        elif all(status == "same-output" for status in prompt_statuses):
+            overall_status = "same-output"
+        elif all(status in ("same-output", "same-bucket") for status in prompt_statuses):
+            overall_status = "same-bucket"
+        else:
+            overall_status = "backend-differs"
+
+        lines.append(
+            "\t".join(
+                [
+                    model["id"],
+                    model["label"],
+                    gguf_case_id,
+                    mlx_case_id,
+                    ",".join(compared_labels),
+                    ",".join(missing_labels),
+                    overall_status,
+                    " | ".join(prompt_results),
+                ]
+            )
+        )
+
+    compare_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def baseline_divergence_report(
     baseline_cfg: dict[str, Any],
     root: Path,
@@ -893,6 +1060,7 @@ def promote_baselines(
                 baseline_cfg["exact"][backend][model_id] = {
                     "exit": int(exit_code),
                     "case_id": case_id,
+                    "prompt_outputs": exact_prompt_snapshot(root, stamp, case_id),
                 }
 
     if suite in ("behavior", "all"):
@@ -998,12 +1166,15 @@ def main() -> int:
             for model in models:
                 if backend not in requested_backends(model, args.backend):
                     continue
+                case_id = model[backend].get("exact_case_id")
+                if not case_id:
+                    continue
                 current = {
                     "suite": "exact",
                     "backend": backend,
                     "model_id": model["id"],
                     "label": model["label"],
-                    "case_id": model[backend]["exact_case_id"],
+                    "case_id": case_id,
                     "status": "running",
                 }
                 write_json(current_case_path, current)
@@ -1015,7 +1186,7 @@ def main() -> int:
                     current=current,
                     overall_rc=overall_rc,
                 )
-                print(f"\n=== Running {model[backend]['exact_case_id']} ({backend}) ===")
+                print(f"\n=== Running {case_id} ({backend}) ===")
                 rc = run_exact_case(root, stamp, matrix, model, backend, resolved_models)
                 overall_rc = overall_rc or rc
                 completed_cases += 1
@@ -1023,6 +1194,7 @@ def main() -> int:
                 compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_parity_to_canonical(baselines, root, stamp, models)
+                compare_cross_backend_exact_parity(root, stamp, models)
                 baseline_divergence_report(baselines, root, stamp, models)
                 write_overall_progress(
                     root,
@@ -1038,12 +1210,15 @@ def main() -> int:
             for model in models:
                 if backend not in requested_backends(model, args.backend):
                     continue
+                case_id = model[backend].get("behavior_case_id")
+                if not case_id:
+                    continue
                 current = {
                     "suite": "behavior",
                     "backend": backend,
                     "model_id": model["id"],
                     "label": model["label"],
-                    "case_id": model[backend]["behavior_case_id"],
+                    "case_id": case_id,
                     "status": "running",
                 }
                 write_json(current_case_path, current)
@@ -1055,7 +1230,7 @@ def main() -> int:
                     current=current,
                     overall_rc=overall_rc,
                 )
-                print(f"\n=== Running {model[backend]['behavior_case_id']} ({backend}) ===")
+                print(f"\n=== Running {case_id} ({backend}) ===")
                 rc = run_behavior_case(
                     root,
                     stamp,
@@ -1074,6 +1249,7 @@ def main() -> int:
                 compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_parity_to_canonical(baselines, root, stamp, models)
+                compare_cross_backend_exact_parity(root, stamp, models)
                 baseline_divergence_report(baselines, root, stamp, models)
                 write_overall_progress(
                     root,
@@ -1088,6 +1264,7 @@ def main() -> int:
     compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
     compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
     compare_parity_to_canonical(baselines, root, stamp, models)
+    compare_cross_backend_exact_parity(root, stamp, models)
     baseline_divergence_report(baselines, root, stamp, models)
 
     if args.promote_baseline:
@@ -1123,6 +1300,10 @@ def main() -> int:
     if parity_compare_path.exists():
         print("\n=== Parity vs canonical baseline ===")
         print(parity_compare_path.read_text(encoding="utf-8"), end="")
+    exact_parity_path = root / stamp / "exact-cross-backend-parity.tsv"
+    if exact_parity_path.exists():
+        print("\n=== Exact cross-backend parity ===")
+        print(exact_parity_path.read_text(encoding="utf-8"), end="")
     divergence_path = root / stamp / "baseline-divergence.tsv"
     if divergence_path.exists():
         print("\n=== Baseline divergence ===")

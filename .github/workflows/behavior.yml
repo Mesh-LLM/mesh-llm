@@ -1,0 +1,328 @@
+name: Behavior Regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/behavior.yml'
+      - '.github/cache-version.txt'
+      - 'Justfile'
+      - 'scripts/build-*.sh'
+      - 'scripts/build-*.ps1'
+      - 'scripts/ci-mt-bench-behavior.py'
+      - 'scripts/ci-exact-smoke.py'
+      - 'scripts/run-validation-matrix.py'
+      - 'testdata/validation/**'
+      - 'mesh-llm/src/launch.rs'
+      - 'mesh-llm/src/mlx/**'
+      - 'mesh-llm/src/models/**'
+      - 'mesh-llm/src/network/proxy.rs'
+  pull_request:
+    paths:
+      - '.github/workflows/behavior.yml'
+      - '.github/cache-version.txt'
+      - 'Justfile'
+      - 'scripts/build-*.sh'
+      - 'scripts/build-*.ps1'
+      - 'scripts/ci-mt-bench-behavior.py'
+      - 'scripts/ci-exact-smoke.py'
+      - 'scripts/run-validation-matrix.py'
+      - 'testdata/validation/**'
+      - 'mesh-llm/src/launch.rs'
+      - 'mesh-llm/src/mlx/**'
+      - 'mesh-llm/src/models/**'
+      - 'mesh-llm/src/network/proxy.rs'
+  schedule:
+    - cron: "0 20 * * *"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CACHE_NAMESPACE: mesh-llm
+  SCCACHE_GHA_ENABLED: "true"
+
+jobs:
+  behavior_matrix:
+    name: Build behavior matrix
+    runs-on: ubuntu-latest
+    outputs:
+      gguf_matrix: ${{ steps.build_matrix.outputs.gguf_matrix }}
+      mlx_matrix: ${{ steps.build_matrix.outputs.mlx_matrix }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build shard matrix from source-of-truth
+        id: build_matrix
+        run: |
+          gguf_matrix=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          matrix = json.loads(Path('testdata/validation/matrix.json').read_text())
+
+          def slug(ref: str) -> str:
+              return "--".join(ref.split("/")[:2])
+
+          gguf = [
+              {"id": row["id"], "cache_slug": slug(row["gguf"]["model_ref"])}
+              for row in matrix["models"]
+              if "gguf" in row and "model_ref" in row["gguf"]
+          ]
+          print(json.dumps(gguf))
+          PY
+          )
+
+          mlx_matrix=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          matrix = json.loads(Path('testdata/validation/matrix.json').read_text())
+
+          def slug(ref: str) -> str:
+              return "--".join(ref.split("/")[:2])
+
+          mlx = [
+              {"id": row["id"], "cache_slug": slug(row["mlx"]["model_ref"])}
+              for row in matrix["models"]
+              if "mlx" in row and "model_ref" in row["mlx"]
+          ]
+          print(json.dumps(mlx))
+          PY
+          )
+
+          echo "gguf_matrix=$gguf_matrix" >> "$GITHUB_OUTPUT"
+          echo "mlx_matrix=$mlx_matrix" >> "$GITHUB_OUTPUT"
+
+  linux_build:
+    name: Linux Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            .github/cache-version.txt
+            mesh-llm/ui/package-lock.json
+
+      - name: Build UI
+        working-directory: mesh-llm/ui
+        run: npm ci && npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mesh-llm
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-behavior-rust-${{ hashFiles('.github/cache-version.txt') }}
+
+      - name: Build mesh-llm
+        run: cargo build --release -p mesh-llm --bin mesh-llm
+
+      - name: Clone llama.cpp fork
+        run: git clone -b upstream-latest --depth 1 https://github.com/michaelneale/llama.cpp.git llama.cpp
+
+      - name: Build llama.cpp (CPU + RPC)
+        run: |
+          CACHE_FLAGS=()
+          if command -v sccache >/dev/null 2>&1; then
+            CACHE_FLAGS+=(
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache
+              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            )
+          fi
+          cmake -B llama.cpp/build -S llama.cpp \
+            -DGGML_METAL=OFF \
+            -DGGML_CUDA=OFF \
+            -DGGML_RPC=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            "${CACHE_FLAGS[@]}"
+          cmake --build llama.cpp/build --config Release -j$(nproc) --target rpc-server llama-server
+
+      - name: Package Linux binaries
+        run: |
+          mkdir -p ci-artifacts/linux-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-binaries.tgz -C ci-artifacts linux-binaries
+
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-linux-binaries
+          path: ci-artifacts/linux-binaries.tgz
+          if-no-files-found: error
+
+  gguf_behavior:
+    name: GGUF Behavior
+    needs: [linux_build, behavior_matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.behavior_matrix.outputs.gguf_matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: behavior-linux-binaries
+          path: ci-artifacts
+
+      - name: Extract Linux binaries
+        run: tar -xzf ci-artifacts/linux-binaries.tgz
+
+      - name: Cache GGUF model
+        id: cache-gguf-model
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface/hub/models--${{ matrix.cache_slug }}
+          key: behavior-gguf-hub-${{ matrix.cache_slug }}
+
+      - name: Run full MT-Bench behavior suite
+        run: |
+          python3 scripts/run-validation-matrix.py \
+            --suite behavior \
+            --backend gguf \
+            --skip-build \
+            --cases "${{ matrix.id }}" \
+            --stamp "ci-behavior-gguf-${{ matrix.id }}"
+
+      - name: Upload behavior report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gguf-behavior-${{ matrix.id }}
+          path: MLX_VALIDATION_RESULTS/ci-behavior-gguf-${{ matrix.id }}
+          if-no-files-found: error
+
+  macos_build:
+    name: macOS Build
+    if: ${{ vars.ENABLE_MACOS_CI == 'true' }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            .github/cache-version.txt
+            mesh-llm/ui/package-lock.json
+
+      - name: Build UI
+        working-directory: mesh-llm/ui
+        run: npm ci && npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mesh-llm
+          prefix-key: ${{ env.CACHE_NAMESPACE }}-behavior-rust-${{ hashFiles('.github/cache-version.txt') }}
+
+      - name: Build mesh-llm
+        run: cargo build --release -p mesh-llm --bin mesh-llm
+
+      - name: Clone llama.cpp fork
+        run: git clone -b upstream-latest --depth 1 https://github.com/michaelneale/llama.cpp.git llama.cpp
+
+      - name: Build llama.cpp (CPU + RPC)
+        run: |
+          CACHE_FLAGS=()
+          if command -v sccache >/dev/null 2>&1; then
+            CACHE_FLAGS+=(
+              -DCMAKE_C_COMPILER_LAUNCHER=sccache
+              -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            )
+          fi
+          cmake -B llama.cpp/build -S llama.cpp \
+            -DGGML_METAL=OFF \
+            -DGGML_RPC=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLLAMA_OPENSSL=OFF \
+            "${CACHE_FLAGS[@]}"
+          cmake --build llama.cpp/build --config Release -j$(sysctl -n hw.ncpu) --target rpc-server llama-server
+
+      - name: Package macOS binaries
+        run: |
+          mkdir -p ci-artifacts/macos-binaries
+          cp target/release/mesh-llm ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/macos-binaries/ 2>/dev/null || true
+          cp llama.cpp/build/bin/*.dylib ci-artifacts/macos-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/macos-binaries.tgz -C ci-artifacts macos-binaries
+
+      - name: Upload macOS binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-macos-binaries
+          path: ci-artifacts/macos-binaries.tgz
+          if-no-files-found: error
+
+  mlx_behavior:
+    name: MLX Behavior
+    if: ${{ vars.ENABLE_MACOS_CI == 'true' }}
+    needs: [macos_build, behavior_matrix]
+    runs-on: macos-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.behavior_matrix.outputs.mlx_matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download macOS binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: behavior-macos-binaries
+          path: ci-artifacts
+
+      - name: Extract macOS binaries
+        run: tar -xzf ci-artifacts/macos-binaries.tgz
+
+      - name: Cache MLX model repo
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface/hub/models--${{ matrix.cache_slug }}
+          key: behavior-mlx-hub-${{ matrix.cache_slug }}
+
+      - name: Run full MT-Bench behavior suite
+        run: |
+          python3 scripts/run-validation-matrix.py \
+            --suite behavior \
+            --backend mlx \
+            --skip-build \
+            --cases "${{ matrix.id }}" \
+            --stamp "ci-behavior-mlx-${{ matrix.id }}"
+
+      - name: Upload behavior report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-behavior-${{ matrix.id }}
+          path: MLX_VALIDATION_RESULTS/ci-behavior-mlx-${{ matrix.id }}
+          if-no-files-found: error

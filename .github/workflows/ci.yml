@@ -3,7 +3,8 @@ name: CI
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - '**'
   pull_request:
 
 concurrency:
@@ -135,6 +136,22 @@ jobs:
             "${CACHE_FLAGS[@]}"
           cmake --build llama.cpp/build --config Release -j$(nproc) --target rpc-server llama-server llama-moe-split
 
+      - name: Package Linux binaries
+        run: |
+          mkdir -p ci-artifacts/linux-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-binaries.tgz -C ci-artifacts linux-binaries
+
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: ci-artifacts/linux-binaries.tgz
+          if-no-files-found: error
+
       # ── Download model ──
       - name: Cache model
         id: cache-model
@@ -214,7 +231,7 @@ jobs:
 
   macos:
     needs: changes
-    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' }}
+    if: ${{ vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true') }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
@@ -268,6 +285,28 @@ jobs:
             -DLLAMA_OPENSSL=OFF \
             "${CACHE_FLAGS[@]}"
           cmake --build llama.cpp/build --config Release -j$(sysctl -n hw.ncpu) --target rpc-server llama-server llama-moe-split
+
+      - name: Package macOS binaries
+        run: |
+          mkdir -p ci-artifacts/macos-binaries
+          cp target/release/mesh-llm ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/macos-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/macos-binaries/ 2>/dev/null || true
+          cp llama.cpp/build/bin/*.dylib ci-artifacts/macos-binaries/ 2>/dev/null || true
+          shopt -s nullglob
+          metallibs=(target/release/build/mlx-sys-*/out/build/lib/mlx.metallib)
+          if [ "${#metallibs[@]}" -gt 0 ]; then
+            cp "${metallibs[0]}" ci-artifacts/macos-binaries/mlx.metallib
+          fi
+          tar -czf ci-artifacts/macos-binaries.tgz -C ci-artifacts macos-binaries
+
+      - name: Upload macOS binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-binaries
+          path: ci-artifacts/macos-binaries.tgz
+          if-no-files-found: error
 
       # ── Download model ──
       - name: Cache model
@@ -339,6 +378,166 @@ jobs:
         if: always()
         run: sccache --show-stats || true
 
+  macos_mlx:
+    needs: [changes, macos]
+    if: ${{ needs.macos.result == 'success' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
+    name: macOS MLX
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: qwen2.5-0.5b
+            id: qwen25
+            cache_slug: meshllm--qwen2.5-0.5b-instruct-parity-8bit-mlx
+          - name: qwen3-0.6b
+            id: qwen3
+            cache_slug: meshllm--qwen3-0.6b-parity-8bit-mlx
+          - name: llama-3.2-1b
+            id: llama32
+            cache_slug: meshllm--llama-3.2-1b-instruct-parity-bf16-mlx
+          - name: gemma-3-1b
+            id: gemma3
+            cache_slug: meshllm--gemma-3-1b-it-parity-bf16-mlx
+          - name: gemma-2-2b
+            id: gemma2
+            cache_slug: meshllm--gemma-2-2b-it-parity-8bit-mlx
+          - name: glm-4-9b
+            id: glm4
+            cache_slug: meshllm--glm-4-9b-0414-parity-4bit-mlx
+          - name: gemma-4-e4b
+            id: gemma4
+            cache_slug: meshllm--gemma-4-e4b-it-parity-8bit-mlx
+          - name: lfm2-350m
+            id: lfm2
+            cache_slug: meshllm--lfm2-350m-parity-4bit-mlx
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download macOS binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-binaries
+          path: ci-artifacts
+
+      - name: Extract macOS binaries
+        run: tar -xzf ci-artifacts/macos-binaries.tgz
+
+      - name: Stage binaries for validation runner
+        run: |
+          mkdir -p target/release llama.cpp/build/bin
+          cp macos-binaries/mesh-llm target/release/mesh-llm
+          cp macos-binaries/rpc-server llama.cpp/build/bin/rpc-server
+          cp macos-binaries/llama-server llama.cpp/build/bin/llama-server
+          if [ -f macos-binaries/mlx.metallib ]; then
+            cp macos-binaries/mlx.metallib target/release/mlx.metallib
+          fi
+          if ls macos-binaries/*.dylib >/dev/null 2>&1; then
+            cp macos-binaries/*.dylib llama.cpp/build/bin/
+          fi
+
+      - name: Cache MLX model repo
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface/hub/models--${{ matrix.cache_slug }}
+          key: mlx-hub-${{ matrix.cache_slug }}
+
+      - name: MLX exact matrix
+        run: |
+          python3 scripts/run-validation-matrix.py \
+            --suite exact \
+            --backend mlx \
+            --skip-build \
+            --cases "${{ matrix.id }}" \
+            --stamp "ci-macos-mlx-${{ matrix.id }}"
+
+      - name: Upload MLX exact results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlx-exact-${{ matrix.id }}
+          path: MLX_VALIDATION_RESULTS/ci-macos-mlx-${{ matrix.id }}
+          if-no-files-found: warn
+
+  gguf_smokes:
+    needs: [changes, linux]
+    if: ${{ needs.linux.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
+    name: GGUF Smokes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: qwen2.5-0.5b
+            id: qwen25
+            cache_slug: meshllm--qwen2.5-0.5b-instruct-parity-q8_0-gguf
+          - name: qwen3-0.6b
+            id: qwen3
+            cache_slug: meshllm--qwen3-0.6b-parity-q8_0-gguf
+          - name: llama-3.2-1b
+            id: llama32
+            cache_slug: meshllm--llama-3.2-1b-instruct-parity-f16-gguf
+          - name: gemma-3-1b
+            id: gemma3
+            cache_slug: meshllm--gemma-3-1b-it-parity-f16-gguf
+          - name: gemma-2-2b
+            id: gemma2
+            cache_slug: meshllm--gemma-2-2b-it-parity-q8_0-gguf
+          - name: glm-4-9b
+            id: glm4
+            cache_slug: meshllm--glm-4-9b-0414-parity-q4_k_m-gguf
+          - name: gemma-4-e4b
+            id: gemma4
+            cache_slug: meshllm--gemma-4-e4b-it-parity-q8_0-gguf
+          - name: lfm2-350m
+            id: lfm2
+            cache_slug: meshllm--lfm2-350m-parity-q4_k_m-gguf
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download Linux GGUF smoke binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: ci-artifacts
+
+      - name: Extract Linux GGUF smoke binaries
+        run: tar -xzf ci-artifacts/linux-binaries.tgz
+
+      - name: Stage binaries for validation runner
+        run: |
+          mkdir -p target/release llama.cpp/build/bin
+          cp linux-binaries/mesh-llm target/release/mesh-llm
+          cp linux-binaries/rpc-server llama.cpp/build/bin/rpc-server
+          cp linux-binaries/llama-server llama.cpp/build/bin/llama-server
+
+      - name: Cache GGUF model
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/huggingface/hub/models--${{ matrix.cache_slug }}
+          key: gguf-hub-${{ matrix.cache_slug }}
+
+      - name: GGUF exact matrix
+        run: |
+          python3 scripts/run-validation-matrix.py \
+            --suite exact \
+            --backend gguf \
+            --skip-build \
+            --cases "${{ matrix.id }}" \
+            --stamp "ci-gguf-${{ matrix.id }}"
+
+      - name: Upload GGUF exact results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gguf-exact-${{ matrix.id }}
+          path: MLX_VALIDATION_RESULTS/ci-gguf-${{ matrix.id }}
+          if-no-files-found: warn
+
+      - name: Show sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
   linux_cuda:
     needs: changes
     if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' }}
@@ -403,6 +602,23 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Package Linux CUDA binaries
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/linux-cuda-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-cuda-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-cuda-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-cuda-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-cuda-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-cuda-binaries.tgz -C ci-artifacts linux-cuda-binaries
+
+      - name: Upload Linux CUDA binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cuda-binaries
+          path: ci-artifacts/linux-cuda-binaries.tgz
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()
@@ -473,6 +689,23 @@ jobs:
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
 
+      - name: Package Linux ROCm binaries
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/linux-rocm-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-rocm-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-rocm-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-rocm-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-rocm-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-rocm-binaries.tgz -C ci-artifacts linux-rocm-binaries
+
+      - name: Upload Linux ROCm binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rocm-binaries
+          path: ci-artifacts/linux-rocm-binaries.tgz
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
@@ -541,6 +774,23 @@ jobs:
         run: |
           target/release/mesh-llm --version
           target/release/mesh-llm --help | head -5
+
+      - name: Package Linux Vulkan binaries
+        shell: bash
+        run: |
+          mkdir -p ci-artifacts/linux-vulkan-binaries
+          cp target/release/mesh-llm ci-artifacts/linux-vulkan-binaries/
+          cp llama.cpp/build/bin/rpc-server ci-artifacts/linux-vulkan-binaries/
+          cp llama.cpp/build/bin/llama-server ci-artifacts/linux-vulkan-binaries/
+          cp llama.cpp/build/bin/llama-moe-split ci-artifacts/linux-vulkan-binaries/ 2>/dev/null || true
+          tar -czf ci-artifacts/linux-vulkan-binaries.tgz -C ci-artifacts linux-vulkan-binaries
+
+      - name: Upload Linux Vulkan binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-vulkan-binaries
+          path: ci-artifacts/linux-vulkan-binaries.tgz
+          if-no-files-found: error
 
       - name: Show sccache stats
         if: always()

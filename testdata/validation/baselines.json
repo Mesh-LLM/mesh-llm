@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "canonical_backend": "gguf",
+  "notes": {
+    "exact": "GGUF is the primary checked-in baseline. MLX baselines are tracked secondarily for backend regression detection.",
+    "behavior": "Behavior baselines are intentionally summary-based. Add them only after accepting a full behavior run for a backend."
+  },
+  "exact": {
+    "gguf": {
+      "qwen25": {
+        "exit": 0,
+        "case_id": "qwen25-gguf-exact"
+      },
+      "qwen3": {
+        "exit": 0,
+        "case_id": "qwen3-gguf-exact"
+      },
+      "josie": {
+        "exit": 1,
+        "case_id": "josie-gguf-exact"
+      },
+      "llama32": {
+        "exit": 1,
+        "case_id": "llama32-gguf-exact"
+      },
+      "gemma2": {
+        "exit": 0,
+        "case_id": "gemma2-gguf-exact"
+      },
+      "gemma3": {
+        "exit": 0,
+        "case_id": "gemma3-gguf-exact"
+      },
+      "gemma4": {
+        "exit": 0,
+        "case_id": "gemma4-gguf-exact"
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-gguf-exact"
+      },
+      "lfm2": {
+        "exit": 1,
+        "case_id": "lfm2-gguf-exact"
+      }
+    },
+    "mlx": {
+      "qwen25": {
+        "exit": 1,
+        "case_id": "qwen25-mlx-exact"
+      },
+      "qwen3": {
+        "exit": 0,
+        "case_id": "qwen3-mlx-exact"
+      },
+      "josie": {
+        "exit": 1,
+        "case_id": "josie-mlx-exact"
+      },
+      "llama32": {
+        "exit": 1,
+        "case_id": "llama32-mlx-exact"
+      },
+      "gemma2": {
+        "exit": 0,
+        "case_id": "gemma2-mlx-exact"
+      },
+      "gemma3": {
+        "exit": 0,
+        "case_id": "gemma3-mlx-exact"
+      },
+      "gemma4": {
+        "exit": 0,
+        "case_id": "gemma4-mlx-exact"
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-mlx-exact"
+      },
+      "lfm2": {
+        "exit": 1,
+        "case_id": "lfm2-mlx-exact"
+      }
+    }
+  },
+  "behavior": {
+    "gguf": {},
+    "mlx": {}
+  }
+}

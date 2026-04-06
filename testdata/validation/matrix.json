@@ -1,0 +1,216 @@
+{
+  "defaults": {
+    "exact": {
+      "prompt": "Reply with exactly: blue",
+      "expect_contains": "blue",
+      "expect_exact": "blue",
+      "forbid_contains": "",
+      "prompt_suite": [
+        {
+          "label": "alt-green",
+          "prompt": "Reply with exactly: green",
+          "expect_exact": "green"
+        },
+        {
+          "label": "alt-red",
+          "prompt": "Reply with exactly: red",
+          "expect_exact": "red"
+        },
+        {
+          "label": "capital-france",
+          "prompt": "What is the capital of France? Reply with one word.",
+          "expect_contains_ci": "Paris"
+        },
+        {
+          "label": "primary-colors",
+          "prompt": "List the RGB primary colors as full lowercase words only, comma-separated, with no abbreviations.",
+          "max_tokens": 24,
+          "expect_contains_all_ci": [
+            "red",
+            "green",
+            "blue"
+          ]
+        },
+        {
+          "label": "two-plus-two",
+          "prompt": "Complete exactly: 2 + 2 =",
+          "max_tokens": 32,
+          "expect_contains_ci": "4"
+        },
+        {
+          "label": "largest-planet",
+          "prompt": "Name the largest planet in the Solar System. Reply with one word.",
+          "expect_contains_ci": "Jupiter"
+        },
+        {
+          "label": "breathing-gas",
+          "prompt": "What gas do humans need to breathe to survive? Reply with one word.",
+          "max_tokens": 24,
+          "expect_any_ci": [
+            "oxygen",
+            "o2",
+            "air"
+          ]
+        },
+        {
+          "label": "opposite-hot",
+          "prompt": "What is the opposite of hot? Reply with one word.",
+          "expect_contains_ci": "cold"
+        },
+        {
+          "label": "banana-color",
+          "prompt": "What color is a ripe banana? Reply with one word.",
+          "expect_contains_ci": "yellow"
+        },
+        {
+          "label": "after-monday",
+          "prompt": "What day comes after Monday? Reply with one word.",
+          "expect_contains_ci": "Tuesday"
+        }
+      ]
+    },
+    "behavior": {
+      "dataset": "HuggingFaceH4/mt_bench_prompts",
+      "max_tokens": 192,
+      "wait_seconds": 300
+    }
+  },
+  "models": [
+    {
+      "id": "qwen25",
+      "label": "qwen2.5-0.5b",
+      "expectation_class": "strict",
+      "notes": "Primary MLX parity canary for exact-answer drift.",
+      "gguf": {
+        "exact_case_id": "qwen25-gguf-exact",
+        "behavior_case_id": "qwen25-gguf-behavior",
+        "model_ref": "meshllm/qwen2.5-0.5b-instruct-parity-q8_0-gguf/qwen2.5-0.5b-instruct-q8_0.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "qwen25-mlx-exact",
+        "behavior_case_id": "qwen25-mlx-behavior",
+        "model_ref": "meshllm/qwen2.5-0.5b-instruct-parity-8bit-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
+      "id": "qwen3",
+      "label": "qwen3-0.6b",
+      "expectation_class": "strict",
+      "notes": "Same-origin Qwen3 parity row; MLX is closer to the original checkpoint than GGUF on the checked exact prompts.",
+      "gguf": {
+        "exact_case_id": "qwen3-gguf-exact",
+        "behavior_case_id": "qwen3-gguf-behavior",
+        "model_ref": "meshllm/qwen3-0.6b-parity-q8_0-gguf/qwen3-0.6b-q8_0.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "qwen3-mlx-exact",
+        "behavior_case_id": "qwen3-mlx-behavior",
+        "model_ref": "meshllm/qwen3-0.6b-parity-8bit-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
+      "id": "llama32",
+      "label": "llama-3.2-1b",
+      "expectation_class": "weak-but-stable",
+      "notes": "Tiny Llama parity canary; exact capitalization drift is tolerated as a known weakness.",
+      "gguf": {
+        "exact_case_id": "llama32-gguf-exact",
+        "behavior_case_id": "llama32-gguf-behavior",
+        "model_ref": "meshllm/llama-3.2-1b-instruct-parity-f16-gguf/llama-3.2-1b-instruct-f16.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "llama32-mlx-exact",
+        "behavior_case_id": "llama32-mlx-behavior",
+        "model_ref": "meshllm/llama-3.2-1b-instruct-parity-bf16-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
+      "id": "gemma2",
+      "label": "gemma-2-2b",
+      "expectation_class": "strict",
+      "notes": "Same-origin Gemma 2 parity row using published meshllm Q8_0 vs 8bit artifacts.",
+      "gguf": {
+        "exact_case_id": "gemma2-gguf-exact",
+        "behavior_case_id": "gemma2-gguf-behavior",
+        "model_ref": "meshllm/gemma-2-2b-it-parity-q8_0-gguf/gemma-2-2b-it-q8_0.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "gemma2-mlx-exact",
+        "behavior_case_id": "gemma2-mlx-behavior",
+        "model_ref": "meshllm/gemma-2-2b-it-parity-8bit-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
+      "id": "gemma3",
+      "label": "gemma-3-1b",
+      "expectation_class": "strict",
+      "notes": "Gemma3 parity baseline using same-origin high-fidelity artifacts published by meshllm.",
+      "gguf": {
+        "exact_case_id": "gemma3-gguf-exact",
+        "behavior_case_id": "gemma3-gguf-behavior",
+        "model_ref": "meshllm/gemma-3-1b-it-parity-f16-gguf/gemma-3-1b-it-f16.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "gemma3-mlx-exact",
+        "behavior_case_id": "gemma3-mlx-behavior",
+        "model_ref": "meshllm/gemma-3-1b-it-parity-bf16-mlx",
+        "template_source": "tokenizer_config.json"
+      }
+    },
+    {
+      "id": "gemma4",
+      "label": "gemma-4-e4b",
+      "expectation_class": "strict",
+      "notes": "Gemma4 parity baseline using same-origin 8bit/Q8_0 artifacts published by meshllm.",
+      "gguf": {
+        "exact_case_id": "gemma4-gguf-exact",
+        "behavior_case_id": "gemma4-gguf-behavior",
+        "model_ref": "meshllm/gemma-4-e4b-it-parity-q8_0-gguf/gemma-4-e4b-it-q8_0.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "gemma4-mlx-exact",
+        "behavior_case_id": "gemma4-mlx-behavior",
+        "model_ref": "meshllm/gemma-4-e4b-it-parity-8bit-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
+      "id": "glm4",
+      "label": "glm-4-9b",
+      "expectation_class": "strict",
+      "notes": "Published same-origin GLM4 parity pair.",
+      "gguf": {
+        "exact_case_id": "glm4-gguf-exact",
+        "behavior_case_id": "glm4-gguf-behavior",
+        "model_ref": "meshllm/glm-4-9b-0414-parity-q4_k_m-gguf/glm-4-9b-0414-q4_k_m.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "glm4-mlx-exact",
+        "behavior_case_id": "glm4-mlx-behavior",
+        "model_ref": "meshllm/glm-4-9b-0414-parity-4bit-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
+      "id": "lfm2",
+      "label": "lfm2-350m",
+      "expectation_class": "weak-but-stable",
+      "notes": "Tiny-model shared weakness canary for exact and behavior drift.",
+      "gguf": {
+        "exact_case_id": "lfm2-gguf-exact",
+        "behavior_case_id": "lfm2-gguf-behavior",
+        "model_ref": "meshllm/lfm2-350m-parity-q4_k_m-gguf/lfm2-350m-q4_k_m.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "lfm2-mlx-exact",
+        "behavior_case_id": "lfm2-mlx-behavior",
+        "model_ref": "meshllm/lfm2-350m-parity-4bit-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    }
+  ]
+}

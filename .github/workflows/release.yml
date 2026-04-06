@@ -23,9 +23,13 @@ jobs:
           - name: Linux CPU
             os: ubuntu-latest
             artifact_name: release-linux-cpu
+            exact_backend: gguf
+            exact_results_artifact: release-exact-gguf
           - name: macOS
             os: macos-14
             artifact_name: release-macos
+            exact_backend: mlx
+            exact_results_artifact: release-exact-mlx
 
     steps:
       - uses: actions/checkout@v5
@@ -58,6 +62,27 @@ jobs:
         shell: bash
         run: |
           just --shell bash --shell-arg -lc release-build
+
+      - name: Run exact validation matrix
+        shell: bash
+        run: |
+          python3 scripts/run-validation-matrix.py \
+            --suite exact \
+            --backend "${{ matrix.exact_backend }}" \
+            --skip-build \
+            --stamp "release-exact-${{ matrix.exact_backend }}-${GITHUB_REF_NAME}"
+
+      - name: Upload exact validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.exact_results_artifact }}
+          path: MLX_VALIDATION_RESULTS/release-exact-${{ matrix.exact_backend }}-${{ github.ref_name }}
+          if-no-files-found: warn
+
+      - name: Bundle release artifacts
+        shell: bash
+        run: |
           just --shell bash --shell-arg -lc release-bundle "${GITHUB_REF_NAME}" dist
 
       - name: Upload release artifacts
