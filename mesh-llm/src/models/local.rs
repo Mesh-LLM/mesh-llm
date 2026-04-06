@@ -429,7 +429,11 @@ fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min
 }
 
 fn snapshot_is_mlx_model_dir(path: &Path) -> bool {
-    crate::mlx::is_mlx_model_dir(path)
+    path.is_dir()
+        && path.join("config.json").exists()
+        && (path.join("tokenizer_config.json").exists() || path.join("tokenizer.json").exists())
+        && (path.join("model.safetensors").exists()
+            || path.join("model.safetensors.index.json").exists())
 }
 
 fn scan_hf_cache_installed_entries(
