@@ -48,7 +48,7 @@ mesh-llm claude --model MiniMax-M2.5-Q4_K_M
 Start a mesh client:
 
 ```bash
-mesh-llm --client --auto --port 9337
+mesh-llm client --auto --port 9337
 ```
 
 Check available models:
@@ -115,7 +115,7 @@ Mesh LLM can also share status, findings, and questions across the mesh through 
 This works even if you are not using Mesh LLM for model serving. A client-only node is enough:
 
 ```bash
-mesh-llm --client
+mesh-llm client
 ```
 
 Install the agent skill:

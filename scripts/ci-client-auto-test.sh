@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci-client-auto-test.sh — verify `mesh-llm --client --auto` boots its API.
+# ci-client-auto-test.sh — verify `mesh-llm client --auto` boots its API.
 #
 # The critical invariant: even when Nostr discovery returns dead/stale peers,
 # the management API on :3131 must come up. A broken implementation thrashes
@@ -29,10 +29,10 @@ if [ ! -f "$MESH_LLM" ]; then
     exit 1
 fi
 
-# Start mesh-llm --client --auto in background
-echo "Starting mesh-llm --client --auto..."
+# Start mesh-llm client --auto in background
+echo "Starting mesh-llm client --auto..."
 "$MESH_LLM" \
-    --client \
+    client \
     --auto \
     --port "$API_PORT" \
     --console "$CONSOLE_PORT" \
@@ -71,7 +71,7 @@ for i in $(seq 1 "$MAX_WAIT"); do
         if grep -q "No meshes found after" "$LOG" 2>/dev/null; then
             echo "⚠️  Process exited with 'no meshes found' — this is expected in CI."
             echo "   Checking whether the API was reachable before exit..."
-            if grep -qE "Console:|Passive client ready:" "$LOG" 2>/dev/null; then
+            if grep -qE "Console:|📡 Client ready:" "$LOG" 2>/dev/null; then
                 echo "✅ API was started before process exited (console bind logged)"
                 exit 0
             else

@@ -647,8 +647,8 @@ impl MeshApi {
                     fit_label,
                     fit_detail,
                     download_command: format!("mesh-llm models download {}", command_ref),
-                    run_command: format!("mesh-llm --model {}", command_ref),
-                    auto_command: format!("mesh-llm --auto --model {}", command_ref),
+                    run_command: format!("mesh-llm serve --model {}", command_ref),
+                    auto_command: format!("mesh-llm serve --auto --model {}", command_ref),
                 }
             })
             .collect()

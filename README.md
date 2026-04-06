@@ -30,7 +30,13 @@ curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.
 Then start a node:
 
 ```bash
-mesh-llm --auto
+mesh-llm serve --auto
+```
+
+Inspect local GPU identity:
+
+```bash
+mesh-llm gpus
 ```
 
 That command:
@@ -60,7 +66,7 @@ curl http://localhost:9337/v1/chat/completions \
 ### 1. Try the public mesh
 
 ```bash
-mesh-llm --auto
+mesh-llm serve --auto
 ```
 
 This is the easiest way to see the system working end to end.
@@ -68,7 +74,7 @@ This is the easiest way to see the system working end to end.
 ### 2. Start a private mesh
 
 ```bash
-mesh-llm --model Qwen2.5-32B
+mesh-llm serve --model Qwen2.5-32B
 ```
 
 This starts serving a model, opens the local API and console, and prints an invite token for other machines.
@@ -89,31 +95,31 @@ Windows source builds are also supported for `cuda`, `rocm`/`hip`, `vulkan`, and
 Once installed, you can run:
 
 ```bash
-mesh-llm --auto                            # join the best public mesh, start serving
+mesh-llm serve --auto                      # join the best public mesh, start serving
 ```
 
 That's it. Downloads a model for your hardware, connects to other nodes, and gives you an OpenAI-compatible API at `http://localhost:9337`.
 
 Or start your own:
 ```bash
-mesh-llm --model Qwen2.5-32B              # downloads model (~20GB), starts API + web console
-mesh-llm --model Qwen2.5-3B               # or a small model first (~2GB)
+mesh-llm serve --model Qwen2.5-32B        # downloads model (~20GB), starts API + web console
+mesh-llm serve --model Qwen2.5-3B         # or a small model first (~2GB)
 ```
 
 Add another machine:
 ```bash
-mesh-llm --join <token>                    # token printed by the first machine
+mesh-llm serve --join <token>              # token printed by the first machine
 ```
 
 Or discover and join public meshes:
 ```bash
-mesh-llm --auto                            # find and join the best mesh
-mesh-llm --client --auto                   # join as API-only client (no GPU)
+mesh-llm serve --auto                      # find and join the best mesh
+mesh-llm client --auto                     # join as API-only client (no GPU)
 ```
 
 ## How it works
 
-Every node gets an OpenAI-compatible API at `http://localhost:9337/v1`. Distribution is automatic — you just say `mesh-llm --model X` and the mesh figures out the best strategy:
+Every node gets an OpenAI-compatible API at `http://localhost:9337/v1`. Distribution is automatic — you just say `mesh-llm serve --model X` and the mesh figures out the best strategy:
 
 - **Model fits on one machine?** → runs solo, full speed, no network overhead
 - **Dense model too big?** → pipeline parallelism — layers split across nodes
@@ -143,42 +149,50 @@ Currently using a lightly forked version of llama.cpp (see the Justfile for wher
 
 ### Start a mesh
 ```bash
-mesh-llm --model Qwen2.5-32B
+mesh-llm serve --model Qwen2.5-32B
 ```
 Starts serving a model and prints an invite token. This mesh is **private** — only people you share the token with can join.
 
 To make it **public** (discoverable by others via `--auto`):
 ```bash
-mesh-llm --model Qwen2.5-32B --publish
+mesh-llm serve --model Qwen2.5-32B --publish
 ```
 
 ### Join a mesh
 ```bash
-mesh-llm --join <token>                    # join with invite token (GPU node)
-mesh-llm --client --join <token>           # join as API-only client (no GPU)
+mesh-llm serve --join <token>              # join with invite token (GPU node)
+mesh-llm client --join <token>             # join as API-only client (no GPU)
 ```
 
 ### Named mesh (buddy mode)
 ```bash
-mesh-llm --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
+mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
 ```
 Everyone runs the same command. First person creates it, everyone else discovers "poker-night" and joins automatically. `--mesh-name` implies `--publish` — named meshes are always published to the directory.
 
 ### Auto-discover
 ```bash
-mesh-llm --auto                            # discover, join, and serve a model
-mesh-llm --client --auto                   # join as API-only client (no GPU)
+mesh-llm serve --auto                      # discover, join, and serve a model
+mesh-llm client --auto                     # join as API-only client (no GPU)
 mesh-llm discover                          # browse available meshes
+mesh-llm gpus                              # inspect local GPUs and stable IDs
 ```
 
 ### Multi-model
 ```bash
-mesh-llm --model Qwen2.5-32B --model GLM-4.7-Flash
+mesh-llm serve --model Qwen2.5-32B --model GLM-4.7-Flash
 
 # Route by model name
 curl localhost:9337/v1/chat/completions -d '{"model":"GLM-4.7-Flash-Q4_K_M", ...}'
 ```
 Different nodes serve different models. The API proxy routes by the `model` field.
+
+### Inspect local GPUs
+```bash
+mesh-llm gpus
+```
+
+Prints local GPU entries, backend device names, stable IDs, VRAM, and cached bandwidth if a benchmark fingerprint is already available.
 
 ### No-arg behavior
 ```bash
@@ -197,7 +211,7 @@ curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.
 To seed the service with a custom startup command on first install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | bash -s -- --service --service-args '--model Qwen2.5-3B'
+curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | bash -s -- --service --service-args 'serve --model Qwen2.5-3B'
 ```
 
 Service installs are user-scoped:
@@ -208,7 +222,7 @@ Service installs are user-scoped:
 
 The two platforms handle launch args differently:
 
-- macOS: `launchd` runs `~/.config/mesh-llm/run-service.sh`, which reads `~/.config/mesh-llm/service.args`. `service.args` is one `mesh-llm` CLI argument per line. The installer creates it with `--auto` by default and preserves your edits on reinstall unless you pass `--service-args` again.
+- macOS: `launchd` runs `~/.config/mesh-llm/run-service.sh`, which reads `~/.config/mesh-llm/service.args`. `service.args` is one `mesh-llm` CLI argument per line. The installer creates it with `serve --auto` by default and preserves your edits on reinstall unless you pass `--service-args` again.
 - Linux: the installer writes the `mesh-llm` argv directly into `ExecStart=` in `~/.config/systemd/user/mesh-llm.service`. If you pass `--service-args`, those replace the current unit args; otherwise the installer preserves the existing unit args on reinstall.
 
 `service.env` is optional and shared by both platforms. Use plain `KEY=value` lines, for example:
@@ -233,7 +247,7 @@ sudo loginctl enable-linger "$USER"
 ## Web console
 
 ```bash
-mesh-llm --model Qwen2.5-32B    # dashboard at http://localhost:3131
+mesh-llm serve --model Qwen2.5-32B    # dashboard at http://localhost:3131
 ```
 
 Live topology, VRAM bars per node, model picker, built-in chat. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
@@ -308,7 +322,7 @@ This command writes/updates `~/.config/goose/custom_providers/mesh.json` and lau
 
 1. Start a mesh client:
 ```bash
-mesh-llm --client --auto --port 9337
+mesh-llm client --auto --port 9337
 ```
 
 2. Check what models are available:
@@ -319,25 +333,25 @@ curl -s http://localhost:9337/v1/models | jq '.data[].id'
 If you want the mesh to be discoverable via `--auto`, publish it:
 
 ```bash
-mesh-llm --model Qwen2.5-32B --publish
+mesh-llm serve --model Qwen2.5-32B --publish
 ```
 
 ### 3. Add another machine
 
 ```bash
-mesh-llm --join <token>
+mesh-llm serve --join <token>
 ```
 
-Use `--client` if the machine should join without serving a model:
+Use `mesh-llm client` if the machine should join without serving a model:
 
 ```bash
-mesh-llm --client --join <token>
+mesh-llm client --join <token>
 ```
 
 ### 4. Create a named mesh for a group
 
 ```bash
-mesh-llm --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
+mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
 ```
 
 Everyone runs the same command. The first node creates the mesh, the rest discover and join it automatically.
@@ -345,7 +359,7 @@ Everyone runs the same command. The first node creates the mesh, the rest discov
 ### 5. Serve more than one model
 
 ```bash
-mesh-llm --model Qwen2.5-32B --model GLM-4.7-Flash
+mesh-llm serve --model Qwen2.5-32B --model GLM-4.7-Flash
 ```
 
 Requests are routed by the `model` field:

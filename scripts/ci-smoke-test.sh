@@ -36,6 +36,7 @@ fi
 
 # Start mesh-llm in background
 ARGS=(
+    serve
     --model "$MODEL"
     --no-draft
     --bin-dir "$BIN_DIR"

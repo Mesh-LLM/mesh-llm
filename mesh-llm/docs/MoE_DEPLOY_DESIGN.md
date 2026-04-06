@@ -6,10 +6,10 @@ This documents how MoE expert sharding is implemented in mesh-llm. Originally a 
 
 ```bash
 # MoE auto-detected — splits if needed, runs solo if it fits
-mesh-llm --model Qwen3-30B-A3B-Q4_K_M
+mesh-llm serve --model Qwen3-30B-A3B-Q4_K_M
 
 # Force splitting even if model fits locally
-mesh-llm --model Qwen3-30B-A3B-Q4_K_M --split
+mesh-llm serve --model Qwen3-30B-A3B-Q4_K_M --split
 ```
 
 The system detects MoE from the GGUF header, computes expert assignments, splits the GGUF per node, and each node runs its own llama-server. Sessions are hash-routed. No manual steps.

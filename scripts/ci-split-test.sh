@@ -68,6 +68,7 @@ trap cleanup EXIT
 echo ""
 echo "Starting Node A..."
 MESH_LLM_EPHEMERAL_KEY=1 "$MESH_LLM" \
+    serve \
     --model "$MODEL" \
     --split \
     --no-draft \
@@ -106,6 +107,7 @@ done
 echo ""
 echo "Starting Node B..."
 MESH_LLM_EPHEMERAL_KEY=1 "$MESH_LLM" \
+    serve \
     --model "$MODEL" \
     --split \
     --no-draft \
@@ -170,7 +172,7 @@ done
 echo ""
 echo "Starting Node C (client)..."
 MESH_LLM_EPHEMERAL_KEY=1 "$MESH_LLM" \
-    --client \
+    client \
     --no-draft \
     --bin-dir "$BIN_DIR" \
     --port "$C_API_PORT" \

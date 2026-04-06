@@ -5,6 +5,22 @@
 use serde_json::Value;
 
 #[derive(Default, Debug, Clone, PartialEq)]
+pub struct GpuFacts {
+    pub index: usize,
+    pub display_name: String,
+    pub backend_device: Option<String>,
+    pub vram_bytes: u64,
+    pub bandwidth_gbps: Option<f64>,
+    pub unified_memory: bool,
+    pub stable_id: Option<String>,
+    pub pci_bdf: Option<String>,
+    pub vendor_uuid: Option<String>,
+    pub metal_registry_id: Option<String>,
+    pub dxgi_luid: Option<String>,
+    pub pnp_instance_id: Option<String>,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct HardwareSurvey {
     pub vram_bytes: u64,
     pub gpu_name: Option<String>,
@@ -14,6 +30,8 @@ pub struct HardwareSurvey {
     /// Per-GPU VRAM in bytes, same order as gpu_name list.
     /// Unified-memory SoCs report a single entry.
     pub gpu_vram: Vec<u64>,
+    /// Per-GPU facts in device-enumeration order.
+    pub gpus: Vec<GpuFacts>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -23,6 +41,7 @@ pub enum Metric {
     GpuCount,
     Hostname,
     IsSoc,
+    GpuFacts,
 }
 
 pub trait Collector {
@@ -97,7 +116,6 @@ pub fn parse_rocm_gpu_vrams(output: &str) -> Vec<u64> {
 }
 
 /// Summarize GPU names: empty→None, 1→name, N identical→"N× name", N mixed→"a, b".
-#[cfg(any(target_os = "linux", target_os = "windows", test))]
 pub fn summarize_gpu_name(names: &[String]) -> Option<String> {
     match names.len() {
         0 => None,
@@ -111,6 +129,69 @@ pub fn summarize_gpu_name(names: &[String]) -> Option<String> {
             }
         }
     }
+}
+
+/// Expand a summarized GPU name string into per-device names.
+/// - Splits comma-separated mixed GPU names.
+/// - Expands summarized forms like `2× NVIDIA A100`.
+/// - Falls back to repeating the raw summary to match `expected_count`.
+pub fn expand_gpu_names(summary: Option<&str>, expected_count: usize) -> Vec<String> {
+    let Some(raw) = summary.map(str::trim) else {
+        return Vec::new();
+    };
+    if raw.is_empty() {
+        return Vec::new();
+    }
+
+    let mut names = Vec::new();
+    for part in raw.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((count_str, name)) = part.split_once('×') {
+            if let Ok(count) = count_str.trim().parse::<usize>() {
+                let name = name.trim();
+                if !name.is_empty() {
+                    for _ in 0..count {
+                        names.push(name.to_string());
+                    }
+                    continue;
+                }
+            }
+        }
+        names.push(part.to_string());
+    }
+
+    if expected_count > 0 && names.len() != expected_count {
+        return vec![raw.to_string(); expected_count];
+    }
+    names
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows", test))]
+pub fn parse_nvidia_gpu_identity(output: &str) -> Vec<(Option<String>, Option<String>)> {
+    output
+        .lines()
+        .map(|line| {
+            let mut parts = line.split(',').map(str::trim);
+            let pci_bdf = parts.next().and_then(|part| {
+                if part.is_empty() {
+                    None
+                } else {
+                    Some(part.to_ascii_lowercase())
+                }
+            });
+            let vendor_uuid = parts.next().and_then(|part| {
+                if part.is_empty() {
+                    None
+                } else {
+                    Some(part.to_string())
+                }
+            });
+            (pci_bdf, vendor_uuid)
+        })
+        .collect()
 }
 
 /// Check if a null-separated `/proc/device-tree/compatible` string contains a Tegra entry.
@@ -583,12 +664,137 @@ fn detect_collector() -> Box<dyn Collector> {
     detect_collector_impl()
 }
 
+fn backend_device_for_name(name: &str, index: usize, is_soc: bool) -> Option<String> {
+    if cfg!(target_os = "macos") && is_soc {
+        return Some(format!("MTL{index}"));
+    }
+    let upper = name.to_ascii_uppercase();
+    if upper.contains("NVIDIA") {
+        Some(format!("CUDA{index}"))
+    } else if upper.contains("AMD")
+        || upper.contains("RADEON")
+        || upper.contains("INSTINCT")
+        || upper.starts_with("MI")
+    {
+        Some(format!("HIP{index}"))
+    } else {
+        None
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn detect_nvidia_identities() -> Vec<(Option<String>, Option<String>)> {
+    let out = match std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=pci.bus_id,uuid", "--format=csv,noheader"])
+        .output()
+    {
+        Ok(out) if out.status.success() => out,
+        _ => return Vec::new(),
+    };
+    let Ok(stdout) = String::from_utf8(out.stdout) else {
+        return Vec::new();
+    };
+    parse_nvidia_gpu_identity(&stdout)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+fn detect_nvidia_identities() -> Vec<(Option<String>, Option<String>)> {
+    Vec::new()
+}
+
+fn inferred_gpu_name_count(name: Option<&str>) -> usize {
+    let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return 0;
+    };
+
+    name.split_once('×')
+        .or_else(|| name.split_once('x'))
+        .or_else(|| name.split_once('X'))
+        .and_then(|(count, _)| count.trim().parse::<usize>().ok())
+        .filter(|&count| count > 0)
+        .unwrap_or(1)
+}
+
+fn hydrate_gpu_facts(survey: &mut HardwareSurvey, metrics: &[Metric]) {
+    let expected_count = survey
+        .gpu_vram
+        .len()
+        .max(usize::from(survey.gpu_count))
+        .max(inferred_gpu_name_count(survey.gpu_name.as_deref()));
+    let mut names = expand_gpu_names(survey.gpu_name.as_deref(), expected_count);
+    if names.is_empty() && expected_count > 0 {
+        names = (0..expected_count)
+            .map(|index| format!("GPU {index}"))
+            .collect();
+    }
+
+    let needs_nvidia_identities = metrics.contains(&Metric::GpuName);
+    #[allow(unused_mut)]
+    let mut nvidia_identities = if needs_nvidia_identities {
+        detect_nvidia_identities()
+    } else {
+        Vec::new()
+    };
+    let count = expected_count.max(names.len());
+    survey.gpus = (0..count)
+        .map(|index| {
+            let display_name = names
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| format!("GPU {index}"));
+            let backend_device = backend_device_for_name(&display_name, index, survey.is_soc);
+            let (pci_bdf, vendor_uuid) = nvidia_identities.get(index).cloned().unwrap_or_default();
+            let stable_id = if survey.is_soc && cfg!(target_os = "macos") {
+                Some(format!("metal:{index}"))
+            } else if let Some(ref pci_bdf) = pci_bdf {
+                Some(format!("pci:{pci_bdf}"))
+            } else if let Some(ref vendor_uuid) = vendor_uuid {
+                Some(format!("uuid:{vendor_uuid}"))
+            } else if let Some(ref backend_device) = backend_device {
+                Some(backend_device.to_ascii_lowercase())
+            } else {
+                Some(format!("index:{index}"))
+            };
+
+            GpuFacts {
+                index,
+                display_name,
+                backend_device,
+                vram_bytes: survey.gpu_vram.get(index).copied().unwrap_or(0),
+                bandwidth_gbps: None,
+                unified_memory: survey.is_soc,
+                stable_id,
+                pci_bdf,
+                vendor_uuid,
+                metal_registry_id: None,
+                dxgi_luid: None,
+                pnp_instance_id: None,
+            }
+        })
+        .collect();
+
+    if metrics.contains(&Metric::GpuCount) && survey.gpu_count == 0 {
+        survey.gpu_count = u8::try_from(survey.gpus.len()).unwrap_or(u8::MAX);
+    }
+    if metrics.contains(&Metric::GpuName) && survey.gpu_name.is_none() {
+        let names: Vec<String> = survey
+            .gpus
+            .iter()
+            .map(|gpu| gpu.display_name.clone())
+            .collect();
+        survey.gpu_name = summarize_gpu_name(&names);
+    }
+}
+
 /// Collect only the requested hardware metrics.
 pub fn query(metrics: &[Metric]) -> HardwareSurvey {
     let collector = detect_collector();
     let mut survey = collector.collect(metrics);
     if metrics.contains(&Metric::Hostname) {
         survey.hostname = detect_hostname();
+    }
+    if metrics.contains(&Metric::GpuFacts) {
+        hydrate_gpu_facts(&mut survey, metrics);
     }
     survey
 }
@@ -600,6 +806,7 @@ pub fn survey() -> HardwareSurvey {
         Metric::GpuCount,
         Metric::Hostname,
         Metric::IsSoc,
+        Metric::GpuFacts,
     ])
 }
 
@@ -744,12 +951,49 @@ card1,not-a-number,512000000";
     }
 
     #[test]
+    fn test_expand_gpu_names_identical_summary() {
+        assert_eq!(
+            expand_gpu_names(Some("2× NVIDIA A100"), 2),
+            vec!["NVIDIA A100".to_string(), "NVIDIA A100".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_expand_gpu_names_mixed_summary() {
+        assert_eq!(
+            expand_gpu_names(Some("NVIDIA A100, NVIDIA RTX 4090"), 2),
+            vec!["NVIDIA A100".to_string(), "NVIDIA RTX 4090".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_nvidia_gpu_identity_rows() {
+        let identities =
+            parse_nvidia_gpu_identity("00000000:65:00.0, GPU-abc\n00000000:b3:00.0, GPU-def\n");
+        assert_eq!(
+            identities,
+            vec![
+                (
+                    Some("00000000:65:00.0".to_string()),
+                    Some("GPU-abc".to_string())
+                ),
+                (
+                    Some("00000000:b3:00.0".to_string()),
+                    Some("GPU-def".to_string())
+                )
+            ]
+        );
+    }
+
+    #[test]
     fn test_hardware_survey_default() {
         let s = HardwareSurvey::default();
         assert_eq!(s.vram_bytes, 0);
         assert_eq!(s.gpu_name, None);
         assert_eq!(s.gpu_count, 0);
         assert_eq!(s.hostname, None);
+        assert!(s.gpu_vram.is_empty());
+        assert!(s.gpus.is_empty());
     }
 
     #[test]

@@ -340,7 +340,7 @@
         <div class="section-tag">Collaboration</div>
         <h2>Blackboard</h2>
         <p class="section-lead">Have your agents gossip over the mesh to collaborate amongst themselves. Status updates, findings, and questions propagate across the mesh — no central server, no cloud.</p>
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:0.8rem;">Works standalone — using your own API keys or cloud models? Just run <code>mesh-llm --client</code> to give your agents a gossip layer. No GPU needed, no model needed. Blackboard is on by default for private meshes.</p>
+        <p style="font-size:0.82rem; color:var(--text2); margin-top:0.8rem;">Works standalone — using your own API keys or cloud models? Just run <code>mesh-llm client</code> to give your agents a gossip layer. No GPU needed, no model needed. Blackboard is on by default for private meshes.</p>
 
         <div class="features" style="margin-bottom:2rem;">
             <div class="feature">
@@ -367,7 +367,7 @@
 
         <div class="code-block">
             <span class="comment"># Start a node — blackboard is on by default</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--client --join</span> <span class="val">&lt;token&gt;</span><br><br>
+            <span class="cmd">mesh-llm</span> <span class="flag">client --join</span> <span class="val">&lt;token&gt;</span><br><br>
             <span class="comment"># Install the agent skill (works with pi, goose, others)</span><br>
             <span class="cmd">mesh-llm</span> blackboard <span class="val">install-skill</span><br><br>
             <span class="comment"># Post, search, read (talks to the running node)</span><br>

@@ -29,7 +29,7 @@ Release bundles install flavor-specific llama.cpp binaries:
 If you keep more than one flavor in the same `bin` directory, choose one explicitly:
 
 ```bash
-mesh-llm --llama-flavor vulkan --model Qwen2.5-32B
+mesh-llm serve --llama-flavor vulkan --model Qwen2.5-32B
 ```
 
 Source builds must use `just`:
@@ -59,10 +59,11 @@ For full build details, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 ## Common commands
 
 ```bash
-mesh-llm --auto
-mesh-llm --model Qwen2.5-32B
-mesh-llm --join <token>
-mesh-llm --client --auto
+mesh-llm serve --auto
+mesh-llm serve --model Qwen2.5-32B
+mesh-llm serve --join <token>
+mesh-llm client --auto
+mesh-llm gpus
 mesh-llm discover
 ```
 
@@ -79,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.
 To seed the service with a custom startup command on first install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | bash -s -- --service --service-args '--model Qwen2.5-3B'
+curl -fsSL https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh | bash -s -- --service --service-args 'serve --model Qwen2.5-3B'
 ```
 
 Service installs are user-scoped:
@@ -133,15 +134,15 @@ Draft pairings for speculative decoding:
 
 ## Specifying models
 
-`--model` accepts several formats. Hugging Face-backed models are cached in the standard Hugging Face cache on first use.
+`mesh-llm serve --model` accepts several formats. Hugging Face-backed models are cached in the standard Hugging Face cache on first use.
 
 ```bash
-mesh-llm --model Qwen3-8B
-mesh-llm --model Qwen3-8B-Q4_K_M
-mesh-llm --model https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
-mesh-llm --model bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf
-mesh-llm --gguf ~/my-models/custom-model.gguf
-mesh-llm --gguf ~/my-models/qwen3.5-4b.gguf --mmproj ~/my-models/mmproj-BF16.gguf
+mesh-llm serve --model Qwen3-8B
+mesh-llm serve --model Qwen3-8B-Q4_K_M
+mesh-llm serve --model https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+mesh-llm serve --model bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+mesh-llm serve --gguf ~/my-models/custom-model.gguf
+mesh-llm serve --gguf ~/my-models/qwen3.5-4b.gguf --mmproj ~/my-models/mmproj-BF16.gguf
 ```
 
 Useful model commands:
@@ -165,8 +166,16 @@ mesh-llm models updates Qwen/Qwen3-8B-GGUF
 - Hugging Face repo snapshots are the canonical managed model store.
 - Flat `~/.models/` storage is no longer scanned for managed models.
 - If you still have legacy files there, use `mesh-llm models migrate --apply`.
-- Arbitrary local GGUF files still work through `--gguf`.
+- Arbitrary local GGUF files still work through `mesh-llm serve --gguf`.
 - MoE split artifacts are cached under `~/.cache/mesh-llm/splits/`.
+
+## Inspect local GPUs
+
+```bash
+mesh-llm gpus
+```
+
+This prints the local GPU inventory with stable IDs, backend device names, VRAM, unified-memory status, and cached bandwidth if a benchmark fingerprint is already present.
 
 ## Local runtime control
 

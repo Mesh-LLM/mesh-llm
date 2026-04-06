@@ -104,7 +104,7 @@ When joining an existing mesh, a tunnel-only API proxy starts immediately on the
 local port — before rpc-server or llama-server are ready. Requests are tunneled to
 mesh hosts via QUIC. When the real `api_proxy` is ready, it takes over the listener.
 
-This gives instant API access (within seconds of `mesh-llm --join`) while the local
+This gives instant API access (within seconds of `mesh-llm serve --join`) while the local
 GPU loads its model in the background.
 
 ## Passive Mode

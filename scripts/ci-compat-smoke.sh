@@ -76,6 +76,7 @@ assert_pid_alive() {
 
 echo "Starting mesh-llm (solo)..."
 ARGS=(
+    serve
     --model "$MODEL"
     --no-draft
     --bin-dir "$BIN_DIR"

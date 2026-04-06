@@ -20,9 +20,9 @@ pub(crate) async fn run_blackboard(
         eprintln!("No mesh-llm node running on port {port}.");
         eprintln!();
         eprintln!("Blackboard requires a running mesh node:");
-        eprintln!("  Private mesh:  mesh-llm --client  (share the join token printed out)");
-        eprintln!("  Join a mesh:   mesh-llm --client --join <token>");
-        eprintln!("  Public mesh:   mesh-llm --client --auto");
+        eprintln!("  Private mesh:  mesh-llm client  (share the join token printed out)");
+        eprintln!("  Join a mesh:   mesh-llm client --join <token>");
+        eprintln!("  Public mesh:   mesh-llm client --auto");
         eprintln!();
         eprintln!("See https://github.com/michaelneale/mesh-llm for setup guide.");
         std::process::exit(1);

@@ -158,7 +158,7 @@ pub(crate) fn nostr_relays(cli_relays: &[String]) -> Vec<String> {
 
 /// Ensure mesh-llm is running on `port`, then return (available_models, chosen_model, spawned_child).
 ///
-/// Launcher behavior: if nothing is listening yet, auto-start `mesh-llm --client --auto`
+/// Launcher behavior: if nothing is listening yet, auto-start `mesh-llm client --auto`
 /// (client node — tunnels to mesh peers without publishing to Nostr).
 /// Returns the child process handle if we spawned one, so callers can clean up on exit.
 pub(crate) async fn check_mesh(
@@ -174,7 +174,7 @@ pub(crate) async fn check_mesh(
         let exe = std::env::current_exe().unwrap_or_else(|_| "mesh-llm".into());
         child = Some(
             std::process::Command::new(&exe)
-                .args(["--client", "--auto", "--port", &port.to_string()])
+                .args(["client", "--auto", "--port", &port.to_string()])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .spawn()

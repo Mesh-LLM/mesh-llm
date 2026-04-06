@@ -172,6 +172,7 @@ EOF
 
   env "${launch_env[@]}" \
     "$MESH_BIN" \
+    serve \
     --config "$CONFIG_PATH" \
     "${extra_args[@]}" \
     --model "$MODEL_PATH" \
@@ -188,6 +189,7 @@ EOF
   env "${launch_env[@]}" \
     MESH_LLM_EPHEMERAL_KEY=1 \
     "$MESH_BIN" \
+    serve \
     --config "$CONFIG_PATH" \
     "${extra_args[@]}" \
     --model "$MODEL_PATH" \
@@ -203,9 +205,9 @@ EOF
 
   env "${launch_env[@]}" \
     "$MESH_BIN" \
+    client \
     --config "$CONFIG_PATH" \
     "${extra_args[@]}" \
-    --client \
     --join "$token" \
     --port "$CLIENT1_API_PORT" \
     --console "$CLIENT1_CONSOLE_PORT" \

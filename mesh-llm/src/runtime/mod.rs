@@ -63,7 +63,16 @@ pub(crate) async fn run() -> Result<()> {
         std::process::exit(0);
     }
 
-    let mut cli = Cli::parse();
+    let normalized_args = crate::cli::normalize_runtime_surface_args(std::env::args_os());
+    let mut cli = Cli::parse_from(normalized_args.normalized.clone());
+
+    if let Some(warning) = crate::cli::legacy_runtime_surface_warning(
+        &cli,
+        &normalized_args.original,
+        normalized_args.explicit_surface,
+    ) {
+        eprintln!("{warning}");
+    }
 
     if let Some(name) = cli.plugin.clone() {
         return plugin::run_plugin_process(name).await;
@@ -1724,8 +1733,11 @@ async fn run_passive(
     let listener = tokio::net::TcpListener::bind(format!("{addr}:{local_port}"))
         .await
         .with_context(|| format!("Failed to bind to port {local_port}"))?;
-    let mode = if is_client { "client" } else { "standby" };
-    eprintln!("Passive {mode} ready:");
+    if is_client {
+        eprintln!("📡 Client ready:");
+    } else {
+        eprintln!("💤 Standby ready:");
+    }
     eprintln!("  API:     http://localhost:{local_port}");
     eprintln!("  Console: http://localhost:{}", cli.console);
 

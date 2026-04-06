@@ -45,7 +45,7 @@ echo ""
 
 # ── Start Node A ──
 echo "📡 Starting Node A (port $PORT_A, console $CONSOLE_A)..."
-$BINARY --blackboard --client --port $PORT_A --console $CONSOLE_A 2>/tmp/blackboard_test_a.log &
+$BINARY client --blackboard --port $PORT_A --console $CONSOLE_A 2>/tmp/blackboard_test_a.log &
 disown
 PID_A=$!
 
@@ -75,7 +75,7 @@ echo "  Token: ${TOKEN:0:30}..."
 # ── Start Node B (joins A) ──
 if [ -n "$TOKEN" ]; then
     echo "📡 Starting Node B (port $PORT_B, console $CONSOLE_B, joining A)..."
-    $BINARY --blackboard --client --join "$TOKEN" --port $PORT_B --console $CONSOLE_B 2>/tmp/blackboard_test_b.log &
+    $BINARY client --blackboard --join "$TOKEN" --port $PORT_B --console $CONSOLE_B 2>/tmp/blackboard_test_b.log &
     disown
     PID_B=$!
 

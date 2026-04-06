@@ -71,7 +71,7 @@ The blackboard plugin is auto-registered unless explicitly disabled in config. U
 mesh-llm plugin list
 mesh-llm blackboard
 mesh-llm blackboard --search "routing"
-mesh-llm --client --join <token> blackboard --mcp
+mesh-llm client --join <token> blackboard --mcp
 ```
 
 External plugins are configured as executables, for example:
@@ -88,16 +88,17 @@ args = ["--stdio"]
 Opt-in Nostr discovery:
 
 ```bash
-mesh-llm --model Qwen2.5-3B --publish --mesh-name "Sydney Lab" --region AU
+mesh-llm serve --model Qwen2.5-3B --publish --mesh-name "Sydney Lab" --region AU
 mesh-llm discover
 mesh-llm discover --model GLM --region AU
-mesh-llm --auto
+mesh-llm serve --auto
+mesh-llm gpus
 ```
 
 Named meshes still work as a strict discovery filter:
 
 ```bash
-mesh-llm --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
+mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
 ```
 
 No-arg behavior remains intentionally simple:

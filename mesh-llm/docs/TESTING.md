@@ -1,11 +1,21 @@
 # Testing mesh-llm
 
+## Local inspection
+
+### 0. Inspect local GPUs
+
+```bash
+mesh-llm gpus
+```
+
+- Prints local GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
+
 ## Single-model permutations
 
 ### 1. Solo (single node)
 
 ```bash
-mesh-llm --model Qwen2.5-3B --console
+mesh-llm serve --model Qwen2.5-3B --console
 ```
 
 - API on `:9337`, console on `:3131`
@@ -16,9 +26,9 @@ mesh-llm --model Qwen2.5-3B --console
 
 ```bash
 # node A (more VRAM, becomes host)
-mesh-llm --model Qwen2.5-32B --bind-port 7842
+mesh-llm serve --model Qwen2.5-32B --bind-port 7842
 # node B (joins)
-mesh-llm --model Qwen2.5-32B --join <TOKEN>
+mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
 ```
 
 - Both nodes run solo (no split) — each is its own host
@@ -28,9 +38,9 @@ mesh-llm --model Qwen2.5-32B --join <TOKEN>
 
 ```bash
 # host with --split
-mesh-llm --model Qwen2.5-32B --bind-port 7842 --split
+mesh-llm serve --model Qwen2.5-32B --bind-port 7842 --split
 # worker joins
-mesh-llm --model Qwen2.5-32B --join <TOKEN>
+mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
 ```
 
 - `--split` forces tensor split even when model fits on host
@@ -45,7 +55,7 @@ When the model exceeds host VRAM, split happens automatically without `--split`.
 ### 5. Lite client (no GPU)
 
 ```bash
-mesh-llm --client --join <TOKEN> --port 9555
+mesh-llm client --join <TOKEN> --port 9555
 ```
 
 - Uses ephemeral key (unique identity, works on same machine as GPU node)
@@ -59,9 +69,9 @@ mesh-llm --client --join <TOKEN> --port 9555
 
 ```bash
 # node A: seeds mesh with two models, serves 3B
-mesh-llm --model Qwen2.5-3B --model GLM-4.7-Flash --console
+mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console
 # node B: joins, auto-assigned to GLM (needed, on disk)
-mesh-llm --join <TOKEN>
+mesh-llm serve --join <TOKEN>
 ```
 
 - `/v1/models` on either node lists both models
@@ -80,9 +90,9 @@ Compatibility result:
 
 ```bash
 # seeder declares two models
-mesh-llm --model Qwen2.5-3B --model GLM-4.7-Flash
+mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash
 # joiner with no --model
-mesh-llm --join <TOKEN>
+mesh-llm serve --join <TOKEN>
 ```
 
 - Joiner scans the Hugging Face cache and picks an unserved model already on disk
@@ -92,7 +102,7 @@ mesh-llm --join <TOKEN>
 
 ```bash
 # GPU nodes running as above
-mesh-llm --client --join <TOKEN> --port 9555
+mesh-llm client --join <TOKEN> --port 9555
 ```
 
 - Client sees all models via gossip (ephemeral key = unique identity)
@@ -114,7 +124,7 @@ mesh-llm unload GLM-4.7-Flash-Q4_K_M
 
 ```bash
 # Running node
-mesh-llm --model Qwen2.5-0.5B-Instruct-Q4_K_M --console
+mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console
 
 # Operator surface
 mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
@@ -147,7 +157,7 @@ curl -X DELETE localhost:3131/api/runtime/models/Llama-3.2-1B-Instruct-Q4_K_M
 
 ```bash
 # With --mesh-name (deterministic ID)
-mesh-llm --model Qwen2.5-3B --mesh-name "test-mesh"
+mesh-llm serve --model Qwen2.5-3B --mesh-name "test-mesh"
 ```
 
 - Log: `📌 Mesh ID: <hex>`
@@ -159,9 +169,9 @@ mesh-llm --model Qwen2.5-3B --mesh-name "test-mesh"
 
 ```bash
 # Originator
-mesh-llm --model Qwen2.5-3B --mesh-name "test-mesh"
+mesh-llm serve --model Qwen2.5-3B --mesh-name "test-mesh"
 # Joiner
-mesh-llm --model Qwen2.5-3B --join <TOKEN>
+mesh-llm serve --model Qwen2.5-3B --join <TOKEN>
 ```
 
 - Joiner log: `📌 Mesh ID: <same hex as originator>`
@@ -180,9 +190,9 @@ mesh-llm --model Qwen2.5-3B --join <TOKEN>
 
 ```bash
 # Originator (already running)
-mesh-llm --model Qwen2.5-3B --port 8090
+mesh-llm serve --model Qwen2.5-3B --port 8090
 # Joiner
-mesh-llm --model Qwen2.5-3B --join <TOKEN> --port 8091
+mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 8091
 ```
 
 - Joiner log: `⚡ API ready (bootstrap): http://localhost:8091`
@@ -195,7 +205,7 @@ mesh-llm --model Qwen2.5-3B --join <TOKEN> --port 8091
 ### 20. Bootstrap proxy not started for originator
 
 ```bash
-mesh-llm --model Qwen2.5-3B
+mesh-llm serve --model Qwen2.5-3B
 ```
 
 - No `⚡ API ready (bootstrap)` message (only joiners get bootstrap proxy)
@@ -217,7 +227,7 @@ mesh-llm
 ### 22. Join via console
 
 ```bash
-mesh-llm --client --auto
+mesh-llm client --auto
 # In browser: http://localhost:3131 → Discover → Join
 # Or via API:
 curl -X POST localhost:3131/api/join -H 'Content-Type: application/json' -d '{"token":"..."}'
@@ -230,7 +240,7 @@ curl -X POST localhost:3131/api/join -H 'Content-Type: application/json' -d '{"t
 ### 23. Management API while serving
 
 ```bash
-mesh-llm --auto
+mesh-llm serve --auto
 # After serving:
 curl localhost:3131/api/status   # JSON: node, peers, models, mesh_id, mesh_name
 curl localhost:3131/api/events   # SSE stream
@@ -316,10 +326,10 @@ Without this, both processes share `~/.mesh-llm/key` and appear as the same node
 
 ```bash
 # Terminal 1: host with --split
-mesh-llm --model Qwen2.5-3B --port 9337 --split --console
+mesh-llm serve --model Qwen2.5-3B --port 9337 --split --console
 
 # Terminal 2: worker with ephemeral key
-MESH_LLM_EPHEMERAL_KEY=1 mesh-llm --model Qwen2.5-3B --join <TOKEN> --port 9338 --split --max-vram 1
+MESH_LLM_EPHEMERAL_KEY=1 mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 9338 --split --max-vram 1
 ```
 
 - Host starts solo, then re-elects with split when worker joins
@@ -331,10 +341,10 @@ MESH_LLM_EPHEMERAL_KEY=1 mesh-llm --model Qwen2.5-3B --join <TOKEN> --port 9338 
 
 ```bash
 # Terminal 1: host
-mesh-llm --model Qwen2.5-3B --port 9337
+mesh-llm serve --model Qwen2.5-3B --port 9337
 
-# Terminal 2: passive client (--client uses ephemeral key automatically)
-mesh-llm --client --join <TOKEN> --port 9338
+# Terminal 2: client (the client surface uses an ephemeral key automatically)
+mesh-llm client --join <TOKEN> --port 9338
 ```
 
 - Client connects without gossip (no peer list entry on host)
