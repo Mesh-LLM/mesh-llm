@@ -36,7 +36,7 @@ async fn handle_status(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
 }
 
 async fn handle_models(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let mesh_models = state.mesh_models().await;
+    let mesh_models = state.refresh_mesh_models().await;
     respond_json(
         stream,
         200,

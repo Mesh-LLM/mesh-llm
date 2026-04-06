@@ -186,6 +186,7 @@ impl MeshApi {
                 nostr_discovery: false,
                 runtime_control: None,
                 local_processes: Vec::new(),
+                cached_mesh_models: Vec::new(),
                 sse_clients: Vec::new(),
                 inventory_scan_running: false,
                 inventory_scan_waiters: Vec::new(),
@@ -671,6 +672,16 @@ impl MeshApi {
             .collect()
     }
 
+    async fn cached_mesh_models(&self) -> Vec<MeshModelPayload> {
+        self.inner.lock().await.cached_mesh_models.clone()
+    }
+
+    async fn refresh_mesh_models(&self) -> Vec<MeshModelPayload> {
+        let mesh_models = self.mesh_models().await;
+        self.inner.lock().await.cached_mesh_models = mesh_models.clone();
+        mesh_models
+    }
+
     fn derive_node_status(
         is_client: bool,
         effective_is_host: bool,
@@ -786,7 +797,7 @@ impl MeshApi {
             .or_else(|| my_hosted_models.first().cloned())
             .or_else(|| my_serving_models.first().cloned())
             .unwrap_or_else(|| model_name.clone());
-        let mesh_models = self.mesh_models().await;
+        let mesh_models = self.cached_mesh_models().await;
 
         let (launch_pi, launch_goose) = if effective_llama_ready {
             (

@@ -144,7 +144,7 @@ pub(super) fn build_ownership_payload(summary: &OwnershipSummary) -> OwnershipPa
     }
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct MeshModelPayload {
     pub(super) name: String,
     pub(super) display_name: String,
