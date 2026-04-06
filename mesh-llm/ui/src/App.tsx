@@ -4377,21 +4377,32 @@ function DashboardPage({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                     {peerRows.map((peer) => (
-                      <TableRow
-                        key={peer.id}
-                        data-id={peer.role !== "Client" ? peer.id : undefined}
-                        className={cn(
-                          peer.role !== "Client" && "cursor-pointer",
-                          peer.id === selectedTopologyNodeId &&
-                            "bg-muted/50 hover:bg-muted/60",
-                        )}
-                        onClick={
-                          peer.role !== "Client"
-                            ? () => setSelectedTopologyNodeId(peer.id)
-                            : undefined
-                        }
-                      >
+                      {peerRows.map((peer) => (
+                       <TableRow
+                         key={peer.id}
+                         data-id={peer.role !== "Client" ? peer.id : undefined}
+                         tabIndex={peer.role !== "Client" ? 0 : undefined}
+                         className={cn(
+                           peer.role !== "Client" && "cursor-pointer",
+                           peer.id === selectedTopologyNodeId &&
+                             "bg-muted/50 hover:bg-muted/60",
+                         )}
+                         onClick={
+                           peer.role !== "Client"
+                             ? () => setSelectedTopologyNodeId(peer.id)
+                             : undefined
+                         }
+                         onKeyDown={
+                           peer.role !== "Client"
+                             ? (e) => {
+                                 if (e.key === "Enter" || e.key === " ") {
+                                   e.preventDefault();
+                                   setSelectedTopologyNodeId(peer.id);
+                                 }
+                               }
+                             : undefined
+                         }
+                       >
                         <TableCell className="font-mono text-xs">
                           <button
                             type="button"
@@ -4488,7 +4499,7 @@ function DashboardPage({
         : null}
 
       <Sheet open={detailPanelStack.length > 0} onOpenChange={(open) => !open && closeDetailPanel()}>
-        <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl" onOpenAutoFocus={(e) => e.preventDefault()}>
+        <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl" onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).focus(); }}>
           {activeDetail?.kind === "node" && activeNode ? (
             <NodeSidebar
               node={activeNode}
@@ -5005,11 +5016,15 @@ function MeshTopologyFlow({
     );
   }, [nodes, center.id]);
 
+  const nodeIdsRef = useRef(new Set(nodes.map((n) => n.id)));
   useEffect(() => {
-    if (highlightedNodeId && nodes.some((n) => n.id === highlightedNodeId)) {
+    nodeIdsRef.current = new Set(nodes.map((n) => n.id));
+  }, [nodes]);
+  useEffect(() => {
+    if (highlightedNodeId && nodeIdsRef.current.has(highlightedNodeId)) {
       setSelectedNodeId(highlightedNodeId);
     }
-  }, [highlightedNodeId, nodes]);
+  }, [highlightedNodeId]);
 
   const nodeInfoById = useMemo(() => {
     const out = new Map<string, TopologyNodeInfo>();
