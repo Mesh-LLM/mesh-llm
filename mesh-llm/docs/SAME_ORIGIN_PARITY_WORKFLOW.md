@@ -54,6 +54,35 @@ First inspect the upstream repo and confirm the real weight filenames:
 hf download <repo-id> --dry-run
 ```
 
+For the large batch of additional parity families on `studio54`, use:
+
+```bash
+zsh scripts/download-origin-checkpoints-studio54.sh
+```
+
+To fetch only a subset:
+
+```bash
+zsh scripts/download-origin-checkpoints-studio54.sh mistral phi3 deepseek
+```
+
+The script downloads into `~/.cache/mesh-llm-origin-batch/` by default and
+continues past gated or failed repos so the rest of the batch can proceed.
+
+By default it excludes families that are too large or risky for the full
+download-convert-validate workflow on `studio54`'s `128 GB` M1 Ultra:
+
+- `mixtral`
+- `cohere-command-r`
+- `jamba`
+- `kimi-linear`
+
+Those can be added explicitly with:
+
+```bash
+zsh scripts/download-origin-checkpoints-studio54.sh --include-heavy
+```
+
 For metadata and tokenizer files, `hf download` is fine:
 
 ```bash

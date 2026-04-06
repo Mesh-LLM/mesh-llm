@@ -138,8 +138,8 @@ jobs:
             url: https://huggingface.co/meshllm/gemma-2-2b-it-parity-q8_0-gguf/resolve/main/gemma-2-2b-it-q8_0.gguf
             file: gemma-2-2b-it-q8_0.gguf
           - name: glm-4-9b
-            url: https://huggingface.co/lmstudio-community/GLM-4-9B-0414-GGUF/resolve/main/GLM-4-9B-0414-Q4_K_M.gguf
-            file: GLM-4-9B-0414-Q4_K_M.gguf
+            url: https://huggingface.co/meshllm/glm-4-9b-0414-parity-q4_k_m-gguf/resolve/main/glm-4-9b-0414-q4_k_m.gguf
+            file: glm-4-9b-0414-q4_k_m.gguf
           - name: gemma-4-e4b
             url: https://huggingface.co/meshllm/gemma-4-e4b-it-parity-q8_0-gguf/resolve/main/gemma-4-e4b-it-q8_0.gguf
             file: gemma-4-e4b-it-q8_0.gguf
@@ -285,8 +285,8 @@ jobs:
             repo: meshllm/gemma-2-2b-it-parity-8bit-mlx
             cache_slug: meshllm--gemma-2-2b-it-parity-8bit-mlx
           - name: glm-4-9b
-            repo: mlx-community/GLM-4-9B-0414-4bit
-            cache_slug: mlx-community--GLM-4-9B-0414-4bit
+            repo: meshllm/glm-4-9b-0414-parity-4bit-mlx
+            cache_slug: meshllm--glm-4-9b-0414-parity-4bit-mlx
           - name: gemma-4-e4b
             repo: meshllm/gemma-4-e4b-it-parity-8bit-mlx
             cache_slug: meshllm--gemma-4-e4b-it-parity-8bit-mlx

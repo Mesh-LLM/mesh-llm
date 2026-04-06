@@ -341,7 +341,7 @@ jobs:
             cache_slug: meshllm--gemma-2-2b-it-parity-8bit-mlx
           - name: glm-4-9b
             id: glm4
-            cache_slug: mlx-community--GLM-4-9B-0414-4bit
+            cache_slug: meshllm--glm-4-9b-0414-parity-4bit-mlx
           - name: gemma-4-e4b
             id: gemma4
             cache_slug: meshllm--gemma-4-e4b-it-parity-8bit-mlx
@@ -422,7 +422,7 @@ jobs:
             cache_slug: meshllm--gemma-2-2b-it-parity-q8_0-gguf
           - name: glm-4-9b
             id: glm4
-            cache_slug: lmstudio-community--GLM-4-9B-0414-GGUF
+            cache_slug: meshllm--glm-4-9b-0414-parity-q4_k_m-gguf
           - name: gemma-4-e4b
             id: gemma4
             cache_slug: meshllm--gemma-4-e4b-it-parity-q8_0-gguf

@@ -182,17 +182,17 @@
       "id": "glm4",
       "label": "glm-4-9b",
       "expectation_class": "strict",
-      "notes": "GLM4 parity baseline.",
+      "notes": "Published same-origin GLM4 parity pair.",
       "gguf": {
         "exact_case_id": "glm4-gguf-exact",
         "behavior_case_id": "glm4-gguf-behavior",
-        "model_ref": "lmstudio-community/GLM-4-9B-0414-GGUF/GLM-4-9B-0414-Q4_K_M.gguf"
+        "model_ref": "meshllm/glm-4-9b-0414-parity-q4_k_m-gguf/glm-4-9b-0414-q4_k_m.gguf"
       },
       "mlx": {
         "exact_case_id": "glm4-mlx-exact",
         "behavior_case_id": "glm4-mlx-behavior",
-        "model_ref": "mlx-community/GLM-4-9B-0414-4bit",
-        "template_source": "tokenizer_config.json"
+        "model_ref": "meshllm/glm-4-9b-0414-parity-4bit-mlx",
+        "template_source": "chat_template.jinja"
       }
     },
     {
