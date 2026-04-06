@@ -97,17 +97,17 @@
       "id": "qwen3",
       "label": "qwen3-0.6b",
       "expectation_class": "strict",
-      "notes": "General Qwen parity and reasoning-template baseline using a closer Q8_0 vs 8bit pair.",
+      "notes": "Same-origin Qwen3 parity row; MLX is closer to the original checkpoint than GGUF on the checked exact prompts.",
       "gguf": {
         "exact_case_id": "qwen3-gguf-exact",
         "behavior_case_id": "qwen3-gguf-behavior",
-        "model_ref": "Qwen/Qwen3-0.6B-GGUF/Qwen3-0.6B-Q8_0.gguf"
+        "model_ref": "meshllm/qwen3-0.6b-parity-q8_0-gguf/qwen3-0.6b-q8_0.gguf"
       },
       "mlx": {
         "exact_case_id": "qwen3-mlx-exact",
         "behavior_case_id": "qwen3-mlx-behavior",
-        "model_ref": "Qwen/Qwen3-0.6B-MLX-8bit",
-        "template_source": "tokenizer_config.json"
+        "model_ref": "meshllm/qwen3-0.6b-parity-8bit-mlx",
+        "template_source": "chat_template.jinja"
       }
     },
     {
@@ -131,17 +131,17 @@
       "id": "gemma2",
       "label": "gemma-2-2b",
       "expectation_class": "strict",
-      "notes": "Gemma2 config-parse and prefill parity baseline.",
+      "notes": "Same-origin Gemma 2 parity row using published meshllm Q8_0 vs 8bit artifacts.",
       "gguf": {
         "exact_case_id": "gemma2-gguf-exact",
         "behavior_case_id": "gemma2-gguf-behavior",
-        "model_ref": "bartowski/gemma-2-2b-it-GGUF/gemma-2-2b-it-Q4_K_M.gguf"
+        "model_ref": "meshllm/gemma-2-2b-it-parity-q8_0-gguf/gemma-2-2b-it-q8_0.gguf"
       },
       "mlx": {
         "exact_case_id": "gemma2-mlx-exact",
         "behavior_case_id": "gemma2-mlx-behavior",
-        "model_ref": "mlx-community/gemma-2-2b-it-4bit",
-        "template_source": "tokenizer_config.json"
+        "model_ref": "meshllm/gemma-2-2b-it-parity-8bit-mlx",
+        "template_source": "chat_template.jinja"
       }
     },
     {
