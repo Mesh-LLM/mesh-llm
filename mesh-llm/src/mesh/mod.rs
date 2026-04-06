@@ -1673,23 +1673,15 @@ impl Node {
             config_state: {
                 let path = crate::plugin::config_path(None)
                     .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
-                let state = if path.exists() {
-                    crate::runtime::config_state::ConfigState::load(&path)?
-                } else {
-                    crate::runtime::config_state::ConfigState::default()
-                };
+                let state = crate::runtime::config_state::ConfigState::load(&path)?;
                 Arc::new(tokio::sync::Mutex::new(state))
             },
             config_revision_tx: {
                 let path = crate::plugin::config_path(None)
                     .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
-                let revision = if path.exists() {
-                    crate::runtime::config_state::ConfigState::load(&path)
-                        .map(|s| s.revision())
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
+                let revision = crate::runtime::config_state::ConfigState::load(&path)
+                    .map(|s| s.revision())
+                    .unwrap_or(0);
                 let (tx, _rx) = tokio::sync::watch::channel(revision);
                 Arc::new(tx)
             },
@@ -4057,7 +4049,9 @@ impl Node {
                 hash,
                 saved_to_disk,
             } => {
-                let _ = self.config_revision_tx.send(revision);
+                if saved_to_disk {
+                    let _ = self.config_revision_tx.send(revision);
+                }
                 crate::proto::node::ConfigPushResponse {
                     gen: NODE_PROTOCOL_GENERATION,
                     success: true,

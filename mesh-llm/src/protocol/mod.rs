@@ -258,8 +258,6 @@ impl ValidateControlFrame for crate::proto::node::ConfigSnapshotResponse {
         if self.gen != NODE_PROTOCOL_GENERATION {
             return Err(ControlFrameError::BadGeneration { got: self.gen });
         }
-        // Error responses have empty node_id/config_hash/config — skip structural
-        // checks so callers can surface the actual error message.
         let is_error = matches!(self.error.as_deref(), Some(s) if !s.is_empty());
         if !is_error {
             validate_endpoint_id_length(self.node_id.len())?;
@@ -305,6 +303,9 @@ impl ValidateControlFrame for crate::proto::node::ConfigPush {
                 got: self.signature.len(),
             });
         }
+        if self.config.is_none() {
+            return Err(ControlFrameError::MissingConfig);
+        }
         Ok(())
     }
 }
@@ -314,8 +315,6 @@ impl ValidateControlFrame for crate::proto::node::ConfigPushResponse {
         if self.gen != NODE_PROTOCOL_GENERATION {
             return Err(ControlFrameError::BadGeneration { got: self.gen });
         }
-        // Error responses (success=false) may have an empty config_hash;
-        // only enforce the length constraint on success responses.
         if self.success || !self.config_hash.is_empty() {
             validate_config_hash_length(self.config_hash.len())?;
         }
