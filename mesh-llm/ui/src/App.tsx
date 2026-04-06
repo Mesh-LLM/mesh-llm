@@ -6722,11 +6722,6 @@ function ownershipPrimaryLabel(owner?: Ownership | null) {
   return ownershipStatusLabel(owner.status);
 }
 
-function formatOwnershipExpiry(value?: number) {
-  if (!value) return null;
-  return new Date(value).toLocaleString();
-}
-
 function shortName(name: string) {
   return (name || "").replace(/-Q\w+$/, "").replace(/-Instruct/, "");
 }

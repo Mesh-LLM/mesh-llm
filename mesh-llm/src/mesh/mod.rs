@@ -838,7 +838,20 @@ fn load_or_refresh_owner_attestation(
                     current_time_unix_ms(),
                 )
             {
-                return Ok(existing);
+                let summary = verify_node_ownership(
+                    Some(&existing),
+                    endpoint_id.as_bytes(),
+                    &TrustStore::default(),
+                    TrustPolicy::Off,
+                    current_time_unix_ms(),
+                );
+                if summary.status == OwnershipStatus::Verified {
+                    return Ok(existing);
+                }
+                tracing::warn!(
+                    "on-disk node ownership certificate failed verification ({:?}); regenerating",
+                    summary.status
+                );
             }
         }
     }
