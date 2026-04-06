@@ -187,6 +187,62 @@ Config precedence:
 - `mmproj` is optional and only used when that startup model needs a projector sidecar.
 - Plugin entries stay in the same file.
 
+## Lemonade integration
+
+mesh-llm includes a built-in `lemonade` plugin for routing requests to a local [Lemonade Server](https://lemonade-server.ai) through the same `http://localhost:9337/v1` API that mesh-llm already exposes.
+
+Start Lemonade first, either with the Lemonade Desktop app or with the CLI:
+
+```bash
+lemonade-server serve
+curl -s http://localhost:8000/api/v1/models | jq '.data[].id'
+```
+
+The plugin uses `http://localhost:8000/api/v1` by default. To point at a different Lemonade endpoint, set:
+
+```bash
+export MESH_LLM_LEMONADE_BASE_URL=http://127.0.0.1:8000/api/v1
+```
+
+Then enable the plugin in `~/.mesh-llm/config.toml`:
+
+```toml
+[[plugin]]
+name = "lemonade"
+enabled = true
+```
+
+Start mesh-llm normally:
+
+```bash
+mesh-llm serve --model Qwen3-8B-Q4_K_M
+```
+
+After startup, mesh-llm should include Lemonade-hosted models in its own model list:
+
+```bash
+curl -s http://localhost:9337/v1/models | jq '.data[].id'
+```
+
+Requests sent to mesh-llm with a Lemonade model ID are forwarded to Lemonade:
+
+```bash
+curl http://localhost:9337/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen3-0.6B-GGUF",
+    "messages": [
+      {"role": "user", "content": "hello"}
+    ]
+  }'
+```
+
+Notes:
+
+- mesh-llm does not start or supervise Lemonade; run it separately with the Desktop app or CLI.
+- Use the exact model ID returned by Lemonade's `/api/v1/models`.
+- If you use the mesh-llm background service, add `MESH_LLM_LEMONADE_BASE_URL=...` to `~/.config/mesh-llm/service.env`.
+
 Useful model commands:
 
 ```bash
