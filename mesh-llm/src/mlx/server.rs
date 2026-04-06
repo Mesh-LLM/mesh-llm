@@ -13,6 +13,36 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{watch, Mutex};
 
+fn mlx_debug_topk_limit() -> Option<usize> {
+    std::env::var("MESH_MLX_DEBUG_TOPK")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+}
+
+fn log_top_candidates(model: &MlxModel, logits: &Array, label: &str, limit: usize) {
+    match super::sampling::top_logits(logits, limit) {
+        Ok(candidates) => {
+            let rendered = candidates
+                .into_iter()
+                .map(|(token, logit)| {
+                    let piece = model
+                        .tokenizer
+                        .decode(&[token], true)
+                        .unwrap_or_else(|_| format!("<decode-error:{token}>"))
+                        .replace('\n', "\\n");
+                    format!("{token}:{logit:.4}:{piece:?}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            tracing::info!("MLX top candidates [{label}]: {rendered}");
+        }
+        Err(err) => {
+            tracing::warn!("MLX top candidates [{label}] failed: {err}");
+        }
+    }
+}
+
 /// Shared inference state behind the server.
 struct InferState {
     model: MlxModel,
@@ -769,6 +799,9 @@ fn run_inference(
     let mut next_token = if suffix.is_empty() {
         // Entire prompt was cached — re-forward last token to get logits
         let logits = replay_last_prompt_token_logits(&state.model, &prompt_tokens, &mut caches)?;
+        if let Some(limit) = mlx_debug_topk_limit() {
+            log_top_candidates(&state.model, &logits, "step0", limit);
+        }
         sampler.sample_next_token(&logits)?
     } else {
         let logits = prefill_logits(&state.model, suffix, &mut caches)?;
@@ -777,6 +810,9 @@ fn run_inference(
         } else {
             logits
         };
+        if let Some(limit) = mlx_debug_topk_limit() {
+            log_top_candidates(&state.model, &logits, "step0", limit);
+        }
         sampler.sample_next_token(&logits)?
     };
     tracing::info!(
@@ -790,6 +826,7 @@ fn run_inference(
     let mut text = String::new();
     let mut completion_tokens = 0usize;
     let mut finish_reason = "length";
+    let debug_topk = mlx_debug_topk_limit();
 
     // Decode
     for _ in 0..generation.max_tokens {
@@ -810,6 +847,14 @@ fn run_inference(
         }
         let input = Array::from_slice(&[next_token], &[1, 1]);
         let logits = state.model.forward(&input, &mut caches)?;
+        if let Some(limit) = debug_topk.filter(|_| completion_tokens < 4) {
+            log_top_candidates(
+                &state.model,
+                &logits,
+                &format!("step{}", completion_tokens),
+                limit,
+            );
+        }
         next_token = sampler.sample_next_token(&logits)?;
     }
 

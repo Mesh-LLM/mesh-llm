@@ -97,6 +97,17 @@ impl Sampler {
     }
 }
 
+pub fn top_logits(logits: &Array, limit: usize) -> Result<Vec<(u32, f32)>> {
+    let mut candidates = last_logits(logits)?
+        .into_iter()
+        .enumerate()
+        .map(|(token, logit)| (token as u32, logit))
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
+    candidates.truncate(limit.max(1).min(candidates.len()));
+    Ok(candidates)
+}
+
 pub struct StopBuffer {
     sequences: Vec<String>,
     pending: String,
