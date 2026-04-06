@@ -7,20 +7,40 @@ use std::collections::HashMap;
 
 fn local_owner_attestation_to_proto(
     attestation: &crate::crypto::SignedNodeOwnership,
-) -> crate::proto::node::SignedNodeOwnership {
-    crate::proto::node::SignedNodeOwnership {
+) -> Option<crate::proto::node::SignedNodeOwnership> {
+    let owner_sign_public_key = match hex::decode(&attestation.claim.owner_sign_public_key) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("owner attestation dropped: invalid owner_sign_public_key hex: {e}");
+            return None;
+        }
+    };
+    let node_endpoint_id = match hex::decode(&attestation.claim.node_endpoint_id) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("owner attestation dropped: invalid node_endpoint_id hex: {e}");
+            return None;
+        }
+    };
+    let signature = match hex::decode(&attestation.signature) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!("owner attestation dropped: invalid signature hex: {e}");
+            return None;
+        }
+    };
+    Some(crate::proto::node::SignedNodeOwnership {
         version: attestation.claim.version,
         cert_id: attestation.claim.cert_id.clone(),
         owner_id: attestation.claim.owner_id.clone(),
-        owner_sign_public_key: hex::decode(&attestation.claim.owner_sign_public_key)
-            .unwrap_or_default(),
-        node_endpoint_id: hex::decode(&attestation.claim.node_endpoint_id).unwrap_or_default(),
+        owner_sign_public_key,
+        node_endpoint_id,
         issued_at_unix_ms: attestation.claim.issued_at_unix_ms,
         expires_at_unix_ms: attestation.claim.expires_at_unix_ms,
         node_label: attestation.claim.node_label.clone(),
         hostname_hint: attestation.claim.hostname_hint.clone(),
-        signature: hex::decode(&attestation.signature).unwrap_or_default(),
-    }
+        signature,
+    })
 }
 
 fn proto_owner_attestation_to_local(
@@ -298,7 +318,7 @@ pub(crate) fn local_ann_to_proto_ann(
         owner_attestation: ann
             .owner_attestation
             .as_ref()
-            .map(local_owner_attestation_to_proto),
+            .and_then(local_owner_attestation_to_proto),
     }
 }
 
