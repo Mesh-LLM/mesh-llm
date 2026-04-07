@@ -316,8 +316,7 @@ clean-ui:
 
 [windows]
 clean-ui:
-    Set-Location "{{ ui_dir }}"
-    Remove-Item -Recurse -Force node_modules,dist -ErrorAction SilentlyContinue
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Location '{{ ui_dir }}'; Remove-Item -Recurse -Force node_modules,dist -ErrorAction SilentlyContinue"
     echo "Cleaned UI: node_modules + dist removed"
 # Stop all running servers
 stop:
