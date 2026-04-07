@@ -1683,11 +1683,11 @@ impl Node {
                 Arc::new(tx)
             },
             cached_owner_id: {
-                use crate::crypto::{default_keystore_path, load_keystore};
+                use crate::crypto::{default_keystore_path, keystore_metadata};
                 default_keystore_path()
                     .ok()
-                    .and_then(|p| load_keystore(&p, None).ok())
-                    .map(|kp| kp.owner_id())
+                    .and_then(|p| keystore_metadata(&p).ok())
+                    .map(|info| info.owner_id)
             },
         };
 

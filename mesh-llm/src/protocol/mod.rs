@@ -1604,9 +1604,10 @@ mod tests {
 
     #[test]
     fn config_sync_v0_announcement_roundtrip() {
-        // Prove PeerAnnouncementV0 serde handles new fields gracefully:
-        // - owner_id and config_revision ARE serialized (use #[serde(default)])
-        // - config_hash is NOT serialized (uses #[serde(skip_serializing, default)])
+        // Prove PeerAnnouncementV0 serde handles the owner_id field gracefully:
+        // - owner_id IS serialized in v0 JSON (uses #[serde(default)])
+        // - config_revision and config_hash are NOT part of PeerAnnouncementV0;
+        //   they were moved to the subscribe stream only (reserved in proto)
         let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x44; 32]).public());
         let ann = super::PeerAnnouncement {
             addr: EndpointAddr {
@@ -1640,7 +1641,7 @@ mod tests {
         let v0 = PeerAnnouncementV0::from(&ann);
         let json_str = serde_json::to_string(&v0).expect("JSON serialization must succeed");
 
-        // Assert owner_id and config_revision ARE in the JSON
+        // Assert owner_id IS in the JSON (config_revision is not a v0 field)
         assert!(
             json_str.contains("\"owner_id\""),
             "owner_id must be serialized in JSON"
@@ -1909,9 +1910,9 @@ mod tests {
 
     #[test]
     fn config_sync_v0_mesh_coexistence() {
-        // Prove round-trip through the V0 conversion path correctly handles config metadata.
-        // This documents the intentional behavior: config_hash is ephemeral in v0 gossip
-        // (lost in JSON round-trip due to skip_serializing).
+        // Prove round-trip through the V0 conversion path preserves owner_id.
+        // config_revision and config_hash are not part of PeerAnnouncementV0 gossip —
+        // they belong to the subscribe stream only.
         let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x66; 32]).public());
 
         let ann = super::PeerAnnouncement {
@@ -1950,7 +1951,7 @@ mod tests {
             serde_json::from_slice(&json).expect("JSON deserialization must succeed");
         let restored = v0_deserialized[0].clone().into_internal();
 
-        // owner_id and config_revision survive the round-trip
+        // owner_id survives the round-trip
         assert_eq!(
             restored.owner_id.as_deref(),
             Some("mesh-owner"),

@@ -37,7 +37,6 @@ message PeerAnnouncement {
   repeated ServedModelIdentity served_model_identities = 26;
   repeated ModelRuntimeDescriptor served_model_runtime = 27;
    optional string owner_id = 28;           // sha256(owner_signing_public_key), 64-char hex
-   reserved 29, 30;  // config_revision and config_hash — moved to subscribe stream only
 }
 
 message ServedModelDescriptor {
@@ -274,7 +273,5 @@ message ConfigPushResponse {
   uint64 current_revision = 3;
   bytes config_hash = 4;
   optional string error = 5;
-  reserved 6, 7;
-  reserved "saved_to_disk", "applied_live";
   ConfigApplyMode apply_mode = 8;
 }
