@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="720" viewBox="0 0 1300 720" role="img" aria-labelledby="title desc">
+  <title id="title">Release Workflow Job Graph</title>
+  <desc id="desc">Dependency graph for .github/workflows/release.yml jobs.</desc>
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .box { fill: #f7f9fc; stroke: #1f2937; stroke-width: 2; }
+      .build { fill: #eaf2ff; stroke: #1d4ed8; stroke-width: 2.5; }
+      .publish { fill: #ecfdf5; stroke: #15803d; stroke-width: 2.5; }
+      .disabled { fill: #f9fafb; stroke: #9ca3af; stroke-width: 1.8; stroke-dasharray: 6 5; }
+      .label { font-family: Menlo, Consolas, Monaco, monospace; font-size: 20px; fill: #111827; }
+      .small { font-family: Menlo, Consolas, Monaco, monospace; font-size: 15px; fill: #374151; }
+      .tiny { font-family: Menlo, Consolas, Monaco, monospace; font-size: 13px; fill: #6b7280; }
+      .edge { stroke: #374151; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+      .edge-disabled { stroke: #9ca3af; stroke-width: 1.8; fill: none; marker-end: url(#arrowDisabled); stroke-dasharray: 5 5; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#374151" />
+    </marker>
+    <marker id="arrowDisabled" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#9ca3af" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1300" height="720" />
+
+  <!-- Build jobs -->
+  <rect class="box build" x="70" y="130" width="260" height="92" rx="10" ry="10" />
+  <text class="label" x="200" y="170" text-anchor="middle">build</text>
+  <text class="small" x="200" y="195" text-anchor="middle">matrix: Linux CPU + macOS</text>
+
+  <rect class="box build" x="360" y="130" width="260" height="92" rx="10" ry="10" />
+  <text class="label" x="490" y="170" text-anchor="middle">build_linux_cuda</text>
+  <text class="small" x="490" y="195" text-anchor="middle">nvidia/cuda container</text>
+
+  <rect class="box build" x="650" y="130" width="260" height="92" rx="10" ry="10" />
+  <text class="label" x="780" y="170" text-anchor="middle">build_linux_amd</text>
+  <text class="small" x="780" y="195" text-anchor="middle">ROCm container</text>
+
+  <rect class="box build" x="940" y="130" width="260" height="92" rx="10" ry="10" />
+  <text class="label" x="1070" y="170" text-anchor="middle">build_linux_vulkan</text>
+  <text class="small" x="1070" y="195" text-anchor="middle">Ubuntu Vulkan build</text>
+
+  <!-- Disabled windows job -->
+  <rect class="box disabled" x="520" y="300" width="260" height="84" rx="10" ry="10" />
+  <text class="small" x="650" y="336" text-anchor="middle">build_windows (disabled)</text>
+  <text class="tiny" x="650" y="358" text-anchor="middle">commented out in workflow</text>
+
+  <!-- Publish -->
+  <rect class="box publish" x="470" y="500" width="360" height="110" rx="10" ry="10" />
+  <text class="label" x="650" y="548" text-anchor="middle">publish</text>
+  <text class="small" x="650" y="575" text-anchor="middle">downloads release-* artifacts</text>
+  <text class="small" x="650" y="596" text-anchor="middle">creates GitHub Release</text>
+
+  <!-- Edges -->
+  <path class="edge" d="M200,222 L560,500" />
+  <path class="edge" d="M490,222 L610,500" />
+  <path class="edge" d="M780,222 L690,500" />
+  <path class="edge" d="M1070,222 L740,500" />
+  <path class="edge-disabled" d="M650,384 L650,500" />
+
+  <!-- Notes -->
+  <text class="tiny" x="650" y="670" text-anchor="middle">
+    Trigger: push tag v*. publish.needs = build, build_linux_cuda, build_linux_amd, build_linux_vulkan.
+  </text>
+</svg>
