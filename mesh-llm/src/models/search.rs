@@ -264,33 +264,11 @@ async fn build_gated_search_hit(
 }
 
 fn file_quality_score(file: &str) -> usize {
-    let upper = file.to_ascii_uppercase();
-    if upper.contains("BF16") || upper.contains("F16") {
-        return 0;
-    }
-    if upper.contains("Q8_0") {
-        return 1;
-    }
-    if upper.contains("Q6_K") {
-        return 2;
-    }
-    if upper.contains("Q5_") {
-        return 3;
-    }
-    if upper.contains("Q4_") {
-        return 4;
-    }
-    if upper.contains("Q3_") {
-        return 5;
-    }
-    if upper.contains("Q2_") || upper.contains("IQ") {
-        return 6;
-    }
-    7
+    file_preference_score(file)
 }
 
 fn is_primary_model_gguf(file: &str) -> bool {
-    let lower = file.to_ascii_lowercase();
+    let lower = canonical_hf_ref_file_component(file).to_ascii_lowercase();
     lower.ends_with(".gguf") && !lower.contains("mmproj") && !lower.contains("imatrix")
 }
 
