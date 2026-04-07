@@ -74,10 +74,11 @@ pub async fn run_model_search(
     }
     println!();
     for (index, result) in results.iter().enumerate() {
-        let inspected = inspect_repo_ref(&result.repo_id, profile)
-            .await
-            .ok()
-            .flatten();
+        // Avoid a second per-result repo inspection here: search_huggingface has
+        // already done repo-level inspection work to produce these search hits.
+        // Keep the existing rendering path by treating extra inspection details as
+        // unavailable unless they are included in the search result itself.
+        let inspected: Option<RepoVariantInspection> = None;
         println!("{}. 📦 {}", index + 1, result.repo_id);
         println!("   🔗 {}", result.repo_url);
         let mut stats = Vec::new();
