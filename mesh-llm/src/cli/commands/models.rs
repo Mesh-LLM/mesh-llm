@@ -345,7 +345,7 @@ fn print_repo_show(repo: crate::models::RepoInspection) {
     }
     let mut stats = Vec::new();
     stats.push(format!(
-        "📦 {} GGUF files",
+        "📦 {} variants",
         format_count(repo.variant_count as u64)
     ));
     if let Some(downloads) = repo.downloads {
