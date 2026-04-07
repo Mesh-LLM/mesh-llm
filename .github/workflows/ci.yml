@@ -2,6 +2,17 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      run_llama_smoke_tests:
+        description: "Run Llama Smoke Tests (GGUF exact matrix)"
+        type: boolean
+        required: false
+        default: true
+      run_mlx_smoke_tests:
+        description: "Run MLX Smoke Tests (MLX exact matrix)"
+        type: boolean
+        required: false
+        default: true
   push:
     branches:
       - '**'
@@ -363,7 +374,7 @@ jobs:
 
   mlx_smoke_tests:
     needs: [changes, macos, canary_smoke_tests]
-    if: ${{ needs.macos.result == 'success' && needs.canary_smoke_tests.result == 'success' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
+    if: ${{ needs.macos.result == 'success' && needs.canary_smoke_tests.result == 'success' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_mlx_smoke_tests != 'false') }}
     name: MLX Smoke Tests
     runs-on: macos-latest
     strategy:
@@ -444,7 +455,7 @@ jobs:
 
   llama_smoke_tests:
     needs: [changes, linux, canary_smoke_tests]
-    if: ${{ needs.linux.result == 'success' && needs.canary_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
+    if: ${{ needs.linux.result == 'success' && needs.canary_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_llama_smoke_tests != 'false') }}
     name: Llama Smoke Tests
     runs-on: ubuntu-latest
     strategy:
