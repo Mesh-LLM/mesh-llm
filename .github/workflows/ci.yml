@@ -104,7 +104,6 @@ jobs:
       # ── Rust ──
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -157,7 +156,7 @@ jobs:
           tar -czf ci-artifacts/linux-binaries.tgz -C ci-artifacts linux-binaries
 
       - name: Upload Linux binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-binaries
           path: ci-artifacts/linux-binaries.tgz
@@ -198,7 +197,6 @@ jobs:
       # ── Rust ──
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -248,7 +246,7 @@ jobs:
           tar -czf ci-artifacts/macos-binaries.tgz -C ci-artifacts macos-binaries
 
       - name: Upload macOS binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-binaries
           path: ci-artifacts/macos-binaries.tgz
@@ -294,7 +292,7 @@ jobs:
         run: python -m pip install --upgrade pip -r ci/requirements-ci-python.txt
 
       - name: Download Linux binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: linux-binaries
           path: ci-artifacts
@@ -434,7 +432,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download macOS binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: macos-binaries
           path: ci-artifacts
@@ -472,7 +470,7 @@ jobs:
 
       - name: Upload MLX exact results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: mlx-exact-${{ matrix.id }}
           path: MLX_VALIDATION_RESULTS/ci-macos-mlx-${{ matrix.id }}
@@ -491,7 +489,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Download Linux GGUF smoke binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: linux-binaries
           path: ci-artifacts
@@ -523,7 +521,7 @@ jobs:
 
       - name: Upload GGUF exact results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: gguf-exact-${{ matrix.id }}
           path: MLX_VALIDATION_RESULTS/ci-gguf-${{ matrix.id }}
@@ -579,7 +577,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -609,7 +606,7 @@ jobs:
           tar -czf ci-artifacts/linux-cuda-binaries.tgz -C ci-artifacts linux-cuda-binaries
 
       - name: Upload Linux CUDA binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-cuda-binaries
           path: ci-artifacts/linux-cuda-binaries.tgz
@@ -665,7 +662,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -695,7 +691,7 @@ jobs:
           tar -czf ci-artifacts/linux-rocm-binaries.tgz -C ci-artifacts linux-rocm-binaries
 
       - name: Upload Linux ROCm binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-rocm-binaries
           path: ci-artifacts/linux-rocm-binaries.tgz
@@ -751,7 +747,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -781,7 +776,7 @@ jobs:
           tar -czf ci-artifacts/linux-vulkan-binaries.tgz -C ci-artifacts linux-vulkan-binaries
 
       - name: Upload Linux Vulkan binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: linux-vulkan-binaries
           path: ci-artifacts/linux-vulkan-binaries.tgz
