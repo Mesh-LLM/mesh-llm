@@ -236,19 +236,46 @@ case "$BACKEND" in
         ;;
 esac
 
+LLAMA_PIN_SHA="${MESH_LLM_LLAMA_PIN_SHA:-}"
+
 if [[ ! -d "$LLAMA_DIR" ]]; then
-    echo "Cloning michaelneale/llama.cpp (upstream-latest)..."
-    git clone -b upstream-latest \
-        https://github.com/michaelneale/llama.cpp.git "$LLAMA_DIR"
+    if [[ -n "$LLAMA_PIN_SHA" ]]; then
+        echo "Cloning michaelneale/llama.cpp pinned to $LLAMA_PIN_SHA..."
+        git clone -b upstream-latest --depth 1 \
+            https://github.com/michaelneale/llama.cpp.git "$LLAMA_DIR"
+        if ! (cd "$LLAMA_DIR" && git cat-file -e "${LLAMA_PIN_SHA}^{commit}" 2>/dev/null); then
+            echo "Pinned SHA not on upstream-latest tip, fetching explicitly..."
+            (cd "$LLAMA_DIR" && git fetch --depth 1 origin "$LLAMA_PIN_SHA")
+        fi
+        (cd "$LLAMA_DIR" && git checkout --detach "$LLAMA_PIN_SHA")
+    else
+        echo "Cloning michaelneale/llama.cpp (upstream-latest)..."
+        git clone -b upstream-latest \
+            https://github.com/michaelneale/llama.cpp.git "$LLAMA_DIR"
+    fi
 else
     cd "$LLAMA_DIR"
-    CURRENT_BRANCH=$(git branch --show-current)
-    if [[ "$CURRENT_BRANCH" != "upstream-latest" ]]; then
-        echo "⚠️  llama.cpp is on branch '$CURRENT_BRANCH', switching to upstream-latest..."
-        git checkout upstream-latest
+    if [[ -n "$LLAMA_PIN_SHA" ]]; then
+        if ! git cat-file -e "${LLAMA_PIN_SHA}^{commit}" 2>/dev/null; then
+            echo "Fetching pinned llama.cpp SHA $LLAMA_PIN_SHA..."
+            git fetch --depth 1 origin "$LLAMA_PIN_SHA"
+        fi
+        CURRENT_SHA="$(git rev-parse HEAD)"
+        if [[ "$CURRENT_SHA" != "$LLAMA_PIN_SHA" ]]; then
+            echo "Checking out pinned llama.cpp SHA $LLAMA_PIN_SHA (was $CURRENT_SHA)..."
+            git checkout --detach "$LLAMA_PIN_SHA"
+        else
+            echo "llama.cpp already at pinned SHA $LLAMA_PIN_SHA, no checkout needed"
+        fi
+    else
+        CURRENT_BRANCH=$(git branch --show-current)
+        if [[ "$CURRENT_BRANCH" != "upstream-latest" ]]; then
+            echo "⚠️  llama.cpp is on branch '$CURRENT_BRANCH', switching to upstream-latest..."
+            git checkout upstream-latest
+        fi
+        echo "Pulling latest upstream-latest from origin..."
+        git pull --ff-only origin upstream-latest
     fi
-    echo "Pulling latest upstream-latest from origin..."
-    git pull --ff-only origin upstream-latest
     cd "$REPO_ROOT"
 fi
 
@@ -282,9 +309,14 @@ elif [[ "$BACKEND" == "cuda" ]]; then
     # Tracking: https://github.com/ggml-org/llama.cpp/issues/20866
     # Once that upstream issue is resolved and our fork is rebased past the
     # fix, this flag can be dropped.
+    CUDA_FA_ALL_QUANTS_FLAG="-DGGML_CUDA_FA_ALL_QUANTS=ON"
+    if [[ "${MESH_LLM_CUDA_FA_ALL_QUANTS:-on}" == "off" ]]; then
+        CUDA_FA_ALL_QUANTS_FLAG="-DGGML_CUDA_FA_ALL_QUANTS=OFF"
+        echo "GGML_CUDA_FA_ALL_QUANTS disabled via MESH_LLM_CUDA_FA_ALL_QUANTS=off (CI opt-out)"
+    fi
     cmake_flags+=(
         -DGGML_CUDA=ON
-        -DGGML_CUDA_FA_ALL_QUANTS=ON
+        "$CUDA_FA_ALL_QUANTS_FLAG"
         -DGGML_HIP=OFF
         -DGGML_VULKAN=OFF
         -DGGML_METAL=OFF
@@ -321,10 +353,13 @@ cmake "${cmake_flags[@]}"
 # mistake, this trips before we burn 90s rebuilding llama.cpp. Tracking:
 # https://github.com/ggml-org/llama.cpp/issues/20866
 if [[ "$BACKEND" == "cuda" ]]; then
-    if ! grep -q "^GGML_CUDA_FA_ALL_QUANTS:BOOL=ON" "$BUILD_DIR/CMakeCache.txt"; then
-        echo "ERROR: GGML_CUDA_FA_ALL_QUANTS is not ON in $BUILD_DIR/CMakeCache.txt" >&2
-        echo "       This flag is required so asymmetric K/V cache quantization" >&2
-        echo "       does not crash rpc-server with BEST_FATTN_KERNEL_NONE." >&2
+    EXPECTED_FA_ALL_QUANTS="ON"
+    if [[ "${MESH_LLM_CUDA_FA_ALL_QUANTS:-on}" == "off" ]]; then
+        EXPECTED_FA_ALL_QUANTS="OFF"
+    fi
+    if ! grep -q "^GGML_CUDA_FA_ALL_QUANTS:BOOL=${EXPECTED_FA_ALL_QUANTS}" "$BUILD_DIR/CMakeCache.txt"; then
+        echo "ERROR: GGML_CUDA_FA_ALL_QUANTS is not ${EXPECTED_FA_ALL_QUANTS} in $BUILD_DIR/CMakeCache.txt" >&2
+        echo "       Release builds MUST ship ON (asymmetric K/V cache crash risk)." >&2
         echo "       See scripts/build-linux.sh and ggml-org/llama.cpp#20866." >&2
         exit 1
     fi
