@@ -266,10 +266,10 @@ jobs:
         if: always()
         run: sccache --show-stats || true
 
-  canary_smoke_tests:
+  inference_smoke_tests:
     needs: [changes, linux, macos]
     if: ${{ needs.linux.result == 'success' && needs.macos.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
-    name: Canary Smoke Tests
+    name: Inference Smoke Tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -373,8 +373,8 @@ jobs:
             ~/.models/$MOE_MODEL_FILE
 
   mlx_smoke_tests:
-    needs: [changes, macos, canary_smoke_tests]
-    if: ${{ needs.macos.result == 'success' && needs.canary_smoke_tests.result == 'success' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_mlx_smoke_tests != 'false') }}
+    needs: [changes, macos, inference_smoke_tests]
+    if: ${{ needs.macos.result == 'success' && needs.inference_smoke_tests.result == 'success' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_mlx_smoke_tests != 'false') }}
     name: MLX Smoke Tests
     runs-on: macos-latest
     strategy:
@@ -454,8 +454,8 @@ jobs:
           if-no-files-found: warn
 
   llama_smoke_tests:
-    needs: [changes, linux, canary_smoke_tests]
-    if: ${{ needs.linux.result == 'success' && needs.canary_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_llama_smoke_tests != 'false') }}
+    needs: [changes, linux, inference_smoke_tests]
+    if: ${{ needs.linux.result == 'success' && needs.inference_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_llama_smoke_tests != 'false') }}
     name: Llama Smoke Tests
     runs-on: ubuntu-latest
     strategy:
