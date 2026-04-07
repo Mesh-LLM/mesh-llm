@@ -24,12 +24,13 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 use url::Url;
 
+pub(crate) use self::config::validate_config;
 #[allow(unused_imports)]
 pub use self::config::ExternalPluginSpec;
 #[allow(unused_imports)]
 pub use self::config::{
-    config_path, load_config, resolve_plugins, MeshConfig, ModelConfigEntry, PluginHostMode,
-    ResolvedPlugins,
+    config_path, load_config, resolve_plugins, GpuAssignment, GpuConfig, MeshConfig,
+    ModelConfigEntry, PluginConfigEntry, PluginHostMode, ResolvedPlugins,
 };
 use self::runtime::ExternalPlugin;
 pub(crate) use self::support::parse_optional_json;

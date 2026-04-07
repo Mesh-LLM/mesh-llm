@@ -889,6 +889,8 @@ pub(crate) struct PeerAnnouncementV0 {
     served_model_descriptors: Vec<ServedModelDescriptor>,
     #[serde(skip_serializing, skip_deserializing, default)]
     served_model_runtime: Vec<ModelRuntimeDescriptor>,
+    #[serde(default)]
+    owner_id: Option<String>,
 }
 
 impl PeerAnnouncementV0 {
@@ -921,6 +923,7 @@ impl PeerAnnouncementV0 {
             available_model_sizes: self.available_model_sizes,
             served_model_descriptors: self.served_model_descriptors,
             served_model_runtime: self.served_model_runtime,
+            owner_id: self.owner_id,
         }
     }
 }
@@ -948,6 +951,7 @@ impl From<&PeerAnnouncement> for PeerAnnouncementV0 {
             available_model_sizes: ann.available_model_sizes.clone(),
             served_model_descriptors: ann.served_model_descriptors.clone(),
             served_model_runtime: ann.served_model_runtime.clone(),
+            owner_id: ann.owner_id.clone(),
         }
     }
 }
@@ -1059,6 +1063,7 @@ pub(crate) struct PeerAnnouncement {
     pub(crate) available_model_sizes: HashMap<String, u64>,
     pub(crate) served_model_descriptors: Vec<ServedModelDescriptor>,
     pub(crate) served_model_runtime: Vec<ModelRuntimeDescriptor>,
+    pub(crate) owner_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1101,6 +1106,7 @@ pub struct PeerInfo {
     pub available_model_sizes: HashMap<String, u64>,
     pub served_model_descriptors: Vec<ServedModelDescriptor>,
     pub served_model_runtime: Vec<ModelRuntimeDescriptor>,
+    pub owner_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1138,6 +1144,7 @@ impl PeerInfo {
             available_model_sizes: ann.available_model_sizes.clone(),
             served_model_descriptors: ann.served_model_descriptors.clone(),
             served_model_runtime: ann.served_model_runtime.clone(),
+            owner_id: ann.owner_id.clone(),
         }
     }
 
@@ -1335,6 +1342,9 @@ pub struct Node {
     pub is_soc: Option<bool>,
     pub gpu_vram: Option<String>,
     pub gpu_bandwidth_gbps: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
+    config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
+    config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
+    cached_owner_id: Option<String>,
 }
 
 struct MeshState {
@@ -1618,6 +1628,13 @@ impl Node {
             tracing::info!("Detected VRAM: {:.1} GB", vram as f64 / 1e9);
         }
 
+        let config_state_init = {
+            let path = crate::plugin::config_path(None)
+                .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
+            crate::runtime::config_state::ConfigState::load(&path)?
+        };
+        let config_revision_init = config_state_init.revision();
+
         let node = Node {
             endpoint,
             public_addr,
@@ -1660,6 +1677,18 @@ impl Node {
             is_soc,
             gpu_vram,
             gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
+            config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
+            config_revision_tx: {
+                let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
+                Arc::new(tx)
+            },
+            cached_owner_id: {
+                use crate::crypto::{default_keystore_path, keystore_metadata};
+                default_keystore_path()
+                    .ok()
+                    .and_then(|p| keystore_metadata(&p).ok())
+                    .map(|info| info.owner_id)
+            },
         };
 
         // Accept loop starts but waits for start_accepting() before processing connections.
@@ -1746,6 +1775,14 @@ impl Node {
             is_soc: Some(false),
             gpu_vram: None,
             gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
+            config_state: Arc::new(tokio::sync::Mutex::new(
+                crate::runtime::config_state::ConfigState::default(),
+            )),
+            config_revision_tx: {
+                let (tx, _rx) = tokio::sync::watch::channel(0u64);
+                Arc::new(tx)
+            },
+            cached_owner_id: None,
         })
     }
 
@@ -2032,16 +2069,6 @@ impl Node {
     /// Set the operator-facing display name for this node.
     pub async fn set_display_name(&self, name: String) {
         *self.display_name.lock().await = Some(name);
-    }
-
-    /// Get the operator-facing display name for this node.
-    /// Falls back to the short endpoint ID if no name is set.
-    pub async fn display_name(&self) -> String {
-        if let Some(ref name) = *self.display_name.lock().await {
-            name.clone()
-        } else {
-            self.endpoint.id().fmt_short().to_string()
-        }
     }
 
     pub async fn set_plugin_manager(&self, plugin_manager: crate::plugin::PluginManager) {
@@ -3770,11 +3797,366 @@ impl Node {
                         }
                     });
                 }
+                STREAM_CONFIG_SUBSCRIBE => {
+                    let node = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = node.handle_config_subscribe(remote, send, recv).await {
+                            tracing::warn!(
+                                "config subscribe error from {}: {e}",
+                                remote.fmt_short()
+                            );
+                        }
+                    });
+                }
+                STREAM_CONFIG_PUSH => {
+                    let node = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = node.handle_config_push(remote, send, recv).await {
+                            tracing::warn!("config push error from {}: {e}", remote.fmt_short());
+                        }
+                    });
+                }
                 other => {
                     tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short());
                 }
             }
         }
+    }
+
+    // --- Config Subscribe ---
+
+    async fn handle_config_subscribe(
+        &self,
+        remote: EndpointId,
+        mut send: iroh::endpoint::SendStream,
+        mut recv: iroh::endpoint::RecvStream,
+    ) -> anyhow::Result<()> {
+        use crate::proto::node::{ConfigSnapshotResponse, ConfigUpdateNotification};
+        use crate::protocol::convert::mesh_config_to_proto;
+        use prost::Message as _;
+
+        let buf = read_len_prefixed(&mut recv).await?;
+        let frame = crate::proto::node::ConfigSubscribe::decode(buf.as_slice())
+            .map_err(|e| anyhow::anyhow!("ConfigSubscribe decode error: {e}"))?;
+        frame
+            .validate_frame()
+            .map_err(|e| anyhow::anyhow!("ConfigSubscribe validation error: {e}"))?;
+
+        let local_owner_id = match self.local_owner_id() {
+            Some(id) => id,
+            None => {
+                let error_snapshot = crate::proto::node::ConfigSnapshotResponse {
+                    gen: NODE_PROTOCOL_GENERATION,
+                    node_id: vec![],
+                    owner_id: String::new(),
+                    revision: 0,
+                    config_hash: vec![],
+                    config: None,
+                    hostname: None,
+                    error: Some("node has no local owner".to_string()),
+                };
+                write_len_prefixed(&mut send, &error_snapshot.encode_to_vec()).await?;
+                return Ok(());
+            }
+        };
+
+        if frame.subscriber_id.as_slice() != remote.as_bytes() {
+            tracing::warn!(
+                "config subscribe from {}: subscriber_id does not match connection identity",
+                remote.fmt_short()
+            );
+            let error_snapshot = crate::proto::node::ConfigSnapshotResponse {
+                gen: NODE_PROTOCOL_GENERATION,
+                node_id: vec![],
+                owner_id: String::new(),
+                revision: 0,
+                config_hash: vec![],
+                config: None,
+                hostname: None,
+                error: Some("subscriber_id does not match connection identity".to_string()),
+            };
+            write_len_prefixed(&mut send, &error_snapshot.encode_to_vec()).await?;
+            return Ok(());
+        }
+
+        if frame.owner_id != local_owner_id {
+            tracing::warn!(
+                "config subscribe from {}: owner_id mismatch (want {}, got {})",
+                remote.fmt_short(),
+                local_owner_id,
+                frame.owner_id
+            );
+            let error_snapshot = crate::proto::node::ConfigSnapshotResponse {
+                gen: NODE_PROTOCOL_GENERATION,
+                node_id: vec![],
+                owner_id: String::new(),
+                revision: 0,
+                config_hash: vec![],
+                config: None,
+                hostname: None,
+                error: Some("owner_id mismatch".to_string()),
+            };
+            write_len_prefixed(&mut send, &error_snapshot.encode_to_vec()).await?;
+            return Ok(());
+        }
+
+        let snapshot = {
+            let state = self.config_state.lock().await;
+            let proto_cfg = mesh_config_to_proto(state.config());
+            ConfigSnapshotResponse {
+                gen: NODE_PROTOCOL_GENERATION,
+                node_id: self.endpoint.id().as_bytes().to_vec(),
+                owner_id: local_owner_id.to_string(),
+                revision: state.revision(),
+                config_hash: state.config_hash().to_vec(),
+                config: Some(proto_cfg),
+                hostname: self.hostname.clone(),
+                error: None,
+            }
+        };
+        write_len_prefixed(&mut send, &snapshot.encode_to_vec()).await?;
+
+        let owner_id_owned = local_owner_id.to_string();
+        let mut rev_rx = self.config_revision_tx.subscribe();
+        loop {
+            if rev_rx.changed().await.is_err() {
+                break;
+            }
+            let notification = {
+                let state = self.config_state.lock().await;
+                let proto_cfg = mesh_config_to_proto(state.config());
+                ConfigUpdateNotification {
+                    gen: NODE_PROTOCOL_GENERATION,
+                    node_id: self.endpoint.id().as_bytes().to_vec(),
+                    owner_id: owner_id_owned.clone(),
+                    revision: state.revision(),
+                    config_hash: state.config_hash().to_vec(),
+                    config: Some(proto_cfg),
+                }
+            };
+            if write_len_prefixed(&mut send, &notification.encode_to_vec())
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn local_owner_id(&self) -> Option<&str> {
+        self.cached_owner_id.as_deref()
+    }
+
+    // --- Config Push ---
+
+    async fn handle_config_push(
+        &self,
+        remote: EndpointId,
+        mut send: iroh::endpoint::SendStream,
+        mut recv: iroh::endpoint::RecvStream,
+    ) -> anyhow::Result<()> {
+        use crate::protocol::convert::proto_config_to_mesh;
+        use prost::Message as _;
+
+        // 1. Read + decode + validate ConfigPush
+        let buf = read_len_prefixed(&mut recv).await?;
+        let push = crate::proto::node::ConfigPush::decode(buf.as_slice())?;
+        push.validate_frame()
+            .map_err(|e| anyhow::anyhow!("invalid push frame: {e}"))?;
+
+        if push.target_node_id.as_slice() != self.endpoint.id().as_bytes() {
+            send_push_error(&mut send, "target_node_id does not match this node").await?;
+            return Ok(());
+        }
+        if push.requester_id.as_slice() != remote.as_bytes() {
+            send_push_error(&mut send, "requester_id does not match connection identity").await?;
+            return Ok(());
+        }
+
+        // 2. Derive owner_id from the push's public key
+        let pk_bytes: [u8; 32] = push
+            .owner_signing_public_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid public key length"))?;
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes)?;
+        let derived_owner_id = crate::crypto::owner_id_from_verifying_key(&vk);
+
+        if derived_owner_id != push.owner_id {
+            send_push_error(&mut send, "owner_id mismatch").await?;
+            return Ok(());
+        }
+
+        let local_id = match self.local_owner_id() {
+            Some(id) => id,
+            None => {
+                send_push_error(&mut send, "node has no local owner").await?;
+                return Ok(());
+            }
+        };
+        if local_id != push.owner_id {
+            send_push_error(&mut send, "not the owner of this node").await?;
+            return Ok(());
+        }
+
+        let payload = config_push_signature_payload(&push);
+        let sig_bytes: [u8; 64] = match push.signature.as_slice().try_into() {
+            Ok(b) => b,
+            Err(_) => {
+                send_push_error(&mut send, "invalid signature length").await?;
+                return Ok(());
+            }
+        };
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+        if vk.verify_strict(&payload, &sig).is_err() {
+            send_push_error(&mut send, "signature verification failed").await?;
+            return Ok(());
+        }
+
+        // 5. Convert NodeConfigSnapshot → MeshConfig
+        let Some(ref config_snapshot) = push.config else {
+            send_push_error(&mut send, "missing config payload").await?;
+            return Ok(());
+        };
+        let mesh_config = proto_config_to_mesh(config_snapshot);
+
+        // 6. Apply via CAS — use spawn_blocking so synchronous disk I/O in apply()
+        //    does not block the Tokio async runtime while the mutex is held.
+        let config_state = Arc::clone(&self.config_state);
+        let expected_revision = push.expected_revision;
+        let (result, current_revision, current_hash) =
+            tokio::task::spawn_blocking(move || {
+                let mut state = config_state.blocking_lock();
+                let result = state.apply(mesh_config, expected_revision);
+                let current_revision = state.revision();
+                let current_hash = *state.config_hash();
+                (result, current_revision, current_hash)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
+
+        // 7. Build + send response
+        use crate::protocol::convert::local_apply_mode_to_proto;
+        use crate::runtime::config_state::{ApplyResult, ConfigApplyMode};
+        let response = match result {
+            ApplyResult::Applied {
+                revision,
+                hash,
+                apply_mode,
+            } => {
+                if apply_mode != ConfigApplyMode::Noop {
+                    let _ = self.config_revision_tx.send(revision);
+                }
+                crate::proto::node::ConfigPushResponse {
+                    gen: NODE_PROTOCOL_GENERATION,
+                    success: true,
+                    current_revision: revision,
+                    config_hash: hash.to_vec(),
+                    error: None,
+                    apply_mode: local_apply_mode_to_proto(apply_mode),
+                }
+            }
+            ApplyResult::RevisionConflict { current_revision } => {
+                crate::proto::node::ConfigPushResponse {
+                    gen: NODE_PROTOCOL_GENERATION,
+                    success: false,
+                    current_revision,
+                    config_hash: vec![],
+                    error: Some(
+                        "revision conflict: expected_revision does not match current".to_string(),
+                    ),
+                    apply_mode: local_apply_mode_to_proto(ConfigApplyMode::Noop),
+                }
+            }
+            ApplyResult::ValidationError(msg) | ApplyResult::PersistError(msg) => {
+                crate::proto::node::ConfigPushResponse {
+                    gen: NODE_PROTOCOL_GENERATION,
+                    success: false,
+                    current_revision,
+                    config_hash: current_hash.to_vec(),
+                    error: Some(msg),
+                    apply_mode: local_apply_mode_to_proto(ConfigApplyMode::Noop),
+                }
+            }
+        };
+        write_len_prefixed(&mut send, &response.encode_to_vec()).await?;
+        Ok(())
+    }
+
+    /// Outbound config subscription helper — opens a bi-stream to the target peer,
+    /// sends a `ConfigSubscribe` message, and reads back the initial snapshot.
+    ///
+    /// This is an intentional API stub for the future UI/API layer that will
+    /// materialize a mesh-wide config view from per-node subscriptions.
+    /// Not yet called from production code.
+    #[allow(dead_code)]
+    pub(crate) async fn subscribe_to_config(
+        &self,
+        conn: &iroh::endpoint::Connection,
+        owner_id: &str,
+    ) -> anyhow::Result<(
+        crate::proto::node::ConfigSnapshotResponse,
+        tokio::sync::watch::Receiver<crate::proto::node::ConfigUpdateNotification>,
+    )> {
+        use crate::proto::node::{
+            ConfigSnapshotResponse, ConfigSubscribe, ConfigUpdateNotification,
+        };
+
+        let (mut send, mut recv) = conn.open_bi().await?;
+        send.write_all(&[STREAM_CONFIG_SUBSCRIBE]).await?;
+
+        let req = ConfigSubscribe {
+            gen: NODE_PROTOCOL_GENERATION,
+            subscriber_id: self.endpoint.id().as_bytes().to_vec(),
+            owner_id: owner_id.to_string(),
+        };
+        write_len_prefixed(&mut send, &req.encode_to_vec()).await?;
+
+        let buf = read_len_prefixed(&mut recv).await?;
+        let snapshot = ConfigSnapshotResponse::decode(buf.as_slice())
+            .map_err(|e| anyhow::anyhow!("ConfigSnapshotResponse decode error: {e}"))?;
+        snapshot
+            .validate_frame()
+            .map_err(|e| anyhow::anyhow!("ConfigSnapshotResponse validation error: {e}"))?;
+        if let Some(err_msg) = snapshot.error.as_deref().filter(|e| !e.is_empty()) {
+            return Err(anyhow::anyhow!("config subscribe rejected: {err_msg}"));
+        }
+
+        let empty_notif = ConfigUpdateNotification {
+            gen: NODE_PROTOCOL_GENERATION,
+            node_id: snapshot.node_id.clone(),
+            owner_id: snapshot.owner_id.clone(),
+            revision: snapshot.revision,
+            config_hash: snapshot.config_hash.clone(),
+            config: snapshot.config.clone(),
+        };
+        let (notif_tx, notif_rx) = tokio::sync::watch::channel(empty_notif);
+        tokio::spawn(async move {
+            loop {
+                match read_len_prefixed(&mut recv).await {
+                    Ok(buf) => match ConfigUpdateNotification::decode(buf.as_slice()) {
+                        Ok(notif) => {
+                            if let Err(e) = notif.validate_frame() {
+                                tracing::warn!("ConfigUpdateNotification validation error: {e}");
+                                break;
+                            }
+                            if notif_tx.send(notif).is_err() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("ConfigUpdateNotification decode error: {e}");
+                            break;
+                        }
+                    },
+                    Err(_) => break,
+                }
+            }
+        });
+
+        Ok((snapshot, notif_rx))
     }
 
     // --- Gossip ---
@@ -4350,6 +4732,7 @@ impl Node {
                     available_model_sizes: p.available_model_sizes.clone(),
                     served_model_descriptors: p.served_model_descriptors.clone(),
                     served_model_runtime: p.served_model_runtime.clone(),
+                    owner_id: p.owner_id.clone(),
                 })
                 .collect()
         };
@@ -4393,9 +4776,32 @@ impl Node {
             available_model_sizes: my_model_sizes,
             served_model_descriptors: my_served_model_descriptors,
             served_model_runtime: my_model_runtime_descriptors,
+            owner_id: self.local_owner_id().map(str::to_string),
         });
         announcements
     }
+}
+
+pub(crate) fn config_push_signature_payload(push: &crate::proto::node::ConfigPush) -> Vec<u8> {
+    use prost::Message as _;
+    let mut unsigned = push.clone();
+    unsigned.signature.clear();
+    unsigned.encode_to_vec()
+}
+
+async fn send_push_error(send: &mut iroh::endpoint::SendStream, msg: &str) -> anyhow::Result<()> {
+    use crate::protocol::write_len_prefixed;
+    use prost::Message as _;
+    let response = crate::proto::node::ConfigPushResponse {
+        gen: NODE_PROTOCOL_GENERATION,
+        success: false,
+        current_revision: 0,
+        config_hash: vec![],
+        error: Some(msg.to_string()),
+        apply_mode: crate::proto::node::ConfigApplyMode::Noop as i32,
+    };
+    write_len_prefixed(send, &response.encode_to_vec()).await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -4465,6 +4871,14 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
+            config_state: Arc::new(tokio::sync::Mutex::new(
+                crate::runtime::config_state::ConfigState::default(),
+            )),
+            config_revision_tx: {
+                let (tx, _rx) = tokio::sync::watch::channel(0u64);
+                Arc::new(tx)
+            },
+            cached_owner_id: None,
         };
 
         let accept_node = node.clone();
@@ -4944,6 +5358,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
         let legacy_route_table = RoutingTable {
             hosts: vec![RouteEntry {
@@ -5159,6 +5574,7 @@ mod tests {
             available_model_sizes: HashMap::from([("Qwen".into(), 1234_u64)]),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
         let json = serde_json::to_vec(&vec![ann.clone()]).unwrap();
 
@@ -5229,6 +5645,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         }
     }
 
@@ -5717,6 +6134,7 @@ mod tests {
                 context_length: Some(32768),
                 ready: true,
             }],
+            owner_id: None,
         };
 
         let proto_pa = local_ann_to_proto_ann(&local_ann);
@@ -5933,6 +6351,7 @@ mod tests {
             available_model_sizes: new_sizes,
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
 
         apply_transitive_ann(&mut existing, &addr, &ann);
@@ -6000,6 +6419,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
 
         apply_transitive_ann(&mut existing, &weak_addr, &ann);
@@ -6046,6 +6466,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
         apply_transitive_ann(&mut existing, &richer_addr, &ann2);
 
@@ -7028,6 +7449,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
 
         let server = tokio::spawn(async move {
@@ -7214,6 +7636,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
 
         let server = tokio::spawn(async move {
@@ -7422,6 +7845,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         };
         let v0_gossip_json =
             serde_json::to_vec(&vec![v0_ann]).expect("v0 gossip JSON must serialize");
@@ -7641,6 +8065,7 @@ mod tests {
             available_model_sizes: HashMap::new(),
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
+            owner_id: None,
         }
     }
 
@@ -7807,6 +8232,959 @@ mod tests {
             "connect_to_peer must return Ok for known peers"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn config_sync_subscribe_snapshot_encode_decode() {
+        use crate::proto::node::{ConfigSnapshotResponse, NodeConfigSnapshot, NodeGpuConfig};
+
+        let snapshot = ConfigSnapshotResponse {
+            gen: NODE_PROTOCOL_GENERATION,
+            node_id: vec![0xAA; 32],
+            owner_id: "test-owner".to_string(),
+            revision: 7,
+            config_hash: vec![0xBB; 32],
+            config: Some(NodeConfigSnapshot {
+                version: 1,
+                gpu: Some(NodeGpuConfig {
+                    assignment: crate::proto::node::GpuAssignment::Auto as i32,
+                }),
+                models: vec![],
+                plugins: vec![],
+            }),
+            hostname: Some("test-host".to_string()),
+            error: None,
+        };
+
+        let encoded = encode_control_frame(STREAM_CONFIG_SUBSCRIBE, &snapshot);
+        let decoded: ConfigSnapshotResponse =
+            decode_control_frame(STREAM_CONFIG_SUBSCRIBE, &encoded)
+                .expect("round-trip must succeed");
+
+        assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+        assert_eq!(decoded.node_id, vec![0xAA; 32]);
+        assert_eq!(decoded.owner_id, "test-owner");
+        assert_eq!(decoded.revision, 7);
+        assert_eq!(decoded.config_hash, vec![0xBB; 32]);
+        assert_eq!(decoded.hostname, Some("test-host".to_string()));
+        let cfg = decoded.config.expect("config must be present");
+        assert_eq!(cfg.version, 1);
+        let gpu = cfg.gpu.expect("gpu must be present");
+        assert_eq!(
+            gpu.assignment,
+            crate::proto::node::GpuAssignment::Auto as i32
+        );
+    }
+
+    #[test]
+    fn config_sync_subscribe_not_before_admission() {
+        assert!(
+            !stream_allowed_before_admission(STREAM_CONFIG_SUBSCRIBE),
+            "STREAM_CONFIG_SUBSCRIBE (0x0b) must require admission — it is an owner-gated config stream"
+        );
+    }
+
+    fn test_signing_key() -> (ed25519_dalek::SigningKey, String) {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x42u8; 32]);
+        let verifying = signing_key.verifying_key();
+        let owner_id = crate::crypto::owner_id_from_verifying_key(&verifying);
+        (signing_key, owner_id)
+    }
+
+    #[test]
+    fn config_sync_push_signature_payload_deterministic() {
+        use crate::proto::node::{ConfigPush, NodeConfigSnapshot};
+
+        let (_, owner_id) = test_signing_key();
+        let push = ConfigPush {
+            gen: NODE_PROTOCOL_GENERATION,
+            requester_id: vec![0xAA; 32],
+            target_node_id: vec![0xBB; 32],
+            owner_id: owner_id.clone(),
+            owner_signing_public_key: vec![0x42u8; 32],
+            expected_revision: 3,
+            config: Some(NodeConfigSnapshot {
+                version: 1,
+                gpu: None,
+                models: vec![],
+                plugins: vec![],
+            }),
+            signature: vec![0u8; 64],
+        };
+
+        let p1 = config_push_signature_payload(&push);
+        let p2 = config_push_signature_payload(&push);
+        assert_eq!(p1, p2, "payload must be deterministic for the same input");
+        assert!(!p1.is_empty(), "payload must not be empty");
+    }
+
+    #[test]
+    fn config_sync_push_wrong_owner_detected() {
+        use crate::proto::node::ConfigPush;
+
+        let (signing_key, real_owner_id) = test_signing_key();
+        let vk = signing_key.verifying_key();
+        let derived = crate::crypto::owner_id_from_verifying_key(&vk);
+
+        let push_owner_id = "some-other-owner-id".to_string();
+        assert_ne!(
+            push_owner_id, derived,
+            "test requires push.owner_id to differ from the derived owner_id"
+        );
+
+        let push = ConfigPush {
+            gen: NODE_PROTOCOL_GENERATION,
+            requester_id: vec![0xAA; 32],
+            target_node_id: vec![0xBB; 32],
+            owner_id: push_owner_id.clone(),
+            owner_signing_public_key: vk.to_bytes().to_vec(),
+            expected_revision: 0,
+            config: None,
+            signature: vec![0u8; 64],
+        };
+
+        let mismatch = derived != push.owner_id;
+        assert!(
+            mismatch,
+            "owner_id derived from public key ({derived}) must not match push.owner_id ({push_owner_id})"
+        );
+        let _ = real_owner_id;
+    }
+
+    #[test]
+    fn config_sync_push_bad_signature_bytes_length() {
+        let bad_sig: Vec<u8> = vec![0u8; 32];
+        let result: Result<[u8; 64], _> = bad_sig.as_slice().try_into();
+        assert!(
+            result.is_err(),
+            "32-byte slice must not convert to [u8; 64] — wrong-length signature must be rejected"
+        );
+
+        let good_sig: Vec<u8> = vec![0u8; 64];
+        let result: Result<[u8; 64], _> = good_sig.as_slice().try_into();
+        assert!(result.is_ok(), "64-byte slice must convert to [u8; 64]");
+    }
+
+    #[test]
+    fn config_sync_push_roundtrip_encode_decode() {
+        use crate::proto::node::ConfigPushResponse;
+        use prost::Message as _;
+
+        let response = ConfigPushResponse {
+            gen: NODE_PROTOCOL_GENERATION,
+            success: true,
+            current_revision: 42,
+            config_hash: vec![0xCC; 32],
+            error: None,
+            apply_mode: crate::proto::node::ConfigApplyMode::Staged as i32,
+        };
+
+        let encoded = response.encode_to_vec();
+        let decoded = ConfigPushResponse::decode(encoded.as_slice())
+            .expect("ConfigPushResponse must round-trip through encode/decode");
+
+        assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+        assert!(decoded.success);
+        assert_eq!(decoded.current_revision, 42);
+        assert_eq!(decoded.config_hash, vec![0xCC; 32]);
+        assert!(decoded.error.is_none());
+        assert_eq!(
+            decoded.apply_mode,
+            crate::proto::node::ConfigApplyMode::Staged as i32,
+        );
+    }
+
+    #[test]
+    fn config_sync_sign_and_verify_roundtrip() {
+        use crate::proto::node::{ConfigPush, NodeConfigSnapshot};
+        use ed25519_dalek::Signer as _;
+
+        let (signing_key, owner_id) = test_signing_key();
+        let vk = signing_key.verifying_key();
+
+        let mut push = ConfigPush {
+            gen: NODE_PROTOCOL_GENERATION,
+            requester_id: vec![0xAA; 32],
+            target_node_id: vec![0xBB; 32],
+            owner_id: owner_id.clone(),
+            owner_signing_public_key: vk.to_bytes().to_vec(),
+            expected_revision: 0,
+            config: Some(NodeConfigSnapshot {
+                version: 1,
+                gpu: None,
+                models: vec![],
+                plugins: vec![],
+            }),
+            signature: vec![0u8; 64],
+        };
+
+        let payload = config_push_signature_payload(&push);
+        let sig = signing_key.sign(&payload);
+        push.signature = sig.to_bytes().to_vec();
+
+        // Verify: re-derive owner_id from vk and check signature
+        let pk_bytes: [u8; 32] = push.owner_signing_public_key.as_slice().try_into().unwrap();
+        let restored_vk = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes).unwrap();
+        let derived_id = crate::crypto::owner_id_from_verifying_key(&restored_vk);
+        assert_eq!(derived_id, owner_id, "owner_id must match key fingerprint");
+
+        let payload2 = config_push_signature_payload(&push);
+        let sig_bytes: [u8; 64] = push.signature.as_slice().try_into().unwrap();
+        let sig_obj = ed25519_dalek::Signature::from_bytes(&sig_bytes);
+        restored_vk
+            .verify_strict(&payload2, &sig_obj)
+            .expect("signature must verify against the canonical payload");
+    }
+
+    #[test]
+    fn config_sync_signature_payload_excludes_signature_field() {
+        use crate::proto::node::{ConfigPush, NodeConfigSnapshot};
+
+        let (_, owner_id) = test_signing_key();
+
+        let mut push = ConfigPush {
+            gen: NODE_PROTOCOL_GENERATION,
+            requester_id: vec![0xAA; 32],
+            target_node_id: vec![0xBB; 32],
+            owner_id: owner_id.clone(),
+            owner_signing_public_key: vec![0x42u8; 32],
+            expected_revision: 0,
+            config: Some(NodeConfigSnapshot {
+                version: 1,
+                gpu: None,
+                models: vec![],
+                plugins: vec![],
+            }),
+            signature: vec![0u8; 64],
+        };
+
+        let payload_with_sig = config_push_signature_payload(&push);
+
+        // Change only the signature field — the canonical payload must not change
+        push.signature = vec![0xFF; 64];
+        let payload_different_sig = config_push_signature_payload(&push);
+
+        assert_eq!(
+            payload_with_sig, payload_different_sig,
+            "payload must be identical regardless of the signature field value"
+        );
+
+        // Change a semantic field — the canonical payload MUST change
+        push.expected_revision = 99;
+        let payload_changed = config_push_signature_payload(&push);
+        assert_ne!(
+            payload_with_sig, payload_changed,
+            "payload must change when a semantic field changes"
+        );
+    }
+
+    /// Helper: create a test node that has a cached owner_id and a config_state
+    /// pointing to the given directory. The `signing_key` is used to derive the
+    /// owner fingerprint; it is NOT stored by the node (tests sign externally).
+    /// Create a test `Node` with a cached `owner_id` derived from `signing_key` and a
+    /// `ConfigState` whose backing file lives in `config_dir`.
+    ///
+    /// The `signing_key` is used **only** to derive the owner fingerprint stored in
+    /// `cached_owner_id`; the node does not retain the key itself. Callers that need
+    /// to sign `ConfigPush` messages must hold on to `signing_key` themselves.
+    async fn make_test_node_with_owner(
+        role: super::NodeRole,
+        signing_key: &ed25519_dalek::SigningKey,
+        config_dir: &std::path::Path,
+    ) -> Result<Node> {
+        use iroh::endpoint::QuicTransportConfig;
+
+        let owner_id = crate::crypto::owner_id_from_verifying_key(&signing_key.verifying_key());
+        let config_path = config_dir.join("config.toml");
+        let config_state =
+            crate::runtime::config_state::ConfigState::load(&config_path).unwrap_or_default();
+
+        let transport_config = QuicTransportConfig::builder()
+            .max_concurrent_bidi_streams(128u32.into())
+            .build();
+        let endpoint = Endpoint::empty_builder()
+            .secret_key(SecretKey::generate(&mut rand::rng()))
+            .alpns(vec![ALPN_V1.to_vec(), ALPN_V0.to_vec()])
+            .transport_config(transport_config)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
+            .bind()
+            .await?;
+
+        let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
+        let (inflight_change_tx, _) = watch::channel(0u64);
+        let (tunnel_tx, _tunnel_rx) = tokio::sync::mpsc::channel(8);
+        let (tunnel_http_tx, _tunnel_http_rx) = tokio::sync::mpsc::channel(8);
+        let revision = config_state.revision();
+
+        let node = Node {
+            endpoint,
+            public_addr: None,
+            state: Arc::new(Mutex::new(MeshState {
+                peers: HashMap::new(),
+                connections: HashMap::new(),
+                remote_tunnel_maps: HashMap::new(),
+                dead_peers: HashSet::new(),
+                seen_plugin_messages: HashSet::new(),
+                seen_plugin_message_order: VecDeque::new(),
+            })),
+            role: Arc::new(Mutex::new(role)),
+            models: Arc::new(Mutex::new(Vec::new())),
+            model_source: Arc::new(Mutex::new(None)),
+            serving_models: Arc::new(Mutex::new(Vec::new())),
+            served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
+            hosted_models: Arc::new(Mutex::new(Vec::new())),
+            llama_ready: Arc::new(Mutex::new(false)),
+            available_models: Arc::new(Mutex::new(Vec::new())),
+            requested_models: Arc::new(Mutex::new(Vec::new())),
+            model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            mesh_id: Arc::new(Mutex::new(None)),
+            accepting: Arc::new((
+                tokio::sync::Notify::new(),
+                std::sync::atomic::AtomicBool::new(false),
+            )),
+            vram_bytes: 64 * 1024 * 1024 * 1024,
+            peer_change_tx,
+            peer_change_rx,
+            inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            inflight_change_tx,
+            tunnel_tx,
+            tunnel_http_tx,
+            plugin_manager: Arc::new(Mutex::new(None)),
+            display_name: Arc::new(Mutex::new(None)),
+            enumerate_host: false,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
+            config_state: Arc::new(tokio::sync::Mutex::new(config_state)),
+            config_revision_tx: {
+                let (tx, _rx) = tokio::sync::watch::channel(revision);
+                Arc::new(tx)
+            },
+            cached_owner_id: Some(owner_id),
+        };
+
+        let accept_node = node.clone();
+        tokio::spawn(async move {
+            accept_node.accept_loop().await;
+        });
+
+        Ok(node)
+    }
+
+    /// Helper: build and sign a ConfigPush proto for the given node/owner/config.
+    /// Build a `ConfigPush` proto that is correctly signed with `signing_key`.
+    ///
+    /// The resulting push targets `target_node_id`, is attributed to `requester_id`,
+    /// and carries `expected_revision` for CAS enforcement. The signature covers the
+    /// canonical protobuf encoding of the push with the `signature` field cleared.
+    fn build_signed_config_push(
+        signing_key: &ed25519_dalek::SigningKey,
+        requester_id: &EndpointId,
+        target_node_id: &EndpointId,
+        expected_revision: u64,
+        config: crate::proto::node::NodeConfigSnapshot,
+    ) -> crate::proto::node::ConfigPush {
+        use ed25519_dalek::Signer as _;
+
+        let vk = signing_key.verifying_key();
+        let owner_id = crate::crypto::owner_id_from_verifying_key(&vk);
+
+        let mut push = crate::proto::node::ConfigPush {
+            gen: NODE_PROTOCOL_GENERATION,
+            requester_id: requester_id.as_bytes().to_vec(),
+            target_node_id: target_node_id.as_bytes().to_vec(),
+            owner_id,
+            owner_signing_public_key: vk.to_bytes().to_vec(),
+            expected_revision,
+            config: Some(config),
+            signature: vec![0u8; 64],
+        };
+        let payload = config_push_signature_payload(&push);
+        let sig = signing_key.sign(&payload);
+        push.signature = sig.to_bytes().to_vec();
+        push
+    }
+
+    /// Wait until `node` has `target` in its peers list. Times out after 5 s.
+    /// Poll `node.peers()` until `target` appears in the list.
+    ///
+    /// Panics (via `expect`) if `target` is not admitted within 5 seconds.
+    async fn wait_for_peer(node: &Node, target: EndpointId) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if node.peers().await.iter().any(|p| p.id == target) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("peer was not admitted within 5 s");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_subscribe_matching_owner_receives_snapshot() -> Result<()> {
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x11u8; 32]);
+        let owner_id = crate::crypto::owner_id_from_verifying_key(&signing_key.verifying_key());
+
+        let tmp = std::env::temp_dir().join(format!("mesh-llm-cfg-sub-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("server")).ok();
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        let server = make_test_node_with_owner(
+            super::NodeRole::Host { http_port: 9337 },
+            &signing_key,
+            &tmp.join("server"),
+        )
+        .await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &signing_key, &tmp.join("client"))
+                .await?;
+
+        server
+            .set_mesh_id("cfg-subscribe-mesh-01".to_string())
+            .await;
+        client
+            .set_mesh_id("cfg-subscribe-mesh-01".to_string())
+            .await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        let (snapshot, _notif_rx) = client.subscribe_to_config(&conn, &owner_id).await?;
+
+        assert_eq!(
+            snapshot.owner_id, owner_id,
+            "snapshot owner_id must match the server's owner"
+        );
+        assert_eq!(
+            snapshot.node_id,
+            server_id.as_bytes().to_vec(),
+            "snapshot node_id must be the server's endpoint id"
+        );
+        assert_eq!(
+            snapshot.config_hash.len(),
+            32,
+            "config_hash must be 32 bytes"
+        );
+        assert!(
+            snapshot.config.is_some(),
+            "snapshot must include config payload"
+        );
+        assert!(
+            snapshot.error.is_none() || snapshot.error.as_deref() == Some(""),
+            "snapshot must not carry an error"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_subscribe_wrong_owner_returns_error() -> Result<()> {
+        let server_key = ed25519_dalek::SigningKey::from_bytes(&[0x22u8; 32]);
+        let client_key = ed25519_dalek::SigningKey::from_bytes(&[0x33u8; 32]);
+        let client_owner_id =
+            crate::crypto::owner_id_from_verifying_key(&client_key.verifying_key());
+
+        let tmp =
+            std::env::temp_dir().join(format!("mesh-llm-cfg-wrong-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("server")).ok();
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        let server = make_test_node_with_owner(
+            super::NodeRole::Host { http_port: 9337 },
+            &server_key,
+            &tmp.join("server"),
+        )
+        .await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &client_key, &tmp.join("client"))
+                .await?;
+
+        server
+            .set_mesh_id("cfg-wrong-owner-mesh-01".to_string())
+            .await;
+        client
+            .set_mesh_id("cfg-wrong-owner-mesh-01".to_string())
+            .await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        // Subscribe with client's own owner_id, which differs from the server's
+        let result = client.subscribe_to_config(&conn, &client_owner_id).await;
+        assert!(
+            result.is_err(),
+            "subscribing with wrong owner_id must return an error"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("owner_id mismatch") || err_msg.contains("rejected"),
+            "error must mention owner mismatch, got: {err_msg}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_subscribe_unowned_node_returns_error() -> Result<()> {
+        let client_key = ed25519_dalek::SigningKey::from_bytes(&[0x44u8; 32]);
+        let client_owner_id =
+            crate::crypto::owner_id_from_verifying_key(&client_key.verifying_key());
+
+        let tmp =
+            std::env::temp_dir().join(format!("mesh-llm-cfg-unowned-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        // server has NO owner key (make_test_node, not make_test_node_with_owner)
+        let server = make_test_node(super::NodeRole::Host { http_port: 9337 }).await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &client_key, &tmp.join("client"))
+                .await?;
+
+        server.set_mesh_id("cfg-unowned-mesh-01".to_string()).await;
+        client.set_mesh_id("cfg-unowned-mesh-01".to_string()).await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        let result = client.subscribe_to_config(&conn, &client_owner_id).await;
+        assert!(
+            result.is_err(),
+            "subscribing to an unowned node must return an error"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("no local owner") || err_msg.contains("rejected"),
+            "error must mention missing owner, got: {err_msg}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_push_valid_signature_accepted() -> Result<()> {
+        use crate::proto::node::{NodeConfigSnapshot, NodeGpuConfig};
+        use crate::protocol::write_len_prefixed;
+        use prost::Message as _;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x55u8; 32]);
+
+        let tmp =
+            std::env::temp_dir().join(format!("mesh-llm-cfg-push-ok-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("server")).ok();
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        let server = make_test_node_with_owner(
+            super::NodeRole::Host { http_port: 9337 },
+            &signing_key,
+            &tmp.join("server"),
+        )
+        .await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &signing_key, &tmp.join("client"))
+                .await?;
+
+        server.set_mesh_id("cfg-push-ok-mesh-01".to_string()).await;
+        client.set_mesh_id("cfg-push-ok-mesh-01".to_string()).await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let client_id = client.id();
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        let new_config = NodeConfigSnapshot {
+            version: 1,
+            gpu: Some(NodeGpuConfig {
+                assignment: crate::proto::node::GpuAssignment::Auto as i32,
+            }),
+            models: vec![],
+            plugins: vec![],
+        };
+
+        let push = build_signed_config_push(&signing_key, &client_id, &server_id, 0, new_config);
+
+        let (mut send, mut recv) = conn.open_bi().await?;
+        send.write_all(&[STREAM_CONFIG_PUSH]).await?;
+        write_len_prefixed(&mut send, &push.encode_to_vec()).await?;
+        send.finish()?;
+
+        let buf = crate::protocol::read_len_prefixed(&mut recv).await?;
+        let response = crate::proto::node::ConfigPushResponse::decode(buf.as_slice())?;
+
+        assert!(
+            response.success,
+            "valid signed push must be accepted: {:?}",
+            response.error
+        );
+        assert_eq!(
+            response.current_revision, 1,
+            "revision must be bumped to 1 after first push"
+        );
+        assert_eq!(
+            response.config_hash.len(),
+            32,
+            "response config_hash must be 32 bytes"
+        );
+        assert_eq!(
+            response.apply_mode,
+            crate::proto::node::ConfigApplyMode::Staged as i32,
+            "config must be staged to disk"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_push_revision_conflict_rejected() -> Result<()> {
+        use crate::proto::node::{NodeConfigSnapshot, NodeGpuConfig};
+        use crate::protocol::write_len_prefixed;
+        use prost::Message as _;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x66u8; 32]);
+
+        let tmp =
+            std::env::temp_dir().join(format!("mesh-llm-cfg-conflict-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("server")).ok();
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        let server = make_test_node_with_owner(
+            super::NodeRole::Host { http_port: 9337 },
+            &signing_key,
+            &tmp.join("server"),
+        )
+        .await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &signing_key, &tmp.join("client"))
+                .await?;
+
+        server.set_mesh_id("cfg-conflict-mesh-01".to_string()).await;
+        client.set_mesh_id("cfg-conflict-mesh-01".to_string()).await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let client_id = client.id();
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        let good_config = NodeConfigSnapshot {
+            version: 1,
+            gpu: Some(NodeGpuConfig {
+                assignment: crate::proto::node::GpuAssignment::Auto as i32,
+            }),
+            models: vec![],
+            plugins: vec![],
+        };
+
+        // First push (revision 0 → 1) — must succeed
+        let push1 =
+            build_signed_config_push(&signing_key, &client_id, &server_id, 0, good_config.clone());
+        let (mut send1, mut recv1) = conn.open_bi().await?;
+        send1.write_all(&[STREAM_CONFIG_PUSH]).await?;
+        write_len_prefixed(&mut send1, &push1.encode_to_vec()).await?;
+        send1.finish()?;
+        let buf1 = crate::protocol::read_len_prefixed(&mut recv1).await?;
+        let resp1 = crate::proto::node::ConfigPushResponse::decode(buf1.as_slice())?;
+        assert!(resp1.success, "first push must succeed: {:?}", resp1.error);
+
+        // Second push with stale expected_revision=0 — must be rejected
+        let push2 = build_signed_config_push(&signing_key, &client_id, &server_id, 0, good_config);
+        let (mut send2, mut recv2) = conn.open_bi().await?;
+        send2.write_all(&[STREAM_CONFIG_PUSH]).await?;
+        write_len_prefixed(&mut send2, &push2.encode_to_vec()).await?;
+        send2.finish()?;
+        let buf2 = crate::protocol::read_len_prefixed(&mut recv2).await?;
+        let resp2 = crate::proto::node::ConfigPushResponse::decode(buf2.as_slice())?;
+
+        assert!(!resp2.success, "push with stale revision must be rejected");
+        assert_eq!(
+            resp2.current_revision, 1,
+            "rejection response must carry the current revision"
+        );
+        let err = resp2.error.as_deref().unwrap_or("");
+        assert!(
+            err.contains("revision conflict"),
+            "error must mention revision conflict, got: {err}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_push_bad_signature_rejected() -> Result<()> {
+        use crate::proto::node::{NodeConfigSnapshot, NodeGpuConfig};
+        use crate::protocol::write_len_prefixed;
+        use prost::Message as _;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x77u8; 32]);
+
+        let tmp =
+            std::env::temp_dir().join(format!("mesh-llm-cfg-badsig-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("server")).ok();
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        let server = make_test_node_with_owner(
+            super::NodeRole::Host { http_port: 9337 },
+            &signing_key,
+            &tmp.join("server"),
+        )
+        .await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &signing_key, &tmp.join("client"))
+                .await?;
+
+        server.set_mesh_id("cfg-badsig-mesh-01".to_string()).await;
+        client.set_mesh_id("cfg-badsig-mesh-01".to_string()).await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let client_id = client.id();
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        let config = NodeConfigSnapshot {
+            version: 1,
+            gpu: Some(NodeGpuConfig {
+                assignment: crate::proto::node::GpuAssignment::Auto as i32,
+            }),
+            models: vec![],
+            plugins: vec![],
+        };
+
+        // Build a push but corrupt the signature
+        let mut push = build_signed_config_push(&signing_key, &client_id, &server_id, 0, config);
+        push.signature = vec![0xDE; 64]; // garbage signature
+
+        let (mut send, mut recv) = conn.open_bi().await?;
+        send.write_all(&[STREAM_CONFIG_PUSH]).await?;
+        write_len_prefixed(&mut send, &push.encode_to_vec()).await?;
+        send.finish()?;
+
+        let buf = crate::protocol::read_len_prefixed(&mut recv).await?;
+        let response = crate::proto::node::ConfigPushResponse::decode(buf.as_slice())?;
+
+        assert!(
+            !response.success,
+            "push with invalid signature must be rejected"
+        );
+        let err = response.error.as_deref().unwrap_or("");
+        assert!(
+            err.contains("signature"),
+            "error must mention signature verification, got: {err}"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn config_subscribe_delivers_update_notification_after_push() -> Result<()> {
+        use crate::proto::node::{NodeConfigSnapshot, NodeGpuConfig};
+        use crate::protocol::write_len_prefixed;
+        use prost::Message as _;
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x88u8; 32]);
+        let owner_id = crate::crypto::owner_id_from_verifying_key(&signing_key.verifying_key());
+
+        let tmp =
+            std::env::temp_dir().join(format!("mesh-llm-cfg-notif-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(tmp.join("server")).ok();
+        std::fs::create_dir_all(tmp.join("client")).ok();
+
+        let server = make_test_node_with_owner(
+            super::NodeRole::Host { http_port: 9337 },
+            &signing_key,
+            &tmp.join("server"),
+        )
+        .await?;
+        let client =
+            make_test_node_with_owner(super::NodeRole::Worker, &signing_key, &tmp.join("client"))
+                .await?;
+
+        server.set_mesh_id("cfg-notif-mesh-01".to_string()).await;
+        client.set_mesh_id("cfg-notif-mesh-01".to_string()).await;
+        server.start_accepting();
+        client.start_accepting();
+
+        let server_id = server.id();
+        let server_addr = server.endpoint.addr();
+        let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&server_addr)?);
+
+        client.join(&invite).await?;
+        wait_for_peer(&client, server_id).await;
+        wait_for_peer(&server, client.id()).await;
+
+        let client_id = client.id();
+        let conn = {
+            let state = client.state.lock().await;
+            state
+                .connections
+                .get(&server_id)
+                .cloned()
+                .expect("connection to server must exist after join")
+        };
+
+        // Subscribe to config on the server from the client
+        let (initial_snapshot, mut notif_rx) = client.subscribe_to_config(&conn, &owner_id).await?;
+        let initial_revision = initial_snapshot.revision;
+
+        // Now push a config change to the server from the client
+        let new_config = NodeConfigSnapshot {
+            version: 1,
+            gpu: Some(NodeGpuConfig {
+                assignment: crate::proto::node::GpuAssignment::Auto as i32,
+            }),
+            models: vec![crate::proto::node::NodeModelEntry {
+                model: "test-model.gguf".to_string(),
+                mmproj: None,
+                ctx_size: None,
+            }],
+            plugins: vec![],
+        };
+        let push = build_signed_config_push(
+            &signing_key,
+            &client_id,
+            &server_id,
+            initial_revision,
+            new_config,
+        );
+        let (mut send, mut recv) = conn.open_bi().await?;
+        send.write_all(&[STREAM_CONFIG_PUSH]).await?;
+        write_len_prefixed(&mut send, &push.encode_to_vec()).await?;
+        send.finish()?;
+        let buf = crate::protocol::read_len_prefixed(&mut recv).await?;
+        let push_resp = crate::proto::node::ConfigPushResponse::decode(buf.as_slice())?;
+        assert!(
+            push_resp.success,
+            "push must be accepted for notification test: {:?}",
+            push_resp.error
+        );
+
+        // The subscribe stream must deliver a ConfigUpdateNotification for the change
+        tokio::time::timeout(std::time::Duration::from_secs(5), notif_rx.changed())
+            .await
+            .expect("ConfigUpdateNotification must arrive within 5 s")
+            .expect("notification channel must not be closed");
+
+        let notif = notif_rx.borrow_and_update().clone();
+        assert_eq!(
+            notif.revision,
+            initial_revision + 1,
+            "notification revision must be initial + 1"
+        );
+        assert!(
+            !notif.config_hash.is_empty(),
+            "notification must carry config_hash"
+        );
+
+        std::fs::remove_dir_all(&tmp).ok();
         Ok(())
     }
 }

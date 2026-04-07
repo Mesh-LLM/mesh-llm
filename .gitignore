@@ -8,3 +8,5 @@ mesh-bundle.tar.gz
 .DS_Store
 mesh-llm/ui/dist/
 evals/results/
+.sisyphus/
+.playwright-mcp/

@@ -622,6 +622,7 @@ async fn test_moe_remote_failure_removes_peer_for_faildown() {
         available_model_sizes: HashMap::new(),
         served_model_descriptors: vec![],
         served_model_runtime: vec![],
+        owner_id: None,
     })
     .await;
 

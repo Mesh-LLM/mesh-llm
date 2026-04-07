@@ -29,7 +29,7 @@ use tokio::sync::watch;
 /// or ROCm build discovered automatically, so `None` is treated as potentially
 /// supported; if the binary turns out to be CPU/Metal/Vulkan, llama.cpp falls
 /// back safely.
-fn should_use_row_split(flavor: Option<BinaryFlavor>, gpu_count: u8) -> bool {
+fn should_use_row_split(flavor: Option<BinaryFlavor>, gpu_count: usize) -> bool {
     let backend_supported = matches!(
         flavor,
         Some(BinaryFlavor::Cuda) | Some(BinaryFlavor::Rocm) | None
@@ -49,10 +49,11 @@ fn should_use_row_split(flavor: Option<BinaryFlavor>, gpu_count: u8) -> bool {
 /// supported.
 pub(crate) fn local_multi_gpu_split_mode(flavor: Option<BinaryFlavor>) -> Option<SplitMode> {
     let hw = hardware::query(&[hardware::Metric::GpuCount]);
-    if should_use_row_split(flavor, hw.gpu_count) {
+    let gpu_count = usize::from(hw.gpu_count);
+    if should_use_row_split(flavor, gpu_count) {
         tracing::info!(
             "Local multi-GPU detected ({} GPUs) — using row split for tensor parallelism",
-            hw.gpu_count
+            gpu_count
         );
         Some(SplitMode::Row)
     } else {

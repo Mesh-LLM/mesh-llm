@@ -1,3 +1,4 @@
+pub(crate) mod config_state;
 mod discovery;
 mod local;
 mod proxy;

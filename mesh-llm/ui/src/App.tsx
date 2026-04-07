@@ -127,6 +127,7 @@ import {
   getAttachmentSendIssue,
   validateAttachmentFile,
 } from "./lib/attachments";
+import { createRafBatcher } from "./lib/streaming";
 import { cn } from "./lib/utils";
 import {
   TOPOLOGY_LAYOUT_OPTIONS,
@@ -951,6 +952,8 @@ export function App() {
   const chatClientIdRef = useRef<string>(readOrCreateChatClientId());
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const currentAbortRef = useRef<AbortController | null>(null);
+  const queuedInputRef = useRef<string | null>(null);
+  const [queuedText, setQueuedText] = useState<string | null>(null);
   const activeConversationId = chatState.activeConversationId;
   const conversations = chatState.conversations;
   const activeConversation = useMemo(
@@ -1357,10 +1360,25 @@ export function App() {
     const el = chatScrollRef.current;
     if (!el) return;
     if (!activeConversationId && !lastMessageId && !isSending) return;
-    el.scrollTop = el.scrollHeight;
+    // Only auto-scroll if the user is already near the bottom.
+    // This lets them scroll up to read earlier content while streaming.
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 80) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [activeConversationId, isSending, lastMessageId]);
 
   useEffect(() => () => currentAbortRef.current?.abort(), []);
+
+  // Drain queued message once streaming finishes and state is fresh.
+  useEffect(() => {
+    if (isSending) return;
+    const queued = queuedInputRef.current;
+    if (queued == null) return;
+    queuedInputRef.current = null;
+    setQueuedText(null);
+    void sendMessage(queued);
+  }, [isSending]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const canChat =
     !!status &&
@@ -1506,6 +1524,7 @@ export function App() {
     const reqStart = performance.now();
     const controller = new AbortController();
     currentAbortRef.current = controller;
+    let batcher: ReturnType<typeof createRafBatcher> | null = null;
 
     try {
       const requestId = providedRequestId ?? randomId();
@@ -1552,6 +1571,24 @@ export function App() {
       let completionTokens: number | null = null;
       let firstTokenAt: number | null = null;
 
+      // Batch token deltas so React re-renders at most once per frame.
+      batcher = createRafBatcher((snapshot) => {
+        updateChatState((prev) => ({
+          ...prev,
+          conversations: updateConversationList(
+            prev.conversations,
+            conversationId,
+            (conversation) => ({
+              ...conversation,
+              messages: conversation.messages.map((m) =>
+                m.id === assistantId ? { ...m, content: snapshot } : m,
+              ),
+              updatedAt: Date.now(),
+            }),
+          ),
+        }));
+      });
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1587,20 +1624,7 @@ export function App() {
               }
               if (firstTokenAt == null) firstTokenAt = performance.now();
               full += contentDelta;
-              updateChatState((prev) => ({
-                ...prev,
-                conversations: updateConversationList(
-                  prev.conversations,
-                  conversationId,
-                  (conversation) => ({
-                    ...conversation,
-                    messages: conversation.messages.map((m) =>
-                      m.id === assistantId ? { ...m, content: full } : m,
-                    ),
-                    updatedAt: Date.now(),
-                  }),
-                ),
-              }));
+              batcher.push(full);
             } else if (eventName === "response.completed") {
               const responsePayload =
                 payload.response && typeof payload.response === "object"
@@ -1630,6 +1654,8 @@ export function App() {
           frameEnd = buf.indexOf("\n\n");
         }
       }
+
+      batcher.flush();
 
       const endAt = performance.now();
       const genStart = firstTokenAt ?? reqStart;
@@ -1702,6 +1728,7 @@ export function App() {
         }));
       }
     } finally {
+      batcher?.cancel();
       if (currentAbortRef.current === controller)
         currentAbortRef.current = null;
       setIsSending(false);
@@ -1710,8 +1737,14 @@ export function App() {
 
   async function sendMessage(text: string) {
     const trimmed = text.trim();
-    if ((!trimmed && pendingAttachments.length === 0) || !status || isSending)
+    if ((!trimmed && pendingAttachments.length === 0) || !status)
       return;
+    if (isSending) {
+      queuedInputRef.current = trimmed;
+      setQueuedText(trimmed);
+      setInput("");
+      return;
+    }
     if (attachmentSendIssue) {
       setComposerError(attachmentSendIssue);
       return;
@@ -1877,6 +1910,8 @@ export function App() {
   }
 
   function createNewConversation() {
+    queuedInputRef.current = null;
+    setQueuedText(null);
     const conversation = createConversation();
     updateChatState((prev) => ({
       conversations: [conversation, ...prev.conversations],
@@ -2089,6 +2124,7 @@ export function App() {
                   input={input}
                   setInput={setInput}
                   isSending={isSending}
+                  queuedText={queuedText}
                   canChat={canChat}
                   canRegenerate={canRegenerate}
                   onStop={stopStreaming}
@@ -2716,6 +2752,7 @@ export function ChatPage(props: {
   input: string;
   setInput: (v: string) => void;
   isSending: boolean;
+  queuedText: string | null;
   canChat: boolean;
   canRegenerate: boolean;
   onStop: () => void;
@@ -2754,6 +2791,7 @@ export function ChatPage(props: {
     input,
     setInput,
     isSending,
+    queuedText,
     canChat,
     canRegenerate,
     onStop,
@@ -3375,6 +3413,20 @@ export function ChatPage(props: {
                       response...
                     </div>
                   ) : null}
+
+                  {queuedText ? (
+                    <div className="flex justify-end">
+                      <div className="max-w-[92%] md:max-w-[82%] opacity-50">
+                        <div className="mb-1 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+                          <User className="h-3.5 w-3.5" />
+                          <span>Queued</span>
+                        </div>
+                        <div className="rounded-lg border border-dashed bg-muted px-4 py-3 text-sm whitespace-pre-wrap">
+                          {queuedText}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -3492,7 +3544,7 @@ export function ChatPage(props: {
                     ? "Ask me anything..."
                     : "Waiting for a warm model..."
                 }
-                disabled={!props.canChat || isSending}
+                disabled={!props.canChat}
                 className="min-h-[56px] md:min-h-[80px] resize-none text-base md:text-sm"
               />
               <div className="flex items-center justify-between gap-2">
@@ -3596,16 +3648,15 @@ export function ChatPage(props: {
                     data-testid="chat-send"
                     disabled={
                       !props.canChat ||
-                      (!input.trim() && pendingAttachments.length === 0) ||
-                      isSending
+                      (!input.trim() && pendingAttachments.length === 0)
                     }
                   >
                     {isSending ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Send className="mr-2 h-4 w-4 text-muted-foreground" />
                     ) : (
                       <Send className="mr-2 h-4 w-4" />
                     )}
-                    Send
+                    {isSending ? "Queue" : "Send"}
                   </Button>
                 </div>
               </div>
@@ -3857,6 +3908,8 @@ function DashboardPage({
   );
   const [isMeshOverviewFullscreen, setIsMeshOverviewFullscreen] =
     useState(false);
+  const [selectedTopologyNodeId, setSelectedTopologyNodeId] =
+    useState<string>("");
   const [detailPanelStack, setDetailPanelStack] = useState<DetailPanelEntry[]>(
     [],
   );
@@ -4012,6 +4065,7 @@ function DashboardPage({
   }, [activeDetail, status, topologyNodes, totalMeshVramGb]);
 
   function pushDetail(entry: DetailPanelEntry) {
+    if (isMeshOverviewFullscreen) return;
     setDetailPanelStack((prev) => {
       const current = prev[prev.length - 1];
       const isSameEntry =
@@ -4214,6 +4268,7 @@ function DashboardPage({
                   layoutMode={meshTopologyLayoutMode}
                   themeMode={themeMode}
                   onOpenNode={openNodeDetail}
+                  highlightedNodeId={selectedTopologyNodeId}
                   fullscreen={false}
                   heightClass="h-[360px] md:h-[420px] lg:h-[460px] xl:h-[520px]"
                 />
@@ -4374,13 +4429,43 @@ function DashboardPage({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {peerRows.map((peer) => (
-                      <TableRow key={peer.id}>
+                      {peerRows.map((peer) => (
+                       <TableRow
+                         key={peer.id}
+                         data-id={peer.role !== "Client" ? peer.id : undefined}
+                         tabIndex={peer.role !== "Client" ? 0 : undefined}
+                         className={cn(
+                           peer.role !== "Client" && "cursor-pointer",
+                           peer.id === selectedTopologyNodeId &&
+                             "bg-muted/50 hover:bg-muted/60",
+                         )}
+                         onClick={
+                           peer.role !== "Client"
+                             ? () => setSelectedTopologyNodeId(peer.id)
+                             : undefined
+                         }
+                         onKeyDown={
+                           peer.role !== "Client"
+                             ? (e) => {
+                                 if (e.key === "Enter" || e.key === " ") {
+                                   e.preventDefault();
+                                   setSelectedTopologyNodeId(peer.id);
+                                 }
+                               }
+                             : undefined
+                         }
+                       >
                         <TableCell className="font-mono text-xs">
                           <button
                             type="button"
                             className="text-left underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded-sm"
-                            onClick={() => openNodeDetail(peer.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (peer.role !== "Client") {
+                                setSelectedTopologyNodeId(peer.id);
+                              }
+                              openNodeDetail(peer.id);
+                            }}
                           >
                             {peer.id}
                           </button>
@@ -4448,6 +4533,7 @@ function DashboardPage({
                       layoutMode={meshTopologyLayoutMode}
                       themeMode={themeMode}
                       onOpenNode={openNodeDetail}
+                      highlightedNodeId={selectedTopologyNodeId}
                       fullscreen
                       heightClass="min-h-[420px]"
                       containerStyle={{
@@ -4464,8 +4550,8 @@ function DashboardPage({
           )
         : null}
 
-      <Sheet open={detailPanelStack.length > 0} onOpenChange={(open) => !open && closeDetailPanel()}>
-        <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl">
+      <Sheet open={detailPanelStack.length > 0 && !isMeshOverviewFullscreen} onOpenChange={(open) => !open && closeDetailPanel()}>
+        <SheetContent side="right" className="w-full overflow-y-auto border-l bg-background/95 p-0 backdrop-blur sm:max-w-2xl" onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement).focus(); }}>
           {activeDetail?.kind === "node" && activeNode ? (
             <NodeSidebar
               node={activeNode}
@@ -4632,7 +4718,6 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
   const dotClass = isCenter
     ? "bg-primary border-primary"
     : "bg-muted border-border";
-  const dotCenterY = 22;
   const baseHandleStyle = {
     opacity: 0,
     width: 1,
@@ -4640,27 +4725,21 @@ function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
     border: 0,
     pointerEvents: "none" as const,
   };
-  const targetHandleStyle = isHorizontal
-    ? { ...baseHandleStyle, top: dotCenterY, transform: "translateY(-50%)" }
-    : { ...baseHandleStyle, left: "50%", top: dotCenterY, transform: "translate(-50%, -50%)" };
-  const sourceHandleStyle = isHorizontal
-    ? { ...baseHandleStyle, top: dotCenterY, transform: "translateY(-50%)" }
-    : { ...baseHandleStyle, left: "50%", bottom: dotCenterY, top: "auto", transform: "translate(-50%, 50%)" };
 
   return (
     <div className="relative w-[246px] pt-2">
-      <Handle
-        type="target"
-        position={isHorizontal ? Position.Left : Position.Top}
-        style={targetHandleStyle}
-      />
-      <Handle
-        type="source"
-        position={isHorizontal ? Position.Right : Position.Bottom}
-        style={sourceHandleStyle}
-      />
-
-      <div className={cn("mx-auto h-7 w-7 rounded-full border-2", dotClass)} />
+      <div className={cn("relative mx-auto h-7 w-7 rounded-full border-2", dotClass)}>
+        <Handle
+          type="target"
+          position={isHorizontal ? Position.Left : Position.Top}
+          style={baseHandleStyle}
+        />
+        <Handle
+          type="source"
+          position={isHorizontal ? Position.Right : Position.Bottom}
+          style={baseHandleStyle}
+        />
+      </div>
       <div className="mt-1 flex items-center justify-center gap-1 text-[10px] leading-3 text-foreground">
         <span className="break-all">{data.node.id}</span>
         {data.node.self ? (
@@ -4853,6 +4932,7 @@ function MeshTopologyDiagram({
   layoutMode,
   themeMode,
   onOpenNode,
+  highlightedNodeId,
   fullscreen = false,
   heightClass,
   containerStyle,
@@ -4863,6 +4943,7 @@ function MeshTopologyDiagram({
   layoutMode: TopologyLayoutMode;
   themeMode: ThemeMode;
   onOpenNode?: (nodeId: string) => void;
+  highlightedNodeId?: string;
   fullscreen?: boolean;
   heightClass?: string;
   containerStyle?: CSSProperties;
@@ -4882,6 +4963,7 @@ function MeshTopologyDiagram({
       layoutMode={layoutMode}
       themeMode={themeMode}
       onOpenNode={onOpenNode}
+      highlightedNodeId={highlightedNodeId}
       fullscreen={fullscreen}
       heightClass={heightClass}
       containerStyle={containerStyle}
@@ -4896,6 +4978,7 @@ function MeshTopologyFlow({
   layoutMode,
   themeMode,
   onOpenNode,
+  highlightedNodeId,
   fullscreen,
   heightClass,
   containerStyle,
@@ -4906,6 +4989,7 @@ function MeshTopologyFlow({
   layoutMode: TopologyLayoutMode;
   themeMode: ThemeMode;
   onOpenNode?: (nodeId: string) => void;
+  highlightedNodeId?: string;
   fullscreen: boolean;
   heightClass?: string;
   containerStyle?: CSSProperties;
@@ -4983,6 +5067,16 @@ function MeshTopologyFlow({
       nodes.some((n) => n.id === prev) ? prev : center.id,
     );
   }, [nodes, center.id]);
+
+  const nodeIdsRef = useRef(new Set(nodes.map((n) => n.id)));
+  useEffect(() => {
+    nodeIdsRef.current = new Set(nodes.map((n) => n.id));
+  }, [nodes]);
+  useEffect(() => {
+    if (highlightedNodeId && nodeIdsRef.current.has(highlightedNodeId)) {
+      setSelectedNodeId(highlightedNodeId);
+    }
+  }, [highlightedNodeId]);
 
   const nodeInfoById = useMemo(() => {
     const out = new Map<string, TopologyNodeInfo>();

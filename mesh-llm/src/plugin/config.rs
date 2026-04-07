@@ -1,11 +1,11 @@
 use super::{PluginSummary, BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, LEMONADE_PLUGIN_ID};
 use anyhow::{bail, Context, Result};
 use mesh_llm_plugin::MeshVisibility;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MeshConfig {
     #[serde(default)]
     pub version: Option<u32>,
@@ -17,13 +17,13 @@ pub struct MeshConfig {
     pub plugins: Vec<PluginConfigEntry>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct GpuConfig {
     #[serde(default)]
     pub assignment: GpuAssignment,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GpuAssignment {
     #[default]
@@ -31,7 +31,7 @@ pub enum GpuAssignment {
     Pinned,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ModelConfigEntry {
     pub model: String,
     #[serde(default)]
@@ -40,7 +40,7 @@ pub struct ModelConfigEntry {
     pub ctx_size: Option<u32>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluginConfigEntry {
     pub name: String,
     #[serde(default)]
@@ -93,7 +93,7 @@ pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
     Ok(config)
 }
 
-fn validate_config(config: &MeshConfig) -> Result<()> {
+pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
     if let Some(version) = config.version {
         if version != 1 {
             bail!("unsupported config version {version}; expected version = 1");
