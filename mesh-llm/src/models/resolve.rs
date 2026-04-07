@@ -40,35 +40,60 @@ enum ExactModelRef {
     },
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CapabilityProfile {
-    Text,
-    Vision,
-    Audio,
-    Multimodal,
+/// Capability requirements for model selection.
+///
+/// Multiple requirements combine as intersection: all specified capabilities must
+/// be present. The default (all fields false) is the text-only profile that
+/// accepts any model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Default)]
+pub struct CapabilityProfile {
+    pub vision: bool,
+    pub audio: bool,
+    pub multimodal: bool,
 }
 
 impl CapabilityProfile {
-    pub fn from_env() -> Self {
-        match std::env::var("MESH_LLM_CAPABILITY_PROFILE")
-            .ok()
-            .as_deref()
-            .map(|value| value.to_ascii_lowercase())
-            .as_deref()
-        {
-            Some("vision") => Self::Vision,
-            Some("audio") => Self::Audio,
-            Some("multimodal") => Self::Multimodal,
-            _ => Self::Text,
-        }
+    /// Returns true when no specific capability is required (text/default profile).
+    pub fn is_text_only(self) -> bool {
+        !self.vision && !self.audio && !self.multimodal
     }
 
-    pub fn as_label(self) -> &'static str {
-        match self {
-            Self::Text => "text",
-            Self::Vision => "vision",
-            Self::Audio => "audio",
-            Self::Multimodal => "multimodal",
+    /// Parse the capability profile from the `MESH_LLM_CAPABILITY_PROFILE`
+    /// environment variable. Multiple capabilities are joined with `+`
+    /// (e.g. `"vision+audio"`).
+    pub fn from_env() -> Self {
+        let value = std::env::var("MESH_LLM_CAPABILITY_PROFILE")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let mut profile = Self::default();
+        for part in value.split('+') {
+            match part.trim() {
+                "vision" => profile.vision = true,
+                "audio" => profile.audio = true,
+                "multimodal" => profile.multimodal = true,
+                _ => {}
+            }
+        }
+        profile
+    }
+
+    /// Human-readable label for this profile (e.g. `"text"`, `"vision"`,
+    /// `"vision+audio"`).
+    pub fn as_label(self) -> String {
+        let mut parts = Vec::new();
+        if self.vision {
+            parts.push("vision");
+        }
+        if self.audio {
+            parts.push("audio");
+        }
+        if self.multimodal {
+            parts.push("multimodal");
+        }
+        if parts.is_empty() {
+            "text".to_string()
+        } else {
+            parts.join("+")
         }
     }
 }
@@ -1004,12 +1029,16 @@ fn parse_repo_query(input: &str) -> Option<String> {
 }
 
 fn capability_matches(profile: CapabilityProfile, caps: ModelCapabilities) -> bool {
-    match profile {
-        CapabilityProfile::Text => true,
-        CapabilityProfile::Vision => caps.vision != capabilities::CapabilityLevel::None,
-        CapabilityProfile::Audio => caps.audio != capabilities::CapabilityLevel::None,
-        CapabilityProfile::Multimodal => caps.multimodal || caps.supports_multimodal_runtime(),
+    if profile.vision && caps.vision == capabilities::CapabilityLevel::None {
+        return false;
     }
+    if profile.audio && caps.audio == capabilities::CapabilityLevel::None {
+        return false;
+    }
+    if profile.multimodal && !(caps.multimodal || caps.supports_multimodal_runtime()) {
+        return false;
+    }
+    true
 }
 
 fn capability_richness(caps: ModelCapabilities) -> usize {
@@ -1374,10 +1403,28 @@ mod tests {
             audio: CapabilityLevel::Likely,
             ..ModelCapabilities::default()
         };
-        assert!(capability_matches(CapabilityProfile::Text, caps));
-        assert!(capability_matches(CapabilityProfile::Vision, caps));
-        assert!(capability_matches(CapabilityProfile::Audio, caps));
-        assert!(capability_matches(CapabilityProfile::Multimodal, caps));
+        assert!(capability_matches(CapabilityProfile::default(), caps));
+        assert!(capability_matches(
+            CapabilityProfile {
+                vision: true,
+                ..Default::default()
+            },
+            caps
+        ));
+        assert!(capability_matches(
+            CapabilityProfile {
+                audio: true,
+                ..Default::default()
+            },
+            caps
+        ));
+        assert!(capability_matches(
+            CapabilityProfile {
+                multimodal: true,
+                ..Default::default()
+            },
+            caps
+        ));
     }
 
     #[test]
@@ -1400,7 +1447,7 @@ mod tests {
 
         let (picked, fit) = choose_variant(
             &variants,
-            CapabilityProfile::Text,
+            CapabilityProfile::default(),
             Some(96_000_000_000),
             true,
         )
@@ -1433,7 +1480,7 @@ mod tests {
         ];
         let (picked, fit) = choose_variant(
             &variants,
-            CapabilityProfile::Text,
+            CapabilityProfile::default(),
             Some(96_000_000_000),
             true,
         )
@@ -1483,7 +1530,7 @@ mod tests {
         ];
         let (picked, fit) = choose_variant(
             &variants,
-            CapabilityProfile::Text,
+            CapabilityProfile::default(),
             Some(64_000_000_000),
             true,
         )

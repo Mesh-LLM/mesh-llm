@@ -69,16 +69,11 @@ pub async fn run_model_search(
     if let Some(summary) = local_capacity_summary() {
         println!("{}", summary);
     }
-    if profile != CapabilityProfile::Text {
+    if !profile.is_text_only() {
         println!("🎯 capability: {}", profile.as_label());
     }
     println!();
     for (index, result) in results.iter().enumerate() {
-        // Avoid a second per-result repo inspection here: search_huggingface has
-        // already done repo-level inspection work to produce these search hits.
-        // Keep the existing rendering path by treating extra inspection details as
-        // unavailable unless they are included in the search result itself.
-        let inspected: Option<RepoVariantInspection> = None;
         println!("{}. 📦 {}", index + 1, result.repo_id);
         println!("   🔗 {}", result.repo_url);
         let mut stats = Vec::new();
@@ -88,12 +83,7 @@ pub async fn run_model_search(
                 format_count(result.gguf_files as u64)
             ));
         }
-        if let Some(size_bytes) = inspected
-            .as_ref()
-            .and_then(|value| value.recommended_size_bytes)
-        {
-            stats.push(format!("📏 {}", format_installed_size(size_bytes)));
-        } else if let Some(size) = &result.size_label {
+        if let Some(size) = &result.size_label {
             stats.push(format!("📏 {}", size));
         }
         if let Some(downloads) = result.downloads {
@@ -134,33 +124,15 @@ pub async fn run_model_search(
             caps.push(format!("🛠️ tool use ({label})"));
         }
         println!("   {}", caps.join("  "));
-        let recommended_ref = inspected
-            .as_ref()
-            .map(|value| value.recommended_ref.as_str())
-            .or(result.recommended_ref.as_deref());
-        let highest_quality_ref = inspected
-            .as_ref()
-            .map(|value| value.highest_quality_ref.as_str())
-            .or(result.highest_quality_ref.as_deref());
-
-        if let Some(recommended_ref) = recommended_ref {
+        if let Some(recommended_ref) = result.recommended_ref.as_deref() {
             println!("   ✅ recommended for this machine: {recommended_ref}");
-            if let Some(highest_quality_ref) = highest_quality_ref {
+            if let Some(highest_quality_ref) = result.highest_quality_ref.as_deref() {
                 println!("   🏆 highest quality: {highest_quality_ref}");
             }
             println!("   🔎 mesh-llm models show {}", result.repo_id);
             println!("   ⬇️ mesh-llm models download {}", recommended_ref);
         }
-        if let Some(fit) = inspected.as_ref().and_then(|value| value.recommended_fit) {
-            println!(
-                "   {}",
-                if fit {
-                    "✅ likely comfortable here"
-                } else {
-                    "⛔ likely too large for local serve"
-                }
-            );
-        } else if let Some(size) = &result.size_label {
+        if let Some(size) = &result.size_label {
             if let Some(fit) = fit_hint_for_size_label(size) {
                 println!("   {}", fit);
             }
@@ -431,29 +403,16 @@ fn format_variant_row(index: usize, variant: &RepoVariantInspection) -> String {
 }
 
 fn capability_profile_from_flags(
-    text: bool,
+    _text: bool,
     vision: bool,
     audio: bool,
     multimodal: bool,
 ) -> Result<CapabilityProfile> {
-    let selected = [text, vision, audio, multimodal]
-        .into_iter()
-        .filter(|flag| *flag)
-        .count();
-    if selected > 1 {
-        anyhow::bail!(
-            "Choose only one capability selector: --text, --vision, --audio, or --multimodal"
-        );
-    }
-    if vision {
-        Ok(CapabilityProfile::Vision)
-    } else if audio {
-        Ok(CapabilityProfile::Audio)
-    } else if multimodal {
-        Ok(CapabilityProfile::Multimodal)
-    } else {
-        Ok(CapabilityProfile::Text)
-    }
+    Ok(CapabilityProfile {
+        vision,
+        audio,
+        multimodal,
+    })
 }
 
 fn format_installed_size(bytes: u64) -> String {
@@ -585,25 +544,37 @@ mod tests {
     fn capability_flags_select_profile() {
         assert_eq!(
             capability_profile_from_flags(false, true, false, false).unwrap(),
-            CapabilityProfile::Vision
+            CapabilityProfile {
+                vision: true,
+                ..Default::default()
+            }
         );
         assert_eq!(
             capability_profile_from_flags(false, false, true, false).unwrap(),
-            CapabilityProfile::Audio
+            CapabilityProfile {
+                audio: true,
+                ..Default::default()
+            }
         );
         assert_eq!(
             capability_profile_from_flags(false, false, false, true).unwrap(),
-            CapabilityProfile::Multimodal
+            CapabilityProfile {
+                multimodal: true,
+                ..Default::default()
+            }
         );
         assert_eq!(
             capability_profile_from_flags(false, false, false, false).unwrap(),
-            CapabilityProfile::Text
+            CapabilityProfile::default()
         );
     }
 
     #[test]
-    fn capability_flags_reject_multiple_selectors() {
-        assert!(capability_profile_from_flags(true, true, false, false).is_err());
+    fn capability_flags_support_intersection() {
+        let profile = capability_profile_from_flags(false, true, true, false).unwrap();
+        assert!(profile.vision);
+        assert!(profile.audio);
+        assert!(!profile.multimodal);
     }
 
     #[test]
@@ -649,6 +620,12 @@ mod tests {
         let captured = captured.lock().unwrap();
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].0, "anikifoss/MiniMax-M2-HQ4_K/MiniMax-M2-HQ4_K");
-        assert_eq!(captured[0].1, CapabilityProfile::Vision);
+        assert_eq!(
+            captured[0].1,
+            CapabilityProfile {
+                vision: true,
+                ..Default::default()
+            }
+        );
     }
 }

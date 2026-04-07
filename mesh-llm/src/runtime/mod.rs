@@ -351,23 +351,11 @@ fn cli_has_explicit_models(cli: &Cli) -> bool {
 }
 
 fn runtime_capability_profile(cli: &Cli) -> Result<models::CapabilityProfile> {
-    let selected = [cli.text, cli.vision, cli.audio, cli.multimodal]
-        .into_iter()
-        .filter(|value| *value)
-        .count();
-    anyhow::ensure!(
-        selected <= 1,
-        "Choose only one capability selector: --text, --vision, --audio, or --multimodal"
-    );
-    if cli.vision {
-        Ok(models::CapabilityProfile::Vision)
-    } else if cli.audio {
-        Ok(models::CapabilityProfile::Audio)
-    } else if cli.multimodal {
-        Ok(models::CapabilityProfile::Multimodal)
-    } else {
-        Ok(models::CapabilityProfile::Text)
-    }
+    Ok(models::CapabilityProfile {
+        vision: cli.vision,
+        audio: cli.audio,
+        multimodal: cli.multimodal,
+    })
 }
 
 fn build_startup_model_specs(

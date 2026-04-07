@@ -268,7 +268,7 @@ fn file_quality_score(file: &str) -> usize {
 }
 
 fn is_primary_model_gguf(file: &str) -> bool {
-    let lower = canonical_hf_ref_file_component(file).to_ascii_lowercase();
+    let lower = file.to_ascii_lowercase();
     lower.ends_with(".gguf") && !lower.contains("mmproj") && !lower.contains("imatrix")
 }
 
