@@ -1,9 +1,12 @@
 //! Built-in model catalog plus managed acquisition helpers.
 
+use super::access;
 use anyhow::{Context, Result};
+use hf_hub::api::sync::ApiError as SyncApiError;
 use hf_hub::api::Progress as HfProgress;
 use hf_hub::{Repo, RepoType};
 use serde::Deserialize;
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::io::Write;
@@ -259,9 +262,30 @@ async fn download_hf_assets(label: &str, assets: Vec<HfAsset>) -> Result<Vec<Pat
             return func(&label, assets);
         }
     }
+    ensure_hf_repo_access(&assets).await?;
     tokio::task::spawn_blocking(move || download_hf_assets_blocking(&label, assets))
         .await
         .context("Join Hugging Face download task")?
+}
+
+async fn ensure_hf_repo_access(assets: &[HfAsset]) -> Result<()> {
+    let repos: BTreeSet<(String, String)> = assets
+        .iter()
+        .map(|asset| (asset.repo.clone(), asset.revision.clone()))
+        .collect();
+    if repos.is_empty() {
+        return Ok(());
+    }
+    let api = super::build_hf_tokio_api(false)?;
+    for (repo, revision) in repos {
+        if matches!(
+            access::probe_repo_access(&api, &repo, Some(revision.as_str())).await?,
+            access::RepoAccess::Gated
+        ) {
+            return Err(anyhow::anyhow!(access::gated_access_message(&repo)));
+        }
+    }
+    Ok(())
 }
 
 struct MeshDownloadProgress {
@@ -402,6 +426,16 @@ fn download_hf_assets_blocking(label: &str, assets: Vec<HfAsset>) -> Result<Vec<
                         continue;
                     }
                     Err(err) => {
+                        if hf_download_error_looks_access_denied(&err) {
+                            return Err(anyhow::anyhow!(
+                                "Cannot access Hugging Face asset {}/{}@{} ({}). {}",
+                                asset.repo,
+                                asset.file,
+                                asset.revision,
+                                err,
+                                access::gated_access_message(&asset.repo)
+                            ));
+                        }
                         return Err(err).with_context(|| {
                             format!(
                                 "Cache Hugging Face asset {}/{}@{}",
@@ -418,6 +452,11 @@ fn download_hf_assets_blocking(label: &str, assets: Vec<HfAsset>) -> Result<Vec<
     }
 
     Ok(primary_paths)
+}
+
+fn hf_download_error_looks_access_denied(err: &SyncApiError) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    text.contains("http status: 401") || text.contains("http status: 403") || text.contains("gated")
 }
 
 pub async fn download_hf_repo_file(

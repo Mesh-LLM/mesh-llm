@@ -4026,16 +4026,15 @@ impl Node {
         //    does not block the Tokio async runtime while the mutex is held.
         let config_state = Arc::clone(&self.config_state);
         let expected_revision = push.expected_revision;
-        let (result, current_revision, current_hash) =
-            tokio::task::spawn_blocking(move || {
-                let mut state = config_state.blocking_lock();
-                let result = state.apply(mesh_config, expected_revision);
-                let current_revision = state.revision();
-                let current_hash = *state.config_hash();
-                (result, current_revision, current_hash)
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
+        let (result, current_revision, current_hash) = tokio::task::spawn_blocking(move || {
+            let mut state = config_state.blocking_lock();
+            let result = state.apply(mesh_config, expected_revision);
+            let current_revision = state.revision();
+            let current_hash = *state.config_hash();
+            (result, current_revision, current_hash)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
 
         // 7. Build + send response
         use crate::protocol::convert::local_apply_mode_to_proto;

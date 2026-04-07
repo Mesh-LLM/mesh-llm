@@ -3,9 +3,10 @@ use super::resolve::{
     remote_hf_size_label_with_api,
 };
 use super::ModelCapabilities;
-use super::{build_hf_tokio_api, capabilities, catalog};
+use super::{access, build_hf_tokio_api, capabilities, catalog};
 use anyhow::{Context, Result};
 use hf_hub::api::tokio::Api as TokioApi;
+use hf_hub::api::tokio::ApiError;
 use hf_hub::api::RepoSummary;
 use hf_hub::RepoType;
 use tokio::task::JoinSet;
@@ -13,8 +14,11 @@ use tokio::task::JoinSet;
 #[derive(Clone, Debug)]
 pub struct SearchHit {
     pub repo_id: String,
+    pub repo_url: String,
     pub file: String,
-    pub exact_ref: String,
+    pub description: Option<String>,
+    pub exact_ref: Option<String>,
+    pub metadata_notice: Option<String>,
     pub size_label: Option<String>,
     pub downloads: Option<u64>,
     pub likes: Option<u64>,
@@ -109,17 +113,36 @@ where
 }
 
 async fn build_search_hit(api: TokioApi, repo: RepoSummary) -> Result<Option<SearchHit>> {
-    let detail = api
-        .repo(repo.repo())
-        .info()
-        .await
-        .with_context(|| format!("Fetch Hugging Face repo {}", repo.id))?;
+    let detail = match api.repo(repo.repo()).info().await {
+        Ok(detail) => detail,
+        Err(err) => {
+            if let Some(hit) = build_gated_search_hit(&api, &repo, &err).await? {
+                return Ok(Some(hit));
+            }
+            return Err(err).with_context(|| format!("Fetch Hugging Face repo {}", repo.id));
+        }
+    };
 
     let repo_id = detail
         .id
         .clone()
         .or(detail.model_id.clone())
         .unwrap_or(repo.id.clone());
+    if detail.gated == Some(true) {
+        return Ok(Some(SearchHit {
+            repo_id: repo_id.clone(),
+            repo_url: access::repo_url(&repo_id),
+            file: "<gated repo: accept terms to inspect GGUF files>".to_string(),
+            description: detail.description.clone().or(repo.description.clone()),
+            exact_ref: None,
+            metadata_notice: Some(access::gated_access_message(&repo_id)),
+            size_label: None,
+            downloads: detail.downloads.or(repo.downloads),
+            likes: detail.likes.or(repo.likes),
+            catalog: None,
+            capabilities: ModelCapabilities::default(),
+        }));
+    }
     let sibling_names: Vec<String> = detail
         .siblings
         .iter()
@@ -159,12 +182,54 @@ async fn build_search_hit(api: TokioApi, repo: RepoSummary) -> Result<Option<Sea
     };
     Ok(Some(SearchHit {
         repo_id: repo_id.clone(),
+        repo_url: access::repo_url(&repo_id),
         file: file.clone(),
-        exact_ref: format!("{repo_id}/{file}"),
+        description: detail.description.clone().or(repo.description.clone()),
+        exact_ref: Some(format!("{repo_id}/{file}")),
+        metadata_notice: None,
         size_label,
         downloads: detail.downloads.or(repo.downloads),
         likes: detail.likes.or(repo.likes),
         catalog,
         capabilities,
+    }))
+}
+
+async fn build_gated_search_hit(
+    api: &TokioApi,
+    repo: &RepoSummary,
+    err: &ApiError,
+) -> Result<Option<SearchHit>> {
+    let repo_id = repo.id.clone();
+    let is_gated = match err {
+        ApiError::RequestError(request_error) => {
+            if access::reqwest_error_indicates_gated(request_error) {
+                true
+            } else {
+                matches!(
+                    access::probe_repo_access(api, &repo_id, None).await?,
+                    access::RepoAccess::Gated
+                )
+            }
+        }
+        _ => false,
+    };
+
+    if !is_gated {
+        return Ok(None);
+    }
+
+    Ok(Some(SearchHit {
+        repo_id: repo_id.clone(),
+        repo_url: access::repo_url(&repo_id),
+        file: "<gated repo: accept terms to inspect GGUF files>".to_string(),
+        description: repo.description.clone(),
+        exact_ref: None,
+        metadata_notice: Some(access::gated_access_message(&repo_id)),
+        size_label: None,
+        downloads: repo.downloads,
+        likes: repo.likes,
+        catalog: None,
+        capabilities: ModelCapabilities::default(),
     }))
 }

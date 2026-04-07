@@ -453,18 +453,20 @@ impl KvCacheWarning {
     /// corresponds to. Used in post-mortem messages.
     fn post_mortem_hint(&self) -> &'static str {
         match self {
-            KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants =>
+            KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants => {
                 "Known upstream bug: CUDA FA kernel selector rejects mismatched K/V \
                  quantization types without GGML_CUDA_FA_ALL_QUANTS. Our custom CUDA \
                  build sets this flag (see scripts/build-linux.sh); if you are running \
                  a Homebrew or official release llama.cpp binary this will crash every \
-                 time. Track ggml-org/llama.cpp#20866.",
-            KvCacheWarning::QuantizedVBreaksMetalFaFallback =>
+                 time. Track ggml-org/llama.cpp#20866."
+            }
+            KvCacheWarning::QuantizedVBreaksMetalFaFallback => {
                 "Known upstream bug: Metal crashes on quantized V cache when Flash \
                  Attention falls back to CPU. All Apple Silicon (M1+) supports Metal FA \
                  and is not affected. If you are seeing this on Apple Silicon, please \
                  file a mesh-llm bug — it should not happen. Older Intel Macs or any \
-                 host without Metal FA will trip this. Track ggml-org/llama.cpp#21450.",
+                 host without Metal FA will trip this. Track ggml-org/llama.cpp#21450."
+            }
         }
     }
 }
@@ -477,9 +479,11 @@ pub(crate) fn detect_known_crash_signature(log_tail: &str) -> Option<KvCacheWarn
         KvCacheWarning::QuantizedVBreaksMetalFaFallback,
         KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
     ];
-    candidates
-        .into_iter()
-        .find(|w| w.crash_signatures().iter().any(|sig| log_tail.contains(sig)))
+    candidates.into_iter().find(|w| {
+        w.crash_signatures()
+            .iter()
+            .any(|sig| log_tail.contains(sig))
+    })
 }
 
 fn emit_kv_cache_warning(warning: KvCacheWarning, k: KvType, v: KvType) {
@@ -1361,18 +1365,27 @@ mod tests {
         let expected: &[(u64, &[KvCacheWarning])] = &[
             (1, &[]),
             (4, &[]),
-            (5, &[
-                KvCacheWarning::QuantizedVBreaksMetalFaFallback,
-                KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
-            ]),
-            (20, &[
-                KvCacheWarning::QuantizedVBreaksMetalFaFallback,
-                KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
-            ]),
-            (49, &[
-                KvCacheWarning::QuantizedVBreaksMetalFaFallback,
-                KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
-            ]),
+            (
+                5,
+                &[
+                    KvCacheWarning::QuantizedVBreaksMetalFaFallback,
+                    KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
+                ],
+            ),
+            (
+                20,
+                &[
+                    KvCacheWarning::QuantizedVBreaksMetalFaFallback,
+                    KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
+                ],
+            ),
+            (
+                49,
+                &[
+                    KvCacheWarning::QuantizedVBreaksMetalFaFallback,
+                    KvCacheWarning::MismatchedQuantNeedsCudaFaAllQuants,
+                ],
+            ),
             (50, &[]),
             (100, &[]),
         ];
@@ -1416,7 +1429,8 @@ mod tests {
 
     #[test]
     fn kv_quant_tier_boundaries_are_exact() {
-        let just_below_medium = KvCacheQuant::for_model_size(KvCacheQuant::MEDIUM_TIER_MIN_BYTES - 1);
+        let just_below_medium =
+            KvCacheQuant::for_model_size(KvCacheQuant::MEDIUM_TIER_MIN_BYTES - 1);
         assert_eq!(just_below_medium.k_type, KvType::F16);
         assert_eq!(just_below_medium.v_type, KvType::F16);
         let at_medium = KvCacheQuant::for_model_size(KvCacheQuant::MEDIUM_TIER_MIN_BYTES);
@@ -1469,8 +1483,7 @@ mod tests {
     #[test]
     fn detect_crash_signature_matches_metal_v_cache_error_both_phrasings() {
         let new_phrasing = "common_init_from_params: quantized V cache requires Flash Attention";
-        let old_phrasing =
-            "llama_init_from_model: V cache quantization requires flash_attn";
+        let old_phrasing = "llama_init_from_model: V cache quantization requires flash_attn";
         assert_eq!(
             super::detect_known_crash_signature(new_phrasing),
             Some(KvCacheWarning::QuantizedVBreaksMetalFaFallback)

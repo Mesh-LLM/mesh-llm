@@ -1,3 +1,4 @@
+mod access;
 pub mod capabilities;
 pub mod catalog;
 pub mod gguf;

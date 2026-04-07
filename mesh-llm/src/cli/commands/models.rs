@@ -65,8 +65,12 @@ pub async fn run_model_search(query: &[String], catalog_only: bool, limit: usize
     }
     println!();
     for (index, result) in results.iter().enumerate() {
-        println!("{}. 📦 {}", index + 1, result.file);
-        println!("   repo: {}", result.repo_id);
+        if result.metadata_notice.is_some() {
+            println!("{}. 🟡 {}", index + 1, result.repo_id);
+        } else {
+            println!("{}. 📦 {}", index + 1, result.repo_id);
+        }
+        println!("   🔗 {}", result.repo_url);
         let mut stats = Vec::new();
         if let Some(size) = &result.size_label {
             stats.push(format!("📏 {}", size));
@@ -79,6 +83,14 @@ pub async fn run_model_search(query: &[String], catalog_only: bool, limit: usize
         }
         if !stats.is_empty() {
             println!("   {}", stats.join("  "));
+        }
+        if let Some(description) = result.description.as_deref() {
+            println!("   📝 {}", trim_ellipsis(description, 88));
+        }
+        if let Some(notice) = &result.metadata_notice {
+            println!("   🟡 {}", notice);
+            println!();
+            continue;
         }
         let mut caps = vec!["💬 text".to_string()];
         if result.capabilities.multimodal_label().is_some() {
@@ -96,10 +108,11 @@ pub async fn run_model_search(query: &[String], catalog_only: bool, limit: usize
         if let Some(label) = result.capabilities.tool_use_label() {
             caps.push(format!("🛠️ tool use ({label})"));
         }
-        println!("   capabilities: {}", caps.join("  "));
-        println!("   ref: {}", result.exact_ref);
-        println!("   show: mesh-llm models show {}", result.exact_ref);
-        println!("   download: mesh-llm models download {}", result.exact_ref);
+        println!("   {}", caps.join("  "));
+        if let Some(exact_ref) = &result.exact_ref {
+            println!("   🔎 mesh-llm models show {}", exact_ref);
+            println!("   ⬇️ mesh-llm models download {}", exact_ref);
+        }
         if let Some(size) = &result.size_label {
             if let Some(fit) = fit_hint_for_size_label(size) {
                 println!("   {}", fit);
@@ -291,6 +304,21 @@ fn format_source_label(source: &str) -> &'static str {
         "url" => "Direct URL",
         _ => "Unknown",
     }
+}
+
+fn trim_ellipsis(text: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    for (index, ch) in text.chars().enumerate() {
+        if index >= max_chars {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn local_capacity_summary() -> Option<String> {

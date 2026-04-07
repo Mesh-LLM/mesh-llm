@@ -944,12 +944,10 @@ mod tests {
                 apply_mode: variant as i32,
             };
             let encoded = encode_control_frame(STREAM_CONFIG_PUSH, &response);
-            let decoded: ConfigPushResponse =
-                decode_control_frame(STREAM_CONFIG_PUSH, &encoded)
-                    .expect("ConfigPushResponse must round-trip");
+            let decoded: ConfigPushResponse = decode_control_frame(STREAM_CONFIG_PUSH, &encoded)
+                .expect("ConfigPushResponse must round-trip");
             assert_eq!(
-                decoded.apply_mode,
-                variant as i32,
+                decoded.apply_mode, variant as i32,
                 "{label} must survive encode/decode round-trip"
             );
         }
@@ -968,9 +966,11 @@ mod tests {
             apply_mode: 99,
         };
         let encoded = response.encode_to_vec();
-        let decoded =
-            ConfigPushResponse::decode(encoded.as_slice()).expect("must decode");
-        assert_eq!(decoded.apply_mode, 99, "proto must preserve unknown enum values");
+        let decoded = ConfigPushResponse::decode(encoded.as_slice()).expect("must decode");
+        assert_eq!(
+            decoded.apply_mode, 99,
+            "proto must preserve unknown enum values"
+        );
     }
 
     #[test]
