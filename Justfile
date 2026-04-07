@@ -309,6 +309,11 @@ auto: build
 
 # ── Utilities ──────────────────────────────────────────────────
 
+# Clean UI build artifacts (node_modules, dist). Fixes stale npm state.
+clean-ui:
+    rm -rf {{ ui_dir }}/node_modules {{ ui_dir }}/dist
+    echo "Cleaned UI: node_modules + dist removed"
+
 # Stop all running servers
 stop:
     pkill -f "mesh-llm" 2>/dev/null || true

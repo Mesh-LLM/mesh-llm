@@ -34,7 +34,19 @@ just stop     # kill mesh/rpc/llama processes
 just test     # quick inference test against :9337
 just auto     # build + stop + start with --auto
 just ui-dev   # vite dev server with HMR
+just clean-ui # nuke node_modules + dist (fixes stale npm state)
 ```
+
+### npm "Exit handler never called" error
+
+If `just build` fails on the UI step with `npm error Exit handler never called!`, run:
+
+```bash
+just clean-ui
+just build
+```
+
+This is an npm bug that surfaces when `node_modules` gets into a bad state (e.g. after branch switches that change `package-lock.json`). Nuking `node_modules` and letting `npm ci` reinstall from scratch fixes it.
 
 See `CONTRIBUTING.md` for full dev workflow.
 
