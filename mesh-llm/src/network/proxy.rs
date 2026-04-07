@@ -111,6 +111,13 @@ pub async fn read_http_request(stream: &mut TcpStream) -> Result<BufferedHttpReq
     read_http_request_with_limits(stream, HTTP_READ_LIMITS, None).await
 }
 
+pub(crate) async fn read_http_request_from_reader<R>(reader: &mut R) -> Result<BufferedHttpRequest>
+where
+    R: AsyncRead + Unpin,
+{
+    read_http_request_with_limits_from_reader(reader, HTTP_READ_LIMITS).await
+}
+
 pub async fn read_http_request_with_plugin_manager(
     stream: &mut TcpStream,
     plugin_manager: Option<&plugin::PluginManager>,
@@ -226,6 +233,95 @@ async fn read_http_request_with_limits(
     })
 }
 
+async fn read_http_request_with_limits_from_reader<R>(
+    reader: &mut R,
+    limits: HttpReadLimits,
+) -> Result<BufferedHttpRequest>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut raw = Vec::with_capacity(8192);
+    let parsed = read_until_headers_parsed(reader, &mut raw, limits.max_header_bytes).await?;
+    if parsed.expects_continue {
+        bail!("Expect: 100-continue is not supported over mesh tunnels");
+    }
+    let body_limits = body_limits_for_path(&parsed.path, limits);
+    let header_end = parsed.header_end;
+
+    let body = if parsed.is_chunked {
+        loop {
+            if let Some((consumed, decoded)) =
+                try_decode_chunked_body(&raw[header_end..], body_limits.max_body_bytes)?
+            {
+                raw.truncate(header_end + consumed);
+                break decoded;
+            }
+            read_more(reader, &mut raw).await?;
+            if raw.len().saturating_sub(header_end) > body_limits.max_chunked_wire_bytes {
+                bail!(
+                    "HTTP chunked wire body exceeds {} bytes",
+                    body_limits.max_chunked_wire_bytes
+                );
+            }
+        }
+    } else if let Some(content_length) = parsed.content_length {
+        if content_length > body_limits.max_body_bytes {
+            bail!("HTTP body exceeds {} bytes", body_limits.max_body_bytes);
+        }
+        let body_end = header_end + content_length;
+        while raw.len() < body_end {
+            read_more(reader, &mut raw).await?;
+        }
+        raw.truncate(body_end);
+        raw[header_end..body_end].to_vec()
+    } else {
+        raw.truncate(header_end);
+        Vec::new()
+    };
+
+    let mut body_json = if body.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(&body).ok()
+    };
+    let mut request_path = parsed.path.clone();
+    let mut response_adapter = ResponseAdapter::None;
+    let rewritten_body = if let Some(body_json) = body_json.as_mut() {
+        let normalization = normalize_openai_compat_request(&parsed.path, body_json)?;
+        if let Some(rewritten_path) = normalization.rewritten_path {
+            request_path = rewritten_path;
+        }
+        response_adapter = normalization.response_adapter;
+        normalization.changed.then(|| {
+            serde_json::to_vec(body_json)
+                .context("serialize normalized OpenAI-compatible request body")
+        })
+    } else {
+        None
+    }
+    .transpose()?;
+    let model_name = body_json.as_ref().and_then(extract_model_from_json);
+    let session_hint = body_json.as_ref().and_then(extract_session_hint_from_json);
+    let raw = finalize_forwarded_request(
+        raw,
+        header_end,
+        false,
+        Some(&request_path),
+        rewritten_body.as_deref(),
+    )?;
+
+    Ok(BufferedHttpRequest {
+        raw,
+        method: parsed.method,
+        path: request_path,
+        body_json,
+        model_name,
+        session_hint,
+        request_object_request_ids: Vec::new(),
+        response_adapter,
+    })
+}
+
 fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
     let path_only = path.split('?').next().unwrap_or(path);
     if path_only == "/api/objects" {
@@ -291,11 +387,14 @@ fn finalize_forwarded_request(
 /// Read from the stream until httparse can fully parse the request headers.
 /// Returns parsed metadata; `buf` contains all bytes read so far (headers +
 /// any trailing body bytes that arrived in the same read).
-async fn read_until_headers_parsed(
-    stream: &mut TcpStream,
+async fn read_until_headers_parsed<R>(
+    stream: &mut R,
     buf: &mut Vec<u8>,
     max_header_bytes: usize,
-) -> Result<ParsedHeaders> {
+) -> Result<ParsedHeaders>
+where
+    R: AsyncRead + Unpin,
+{
     loop {
         let mut headers_buf = [httparse::EMPTY_HEADER; MAX_HEADERS];
         let mut req = httparse::Request::new(&mut headers_buf);
@@ -356,7 +455,10 @@ async fn read_until_headers_parsed(
     }
 }
 
-async fn read_more(stream: &mut TcpStream, buf: &mut Vec<u8>) -> Result<()> {
+async fn read_more<R>(stream: &mut R, buf: &mut Vec<u8>) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+{
     let mut chunk = [0u8; 8192];
     let n = stream.read(&mut chunk).await?;
     if n == 0 {
@@ -1473,6 +1575,12 @@ async fn relay_translated_responses_json<R: AsyncRead + Unpin>(
 pub fn is_models_list_request(method: &str, path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     method == "GET" && (path == "/v1/models" || path == "/models")
+}
+
+pub(crate) fn is_tunneled_http_request(method: &str, path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    is_models_list_request(method, path)
+        || (method == "POST" && matches!(path, "/v1/chat/completions" | "/v1/responses"))
 }
 
 pub fn is_drop_request(method: &str, path: &str) -> bool {

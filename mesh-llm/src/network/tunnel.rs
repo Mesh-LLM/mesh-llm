@@ -11,7 +11,10 @@
 //! 3. Bidirectionally relay
 
 use crate::mesh::Node;
-use crate::network::rewrite::{self, PortRewriteMap};
+use crate::network::{
+    proxy,
+    rewrite::{self, PortRewriteMap},
+};
 use anyhow::Result;
 use iroh::EndpointId;
 use std::collections::HashMap;
@@ -287,20 +290,78 @@ async fn handle_inbound_stream(
 }
 
 /// Handle an inbound HTTP tunnel bi-stream: connect directly to the local llama-server and relay.
-/// Plain byte relay — the client proxy already normalized the request before tunneling.
+/// Only the inference surface is allowed over this path. Peer-local management
+/// routes stay loopback-only even after mesh admission.
 async fn handle_inbound_http_stream(
     node: Node,
-    quic_send: iroh::endpoint::SendStream,
-    quic_recv: iroh::endpoint::RecvStream,
+    mut quic_send: iroh::endpoint::SendStream,
+    mut quic_recv: iroh::endpoint::RecvStream,
     http_port: u16,
 ) -> Result<()> {
-    tracing::info!("Inbound HTTP tunnel stream → llama-server :{http_port}");
-    let tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
-    tcp_stream.set_nodelay(true)?;
-    let _inflight = node.begin_inflight_request();
+    let Some(request) = receive_tunneled_http_request(&mut quic_recv, &mut quic_send).await? else {
+        quic_send.finish()?;
+        return Ok(());
+    };
 
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    tracing::info!("Inbound HTTP tunnel stream → llama-server :{http_port}");
+    let _inflight = node.begin_inflight_request();
+    let mut tcp_stream = TcpStream::connect(format!("127.0.0.1:{http_port}")).await?;
+    tcp_stream.set_nodelay(true)?;
+    tcp_stream.write_all(&request.raw).await?;
+    tcp_stream.shutdown().await?;
+    relay_response_with_first_byte_timeout(
+        &mut tcp_stream,
+        &mut quic_send,
+        quic_response_first_byte_timeout(),
+    )
+    .await?;
+    quic_send.finish()?;
+    Ok(())
+}
+
+async fn receive_tunneled_http_request<R, W>(
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<Option<proxy::BufferedHttpRequest>>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let request = match proxy::read_http_request_from_reader(reader).await {
+        Ok(request) => request,
+        Err(err) => {
+            write_http_error(writer, 400, &format!("bad tunneled HTTP request: {err}")).await?;
+            return Ok(None);
+        }
+    };
+
+    if !proxy::is_tunneled_http_request(&request.method, &request.path) {
+        write_http_error(writer, 403, "mesh peers may only tunnel inference routes").await?;
+        return Ok(None);
+    }
+
+    Ok(Some(request))
+}
+
+async fn write_http_error<W>(writer: &mut W, code: u16, msg: &str) -> Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    let status = match code {
+        400 => "Bad Request",
+        403 => "Forbidden",
+        405 => "Method Not Allowed",
+        _ => "Error",
+    };
+    let body = serde_json::to_vec(&serde_json::json!({ "error": msg }))?;
+    let header = format!(
+        "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    writer.write_all(header.as_bytes()).await?;
+    writer.write_all(&body).await?;
+    writer.flush().await?;
+    Ok(())
 }
 
 /// Bidirectional relay between a TCP stream and a QUIC bi-stream.
@@ -639,5 +700,64 @@ mod tests {
             forwarded,
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
         );
+    }
+
+    #[tokio::test]
+    async fn receive_tunneled_http_request_rejects_management_routes() {
+        let (mut client_write, mut server_read) = tokio::io::duplex(1024);
+        let (mut server_write, mut client_read) = tokio::io::duplex(1024);
+
+        let sender = tokio::spawn(async move {
+            client_write
+                .write_all(b"GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let request = receive_tunneled_http_request(&mut server_read, &mut server_write)
+            .await
+            .unwrap();
+        assert!(request.is_none());
+        server_write.shutdown().await.unwrap();
+        sender.await.unwrap();
+
+        let mut response = Vec::new();
+        client_read.read_to_end(&mut response).await.unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 403 Forbidden"));
+        assert!(response.contains("mesh peers may only tunnel inference routes"));
+    }
+
+    #[tokio::test]
+    async fn receive_tunneled_http_request_accepts_inference_routes() {
+        let (mut client_write, mut server_read) = tokio::io::duplex(4096);
+        let (mut server_write, mut client_read) = tokio::io::duplex(4096);
+
+        let sender = tokio::spawn(async move {
+            client_write
+                .write_all(
+                    b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 29\r\n\r\n{\"model\":\"auto\",\"input\":\"hi\"}",
+                )
+                .await
+                .unwrap();
+        });
+
+        let request = receive_tunneled_http_request(&mut server_read, &mut server_write)
+            .await
+            .unwrap()
+            .expect("inference request should be accepted");
+        server_write.shutdown().await.unwrap();
+        sender.await.unwrap();
+
+        let mut response = Vec::new();
+        client_read.read_to_end(&mut response).await.unwrap();
+        assert!(
+            response.is_empty(),
+            "accepted requests should not emit an error"
+        );
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/v1/chat/completions");
+        assert!(String::from_utf8_lossy(&request.raw)
+            .starts_with("POST /v1/chat/completions HTTP/1.1\r\n"));
     }
 }
