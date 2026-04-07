@@ -21,7 +21,7 @@ pub(crate) use plugins::blackboard;
 
 use anyhow::Result;
 
-pub const VERSION: &str = "0.56.0";
+pub const VERSION: &str = "0.57.0";
 
 pub async fn run() -> Result<()> {
     runtime::run().await
