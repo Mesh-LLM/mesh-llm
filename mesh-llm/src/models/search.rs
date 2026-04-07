@@ -10,6 +10,7 @@ use hf_hub::api::tokio::Api as TokioApi;
 use hf_hub::api::tokio::ApiError;
 use hf_hub::api::RepoSummary;
 use hf_hub::RepoType;
+use std::collections::BTreeMap;
 use tokio::task::JoinSet;
 
 #[derive(Clone, Debug)]
@@ -17,8 +18,10 @@ pub struct SearchHit {
     pub repo_id: String,
     pub repo_url: String,
     pub description: Option<String>,
-    pub exact_ref: Option<String>,
+    pub recommended_ref: Option<String>,
+    pub highest_quality_ref: Option<String>,
     pub metadata_notice: Option<String>,
+    pub gguf_files: usize,
     pub size_label: Option<String>,
     pub downloads: Option<u64>,
     pub likes: Option<u64>,
@@ -133,8 +136,10 @@ async fn build_search_hit(api: TokioApi, repo: RepoSummary) -> Result<Option<Sea
             repo_id: repo_id.clone(),
             repo_url: access::repo_url(&repo_id),
             description: detail.description.clone().or(repo.description.clone()),
-            exact_ref: None,
+            recommended_ref: None,
+            highest_quality_ref: None,
             metadata_notice: Some(access::gated_access_message(&repo_id)),
+            gguf_files: 0,
             size_label: None,
             downloads: detail.downloads.or(repo.downloads),
             likes: detail.likes.or(repo.likes),
@@ -147,23 +152,47 @@ async fn build_search_hit(api: TokioApi, repo: RepoSummary) -> Result<Option<Sea
         .iter()
         .map(|sibling| sibling.rfilename.clone())
         .collect();
-    let mut files: Vec<String> = detail
+    let files: Vec<String> = detail
         .siblings
         .into_iter()
         .map(|sibling| sibling.rfilename)
-        .filter(|file| file.ends_with(".gguf"))
+        .filter(|file| is_primary_model_gguf(file))
         .collect();
     if files.is_empty() {
         return Ok(None);
     }
-    files.sort_by(|left, right| {
-        file_preference_score(left)
-            .cmp(&file_preference_score(right))
-            .then_with(|| left.cmp(right))
-    });
-    let Some(file) = files.into_iter().next() else {
+    let mut stems: BTreeMap<String, String> = BTreeMap::new();
+    for file in files {
+        let stem = canonical_hf_ref_file_component(&file);
+        let update = match stems.get(&stem) {
+            Some(existing) => file_preference_score(&file) < file_preference_score(existing),
+            None => true,
+        };
+        if update {
+            stems.insert(stem, file);
+        }
+    }
+    let gguf_files = stems.len();
+    let Some((recommended_stem, file)) = stems
+        .iter()
+        .min_by(|left, right| {
+            file_preference_score(left.1)
+                .cmp(&file_preference_score(right.1))
+                .then_with(|| left.0.cmp(right.0))
+        })
+        .map(|(stem, file)| (stem.to_string(), file.to_string()))
+    else {
         return Ok(None);
     };
+    let highest_quality_ref = stems
+        .iter()
+        .min_by(|left, right| {
+            file_quality_score(left.1)
+                .cmp(&file_quality_score(right.1))
+                .then_with(|| file_preference_score(left.1).cmp(&file_preference_score(right.1)))
+                .then_with(|| left.0.cmp(right.0))
+        })
+        .map(|(stem, _)| format!("{repo_id}/{stem}"));
     let catalog = matching_catalog_model_for_huggingface(&repo_id, None, &file);
     let size_label = match catalog {
         Some(model) => Some(model.size.to_string()),
@@ -183,11 +212,10 @@ async fn build_search_hit(api: TokioApi, repo: RepoSummary) -> Result<Option<Sea
         repo_id: repo_id.clone(),
         repo_url: access::repo_url(&repo_id),
         description: detail.description.clone().or(repo.description.clone()),
-        exact_ref: Some(format!(
-            "{repo_id}/{}",
-            canonical_hf_ref_file_component(&file)
-        )),
+        recommended_ref: Some(format!("{repo_id}/{recommended_stem}")),
+        highest_quality_ref,
         metadata_notice: None,
+        gguf_files,
         size_label,
         downloads: detail.downloads.or(repo.downloads),
         likes: detail.likes.or(repo.likes),
@@ -224,12 +252,45 @@ async fn build_gated_search_hit(
         repo_id: repo_id.clone(),
         repo_url: access::repo_url(&repo_id),
         description: repo.description.clone(),
-        exact_ref: None,
+        recommended_ref: None,
+        highest_quality_ref: None,
         metadata_notice: Some(access::gated_access_message(&repo_id)),
+        gguf_files: 0,
         size_label: None,
         downloads: repo.downloads,
         likes: repo.likes,
         catalog: None,
         capabilities: ModelCapabilities::default(),
     }))
+}
+
+fn file_quality_score(file: &str) -> usize {
+    let upper = file.to_ascii_uppercase();
+    if upper.contains("BF16") || upper.contains("F16") {
+        return 0;
+    }
+    if upper.contains("Q8_0") {
+        return 1;
+    }
+    if upper.contains("Q6_K") {
+        return 2;
+    }
+    if upper.contains("Q5_") {
+        return 3;
+    }
+    if upper.contains("Q4_") {
+        return 4;
+    }
+    if upper.contains("Q3_") {
+        return 5;
+    }
+    if upper.contains("Q2_") || upper.contains("IQ") {
+        return 6;
+    }
+    7
+}
+
+fn is_primary_model_gguf(file: &str) -> bool {
+    let lower = file.to_ascii_lowercase();
+    lower.ends_with(".gguf") && !lower.contains("mmproj")
 }

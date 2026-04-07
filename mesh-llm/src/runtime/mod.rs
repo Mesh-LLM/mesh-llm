@@ -81,6 +81,10 @@ pub(crate) async fn run() -> Result<()> {
 
     let normalized_args = crate::cli::normalize_runtime_surface_args(std::env::args_os());
     let mut cli = Cli::parse_from(normalized_args.normalized.clone());
+    let capability_profile = runtime_capability_profile(&cli)?;
+    unsafe {
+        std::env::set_var("MESH_LLM_CAPABILITY_PROFILE", capability_profile.as_label());
+    }
 
     if let Some(warning) = crate::cli::legacy_runtime_surface_warning(
         &cli,
@@ -344,6 +348,26 @@ async fn resolve_model(input: &std::path::Path) -> Result<PathBuf> {
 
 fn cli_has_explicit_models(cli: &Cli) -> bool {
     !cli.model.is_empty() || !cli.gguf.is_empty()
+}
+
+fn runtime_capability_profile(cli: &Cli) -> Result<models::CapabilityProfile> {
+    let selected = [cli.text, cli.vision, cli.audio, cli.multimodal]
+        .into_iter()
+        .filter(|value| *value)
+        .count();
+    anyhow::ensure!(
+        selected <= 1,
+        "Choose only one capability selector: --text, --vision, --audio, or --multimodal"
+    );
+    if cli.vision {
+        Ok(models::CapabilityProfile::Vision)
+    } else if cli.audio {
+        Ok(models::CapabilityProfile::Audio)
+    } else if cli.multimodal {
+        Ok(models::CapabilityProfile::Multimodal)
+    } else {
+        Ok(models::CapabilityProfile::Text)
+    }
 }
 
 fn build_startup_model_specs(
@@ -1173,6 +1197,24 @@ async fn run_auto(
         // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
         router::strip_split_suffix_owned(&stem)
     };
+
+    // Prevent non-MoE startup models that exceed local fit budget from entering serve mode.
+    // MoE models are allowed to continue so election can run split placement.
+    let model_bytes = election::total_model_bytes(&model);
+    let required_bytes = (model_bytes as f64 * 1.1) as u64;
+    let available_vram = node.vram_bytes();
+    let catalog_match = models::find_catalog_model_exact(&model_name);
+    let is_moe_model = models::infer_local_model_topology(&model, catalog_match)
+        .and_then(|topology| topology.moe)
+        .is_some();
+    if !is_moe_model && model_bytes > 0 && required_bytes > available_vram {
+        anyhow::bail!(
+            "🟡 {} is too large to serve on this machine (needs {:.1} GB, available {:.1} GB).",
+            model_name,
+            required_bytes as f64 / 1e9,
+            available_vram as f64 / 1e9
+        );
+    }
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = primary_startup_model

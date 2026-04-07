@@ -1864,7 +1864,7 @@ dependencies = [
 [[package]]
 name = "hf-hub"
 version = "0.5.0"
-source = "git+https://github.com/i386/hf-hub.git?rev=af8653a4686bf710f87c2dd15967079c1017096d#af8653a4686bf710f87c2dd15967079c1017096d"
+source = "git+https://github.com/i386/hf-hub.git?rev=d938c23e74bc7d8a3919843daa8065eb8f10fdf8#d938c23e74bc7d8a3919843daa8065eb8f10fdf8"
 dependencies = [
  "dirs",
  "futures",

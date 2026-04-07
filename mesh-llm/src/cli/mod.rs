@@ -190,6 +190,22 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) config: Option<PathBuf>,
 
+    /// Prefer text-capable variants when resolving repo or family refs.
+    #[arg(long)]
+    pub(crate) text: bool,
+
+    /// Prefer vision-capable variants when resolving repo or family refs.
+    #[arg(long)]
+    pub(crate) vision: bool,
+
+    /// Prefer audio-capable variants when resolving repo or family refs.
+    #[arg(long)]
+    pub(crate) audio: bool,
+
+    /// Prefer multimodal variants when resolving repo or family refs.
+    #[arg(long)]
+    pub(crate) multimodal: bool,
+
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub(crate) nostr_discovery: bool,

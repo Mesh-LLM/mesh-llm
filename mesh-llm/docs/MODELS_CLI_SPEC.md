@@ -324,6 +324,11 @@ Shared fit rule:
 - `required_bytes = model_bytes * 1.10`
 - `fits_local = available_vram_bytes >= required_bytes`
 
+Operational recommendation for larger context windows:
+
+- For `64k` context targets, plan for ~`1.30x` model-bytes headroom (about 30% extra) to leave practical KV/cache margin and avoid tight-runtime failures.
+- The `1.10x` rule remains the baseline gate; `1.30x` is the recommended planning target for 64k operation.
+
 Fit is evaluated only after capability-profile filtering chooses eligible variants.
 
 ### 8.1 Download
