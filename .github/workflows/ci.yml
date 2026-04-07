@@ -268,7 +268,7 @@ jobs:
 
   inference_smoke_tests:
     needs: [changes, linux, macos]
-    if: ${{ needs.linux.result == 'success' && needs.macos.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.linux.result == 'success' && needs.macos.result == 'success' && (github.event.inputs.run_llama_smoke_tests != 'false' || github.event.inputs.run_mlx_smoke_tests != 'false') }}
     name: Inference Smoke Tests
     runs-on: ubuntu-latest
     steps:
@@ -372,30 +372,9 @@ jobs:
             llama.cpp/build/bin \
             ~/.models/$MOE_MODEL_FILE
 
-  mlx_runner_gate:
-    needs: [changes, macos, inference_smoke_tests]
-    if: ${{ needs.macos.result == 'success' && needs.inference_smoke_tests.result == 'success' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_mlx_smoke_tests != 'false') }}
-    name: MLX Runner Gate
-    runs-on: macos-latest
-    outputs:
-      can_run: ${{ steps.mlx_mem_check.outputs.can_run }}
-    steps:
-      - name: Check macOS runner memory (>= 64GB)
-        id: mlx_mem_check
-        run: |
-          REQUIRED_BYTES=68719476736
-          MEM_BYTES="$(sysctl -n hw.memsize)"
-          echo "Detected runner memory bytes: ${MEM_BYTES}"
-          if [ "${MEM_BYTES}" -lt "${REQUIRED_BYTES}" ]; then
-            echo "can_run=false" >> "$GITHUB_OUTPUT"
-            echo "MLX smoke tests will be skipped on this runner (<64GB RAM)."
-          else
-            echo "can_run=true" >> "$GITHUB_OUTPUT"
-          fi
-
   mlx_smoke_tests:
-    needs: [changes, macos, inference_smoke_tests, mlx_runner_gate]
-    if: ${{ needs.macos.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.mlx_runner_gate.outputs.can_run == 'true' && vars.ENABLE_MACOS_CI == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_mlx_smoke_tests != 'false') }}
+    needs: [changes, macos, inference_smoke_tests]
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.macos.result == 'success' && needs.inference_smoke_tests.result == 'success' && github.event.inputs.run_mlx_smoke_tests != 'false' }}
     name: MLX Smoke Tests
     runs-on: macos-latest
     strategy:
@@ -476,7 +455,7 @@ jobs:
 
   llama_smoke_tests:
     needs: [changes, linux, inference_smoke_tests]
-    if: ${{ needs.linux.result == 'success' && needs.inference_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && (github.event_name != 'workflow_dispatch' || github.event.inputs.run_llama_smoke_tests != 'false') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.linux.result == 'success' && needs.inference_smoke_tests.result == 'success' && github.event.inputs.run_llama_smoke_tests != 'false' }}
     name: Llama Smoke Tests
     runs-on: ubuntu-latest
     strategy:
