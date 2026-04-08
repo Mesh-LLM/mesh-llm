@@ -12,14 +12,13 @@ This repo (`mesh-llm`) contains mesh-llm — a Rust binary that pools GPUs over 
 | `CONTRIBUTING.md` | Build from source, dev workflow, UI dev |
 | `RELEASE.md` | Release process (build, bundle, tag, GitHub release) |
 | `ROADMAP.md` | Future directions |
-| `PLAN.md` | Historical design notes and benchmarks |
 | `mesh-llm/TODO.md` | Current work items and backlog |
 | `mesh-llm/README.md` | Rust crate overview and file map |
 | `mesh-llm/docs/DESIGN.md` | Architecture, protocols, features |
 | `mesh-llm/docs/TESTING.md` | Test playbook, scenarios, remote deploy |
+| `mesh-llm/docs/MULTI_MODAL.md` | Multimodal design: capability model, blob plugin, console, routing |
 | `mesh-llm/docs/MoE_PLAN.md` | MoE expert sharding design |
 | `mesh-llm/docs/MoE_DEPLOY_DESIGN.md` | MoE auto-deploy UX |
-| `mesh-llm/docs/MoE_SPLIT_REPORT.md` | MoE splitting validation results |
 | `fly/README.md` | Fly.io deployment (console + API apps) |
 | `relay/README.md` | Self-hosted iroh relay on Fly |
 
@@ -127,14 +126,29 @@ Current structure notes.
 ## Key Source Files
 
 - `mesh-llm/src/main.rs` — CLI args, orchestration: `run_auto()`, `run_idle()`, `run_passive()`
-- `mesh-llm/src/mesh.rs` — `Node` struct, gossip, mesh_id, peer management
-- `mesh-llm/src/election.rs` — Host election, tensor split calculation
-- `mesh-llm/src/proxy.rs` — HTTP proxy: request parsing, model routing, response helpers
-- `mesh-llm/src/api.rs` — Management API (:3131): `/api/status`, `/api/events`, `/api/discover`, `/api/join`
-- `mesh-llm/src/nostr.rs` — Nostr discovery, `score_mesh()`, `smart_auto()`
-- `mesh-llm/src/download.rs` — Model catalog (`MODEL_CATALOG`), HuggingFace downloads
-- `mesh-llm/src/moe.rs` — MoE detection, expert rankings, split orchestration
-- `mesh-llm/src/launch.rs` — llama-server/rpc-server process management
+- `mesh-llm/src/mesh/mod.rs` — `Node` struct, gossip, mesh_id, peer management
+- `mesh-llm/src/inference/election.rs` — Host election, tensor split calculation
+- `mesh-llm/src/inference/launch.rs` — llama-server/rpc-server process management
+- `mesh-llm/src/inference/moe.rs` — MoE detection, expert rankings, split orchestration
+- `mesh-llm/src/network/proxy.rs` — HTTP proxy: request parsing, model routing, response helpers
+- `mesh-llm/src/network/router.rs` — Request classification, model scoring, multimodal routing
+- `mesh-llm/src/network/nostr.rs` — Nostr discovery, `score_mesh()`, `smart_auto()`
+- `mesh-llm/src/network/tunnel.rs` — TCP ↔ QUIC relay (RPC + HTTP)
+- `mesh-llm/src/api/mod.rs` — Management API (:3131): `/api/status`, `/api/events`, `/api/discover`, `/api/join`
+- `mesh-llm/src/models/catalog.rs` — Model catalog, HuggingFace downloads
+- `mesh-llm/src/models/capabilities.rs` — Multimodal/vision/audio/reasoning capability inference
+- `mesh-llm/src/plugins/blobstore/mod.rs` — Request-scoped media object storage for multimodal
+
+## Mesh Protocol Compatibility
+
+Mesh compatibility across versions is critical. Nodes in the wild run different versions and must interoperate.
+
+- The mesh supports mixed-version operation: QUIC ALPN `mesh-llm/1` (protobuf) and `mesh-llm/0` (legacy JSON) nodes coexist. Do not break this.
+- Gossip fields, stream types, and protobuf schemas must be additive. New fields should be optional and ignored by older nodes. Do not repurpose or remove existing fields.
+- When adding new gossip fields, stream types, or changing wire format, explicitly consider what happens when an older node receives the new data and when a newer node talks to an older peer.
+- Capability advertisement (vision, audio, multimodal, reasoning, tool_use, moe) is gossiped to all peers and consumed by routing, the API, and the UI. Changes to capability semantics affect the whole mesh, not just the local node.
+- If a change would break mixed-version meshes, explicitly flag it as a breaking protocol change and ask the developer before proceeding.
+- Test compatibility by running the current branch against a released binary on a second node. Verify gossip, routing, and inference work across the version boundary.
 
 ## Plugin Protocol Compatibility
 
@@ -151,6 +165,15 @@ For changes in `mesh-llm/ui/`, use components and compose interfaces consistentl
 ## Testing
 
 Read `mesh-llm/docs/TESTING.md` before running tests. It has all test scenarios, remote deploy instructions, and cleanup commands.
+
+Testing matters more than usual in this project because:
+
+- Nodes run on different machines with different hardware and OS versions. Bugs that don't reproduce locally can appear in real deployments.
+- The mesh protocol is a distributed system — gossip, election, and routing interact across nodes. Single-node unit tests don't catch protocol-level regressions.
+- The public mesh at anarchai.org runs continuously. Breaking changes that pass local tests can take down live inference for real users.
+- Multimodal, MoE splitting, and multi-model routing all have complex interaction paths that are hard to reason about statically.
+
+When making changes that touch gossip, routing, proxy, election, or capability advertisement, test against at least two nodes before merging. The deploy checklist above is not optional.
 
 ## Formatting
 
