@@ -1617,10 +1617,20 @@ pub fn is_models_list_request(method: &str, path: &str) -> bool {
     method == "GET" && (path == "/v1/models" || path == "/models")
 }
 
-pub(crate) fn is_tunneled_http_request(method: &str, path: &str) -> bool {
+pub fn is_completions_request(method: &str, path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
+    method == "POST" && path == "/v1/chat/completions"
+}
+
+pub fn is_responses_request(method: &str, path: &str) -> bool {
+    let path = path.split('?').next().unwrap_or(path);
+    method == "POST" && path == "/v1/responses"
+}
+
+pub(crate) fn is_tunneled_http_request(method: &str, path: &str) -> bool {
     is_models_list_request(method, path)
-        || (method == "POST" && matches!(path, "/v1/chat/completions" | "/v1/responses"))
+        || is_completions_request(method, path)
+        || is_responses_request(method, path)
 }
 
 pub fn is_drop_request(method: &str, path: &str) -> bool {
@@ -2958,6 +2968,17 @@ mod tests {
     fn test_pipeline_request_supported_rejects_other_endpoint() {
         let body = serde_json::json!({"messages":[{"role":"user","content":"hi"}]});
         assert!(!pipeline_request_supported("/v1/responses", &body));
+    }
+
+    #[test]
+    fn test_tunneled_http_request_uses_endpoint_helpers() {
+        assert!(is_tunneled_http_request("GET", "/v1/models?refresh=1"));
+        assert!(is_tunneled_http_request(
+            "POST",
+            "/v1/chat/completions?stream=1"
+        ));
+        assert!(is_tunneled_http_request("POST", "/v1/responses?stream=1"));
+        assert!(!is_tunneled_http_request("POST", "/api/status"));
     }
 
     #[test]
