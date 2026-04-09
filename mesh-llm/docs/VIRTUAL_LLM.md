@@ -24,9 +24,10 @@ Content-Type: application/json
 **Response** (mesh-llm → llama-server):
 ```json
 {
-  "action": "none" | "inject" | "stop",
+  "action": "none" | "inject" | "stop" | "pending",
   "text": "...",
-  "continue": false
+  "continue": false,
+  "async_id": "cap-001"
 }
 ```
 
@@ -34,6 +35,7 @@ Content-Type: application/json
 - `none` — do nothing, continue normally
 - `inject` — tokenize `text`, add to prompt or KV cache, continue
 - `stop` — halt generation, release slot
+- `pending` — mesh-llm has started background work. Generation proceeds without blocking. llama-server stores `async_id` and polls for the result during generation (see [Async hooks](#async-hooks))
 
 ---
 
@@ -77,9 +79,9 @@ Request has images but the model is text-only. mesh-llm detects the mismatch, fo
 
 The caption is prepended to the prompt as a system message before tokenization. The text model generates with the caption in context from the start.
 
-**Example — context pre-fetch**:
+**Example — context pre-fetch (sync)**:
 
-Request asks about a specific topic. mesh-llm uses a small fast model to summarize relevant context:
+Request asks about a specific topic. mesh-llm uses a small fast model to summarize relevant context. This blocks — generation waits for the context:
 
 ```json
 {
@@ -87,6 +89,19 @@ Request asks about a specific topic. mesh-llm uses a small fast model to summari
   "text": "Context: auth.rs contains three functions: verify_token() for JWT validation, check_session() for session lookup, and refresh_auth() for token renewal."
 }
 ```
+
+**Example — image captioning (async)**:
+
+Request has images but captioning takes a few seconds. mesh-llm starts the vision model in the background and tells llama-server to proceed — the caption will arrive during generation:
+
+```json
+{
+  "action": "pending",
+  "async_id": "cap-001"
+}
+```
+
+Generation starts immediately. llama-server polls for `cap-001` during generation (see [Async hooks](#async-hooks)). When the caption arrives, it's injected into the live KV cache.
 
 **Example — no action needed**:
 
@@ -98,7 +113,7 @@ Model has vision capability and can handle the images directly:
 
 **Where in C++**: `launch_slot_with_task()`, after task assignment, before tokenization. The parsed request JSON (`data`) is still available.
 
-**Latency**: Delays time-to-first-token by the callback time. If `none`, ~0.1ms. If captioning, the vision model inference time.
+**Blocking**: This hook can return `inject` (sync, blocks until response) or `pending` (async, returns immediately). mesh-llm decides based on how long the consultation will take.
 
 ---
 
@@ -167,7 +182,7 @@ Entropy is 1.4, margin is 0.45 — model knows exactly what to say:
 
 **Where in C++**: The `SLOT_STATE_DONE_PROMPT → SLOT_STATE_GENERATING` transition. Entropy and margin computed from `get_token_probabilities(ctx, tok_idx)`.
 
-**Latency**: Delays first token. But if entropy is high, the model was going to produce a bad response anyway — better to delay and improve.
+**Blocking**: Always sync. mesh-llm just looks at the numbers and returns immediately — no model consultation at this hook, just a fast decision. ~0.1ms.
 
 ---
 
@@ -220,7 +235,7 @@ Signal stats look fine (low entropy, good margin). mesh-llm logs the stats for r
 
 **Where in C++**: `send_final_response()`, before pushing the result to the HTTP response queue.
 
-**Latency**: Delays final response. For non-streaming, the client waits. For streaming, only the final chunk is delayed.
+**Blocking**: Sync — holds the final response until mesh-llm replies. If verification is enabled, this is where the cost goes. If mesh-llm returns `none`, ~0.1ms.
 
 ---
 
@@ -302,13 +317,50 @@ Injected tokens are invisible to the client's SSE stream.
 
 ---
 
-## Mid-generation intervention (future)
+## Async hooks
 
-The four hooks above cover pre, post-prefill, post-generation, and telemetry. If mid-generation intervention is needed later, two approaches:
+When mesh-llm returns `action: "pending"` with an `async_id`, it's saying: "I've started working on something in the background. Don't wait for me — keep generating. I'll have the result ready soon."
 
-**Threshold breakout**: C++ monitors the rolling signal window. When `uncertain_streak` exceeds a configured limit, it fires a one-time callback. This is a rare event — maybe 0-2 times per generation, not per-token. Slot pauses, mesh-llm consults, injects, slot resumes. Stream pauses briefly but doesn't break.
+llama-server stores the `async_id` and polls for the result during generation. Not every token — every N tokens (e.g., every 16). The poll is a lightweight GET:
 
-**Async poll**: Hook 1 starts a background consultation (mesh-llm returns `async_id`). C++ polls `GET /mesh/hook/async/{id}` every N tokens (8-16, not every token). When ready, inject. Zero TTFT cost, background work runs parallel to generation.
+```
+GET http://localhost:{mesh_port}/mesh/hook/poll/{async_id}
+
+→ 202 (not ready yet)
+→ 200 { "action": "inject", "text": "..." }
+```
+
+When the result arrives (200), llama-server injects the text into the live KV cache and continues generating. The model's subsequent tokens are conditioned on the injected content.
+
+**Example flow — async image captioning**:
+
+```
+Token  0: Hook 1 fires → mesh-llm returns { pending, async_id: "cap-001" }
+                          mesh-llm starts captioning via vision model in mesh...
+Token  1-15: generating normally, no poll
+Token 16: poll GET /mesh/hook/poll/cap-001 → 202 (not ready)
+Token 17-31: generating normally
+Token 32: poll GET /mesh/hook/poll/cap-001 → 200 { inject, text: "Image shows..." }
+           → inject 50 tokens into KV cache
+Token 33+: generating conditioned on prompt + 32 generated tokens + caption
+```
+
+TTFT cost: zero. The model starts generating immediately. There's a brief stall at injection (evaluating the injected tokens through the model). The first 32 tokens were generated without the caption — they may be suboptimal, but the model often self-corrects once the context arrives because its attention now includes the injection.
+
+**Poll cost**: One GET every 16 tokens. At 50 tok/s that's ~3 polls/second. Each returns 202 in <0.1ms when nothing is ready. Negligible.
+
+**Multiple async**: A request can have multiple pending async_ids (e.g., two images being captioned). Each is polled independently.
+
+### When to use sync vs async
+
+| Situation | Mode | Why |
+|---|---|---|
+| Image caption for text-only model, fast vision model available | **Sync** at Hook 1 | Caption is essential, fast enough to not hurt TTFT much |
+| Image caption, slow or remote vision model | **Async** from Hook 1 | Don't block TTFT, inject when ready |
+| Context pre-fetch, small fast model | **Sync** at Hook 1 | Quick, and the context is important from token 1 |
+| Context pre-fetch, large/slow model | **Async** from Hook 1 | Start generating, inject context when it arrives |
+| First-token confidence check | **Sync** at Hook 2 | Just number-crunching, returns in <1ms |
+| Response verification | **Sync** at Hook 3 | Need the verdict before sending to client |
 
 ---
 
@@ -325,12 +377,22 @@ struct mesh_hook_ctx {
 
     mesh_signal_window signals;
 
+    // async polling state
+    std::vector<std::string> pending_async_ids;
+    int tokens_since_last_poll = 0;
+    int poll_interval = 16;  // poll every N tokens
+
     std::unique_ptr<httplib::Client> client;
 
     void init(int mesh_port) {
         client = std::make_unique<httplib::Client>("localhost", mesh_port);
         client->set_connection_timeout(0, 100000); // 100ms connect
         client->set_read_timeout(30);              // 30s read
+    }
+
+    bool should_poll() {
+        if (pending_async_ids.empty()) return false;
+        return ++tokens_since_last_poll >= poll_interval;
     }
 };
 ```
@@ -367,36 +429,60 @@ When set, hooks are enabled for requests that include `mesh_hooks: true`.
 | pre_response | `send_final_response()` | Before pushing result to queue |
 | complete | `slot.release()` | After response sent, detached thread |
 
-### Signal computation
+### Generation loop
 
 In the generation loop, after `common_sampler_sample()` and `common_sampler_accept()`:
 
 ```cpp
 if (slot.mesh_hook.enabled) {
+    // 1. Update signal stats (always, cheap)
     auto probs = get_token_probabilities(ctx, tok_idx);
     float entropy = compute_entropy(probs);
     float margin = probs[0].p - probs[1].p;
     slot.mesh_hook.signals.push(entropy, margin);
+
+    // 2. Poll for async results (every N tokens, lightweight GET)
+    if (slot.mesh_hook.should_poll()) {
+        slot.mesh_hook.tokens_since_last_poll = 0;
+        for (auto it = slot.mesh_hook.pending_async_ids.begin();
+             it != slot.mesh_hook.pending_async_ids.end(); ) {
+            auto res = slot.mesh_hook.client->Get("/mesh/hook/poll/" + *it);
+            if (res && res->status == 200) {
+                auto body = json::parse(res->body);
+                if (body["action"] == "inject") {
+                    inject_tokens(slot, body["text"].get<std::string>());
+                }
+                it = slot.mesh_hook.pending_async_ids.erase(it);
+            } else {
+                ++it;  // 202 = not ready, keep polling
+            }
+        }
+    }
 }
 ```
 
-No callback. Just arithmetic and a ring buffer write.
+Signal update is pure arithmetic (~1μs). Async poll fires every 16 tokens and returns in <0.1ms when nothing is ready.
 
 ---
 
 ## mesh-llm changes
 
-### New API endpoint
+### New API endpoints
 
-`POST /mesh/hook` on the management API port (3131). Receives callbacks, runs decision logic, returns action.
+On the management API port (3131):
+
+- `POST /mesh/hook` — receives hook callbacks, runs decision logic, returns action. For `pending` responses, starts background work and stores the async_id.
+- `GET /mesh/hook/poll/{async_id}` — lightweight poll. Returns 202 if not ready, 200 with action if ready.
 
 ### New module: `inference/virtual.rs`
 
 Decision engine for each hook type:
-- Pre-inference: detect media mismatches, decide what to pre-fetch
+- Pre-inference: detect media mismatches, decide sync inject vs async pending
 - Post-prefill: evaluate first-token signals, decide if context needed
 - Pre-response: optionally verify, score, or correct
 - Complete: record telemetry, update routing heuristics
+
+Manages async consultations: spawns tokio tasks for background model calls, stores results keyed by async_id, serves poll responses.
 
 Consultation requests routed through existing mesh infrastructure — same model discovery, QUIC tunneling, and routing that normal requests use.
 
