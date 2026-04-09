@@ -69,6 +69,11 @@ After prompt evaluation, before first token. Fires when the model looks uncertai
   "hook": "post_prefill",
   "trigger": "high_entropy",
   "request_id": "chatcmpl-abc",
+  "model": "qwen3-32b",
+  "model_capabilities": ["text", "code"],
+  "messages": [
+    {"role": "user", "content": "How does the auth flow work in this codebase?"}
+  ],
   "n_prompt_tokens": 847,
   "signals": {
     "first_token_entropy": 6.8,
@@ -84,7 +89,7 @@ After prompt evaluation, before first token. Fires when the model looks uncertai
 }
 ```
 
-No messages — mesh-llm already has the request from Hook 1, keyed by `request_id`. Just signals: entropy, margin, and top-5 token candidates with probabilities.
+Includes the full messages array — Hook 1 may not have fired for this request, so mesh-llm can't assume it has the context cached. The messages are already in memory on the C++ side, serializing over localhost is negligible.
 
 ### Hook 3: Pre-response
 
@@ -104,6 +109,10 @@ After generation completes, before sending to client. Fires when the output look
   "hook": "pre_response",
   "trigger": "max_tokens",
   "request_id": "chatcmpl-abc",
+  "model": "qwen3-32b",
+  "messages": [
+    {"role": "user", "content": "Explain the full auth flow in detail."}
+  ],
   "generated_text": "The verify_token() function handles session validation by checking the JWT signature against the stored secret. It first decodes the token header to determine the algorithm, then...",
   "n_decoded": 4096,
   "n_predict": 4096,
@@ -118,7 +127,7 @@ After generation completes, before sending to client. Fires when the output look
 }
 ```
 
-mesh-llm gets the **full generated text**, the stop reason, token counts, and signal summary over the whole generation. With the original request (from Hook 1 via `request_id`), mesh-llm has the full picture: what was asked, what was generated, and how confident the model was.
+mesh-llm gets the **original messages**, the **full generated text**, stop reason, token counts, and signal summary. Everything needed to decide: verify with another model, summarize and continue, or let it through.
 
 ### Polling
 
