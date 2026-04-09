@@ -3,12 +3,24 @@ use clap::Subcommand;
 #[derive(Subcommand, Debug)]
 pub enum ModelsCommand {
     /// List built-in recommended models.
-    Recommended,
+    Recommended {
+        /// Output as JSON for machine consumption.
+        #[arg(long)]
+        json: bool,
+    },
     /// List installed local models from the HF cache.
-    Installed,
+    Installed {
+        /// Output as JSON for machine consumption.
+        #[arg(long)]
+        json: bool,
+    },
     /// List built-in catalog models.
     #[command(hide = true)]
-    List,
+    List {
+        /// Output as JSON for machine consumption.
+        #[arg(long)]
+        json: bool,
+    },
     /// Search for catalog models and downloadable GGUF/MLX artifacts on Hugging Face.
     Search {
         /// Search terms.

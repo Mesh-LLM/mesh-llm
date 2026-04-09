@@ -138,7 +138,36 @@ pub async fn run_model_search(
     Ok(())
 }
 
-pub fn run_model_recommended() {
+pub fn run_model_recommended(json: bool) {
+    if json {
+        let models: Vec<serde_json::Value> = catalog::MODEL_CATALOG
+            .iter()
+            .map(|model| {
+                let caps = capabilities::infer_catalog_capabilities(model);
+                serde_json::json!({
+                    "name": model.name,
+                    "file": model.file,
+                    "size": model.size,
+                    "description": model.description,
+                    "draft": model.draft,
+                    "moe": model.moe.is_some(),
+                    "capabilities": {
+                        "vision": caps.vision_status(),
+                        "audio": caps.audio_status(),
+                        "reasoning": caps.reasoning_status(),
+                        "tool_use": caps.tool_use_status(),
+                        "multimodal": caps.multimodal_status(),
+                    },
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "models": models })).unwrap()
+        );
+        return;
+    }
+
     println!("📚 Recommended models");
     println!();
     for model in catalog::MODEL_CATALOG.iter() {
@@ -164,8 +193,47 @@ pub fn run_model_recommended() {
     }
 }
 
-pub fn run_model_installed() {
+pub fn run_model_installed(json: bool) {
     let installed = scan_installed_models();
+
+    if json {
+        let models: Vec<serde_json::Value> = installed
+            .iter()
+            .map(|name| {
+                let path = crate::models::find_model_path(name);
+                let size_bytes = std::fs::metadata(&path).map(|meta| meta.len()).ok();
+                let catalog_model = find_catalog_model_exact(name);
+                let caps = installed_model_capabilities(name);
+                serde_json::json!({
+                    "name": name,
+                    "path": path.to_string_lossy(),
+                    "size_bytes": size_bytes,
+                    "size": size_bytes.map(format_installed_size),
+                    "in_catalog": catalog_model.is_some(),
+                    "description": catalog_model.map(|m| m.description.as_str()),
+                    "draft": catalog_model.and_then(|m| m.draft.as_deref()),
+                    "moe": catalog_model.map(|m| m.moe.is_some()).unwrap_or(false),
+                    "capabilities": {
+                        "vision": caps.vision_status(),
+                        "audio": caps.audio_status(),
+                        "reasoning": caps.reasoning_status(),
+                        "tool_use": caps.tool_use_status(),
+                        "multimodal": caps.multimodal_status(),
+                    },
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "cache_dir": huggingface_hub_cache_dir().to_string_lossy(),
+                "models": models,
+            }))
+            .unwrap()
+        );
+        return;
+    }
+
     if installed.is_empty() {
         println!("📦 No installed models found");
         println!("   HF cache: {}", huggingface_hub_cache_dir().display());
@@ -352,8 +420,10 @@ fn fit_hint_for_size_label(size_label: &str) -> Option<String> {
 
 pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
     match command {
-        ModelsCommand::Recommended | ModelsCommand::List => run_model_recommended(),
-        ModelsCommand::Installed => run_model_installed(),
+        ModelsCommand::Recommended { json } | ModelsCommand::List { json } => {
+            run_model_recommended(*json)
+        }
+        ModelsCommand::Installed { json } => run_model_installed(*json),
         ModelsCommand::Search {
             query,
             gguf,

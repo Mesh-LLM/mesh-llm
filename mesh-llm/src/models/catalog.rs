@@ -15,13 +15,13 @@ use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize)]
 pub struct CatalogAsset {
     pub file: String,
     pub url: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct CatalogModel {
     pub name: String,
     pub file: String,
@@ -60,7 +60,7 @@ impl CatalogModel {
 
 /// Pre-computed MoE expert sharding configuration for a model.
 /// Derived from router gate mass analysis — determines which experts go where.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct MoeConfig {
     /// Total number of experts in the model
     pub n_expert: u32,
