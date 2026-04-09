@@ -65,6 +65,19 @@ clone_or_update_llama() {
 }
 
 clone_or_update_llama
+
+# =======================================================================
+# TEMPORARY: mesh hook C++ patches — overlay onto llama.cpp after pull.
+# This exists ONLY for the micn/virtual-llm branch so we can iterate on
+# C++ and Rust in one repo/PR. Remove this block (and llama-patches/)
+# when the C++ code moves to the mesh-hooks branch on the llama.cpp fork.
+# =======================================================================
+PATCHES_DIR="$REPO_ROOT/mesh-llm/llama-patches"
+if [[ -x "$PATCHES_DIR/sync.sh" ]]; then
+    echo "⚠️  TEMPORARY: Syncing mesh hook C++ patches into llama.cpp..."
+    "$PATCHES_DIR/sync.sh"
+fi
+
 configure_compiler_cache
 
 cmake_flags=(
