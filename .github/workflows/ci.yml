@@ -414,7 +414,10 @@ jobs:
     name: Linux ROCm
     runs-on: ubuntu-latest
     container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
+      # `7.0-complete` now exceeds the free space available before job steps run
+      # on GitHub-hosted runners. The standard 7.0 dev image is much smaller
+      # and still provides a supported ROCm 7.0 environment for this build.
+      image: rocm/dev-ubuntu-24.04:7.0
 
     steps:
       - name: Install base packages

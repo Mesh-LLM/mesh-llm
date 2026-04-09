@@ -137,7 +137,9 @@ jobs:
     name: Build Linux AMD ROCm
     runs-on: ubuntu-latest
     container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
+      # Keep release and PR ROCm jobs on the same smaller image so the release
+      # lane does not hit the same runner disk exhaustion as CI.
+      image: rocm/dev-ubuntu-24.04:7.0
 
     steps:
       - name: Install base packages
