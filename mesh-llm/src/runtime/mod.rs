@@ -1173,7 +1173,7 @@ async fn run_auto(
             let pack = nostr::auto_model_pack(node.vram_bytes() as f64 / 1e9);
             if !pack.is_empty() {
                 eprintln!(
-                    "📋 No unserved demand — serving {} for {:.0}GB VRAM",
+                    "📋 No unserved demand — serving {} for {:.0}GB capacity",
                     pack[0],
                     node.vram_bytes() as f64 / 1e9
                 );
@@ -1207,7 +1207,7 @@ async fn run_auto(
             } else {
                 eprintln!("💤 No matching model on disk — running as standby GPU node");
                 eprintln!(
-                    "   VRAM: {:.1}GB, models on disk: {:?}",
+                    "   Capacity: {:.1}GB, models on disk: {:?}",
                     node.vram_bytes() as f64 / 1e9,
                     local_models
                 );

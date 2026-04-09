@@ -1629,20 +1629,20 @@ impl Node {
             let max_bytes = (max_gb * 1e9) as u64;
             if max_bytes < vram {
                 tracing::info!(
-                    "Detected VRAM: {:.1} GB, capped to {:.1} GB (--max-vram)",
+                    "Detected capacity: {:.1} GB, capped to {:.1} GB (--max-vram)",
                     vram as f64 / 1e9,
                     max_gb
                 );
                 vram = max_bytes;
             } else {
                 tracing::info!(
-                    "Detected VRAM: {:.1} GB (--max-vram {:.1} has no effect)",
+                    "Detected capacity: {:.1} GB (--max-vram {:.1} has no effect)",
                     vram as f64 / 1e9,
                     max_gb
                 );
             }
         } else {
-            tracing::info!("Detected VRAM: {:.1} GB", vram as f64 / 1e9);
+            tracing::info!("Detected capacity: {:.1} GB", vram as f64 / 1e9);
         }
 
         let config_state_init = {
@@ -9361,25 +9361,146 @@ pub fn clear_public_identity() {
 async fn load_or_create_key() -> Result<SecretKey> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    let dir = home.join(".mesh-llm");
-    let key_path = dir.join("key");
+    load_or_create_key_at(&home.join(".mesh-llm")).await
+}
 
-    if key_path.exists() {
-        let hex = tokio::fs::read_to_string(&key_path).await?;
-        let bytes = hex::decode(hex.trim())?;
-        if bytes.len() != 32 {
-            anyhow::bail!("Invalid key length in {}", key_path.display());
+async fn load_or_create_key_at(dir: &std::path::Path) -> Result<SecretKey> {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        ensure_private_identity_dir(&dir)?;
+        let key_path = dir.join("key");
+
+        if key_path.exists() {
+            ensure_private_identity_file(&key_path)?;
+            let hex = std::fs::read_to_string(&key_path)?;
+            let bytes = hex::decode(hex.trim())?;
+            if bytes.len() != 32 {
+                anyhow::bail!("Invalid key length in {}", key_path.display());
+            }
+            let key = SecretKey::from_bytes(&bytes.try_into().unwrap());
+            tracing::info!("Loaded key from {}", key_path.display());
+            return Ok(key);
         }
-        let key = SecretKey::from_bytes(&bytes.try_into().unwrap());
-        tracing::info!("Loaded key from {}", key_path.display());
-        return Ok(key);
+
+        let key = SecretKey::generate(&mut rand::rng());
+        crate::crypto::write_keystore_bytes_atomically(
+            &key_path,
+            hex::encode(key.to_bytes()).as_bytes(),
+        )?;
+        tracing::info!("Generated new key, saved to {}", key_path.display());
+        Ok(key)
+    })
+    .await?
+}
+
+#[cfg(unix)]
+fn ensure_private_identity_dir(dir: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::create_dir_all(dir)?;
+    let metadata = std::fs::metadata(dir)?;
+    let mut perms = metadata.permissions();
+    if perms.mode() & 0o077 != 0 {
+        perms.set_mode(0o700);
+        std::fs::set_permissions(dir, perms)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_identity_dir(dir: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dir)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_private_identity_file(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        anyhow::bail!("Identity key path is not a regular file");
+    }
+    let mut perms = metadata.permissions();
+    if perms.mode() & 0o077 != 0 {
+        perms.set_mode(0o600);
+        std::fs::set_permissions(path, perms)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_identity_file(_path: &std::path::Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod private_key_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_mesh_dir(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}"))
     }
 
-    let key = SecretKey::generate(&mut rand::rng());
-    tokio::fs::create_dir_all(&dir).await?;
-    tokio::fs::write(&key_path, hex::encode(key.to_bytes())).await?;
-    tracing::info!("Generated new key, saved to {}", key_path.display());
-    Ok(key)
+    #[tokio::test]
+    async fn load_or_create_key_at_round_trips_key_material() {
+        let dir = temp_mesh_dir("mesh-llm-node-key");
+        let key = load_or_create_key_at(&dir).await.unwrap();
+        let loaded = load_or_create_key_at(&dir).await.unwrap();
+        assert_eq!(key.to_bytes(), loaded.to_bytes());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn load_or_create_key_at_hardens_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_mesh_dir("mesh-llm-node-key-perms");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let key_path = dir.join("key");
+        std::fs::write(&key_path, hex::encode([7u8; 32])).unwrap();
+        std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let key = load_or_create_key_at(&dir).await.unwrap();
+        assert_eq!(key.to_bytes(), [7u8; 32]);
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn load_or_create_key_at_rejects_symlink_key() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_mesh_dir("mesh-llm-node-key-symlink");
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("key");
+        let real_file = dir.join("key.real");
+        std::fs::write(&real_file, hex::encode([7u8; 32])).unwrap();
+        std::fs::set_permissions(&real_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&real_file, &key_path).unwrap();
+
+        let result = load_or_create_key_at(&dir).await;
+        assert!(result.is_err(), "expected error for symlinked key file");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 #[cfg(test)]

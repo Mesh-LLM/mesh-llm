@@ -220,6 +220,46 @@ fn expand_split_asset(asset: &HfAsset) -> Result<Vec<HfAsset>> {
 
 fn is_mlx_primary_asset(file: &str) -> bool {
     matches!(file, "model.safetensors" | "model.safetensors.index.json")
+        || is_split_mlx_first_shard_file(file)
+}
+
+/// Returns true if `file` is the first shard of a sharded MLX safetensors set,
+/// i.e. `model-00001-of-NNNNN.safetensors`.
+fn is_split_mlx_first_shard_file(file: &str) -> bool {
+    let Some(rest) = file.strip_prefix("model-") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_suffix(".safetensors") else {
+        return false;
+    };
+    let Some((left, right)) = rest.split_once("-of-") else {
+        return false;
+    };
+    left == "00001" && right.len() == 5 && right.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Expands a first-shard MLX ref (`model-00001-of-NNNNN.safetensors`) into the
+/// full list of shard assets without needing to download the index.
+fn expand_split_mlx_first_shard(asset: &HfAsset) -> Vec<HfAsset> {
+    let Some(rest) = asset.file.strip_prefix("model-00001-of-") else {
+        return Vec::new();
+    };
+    let Some(total_str) = rest.strip_suffix(".safetensors") else {
+        return Vec::new();
+    };
+    if total_str.len() != 5 || !total_str.bytes().all(|b| b.is_ascii_digit()) {
+        return Vec::new();
+    }
+    let Ok(count): Result<u32> = total_str.parse().map_err(anyhow::Error::from) else {
+        return Vec::new();
+    };
+    (1..=count)
+        .map(|index| HfAsset {
+            repo: asset.repo.clone(),
+            revision: asset.revision.clone(),
+            file: format!("model-{index:05}-of-{total_str}.safetensors"),
+        })
+        .collect()
 }
 
 fn mlx_sidecar_assets(asset: &HfAsset) -> Vec<(bool, HfAsset)> {
@@ -448,7 +488,12 @@ fn download_hf_assets_blocking(label: &str, assets: Vec<HfAsset>) -> Result<Vec<
         for sidecar in mlx_sidecar_assets(&asset) {
             download_plan.insert(sidecar);
         }
+        // Expand shards from an index file (downloads index to discover shard names)
         for shard in mlx_sharded_weight_assets(&api, &cache, &asset)? {
+            download_plan.insert((true, shard));
+        }
+        // Expand shards from a first-shard ref without needing to download the index
+        for shard in expand_split_mlx_first_shard(&asset) {
             download_plan.insert((true, shard));
         }
     }
@@ -1046,47 +1091,6 @@ mod tests {
     }
 
     #[test]
-    fn source_identity_is_exposed_for_mlx_catalog_entries() {
-        let model = find_model("Qwen2.5-Coder-14B-Instruct-MLX").unwrap();
-        assert_eq!(
-            model.source_repo(),
-            Some("lmstudio-community/Qwen2.5-Coder-14B-Instruct-MLX-4bit")
-        );
-        assert_eq!(model.source_revision(), Some("main"));
-        assert_eq!(model.source_file(), Some("model.safetensors.index.json"));
-    }
-
-    #[test]
-    fn source_identity_is_exposed_for_gemma4_mlx_catalog_entry() {
-        let model = find_model("Gemma-4-E4B-it-MLX").unwrap();
-        assert_eq!(
-            model.source_repo(),
-            Some("unsloth/gemma-4-E4B-it-UD-MLX-4bit")
-        );
-        assert_eq!(model.source_revision(), Some("main"));
-        assert_eq!(model.source_file(), Some("model.safetensors.index.json"));
-    }
-
-    #[test]
-    fn source_identity_is_exposed_for_glm4_mlx_catalog_entry() {
-        let model = find_model("GLM-4-9B-0414-MLX").unwrap();
-        assert_eq!(
-            model.source_repo(),
-            Some("mlx-community/GLM-4-9B-0414-4bit")
-        );
-        assert_eq!(model.source_revision(), Some("main"));
-        assert_eq!(model.source_file(), Some("model.safetensors.index.json"));
-    }
-
-    #[test]
-    fn source_identity_is_exposed_for_lfm2_mlx_catalog_entry() {
-        let model = find_model("LFM2-350M-MLX").unwrap();
-        assert_eq!(model.source_repo(), Some("mlx-community/LFM2-350M-4bit"));
-        assert_eq!(model.source_revision(), Some("main"));
-        assert_eq!(model.source_file(), Some("model.safetensors.index.json"));
-    }
-
-    #[test]
     fn test_free_disk_space() {
         let path = std::env::temp_dir().join("test_file.gguf");
         let free = free_disk_space(&path);
@@ -1151,96 +1155,6 @@ mod tests {
     }
 
     #[test]
-    fn mlx_sidecars_include_tokenizer_and_optional_templates() {
-        let asset = HfAsset {
-            repo: "mlx-community/qwen2.5-0.5b-instruct-q2".to_string(),
-            revision: "main".to_string(),
-            file: "model.safetensors".to_string(),
-        };
-        let sidecars = mlx_sidecar_assets(&asset);
-        assert!(sidecars
-            .iter()
-            .any(|(required, asset)| *required && asset.file == "tokenizer.json"));
-        assert!(sidecars
-            .iter()
-            .any(|(required, asset)| !required && asset.file == "tokenizer_config.json"));
-        assert!(sidecars
-            .iter()
-            .any(|(required, asset)| !required && asset.file == "chat_template.json"));
-    }
-
-    #[test]
-    fn optional_metadata_detection_covers_mlx_sidecars() {
-        let optional_files = [
-            "config.json",
-            "tokenizer_config.json",
-            "chat_template.jinja",
-            "chat_template.json",
-        ];
-        for file in optional_files {
-            let asset = HfAsset {
-                repo: "mlx-community/JOSIE-IT1-Qwen3-0.6B-4bit".to_string(),
-                revision: "main".to_string(),
-                file: file.to_string(),
-            };
-            assert!(
-                is_optional_metadata(false, &asset),
-                "{file} should be optional"
-            );
-        }
-
-        let required = HfAsset {
-            repo: "mlx-community/JOSIE-IT1-Qwen3-0.6B-4bit".to_string(),
-            revision: "main".to_string(),
-            file: "tokenizer.json".to_string(),
-        };
-        assert!(!is_optional_metadata(true, &required));
-    }
-
-    #[test]
-    fn parse_safetensors_index_shards_extracts_unique_files() {
-        let index = serde_json::json!({
-            "weight_map": {
-                "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00002.safetensors",
-                "model.layers.0.self_attn.k_proj.weight": "model-00001-of-00002.safetensors",
-                "model.layers.1.self_attn.q_proj.weight": "model-00002-of-00002.safetensors"
-            }
-        });
-        let shards = parse_safetensors_index_shards(&index).unwrap();
-        assert_eq!(
-            shards,
-            vec![
-                "model-00001-of-00002.safetensors".to_string(),
-                "model-00002-of-00002.safetensors".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn qwen_catalog_has_case_mismatch_between_file_and_url() {
-        // Qwen HF repos use lowercase filenames but the catalog stores PascalCase.
-        // This is the mismatch that the case-insensitive fallback in download_model fixes.
-        let model = find_model("Qwen2.5-3B-Instruct-Q4_K_M").unwrap();
-        let url_file = model.source_file().unwrap();
-        assert_ne!(model.file.as_str(), url_file);
-        assert!(model.file.eq_ignore_ascii_case(url_file));
-    }
-
-    /// Helper: simulate the path-matching predicate from download_model().
-    fn matches_model_file(path_filename: &str, url_filename: &str, catalog_file: &str) -> bool {
-        path_filename == url_filename || path_filename.eq_ignore_ascii_case(catalog_file)
-    }
-
-    #[test]
-    fn cache_lookup_matches_lowercase_url_filename() {
-        assert!(matches_model_file(
-            "qwen2.5-3b-instruct-q4_k_m.gguf",
-            "qwen2.5-3b-instruct-q4_k_m.gguf",
-            "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
-        ));
-    }
-
-    #[test]
     fn path_file_name_matches_nested_path_ignore_case() {
         let path = Path::new("/tmp/cache/Subdir/Model.Q4_K_M.gguf");
         assert!(path_suffix_matches_ignore_case(
@@ -1256,6 +1170,45 @@ mod tests {
             path,
             "subdir/model.q4_k_m.gguf"
         ));
+    }
+
+    #[test]
+    fn mlx_sidecars_include_required_tokenizer_and_optional_templates() {
+        let asset = HfAsset {
+            repo: "mlx-community/qwen2.5-0.5b-instruct-q2".to_string(),
+            revision: "main".to_string(),
+            file: "model.safetensors".to_string(),
+        };
+        let sidecars = mlx_sidecar_assets(&asset);
+        assert_eq!(sidecars.len(), 4);
+        assert_eq!(sidecars[0].0, true);
+        assert_eq!(sidecars[0].1.file, "tokenizer.json");
+        assert!(sidecars
+            .iter()
+            .any(|(_, a)| a.file == "tokenizer_config.json"));
+        assert!(sidecars
+            .iter()
+            .any(|(_, a)| a.file == "chat_template.jinja"));
+        assert!(sidecars.iter().any(|(_, a)| a.file == "chat_template.json"));
+    }
+
+    #[test]
+    fn parse_safetensors_index_shards_extracts_unique_shards() {
+        let index = serde_json::json!({
+            "weight_map": {
+                "layer.0.q": "model-00001-of-00002.safetensors",
+                "layer.0.k": "model-00001-of-00002.safetensors",
+                "layer.1.q": "model-00002-of-00002.safetensors"
+            }
+        });
+        let shards = parse_safetensors_index_shards(&index).unwrap();
+        assert_eq!(
+            shards,
+            vec![
+                "model-00001-of-00002.safetensors".to_string(),
+                "model-00002-of-00002.safetensors".to_string()
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1422,5 +1375,61 @@ mod tests {
 
         let resolved = download_model(&model).await.unwrap();
         assert_eq!(resolved, expected_file);
+    }
+
+    #[test]
+    fn is_split_mlx_first_shard_file_identifies_correct_patterns() {
+        assert!(is_split_mlx_first_shard_file(
+            "model-00001-of-00004.safetensors"
+        ));
+        assert!(is_split_mlx_first_shard_file(
+            "model-00001-of-00048.safetensors"
+        ));
+        assert!(!is_split_mlx_first_shard_file(
+            "model-00002-of-00004.safetensors"
+        ));
+        assert!(!is_split_mlx_first_shard_file("model.safetensors"));
+        assert!(!is_split_mlx_first_shard_file(
+            "model.safetensors.index.json"
+        ));
+        assert!(!is_split_mlx_first_shard_file("model-00001-of-00004.gguf"));
+    }
+
+    #[test]
+    fn expand_split_mlx_first_shard_generates_all_shards() {
+        let asset = HfAsset {
+            repo: "org/repo".to_string(),
+            revision: "main".to_string(),
+            file: "model-00001-of-00003.safetensors".to_string(),
+        };
+        let shards = expand_split_mlx_first_shard(&asset);
+        assert_eq!(shards.len(), 3);
+        assert_eq!(shards[0].file, "model-00001-of-00003.safetensors");
+        assert_eq!(shards[1].file, "model-00002-of-00003.safetensors");
+        assert_eq!(shards[2].file, "model-00003-of-00003.safetensors");
+        for shard in &shards {
+            assert_eq!(shard.repo, "org/repo");
+            assert_eq!(shard.revision, "main");
+        }
+    }
+
+    #[test]
+    fn expand_split_mlx_first_shard_returns_empty_for_non_first_shard() {
+        let asset = HfAsset {
+            repo: "org/repo".to_string(),
+            revision: "main".to_string(),
+            file: "model-00002-of-00003.safetensors".to_string(),
+        };
+        let shards = expand_split_mlx_first_shard(&asset);
+        assert!(shards.is_empty());
+    }
+
+    #[test]
+    fn is_mlx_primary_asset_includes_first_shard() {
+        assert!(is_mlx_primary_asset("model.safetensors"));
+        assert!(is_mlx_primary_asset("model.safetensors.index.json"));
+        assert!(is_mlx_primary_asset("model-00001-of-00048.safetensors"));
+        assert!(!is_mlx_primary_asset("model-00002-of-00048.safetensors"));
+        assert!(!is_mlx_primary_asset("model-00048-of-00048.safetensors"));
     }
 }

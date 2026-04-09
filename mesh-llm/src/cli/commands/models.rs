@@ -1,9 +1,9 @@
 use crate::cli::models::ModelsCommand;
 use crate::models::{
-    capabilities, catalog, catalog_model_kind_label, download_exact_ref, find_catalog_model_exact,
-    huggingface_hub_cache_dir, installed_model_capabilities, scan_installed_models,
-    search_catalog_models, search_huggingface, show_exact_model, MlxSelectionPolicy,
-    ResolveFormatPreference, SearchArtifactFilter, SearchProgress,
+    capabilities, catalog, download_exact_ref, find_catalog_model_exact, huggingface_hub_cache_dir,
+    installed_model_capabilities, scan_installed_models, search_catalog_models, search_huggingface,
+    show_exact_model, MlxSelectionPolicy, ResolveFormatPreference, SearchArtifactFilter,
+    SearchProgress,
 };
 use crate::system::hardware;
 use anyhow::{anyhow, Result};
@@ -22,7 +22,6 @@ pub async fn run_model_search(
     } else if prefer_gguf {
         SearchArtifactFilter::Gguf
     } else {
-        // Default to GGUF when neither flag is provided.
         SearchArtifactFilter::Gguf
     };
     let filter_label = match filter {
@@ -34,8 +33,8 @@ pub async fn run_model_search(
         let results: Vec<_> = search_catalog_models(&query)
             .into_iter()
             .filter(|model| match filter {
-                SearchArtifactFilter::Gguf => catalog_model_kind_label(model) == "🦙 gguf",
-                SearchArtifactFilter::Mlx => catalog_model_kind_label(model) == "🍎 mlx",
+                SearchArtifactFilter::Gguf => !catalog_model_is_mlx(model),
+                SearchArtifactFilter::Mlx => catalog_model_is_mlx(model),
             })
             .collect();
         if results.is_empty() {
@@ -91,8 +90,8 @@ pub async fn run_model_search(
     }
     println!();
     for (index, result) in results.iter().enumerate() {
-        println!("{}. 📦 {}", index + 1, result.file);
-        println!("   repo: {}", result.repo_id);
+        println!("{}. 📦 {}", index + 1, result.repo_id);
+        println!("   type: {}", result.kind);
         let mut stats = Vec::new();
         if let Some(size) = &result.size_label {
             stats.push(format!("📏 {}", size));
@@ -219,6 +218,7 @@ pub async fn run_model_show(model_ref: &str) -> Result<()> {
     }
     println!();
     println!("Ref: {}", details.exact_ref);
+    println!("Type: {}", details.kind);
     println!("Source: {}", format_source_label(details.source));
     if let Some(size) = details.size_label {
         println!("Size: {size}");
@@ -270,14 +270,14 @@ pub async fn run_model_download(
     prefer_mlx: bool,
     include_draft: bool,
 ) -> Result<()> {
-    let preference = if prefer_gguf {
-        ResolveFormatPreference::Gguf
-    } else if prefer_mlx {
+    let preference = if prefer_mlx {
         ResolveFormatPreference::Mlx
+    } else if prefer_gguf {
+        ResolveFormatPreference::Gguf
     } else {
         ResolveFormatPreference::Auto
     };
-
+    let details = show_exact_model(model_ref).await.ok();
     let path = download_exact_ref(
         model_ref,
         preference,
@@ -286,13 +286,16 @@ pub async fn run_model_download(
     )
     .await?;
     println!("✅ Downloaded model");
+    if let Some(details) = &details {
+        println!("   type: {}", details.kind);
+    }
     println!("   {}", path.display());
 
     if !include_draft {
         return Ok(());
     }
 
-    let Some(details) = show_exact_model(model_ref).await.ok() else {
+    let Some(details) = details else {
         return Ok(());
     };
     let Some(draft) = details.draft else {
@@ -389,4 +392,14 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn catalog_model_is_mlx(model: &catalog::CatalogModel) -> bool {
+    model
+        .source_file()
+        .map(|file| {
+            file.ends_with("model.safetensors") || file.ends_with("model.safetensors.index.json")
+        })
+        .unwrap_or(false)
+        || model.url.contains("model.safetensors")
 }

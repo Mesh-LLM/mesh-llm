@@ -1,6 +1,10 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+const MAX_GGUF_STRING_BYTES: u64 = 1_000_000;
+const MAX_GGUF_ARRAY_ELEMENTS: u64 = 1_000_000;
+const MAX_GGUF_ARRAY_DEPTH: u32 = 64;
+
 /// MoE info extracted from a GGUF file header.
 #[derive(Clone, Debug)]
 pub struct GgufMoeInfo {
@@ -76,31 +80,60 @@ fn read_i64(f: &mut std::fs::File) -> std::io::Result<i64> {
     Ok(i64::from_le_bytes(buf))
 }
 
-fn read_gguf_string(f: &mut std::fs::File) -> std::io::Result<String> {
-    let len = read_u64(f)? as usize;
-    if len > 1_000_000 {
+fn read_bounded_len(f: &mut std::fs::File, max: u64, label: &str) -> std::io::Result<usize> {
+    let len = read_u64(f)?;
+    if len > max {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "string too long",
+            format!("{label} too long"),
         ));
     }
+    usize::try_from(len).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("{label} too large"),
+        )
+    })
+}
+
+fn read_gguf_string(f: &mut std::fs::File) -> std::io::Result<String> {
+    let len = read_bounded_len(f, MAX_GGUF_STRING_BYTES, "string")?;
     let mut buf = vec![0u8; len];
     f.read_exact(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).to_string())
+    String::from_utf8(buf).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid UTF-8 in GGUF string",
+        )
+    })
 }
 
 fn skip_gguf_value(f: &mut std::fs::File, typ: GgufType) -> std::io::Result<()> {
+    skip_gguf_value_with_depth(f, typ, 0)
+}
+
+fn skip_gguf_value_with_depth(
+    f: &mut std::fs::File,
+    typ: GgufType,
+    depth: u32,
+) -> std::io::Result<()> {
     match typ {
         GgufType::String => {
             let _ = read_gguf_string(f)?;
         }
         GgufType::Array => {
+            if depth >= MAX_GGUF_ARRAY_DEPTH {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "GGUF nesting too deep",
+                ));
+            }
             let elem_type = GgufType::from_u32(read_u32(f)?).ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "bad array type")
             })?;
-            let count = read_u64(f)? as usize;
+            let count = read_bounded_len(f, MAX_GGUF_ARRAY_ELEMENTS, "array")?;
             for _ in 0..count {
-                skip_gguf_value(f, elem_type)?;
+                skip_gguf_value_with_depth(f, elem_type, depth + 1)?;
             }
         }
         other => {
@@ -328,4 +361,88 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
     }
 
     Some(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_file_path(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}.gguf"))
+    }
+
+    fn write_bytes(prefix: &str, bytes: &[u8]) -> PathBuf {
+        let path = temp_file_path(prefix);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(bytes).unwrap();
+        file.flush().unwrap();
+        path
+    }
+
+    fn push_array_header(bytes: &mut Vec<u8>, elem_type: GgufType, count: u64) {
+        bytes.extend_from_slice(&(elem_type as u32).to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+    }
+
+    fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value.as_bytes());
+    }
+
+    #[test]
+    fn skip_gguf_value_rejects_excessive_array_depth() {
+        let mut bytes = Vec::new();
+        for _ in 0..=MAX_GGUF_ARRAY_DEPTH {
+            push_array_header(&mut bytes, GgufType::Array, 1);
+        }
+        push_array_header(&mut bytes, GgufType::Uint8, 1);
+        bytes.push(0);
+
+        let path = write_bytes("mesh-llm-gguf-depth", &bytes);
+        let mut file = std::fs::File::open(&path).unwrap();
+        let err = skip_gguf_value(&mut file, GgufType::Array).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("nesting too deep"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn skip_gguf_value_rejects_excessive_array_count() {
+        let mut bytes = Vec::new();
+        push_array_header(&mut bytes, GgufType::Uint8, MAX_GGUF_ARRAY_ELEMENTS + 1);
+
+        let path = write_bytes("mesh-llm-gguf-count", &bytes);
+        let mut file = std::fs::File::open(&path).unwrap();
+        let err = skip_gguf_value(&mut file, GgufType::Array).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("array too long"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_compact_meta_returns_none_on_malicious_nested_array() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&1i64.to_le_bytes());
+        push_gguf_string(&mut bytes, "general.architecture");
+        bytes.extend_from_slice(&(GgufType::Array as u32).to_le_bytes());
+        for _ in 0..=MAX_GGUF_ARRAY_DEPTH {
+            push_array_header(&mut bytes, GgufType::Array, 1);
+        }
+        push_array_header(&mut bytes, GgufType::Uint8, 1);
+        bytes.push(0);
+
+        let path = write_bytes("mesh-llm-gguf-malicious", &bytes);
+        assert!(scan_gguf_compact_meta(&path).is_none());
+        let _ = std::fs::remove_file(path);
+    }
 }

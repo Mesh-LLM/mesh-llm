@@ -13,6 +13,7 @@ pub use self::keychain::{
     set_secret as keychain_set, OwnerKeychainLoadError, DEFAULT_OWNER_ACCOUNT, KEYCHAIN_SERVICE,
 };
 pub use self::keys::{owner_id_from_verifying_key, OwnerKeypair};
+pub(crate) use self::keystore::write_keystore_bytes_atomically;
 pub use self::keystore::{
     default_keystore_path, keystore_exists, keystore_metadata, load_keystore, save_keystore,
     KeystoreInfo,

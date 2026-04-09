@@ -114,14 +114,14 @@ fn fit_hint_for_machine(size_gb: f64, my_vram_gb: f64) -> (String, String) {
     if size_gb <= 0.0 || my_vram_gb <= 0.0 {
         return (
             "Unknown".into(),
-            "No local VRAM signal is available for this machine yet.".into(),
+            "No local capacity signal is available for this machine yet.".into(),
         );
     }
     if size_gb * 1.2 <= my_vram_gb {
         return (
             "Likely comfortable".into(),
             format!(
-                "This machine has {:.1} GB VRAM, which should handle a {:.1} GB model comfortably.",
+                "This machine has {:.1} GB capacity, which should handle a {:.1} GB model comfortably.",
                 my_vram_gb, size_gb
             ),
         );
@@ -130,7 +130,7 @@ fn fit_hint_for_machine(size_gb: f64, my_vram_gb: f64) -> (String, String) {
         return (
             "Likely fits".into(),
             format!(
-                "This machine has {:.1} GB VRAM. A {:.1} GB model should fit, but headroom will be tight.",
+                "This machine has {:.1} GB capacity. A {:.1} GB model should fit, but headroom will be tight.",
                 my_vram_gb, size_gb
             ),
         );
@@ -139,7 +139,7 @@ fn fit_hint_for_machine(size_gb: f64, my_vram_gb: f64) -> (String, String) {
         return (
             "Possible with tradeoffs".into(),
             format!(
-                "This machine has {:.1} GB VRAM. A {:.1} GB model may load, but expect tighter memory pressure.",
+                "This machine has {:.1} GB capacity. A {:.1} GB model may load, but expect tighter memory pressure.",
                 my_vram_gb, size_gb
             ),
         );
@@ -147,7 +147,7 @@ fn fit_hint_for_machine(size_gb: f64, my_vram_gb: f64) -> (String, String) {
     (
         "Likely too large".into(),
         format!(
-            "This machine has {:.1} GB VRAM, which is likely not enough for a {:.1} GB model locally.",
+            "This machine has {:.1} GB capacity, which is likely not enough for a {:.1} GB model locally.",
             my_vram_gb, size_gb
         ),
     )
