@@ -1328,7 +1328,17 @@ async fn run_auto(
     let console_state_for_primary_process = console_state.clone();
     let primary_process_model_name = model_name.clone();
     let primary_model_name_for_advertise = model_name.clone();
-    let moe_runtime_options = moe::MoeRuntimeOptions::default();
+    let moe_runtime_options = moe::MoeRuntimeOptions {
+        ranking_strategy: cli.moe_ranking,
+        micro_prompt_count: cli.moe_micro_prompts,
+        micro_tokens: cli.moe_micro_tokens,
+        micro_layer_scope: cli.moe_micro_layer_scope,
+        mmap_prompt_count: cli.moe_mmap_prompts,
+        mmap_tokens: cli.moe_mmap_tokens,
+        mmap_layer_scope: cli.moe_mmap_layer_scope,
+        mmap_ram_budget_gb: cli.moe_mmap_ram_budget_gb,
+        mmap_ngl: cli.moe_mmap_ngl,
+    };
     let primary_mmproj = primary_startup_model
         .as_ref()
         .and_then(|model| model.mmproj_path.clone());
@@ -1463,7 +1473,17 @@ async fn run_auto(
             let extra_model_name = extra_name.clone();
             let api_port_extra = api_port;
             let extra_llama_flavor = cli.llama_flavor;
-            let extra_moe_runtime_options = moe::MoeRuntimeOptions::default();
+            let extra_moe_runtime_options = moe::MoeRuntimeOptions {
+                ranking_strategy: cli.moe_ranking,
+                micro_prompt_count: cli.moe_micro_prompts,
+                micro_tokens: cli.moe_micro_tokens,
+                micro_layer_scope: cli.moe_micro_layer_scope,
+                mmap_prompt_count: cli.moe_mmap_prompts,
+                mmap_tokens: cli.moe_mmap_tokens,
+                mmap_layer_scope: cli.moe_mmap_layer_scope,
+                mmap_ram_budget_gb: cli.moe_mmap_ram_budget_gb,
+                mmap_ngl: cli.moe_mmap_ngl,
+            };
             let extra_console_state = console_state.clone();
             let extra_model_name_for_status = extra_model_name.clone();
             let extra_model_name_for_process = extra_model_name.clone();
