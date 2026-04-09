@@ -42,6 +42,19 @@
 //!
 //! Pending consultations are tracked in `AsyncConsultations` (a DashMap).
 //!
+//! # Model awareness
+//!
+//! The C++ hook payload only contains the model filename (e.g.
+//! `"Qwen3-8B-Q4_K_M"`). mesh-llm enriches this with:
+//!
+//! - **ModelProfile** (from router.rs) — tier, strengths, tools support
+//! - **ModelCapabilities** (from capabilities.rs) — multimodal, vision, audio
+//! - **Mesh peer state** — what other models are available, their capabilities
+//!
+//! This lets the decision engine pick the right complementary model:
+//! a vision model when the current one is text-only, a stronger model
+//! when the current one is uncertain, a code model when code is detected.
+//!
 //! # Current status
 //!
 //! All handlers are stubs that log and return `none`. The hook plumbing
@@ -49,6 +62,37 @@
 //! Next step: implement actual consultations against mesh peers.
 
 use serde_json::{json, Value};
+
+// ---------------------------------------------------------------------------
+// Context passed to hook handlers
+// ---------------------------------------------------------------------------
+
+/// What we know about the model that triggered the hook, enriched from
+/// mesh-llm's own model profiles and mesh peer state.
+///
+/// The C++ side only sends the model filename. We look up the rest.
+#[allow(dead_code)] // fields used when consultations are implemented
+pub struct HookContext {
+    /// The model filename from the hook payload (e.g. "Qwen3-8B-Q4_K_M").
+    pub model_name: String,
+    /// Tier from ModelProfile (1=tiny, 2=small, 3=medium, 4=frontier).
+    /// None if model isn't in the catalog.
+    pub tier: Option<u8>,
+    /// Whether the triggering model supports vision.
+    pub has_vision: bool,
+    /// Whether the triggering model supports tool calling.
+    pub has_tools: bool,
+    /// Primary strength category (code, math, general, etc.)
+    pub primary_strength: Option<String>,
+
+    // -- Mesh state --
+    /// Vision-capable models available in the mesh (model name, peer id).
+    pub vision_peers: Vec<(String, String)>,
+    /// Models with a higher tier than the triggering model.
+    pub stronger_peers: Vec<(String, String)>,
+    /// All available models in the mesh (for fallback).
+    pub all_peers: Vec<(String, String)>,
+}
 
 /// Response actions returned to llama-server.
 ///
