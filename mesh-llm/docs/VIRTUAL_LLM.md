@@ -27,17 +27,35 @@ Response:
 - **pending** — mesh-llm is working on it in the background, poll for result later
 - **stop** — halt generation
 
+Hook 1's response can also configure the rest of the request:
+```json
+{
+  "action": "none",
+  "entropy_threshold": 5.0,
+  "verify": true
+}
+```
+
+- `entropy_threshold` — Hook 2 only fires if first-token entropy exceeds this (default: skip Hook 2)
+- `verify` — Hook 3 fires after generation (default: skip Hook 3)
+
 Pending results polled via `GET /mesh/hook/poll/{async_id}` → 202 (not ready) or 200 (ready, with inject action).
 
 ---
 
 ## When hooks fire
 
-All three hooks fire on every request where `mesh_hooks: true` is set in the request body. There's no conditional logic on the C++ side — it always calls mesh-llm, and mesh-llm decides whether to act (returns `none` to do nothing).
+mesh-llm sets `mesh_hooks: true` when forwarding requests to llama-server. When absent or false, all hook code is skipped — zero overhead.
 
-mesh-llm sets `mesh_hooks: true` when forwarding requests to llama-server. It decides per-request based on what it knows: images present + text-only model, request looks complex, verification enabled, etc. When `mesh_hooks` is absent or false, all hook code is skipped — zero overhead.
+**Hook 1 (pre-inference)**: Always fires when hooks are enabled. mesh-llm needs to see every request to decide if it should act — only it knows what models are in the mesh, whether a vision model is available, etc.
 
-Polling is the only conditional: it only runs when `pending_async_ids` is non-empty (i.e., Hook 1 returned `pending`). No async work started = nothing to poll.
+**Hook 2 (post-prefill)**: Fires only if the model is uncertain. C++ computes entropy and margin from the first-token logits. If entropy exceeds a threshold, it calls mesh-llm. If the model is confident, the hook is skipped — no POST, no latency. The threshold is set per-request by mesh-llm (via `mesh_entropy_threshold` in the request params, default 5.0).
+
+**Hook 3 (pre-response)**: Fires only if mesh-llm requested verification for this request. Hook 1's response can include `"verify": true` to enable it. If not set, the hook is skipped.
+
+**Polling**: Only runs when `pending_async_ids` is non-empty (Hook 1 returned `pending`). No async work = nothing to poll.
+
+So the flow is: Hook 1 always fires. It tells C++ what to watch for during this request — entropy threshold, whether to verify, any async work to poll. Hooks 2 and 3 are conditional based on what Hook 1 set up.
 
 ## Hooks
 
@@ -206,6 +224,10 @@ struct mesh_hook_ctx {
     int  port = 0;
     std::string request_id;
     json original_request;
+
+    // set by Hook 1 response
+    float entropy_threshold = -1.0f;  // <0 = skip Hook 2
+    bool  verify = false;             // false = skip Hook 3
 
     // signal window
     mesh_signal_window signals;
