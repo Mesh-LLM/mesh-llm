@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# build-linux-amd.sh — build llama.cpp (ROCm/HIP) + mesh-llm on Linux
+# build-linux-rocm.sh — build llama.cpp (ROCm/HIP) + mesh-llm on Linux
 #
-# Usage: scripts/build-linux-amd.sh [amdgpu_targets]
+# Usage: scripts/build-linux-rocm.sh [amdgpu_targets]
 #   amdgpu_targets  Semicolon-separated AMDGPU targets, e.g.
 #                   "gfx90a;gfx942;gfx1100". If omitted, a broad default is used.
 

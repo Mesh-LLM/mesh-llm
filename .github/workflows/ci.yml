@@ -611,7 +611,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-slim-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-amd.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx1100-rocm7.0
+          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-slim-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx1100-rocm7.0
 
       # This lane is compile-only plus a CLI smoke check (`--version`/`--help`).
       # It does not exercise ROCm inference on real AMD hardware, so restrict
@@ -623,7 +623,7 @@ jobs:
         env:
           MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
         run: |
-          just --shell bash --shell-arg -lc release-build-amd gfx1100
+          just --shell bash --shell-arg -lc release-build-rocm gfx1100
 
       - name: Build mesh-llm binary only (cache hit — llama.cpp skipped)
         if: steps.llama_rocm_cache.outputs.cache-hit == 'true'

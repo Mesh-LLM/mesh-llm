@@ -23,7 +23,7 @@ On Windows, use the release-specific recipes directly:
 ```powershell
 just release-build-windows
 just release-build-cuda-windows
-just release-build-amd-windows
+just release-build-rocm-windows
 just release-build-vulkan-windows
 ```
 
@@ -58,7 +58,7 @@ On Windows, create release archives directly:
 ```powershell
 just release-bundle-windows v0.X.0
 just release-bundle-cuda-windows v0.X.0
-just release-bundle-amd-windows v0.X.0
+just release-bundle-rocm-windows v0.X.0
 just release-bundle-vulkan-windows v0.X.0
 ```
 

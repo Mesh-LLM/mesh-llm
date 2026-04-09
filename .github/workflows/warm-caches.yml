@@ -32,7 +32,7 @@ on:
       # to any of them invalidates the cache AND triggers this workflow to
       # rebuild and re-warm in the same commit.
       - 'scripts/build-linux.sh'
-      - 'scripts/build-linux-amd.sh'
+      - 'scripts/build-linux-rocm.sh'
       - 'Justfile'
       - '.github/workflows/ci.yml'
       - '.github/workflows/warm-caches.yml'
@@ -356,7 +356,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-slim-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-amd.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx1100-rocm7.0
+          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-slim-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx1100-rocm7.0
 
       - name: Short-circuit if ROCm slim cache already warm
         if: steps.llama_rocm_slim_cache.outputs.cache-hit == 'true'
@@ -372,7 +372,7 @@ jobs:
         env:
           MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
         run: |
-          just --shell bash --shell-arg -lc release-build-amd gfx1100
+          just --shell bash --shell-arg -lc release-build-rocm gfx1100
 
       - name: Verify ROCm slim binaries are present
         shell: bash
@@ -470,7 +470,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-fat-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-amd.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx90a-gfx942-gfx1100-gfx1101-gfx1102-gfx1200-gfx1201-rocm7.0
+          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-fat-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx90a-gfx942-gfx1100-gfx1101-gfx1102-gfx1200-gfx1201-rocm7.0
 
       - name: Short-circuit if ROCm fat cache already warm
         if: steps.llama_rocm_fat_cache.outputs.cache-hit == 'true'
@@ -486,7 +486,7 @@ jobs:
         env:
           MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
         run: |
-          just --shell bash --shell-arg -lc release-build-amd
+          just --shell bash --shell-arg -lc release-build-rocm
 
       - name: Verify ROCm fat binaries are present
         shell: bash
