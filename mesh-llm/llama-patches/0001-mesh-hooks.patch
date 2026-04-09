@@ -1,7 +1,7 @@
 From b6c41378092ff8a5d82f407b33ef8a5b11b57879 Mon Sep 17 00:00:00 2001
 From: Michael Neale <michael.neale@gmail.com>
 Date: Thu, 9 Apr 2026 13:51:03 +1000
-Subject: [PATCH] =?UTF-8?q?mesh=20hooks:=20initial=20implementation=20?=
+Subject: [PATCH 1/2] =?UTF-8?q?mesh=20hooks:=20initial=20implementation=20?=
  =?UTF-8?q?=E2=80=94=20three=20hooks=20wired=20into=20server?=
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -570,6 +570,113 @@ index a49ddb594..3ce48e7bb 100644
      // Embeddings
      int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
  
+-- 
+2.51.0
+
+
+From af13d1a589cf08f71fe4f295b5a518f4de6dfdfb Mon Sep 17 00:00:00 2001
+From: Michael Neale <michael.neale@gmail.com>
+Date: Thu, 9 Apr 2026 15:32:50 +1000
+Subject: [PATCH 2/2] mesh hooks: fix triggers, add has_media(), demote debug
+ logs
+
+- Fix images_no_multimodal trigger: was always true when hooks enabled,
+  now correctly checks task.tokens.has_media() && !has_mtmd
+- Add server_tokens::has_media() public accessor
+- Add mesh_n_turns to task_params, parsed from messages array size
+- Demote Hook 1/2 response logging from INF to DBG
+- All three hooks tested end-to-end with mock server
+---
+ tools/server/server-common.h    |  3 +++
+ tools/server/server-context.cpp | 14 ++++++++++++--
+ tools/server/server-task.cpp    |  4 ++++
+ tools/server/server-task.h      |  5 +++--
+ 4 files changed, 22 insertions(+), 4 deletions(-)
+
+diff --git a/tools/server/server-common.h b/tools/server/server-common.h
+index 213ae52bb..3d835971b 100644
+--- a/tools/server/server-common.h
++++ b/tools/server/server-common.h
+@@ -196,6 +196,9 @@ public:
+ 
+     bool empty() const { return tokens.empty(); }
+ 
++    // true if the token sequence contains any media (images/audio)
++    bool has_media() const { return !map_idx_to_media.empty(); }
++
+     void clear() {
+         map_idx_to_media.clear();
+         tokens.clear();
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 4f632f548..a8ff093c2 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -1229,8 +1229,10 @@ private:
+ 
+             // evaluate pre-inference triggers
+             // images present but model has no multimodal context
+-            slot.mesh_hook.has_images_no_multimodal = task.tokens.has_mtmd == false
+-                && task.params.mesh_hooks; // TODO: detect images from original request
++            // has_mtmd is true when the model has a multimodal context (mmproj loaded)
++            // has_media() is true when the request actually contains images/audio
++            slot.mesh_hook.has_images_no_multimodal =
++                task.tokens.has_media() && !task.tokens.has_mtmd;
+ 
+             // context pressure: prompt > 75% of slot context
+             slot.mesh_hook.context_pressure = task.n_tokens() > (int)(slot.n_ctx * 0.75);
+@@ -1252,6 +1254,11 @@ private:
+                 auto resp = slot.mesh_hook.call_hook(payload);
+                 auto inject_text = slot.mesh_hook.process_response(resp);
+ 
++                SLT_DBG(slot, "mesh hook 1: response action=%s entropy_threshold=%.2f verify=%d\n",
++                        resp.value("action", "none").c_str(),
++                        slot.mesh_hook.entropy_threshold,
++                        slot.mesh_hook.verify ? 1 : 0);
++
+                 if (!inject_text.empty()) {
+                     SLT_INF(slot, "mesh hook 1: injecting %zu chars into prompt\n", inject_text.size());
+                     // TODO: prepend inject_text to the prompt as a system message
+@@ -2959,6 +2966,9 @@ private:
+                         float entropy = mesh_compute_entropy(probs);
+                         float margin  = probs.size() >= 2 ? probs[0].p - probs[1].p : 1.0f;
+ 
++                        SLT_DBG(slot, "mesh hook 2: check entropy=%.2f threshold=%.2f margin=%.3f\n",
++                                entropy, slot.mesh_hook.entropy_threshold, margin);
++
+                         if (entropy > slot.mesh_hook.entropy_threshold || margin < 0.05f) {
+                             // build top tokens list
+                             json top_tokens = json::array();
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index 98bbd6bac..e902b7862 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -276,6 +276,10 @@ task_params server_task::params_from_json_cmpl(
+     // mesh hooks
+     params.mesh_hooks       = json_value(data,       "mesh_hooks",         params_base.mesh_port > 0);
+     params.mesh_port        = json_value(data,       "mesh_port",          params_base.mesh_port);
++    // count conversation turns from the messages array (if present)
++    if (data.contains("messages") && data["messages"].is_array()) {
++        params.mesh_n_turns = (int)data["messages"].size();
++    }
+ 
+     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);
+     params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index 3ce48e7bb..408963ca7 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -84,8 +84,9 @@ struct task_params {
+     common_chat_parser_params chat_parser_params;
+ 
+     // Mesh hooks — callback to mesh-llm during inference
+-    bool mesh_hooks = false;
+-    int  mesh_port  = 0;  // 0 = use server default
++    bool mesh_hooks    = false;
++    int  mesh_port     = 0;  // 0 = use server default
++    int  mesh_n_turns  = 0;  // number of messages in the conversation
+ 
+     // Embeddings
+     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 -- 
 2.51.0
 
