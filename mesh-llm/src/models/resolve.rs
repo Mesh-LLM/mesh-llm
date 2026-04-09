@@ -451,18 +451,21 @@ pub(super) fn parse_huggingface_ref(input: &str) -> Option<(String, Option<Strin
     if let Some(parsed) = parse_hf_resolve_url(input) {
         return Some(parsed);
     }
-    if !is_supported_huggingface_file_ref(input) {
-        return None;
-    }
 
     let parts: Vec<&str> = input.splitn(3, '/').collect();
     if parts.len() != 3 {
+        return None;
+    }
+    if parts[0].is_empty() || parts[1].is_empty() || parts[0].contains(':') {
         return None;
     }
     let (repo_tail, revision) = match parts[1].split_once('@') {
         Some((repo, revision)) => (repo, Some(revision.to_string())),
         None => (parts[1], None),
     };
+    if repo_tail.is_empty() {
+        return None;
+    }
     Some((
         format!("{}/{}", parts[0], repo_tail),
         revision,
@@ -756,6 +759,7 @@ async fn parse_exact_model_ref(
         return Ok(ExactModelRef::Catalog(model));
     }
     if let Some((repo, revision, file)) = parse_huggingface_ref(input) {
+        let file = resolve_huggingface_file(&repo, revision.as_deref(), &file).await?;
         validate_preference_matches_file(&file, preference)?;
         ensure_explicit_mlx_selection(
             artifact_kind_for_file(&file),
@@ -802,6 +806,119 @@ async fn parse_exact_model_ref(
     }
     bail!(
         "Expected a model ref. Use a catalog id, a Hugging Face ref like org/repo/file.gguf, org/repo/model.safetensors, or org/repo, or a direct URL."
+    )
+}
+
+fn is_split_mlx_first_shard(file: &str) -> bool {
+    let Some(rest) = file.strip_prefix("model-") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_suffix(".safetensors") else {
+        return false;
+    };
+    let Some((left, right)) = rest.split_once("-of-") else {
+        return false;
+    };
+    left == "00001" && right.len() == 5 && right.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn select_default_hf_file_from_siblings(siblings: &[String]) -> Option<String> {
+    siblings
+        .iter()
+        .filter_map(|file| {
+            let lower = file.to_lowercase();
+            let rank = if lower == "model.safetensors" {
+                0
+            } else if is_split_mlx_first_shard(&lower) {
+                1
+            } else if lower.ends_with(".gguf") {
+                if lower.contains("-000") && !lower.contains("-00001-of-") {
+                    return None;
+                }
+                if lower.contains("-00001-of-") { 2 } else { 3 }
+            } else {
+                return None;
+            };
+            Some((rank, file_preference_score(file), file.clone()))
+        })
+        .min_by(|left, right| left.cmp(right))
+        .map(|(_, _, file)| file)
+}
+
+fn resolve_hf_file_from_siblings(requested: &str, siblings: &[String]) -> Option<String> {
+    if requested.is_empty() {
+        return select_default_hf_file_from_siblings(siblings);
+    }
+
+    if requested.ends_with(".gguf")
+        || requested.ends_with(".safetensors")
+        || requested.ends_with(".safetensors.index.json")
+    {
+        return Some(requested.to_string());
+    }
+
+    let requested_lower = requested.to_lowercase();
+    let gguf_exact = format!("{requested}.gguf").to_lowercase();
+    let gguf_split_prefix = format!("{requested}-00001-of-").to_lowercase();
+    let safetensors_exact = format!("{requested}.safetensors").to_lowercase();
+    let safetensors_split_prefix = format!("{requested}-00001-of-").to_lowercase();
+
+    siblings
+        .iter()
+        .filter_map(|file| {
+            let lower = file.to_lowercase();
+            let rank = if lower == requested_lower {
+                0
+            } else if lower == safetensors_exact {
+                1
+            } else if lower.starts_with(&safetensors_split_prefix)
+                && lower.ends_with(".safetensors")
+            {
+                2
+            } else if lower == gguf_exact {
+                3
+            } else if lower.starts_with(&gguf_split_prefix) && lower.ends_with(".gguf") {
+                4
+            } else {
+                return None;
+            };
+            Some((rank, file_preference_score(file), file.clone()))
+        })
+        .min_by(|left, right| left.cmp(right))
+        .map(|(_, _, file)| file)
+}
+
+async fn resolve_huggingface_file(repo: &str, revision: Option<&str>, file: &str) -> Result<String> {
+    if file.ends_with(".gguf")
+        || file.ends_with(".safetensors")
+        || file.ends_with(".safetensors.index.json")
+    {
+        return Ok(file.to_string());
+    }
+
+    let revision = revision.unwrap_or("main");
+    let api = build_hf_tokio_api(false)?;
+    let detail = api
+        .repo(Repo::with_revision(
+            repo.to_string(),
+            RepoType::Model,
+            revision.to_string(),
+        ))
+        .info()
+        .await
+        .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision}"))?;
+    let siblings: Vec<String> = detail
+        .siblings
+        .iter()
+        .map(|sibling| sibling.rfilename.clone())
+        .collect();
+
+    if let Some(resolved) = resolve_hf_file_from_siblings(file, &siblings) {
+        return Ok(resolved);
+    }
+
+    bail!(
+        "No model file matching stem '{file}' in {repo}@{revision}. Use a full ref like org/repo/file.gguf or org/repo/model.safetensors."
     )
 }
 
@@ -890,6 +1007,26 @@ mod tests {
             parse_huggingface_repo_ref("mlx-community/Qwen2.5-0.5B-Instruct@main").unwrap();
         assert_eq!(repo, "mlx-community/Qwen2.5-0.5B-Instruct");
         assert_eq!(revision.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn split_stem_resolves_to_first_part() {
+        let siblings = vec![
+            "zai-org.GLM-5.1.Q2_K-00002-of-00018.gguf".to_string(),
+            "zai-org.GLM-5.1.Q2_K-00001-of-00018.gguf".to_string(),
+        ];
+        let resolved = resolve_hf_file_from_siblings("zai-org.GLM-5.1.Q2_K", &siblings).unwrap();
+        assert_eq!(resolved, "zai-org.GLM-5.1.Q2_K-00001-of-00018.gguf");
+    }
+
+    #[test]
+    fn mlx_stem_resolves_to_model_safetensors() {
+        let siblings = vec![
+            "model.safetensors.index.json".to_string(),
+            "model.safetensors".to_string(),
+        ];
+        let resolved = resolve_hf_file_from_siblings("model", &siblings).unwrap();
+        assert_eq!(resolved, "model.safetensors");
     }
 
     #[test]

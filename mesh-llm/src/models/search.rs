@@ -215,19 +215,26 @@ fn repo_artifact_kind_label(kind: RepoArtifactKind) -> &'static str {
 }
 
 fn display_ref_file(file: &str) -> String {
-    let Some(without_ext) = file.strip_suffix(".gguf") else {
-        return file.to_string();
-    };
-    if !without_ext.contains("-00001-of-") {
+    if let Some(without_ext) = file.strip_suffix(".gguf") {
+        if !without_ext.contains("-00001-of-") {
+            return without_ext.to_string();
+        }
+        let Some((prefix, suffix)) = without_ext.rsplit_once("-00001-of-") else {
+            return without_ext.to_string();
+        };
+        if suffix.len() == 5 && suffix.chars().all(|ch| ch.is_ascii_digit()) {
+            return prefix.to_string();
+        }
         return without_ext.to_string();
     }
-    let Some((prefix, suffix)) = without_ext.rsplit_once("-00001-of-") else {
-        return without_ext.to_string();
-    };
-    if suffix.len() == 5 && suffix.chars().all(|ch| ch.is_ascii_digit()) {
-        return prefix.to_string();
+
+    if file == "model.safetensors" {
+        return "model".to_string();
     }
-    without_ext.to_string()
+    if is_split_mlx_first_shard(file) {
+        return "model".to_string();
+    }
+    file.to_string()
 }
 
 fn collect_repo_artifact_candidates(siblings: &[String]) -> Vec<RepoArtifactCandidate> {
@@ -353,15 +360,16 @@ mod tests {
     }
 
     #[test]
-    fn display_ref_file_uses_gguf_stem_and_leaves_mlx_unchanged() {
+    fn display_ref_file_uses_gguf_and_mlx_stems() {
         assert_eq!(display_ref_file("Qwen3-8B-Q4_K_M.gguf"), "Qwen3-8B-Q4_K_M");
         assert_eq!(
             display_ref_file("GLM-5.1-UD-Q5_K_XL-00001-of-00013.gguf"),
             "GLM-5.1-UD-Q5_K_XL"
         );
+        assert_eq!(display_ref_file("model.safetensors"), "model");
         assert_eq!(
-            display_ref_file("model.safetensors.index.json"),
-            "model.safetensors.index.json"
+            display_ref_file("model-00001-of-00048.safetensors"),
+            "model"
         );
     }
 
