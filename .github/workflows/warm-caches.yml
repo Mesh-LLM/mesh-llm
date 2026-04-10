@@ -16,6 +16,9 @@ name: Warm GPU CI caches
 #     lanes (`linux_cuda` arch89/fa-off and `linux_rocm` gfx1100).
 #   - The fat jobs warm the full default arch matrices for CUDA and ROCm so the
 #     heavier artifact shapes have stable main-scoped cache entries too.
+#   - The repeated warm-job body lives in `gpu-warm-cache-job.yml`; this file
+#     stays responsible for top-level triggers, SHA resolution, explicit key
+#     composition, and cache pruning.
 #
 # Retention policy precedence:
 #   1. workflow_dispatch input `retention` (one-off manual override)
@@ -36,6 +39,7 @@ on:
       - 'Justfile'
       - '.github/workflows/ci.yml'
       - '.github/workflows/warm-caches.yml'
+      - '.github/workflows/gpu-warm-cache-job.yml'
       - '.github/cache-version.txt'
   workflow_dispatch:
     inputs:
@@ -57,60 +61,15 @@ env:
   LLAMA_GPU_CACHE_RETENTION: ${{ github.event.inputs.retention || vars.LLAMA_GPU_CACHE_RETENTION || '2' }}
 
 jobs:
-  warm_llama_cuda_slim:
-    name: Warm Linux CUDA slim cache
+  resolve_llama_sha:
+    name: Resolve llama.cpp upstream SHA
     runs-on: ubuntu-latest
-    container:
-      image: nvidia/cuda:12.8.0-devel-ubuntu22.04
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
 
     steps:
-      - name: Install base packages
-        shell: bash
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates \
-            curl \
-            git \
-            cmake \
-            ninja-build \
-            pkg-config \
-            libssl-dev \
-            libdbus-1-dev \
-            python3
-          rm -rf /var/lib/apt/lists/*
-
-      - uses: actions/checkout@v5
-
-      - uses: taiki-e/install-action@just
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            mesh-llm/ui/package-lock.json
-
-      - name: Build UI
-        working-directory: mesh-llm/ui
-        shell: bash
-        run: |
-          npm ci
-          npm run build
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ hashFiles('.github/cache-version.txt') }}
-
       - name: Resolve llama.cpp upstream SHA
-        id: llama_sha
+        id: resolve
         shell: bash
         run: |
           set -euo pipefail
@@ -122,397 +81,51 @@ jobs:
           echo "Resolved llama.cpp upstream-latest SHA: $SHA"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Restore llama.cpp CUDA slim build
-        id: llama_cuda_slim_cache
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-cuda-slim-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-arch89-fa-off-cuda12.8
-
-      - name: Short-circuit if CUDA slim cache already warm
-        if: steps.llama_cuda_slim_cache.outputs.cache-hit == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "✓ llama.cpp CUDA slim cache already warm for SHA ${{ steps.llama_sha.outputs.sha }}"
-          ls -lh llama.cpp/build/bin/ | head -20
-
-      - name: Build Linux CUDA slim backend (full build)
-        if: steps.llama_cuda_slim_cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          MESH_LLM_CUDA_FA_ALL_QUANTS: off
-          MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
-        run: |
-          just --shell bash --shell-arg -lc release-build-cuda 89
-
-      - name: Verify CUDA slim binaries are present
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -d llama.cpp/build/bin ]]; then
-            echo "ERROR: llama.cpp/build/bin is missing after build" >&2
-            exit 1
-          fi
-          ls -lh llama.cpp/build/bin/
-
-      - name: Save llama.cpp CUDA slim build
-        if: steps.llama_cuda_slim_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_cuda_slim_cache.outputs.cache-primary-key }}
-
-      - name: Verify llama.cpp CUDA slim cache write
-        if: steps.llama_cuda_slim_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_cuda_slim_cache.outputs.cache-primary-key }}
-          lookup-only: true
-          fail-on-cache-miss: true
+  warm_llama_cuda_slim:
+    needs: resolve_llama_sha
+    uses: ./.github/workflows/gpu-warm-cache-job.yml
+    with:
+      job_name: Warm Linux CUDA slim cache
+      cache_label: CUDA slim
+      container_image: nvidia/cuda:12.8.0-devel-ubuntu22.04
+      llama_sha: ${{ needs.resolve_llama_sha.outputs.sha }}
+      cache_key: ${{ format('mesh-llm-llama-cuda-slim-{0}-{1}-arch89-fa-off-cuda12.8', needs.resolve_llama_sha.outputs.sha, hashFiles('scripts/build-linux.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/workflows/gpu-warm-cache-job.yml', '.github/cache-version.txt')) }}
+      build_command: release-build-cuda 89
+      extra_env: |
+        MESH_LLM_CUDA_FA_ALL_QUANTS=off
 
   warm_llama_cuda_fat:
-    name: Warm Linux CUDA fat cache
-    runs-on: ubuntu-latest
-    container:
-      image: nvidia/cuda:12.8.0-devel-ubuntu22.04
-
-    steps:
-      - name: Install base packages
-        shell: bash
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates \
-            curl \
-            git \
-            cmake \
-            ninja-build \
-            pkg-config \
-            libssl-dev \
-            libdbus-1-dev \
-            python3
-          rm -rf /var/lib/apt/lists/*
-
-      - uses: actions/checkout@v5
-
-      - uses: taiki-e/install-action@just
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            mesh-llm/ui/package-lock.json
-
-      - name: Build UI
-        working-directory: mesh-llm/ui
-        shell: bash
-        run: |
-          npm ci
-          npm run build
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ hashFiles('.github/cache-version.txt') }}
-
-      - name: Resolve llama.cpp upstream SHA
-        id: llama_sha
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHA=$(git ls-remote https://github.com/michaelneale/llama.cpp.git refs/heads/upstream-latest | cut -f1)
-          if [[ -z "$SHA" ]]; then
-            echo "Failed to resolve llama.cpp upstream-latest SHA" >&2
-            exit 1
-          fi
-          echo "Resolved llama.cpp upstream-latest SHA: $SHA"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Restore llama.cpp CUDA fat build
-        id: llama_cuda_fat_cache
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-cuda-fat-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-arch75-80-86-89-90-120-fa-on-cuda12.8
-
-      - name: Short-circuit if CUDA fat cache already warm
-        if: steps.llama_cuda_fat_cache.outputs.cache-hit == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "✓ llama.cpp CUDA fat cache already warm for SHA ${{ steps.llama_sha.outputs.sha }}"
-          ls -lh llama.cpp/build/bin/ | head -20
-
-      - name: Build Linux CUDA fat backend (full build)
-        if: steps.llama_cuda_fat_cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
-        run: |
-          just --shell bash --shell-arg -lc release-build-cuda
-
-      - name: Verify CUDA fat binaries are present
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -d llama.cpp/build/bin ]]; then
-            echo "ERROR: llama.cpp/build/bin is missing after build" >&2
-            exit 1
-          fi
-          ls -lh llama.cpp/build/bin/
-
-      - name: Save llama.cpp CUDA fat build
-        if: steps.llama_cuda_fat_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_cuda_fat_cache.outputs.cache-primary-key }}
-
-      - name: Verify llama.cpp CUDA fat cache write
-        if: steps.llama_cuda_fat_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_cuda_fat_cache.outputs.cache-primary-key }}
-          lookup-only: true
-          fail-on-cache-miss: true
+    needs: resolve_llama_sha
+    uses: ./.github/workflows/gpu-warm-cache-job.yml
+    with:
+      job_name: Warm Linux CUDA fat cache
+      cache_label: CUDA fat
+      container_image: nvidia/cuda:12.8.0-devel-ubuntu22.04
+      llama_sha: ${{ needs.resolve_llama_sha.outputs.sha }}
+      cache_key: ${{ format('mesh-llm-llama-cuda-fat-{0}-{1}-arch75-80-86-89-90-120-fa-on-cuda12.8', needs.resolve_llama_sha.outputs.sha, hashFiles('scripts/build-linux.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/workflows/gpu-warm-cache-job.yml', '.github/cache-version.txt')) }}
+      build_command: release-build-cuda
 
   warm_llama_rocm_slim:
-    name: Warm Linux ROCm slim cache
-    runs-on: ubuntu-latest
-    container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
-
-    steps:
-      - name: Install base packages
-        shell: bash
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates \
-            curl \
-            git \
-            cmake \
-            ninja-build \
-            pkg-config \
-            libssl-dev \
-            libdbus-1-dev \
-            python3
-          rm -rf /var/lib/apt/lists/*
-
-      - uses: actions/checkout@v5
-
-      - uses: taiki-e/install-action@just
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            mesh-llm/ui/package-lock.json
-
-      - name: Build UI
-        working-directory: mesh-llm/ui
-        shell: bash
-        run: |
-          npm ci
-          npm run build
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ hashFiles('.github/cache-version.txt') }}
-
-      - name: Resolve llama.cpp upstream SHA
-        id: llama_sha
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHA=$(git ls-remote https://github.com/michaelneale/llama.cpp.git refs/heads/upstream-latest | cut -f1)
-          if [[ -z "$SHA" ]]; then
-            echo "Failed to resolve llama.cpp upstream-latest SHA" >&2
-            exit 1
-          fi
-          echo "Resolved llama.cpp upstream-latest SHA: $SHA"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Restore llama.cpp ROCm slim build
-        id: llama_rocm_slim_cache
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-slim-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx1100-rocm7.0
-
-      - name: Short-circuit if ROCm slim cache already warm
-        if: steps.llama_rocm_slim_cache.outputs.cache-hit == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "✓ llama.cpp ROCm slim cache already warm for SHA ${{ steps.llama_sha.outputs.sha }}"
-          ls -lh llama.cpp/build/bin/ | head -20
-
-      - name: Build Linux ROCm slim backend (full build)
-        if: steps.llama_rocm_slim_cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
-        run: |
-          just --shell bash --shell-arg -lc release-build-rocm gfx1100
-
-      - name: Verify ROCm slim binaries are present
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -d llama.cpp/build/bin ]]; then
-            echo "ERROR: llama.cpp/build/bin is missing after build" >&2
-            exit 1
-          fi
-          ls -lh llama.cpp/build/bin/
-
-      - name: Save llama.cpp ROCm slim build
-        if: steps.llama_rocm_slim_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_rocm_slim_cache.outputs.cache-primary-key }}
-
-      - name: Verify llama.cpp ROCm slim cache write
-        if: steps.llama_rocm_slim_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_rocm_slim_cache.outputs.cache-primary-key }}
-          lookup-only: true
-          fail-on-cache-miss: true
+    needs: resolve_llama_sha
+    uses: ./.github/workflows/gpu-warm-cache-job.yml
+    with:
+      job_name: Warm Linux ROCm slim cache
+      cache_label: ROCm slim
+      container_image: rocm/dev-ubuntu-24.04:7.0-complete
+      llama_sha: ${{ needs.resolve_llama_sha.outputs.sha }}
+      cache_key: ${{ format('mesh-llm-llama-rocm-slim-{0}-{1}-gfx1100-rocm7.0', needs.resolve_llama_sha.outputs.sha, hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/workflows/gpu-warm-cache-job.yml', '.github/cache-version.txt')) }}
+      build_command: release-build-rocm gfx1100
 
   warm_llama_rocm_fat:
-    name: Warm Linux ROCm fat cache
-    runs-on: ubuntu-latest
-    container:
-      image: rocm/dev-ubuntu-24.04:7.0-complete
-
-    steps:
-      - name: Install base packages
-        shell: bash
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates \
-            curl \
-            git \
-            cmake \
-            ninja-build \
-            pkg-config \
-            libssl-dev \
-            libdbus-1-dev \
-            python3
-          rm -rf /var/lib/apt/lists/*
-
-      - uses: actions/checkout@v5
-
-      - uses: taiki-e/install-action@just
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            mesh-llm/ui/package-lock.json
-
-      - name: Build UI
-        working-directory: mesh-llm/ui
-        shell: bash
-        run: |
-          npm ci
-          npm run build
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: mozilla-actions/sccache-action@v0.0.9
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
-          prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ hashFiles('.github/cache-version.txt') }}
-
-      - name: Resolve llama.cpp upstream SHA
-        id: llama_sha
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHA=$(git ls-remote https://github.com/michaelneale/llama.cpp.git refs/heads/upstream-latest | cut -f1)
-          if [[ -z "$SHA" ]]; then
-            echo "Failed to resolve llama.cpp upstream-latest SHA" >&2
-            exit 1
-          fi
-          echo "Resolved llama.cpp upstream-latest SHA: $SHA"
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Restore llama.cpp ROCm fat build
-        id: llama_rocm_fat_cache
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ env.CACHE_NAMESPACE }}-llama-rocm-fat-${{ steps.llama_sha.outputs.sha }}-${{ hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/cache-version.txt') }}-gfx90a-gfx942-gfx1100-gfx1101-gfx1102-gfx1200-gfx1201-rocm7.0
-
-      - name: Short-circuit if ROCm fat cache already warm
-        if: steps.llama_rocm_fat_cache.outputs.cache-hit == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "✓ llama.cpp ROCm fat cache already warm for SHA ${{ steps.llama_sha.outputs.sha }}"
-          ls -lh llama.cpp/build/bin/ | head -20
-
-      - name: Build Linux ROCm fat backend (full build)
-        if: steps.llama_rocm_fat_cache.outputs.cache-hit != 'true'
-        shell: bash
-        env:
-          MESH_LLM_LLAMA_PIN_SHA: ${{ steps.llama_sha.outputs.sha }}
-        run: |
-          just --shell bash --shell-arg -lc release-build-rocm
-
-      - name: Verify ROCm fat binaries are present
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ ! -d llama.cpp/build/bin ]]; then
-            echo "ERROR: llama.cpp/build/bin is missing after build" >&2
-            exit 1
-          fi
-          ls -lh llama.cpp/build/bin/
-
-      - name: Save llama.cpp ROCm fat build
-        if: steps.llama_rocm_fat_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_rocm_fat_cache.outputs.cache-primary-key }}
-
-      - name: Verify llama.cpp ROCm fat cache write
-        if: steps.llama_rocm_fat_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v5
-        with:
-          path: llama.cpp/build/bin
-          key: ${{ steps.llama_rocm_fat_cache.outputs.cache-primary-key }}
-          lookup-only: true
-          fail-on-cache-miss: true
+    needs: resolve_llama_sha
+    uses: ./.github/workflows/gpu-warm-cache-job.yml
+    with:
+      job_name: Warm Linux ROCm fat cache
+      cache_label: ROCm fat
+      container_image: rocm/dev-ubuntu-24.04:7.0-complete
+      llama_sha: ${{ needs.resolve_llama_sha.outputs.sha }}
+      cache_key: ${{ format('mesh-llm-llama-rocm-fat-{0}-{1}-gfx90a-gfx942-gfx1100-gfx1101-gfx1102-gfx1200-gfx1201-rocm7.0', needs.resolve_llama_sha.outputs.sha, hashFiles('scripts/build-linux-rocm.sh', 'Justfile', '.github/workflows/ci.yml', '.github/workflows/warm-caches.yml', '.github/workflows/gpu-warm-cache-job.yml', '.github/cache-version.txt')) }}
+      build_command: release-build-rocm
 
   prune_llama_gpu_caches:
     name: Prune old GPU caches
