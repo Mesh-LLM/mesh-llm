@@ -410,12 +410,7 @@ jobs:
 
   linux_rocm:
     needs: changes
-    # GitHub-hosted pull_request runners do not currently provide a reliable ROCm
-    # environment here: the known-good complete image exhausts runner disk during
-    # job container pull, while the smaller image drops required HIP BLAS dev
-    # components. Keep ROCm coverage on main pushes and manual runs without
-    # blocking unrelated pull requests on hosted-runner infrastructure limits.
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' }}
     name: Linux ROCm
     runs-on: ubuntu-latest
     container:
