@@ -116,10 +116,6 @@ pub(super) async fn dispatch_request(
             mesh_hook::handle(stream, state, method, path_only, body).await?;
             Ok(true)
         }
-        ("GET", p) if p.starts_with("/mesh/hook/poll/") => {
-            mesh_hook::handle(stream, state, method, path_only, body).await?;
-            Ok(true)
-        }
         ("POST", "/api/objects")
         | ("POST", "/api/objects/complete")
         | ("POST", "/api/objects/abort") => {

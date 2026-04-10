@@ -32,15 +32,14 @@
 //!     │ <──────────── response ───────│
 //! ```
 //!
-//! # Async consultations
+//! # Background work pattern
 //!
-//! When a hook needs to consult another model in the mesh (e.g. captioning
-//! an image, summarizing context), it can return `{ "action": "pending",
-//! "async_id": "..." }`. The C++ side polls `GET /mesh/hook/poll/{id}`
-//! every 16 tokens during generation. When the consultation finishes, the
-//! poll returns the inject text.
-//!
-//! Pending consultations are tracked in `AsyncConsultations` (a DashMap).
+//! All hooks are synchronous from the C++ side — each is a blocking POST.
+//! But mesh-llm can start background work on Hook 1 (e.g. send the prompt
+//! to a stronger model for verification) and collect results on Hook 3
+//! (which always fires before the response leaves). A DashMap keyed by
+//! `request_id` bridges the two hooks. If the background work finishes
+//! in time, Hook 3 uses it. If not, it lets the response go as-is.
 //!
 //! # Model awareness
 //!
@@ -96,11 +95,9 @@ pub struct HookContext {
 
 /// Response actions returned to llama-server.
 ///
-/// The C++ side understands four actions:
-/// - `none`    — do nothing, continue normally
-/// - `inject`  — insert `text` into the prompt (Hook 1) or response (Hook 3)
-/// - `pending` — async consultation started, poll `async_id` for result
-/// - `stop`    — abort generation (not yet implemented in C++)
+/// The C++ side understands two actions:
+/// - `none`   — do nothing, continue normally
+/// - `inject` — insert `text` into the prompt (Hook 1) or response (Hook 3)
 #[derive(Debug)]
 #[allow(dead_code)] // variants used when consultations are implemented
 pub enum HookAction {
@@ -108,8 +105,6 @@ pub enum HookAction {
     None,
     /// Inject text into the prompt or response.
     Inject { text: String },
-    /// Async consultation in progress — poll for result.
-    Pending { async_id: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -270,28 +265,14 @@ pub fn handle_pre_response(payload: &Value) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// Async consultation tracking
+// Background work tracking
 // ---------------------------------------------------------------------------
 
-/// Tracks in-flight async consultations (e.g. image captioning, summarization).
-///
-/// When a hook returns `pending`, the async_id is stored here. The C++ side
-/// polls every 16 tokens. When the consultation finishes, the result is
-/// stored and the next poll returns it.
-///
-/// TODO: implement with DashMap<String, ConsultationState> where state is
-/// either Pending (with a JoinHandle) or Ready (with the inject text).
-#[allow(dead_code)] // used when async consultations are implemented
-pub struct AsyncConsultations;
-
-#[allow(dead_code)] // used when async consultations are implemented
-impl AsyncConsultations {
-    /// Look up an async consultation result.
-    ///
-    /// Returns `Some(text)` if the consultation is complete, `None` if still
-    /// pending. A completed consultation is removed from the map.
-    pub fn poll(&self, _async_id: &str) -> Option<String> {
-        // TODO: look up in DashMap, return Ready result, remove entry
-        None
-    }
-}
+// Tracks in-flight background consultations started by Hook 1 and collected
+// by Hook 3. Keyed by `request_id` so Hook 3 can find results from Hook 1.
+//
+// TODO: implement with DashMap<String, BackgroundResult> where result is
+// either Pending (with a JoinHandle) or Ready (with the text/verdict).
+// Hook 1 inserts Pending + spawns a tokio task.
+// Hook 3 checks: if Ready, use it. If Pending, let the response go.
+// Entries are removed after Hook 3 checks (or after a timeout).

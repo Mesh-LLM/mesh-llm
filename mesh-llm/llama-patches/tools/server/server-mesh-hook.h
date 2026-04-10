@@ -2,6 +2,14 @@
 
 // Mesh hook system — callbacks from llama-server into mesh-llm during inference.
 // See mesh-llm/docs/VIRTUAL_LLM.md for the full design.
+//
+// Three hooks, all synchronous:
+//   Hook 1 (pre_inference)  — before generation starts, can inject into prompt
+//   Hook 2 (post_prefill)   — after prompt eval, when first token is uncertain
+//   Hook 3 (pre_response)   — before response is sent, can append to output
+//
+// mesh-llm may start background work on Hook 1 and collect results on Hook 3.
+// No polling — the C++ side just calls hooks and uses whatever comes back.
 
 #include <nlohmann/json.hpp>
 #include <cpp-httplib/httplib.h>
@@ -15,7 +23,7 @@
 using json = nlohmann::ordered_json;
 
 // Rolling window of per-token signal stats (entropy, margin).
-// Updated every token, no callback — just arithmetic.
+// Updated every token during generation — just cheap arithmetic.
 struct mesh_signal_window {
     static constexpr int SIZE = 16;
     float entropy[SIZE] = {};
@@ -35,7 +43,6 @@ struct mesh_signal_window {
         count++;
         entropy_max = std::max(entropy_max, e);
         margin_min  = std::min(margin_min, m);
-        // incremental mean
         entropy_mean = ((entropy_mean * (count - 1)) + e) / count;
         if (e > 4.0f) {
             uncertain_count++;
@@ -46,7 +53,6 @@ struct mesh_signal_window {
         return count > 0 ? (float)uncertain_count / count : 0;
     }
 
-    // mean entropy of the last SIZE tokens (the "tail")
     float tail_entropy_mean() const {
         int n = std::min(count, SIZE);
         if (n == 0) return 0;
@@ -90,7 +96,6 @@ struct mesh_hook_ctx {
     bool enabled = false;
     int  port    = 0;
     std::string request_id;
-    json original_request;  // the parsed request JSON (messages, etc.)
 
     // configured by Hook 1 response
     float entropy_threshold = -1.0f;  // <0 = skip Hook 2
@@ -103,15 +108,10 @@ struct mesh_hook_ctx {
     bool long_session             = false;
     bool large_user_message       = false;
 
-    // signal window
+    // signal window — updated every token, read at Hook 3
     mesh_signal_window signals;
 
-    // async poll state
-    std::vector<std::string> pending_async_ids;
-    int tokens_since_last_poll = 0;
-    int poll_interval          = 16;
-
-    // reusable HTTP client
+    // reusable HTTP client (one per slot, kept alive across requests)
     std::unique_ptr<httplib::Client> client;
 
     void init(int mesh_port) {
@@ -119,12 +119,11 @@ struct mesh_hook_ctx {
         enabled = true;
         client = std::make_unique<httplib::Client>("localhost", mesh_port);
         client->set_connection_timeout(0, 200000);  // 200ms connect
-        client->set_read_timeout(60);               // 60s read (consultations can be slow)
+        client->set_read_timeout(60);               // 60s read (Hook 1 may block for consultation)
     }
 
     void reset() {
         request_id.clear();
-        original_request = json();
         entropy_threshold = -1.0f;
         verify = false;
         has_images_no_multimodal = false;
@@ -133,8 +132,6 @@ struct mesh_hook_ctx {
         long_session = false;
         large_user_message = false;
         signals.reset();
-        pending_async_ids.clear();
-        tokens_since_last_poll = 0;
     }
 
     bool any_pre_inference_trigger() const {
@@ -154,11 +151,6 @@ struct mesh_hook_ctx {
         return "unknown";
     }
 
-    bool should_poll() {
-        if (pending_async_ids.empty()) return false;
-        return ++tokens_since_last_poll >= poll_interval;
-    }
-
     // --- Hook helpers ---
 
     // POST to mesh-llm and return parsed response, or empty json on failure.
@@ -170,27 +162,12 @@ struct mesh_hook_ctx {
                 return json::parse(res->body);
             }
         } catch (...) {
-            // mesh-llm may not be listening — that's fine, hooks are best-effort
+            // mesh-llm may not be listening — hooks are best-effort
         }
         return {};
     }
 
-    // Lightweight poll for async result. Returns inject text or empty string.
-    std::string poll_async(const std::string & async_id) {
-        if (!client) return "";
-        try {
-            auto res = client->Get("/mesh/hook/poll/" + async_id);
-            if (res && res->status == 200) {
-                auto body = json::parse(res->body);
-                if (body.value("action", "") == "inject") {
-                    return body.value("text", "");
-                }
-            }
-        } catch (...) {}
-        return "";
-    }
-
-    // Process a hook response: apply entropy_threshold, verify, pending.
+    // Process a hook response: apply entropy_threshold, verify.
     // Returns inject text (empty = no injection).
     std::string process_response(const json & resp) {
         if (resp.empty()) return "";
@@ -203,14 +180,6 @@ struct mesh_hook_ctx {
         }
         if (resp.contains("verify")) {
             verify = resp["verify"].get<bool>();
-        }
-
-        if (action == "pending") {
-            auto async_id = resp.value("async_id", "");
-            if (!async_id.empty()) {
-                pending_async_ids.push_back(async_id);
-            }
-            return "";
         }
 
         if (action == "inject") {

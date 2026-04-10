@@ -3028,32 +3028,14 @@ private:
 
                 common_sampler_accept(slot.smpl.get(), id, true);
 
-                // --- Mesh: update signals + poll async results ---
+                // --- Mesh: update signal window ---
                 if (slot.mesh_hook.enabled) {
-                    // update signal window (cheap arithmetic, ~1μs)
+                    // Per-token entropy + margin — cheap arithmetic, ~1μs.
+                    // Accumulated here, sent to mesh-llm at Hook 3.
                     auto probs = get_token_probabilities(ctx, tok_idx);
                     float entropy = mesh_compute_entropy(probs);
                     float margin  = probs.size() >= 2 ? probs[0].p - probs[1].p : 1.0f;
                     slot.mesh_hook.signals.push(entropy, margin);
-
-                    // poll for async results every N tokens
-                    if (slot.mesh_hook.should_poll()) {
-                        slot.mesh_hook.tokens_since_last_poll = 0;
-                        for (auto it = slot.mesh_hook.pending_async_ids.begin();
-                             it != slot.mesh_hook.pending_async_ids.end(); ) {
-                            auto inject_text = slot.mesh_hook.poll_async(*it);
-                            if (!inject_text.empty()) {
-                                // Async result ready — append context to the generation.
-                                // This appears in the output as additional context from the mesh.
-                                SLT_INF(slot, "mesh poll: async %s ready, appending %zu chars\n",
-                                        it->c_str(), inject_text.size());
-                                slot.generated_text += inject_text;
-                                it = slot.mesh_hook.pending_async_ids.erase(it);
-                            } else {
-                                ++it;
-                            }
-                        }
-                    }
                 }
 
                 // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
