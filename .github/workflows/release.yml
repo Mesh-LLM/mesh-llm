@@ -95,9 +95,31 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      - name: Upload Linux inference binaries
+        if: matrix.name == 'Linux CPU'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-release-inference-binaries
+          path: |
+            target/release/mesh-llm
+            llama.cpp/build/bin/rpc-server
+            llama.cpp/build/bin/llama-server
+            llama.cpp/build/bin/llama-moe-split
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
+
+  inference_smoke_tests:
+    needs:
+      - build
+    uses: ./.github/workflows/smoke.yml
+    with:
+      artifact_name: ci-linux-release-inference-binaries
+      mesh_binary_target: target/release/mesh-llm
+      cache_key_prefix: 'release-'
+      workflow_cache_file: .github/workflows/release.yml
 
   build_linux_cuda:
     name: Build Linux CUDA
