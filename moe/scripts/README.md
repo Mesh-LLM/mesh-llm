@@ -54,3 +54,38 @@ Notes:
 ```text
 data/<namespace>/<repo>/<revision>/gguf/<distribution_id>/<analyzer_id>/
 ```
+
+## `submit_hf_job.py`
+
+Submits a Hugging Face Job that runs [`analyze_and_publish.py`](/Users/jdumay/.codex/worktrees/4dc4/mesh-llm/moe/scripts/analyze_and_publish.py) remotely with the same canonical dataset output contract.
+
+Run it with `uv`:
+
+```bash
+uv run moe/scripts/submit_hf_job.py \
+  --source-repo unsloth/GLM-5.1-GGUF \
+  --distribution-id GLM-5.1-UD-IQ2_M \
+  --analyzer-id micro-v1 \
+  --release-tag latest \
+  --dataset-repo meshllm/moe-rankings \
+  --flavor cpu-xl \
+  --timeout 1h
+```
+
+Dry run:
+
+```bash
+uv run moe/scripts/submit_hf_job.py \
+  --source-repo unsloth/GLM-5.1-GGUF \
+  --distribution-id GLM-5.1-UD-IQ2_M \
+  --dataset-repo meshllm/moe-rankings \
+  --dry-run
+```
+
+Notes:
+
+- The job runner always uses `--analyzer-source release` inside the remote job.
+- The remote job receives `HF_TOKEN` as a secret so it can create and upload to the destination dataset repo.
+- The default hardware flavor is `cpu-xl`.
+- The default timeout is `1h`.
+- Live HF Jobs require a GitHub release that already ships `llama-moe-analyze`.
