@@ -143,76 +143,12 @@ jobs:
           cmake -B llama.cpp/build -S llama.cpp \
             -DGGML_METAL=OFF \
             -DGGML_CUDA=OFF \
+            -DGGML_NATIVE=OFF \
             -DGGML_RPC=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DLLAMA_OPENSSL=OFF \
             "${CACHE_FLAGS[@]}"
           cmake --build llama.cpp/build --config Release -j$(nproc) --target rpc-server llama-server llama-moe-split
-
-      # ── Download model ──
-      - name: Cache model
-        id: cache-model
-        uses: actions/cache@v5
-        with:
-          path: ~/.models/${{ env.MODEL_FILE }}
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-model-${{ env.MODEL_FILE }}-${{ hashFiles('.github/cache-version.txt', '.github/workflows/ci.yml') }}
-
-      - name: Download model
-        if: steps.cache-model.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.models
-          curl -fSL "$MODEL_URL" -o ~/.models/$MODEL_FILE
-          ls -lh ~/.models/$MODEL_FILE
-
-      # ── Integration smoke test ──
-      - name: Smoke test (real inference)
-        run: |
-          scripts/ci-smoke-test.sh \
-            target/debug/mesh-llm \
-            llama.cpp/build/bin \
-            ~/.models/$MODEL_FILE
-
-      - name: OpenAI Python compat smoke
-        run: |
-          scripts/ci-compat-smoke.sh \
-            target/debug/mesh-llm \
-            llama.cpp/build/bin \
-            ~/.models/$MODEL_FILE
-
-      - name: Split-mode test (host/worker routing)
-        run: |
-          scripts/ci-split-test.sh \
-            target/debug/mesh-llm \
-            llama.cpp/build/bin \
-            ~/.models/$MODEL_FILE
-
-      # ── MoE split test ──
-      - name: Cache MoE model
-        id: cache-moe-model
-        uses: actions/cache@v5
-        with:
-          path: ~/.models/${{ env.MOE_MODEL_FILE }}
-          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-model-${{ env.MOE_MODEL_FILE }}-${{ hashFiles('.github/cache-version.txt', '.github/workflows/ci.yml') }}
-
-      - name: Download MoE model
-        if: steps.cache-moe-model.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/.models
-          curl -fSL "$MOE_MODEL_URL" -o ~/.models/$MOE_MODEL_FILE
-          ls -lh ~/.models/$MOE_MODEL_FILE
-
-      - name: MoE split test (expert sharding)
-        run: |
-          scripts/ci-moe-split-test.sh \
-            llama.cpp/build/bin \
-            ~/.models/$MOE_MODEL_FILE
-
-      - name: MoE mesh test (expert sharding end-to-end)
-        run: |
-          scripts/ci-moe-mesh-test.sh \
-            target/debug/mesh-llm \
-            llama.cpp/build/bin \
-            ~/.models/$MOE_MODEL_FILE
 
       - name: CLI smoke test
         run: |
@@ -222,9 +158,30 @@ jobs:
       - name: Client-auto boot test
         run: scripts/ci-client-auto-test.sh target/debug/mesh-llm
 
+      - name: Upload Linux inference binaries
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-inference-binaries
+          path: |
+            target/debug/mesh-llm
+            llama.cpp/build/bin/rpc-server
+            llama.cpp/build/bin/llama-server
+            llama.cpp/build/bin/llama-moe-split
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
+
+  inference_smoke_tests:
+    needs: [changes, linux]
+    if: ${{ needs.linux.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true') }}
+    uses: ./.github/workflows/smoke.yml
+    with:
+      artifact_name: ci-linux-inference-binaries
+      mesh_binary_target: target/debug/mesh-llm
+      cache_key_prefix: ''
+      workflow_cache_file: .github/workflows/ci.yml
 
   macos:
     needs: changes
@@ -284,6 +241,7 @@ jobs:
           fi
           cmake -B llama.cpp/build -S llama.cpp \
             -DGGML_METAL=OFF \
+            -DGGML_NATIVE=OFF \
             -DGGML_RPC=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DLLAMA_OPENSSL=OFF \
