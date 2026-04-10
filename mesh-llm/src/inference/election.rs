@@ -2477,13 +2477,21 @@ async fn start_llama(
     };
 
     #[cfg(target_os = "macos")]
-    if rpc_ports.is_empty() && crate::mlx::model::is_mlx_model_dir(model) {
-        match crate::mlx::server::start_mlx_server(model, model_name.to_string(), llama_port).await
+    let should_start_mlx = rpc_ports.is_empty() && crate::mlx::model::is_mlx_model_dir(model);
+    #[cfg(not(target_os = "macos"))]
+    let should_start_mlx = false;
+
+    if should_start_mlx {
+        #[cfg(target_os = "macos")]
         {
-            Ok(process) => return Some((llama_port, process)),
-            Err(e) => {
-                eprintln!("  Failed to start MLX server: {e}");
-                return None;
+            match crate::mlx::server::start_mlx_server(model, model_name.to_string(), llama_port)
+                .await
+            {
+                Ok(process) => return Some((llama_port, process)),
+                Err(e) => {
+                    eprintln!("  Failed to start MLX server: {e}");
+                    return None;
+                }
             }
         }
     }
