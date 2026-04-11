@@ -1273,71 +1273,79 @@ def main() -> int:
                     overall_rc=overall_rc,
                 )
 
-    aggregate(root, stamp, models)
-    compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
-    compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
-    compare_parity_to_canonical(baselines, root, stamp, models)
-    compare_cross_backend_exact_parity(root, stamp, models)
-    baseline_divergence_report(baselines, root, stamp, models)
-
-    if args.promote_baseline:
-        if baseline_path is None:
-            raise SystemExit("❌ --promote-baseline requires a writable --baselines path")
-        promote_baselines(baselines, baseline_path, root, stamp, models, args.backend, args.suite)
+    pending_exit: SystemExit | None = None
+    try:
+        aggregate(root, stamp, models)
+        compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
+        compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+        compare_parity_to_canonical(baselines, root, stamp, models)
+        compare_cross_backend_exact_parity(root, stamp, models)
         baseline_divergence_report(baselines, root, stamp, models)
 
-    if args.suite in ("exact", "all"):
-        exact_path = summary_path(root, stamp, "exact")
-        if exact_path.exists():
-            print("\n=== Exact summary ===")
-            print(exact_path.read_text(encoding="utf-8"), end="")
-    if args.suite in ("behavior", "all"):
-        behavior_path = summary_path(root, stamp, "behavior")
-        if behavior_path.exists():
-            print("\n=== Behavior summary ===")
-            print(behavior_path.read_text(encoding="utf-8"), end="")
+        if args.promote_baseline:
+            if baseline_path is None:
+                raise SystemExit("❌ --promote-baseline requires a writable --baselines path")
+            promote_baselines(baselines, baseline_path, root, stamp, models, args.backend, args.suite)
+            baseline_divergence_report(baselines, root, stamp, models)
 
-    aggregate_path = root / stamp / "validation-summary.tsv"
-    if aggregate_path.exists():
-        print("\n=== Combined summary ===")
-        print(aggregate_path.read_text(encoding="utf-8"), end="")
-    exact_compare_path = root / stamp / "exact-baseline-comparison.tsv"
-    if exact_compare_path.exists():
-        print("\n=== Exact baseline comparison ===")
-        print(exact_compare_path.read_text(encoding="utf-8"), end="")
-    behavior_compare_path = root / stamp / "behavior-baseline-comparison.tsv"
-    if behavior_compare_path.exists():
-        print("\n=== Behavior baseline comparison ===")
-        print(behavior_compare_path.read_text(encoding="utf-8"), end="")
-    parity_compare_path = root / stamp / "parity-vs-canonical-baseline.tsv"
-    if parity_compare_path.exists():
-        print("\n=== Parity vs canonical baseline ===")
-        print(parity_compare_path.read_text(encoding="utf-8"), end="")
-    exact_parity_path = root / stamp / "exact-cross-backend-parity.tsv"
-    if exact_parity_path.exists():
-        print("\n=== Exact cross-backend parity ===")
-        print(exact_parity_path.read_text(encoding="utf-8"), end="")
-    divergence_path = root / stamp / "baseline-divergence.tsv"
-    if divergence_path.exists():
-        print("\n=== Baseline divergence ===")
-        print(divergence_path.read_text(encoding="utf-8"), end="")
-    write_json(
-        current_case_path,
-        {
-            "status": "idle",
-            "completed_cases": completed_cases,
-            "total_cases": total_cases,
-            "overall_exit_code": overall_rc,
-        },
-    )
-    write_overall_progress(
-        root,
-        stamp,
-        total_cases=total_cases,
-        completed_cases=completed_cases,
-        current=None,
-        overall_rc=overall_rc,
-    )
+        if args.suite in ("exact", "all"):
+            exact_path = summary_path(root, stamp, "exact")
+            if exact_path.exists():
+                print("\n=== Exact summary ===")
+                print(exact_path.read_text(encoding="utf-8"), end="")
+        if args.suite in ("behavior", "all"):
+            behavior_path = summary_path(root, stamp, "behavior")
+            if behavior_path.exists():
+                print("\n=== Behavior summary ===")
+                print(behavior_path.read_text(encoding="utf-8"), end="")
+
+        aggregate_path = root / stamp / "validation-summary.tsv"
+        if aggregate_path.exists():
+            print("\n=== Combined summary ===")
+            print(aggregate_path.read_text(encoding="utf-8"), end="")
+        exact_compare_path = root / stamp / "exact-baseline-comparison.tsv"
+        if exact_compare_path.exists():
+            print("\n=== Exact baseline comparison ===")
+            print(exact_compare_path.read_text(encoding="utf-8"), end="")
+        behavior_compare_path = root / stamp / "behavior-baseline-comparison.tsv"
+        if behavior_compare_path.exists():
+            print("\n=== Behavior baseline comparison ===")
+            print(behavior_compare_path.read_text(encoding="utf-8"), end="")
+        parity_compare_path = root / stamp / "parity-vs-canonical-baseline.tsv"
+        if parity_compare_path.exists():
+            print("\n=== Parity vs canonical baseline ===")
+            print(parity_compare_path.read_text(encoding="utf-8"), end="")
+        exact_parity_path = root / stamp / "exact-cross-backend-parity.tsv"
+        if exact_parity_path.exists():
+            print("\n=== Exact cross-backend parity ===")
+            print(exact_parity_path.read_text(encoding="utf-8"), end="")
+        divergence_path = root / stamp / "baseline-divergence.tsv"
+        if divergence_path.exists():
+            print("\n=== Baseline divergence ===")
+            print(divergence_path.read_text(encoding="utf-8"), end="")
+    except SystemExit as exc:
+        pending_exit = exc
+    finally:
+        final_status = "failed" if pending_exit is not None else "idle"
+        write_json(
+            current_case_path,
+            {
+                "status": final_status,
+                "completed_cases": completed_cases,
+                "total_cases": total_cases,
+                "overall_exit_code": overall_rc,
+            },
+        )
+        write_overall_progress(
+            root,
+            stamp,
+            total_cases=total_cases,
+            completed_cases=completed_cases,
+            current=None,
+            overall_rc=overall_rc,
+        )
+    if pending_exit is not None:
+        raise pending_exit
     print(f"\nRaw artifacts: {root / stamp}")
     return overall_rc
 

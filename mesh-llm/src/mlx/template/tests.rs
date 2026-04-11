@@ -259,6 +259,21 @@ fn detects_old_qwen_reasoning_tags_from_split_template() {
 }
 
 #[test]
+fn normalize_hf_messages_fills_missing_dot_access_fields() {
+    let template = "{% if message.tool_calls %}x{% endif %}{% if message.tool_call_id %}y{% endif %}{% if message.name %}z{% endif %}";
+    let messages = json!([
+        {"role": "assistant", "content": "hello"}
+    ]);
+
+    let normalized = normalize_hf_messages(template, messages);
+    let message = &normalized.as_array().unwrap()[0];
+
+    assert!(message.get("tool_calls").is_some());
+    assert!(message.get("tool_call_id").is_some());
+    assert!(message.get("name").is_some());
+}
+
+#[test]
 fn detects_gemma4_reasoning_channel_markers() {
     let template = "{% if add_generation_prompt %}<|channel>thought{{ reasoning_content }}<channel|>{% endif %}";
     let reasoning = detect_reasoning_template(template);
@@ -404,7 +419,7 @@ fn qwen3_templates_default_enable_thinking_to_false() {
         }))
         .unwrap();
 
-    assert_eq!(prompt, "<|im_start|>assistant\n<think>\n\n</think>\n\n");
+    assert_eq!(prompt, "<|im_start|>assistant\n");
 }
 
 #[test]
@@ -432,6 +447,37 @@ fn qwen3_templates_honor_explicit_enable_thinking_true() {
         .render_request(&json!({
             "messages": [{"role": "user", "content": "hello"}],
             "enable_thinking": true
+        }))
+        .unwrap();
+
+    assert_eq!(prompt, "<|im_start|>assistant\n");
+}
+
+#[test]
+fn qwen3_templates_strip_empty_reasoning_prefill_when_explicitly_disabled() {
+    let root = std::env::temp_dir().join(format!(
+        "mesh-llm-template-qwen3-thinking-false-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("tokenizer_config.json"),
+        serde_json::json!({
+            "chat_template": "{%- if add_generation_prompt %}{{- '<|im_start|>assistant\\n' }}{%- if enable_thinking is defined and enable_thinking is false %}{{- '<think>\\n\\n</think>\\n\\n' }}{%- endif %}{%- endif %}"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let template = PromptTemplate::detect(
+        &root,
+        &serde_json::json!({"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}),
+    );
+    let prompt = template
+        .render_request(&json!({
+            "messages": [{"role": "user", "content": "hello"}],
+            "enable_thinking": false
         }))
         .unwrap();
 

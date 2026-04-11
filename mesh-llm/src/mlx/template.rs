@@ -376,7 +376,37 @@ fn render_hf_template(
 
     let rendered = tmpl.render(Value::Object(ctx))?;
 
-    Ok(rendered)
+    Ok(strip_empty_reasoning_prefill(
+        rendered,
+        req,
+        reasoning_defaults,
+    ))
+}
+
+fn strip_empty_reasoning_prefill(
+    rendered: String,
+    req: &Value,
+    reasoning_defaults: &ReasoningDefaults,
+) -> String {
+    let thinking_disabled = match template_kwarg(req, "enable_thinking") {
+        Some(Value::Bool(value)) => !value,
+        Some(_) => false,
+        None => reasoning_defaults.enable_thinking == Some(false),
+    };
+    if !thinking_disabled {
+        return rendered;
+    }
+
+    let assistant_prefix = "<|im_start|>assistant\n";
+    if let Some(prefix_start) = rendered.rfind(assistant_prefix) {
+        let suffix_start = prefix_start + assistant_prefix.len();
+        let suffix = &rendered[suffix_start..];
+        if suffix.trim() == "<think>\n\n</think>" {
+            return rendered[..suffix_start].to_string();
+        }
+    }
+
+    rendered
 }
 
 fn reasoning_defaults(config: &Value) -> ReasoningDefaults {
@@ -520,13 +550,10 @@ fn normalize_hf_messages(template: &str, messages: Value) -> Value {
     let Some(messages) = messages.as_array() else {
         return messages;
     };
-    let fill_tool_calls =
-        template.contains("message['tool_calls']") || template.contains("message[\"tool_calls\"]");
-    let fill_tool_call_id = template.contains("message['tool_call_id']")
-        || template.contains("message[\"tool_call_id\"]");
-    let fill_name = template.contains("message['name']") || template.contains("message[\"name\"]");
-    let fill_tool_responses = template.contains("message['tool_responses']")
-        || template.contains("message[\"tool_responses\"]");
+    let fill_tool_calls = message_field_mentioned(template, "tool_calls");
+    let fill_tool_call_id = message_field_mentioned(template, "tool_call_id");
+    let fill_name = message_field_mentioned(template, "name");
+    let fill_tool_responses = message_field_mentioned(template, "tool_responses");
 
     Value::Array(
         messages
@@ -550,6 +577,12 @@ fn normalize_hf_messages(template: &str, messages: Value) -> Value {
             })
             .collect(),
     )
+}
+
+fn message_field_mentioned(template: &str, field: &str) -> bool {
+    template.contains(&format!("message['{field}']"))
+        || template.contains(&format!("message[\"{field}\"]"))
+        || template.contains(&format!("message.{field}"))
 }
 
 fn absent_tools_value(template: &str) -> Value {

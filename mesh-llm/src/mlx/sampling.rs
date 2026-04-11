@@ -9,6 +9,7 @@ pub struct SamplingParams {
     pub top_p: f32,
     pub top_k: Option<usize>,
     pub seed: Option<u64>,
+    pub suppressed_token_ids: Vec<u32>,
 }
 
 impl Default for SamplingParams {
@@ -18,6 +19,7 @@ impl Default for SamplingParams {
             top_p: 1.0,
             top_k: None,
             seed: None,
+            suppressed_token_ids: Vec::new(),
         }
     }
 }
@@ -34,15 +36,20 @@ impl Sampler {
     }
 
     pub fn sample_next_token(&mut self, logits: &Array) -> Result<u32> {
+        let suppressed = self.params.suppressed_token_ids.as_slice();
         if self.params.temperature <= 0.0 {
-            return crate::mlx::model::argmax_last(logits);
+            return argmax_last_filtered(logits, suppressed);
         }
 
         let mut candidates = last_logits(logits)?
             .into_iter()
             .enumerate()
+            .filter(|(token, _)| !suppressed.contains(&(*token as u32)))
             .map(|(token, logit)| (token as u32, logit / self.params.temperature))
             .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return crate::mlx::model::argmax_last(logits);
+        }
 
         candidates.sort_by(|left, right| right.1.total_cmp(&left.1));
 
@@ -94,6 +101,26 @@ impl Sampler {
         } else {
             rand::random::<f32>()
         }
+    }
+}
+
+fn argmax_last_filtered(logits: &Array, suppressed: &[u32]) -> Result<u32> {
+    let logits_vec = last_logits(logits)?;
+    let mut best: Option<(u32, f32)> = None;
+    for (token, logit) in logits_vec.iter().copied().enumerate() {
+        let token = token as u32;
+        if suppressed.contains(&token) {
+            continue;
+        }
+        match best {
+            Some((_, best_logit)) if logit <= best_logit => {}
+            _ => best = Some((token, logit)),
+        }
+    }
+    if let Some((token, _)) = best {
+        Ok(token)
+    } else {
+        crate::mlx::model::argmax_last(logits)
     }
 }
 
@@ -210,6 +237,7 @@ fn safe_prefix_len(text: &str, holdback_chars: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use array_macro::array;
 
     #[test]
     fn stop_buffer_holds_back_partial_match() {
@@ -232,5 +260,19 @@ mod tests {
         let second = buffer.push("lo");
         assert_eq!(second.emit, "he");
         assert_eq!(buffer.finish(), "llo");
+    }
+
+    #[test]
+    fn sampler_suppresses_tokens_during_argmax() {
+        let logits = array!([[[0.1f32, 0.9f32, 0.8f32]]]);
+        let mut sampler = Sampler::new(SamplingParams {
+            temperature: 0.0,
+            top_p: 1.0,
+            top_k: None,
+            seed: None,
+            suppressed_token_ids: vec![1],
+        });
+        let token = sampler.sample_next_token(&logits).unwrap();
+        assert_eq!(token, 2);
     }
 }

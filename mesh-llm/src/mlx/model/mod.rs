@@ -575,7 +575,7 @@ impl Attention {
         )?;
 
         let mask = if self.window_size.is_some() {
-            attention_mask(l, l, 0, self.window_size)?
+            attention_mask(l, l, 0, 0, self.window_size)?
         } else {
             None
         };
@@ -616,7 +616,7 @@ impl Attention {
         let q = Self::apply_qk_norm(q, self.q_norm.as_ref(), b, l, self.num_heads, self.head_dim)?
             .transpose_axes(&[0, 2, 1, 3])?;
 
-        let offset = cache.offset as i32;
+        let offset = shared_cache.unwrap_or(&*cache).offset() as i32;
         let q = apply_rope(
             &q,
             self.rope_dim,
@@ -625,10 +625,13 @@ impl Attention {
             self.rope_traditional,
             offset,
         )?;
-        let (k, v) = if let Some(shared_cache) = shared_cache {
-            shared_cache
+        let (k, v, key_start) = if let Some(shared_cache) = shared_cache {
+            let (k, v) = shared_cache
                 .views()
-                .context("Gemma4 shared KV cache was empty")?
+                .context("Gemma4 shared KV cache was empty")?;
+            let key_start =
+                shared_cache.key_start_for_attention(l as usize, k.shape()[2] as usize) as i32;
+            (k, v, key_start)
         } else {
             let k = self.k_proj.forward(x)?;
             let v = self.v_proj.forward(x)?;
@@ -656,12 +659,15 @@ impl Attention {
                 self.rope_traditional,
                 offset,
             )?;
-            cache.update(k, v)?
+            let (k, v) = cache.update(k, v)?;
+            let key_start =
+                (offset as usize + l as usize).saturating_sub(k.shape()[2] as usize) as i32;
+            (k, v, key_start)
         };
 
         // Causal mask for prefill (multi-token). Decode (l=1) needs no mask.
         let mask = if self.window_size.is_some() {
-            attention_mask(l, k.shape()[2], offset, self.window_size)?
+            attention_mask(l, k.shape()[2], key_start, offset, self.window_size)?
         } else {
             None
         };
@@ -742,7 +748,7 @@ impl DeepseekV3Attention {
             &k_pe.transpose_axes(&[0, 1, 3, 2])?,
         )?;
         if causal {
-            let mask = attention_mask(q_pe.shape()[2], k_pe.shape()[2], 0, None)?
+            let mask = attention_mask(q_pe.shape()[2], k_pe.shape()[2], 0, 0, None)?
                 .context("expected causal mask")?;
             let fill = array!(pe_scores.dtype().finfo_min()? as f32).as_dtype(pe_scores.dtype())?;
             pe_scores = mlx_rs::ops::r#where(&mask, &pe_scores, &fill)?;
@@ -787,7 +793,10 @@ impl DeepseekV3Attention {
             .reshape(&[b, l, 1, self.qk_rope_head_dim])?
             .transpose_axes(&[0, 2, 1, 3])?;
 
-        let offset = cache.as_ref().map(|cache| cache.offset as i32).unwrap_or(0);
+        let offset = cache
+            .as_ref()
+            .map(|cache| cache.offset() as i32)
+            .unwrap_or(0);
         let q_pe = apply_rope(
             &q_pe,
             self.qk_rope_head_dim,
@@ -854,15 +863,16 @@ impl DeepseekV3Attention {
 fn attention_mask(
     query_len: i32,
     key_len: i32,
-    offset: i32,
+    key_start: i32,
+    query_start: i32,
     window_size: Option<i32>,
 ) -> Result<Option<Array>> {
     if query_len == 1 && window_size.is_none() {
         return Ok(None);
     }
 
-    let key_positions = mlx_rs::ops::arange::<_, i32>(0, key_len, 1)?;
-    let query_positions = mlx_rs::ops::arange::<_, i32>(offset, offset + query_len, 1)?;
+    let key_positions = mlx_rs::ops::arange::<_, i32>(key_start, key_start + key_len, 1)?;
+    let query_positions = mlx_rs::ops::arange::<_, i32>(query_start, query_start + query_len, 1)?;
     let left = query_positions.expand_dims(1)?;
     let right = key_positions.expand_dims(0)?;
     let mut mask = left.ge(&right)?;
@@ -1257,7 +1267,7 @@ impl KimiMlaAttention {
         } else {
             let k = self.embed_q.forward(&kv_latent, false)?;
             let v = self.unembed_out.forward(&kv_latent, true)?;
-            let mask = attention_mask(l, l, 0, None)?.context("expected kimi mla mask")?;
+            let mask = attention_mask(l, l, 0, 0, None)?.context("expected kimi mla mask")?;
             let scores = mlx_rs::ops::matmul(
                 &q_nope.multiply(&array!(self.scale))?,
                 &k.transpose_axes(&[0, 1, 3, 2])?,
@@ -1528,6 +1538,15 @@ impl AttentionKind {
             Self::Lfm2ShortConv(_) => None,
         }
     }
+
+    fn sliding_window_size(&self) -> Option<usize> {
+        match self {
+            Self::Standard(attn) => attn.window_size.map(|size| size as usize),
+            Self::DeepseekV3(_) => None,
+            Self::KimiMla(_) | Self::KimiDelta(_) => None,
+            Self::Lfm2ShortConv(_) => None,
+        }
+    }
 }
 
 pub enum MlpKind {
@@ -1677,10 +1696,19 @@ pub struct PerLayerInputBlock {
 
 const KV_CACHE_STEP: usize = 256;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KVCacheMode {
+    Standard,
+    Rotating { max_size: usize, keep: usize },
+}
+
 pub struct KVCache {
     keys: Option<Array>,
     values: Option<Array>,
-    pub offset: usize,
+    start_offset: usize,
+    offset: usize,
+    idx: usize,
+    mode: KVCacheMode,
 }
 
 impl KVCache {
@@ -1688,8 +1716,38 @@ impl KVCache {
         KVCache {
             keys: None,
             values: None,
+            start_offset: 0,
             offset: 0,
+            idx: 0,
+            mode: KVCacheMode::Standard,
         }
+    }
+
+    pub fn new_rotating(max_size: usize, keep: usize) -> Self {
+        KVCache {
+            keys: None,
+            values: None,
+            start_offset: 0,
+            offset: 0,
+            idx: 0,
+            mode: KVCacheMode::Rotating { max_size, keep },
+        }
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
+    fn current_len(&self) -> usize {
+        self.offset.saturating_sub(self.start_offset)
+    }
+
+    fn retained_start(&self) -> usize {
+        self.start_offset
+    }
+
+    pub fn can_trim_to(&self, n: usize) -> bool {
+        n <= self.offset && n >= self.retained_start()
     }
 
     /// Return references to cached arrays (for eval/materialization).
@@ -1705,23 +1763,62 @@ impl KVCache {
     }
 
     pub fn views(&self) -> Option<(Array, Array)> {
-        use std::ops::RangeFull;
-
-        if self.offset == 0 {
+        if self.current_len() == 0 {
             return None;
         }
-        let end_i = self.offset as i32;
-        Some((
-            self.keys
-                .as_ref()?
-                .index((RangeFull, RangeFull, ..end_i, RangeFull)),
-            self.values
-                .as_ref()?
-                .index((RangeFull, RangeFull, ..end_i, RangeFull)),
-        ))
+        let keys = self.temporal_order(self.keys.as_ref()?).ok()?;
+        let values = self.temporal_order(self.values.as_ref()?).ok()?;
+        Some((keys, values))
+    }
+
+    fn temporal_order(&self, array: &Array) -> Result<Array> {
+        use std::ops::RangeFull;
+
+        match self.mode {
+            KVCacheMode::Standard => {
+                let end_i = self.offset as i32;
+                Ok(array.index((RangeFull, RangeFull, ..end_i, RangeFull)))
+            }
+            KVCacheMode::Rotating { keep, .. } => {
+                let len = array.shape()[2] as usize;
+                if self.idx == len {
+                    return Ok(array.clone());
+                }
+                if self.idx < self.current_len() {
+                    let mut parts = Vec::new();
+                    if keep > 0 {
+                        parts.push(array.index((RangeFull, RangeFull, ..(keep as i32), RangeFull)));
+                    }
+                    parts.push(array.index((RangeFull, RangeFull, self.idx as i32.., RangeFull)));
+                    if self.idx > keep {
+                        parts.push(array.index((
+                            RangeFull,
+                            RangeFull,
+                            keep as i32..self.idx as i32,
+                            RangeFull,
+                        )));
+                    }
+                    let refs: Vec<&Array> = parts.iter().collect();
+                    Ok(mlx_rs::ops::concatenate_axis(&refs, 2)?)
+                } else {
+                    Ok(array.index((RangeFull, RangeFull, ..(self.idx as i32), RangeFull)))
+                }
+            }
+        }
+    }
+
+    fn key_start_for_attention(&self, query_len: usize, key_len: usize) -> usize {
+        (self.offset + query_len).saturating_sub(key_len)
     }
 
     pub fn update(&mut self, k: Array, v: Array) -> Result<(Array, Array)> {
+        match self.mode {
+            KVCacheMode::Standard => self.update_standard(k, v),
+            KVCacheMode::Rotating { max_size, keep } => self.update_rotating(k, v, max_size, keep),
+        }
+    }
+
+    fn update_standard(&mut self, k: Array, v: Array) -> Result<(Array, Array)> {
         use std::ops::RangeFull;
 
         let seq_len = k.shape()[2] as usize;
@@ -1764,6 +1861,7 @@ impl KVCache {
         }
 
         self.offset = prev + seq_len;
+        self.start_offset = 0;
         let prev_i = prev as i32;
         let end_i = self.offset as i32;
 
@@ -1792,11 +1890,163 @@ impl KVCache {
         Ok((k_out, v_out))
     }
 
-    /// Rewind the cache to `n` tokens. The underlying buffer is kept —
-    /// only the offset is moved back so new tokens overwrite the tail.
-    pub fn trim_to(&mut self, n: usize) {
-        self.offset = n;
+    fn update_rotating(
+        &mut self,
+        k: Array,
+        v: Array,
+        max_size: usize,
+        keep: usize,
+    ) -> Result<(Array, Array)> {
+        let seq_len = k.shape()[2] as usize;
+        if seq_len == 1 {
+            return self.update_rotating_in_place(k, v, max_size, keep);
+        }
+        self.update_rotating_concat(k, v, max_size, keep)
     }
+
+    fn update_rotating_concat(
+        &mut self,
+        k: Array,
+        v: Array,
+        max_size: usize,
+        keep: usize,
+    ) -> Result<(Array, Array)> {
+        let seq_len = k.shape()[2] as usize;
+        if self.keys.is_none() {
+            self.keys = Some(k);
+            self.values = Some(v);
+        } else {
+            let ordered_k = self.temporal_order(self.keys.as_ref().unwrap())?;
+            let ordered_v = self.temporal_order(self.values.as_ref().unwrap())?;
+            self.idx = ordered_k.shape()[2] as usize;
+            let current_len = ordered_k.shape()[2] as usize;
+            let trim_size = (current_len + seq_len).saturating_sub(max_size);
+            self.keys = Some(trim_rotating_cache(&ordered_k, trim_size, keep, Some(&k))?);
+            self.values = Some(trim_rotating_cache(&ordered_v, trim_size, keep, Some(&v))?);
+            self.start_offset += trim_size;
+        }
+
+        self.offset += seq_len;
+        self.idx = self.keys.as_ref().unwrap().shape()[2] as usize;
+        self.views()
+            .context("rotating KV cache was empty after concat update")
+    }
+
+    fn update_rotating_in_place(
+        &mut self,
+        k: Array,
+        v: Array,
+        max_size: usize,
+        keep: usize,
+    ) -> Result<(Array, Array)> {
+        use std::ops::RangeFull;
+
+        let seq_len = k.shape()[2] as usize;
+        debug_assert_eq!(seq_len, 1);
+        let prev = self.offset;
+
+        let current_capacity = self
+            .keys
+            .as_ref()
+            .map(|keys| keys.shape()[2] as usize)
+            .unwrap_or(0);
+        if self.keys.is_none() || (prev >= current_capacity && current_capacity < max_size) {
+            let [b, n_kv_heads, _, k_head_dim] = k.shape()[..4] else {
+                bail!("unexpected k shape");
+            };
+            let v_head_dim = v.shape()[3];
+            let new_size = KV_CACHE_STEP
+                .min(max_size.saturating_sub(prev))
+                .max(seq_len);
+            let new_k =
+                mlx_rs::ops::zeros_dtype(&[b, n_kv_heads, new_size as i32, k_head_dim], k.dtype())?;
+            let new_v =
+                mlx_rs::ops::zeros_dtype(&[b, n_kv_heads, new_size as i32, v_head_dim], v.dtype())?;
+            if let (Some(old_k), Some(old_v)) = (&self.keys, &self.values) {
+                self.keys = Some(mlx_rs::ops::concatenate_axis(&[old_k, &new_k], 2)?);
+                self.values = Some(mlx_rs::ops::concatenate_axis(&[old_v, &new_v], 2)?);
+            } else {
+                self.keys = Some(new_k);
+                self.values = Some(new_v);
+            }
+            self.idx = prev;
+        }
+
+        let current_capacity = self.keys.as_ref().unwrap().shape()[2] as usize;
+        let trim_size = current_capacity.saturating_sub(max_size);
+        if trim_size > 0 {
+            let ordered_k = self.temporal_order(self.keys.as_ref().unwrap())?;
+            let ordered_v = self.temporal_order(self.values.as_ref().unwrap())?;
+            self.keys = Some(trim_rotating_cache(&ordered_k, trim_size, keep, None)?);
+            self.values = Some(trim_rotating_cache(&ordered_v, trim_size, keep, None)?);
+            self.idx = max_size;
+            self.start_offset += trim_size;
+        }
+
+        let evicted = usize::from(self.current_len() == max_size);
+        if self.idx == max_size {
+            self.idx = keep;
+        }
+
+        let start = self.idx as i32;
+        let end = (self.idx + seq_len) as i32;
+        self.keys
+            .as_mut()
+            .unwrap()
+            .try_index_mut((RangeFull, RangeFull, start..end, RangeFull), &k)?;
+        self.values
+            .as_mut()
+            .unwrap()
+            .try_index_mut((RangeFull, RangeFull, start..end, RangeFull), &v)?;
+
+        self.offset += seq_len;
+        self.start_offset += evicted;
+        self.idx += seq_len;
+        self.views()
+            .context("rotating KV cache was empty after in-place update")
+    }
+
+    /// Rewind the cache to `n` tokens if the requested prefix is still retained.
+    pub fn trim_to(&mut self, n: usize) -> Result<bool> {
+        if !self.can_trim_to(n) {
+            return Ok(false);
+        }
+        if matches!(self.mode, KVCacheMode::Rotating { .. }) && n != self.offset {
+            if let (Some(keys), Some(values)) = (&self.keys, &self.values) {
+                self.keys = Some(self.temporal_order(keys)?);
+                self.values = Some(self.temporal_order(values)?);
+            }
+        }
+        self.offset = n;
+        if matches!(self.mode, KVCacheMode::Rotating { .. }) {
+            self.idx = self.current_len();
+        }
+        Ok(true)
+    }
+}
+
+fn trim_rotating_cache(
+    array: &Array,
+    trim_size: usize,
+    keep: usize,
+    append: Option<&Array>,
+) -> Result<Array> {
+    use std::ops::RangeFull;
+
+    let mut parts = Vec::new();
+    if trim_size > 0 {
+        if keep > 0 {
+            parts.push(array.index((RangeFull, RangeFull, ..(keep as i32), RangeFull)));
+        }
+        parts.push(array.index((RangeFull, RangeFull, (trim_size + keep) as i32.., RangeFull)));
+    } else {
+        parts.push(array.clone());
+    }
+    if let Some(append) = append {
+        parts.push(append.clone());
+    }
+    let refs: Vec<&Array> = parts.iter().collect();
+    Ok(mlx_rs::ops::concatenate_axis(&refs, 2)?)
 }
 
 // ── Quantized embedding ──
@@ -3124,8 +3374,15 @@ impl MlxModel {
     }
 
     pub fn new_caches(&self) -> Vec<KVCache> {
-        (0..self.config.num_hidden_layers)
-            .map(|_| KVCache::new())
+        self.layers
+            .iter()
+            .map(|layer| {
+                if let Some(window_size) = layer.attn.sliding_window_size() {
+                    KVCache::new_rotating(window_size, 0)
+                } else {
+                    KVCache::new()
+                }
+            })
             .collect()
     }
 
@@ -4776,8 +5033,45 @@ mod tests {
         let output_refs: Vec<&Array> = outputs.iter().collect();
         let actual = mlx_rs::ops::concatenate_axis(&output_refs, 1).unwrap();
 
-        assert_eq!(cache.offset, 4);
+        assert_eq!(cache.offset(), 4);
         assert_arrays_close(&actual, &expected, 1e-4);
+    }
+
+    #[test]
+    fn rotating_kv_cache_cannot_trim_before_retained_window() {
+        let mut cache = KVCache::new_rotating(2, 0);
+        let k = Array::from_slice(&[1.0f32, 2.0], &[1, 1, 1, 2]);
+        let v = Array::from_slice(&[3.0f32, 4.0], &[1, 1, 1, 2]);
+
+        cache.update(k.clone(), v.clone()).unwrap();
+        cache.update(k.clone(), v.clone()).unwrap();
+        cache.update(k, v).unwrap();
+
+        assert_eq!(cache.offset(), 3);
+        assert_eq!(cache.retained_start(), 1);
+        assert!(cache.can_trim_to(1));
+        assert!(!cache.can_trim_to(0));
+    }
+
+    #[test]
+    fn rotating_kv_cache_rewind_and_append_preserves_temporal_order() {
+        let mut cache = KVCache::new_rotating(3, 0);
+        for token in [1.0f32, 2.0, 3.0] {
+            let k = Array::from_slice(&[token], &[1, 1, 1, 1]);
+            let v = Array::from_slice(&[token + 10.0], &[1, 1, 1, 1]);
+            cache.update(k, v).unwrap();
+        }
+
+        assert!(cache.trim_to(2).unwrap());
+
+        let k = Array::from_slice(&[9.0f32], &[1, 1, 1, 1]);
+        let v = Array::from_slice(&[19.0f32], &[1, 1, 1, 1]);
+        let (keys, values) = cache.update(k, v).unwrap();
+
+        assert_eq!(cache.offset(), 3);
+        assert_eq!(cache.retained_start(), 0);
+        assert_eq!(keys.as_slice::<f32>(), &[1.0, 2.0, 9.0]);
+        assert_eq!(values.as_slice::<f32>(), &[11.0, 12.0, 19.0]);
     }
 
     #[test]
@@ -4805,7 +5099,7 @@ mod tests {
         let full = Array::from_slice(&[1.0f32, 0.0, 0.5, 1.0, -1.0, 0.25, 0.75, -0.5], &[1, 4, 2]);
         let expected = attn.forward_no_cache(&full).unwrap();
 
-        let mut cache = KVCache::new();
+        let mut cache = KVCache::new_rotating(2, 0);
         let mut outputs = Vec::new();
         for step in 0..4i32 {
             let x = full.index((0..1, step..step + 1, std::ops::RangeFull));
@@ -4814,7 +5108,7 @@ mod tests {
         let output_refs: Vec<&Array> = outputs.iter().collect();
         let actual = mlx_rs::ops::concatenate_axis(&output_refs, 1).unwrap();
 
-        assert_eq!(cache.offset, 4);
+        assert_eq!(cache.offset(), 4);
         assert_arrays_close(&actual, &expected, 1e-4);
     }
 

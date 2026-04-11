@@ -678,7 +678,7 @@ fn prepare_reasoning_request(
     }
 
     const DIRECT_ANSWER_NUDGE: &str =
-        "Respond directly with the final answer. Do not include reasoning, analysis, or preamble unless the user explicitly asks for it.";
+        "Respond directly with the final answer. Do not output <think> tags. Do not produce internal reasoning, hidden chain-of-thought, analysis, or preamble unless the user explicitly asks for it. Start answering immediately.";
     const OLMO2_BREVITY_NUDGE: &str =
         "Be concise. Prefer short plain paragraphs or a flat bullet list. Avoid nested outlines, repeated section labels, or repeating the same equation/premise multiple times. For follow-up turns, answer only the new request. Do not restate the previous answer, and do not dump full code/examples unless the user explicitly asks for the full content. If the user asks for a small styling or edit change, provide only the minimal change.";
 
@@ -946,9 +946,13 @@ fn replay_last_prompt_token_logits(
     let last = *prompt_tokens
         .last()
         .context("replay_last_prompt_token_logits called with empty prompt")?;
-    let rewind_to = caches[0].offset.saturating_sub(1);
+    let rewind_to = caches[0].offset().saturating_sub(1);
     for cache in caches.iter_mut() {
-        cache.trim_to(rewind_to);
+        anyhow::ensure!(
+            cache.trim_to(rewind_to)?,
+            "cannot rewind MLX cache to token {} during replay",
+            rewind_to
+        );
     }
     let input = Array::from_slice(&[last], &[1, 1]);
     model.forward(&input, caches)
@@ -977,17 +981,26 @@ fn setup_caches_with_reuse<'a>(
     if let Some(ref cached) = state.prompt_cache {
         let prefix_len = common_prefix_len(&cached.tokens, prompt_tokens);
         if prefix_len > 0 {
-            // Reuse cached KV — trim to prefix length and return suffix
             let mut caches = state.prompt_cache.take().unwrap().caches;
-            for c in &mut caches {
-                c.trim_to(prefix_len);
+            if caches.iter().all(|c| c.can_trim_to(prefix_len)) {
+                // Reuse cached KV — trim to prefix length and return suffix
+                for c in &mut caches {
+                    let trimmed = c
+                        .trim_to(prefix_len)
+                        .expect("cache trim should succeed after can_trim_to check");
+                    debug_assert!(trimmed);
+                }
+                tracing::info!(
+                    "MLX prompt cache: reusing {prefix_len}/{} tokens ({} new)",
+                    prompt_tokens.len(),
+                    prompt_tokens.len() - prefix_len,
+                );
+                return (caches, &prompt_tokens[prefix_len..]);
             }
             tracing::info!(
-                "MLX prompt cache: reusing {prefix_len}/{} tokens ({} new)",
+                "MLX prompt cache: cannot reuse {prefix_len}/{} tokens after cache eviction; rebuilding",
                 prompt_tokens.len(),
-                prompt_tokens.len() - prefix_len,
             );
-            return (caches, &prompt_tokens[prefix_len..]);
         }
     }
     // No cache hit — fresh caches
@@ -1339,9 +1352,40 @@ fn parse_generation_config(req: &serde_json::Value, model: &MlxModel) -> Generat
                 .map(|value| value as usize)
                 .filter(|value| *value > 0),
             seed: req["seed"].as_u64(),
+            suppressed_token_ids: suppressed_reasoning_token_ids(model, req),
         },
         stop_sequences,
         response_policy: response_policy(req, model),
+    }
+}
+
+fn suppressed_reasoning_token_ids(model: &MlxModel, req: &serde_json::Value) -> Vec<u32> {
+    if !reasoning_disabled(
+        req,
+        model.reasoning_family,
+        &model.prompt_template.reasoning_template(),
+    ) {
+        return Vec::new();
+    }
+
+    let mut ids = Vec::new();
+    for block in model.prompt_template.reasoning_template().tagged_reasoning {
+        if let Some(token_id) = single_token_id_for_text(model, &block.start) {
+            ids.push(token_id);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn single_token_id_for_text(model: &MlxModel, text: &str) -> Option<u32> {
+    let encoding = model.tokenizer.encode(text, false).ok()?;
+    let ids = encoding.get_ids();
+    if ids.len() == 1 {
+        Some(ids[0])
+    } else {
+        None
     }
 }
 
@@ -1913,6 +1957,7 @@ mod tests {
                 top_p: 1.0,
                 top_k: None,
                 seed: None,
+                suppressed_token_ids: Vec::new(),
             },
             stop_sequences: Vec::new(),
             response_policy: ResponsePolicy::default(),
@@ -1951,6 +1996,7 @@ mod tests {
                 top_p: 1.0,
                 top_k: None,
                 seed: None,
+                suppressed_token_ids: Vec::new(),
             },
             stop_sequences: Vec::new(),
             response_policy: ResponsePolicy::default(),
