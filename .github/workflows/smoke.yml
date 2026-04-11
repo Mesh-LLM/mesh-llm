@@ -55,14 +55,17 @@ jobs:
           cp "ci-artifacts/linux/${{ inputs.mesh_binary_target }}" "${{ inputs.mesh_binary_target }}"
           cp ci-artifacts/linux/llama.cpp/build/bin/rpc-server llama.cpp/build/bin/rpc-server
           cp ci-artifacts/linux/llama.cpp/build/bin/llama-server llama.cpp/build/bin/llama-server
+          cp ci-artifacts/linux/llama.cpp/build/bin/llama-moe-analyze llama.cpp/build/bin/llama-moe-analyze
           cp ci-artifacts/linux/llama.cpp/build/bin/llama-moe-split llama.cpp/build/bin/llama-moe-split
           chmod +x "${{ inputs.mesh_binary_target }}"
           chmod +x llama.cpp/build/bin/rpc-server
           chmod +x llama.cpp/build/bin/llama-server
+          chmod +x llama.cpp/build/bin/llama-moe-analyze
           chmod +x llama.cpp/build/bin/llama-moe-split
           test -x "${{ inputs.mesh_binary_target }}"
           test -x llama.cpp/build/bin/rpc-server
           test -x llama.cpp/build/bin/llama-server
+          test -x llama.cpp/build/bin/llama-moe-analyze
           test -x llama.cpp/build/bin/llama-moe-split
 
       - name: Cache integration model

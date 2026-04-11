@@ -12,3 +12,8 @@ evals/results/
 .playwright-mcp/
 MLX_VALIDATION_RESULTS/
 .envrc
+.moe-cache/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
