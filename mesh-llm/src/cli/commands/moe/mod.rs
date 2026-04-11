@@ -1,6 +1,7 @@
 mod formatters;
 mod formatters_console;
 mod formatters_json;
+mod hf_jobs;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
@@ -19,7 +20,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::cli::moe::{MoeAnalyzeCommand, MoeCommand};
+use crate::cli::moe::{HfJobArgs, MoeAnalyzeCommand, MoeCommand};
 use crate::cli::Cli;
 use crate::inference::moe;
 use crate::models;
@@ -62,13 +63,27 @@ pub(crate) async fn dispatch_moe_command(command: &MoeCommand, cli: &Cli) -> Res
             MoeAnalyzeCommand::Full {
                 model,
                 context_size,
-            } => run_analyze_full(model, *context_size).await,
+                n_gpu_layers,
+                hf_job,
+            } => run_analyze_full(model, *context_size, *n_gpu_layers, hf_job).await,
             MoeAnalyzeCommand::Micro {
                 model,
                 prompt_count,
                 token_count,
                 context_size,
-            } => run_analyze_micro(model, *prompt_count, *token_count, *context_size).await,
+                n_gpu_layers,
+                hf_job,
+            } => {
+                run_analyze_micro(
+                    model,
+                    *prompt_count,
+                    *token_count,
+                    *context_size,
+                    *n_gpu_layers,
+                    hf_job,
+                )
+                .await
+            }
         },
         MoeCommand::Share {
             model,
@@ -107,7 +122,15 @@ async fn run_plan(
     moe_plan_formatter(json_output).render(&report)
 }
 
-async fn run_analyze_full(model: &str, context_size: u32) -> Result<()> {
+async fn run_analyze_full(
+    model: &str,
+    context_size: u32,
+    n_gpu_layers: u32,
+    hf_job: &HfJobArgs,
+) -> Result<()> {
+    if hf_job.hf_job {
+        return hf_jobs::submit_full_analyze_job(model, context_size, n_gpu_layers, hf_job).await;
+    }
     let resolved = moe_planner::resolve_model_context(model).await?;
     let output_path = moe::ranking_cache_path(&resolved.path);
     let log_path = log_path_for(&resolved.path, "full-v1");
@@ -133,7 +156,7 @@ async fn run_analyze_full(model: &str, context_size: u32) -> Result<()> {
         "-c".to_string(),
         context_size.to_string(),
         "-ngl".to_string(),
-        "0".to_string(),
+        n_gpu_layers.to_string(),
     ];
     run_analyzer_command(&command, &log_path, "full-v1")?;
     println!("✅ Full MoE analysis complete");
@@ -148,7 +171,20 @@ async fn run_analyze_micro(
     prompt_count: usize,
     token_count: u32,
     context_size: u32,
+    n_gpu_layers: u32,
+    hf_job: &HfJobArgs,
 ) -> Result<()> {
+    if hf_job.hf_job {
+        return hf_jobs::submit_micro_analyze_job(
+            model,
+            prompt_count,
+            token_count,
+            context_size,
+            n_gpu_layers,
+            hf_job,
+        )
+        .await;
+    }
     let resolved = moe_planner::resolve_model_context(model).await?;
     let prompt_count = prompt_count.clamp(1, MICRO_PROMPTS.len());
     let log_path = log_path_for(&resolved.path, "micro-v1");
@@ -192,7 +228,7 @@ async fn run_analyze_micro(
             "-c".to_string(),
             context_size.to_string(),
             "-ngl".to_string(),
-            "0".to_string(),
+            n_gpu_layers.to_string(),
             "--all-layers".to_string(),
             "-p".to_string(),
             (*prompt).to_string(),

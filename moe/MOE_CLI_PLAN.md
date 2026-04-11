@@ -134,7 +134,8 @@ Purpose:
 
 - run the canonical full MoE analysis for a model
 - cache the resulting artifact locally
-- optionally prepare it for later submission
+- optionally submit the analyze run to Hugging Face Jobs with `--hf-job`
+- on remote success, share the resulting artifact back through a dataset PR
 
 This should align to:
 
@@ -146,7 +147,8 @@ Purpose:
 
 - run the canonical micro analysis for a model
 - cache the resulting artifact locally
-- optionally prepare it for later submission
+- optionally submit the analyze run to Hugging Face Jobs with `--hf-job`
+- on remote success, share the resulting artifact back through a dataset PR
 
 This should align to:
 
@@ -178,6 +180,17 @@ Progress bars should be used for:
 - remote downloads
 - long-running analysis work
 - any other long blocking task
+
+### Remote Job Mode
+
+`--hf-job` should:
+
+- require a Hugging Face-backed model identity so the remote worker can resolve the same exact distribution
+- submit a Hugging Face Job from the Rust CLI
+- download a release bundle inside the remote job
+- run the public `mesh-llm moe analyze ...` command inside the job
+- run the public `mesh-llm moe share ...` command after successful analysis
+- open a dataset PR against `meshllm/moe-rankings` rather than writing directly to `main`
 
 ### Error Discoverability
 
