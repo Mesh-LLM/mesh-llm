@@ -179,9 +179,33 @@ When making changes that touch gossip, routing, proxy, election, or capability a
 
 Run `cargo` commands serially. Do not run multiple `cargo` commands in parallel (including parallel test runs), because this repo frequently hits Cargo lock conflicts (`package cache` / `artifact directory`) under concurrent invocation.
 
-## Formatting
+## Pre-Commit Checklist
 
-Before committing Rust changes, format only the changed Rust files from the repo root, for example with `cargo fmt --all -- path/to/file.rs`, and include those formatting changes in the commit.
+Before committing, run the local checks most likely to fail in CI for the files you touched. Do not rely on CI to catch basic formatting, compile, or stale UI build issues.
+
+### Minimum bar before every commit
+
+- Rust-only change — format the changed Rust files and run `cargo check -p mesh-llm`.
+- UI-only change — run `just build`.
+- Mixed Rust and UI change — run `just build`.
+
+### Rust changes
+
+- Format only the changed Rust files from the repo root, for example with `cargo fmt --all -- path/to/file.rs`, and include those formatting changes in the commit.
+- After Rust changes, run `cargo check -p mesh-llm`.
+- If you touched tests, public APIs, routing, inference, gossip, plugin protocol, or CLI behavior, run the relevant tests before committing.
+- Run Rust validation serially. Do not run multiple `cargo` commands at the same time.
+
+### UI changes
+
+- Use the repo's supported workflow and run `just build`.
+- If `just build` fails on the UI step with `npm error Exit handler never called!`, run `just clean-ui` and then rerun `just build`.
+
+### Commit standard
+
+- Do not commit if formatting has not been applied.
+- Do not commit if basic local validation for your change type has not been run.
+- Do not commit known warnings in code you touched.
 
 ## Warnings
 
