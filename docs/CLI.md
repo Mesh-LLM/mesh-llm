@@ -79,6 +79,11 @@ Runtime switches:
 - `--max-vram <MAX_VRAM>`: cap VRAM used for planning and fit decisions.
 - `--llama-flavor <LLAMA_FLAVOR>`: force backend binary flavor (`cpu|cuda|rocm|vulkan|metal`).
 - `--config <CONFIG>`: explicit config file path.
+- `--owner-key <OWNER_KEY>`: keystore used to attest this runtime node.
+- `--owner-required`: fail startup if owner attestation cannot be loaded.
+- `--node-label <NODE_LABEL>`: attach a human label to this runtime node certificate.
+- `--trust-policy <TRUST_POLICY>`: override peer ownership trust policy.
+- `--trust-owner <TRUST_OWNER>`: add trusted owner IDs on top of the local trust store.
 
 ## Commands
 
@@ -323,6 +328,15 @@ Subcommands:
 - `--keychain`: store random unlock passphrase in OS keychain.
 
 `auth status` switches:
+
+- `--owner-key <OWNER_KEY>`: keystore path.
+
+`auth sign-node` / `auth renew-node` / `auth rotate-node` switches:
+
+- `--owner-key <OWNER_KEY>`: keystore path.
+- `--node-label <NODE_LABEL>`: attach a human label to the signed node certificate.
+
+`auth rotate-owner` switches:
 
 - `--owner-key <OWNER_KEY>`: keystore path.
 

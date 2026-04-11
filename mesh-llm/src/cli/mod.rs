@@ -39,6 +39,9 @@ pub(crate) enum TrustCommand {
 pub(crate) enum AuthCommand {
     /// Generate a new owner keypair and save to keystore.
     Init {
+        /// Path to the owner keystore.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
         /// Overwrite an existing keystore.
         #[arg(long)]
         force: bool,
@@ -54,6 +57,9 @@ pub(crate) enum AuthCommand {
     },
     /// Show current owner identity status.
     Status {
+        /// Path to the owner keystore.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
         /// Path to the node identity file (default: ~/.mesh-llm/key).
         #[arg(long)]
         node_key: Option<PathBuf>,
@@ -66,6 +72,9 @@ pub(crate) enum AuthCommand {
     },
     /// Sign the current node identity with the existing owner keystore.
     SignNode {
+        /// Path to the owner keystore.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
         /// Path to the node identity file (default: ~/.mesh-llm/key).
         #[arg(long)]
         node_key: Option<PathBuf>,
@@ -75,12 +84,18 @@ pub(crate) enum AuthCommand {
         /// Optional hostname hint attached to the certificate.
         #[arg(long)]
         hostname_hint: Option<String>,
+        /// Optional human label attached to this node certificate.
+        #[arg(long)]
+        node_label: Option<String>,
         /// Certificate lifetime in hours.
         #[arg(long, default_value = "168")]
         expires_in_hours: u64,
     },
     /// Renew the local node ownership certificate in place.
     RenewNode {
+        /// Path to the owner keystore.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
         /// Path to the node identity file (default: ~/.mesh-llm/key).
         #[arg(long)]
         node_key: Option<PathBuf>,
@@ -90,6 +105,9 @@ pub(crate) enum AuthCommand {
         /// Optional hostname hint attached to the certificate.
         #[arg(long)]
         hostname_hint: Option<String>,
+        /// Optional human label attached to this node certificate.
+        #[arg(long)]
+        node_label: Option<String>,
         /// Certificate lifetime in hours.
         #[arg(long, default_value = "168")]
         expires_in_hours: u64,
@@ -111,6 +129,9 @@ pub(crate) enum AuthCommand {
     },
     /// Rotate the local node identity key.
     RotateNode {
+        /// Path to the owner keystore.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
         /// Path to the node identity file (default: ~/.mesh-llm/key).
         #[arg(long)]
         node_key: Option<PathBuf>,
@@ -120,6 +141,9 @@ pub(crate) enum AuthCommand {
         /// Optional hostname hint attached to the certificate.
         #[arg(long)]
         hostname_hint: Option<String>,
+        /// Optional human label attached to this node certificate.
+        #[arg(long)]
+        node_label: Option<String>,
         /// Certificate lifetime in hours.
         #[arg(long, default_value = "168")]
         expires_in_hours: u64,
@@ -161,6 +185,9 @@ pub(crate) enum AuthCommand {
     },
     /// Rotate the existing owner keystore identity.
     RotateOwner {
+        /// Path to the owner keystore.
+        #[arg(long)]
+        owner_key: Option<PathBuf>,
         /// Skip passphrase prompt (store keys unencrypted).
         #[arg(long)]
         no_passphrase: bool,
@@ -333,23 +360,23 @@ pub(crate) struct Cli {
     pub(crate) config: Option<PathBuf>,
 
     /// Path to the owner keystore used to attest this node.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub(crate) owner_key: Option<PathBuf>,
 
     /// Fail startup if owner attestation cannot be loaded or signed.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub(crate) owner_required: bool,
 
     /// Optional human label attached to this node certificate.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub(crate) node_label: Option<String>,
 
     /// Override peer ownership trust policy.
-    #[arg(long, global = true, value_enum)]
+    #[arg(long, value_enum)]
     pub(crate) trust_policy: Option<TrustPolicy>,
 
     /// Add trusted owner IDs on top of the local trust store.
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub(crate) trust_owner: Vec<String>,
 
     /// Internal: set when this node joined via Nostr discovery (not --join).
@@ -747,5 +774,28 @@ mod tests {
             normalized.explicit_surface
         )
         .is_none());
+    }
+
+    #[test]
+    fn auth_status_accepts_owner_key_locally() {
+        let cli = Cli::parse_from(["mesh-llm", "auth", "status", "--owner-key", "owner.json"]);
+
+        match cli.command.expect("auth command expected") {
+            Command::Auth {
+                command: AuthCommand::Status { owner_key, .. },
+            } => {
+                assert_eq!(owner_key, Some(PathBuf::from("owner.json")));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn auth_status_rejects_runtime_only_owner_required_flag() {
+        let err = Cli::try_parse_from(["mesh-llm", "auth", "status", "--owner-required"])
+            .expect_err("runtime-only flag should be rejected for auth status");
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("--owner-required"));
     }
 }
