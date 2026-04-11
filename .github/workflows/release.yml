@@ -392,6 +392,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           shopt -s nullglob
@@ -401,8 +402,8 @@ jobs:
             exit 1
           fi
 
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber
+          if gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GH_REPO" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" "${files[@]}" --generate-notes
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GH_REPO" --generate-notes
           fi
