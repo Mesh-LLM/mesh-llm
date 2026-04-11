@@ -10,6 +10,14 @@ The paper shows ensemble routing across heterogeneous models outperforms any sin
 
 **Relates to:** Smart Router (below), Multi-Model Per Host.
 
+## Node Owner Identity
+
+Design: [NODE_OWNER_IDENTITY.md](docs/NODE_OWNER_IDENTITY.md)
+
+- [x] Add non-breaking owner attestation for node identities.
+- [x] Surface verified owner state in gossip, `/api/status`, and the console.
+- [x] Add optional trust policy and owner allowlists for private meshes.
+
 ## Multi-Model Per Host
 
 Currently each host runs one llama-server serving one model. Hosts with spare VRAM could serve multiple simultaneously.

@@ -67,9 +67,32 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+      - name: Upload Linux inference binaries
+        if: matrix.name == 'Linux CPU'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-linux-release-inference-binaries
+          path: |
+            target/release/mesh-llm
+            llama.cpp/build/bin/rpc-server
+            llama.cpp/build/bin/llama-server
+            llama.cpp/build/bin/llama-moe-analyze
+            llama.cpp/build/bin/llama-moe-split
+          if-no-files-found: error
+
       - name: Show sccache stats
         if: always()
         run: sccache --show-stats || true
+
+  inference_smoke_tests:
+    needs:
+      - build
+    uses: ./.github/workflows/smoke.yml
+    with:
+      artifact_name: ci-linux-release-inference-binaries
+      mesh_binary_target: target/release/mesh-llm
+      cache_key_prefix: 'release-'
+      workflow_cache_file: .github/workflows/release.yml
 
   build_linux_cuda:
     name: Build Linux CUDA
@@ -355,6 +378,7 @@ jobs:
       - build_linux_cuda
       - build_linux_rocm
       - build_linux_vulkan
+      - inference_smoke_tests
       # - build_windows  # disabled until llama.cpp CUDA fix
 
     steps:
@@ -366,8 +390,20 @@ jobs:
           merge-multiple: true
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
-          generate_release_notes: true
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(dist/*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No release files found under dist/"
+            exit 1
+          fi
+
+          if gh release view "$GITHUB_REF_NAME" --repo "$GH_REPO" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GH_REPO" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "${files[@]}" --repo "$GH_REPO" --generate-notes
+          fi

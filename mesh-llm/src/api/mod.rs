@@ -31,8 +31,9 @@ use self::http::{http_body_text, respond_error};
 use self::routes::dispatch_request;
 use self::state::ApiInner;
 use self::status::{
-    build_gpus, build_runtime_processes_payload, build_runtime_status_payload, MeshModelPayload,
-    PeerPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
+    build_gpus, build_ownership_payload, build_runtime_processes_payload,
+    build_runtime_status_payload, MeshModelPayload, PeerPayload, RuntimeProcessesPayload,
+    RuntimeStatusPayload, StatusPayload,
 };
 use crate::inference::election;
 use crate::mesh;
@@ -742,6 +743,7 @@ impl MeshApi {
         }; // inner lock dropped here
 
         let all_peers = node.peers().await;
+        let local_owner_summary = node.owner_summary().await;
         let my_models = node.models().await;
         let my_available_models = node.available_models().await;
         let my_requested_models = node.requested_models().await;
@@ -749,6 +751,7 @@ impl MeshApi {
             .iter()
             .map(|p| PeerPayload {
                 id: p.id.fmt_short().to_string(),
+                owner: build_ownership_payload(&p.owner_summary),
                 role: match p.role {
                     mesh::NodeRole::Worker => "Worker".into(),
                     mesh::NodeRole::Host { .. } => "Host".into(),
@@ -814,6 +817,7 @@ impl MeshApi {
             version: MESH_LLM_VERSION.to_string(),
             latest_version,
             node_id,
+            owner: build_ownership_payload(&local_owner_summary),
             token,
             node_status,
             is_host: effective_is_host,
@@ -1623,7 +1627,7 @@ mod tests {
         manifests.insert(
             plugin_name.to_string(),
             mesh_llm_plugin::plugin_manifest![
-                mesh_llm_plugin::capability(plugin::BLACKBOARD_CAPABILITY),
+                mesh_llm_plugin::capability(blackboard::BLACKBOARD_CHANNEL),
                 mesh_llm_plugin::http_get("/feed", "feed"),
                 mesh_llm_plugin::http_get("/search", "search"),
                 mesh_llm_plugin::http_post("/post", "post"),

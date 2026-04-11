@@ -21,9 +21,27 @@ use std::thread;
 use tokio::sync::watch;
 
 pub use mesh_client_core::inference::election::{
-    should_be_host_for_model, total_model_bytes, InferenceTarget, LocalProcessInfo, ModelTargets,
-    MoeState,
+    total_model_bytes, InferenceTarget, LocalProcessInfo, ModelTargets, MoeState,
 };
+
+pub fn should_be_host_for_model(
+    my_id: iroh::EndpointId,
+    my_vram: u64,
+    model_peers: &[mesh::PeerInfo],
+) -> bool {
+    for peer in model_peers {
+        if matches!(peer.role, NodeRole::Client) {
+            continue;
+        }
+        if peer.vram_bytes > my_vram {
+            return false;
+        }
+        if peer.vram_bytes == my_vram && peer.id > my_id {
+            return false;
+        }
+    }
+    true
+}
 
 /// Returns `true` when `flavor` and `gpu_count` together call for row-split
 /// tensor parallelism.

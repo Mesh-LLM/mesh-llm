@@ -51,6 +51,7 @@ import {
   RotateCcw,
   Send,
   Server,
+  Shield,
   Square,
   Sparkles,
   Brain,
@@ -240,7 +241,18 @@ type NodeSidebarRecord = {
   llamaReady?: boolean;
   apiPort?: number;
   inflightRequests?: number;
+  owner: Ownership;
   privacyLimited: boolean;
+};
+
+type Ownership = {
+  owner_id?: string;
+  cert_id?: string;
+  status: string;
+  verified: boolean;
+  expires_at_unix_ms?: number;
+  node_label?: string;
+  hostname_hint?: string;
 };
 
 function modelDisplayName(model?: MeshModel | null) {
@@ -326,6 +338,7 @@ function reasoningBadge(model?: MeshModel | null) {
 
 type Peer = {
   id: string;
+  owner?: Ownership;
   role: string;
   models: string[];
   available_models?: string[];
@@ -344,6 +357,7 @@ type StatusPayload = {
   version?: string;
   latest_version?: string | null;
   node_id: string;
+  owner?: Ownership;
   token: string;
   node_status: string;
   is_host: boolean;
@@ -4395,6 +4409,9 @@ function DashboardPage({
       llamaReady: topologyNode.self ? status.llama_ready : undefined,
       apiPort: topologyNode.self ? status.api_port : undefined,
       inflightRequests: topologyNode.self ? status.inflight_requests : undefined,
+      owner: topologyNode.self
+        ? status.owner ?? { status: "unsigned", verified: false }
+        : peer?.owner ?? { status: "unsigned", verified: false },
       privacyLimited:
         !topologyNode.self &&
         !topologyNode.hostname &&
@@ -4535,7 +4552,7 @@ function DashboardPage({
           </AlertDescription>
         </Alert>
       ) : null}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
           title="Node ID"
           value={status?.node_id ?? "n/a"}
@@ -4548,6 +4565,19 @@ function DashboardPage({
           }
           icon={<Hash className="h-4 w-4" />}
           tooltip="Current node identifier in this mesh."
+        />
+        <StatCard
+          title="Owner"
+          value={ownershipPrimaryLabel(status?.owner)}
+          valueSuffix={
+            <StatusPill
+              label={ownershipStatusLabel(status?.owner?.status)}
+              tone={ownershipTone(status?.owner?.status)}
+              tooltip="Ownership certificate state for this node."
+            />
+          }
+          icon={<Shield className="h-4 w-4" />}
+          tooltip="Stable owner identity from the keystore, if this node is attested."
         />
         <StatCard
           title="Active Models"
@@ -6445,6 +6475,40 @@ function NodeSidebar({
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <Shield className="h-4 w-4 text-muted-foreground" />
+              <span>Ownership</span>
+            </CardTitle>
+            <p className="text-sm leading-6 text-muted-foreground">
+              Shows whether this node identity is cryptographically bound to a stable owner.
+            </p>
+          </CardHeader>
+          <CardContent className="grid gap-3 pt-0 sm:grid-cols-2">
+            <ModelMetaItem
+              label="Ownership"
+              value={ownershipStatusLabel(node.owner.status)}
+            />
+            <ModelMetaItem
+              label="Node"
+              value={node.id}
+              copyValue={node.id}
+            />
+            <ModelMetaItem
+              label="Owner"
+              value={node.owner.owner_id ?? "Unsigned"}
+              copyValue={node.owner.owner_id}
+            />
+            {node.owner.node_label ? (
+              <ModelMetaItem label="Node Label" value={node.owner.node_label} />
+            ) : null}
+            {node.owner.hostname_hint ? (
+              <ModelMetaItem label="Hostname Hint" value={node.owner.hostname_hint} />
+            ) : null}
+          </CardContent>
+        </Card>
+
         {node.self ? (
           <Card>
             <CardHeader className="pb-2">
@@ -7072,6 +7136,44 @@ function meshGpuVram(status: StatusPayload | null) {
 function overviewVramGb(isClient: boolean, vramGb?: number | null) {
   if (isClient) return 0;
   return Math.max(0, vramGb || 0);
+}
+
+function ownershipTone(status?: string): "good" | "warn" | "bad" | "neutral" {
+  switch (status) {
+    case "verified":
+      return "good";
+    case "expired":
+    case "untrusted_owner":
+      return "warn";
+    case "invalid_signature":
+    case "mismatched_node_id":
+    case "revoked_owner":
+    case "revoked_cert":
+    case "revoked_node_id":
+      return "bad";
+    default:
+      return "neutral";
+  }
+}
+
+function ownershipStatusLabel(status?: string) {
+  if (!status) return "Unknown";
+  return status
+    .split("_")
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function shortIdentity(value?: string | null, size = 12) {
+  if (!value) return "n/a";
+  return value.length <= size ? value : value.slice(0, size);
+}
+
+function ownershipPrimaryLabel(owner?: Ownership | null) {
+  if (!owner) return "Unsigned";
+  if (owner.node_label) return owner.node_label;
+  if (owner.owner_id) return shortIdentity(owner.owner_id, 16);
+  return ownershipStatusLabel(owner.status);
 }
 
 function shortName(name: string) {
