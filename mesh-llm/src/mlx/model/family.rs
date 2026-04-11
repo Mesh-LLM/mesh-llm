@@ -17,6 +17,7 @@ pub enum ReasoningFamily {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModelArchitecture {
     LlamaLike,
+    Olmo,
     Olmo2,
     DeepseekV3,
     GptOss,
@@ -31,6 +32,10 @@ pub(super) enum ModelArchitecture {
 impl ModelArchitecture {
     pub(super) fn is_olmo2(self) -> bool {
         matches!(self, Self::Olmo2)
+    }
+
+    pub(super) fn is_olmo(self) -> bool {
+        matches!(self, Self::Olmo)
     }
 
     pub(super) fn is_deepseek_v3(self) -> bool {
@@ -113,6 +118,8 @@ pub(super) fn model_architecture(config: &Value) -> ModelArchitecture {
         ModelArchitecture::DeepseekV3
     } else if model_type.starts_with("olmo2") {
         ModelArchitecture::Olmo2
+    } else if model_type.starts_with("olmo") {
+        ModelArchitecture::Olmo
     } else if model_type.starts_with("lfm2") {
         ModelArchitecture::Lfm2
     } else if model_type.starts_with("gemma4") {
@@ -188,6 +195,7 @@ pub(super) fn config_supports_mlx(config: &Value) -> bool {
                 | "qwen3"
                 | "gpt_oss"
                 | "kimi_linear"
+                | "olmo"
                 | "olmo2"
                 | "gemma2"
                 | "gemma3"
@@ -204,6 +212,7 @@ pub(super) fn config_supports_mlx(config: &Value) -> bool {
                 | "qwen3forcausallm"
                 | "gptossforcausallm"
                 | "kimilinearforcausallm"
+                | "olmoforcausallm"
                 | "olmo2forcausallm"
                 | "gemma2forcausallm"
                 | "gemma3forcausallm"
@@ -243,7 +252,7 @@ pub(super) fn ensure_supported_mlx_model(dir: &Path, config: &Value) -> Result<(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "none".to_string());
     bail!(
-        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/DeepSeekV3/GPT-OSS/Kimi-Linear/LFM2/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
+        "unsupported MLX model architecture in {} (model_type={}, architectures={}); supported MLX models currently cover Llama/OLMo/DeepSeekV3/GPT-OSS/Kimi-Linear/LFM2/GLM4/Qwen/Gemma2/Gemma3/Gemma4-style safetensors checkpoints",
         dir.display(),
         model_type,
         architectures,

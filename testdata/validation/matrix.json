@@ -77,6 +77,93 @@
   },
   "models": [
     {
+      "id": "olmo7b",
+      "label": "olmo-7b-instruct-hf",
+      "expectation_class": "weak-but-stable",
+      "notes": "Accepted same-origin OLMo parity pair; exact prompts tolerate shared verbosity and phrasing drift after HF-template whitespace fixes.",
+      "exact": {
+        "prompt": "Reply with exactly: blue",
+        "expect_contains": "",
+        "expect_contains_ci": "blue",
+        "expect_exact": "",
+        "forbid_contains": "",
+        "prompt_suite": [
+          {
+            "label": "alt-green",
+            "prompt": "Reply with exactly: green",
+            "expect_contains_ci": "green"
+          },
+          {
+            "label": "alt-red",
+            "prompt": "Reply with exactly: red",
+            "expect_contains_ci": "red"
+          },
+          {
+            "label": "capital-france",
+            "prompt": "What is the capital of France? Reply with one word.",
+            "expect_contains_ci": "Paris"
+          },
+          {
+            "label": "primary-colors",
+            "prompt": "List the RGB primary colors as full lowercase words only, comma-separated, with no abbreviations.",
+            "max_tokens": 24,
+            "expect_contains_all_ci": [
+              "red",
+              "green",
+              "blue"
+            ]
+          },
+          {
+            "label": "two-plus-two",
+            "prompt": "Complete exactly: 2 + 2 =",
+            "max_tokens": 32,
+            "expect_contains_ci": "4"
+          },
+          {
+            "label": "largest-planet",
+            "prompt": "Name the largest planet in the Solar System. Reply with one word.",
+            "expect_contains_ci": "Jupiter"
+          },
+          {
+            "label": "breathing-gas",
+            "prompt": "What gas do humans need to breathe to survive? Reply with one word.",
+            "max_tokens": 24,
+            "expect_any_ci": [
+              "oxygen",
+              "o2",
+              "air"
+            ]
+          },
+          {
+            "label": "opposite-hot",
+            "prompt": "What is the opposite of hot? Reply with one word.",
+            "expect_contains_ci": "cold"
+          },
+          {
+            "label": "banana-color",
+            "prompt": "What color is a ripe banana? Reply with one word.",
+            "expect_contains_ci": "yellow"
+          },
+          {
+            "label": "after-monday",
+            "prompt": "What day comes after Monday? Reply with one word.",
+            "expect_contains_ci": "Tuesday"
+          }
+        ]
+      },
+      "gguf": {
+        "exact_case_id": "olmo7b-gguf-exact",
+        "behavior_case_id": "olmo7b-gguf-behavior",
+        "model_ref": "meshllm/olmo-7b-instruct-hf-parity-f16-gguf/olmo-7b-instruct-hf-f16.gguf"
+      },
+      "mlx": {
+        "exact_case_id": "olmo7b-mlx-exact",
+        "behavior_case_id": "olmo7b-mlx-behavior",
+        "model_ref": "meshllm/olmo-7b-instruct-hf-parity-bf16-mlx",
+        "template_source": "chat_template.jinja"
+      }
+    },
+    {
       "id": "mistral",
       "label": "mistral-7b-instruct-v0.3",
       "expectation_class": "weak-but-stable",

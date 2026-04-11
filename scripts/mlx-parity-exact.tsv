@@ -1,4 +1,6 @@
 backend	case_id	model_ref	template_source
+gguf	olmo7b-gguf-exact	meshllm/olmo-7b-instruct-hf-parity-f16-gguf/olmo-7b-instruct-hf-f16.gguf	-
+mlx	olmo7b-mlx-exact	meshllm/olmo-7b-instruct-hf-parity-bf16-mlx	chat_template.jinja
 gguf	mistral-gguf-exact	meshllm/mistral-7b-instruct-v0.3-parity-f16-gguf/mistral-7b-instruct-v0.3-f16.gguf	-
 mlx	mistral-mlx-exact	meshllm/mistral-7b-instruct-v0.3-parity-bf16-mlx	chat_template.jinja
 gguf	qwen25-gguf-exact	meshllm/qwen2.5-0.5b-instruct-parity-q8_0-gguf/qwen2.5-0.5b-instruct-q8_0.gguf	-

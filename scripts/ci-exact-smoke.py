@@ -93,10 +93,7 @@ def ensure_expected_template_source(model_arg: str, expected_template_source: st
 def build_launch_command(args: argparse.Namespace, api_port: int, console_port: int) -> list[str]:
     command = [args.mesh_llm]
     if args.backend == "mlx":
-        if os.path.isdir(args.model):
-            command.extend(["--mlx-file", args.model])
-        else:
-            command.extend(["--model", args.model, "--mlx-file", args.model])
+        command.extend(["--mlx-file", args.model])
     else:
         command.extend(["--gguf-file", args.model, "--bin-dir", args.bin_dir])
     command.extend(["--no-draft", "--port", str(api_port), "--console", str(console_port)])

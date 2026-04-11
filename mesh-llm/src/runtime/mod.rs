@@ -37,6 +37,14 @@ struct StartupModelSpec {
     model_ref: PathBuf,
     mmproj_ref: Option<PathBuf>,
     ctx_size: Option<u32>,
+    backend_hint: StartupBackendHint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupBackendHint {
+    Auto,
+    Gguf,
+    Mlx,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +53,7 @@ struct StartupModelPlan {
     resolved_path: PathBuf,
     mmproj_path: Option<PathBuf>,
     ctx_size: Option<u32>,
+    backend_hint: StartupBackendHint,
 }
 
 fn resolve_runtime_owner_key_path(cli: &Cli) -> Result<Option<PathBuf>> {
@@ -477,6 +486,7 @@ fn build_startup_model_specs(
                 model_ref: path.clone(),
                 mmproj_ref: None,
                 ctx_size: cli.ctx_size,
+                backend_hint: StartupBackendHint::Gguf,
             });
         }
         for path in &cli.mlx_file {
@@ -484,6 +494,7 @@ fn build_startup_model_specs(
                 model_ref: path.clone(),
                 mmproj_ref: None,
                 ctx_size: cli.ctx_size,
+                backend_hint: StartupBackendHint::Mlx,
             });
         }
         for model in &cli.model {
@@ -491,6 +502,7 @@ fn build_startup_model_specs(
                 model_ref: model.clone(),
                 mmproj_ref: None,
                 ctx_size: cli.ctx_size,
+                backend_hint: StartupBackendHint::Auto,
             });
         }
         if let Some(mmproj) = &cli.mmproj {
@@ -506,6 +518,7 @@ fn build_startup_model_specs(
             model_ref: PathBuf::from(model.model.clone()),
             mmproj_ref: model.mmproj.as_ref().map(PathBuf::from),
             ctx_size: cli.ctx_size.or(model.ctx_size),
+            backend_hint: StartupBackendHint::Auto,
         });
     }
     Ok(specs)
@@ -524,6 +537,7 @@ async fn resolve_startup_models(specs: &[StartupModelSpec]) -> Result<Vec<Startu
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,
+            backend_hint: spec.backend_hint,
         });
     }
     Ok(plans)
@@ -1322,7 +1336,10 @@ async fn run_auto(
     launch::kill_orphan_rpc_servers().await;
 
     #[cfg(target_os = "macos")]
-    let is_mlx = crate::mlx::is_mlx_model_dir(&model);
+    let is_mlx = primary_startup_model
+        .as_ref()
+        .is_some_and(|model| model.backend_hint == StartupBackendHint::Mlx)
+        || crate::mlx::is_mlx_model_dir(&model);
     #[cfg(not(target_os = "macos"))]
     let is_mlx = false;
 

@@ -330,6 +330,53 @@ fn unit_rms_norm(x: &Array, eps: f32) -> Result<Array> {
     Ok(mlx_rs::fast::rms_norm(x, &weight, eps)?)
 }
 
+pub struct LayerNorm {
+    eps: f32,
+}
+
+impl LayerNorm {
+    pub fn forward(&self, x: &Array) -> Result<Array> {
+        Ok(mlx_rs::fast::layer_norm(
+            x,
+            None::<&Array>,
+            None::<&Array>,
+            self.eps,
+        )?)
+    }
+}
+
+pub enum NormKind {
+    Rms(RMSNorm),
+    Layer(LayerNorm),
+}
+
+impl NormKind {
+    pub fn forward(&self, x: &Array) -> Result<Array> {
+        match self {
+            Self::Rms(norm) => norm.forward(x),
+            Self::Layer(norm) => norm.forward(x),
+        }
+    }
+}
+
+impl From<RMSNorm> for NormKind {
+    fn from(value: RMSNorm) -> Self {
+        Self::Rms(value)
+    }
+}
+
+fn rms_norm_kind(weight: Array, eps: f32, add_unit_offset: bool) -> NormKind {
+    NormKind::Rms(RMSNorm {
+        weight,
+        eps,
+        add_unit_offset,
+    })
+}
+
+fn layer_norm_kind(eps: f32) -> NormKind {
+    NormKind::Layer(LayerNorm { eps })
+}
+
 pub struct QuantizedMultiLinear {
     weight: Array,
     scales: Array,
@@ -1504,10 +1551,10 @@ impl MlpKind {
 pub struct Layer {
     attn: AttentionKind,
     mlp: MlpKind,
-    attn_in_norm: Option<RMSNorm>,
-    attn_out_norm: Option<RMSNorm>,
-    mlp_in_norm: Option<RMSNorm>,
-    mlp_out_norm: Option<RMSNorm>,
+    attn_in_norm: Option<NormKind>,
+    attn_out_norm: Option<NormKind>,
+    mlp_in_norm: Option<NormKind>,
+    mlp_out_norm: Option<NormKind>,
     per_layer_input: Option<PerLayerInputBlock>,
     layer_scalar: Option<Array>,
 }
@@ -1615,7 +1662,7 @@ impl Layer {
 pub struct PerLayerInputBlock {
     input_gate: QuantizedLinear,
     projection: QuantizedLinear,
-    post_norm: RMSNorm,
+    post_norm: NormKind,
     activation: Activation,
 }
 
@@ -1826,12 +1873,12 @@ pub struct MlxModel {
     embed_scale: f32,
     embed_tokens_per_layer: Option<QuantizedEmbedding>,
     embed_tokens_per_layer_scale: Option<f32>,
-    per_layer_projection_norm: Option<RMSNorm>,
+    per_layer_projection_norm: Option<NormKind>,
     per_layer_model_projection: Option<QuantizedLinear>,
     per_layer_model_projection_scale: Option<f32>,
     per_layer_input_scale: Option<f32>,
     layers: Vec<Layer>,
-    norm: RMSNorm,
+    norm: NormKind,
     lm_head: Option<QuantizedLinear>,
     final_logit_softcapping: Option<f32>,
     pub config: ModelConfig,
@@ -1912,17 +1959,21 @@ impl MlxModel {
                 .cloned()
                 .with_context(|| format!("missing {prefix}.weight"))?;
             let bias = tensors.get(&format!("{prefix}.bias")).cloned();
-            let dense_weight_t = if quantized.is_none() {
+            let scales_key = format!("{prefix}.scales");
+            let biases_key = format!("{prefix}.biases");
+            let has_quantized_storage =
+                tensors.contains_key(&scales_key) && tensors.contains_key(&biases_key);
+            let dense_weight_t = if quantized.is_none() || !has_quantized_storage {
                 Some(weight.transpose_axes(&[1, 0])?)
             } else {
                 let (group_size, bits) =
                     quant_params_for(&config_json, prefix, default_group_size, default_bits);
                 let scales = tensors
-                    .get(&format!("{prefix}.scales"))
+                    .get(&scales_key)
                     .cloned()
                     .with_context(|| format!("missing {prefix}.scales"))?;
                 let biases = tensors
-                    .get(&format!("{prefix}.biases"))
+                    .get(&biases_key)
                     .cloned()
                     .with_context(|| format!("missing {prefix}.biases"))?;
                 // Some Gemma4 MLX checkpoints use 5-bit weights for a subset of MLP
@@ -1935,17 +1986,17 @@ impl MlxModel {
                     None
                 }
             };
-            let (group_size, bits) = if quantized.is_some() {
+            let (group_size, bits) = if quantized.is_some() && has_quantized_storage {
                 quant_params_for(&config_json, prefix, default_group_size, default_bits)
             } else {
                 (0, 0)
             };
             let scales = tensors
-                .get(&format!("{prefix}.scales"))
+                .get(&scales_key)
                 .cloned()
                 .unwrap_or_else(|| array!(0.0f32));
             let biases = tensors
-                .get(&format!("{prefix}.biases"))
+                .get(&biases_key)
                 .cloned()
                 .unwrap_or_else(|| array!(0.0f32));
             Ok(QuantizedLinear {
@@ -2092,8 +2143,8 @@ impl MlxModel {
             None
         };
         let per_layer_projection_norm = if arch.is_gemma4() {
-            Some(RMSNorm {
-                weight: tensors
+            Some(rms_norm_kind(
+                tensors
                     .get(&format!(
                         "{}.per_layer_projection_norm.weight",
                         prefixes.model
@@ -2105,9 +2156,9 @@ impl MlxModel {
                             prefixes.model
                         )
                     })?,
-                eps: config.rms_norm_eps,
-                add_unit_offset: false,
-            })
+                config.rms_norm_eps,
+                false,
+            ))
         } else {
             None
         };
@@ -2120,20 +2171,26 @@ impl MlxModel {
             None
         };
 
-        let norm = RMSNorm {
-            weight: if arch.is_lfm2() {
-                tensors
-                    .get(&format!("{}.embedding_norm.weight", prefixes.model))
-                    .cloned()
-                    .with_context(|| format!("missing {}.embedding_norm.weight", prefixes.model))?
-            } else {
-                tensors
-                    .get(&format!("{}.norm.weight", prefixes.model))
-                    .cloned()
-                    .with_context(|| format!("missing {}.norm.weight", prefixes.model))?
-            },
-            eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
-            add_unit_offset: arch.uses_gemma_norm_offset(),
+        let norm = if arch.is_olmo() {
+            layer_norm_kind(1e-5)
+        } else {
+            rms_norm_kind(
+                if arch.is_lfm2() {
+                    tensors
+                        .get(&format!("{}.embedding_norm.weight", prefixes.model))
+                        .cloned()
+                        .with_context(|| {
+                            format!("missing {}.embedding_norm.weight", prefixes.model)
+                        })?
+                } else {
+                    tensors
+                        .get(&format!("{}.norm.weight", prefixes.model))
+                        .cloned()
+                        .with_context(|| format!("missing {}.norm.weight", prefixes.model))?
+                },
+                config.block_norm_eps.unwrap_or(config.rms_norm_eps),
+                arch.uses_gemma_norm_offset(),
+            )
         };
 
         // Qwen3-class configs can declare an explicit head_dim that differs
@@ -2286,25 +2343,25 @@ impl MlxModel {
                         rope_theta: config.rope_theta,
                     }),
                     mlp: mlp_kind,
-                    attn_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    attn_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.input_layernorm.weight"))
                             .cloned()
                             .with_context(|| format!("missing {p}.input_layernorm.weight"))?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: false,
-                    }),
+                        config.rms_norm_eps,
+                        false,
+                    )),
                     attn_out_norm: None,
-                    mlp_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    mlp_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.post_attention_layernorm.weight"))
                             .cloned()
                             .with_context(|| {
                                 format!("missing {p}.post_attention_layernorm.weight")
                             })?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: false,
-                    }),
+                        config.rms_norm_eps,
+                        false,
+                    )),
                     mlp_out_norm: None,
                     per_layer_input: None,
                     layer_scalar: None,
@@ -2370,23 +2427,23 @@ impl MlxModel {
                         down_proj: load_qlinear(&format!("{p}.feed_forward.w2"))?,
                         activation: Activation::Silu,
                     }),
-                    attn_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    attn_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.operator_norm.weight"))
                             .cloned()
                             .with_context(|| format!("missing {p}.operator_norm.weight"))?,
-                        eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
-                        add_unit_offset: false,
-                    }),
+                        config.block_norm_eps.unwrap_or(config.rms_norm_eps),
+                        false,
+                    )),
                     attn_out_norm: None,
-                    mlp_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    mlp_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.ffn_norm.weight"))
                             .cloned()
                             .with_context(|| format!("missing {p}.ffn_norm.weight"))?,
-                        eps: config.block_norm_eps.unwrap_or(config.rms_norm_eps),
-                        add_unit_offset: false,
-                    }),
+                        config.block_norm_eps.unwrap_or(config.rms_norm_eps),
+                        false,
+                    )),
                     mlp_out_norm: None,
                     per_layer_input: None,
                     layer_scalar: None,
@@ -2551,25 +2608,25 @@ impl MlxModel {
                 layers.push(Layer {
                     attn,
                     mlp,
-                    attn_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    attn_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.input_layernorm.weight"))
                             .cloned()
                             .with_context(|| format!("missing {p}.input_layernorm.weight"))?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: false,
-                    }),
+                        config.rms_norm_eps,
+                        false,
+                    )),
                     attn_out_norm: None,
-                    mlp_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    mlp_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.post_attention_layernorm.weight"))
                             .cloned()
                             .with_context(|| {
                                 format!("missing {p}.post_attention_layernorm.weight")
                             })?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: false,
-                    }),
+                        config.rms_norm_eps,
+                        false,
+                    )),
                     mlp_out_norm: None,
                     per_layer_input: None,
                     layer_scalar: None,
@@ -2617,25 +2674,25 @@ impl MlxModel {
                         router: load_qlinear(&format!("{p}.mlp.router"))?,
                         top_k: config.num_experts_per_tok.unwrap_or(1),
                     }),
-                    attn_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    attn_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.input_layernorm.weight"))
                             .cloned()
                             .with_context(|| format!("missing {p}.input_layernorm.weight"))?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: false,
-                    }),
+                        config.rms_norm_eps,
+                        false,
+                    )),
                     attn_out_norm: None,
-                    mlp_in_norm: Some(RMSNorm {
-                        weight: tensors
+                    mlp_in_norm: Some(rms_norm_kind(
+                        tensors
                             .get(&format!("{p}.post_attention_layernorm.weight"))
                             .cloned()
                             .with_context(|| {
                                 format!("missing {p}.post_attention_layernorm.weight")
                             })?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: false,
-                    }),
+                        config.rms_norm_eps,
+                        false,
+                    )),
                     mlp_out_norm: None,
                     per_layer_input: None,
                     layer_scalar: None,
@@ -2755,15 +2812,21 @@ impl MlxModel {
                     activation: activation,
                 }),
                 attn_in_norm: (!arch.is_olmo2())
-                    .then(|| -> Result<RMSNorm> {
-                        Ok(RMSNorm {
-                            weight: tensors
-                                .get(&format!("{p}.input_layernorm.weight"))
-                                .cloned()
-                                .with_context(|| format!("missing {p}.input_layernorm.weight"))?,
-                            eps: config.rms_norm_eps,
-                            add_unit_offset: arch.uses_gemma_norm_offset(),
-                        })
+                    .then(|| -> Result<NormKind> {
+                        if arch.is_olmo() {
+                            Ok(layer_norm_kind(1e-5))
+                        } else {
+                            Ok(rms_norm_kind(
+                                tensors
+                                    .get(&format!("{p}.input_layernorm.weight"))
+                                    .cloned()
+                                    .with_context(|| {
+                                        format!("missing {p}.input_layernorm.weight")
+                                    })?,
+                                config.rms_norm_eps,
+                                arch.uses_gemma_norm_offset(),
+                            ))
+                        }
                     })
                     .transpose()?,
                 attn_out_norm: (arch.is_glm4()
@@ -2771,37 +2834,41 @@ impl MlxModel {
                     || arch.is_gemma2()
                     || arch.is_gemma3()
                     || arch.is_gemma4())
-                .then(|| -> Result<RMSNorm> {
+                .then(|| -> Result<NormKind> {
                     let key = if arch.is_glm4() {
                         format!("{p}.post_self_attn_layernorm.weight")
                     } else {
                         format!("{p}.post_attention_layernorm.weight")
                     };
-                    Ok(RMSNorm {
-                        weight: tensors
+                    Ok(rms_norm_kind(
+                        tensors
                             .get(&key)
                             .cloned()
                             .with_context(|| format!("missing {key}"))?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: arch.uses_gemma_norm_offset(),
-                    })
+                        config.rms_norm_eps,
+                        arch.uses_gemma_norm_offset(),
+                    ))
                 })
                 .transpose()?,
                 mlp_in_norm: (!arch.is_olmo2())
-                    .then(|| -> Result<RMSNorm> {
-                        Ok(RMSNorm {
-                            weight: tensors.get(&mlp_in_norm_key).cloned().with_context(|| {
-                                if arch.is_gemma2() || arch.is_gemma3() {
-                                    format!("missing {p}.pre_feedforward_layernorm.weight")
-                                } else if arch.is_glm4() {
-                                    format!("missing {p}.post_attention_layernorm.weight")
-                                } else {
-                                    format!("missing {p}.post_attention_layernorm.weight")
-                                }
-                            })?,
-                            eps: config.rms_norm_eps,
-                            add_unit_offset: arch.uses_gemma_norm_offset(),
-                        })
+                    .then(|| -> Result<NormKind> {
+                        if arch.is_olmo() {
+                            Ok(layer_norm_kind(1e-5))
+                        } else {
+                            Ok(rms_norm_kind(
+                                tensors.get(&mlp_in_norm_key).cloned().with_context(|| {
+                                    if arch.is_gemma2() || arch.is_gemma3() {
+                                        format!("missing {p}.pre_feedforward_layernorm.weight")
+                                    } else if arch.is_glm4() {
+                                        format!("missing {p}.post_attention_layernorm.weight")
+                                    } else {
+                                        format!("missing {p}.post_attention_layernorm.weight")
+                                    }
+                                })?,
+                                config.rms_norm_eps,
+                                arch.uses_gemma_norm_offset(),
+                            ))
+                        }
                     })
                     .transpose()?,
                 mlp_out_norm: (arch.is_glm4()
@@ -2809,20 +2876,20 @@ impl MlxModel {
                     || arch.is_gemma2()
                     || arch.is_gemma3()
                     || arch.is_gemma4())
-                .then(|| -> Result<RMSNorm> {
+                .then(|| -> Result<NormKind> {
                     let key = if arch.is_glm4() {
                         format!("{p}.post_mlp_layernorm.weight")
                     } else {
                         format!("{p}.post_feedforward_layernorm.weight")
                     };
-                    Ok(RMSNorm {
-                        weight: tensors
+                    Ok(rms_norm_kind(
+                        tensors
                             .get(&key)
                             .cloned()
                             .with_context(|| format!("missing {key}"))?,
-                        eps: config.rms_norm_eps,
-                        add_unit_offset: arch.uses_gemma_norm_offset(),
-                    })
+                        config.rms_norm_eps,
+                        arch.uses_gemma_norm_offset(),
+                    ))
                 })
                 .transpose()?,
                 per_layer_input: arch
@@ -2831,16 +2898,16 @@ impl MlxModel {
                         Ok(PerLayerInputBlock {
                             input_gate: load_qlinear(&format!("{p}.per_layer_input_gate"))?,
                             projection: load_qlinear(&format!("{p}.per_layer_projection"))?,
-                            post_norm: RMSNorm {
-                                weight: tensors
+                            post_norm: rms_norm_kind(
+                                tensors
                                     .get(&format!("{p}.post_per_layer_input_norm.weight"))
                                     .cloned()
                                     .with_context(|| {
                                         format!("missing {p}.post_per_layer_input_norm.weight")
                                     })?,
-                                eps: config.rms_norm_eps,
-                                add_unit_offset: false,
-                            },
+                                config.rms_norm_eps,
+                                false,
+                            ),
                             activation,
                         })
                     })
@@ -2970,10 +3037,15 @@ impl MlxModel {
         }
         let h = self.norm.forward(&h)?;
 
-        let logits = if let Some(ref lm_head) = self.lm_head {
-            lm_head.forward(&h)?
+        let h_for_logits = if matches!(self.norm, NormKind::Layer(_)) {
+            h.as_dtype(Dtype::Float32)?
         } else {
-            self.embed_tokens.as_linear().forward(&h)?
+            h.clone()
+        };
+        let logits = if let Some(ref lm_head) = self.lm_head {
+            lm_head.forward(&h_for_logits)?
+        } else {
+            self.embed_tokens.as_linear().forward(&h_for_logits)?
         };
         if let Some(softcap) = self.final_logit_softcapping {
             let scaled = logits.divide(&array!(softcap))?;
@@ -3044,10 +3116,15 @@ impl MlxModel {
         }
         let h = self.norm.forward(&h)?;
 
-        let logits = if let Some(ref lm_head) = self.lm_head {
-            lm_head.forward(&h)?
+        let h_for_logits = if matches!(self.norm, NormKind::Layer(_)) {
+            h.as_dtype(Dtype::Float32)?
         } else {
-            self.embed_tokens.as_linear().forward(&h)?
+            h.clone()
+        };
+        let logits = if let Some(ref lm_head) = self.lm_head {
+            lm_head.forward(&h_for_logits)?
+        } else {
+            self.embed_tokens.as_linear().forward(&h_for_logits)?
         };
         if let Some(softcap) = self.final_logit_softcapping {
             let scaled = logits.divide(&array!(softcap))?;
@@ -3222,10 +3299,31 @@ fn load_all_safetensors(dir: &Path) -> Result<HashMap<String, Array>> {
         Ok(tensors)
     } else {
         let st_path = dir.join("model.safetensors");
-        if !st_path.exists() {
-            bail!("no model.safetensors found in {}", dir.display());
+        if st_path.exists() {
+            return Ok(Array::load_safetensors(st_path)?);
         }
-        Ok(Array::load_safetensors(st_path)?)
+
+        let mut shard_paths = std::fs::read_dir(dir)
+            .with_context(|| format!("reading MLX model directory {}", dir.display()))?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("model-") && name.ends_with(".safetensors")
+                    })
+            })
+            .collect::<Vec<_>>();
+        shard_paths.sort();
+        if shard_paths.is_empty() {
+            bail!("no MLX safetensors weights found in {}", dir.display());
+        }
+
+        let mut tensors = HashMap::new();
+        for shard_path in shard_paths {
+            tensors.extend(Array::load_safetensors(shard_path)?);
+        }
+        Ok(tensors)
     }
 }
 
@@ -3235,12 +3333,12 @@ fn normalize_model_dir(path: &Path) -> Option<&Path> {
     }
     let name = path.file_name()?.to_str()?;
     match name {
-        "config.json"
-        | "chat_template.jinja"
-        | "tokenizer.json"
-        | "tokenizer_config.json"
-        | "model.safetensors"
-        | "model.safetensors.index.json" => path.parent(),
+        "config.json" | "chat_template.jinja" | "tokenizer.json" | "tokenizer_config.json" => {
+            path.parent()
+        }
+        _ if name.ends_with(".safetensors") || name == "model.safetensors.index.json" => {
+            path.parent()
+        }
         _ => None,
     }
 }
@@ -3249,8 +3347,17 @@ fn has_required_model_files(dir: &Path) -> bool {
     let has_config = dir.join("config.json").exists();
     let has_tokenizer =
         dir.join("tokenizer_config.json").exists() || dir.join("tokenizer.json").exists();
-    let has_weights =
-        dir.join("model.safetensors").exists() || dir.join("model.safetensors.index.json").exists();
+    let has_sharded_weights = std::fs::read_dir(dir).ok().is_some_and(|entries| {
+        entries.filter_map(|entry| entry.ok()).any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("model-") && name.ends_with(".safetensors"))
+        })
+    });
+    let has_weights = dir.join("model.safetensors").exists()
+        || dir.join("model.safetensors.index.json").exists()
+        || has_sharded_weights;
     has_config && has_tokenizer && has_weights
 }
 
@@ -3393,6 +3500,14 @@ mod tests {
             mlx_model_dir(&root.join("model.safetensors")),
             Some(root.as_path())
         );
+
+        std::fs::remove_file(root.join("model.safetensors")).unwrap();
+        std::fs::write(root.join("model-00001-of-00002.safetensors"), b"12345678").unwrap();
+        std::fs::write(root.join("model-00002-of-00002.safetensors"), b"12345678").unwrap();
+        assert_eq!(
+            mlx_model_dir(&root.join("model-00001-of-00002.safetensors")),
+            Some(root.as_path())
+        );
     }
 
     #[test]
@@ -3433,6 +3548,10 @@ mod tests {
             "model_type": "olmo2",
             "architectures": ["Olmo2ForCausalLM"]
         });
+        let olmo: Value = serde_json::json!({
+            "model_type": "olmo",
+            "architectures": ["OlmoForCausalLM"]
+        });
         let llama: Value = serde_json::json!({
             "model_type": "llama",
             "architectures": ["LlamaForCausalLM"]
@@ -3463,6 +3582,7 @@ mod tests {
         assert!(config_supports_mlx(&qwen));
         assert!(config_supports_mlx(&gpt_oss));
         assert!(config_supports_mlx(&kimi_linear));
+        assert!(config_supports_mlx(&olmo));
         assert!(config_supports_mlx(&olmo2));
         assert!(config_supports_mlx(&llama));
         assert!(config_supports_mlx(&mistral));
@@ -3552,6 +3672,22 @@ mod tests {
         let config = serde_json::json!({
             "model_type": "mistral",
             "architectures": ["MistralForCausalLM"]
+        });
+
+        ensure_supported_mlx_model(&root, &config).unwrap();
+    }
+
+    #[test]
+    fn olmo_is_accepted_as_mlx_architecture() {
+        let root = std::env::temp_dir().join(format!(
+            "mesh-llm-mlx-olmo-supported-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let config = serde_json::json!({
+            "model_type": "olmo",
+            "architectures": ["OlmoForCausalLM"]
         });
 
         ensure_supported_mlx_model(&root, &config).unwrap();
@@ -3702,6 +3838,16 @@ mod tests {
         });
 
         assert_eq!(model_architecture(&config), ModelArchitecture::Lfm2);
+    }
+
+    #[test]
+    fn model_architecture_detects_olmo() {
+        let config = serde_json::json!({
+            "model_type": "olmo",
+            "architectures": ["OlmoForCausalLM"]
+        });
+
+        assert_eq!(model_architecture(&config), ModelArchitecture::Olmo);
     }
 
     #[test]
@@ -4263,5 +4409,309 @@ mod tests {
             tensors["model.layers.0.mlp.up_proj.weight"].shape(),
             &[12, 3]
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn olmo_debug_cache_vs_no_cache_local() {
+        let dir = std::path::Path::new(
+            "/Users/jdumay/.cache/mesh-llm-debug/olmo-7b-instruct-hf-same-origin/mlx/olmo-7b-instruct-hf-bf16",
+        );
+        assert!(
+            dir.exists(),
+            "missing local OLMo artifact at {}",
+            dir.display()
+        );
+
+        let model = MlxModel::load(dir).expect("load local olmo mlx artifact");
+        let prompt =
+            "<|endoftext|><|user|>\nWhat day comes after Monday? Reply with one word.\n<|assistant|>\n";
+        let encoded = model
+            .tokenizer
+            .encode(prompt, false)
+            .expect("tokenize prompt");
+        let ids = encoded.get_ids().to_vec();
+        let input = Array::from_slice(&ids, &[1, ids.len() as i32]);
+
+        let h = model.embed_tokens.forward(&input).expect("embed");
+        let ln = model.layers[0]
+            .attn_in_norm
+            .as_ref()
+            .expect("attn_in_norm")
+            .forward(&h)
+            .expect("ln");
+        let (q, k, v, q_rope, k_rope, attn_out, h, mlp_in, mlp, layer0_out) = match &model.layers[0]
+        {
+            Layer {
+                attn: AttentionKind::Standard(attn),
+                mlp,
+                mlp_in_norm,
+                ..
+            } => {
+                let shape = ln.shape();
+                let (b, l) = (shape[0], shape[1]);
+
+                let q = attn.q_proj.forward(&ln).expect("q_proj");
+                let q = Attention::apply_qk_norm(
+                    q,
+                    attn.q_norm.as_ref(),
+                    b,
+                    l,
+                    attn.num_heads,
+                    attn.head_dim,
+                )
+                .expect("q norm")
+                .transpose_axes(&[0, 2, 1, 3])
+                .expect("q transpose");
+                let q_rope = apply_rope(
+                    &q,
+                    attn.rope_dim,
+                    attn.head_dim,
+                    attn.rope_theta,
+                    attn.rope_traditional,
+                    0,
+                )
+                .expect("q rope");
+
+                let k = attn.k_proj.forward(&ln).expect("k_proj");
+                let v = attn.v_proj.forward(&ln).expect("v_proj");
+                let k = Attention::apply_qk_norm(
+                    k,
+                    attn.k_norm.as_ref(),
+                    b,
+                    l,
+                    attn.num_kv_heads,
+                    attn.head_dim,
+                )
+                .expect("k norm")
+                .transpose_axes(&[0, 2, 1, 3])
+                .expect("k transpose");
+                let v = v
+                    .reshape(&[b, l, attn.num_kv_heads, attn.head_dim])
+                    .expect("v reshape");
+                let v = if let Some(norm) = &attn.v_norm {
+                    norm.forward(&v).expect("v norm")
+                } else {
+                    v
+                }
+                .transpose_axes(&[0, 2, 1, 3])
+                .expect("v transpose");
+                let k_rope = apply_rope(
+                    &k,
+                    attn.rope_dim,
+                    attn.head_dim,
+                    attn.rope_theta,
+                    attn.rope_traditional,
+                    0,
+                )
+                .expect("k rope");
+
+                let mask = if l > 1 {
+                    Some(mlx_rs::fast::ScaledDotProductAttentionMask::Causal)
+                } else {
+                    None
+                };
+                let attn_out = mlx_rs::fast::scaled_dot_product_attention(
+                    &q_rope, &k_rope, &v, attn.scale, mask,
+                )
+                .expect("attn");
+                let attn_out = attn_out
+                    .transpose_axes(&[0, 2, 1, 3])
+                    .expect("attn transpose")
+                    .reshape(&[b, l, attn.num_heads * attn.head_dim])
+                    .expect("attn reshape");
+                let attn_out = attn.o_proj.forward(&attn_out).expect("o_proj");
+
+                let h = &attn_out + &h;
+                let mlp_in = if let Some(norm) = mlp_in_norm {
+                    norm.forward(&h).expect("mlp in norm")
+                } else {
+                    h.clone()
+                };
+                let mlp = mlp.forward(&mlp_in).expect("mlp");
+                let layer0_out = &mlp + &h;
+
+                (
+                    q, k, v, q_rope, k_rope, attn_out, h, mlp_in, mlp, layer0_out,
+                )
+            }
+            _ => panic!("expected standard attention"),
+        };
+
+        let embed_last = h
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("embed cast");
+        let ln_last = ln
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("ln cast");
+        let q_last = q
+            .index((0, 0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("q cast");
+        let k_last = k
+            .index((0, 0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("k cast");
+        let v_last = v
+            .index((0, 0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("v cast");
+        let q_rope_last = q_rope
+            .index((0, 0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("q rope cast");
+        let k_rope_last = k_rope
+            .index((0, 0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("k rope cast");
+        let attn_out_last = attn_out
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("attn_out cast");
+        let h_last = h
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("h cast");
+        let mlp_in_last = mlp_in
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("mlp_in cast");
+        let mlp_last = mlp
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("mlp cast");
+        let layer0_out_last = layer0_out
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("layer0_out cast");
+        mlx_rs::transforms::eval([
+            &embed_last,
+            &ln_last,
+            &q_last,
+            &k_last,
+            &v_last,
+            &q_rope_last,
+            &k_rope_last,
+            &attn_out_last,
+            &h_last,
+            &mlp_in_last,
+            &mlp_last,
+            &layer0_out_last,
+        ])
+        .expect("eval debug slices");
+        println!("embed {:?}", embed_last.as_slice::<f32>());
+        println!("ln0 {:?}", ln_last.as_slice::<f32>());
+        println!("q0 {:?}", q_last.as_slice::<f32>());
+        println!("k0 {:?}", k_last.as_slice::<f32>());
+        println!("v0 {:?}", v_last.as_slice::<f32>());
+        println!("qrope0 {:?}", q_rope_last.as_slice::<f32>());
+        println!("krope0 {:?}", k_rope_last.as_slice::<f32>());
+        println!("attn_out0 {:?}", attn_out_last.as_slice::<f32>());
+        println!("h0 {:?}", h_last.as_slice::<f32>());
+        println!("mlp_in0 {:?}", mlp_in_last.as_slice::<f32>());
+        println!("mlp0 {:?}", mlp_last.as_slice::<f32>());
+        println!("layer0_out {:?}", layer0_out_last.as_slice::<f32>());
+
+        let mut h_all = model.embed_tokens.forward(&input).expect("embed all");
+        for (i, layer) in model.layers.iter().enumerate() {
+            h_all = layer.forward_no_cache(&h_all, None).expect("layer forward");
+            let slice = h_all
+                .index((0, (ids.len() as i32 - 1), 0..4))
+                .as_dtype(Dtype::Float32)
+                .expect("layer slice");
+            mlx_rs::transforms::eval([&slice]).expect("eval layer slice");
+            println!("layer{idx}_h {:?}", slice.as_slice::<f32>(), idx = i);
+        }
+
+        let h_norm = model.norm.forward(&h_all).expect("final norm");
+        let h_norm_last = h_norm
+            .index((0, (ids.len() as i32 - 1), 0..8))
+            .as_dtype(Dtype::Float32)
+            .expect("norm cast");
+        let logits = if let Some(lm_head) = &model.lm_head {
+            lm_head.forward(&h_norm).expect("lm head")
+        } else {
+            model
+                .embed_tokens
+                .as_linear()
+                .forward(&h_norm)
+                .expect("tied lm head")
+        };
+        let h_norm_f32 = h_norm.as_dtype(Dtype::Float32).expect("norm f32");
+        let logits_f32 = if let Some(lm_head) = &model.lm_head {
+            lm_head.forward(&h_norm_f32).expect("lm head f32")
+        } else {
+            model
+                .embed_tokens
+                .as_linear()
+                .forward(&h_norm_f32)
+                .expect("tied lm head f32")
+        };
+        let logits_last = logits
+            .index((0, (ids.len() as i32 - 1), std::ops::RangeFull))
+            .as_dtype(Dtype::Float32)
+            .expect("logits cast");
+        let logits_f32_last = logits_f32
+            .index((0, (ids.len() as i32 - 1), std::ops::RangeFull))
+            .as_dtype(Dtype::Float32)
+            .expect("logits f32 cast");
+        mlx_rs::transforms::eval([&h_norm_last, &logits_last, &logits_f32_last])
+            .expect("eval final outputs");
+        let logits_slice = logits_last.as_slice::<f32>();
+        let mut pairs: Vec<(usize, f32)> = logits_slice.iter().copied().enumerate().collect();
+        pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top5: Vec<(usize, f32, String)> = pairs
+            .into_iter()
+            .take(5)
+            .map(|(idx, val)| {
+                (
+                    idx,
+                    val,
+                    model.tokenizer.id_to_token(idx as u32).unwrap_or_default(),
+                )
+            })
+            .collect();
+        let logits_f32_slice = logits_f32_last.as_slice::<f32>();
+        let mut pairs_f32: Vec<(usize, f32)> =
+            logits_f32_slice.iter().copied().enumerate().collect();
+        pairs_f32.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top5_f32: Vec<(usize, f32, String)> = pairs_f32
+            .into_iter()
+            .take(5)
+            .map(|(idx, val)| {
+                (
+                    idx,
+                    val,
+                    model.tokenizer.id_to_token(idx as u32).unwrap_or_default(),
+                )
+            })
+            .collect();
+        println!("final_norm {:?}", h_norm_last.as_slice::<f32>());
+        println!("top5 {:?}", top5);
+        println!("top5_f32_norm {:?}", top5_f32);
+
+        let no_cache_logits = model.forward_no_cache(&input).expect("no-cache forward");
+        let mut caches = model.new_caches();
+        let cache_logits = model.forward(&input, &mut caches).expect("cache forward");
+
+        let no_cache_token = argmax_last(&no_cache_logits).expect("argmax no-cache");
+        let cache_token = argmax_last(&cache_logits).expect("argmax cache");
+        let no_cache_piece = model
+            .tokenizer
+            .id_to_token(no_cache_token)
+            .unwrap_or_else(|| "<missing>".to_string());
+        let cache_piece = model
+            .tokenizer
+            .id_to_token(cache_token)
+            .unwrap_or_else(|| "<missing>".to_string());
+
+        println!(
+            "no_cache_token={} piece={:?} cache_token={} piece={:?}",
+            no_cache_token, no_cache_piece, cache_token, cache_piece
+        );
+
+        assert_eq!(no_cache_token, cache_token);
     }
 }

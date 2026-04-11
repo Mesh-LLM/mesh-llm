@@ -18,6 +18,7 @@ pub enum PromptTemplate {
     ChatMl {
         default_system_prompt: Option<String>,
     },
+    Olmo,
     Olmo2,
     Gemma3,
     Llama3,
@@ -120,6 +121,11 @@ impl PromptTemplate {
                 default_system_prompt: None,
                 template_source: Some("fallback".to_string()),
             },
+            PromptTemplate::Olmo => crate::models::ModelPromptBehavior {
+                prompt_template: Some("olmo".to_string()),
+                default_system_prompt: None,
+                template_source: Some("fallback".to_string()),
+            },
             PromptTemplate::Gemma3 => crate::models::ModelPromptBehavior {
                 prompt_template: Some("gemma3".to_string()),
                 default_system_prompt: None,
@@ -167,6 +173,12 @@ impl PromptTemplate {
                     .context("missing messages array")?;
                 Ok(render_olmo2(messages))
             }
+            PromptTemplate::Olmo => {
+                let messages = req["messages"]
+                    .as_array()
+                    .context("missing messages array")?;
+                Ok(render_olmo(messages))
+            }
             PromptTemplate::Gemma3 => {
                 let messages = req["messages"]
                     .as_array()
@@ -188,6 +200,7 @@ impl PromptTemplate {
                 reasoning_template, ..
             } => reasoning_template.clone(),
             PromptTemplate::ChatMl { .. }
+            | PromptTemplate::Olmo
             | PromptTemplate::Olmo2
             | PromptTemplate::Gemma3
             | PromptTemplate::Llama3 => ReasoningTemplate::default(),
@@ -225,6 +238,9 @@ fn heuristic_prompt_template(config: &Value) -> PromptTemplate {
     if model_type.starts_with("olmo2") || architectures.iter().any(|value| value.contains("olmo2"))
     {
         return PromptTemplate::Olmo2;
+    }
+    if model_type.starts_with("olmo") || architectures.iter().any(|value| value.contains("olmo")) {
+        return PromptTemplate::Olmo;
     }
     if model_type.starts_with("gemma") || architectures.iter().any(|value| value.contains("gemma"))
     {
@@ -551,6 +567,8 @@ fn absent_tools_value(template: &str) -> Value {
 fn build_hf_environment<'a>() -> Environment<'a> {
     let mut env = Environment::new();
     env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.set_trim_blocks(true);
+    env.set_lstrip_blocks(true);
     env.add_function(
         "raise_exception",
         |message: String| -> std::result::Result<String, minijinja::Error> {
@@ -783,6 +801,32 @@ fn render_olmo2(messages: &[Value]) -> String {
         }
     }
     prompt.push_str("<|assistant|>\n");
+    prompt
+}
+
+fn render_olmo(messages: &[Value]) -> String {
+    let mut prompt = String::from("<|endoftext|>");
+    for (index, message) in messages.iter().enumerate() {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user");
+        let content = message_content_text(message);
+        match role {
+            "assistant" => {
+                prompt.push_str("<|assistant|>\n");
+                prompt.push_str(&content);
+                prompt.push_str("<|endoftext|>");
+            }
+            _ => {
+                prompt.push_str("<|user|>\n");
+                prompt.push_str(&content);
+            }
+        }
+        if index == messages.len() - 1 {
+            prompt.push_str("<|assistant|>");
+        }
+    }
     prompt
 }
 

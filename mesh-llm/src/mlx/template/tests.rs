@@ -133,6 +133,28 @@ fn olmo2_heuristic_fallback_is_selected_for_olmo2_configs() {
 }
 
 #[test]
+fn olmo_heuristic_fallback_is_selected_for_olmo_configs() {
+    let config = json!({
+        "model_type": "olmo",
+        "architectures": ["OlmoForCausalLM"]
+    });
+    assert_eq!(heuristic_prompt_template(&config), PromptTemplate::Olmo);
+}
+
+#[test]
+fn render_olmo_matches_origin_role_marker_shape() {
+    let messages = vec![
+        json!({"role": "user", "content": "Say hi"}),
+        json!({"role": "assistant", "content": "Hi."}),
+        json!({"role": "user", "content": "Again"}),
+    ];
+    let prompt = render_olmo(&messages);
+    assert!(prompt.starts_with("<|endoftext|><|user|>\nSay hi"));
+    assert!(prompt.contains("<|assistant|>\nHi.<|endoftext|>"));
+    assert!(prompt.ends_with("<|assistant|>"));
+}
+
+#[test]
 fn render_olmo2_matches_origin_role_marker_shape() {
     let messages = vec![
         json!({"role": "system", "content": "Be concise."}),

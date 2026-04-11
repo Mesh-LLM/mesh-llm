@@ -1890,6 +1890,125 @@ mod tests {
         assert_eq!(decode_stream.step(1).unwrap(), None);
         assert_eq!(decode_stream.step(2).unwrap(), Some("é".to_string()));
     }
+
+    #[test]
+    #[ignore]
+    fn olmo_debug_run_inference_local() {
+        let dir = std::path::Path::new(
+            "/Users/jdumay/.cache/mesh-llm-debug/olmo-7b-instruct-hf-same-origin/mlx/olmo-7b-instruct-hf-bf16",
+        );
+        assert!(
+            dir.exists(),
+            "missing local OLMo artifact at {}",
+            dir.display()
+        );
+
+        let model = MlxModel::load(dir).expect("load local olmo mlx artifact");
+        let prompt =
+            "<|endoftext|><|user|>\nWhat day comes after Monday? Reply with one word.\n<|assistant|>\n";
+        let generation = GenerationConfig {
+            max_tokens: 4,
+            sampling: SamplingParams {
+                temperature: 0.0,
+                top_p: 1.0,
+                top_k: None,
+                seed: None,
+            },
+            stop_sequences: Vec::new(),
+            response_policy: ResponsePolicy::default(),
+        };
+
+        let mut state = InferState {
+            model,
+            model_name: "olmo-debug".to_string(),
+            prompt_cache: None,
+        };
+
+        let first = run_inference(&mut state, prompt, &generation).expect("first inference");
+        println!("fresh text {:?}", first.text);
+
+        let second = run_inference(&mut state, prompt, &generation).expect("second inference");
+        println!("reused text {:?}", second.text);
+    }
+
+    #[test]
+    #[ignore]
+    fn olmo_debug_run_inference_sequence_local() {
+        let dir = std::path::Path::new(
+            "/Users/jdumay/.cache/mesh-llm-debug/olmo-7b-instruct-hf-same-origin/mlx/olmo-7b-instruct-hf-bf16",
+        );
+        assert!(
+            dir.exists(),
+            "missing local OLMo artifact at {}",
+            dir.display()
+        );
+
+        let model = MlxModel::load(dir).expect("load local olmo mlx artifact");
+        let generation = GenerationConfig {
+            max_tokens: 8,
+            sampling: SamplingParams {
+                temperature: 0.0,
+                top_p: 1.0,
+                top_k: None,
+                seed: None,
+            },
+            stop_sequences: Vec::new(),
+            response_policy: ResponsePolicy::default(),
+        };
+        let mut state = InferState {
+            model,
+            model_name: "olmo-debug".to_string(),
+            prompt_cache: None,
+        };
+
+        let prompts = [
+            "Reply with exactly: blue",
+            "What is the capital of France? Reply with one word.",
+            "List the RGB primary colors as full lowercase words only, comma-separated, with no abbreviations.",
+            "Complete exactly: 2 + 2 =",
+            "Name the largest planet in the Solar System. Reply with one word.",
+            "What day comes after Monday? Reply with one word.",
+        ];
+
+        for prompt in prompts {
+            let rendered = render_chat_prompt_from_request(
+                &state.model.prompt_template,
+                &serde_json::json!({
+                    "messages": [{"role": "user", "content": prompt}]
+                }),
+            )
+            .expect("render prompt");
+            if prompt.contains("Monday") {
+                let tokens = encode_prompt_tokens(&state.model, &rendered).expect("encode monday");
+                println!("rendered monday {:?}", rendered);
+                println!("rendered monday tokens {:?}", tokens);
+            }
+            let outcome =
+                run_inference(&mut state, &rendered, &generation).expect("sequence inference");
+            println!("prompt {:?} -> {:?}", prompt, outcome.text);
+        }
+
+        let fresh_model = MlxModel::load(dir).expect("reload local olmo mlx artifact");
+        let mut fresh_state = InferState {
+            model: fresh_model,
+            model_name: "olmo-debug-fresh".to_string(),
+            prompt_cache: None,
+        };
+        let monday = render_chat_prompt_from_request(
+            &fresh_state.model.prompt_template,
+            &serde_json::json!({
+                "messages": [{"role": "user", "content": "What day comes after Monday? Reply with one word."}]
+            }),
+        )
+        .expect("render monday");
+        let monday_tokens =
+            encode_prompt_tokens(&fresh_state.model, &monday).expect("encode monday");
+        println!("fresh rendered monday {:?}", monday);
+        println!("fresh rendered monday tokens {:?}", monday_tokens);
+        let fresh_outcome =
+            run_inference(&mut fresh_state, &monday, &generation).expect("fresh monday");
+        println!("fresh monday {:?}", fresh_outcome.text);
+    }
 }
 
 async fn send_response(stream: &mut tokio::net::TcpStream, status: u16, body: &str) -> Result<()> {
