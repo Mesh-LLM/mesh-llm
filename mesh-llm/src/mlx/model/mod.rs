@@ -4192,6 +4192,127 @@ mod tests {
     }
 
     #[test]
+    fn qwen3_real_hf_config_parses_qk_norm_and_rope_scaling() {
+        let config: ModelConfig = serde_json::from_value(serde_json::json!({
+            "model_type": "qwen3",
+            "architectures": ["Qwen3ForCausalLM"],
+            "hidden_size": 1024,
+            "num_hidden_layers": 28,
+            "intermediate_size": 3072,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 8,
+            "head_dim": 128,
+            "vocab_size": 151936,
+            "rms_norm_eps": 0.000001,
+            "max_position_embeddings": 40960,
+            "tie_word_embeddings": true,
+            "rope_theta": 1000000.0,
+            "rope_scaling": {
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768
+            },
+            "eos_token_id": 151645
+        }))
+        .unwrap();
+
+        assert_eq!(
+            reasoning_family(&serde_json::json!({
+                "model_type": "qwen3",
+                "architectures": ["Qwen3ForCausalLM"]
+            })),
+            ReasoningFamily::Qwen3
+        );
+        assert_eq!(config.head_dim, Some(128));
+        assert_eq!(config.num_key_value_heads, 8);
+        assert_eq!(config.rope_theta, 1000000.0);
+    }
+
+    #[test]
+    fn olmo2_real_hf_config_parses_qk_norm_style_fields() {
+        let config: ModelConfig = serde_json::from_value(serde_json::json!({
+            "model_type": "olmo2",
+            "architectures": ["Olmo2ForCausalLM"],
+            "hidden_size": 4096,
+            "num_hidden_layers": 32,
+            "intermediate_size": 11008,
+            "num_attention_heads": 32,
+            "num_key_value_heads": 32,
+            "head_dim": 128,
+            "vocab_size": 50304,
+            "rms_norm_eps": 0.000001,
+            "max_position_embeddings": 4096,
+            "tie_word_embeddings": false,
+            "attention_bias": false,
+            "rope_theta": 10000.0,
+            "eos_token_id": 50279
+        }))
+        .unwrap();
+
+        assert_eq!(
+            model_architecture(&serde_json::json!({
+                "model_type": "olmo2",
+                "architectures": ["Olmo2ForCausalLM"]
+            })),
+            ModelArchitecture::Olmo2
+        );
+        assert_eq!(config.head_dim, Some(128));
+        assert!(!config.tie_word_embeddings);
+    }
+
+    #[test]
+    fn gpt_oss_real_hf_config_parses_sliding_window_layers() {
+        let config: ModelConfig = serde_json::from_value(serde_json::json!({
+            "model_type": "gpt_oss",
+            "architectures": ["GptOssForCausalLM"],
+            "hidden_size": 2880,
+            "num_hidden_layers": 24,
+            "intermediate_size": 2880,
+            "num_attention_heads": 64,
+            "num_key_value_heads": 8,
+            "head_dim": 64,
+            "vocab_size": 201088,
+            "rms_norm_eps": 0.00001,
+            "rope_theta": 150000.0,
+            "max_position_embeddings": 131072,
+            "sliding_window": 128,
+            "layer_types": ["sliding_attention", "full_attention", "sliding_attention"],
+            "num_experts_per_tok": 4,
+            "tie_word_embeddings": false,
+            "eos_token_id": [199999, 200002]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            model_architecture(&serde_json::json!({
+                "model_type": "gpt_oss",
+                "architectures": ["GptOssForCausalLM"]
+            })),
+            ModelArchitecture::GptOss
+        );
+        assert_eq!(
+            reasoning_family(&serde_json::json!({
+                "model_type": "gpt_oss",
+                "architectures": ["GptOssForCausalLM"]
+            })),
+            ReasoningFamily::GptOss
+        );
+        assert_eq!(config.sliding_window, Some(128));
+        assert_eq!(
+            config.layer_types.as_deref(),
+            Some(
+                &[
+                    "sliding_attention".to_string(),
+                    "full_attention".to_string(),
+                    "sliding_attention".to_string()
+                ][..]
+            )
+        );
+        assert_eq!(config.num_experts_per_tok, Some(4));
+        assert_eq!(config.eos_token_id, vec![199999, 200002]);
+    }
+
+    #[test]
     fn gemma3_uses_scaled_embeddings() {
         let config: ModelConfig = serde_json::from_value(serde_json::json!({
             "hidden_size": 1152,
