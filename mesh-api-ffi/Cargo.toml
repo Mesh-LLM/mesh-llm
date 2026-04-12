@@ -20,3 +20,6 @@ pollster = "0.3"
 
 [build-dependencies]
 uniffi = { version = "=0.31.0", features = ["build"] }
+
+[dev-dependencies]
+mesh-api = { path = "../mesh-api" }

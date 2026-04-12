@@ -52,13 +52,29 @@ fi
     >"$LOG" 2>&1 &
 MESH_PID=$!
 
+descendant_pids() {
+    local pid="$1"
+    local children
+    children="$(pgrep -P "$pid" 2>/dev/null || true)"
+    for child in $children; do
+        descendant_pids "$child"
+        printf '%s\n' "$child"
+    done
+}
+
 cleanup() {
+    local children
+    children="$(descendant_pids "$MESH_PID" | sort -u || true)"
+
     kill "$MESH_PID" 2>/dev/null || true
-    pkill -P "$MESH_PID" 2>/dev/null || true
+    if [ -n "$children" ]; then
+        printf '%s\n' "$children" | xargs kill 2>/dev/null || true
+    fi
     sleep 2
     kill -9 "$MESH_PID" 2>/dev/null || true
-    pkill -9 -f rpc-server 2>/dev/null || true
-    pkill -9 -f llama-server 2>/dev/null || true
+    if [ -n "$children" ]; then
+        printf '%s\n' "$children" | xargs kill -9 2>/dev/null || true
+    fi
     wait "$MESH_PID" 2>/dev/null || true
 }
 trap cleanup EXIT

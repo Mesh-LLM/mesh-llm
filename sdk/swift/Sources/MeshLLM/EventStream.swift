@@ -31,11 +31,22 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
 
     public func activate(requestId: String) {
         stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
         self.requestId = requestId
         stateLock.unlock()
     }
 
     public func onEvent(event: EventDto) {
+        stateLock.lock()
+        let isFinished = finished
+        stateLock.unlock()
+        guard !isFinished else {
+            return
+        }
+
         let mapped = MeshClient.mapEvent(event)
         continuation.yield(mapped)
         switch mapped {
@@ -43,6 +54,81 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
             finish()
         default:
             break
+        }
+    }
+
+    public func finish(throwing error: Error? = nil) {
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
+        finished = true
+        requestId = nil
+        stateLock.unlock()
+
+        if let error {
+            continuation.finish(throwing: error)
+        } else {
+            continuation.finish()
+        }
+    }
+
+    private func cancelIfNeeded() {
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
+        let requestId = self.requestId
+        stateLock.unlock()
+
+        guard let requestId else {
+            return
+        }
+        onCancel(requestId)
+    }
+}
+#else
+public final class EventStreamBridge: @unchecked Sendable {
+    private let continuation: AsyncThrowingStream<MeshEvent, Error>.Continuation
+    private let requestId: RequestId
+    private weak var client: MeshClient?
+    private let stateLock = NSLock()
+    private var finished = false
+
+    public init(
+        continuation: AsyncThrowingStream<MeshEvent, Error>.Continuation,
+        requestId: RequestId,
+        client: MeshClient
+    ) {
+        self.continuation = continuation
+        self.requestId = requestId
+        self.client = client
+
+        continuation.onTermination = { [weak self] _ in
+            guard let self else { return }
+            self.client?.cancel(self.requestId)
+        }
+    }
+
+    public func emit(_ event: MeshEvent) {
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
+        stateLock.unlock()
+
+        switch event {
+        case .completed, .failed, .disconnected:
+            continuation.yield(event)
+            continuation.finish()
+            stateLock.lock()
+            finished = true
+            stateLock.unlock()
+        default:
+            continuation.yield(event)
         }
     }
 
@@ -61,56 +147,5 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
             continuation.finish()
         }
     }
-
-    private func cancelIfNeeded() {
-        stateLock.lock()
-        let requestId = self.requestId
-        stateLock.unlock()
-
-        guard let requestId else {
-            return
-        }
-        onCancel(requestId)
-    }
-}
-#else
-public final class EventStreamBridge: @unchecked Sendable {
-    private let continuation: AsyncThrowingStream<MeshEvent, Error>.Continuation
-    private let requestId: RequestId
-    private weak var client: MeshClient?
-
-    public init(
-        continuation: AsyncThrowingStream<MeshEvent, Error>.Continuation,
-        requestId: RequestId,
-        client: MeshClient
-    ) {
-        self.continuation = continuation
-        self.requestId = requestId
-        self.client = client
-
-        continuation.onTermination = { [weak self] _ in
-            guard let self else { return }
-            self.client?.cancel(self.requestId)
-        }
-    }
-
-    public func emit(_ event: MeshEvent) {
-        switch event {
-        case .completed, .failed, .disconnected:
-            continuation.yield(event)
-            continuation.finish()
-        default:
-            continuation.yield(event)
-        }
-    }
-
-    public func finish(throwing error: Error? = nil) {
-        if let error {
-            continuation.finish(throwing: error)
-        } else {
-            continuation.finish()
-        }
-    }
 }
 #endif
-

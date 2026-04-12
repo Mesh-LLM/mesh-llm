@@ -2813,6 +2813,7 @@ dependencies = [
 name = "mesh-api"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "mesh-client",
  "thiserror 2.0.18",
  "tokio",

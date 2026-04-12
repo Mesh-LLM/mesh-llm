@@ -8,6 +8,7 @@ host-io = ["mesh-client/host-io"]
 
 [dependencies]
 mesh-client = { path = "../mesh-client" }
+hex = "0.4"
 thiserror = "2"
 
 [dev-dependencies]

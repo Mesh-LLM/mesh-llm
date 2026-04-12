@@ -22,19 +22,19 @@ impl EventListener for MockListener {
 
 #[test]
 fn create_client_with_invalid_token_fails() {
-    let result = create_client("deadbeef".to_string(), "".to_string());
+    let result = create_client("".to_string(), "".to_string());
     assert!(matches!(result, Err(FfiError::InvalidInviteToken)));
 }
 
 #[test]
 fn create_client_with_valid_token_succeeds() {
-    let result = create_client("deadbeef".to_string(), "valid-token".to_string());
+    let result = create_client("".to_string(), "valid-token".to_string());
     assert!(result.is_ok());
 }
 
 #[test]
 fn client_handle_status_returns_disconnected() {
-    let handle = create_client("deadbeef".to_string(), "valid-token".to_string()).unwrap();
+    let handle = create_client("".to_string(), "valid-token".to_string()).unwrap();
     let status = handle.status();
     assert!(!status.connected);
     assert_eq!(status.peer_count, 0);
@@ -42,8 +42,27 @@ fn client_handle_status_returns_disconnected() {
 
 #[test]
 fn client_handle_cancel_unknown_id_is_noop() {
-    let handle = create_client("deadbeef".to_string(), "valid-token".to_string()).unwrap();
+    let handle = create_client("".to_string(), "valid-token".to_string()).unwrap();
     handle.cancel("unknown-id".to_string());
+}
+
+#[test]
+fn create_client_with_invalid_owner_keypair_fails() {
+    let result = create_client("deadbeef".to_string(), "valid-token".to_string());
+    assert!(matches!(result, Err(FfiError::InvalidOwnerKeypair)));
+}
+
+#[test]
+fn create_client_uses_supplied_owner_keypair() {
+    let owner_keypair_hex = {
+        let keypair = mesh_api::OwnerKeypair::generate();
+        keypair.to_hex()
+    };
+
+    let handle = create_client(owner_keypair_hex.clone(), "valid-token".to_string()).unwrap();
+    let status = handle.status();
+    assert!(!status.connected);
+    assert_eq!(status.peer_count, 0);
 }
 
 #[test]
@@ -88,7 +107,7 @@ fn mock_listener_receives_events() {
 fn handle_create_destroy_loop_25_times() {
     for i in 0..25 {
         let token = format!("invite-token-{}", i);
-        let handle = create_client("deadbeef".to_string(), token)
+        let handle = create_client("".to_string(), token)
             .expect("create_client should succeed with non-empty token");
         let status = handle.status();
         assert!(!status.connected, "iteration {}: expected disconnected", i);

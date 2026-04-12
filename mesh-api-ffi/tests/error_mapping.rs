@@ -24,6 +24,7 @@ fn ffi_error_all_variants_present() {
     // Adding a variant to FfiError without updating this test will cause a compile error.
     let variants: &[FfiError] = &[
         FfiError::InvalidInviteToken,
+        FfiError::InvalidOwnerKeypair,
         FfiError::JoinFailed,
         FfiError::DiscoveryFailed,
         FfiError::StreamFailed,

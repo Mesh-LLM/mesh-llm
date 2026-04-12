@@ -215,7 +215,7 @@ On Windows release packaging, any `membench-fingerprint*.exe` binaries present i
 
 ## Protocol Backward Compatibility
 
-Any change to `mesh-llm/src/protocol/` or `mesh-client-core/src/protocol/` requires backward-compatibility tests before merging.
+Any change to `mesh-llm/src/protocol/` or `mesh-client/src/protocol/` requires backward-compatibility tests before merging.
 
 Embedded clients (iOS, macOS, Android) are permanently supported. Protocol changes that break embedded client compatibility are breaking changes.
 

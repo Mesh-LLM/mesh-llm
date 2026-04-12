@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     kotlin("jvm") version "2.0.21"
 }
@@ -17,46 +19,89 @@ dependencies {
     testImplementation("io.mockk:mockk:1.13.8")
 }
 
+fun resolveAndroidNdkHome(): String {
+    val env = System.getenv()
+    val direct = listOf("ANDROID_NDK_HOME", "ANDROID_NDK_ROOT")
+        .mapNotNull { env[it] }
+        .firstOrNull { File(it).isDirectory }
+    if (direct != null) {
+        return direct
+    }
+
+    val sdkRoots = buildList {
+        env["ANDROID_SDK_ROOT"]?.let(::add)
+        env["ANDROID_HOME"]?.let(::add)
+        add("${System.getProperty("user.home")}/Library/Android/sdk")
+        add("${System.getProperty("user.home")}/Android/Sdk")
+    }
+
+    sdkRoots
+        .map(::File)
+        .filter(File::isDirectory)
+        .forEach { sdkRoot ->
+            val ndkBundle = sdkRoot.resolve("ndk-bundle")
+            if (ndkBundle.isDirectory) {
+                return ndkBundle.absolutePath
+            }
+
+            val ndkDir = sdkRoot.resolve("ndk")
+            if (ndkDir.isDirectory) {
+                val versions = ndkDir.listFiles()
+                    ?.filter(File::isDirectory)
+                    ?.sortedByDescending(File::getName)
+                    .orEmpty()
+                if (versions.isNotEmpty()) {
+                    return versions.first().absolutePath
+                }
+            }
+        }
+
+    error("Android NDK not found. Set ANDROID_NDK_HOME or ANDROID_SDK_ROOT/ANDROID_HOME.")
+}
+
 // Task to build native libraries for all Android ABIs
-val buildNativeLibs by tasks.registering(Exec::class) {
+val buildNativeLibs by tasks.registering {
     description = "Build mesh-api-ffi shared libraries for all Android ABIs"
     group = "build"
 
     val repoRoot = rootProject.projectDir.parentFile.parentFile
-    val ndkHome = System.getenv("ANDROID_NDK_HOME")
-        ?: "${System.getProperty("user.home")}/Library/Android/sdk/ndk/26.3.11579264"
-
-    val rustupRustc = System.getenv("RUSTC")
-        ?: "${System.getProperty("user.home")}/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc"
-
-    environment("ANDROID_NDK_HOME", ndkHome)
-    environment("ANDROID_NDK_ROOT", ndkHome)
-    environment("RUSTC", rustupRustc)
-
-    commandLine(
-        "bash", "-c",
-        """
-        set -e
-        cd ${repoRoot}
-
-        # Build for arm64-v8a (RUSTC override needed: Homebrew rustc shadows rustup)
-        ANDROID_NDK_HOME=${ndkHome} \
-        cargo ndk -t arm64-v8a build --release -p mesh-api-ffi --no-default-features
-
-        # Build for armeabi-v7a
-        ANDROID_NDK_HOME=${ndkHome} \
-        cargo ndk -t armeabi-v7a build --release -p mesh-api-ffi --no-default-features
-
-        # Build for x86_64
-        ANDROID_NDK_HOME=${ndkHome} \
-        cargo ndk -t x86_64 build --release -p mesh-api-ffi --no-default-features
-
-        # Copy to jniLibs
-        cp target/aarch64-linux-android/release/libmesh_ffi.so sdk/kotlin/src/main/jniLibs/arm64-v8a/
-        cp target/armv7-linux-androideabi/release/libmesh_ffi.so sdk/kotlin/src/main/jniLibs/armeabi-v7a/
-        cp target/x86_64-linux-android/release/libmesh_ffi.so sdk/kotlin/src/main/jniLibs/x86_64/
-        """.trimIndent()
+    val buildTargets = listOf(
+        Triple("arm64-v8a", "aarch64-linux-android", "libmesh_ffi.so"),
+        Triple("armeabi-v7a", "armv7-linux-androideabi", "libmesh_ffi.so"),
+        Triple("x86_64", "x86_64-linux-android", "libmesh_ffi.so"),
     )
+
+    doLast {
+        val ndkHome = resolveAndroidNdkHome()
+        val rustc = System.getenv("RUSTC")
+        val baseEnv = mutableMapOf(
+            "ANDROID_NDK_HOME" to ndkHome,
+            "ANDROID_NDK_ROOT" to ndkHome,
+        )
+        if (!rustc.isNullOrBlank()) {
+            baseEnv["RUSTC"] = rustc
+        }
+
+        buildTargets.forEach { (abi, target, _) ->
+            exec {
+                workingDir = repoRoot
+                environment(baseEnv)
+                commandLine(
+                    "cargo", "ndk",
+                    "-t", abi,
+                    "build",
+                    "--release",
+                    "-p", "mesh-api-ffi",
+                    "--no-default-features"
+                )
+            }
+
+            copy {
+                from(repoRoot.resolve("target/$target/release/libmesh_ffi.so"))
+                into(projectDir.resolve("src/main/jniLibs/$abi"))
+            }
+        }
+    }
 
     outputs.files(
         "${projectDir}/src/main/jniLibs/arm64-v8a/libmesh_ffi.so",
