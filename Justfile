@@ -357,3 +357,62 @@ bench-prefix-affinity:
 # Show the diff from upstream llama.cpp
 diff:
     cd {{ llama_dir }} && git log --oneline master..upstream-latest
+
+# Build the client-only Docker image (no GPU, no llama.cpp)
+[unix]
+docker-build-client tag="mesh-llm:client":
+    DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.client -t {{ tag }} .
+
+[windows]
+docker-build-client tag="mesh-llm:client":
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.client -t '{{ tag }}' ."
+
+# Build the CPU full-node Docker image
+[unix]
+docker-build-cpu tag="mesh-llm:cpu":
+    DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.cpu -t {{ tag }} .
+
+[windows]
+docker-build-cpu tag="mesh-llm:cpu":
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.cpu -t '{{ tag }}' ."
+
+# Build the CUDA full-node Docker image
+[unix]
+docker-build-cuda tag="mesh-llm:cuda" cuda_arch="75;80;86;89;90;120":
+    DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.cuda \
+        --build-arg CUDA_ARCH="{{ cuda_arch }}" \
+        -t {{ tag }} .
+
+[windows]
+docker-build-cuda tag="mesh-llm:cuda" cuda_arch="75;80;86;89;90;120":
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.cuda --build-arg CUDA_ARCH='{{ cuda_arch }}' -t '{{ tag }}' ."
+
+# Build the ROCm full-node Docker image
+[unix]
+docker-build-rocm tag="mesh-llm:rocm" rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201":
+    DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.rocm \
+        --build-arg ROCM_ARCH="{{ rocm_arch }}" \
+        -t {{ tag }} .
+
+[windows]
+docker-build-rocm tag="mesh-llm:rocm" rocm_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201":
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.rocm --build-arg ROCM_ARCH='{{ rocm_arch }}' -t '{{ tag }}' ."
+
+# Build the Vulkan full-node Docker image
+[unix]
+docker-build-vulkan tag="mesh-llm:vulkan":
+    DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.vulkan -t {{ tag }} .
+
+[windows]
+docker-build-vulkan tag="mesh-llm:vulkan":
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.vulkan -t '{{ tag }}' ."
+
+# Run the client console image locally
+docker-run-client tag="mesh-llm:client":
+    docker run --rm -p 3131:3131 -p 9337:9337 -e APP_MODE=console {{ tag }}
+
+# Run a CPU worker node locally (requires model volume mount)
+docker-run-cpu models=(home_dir / ".models") tag="mesh-llm:cpu":
+    docker run --rm -p 9337:9337 \
+        -v {{ models }}:/root/.models \
+        -e APP_MODE=worker {{ tag }}

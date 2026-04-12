@@ -1,15 +1,12 @@
-# mesh-llm Fly.io console image
+# mesh-llm client-only image (no llama.cpp, no GPU)
+# Supersedes fly/Dockerfile content. Supports linux/amd64 and linux/arm64.
 #
-# This is a self-contained copy of docker/Dockerfile.client, kept in fly/
-# to preserve the `fly deploy --config fly/console/fly.toml --dockerfile fly/Dockerfile`
-# invocation used by the existing deployment.
+# Build:  DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.client -t mesh-llm:client .
+# Run:    docker run --rm -p 3131:3131 -p 9337:9337 -e APP_MODE=console mesh-llm:client
 #
-# If you modify this file, also update docker/Dockerfile.client and vice versa.
-# They should be structurally identical to avoid drift between the Fly deploy
-# and the published ghcr.io/michaelneale/mesh-llm:client image.
-#
-# Deploy:
-#   fly deploy --config fly/console/fly.toml --dockerfile fly/Dockerfile
+# Modes (via APP_MODE env):
+#   console — API on 9337 + web console on 3131 (default; UI always included)
+#   worker  — unsupported in this image; use a full-node image (:cpu/:cuda/:rocm/:vulkan)
 
 # syntax=docker/dockerfile:1.7
 
