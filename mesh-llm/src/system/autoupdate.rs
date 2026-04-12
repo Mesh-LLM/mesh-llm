@@ -212,8 +212,10 @@ async fn latest_release_info() -> Option<ReleaseInfo> {
 }
 
 pub(crate) fn version_newer(a: &str, b: &str) -> bool {
-    let parse = |v: &str| -> Vec<u32> { v.split('.').filter_map(|s| s.parse().ok()).collect() };
-    parse(a) > parse(b)
+    match (semver::Version::parse(a), semver::Version::parse(b)) {
+        (Ok(a), Ok(b)) => a > b,
+        _ => false,
+    }
 }
 
 fn should_attempt_auto_update(cli: &Cli) -> bool {
@@ -1026,6 +1028,9 @@ mod tests {
         assert!(version_newer("0.33.1", "0.33.0"));
         assert!(!version_newer("0.33.0", "0.33.0"));
         assert!(!version_newer("0.32.0", "0.33.0"));
+        assert!(version_newer("0.33.0", "0.33.0-rc.1"));
+        assert!(!version_newer("0.33.0-rc.1", "0.33.0"));
+        assert!(version_newer("0.33.0-rc.2", "0.33.0-rc.1"));
     }
 
     #[test]
