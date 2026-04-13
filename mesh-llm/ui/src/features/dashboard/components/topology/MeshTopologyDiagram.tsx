@@ -35,6 +35,13 @@ import { cn } from "../../../../lib/utils";
 import { TOPOLOGY_LAYOUTS } from "../../../../topology/layouts";
 import { TOPOLOGY_NODE_WIDTH } from "../../../../topology/layouts/constants";
 import { estimateTopologyNodeHeight } from "../../../../topology/layouts/elk";
+import {
+  formatLatency,
+  shortName,
+  topologyStatusTone,
+  topologyStatusTooltip,
+  trimGpuVendor,
+} from "../../../app-shell/lib/status-helpers";
 import type {
   BucketedTopologyNode,
   PositionedTopologyNode,
@@ -651,6 +658,11 @@ function MeshTopologyFlow({
     };
 
     update();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", update);
+      return () => window.removeEventListener("resize", update);
+    }
+
     const observer = new ResizeObserver(update);
     observer.observe(container);
     return () => observer.disconnect();
@@ -782,61 +794,4 @@ function MeshTopologyFlow({
       )}
     </div>
   );
-}
-
-function shortName(name: string) {
-  return (name || "").replace(/-Q\w+$/, "").replace(/-Instruct/, "");
-}
-
-function formatLatency(value?: number | null) {
-  if (value == null || !Number.isFinite(Number(value))) return "—";
-  const ms = Math.round(Number(value));
-  if (ms <= 0) return "<1 ms";
-  return `${ms} ms`;
-}
-
-function trimGpuVendor(name: string) {
-  return name
-    .replace(/^NVIDIA GeForce\s+/i, "")
-    .replace(/^NVIDIA Quadro\s+/i, "")
-    .replace(/^NVIDIA\s+/i, "")
-    .replace(/^AMD Radeon\s+/i, "")
-    .replace(/^AMD\s+/i, "")
-    .replace(/^Intel Arc\s+/i, "")
-    .replace(/^Intel\s+/i, "")
-    .replace(/^Apple\s+/i, "")
-    .trim();
-}
-
-function topologyStatusTone(
-  status: string,
-): "good" | "info" | "warn" | "bad" | "neutral" {
-  if (status === "Serving" || status === "Serving (split)") return "good";
-  if (status === "Client") return "info";
-  if (status === "Host") return "info";
-  if (status === "Idle" || status === "Standby") return "neutral";
-  if (status === "Worker (split)") return "warn";
-  return "neutral";
-}
-
-function topologyStatusTooltip(status: string) {
-  if (status === "Serving") {
-    return "Actively serving a model.";
-  }
-  if (status === "Serving (split)") {
-    return "Serving a split model with the mesh.";
-  }
-  if (status === "Worker (split)") {
-    return "Contributing compute to a split model.";
-  }
-  if (status === "Host") {
-    return "Coordinating requests for the mesh.";
-  }
-  if (status === "Client") {
-    return "Sends requests, but does not contribute VRAM.";
-  }
-  if (status === "Idle" || status === "Standby") {
-    return "Connected, but not serving a model.";
-  }
-  return "Current serving role.";
 }

@@ -390,6 +390,31 @@ describe("App routing and status", () => {
     expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
   });
 
+  it("mobile unknown path fallback also syncs dashboard state", async () => {
+    const previousInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 640,
+    });
+    setPath("/unknown-path");
+
+    try {
+      render(<App />);
+
+      const networkLink = await screen.findByRole("link", { name: "Network" });
+      expect(networkLink).toHaveAttribute("aria-current", "page");
+      await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+      expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: previousInnerWidth,
+      });
+    }
+  });
+
   it("/dashboard route renders without redirecting to /config", async () => {
     setPath("/dashboard");
     render(<App />);
@@ -452,6 +477,7 @@ describe("App routing and status", () => {
 
 describe("describeRenderedPagesAsText", () => {
   it("combines page descriptions and preserves failures as placeholders", async () => {
+    const onProgress = vi.fn();
     const describe = vi
       .fn<
         (dataUrl: string) => Promise<{
@@ -478,12 +504,24 @@ describe("describeRenderedPagesAsText", () => {
         "data:image/png;base64,two",
         "data:image/png;base64,three",
       ],
-      { describe },
+      { describe, onProgress },
     );
 
     expect(text).toContain("[Page 1]\nFirst page OCR");
     expect(text).toContain("[Page 2]\n[Unable to describe page]");
     expect(text).toContain("[Page 3]\n[Unable to describe page]");
+    expect(onProgress).toHaveBeenNthCalledWith(
+      1,
+      "Describing scanned PDF page 1/3...",
+    );
+    expect(onProgress).toHaveBeenNthCalledWith(
+      2,
+      "Describing scanned PDF page 2/3...",
+    );
+    expect(onProgress).toHaveBeenNthCalledWith(
+      3,
+      "Describing scanned PDF page 3/3...",
+    );
   });
 });
 

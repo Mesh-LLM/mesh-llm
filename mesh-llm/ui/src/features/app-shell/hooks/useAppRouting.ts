@@ -19,7 +19,11 @@ export function useAppRouting() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const current = sectionFromPathname(window.location.pathname);
-    if (current == null) replaceRoute({ section: "dashboard", chatId: null });
+    if (current == null) {
+      replaceRoute({ section: "dashboard", chatId: null });
+      setSection("dashboard");
+      setRoutedChatId(null);
+    }
 
     const onPopState = () => {
       const route = readRouteFromLocation();

@@ -113,24 +113,33 @@ export async function buildAttachmentBlocks(
 ) {
   const contentBlocks: Array<Record<string, unknown>> = [];
   for (const attachment of attachments) {
-    if (attachment.extractedText) {
-      attachment.renderedPageImages = undefined;
+    const extractedText = attachment.extractedText;
+    if (extractedText) {
       const label = attachment.fileName
         ? `[Content from ${attachment.fileName}]`
         : "[Extracted PDF content]";
       contentBlocks.push({
         type: "input_text",
-        text: `${label}\n\n${attachment.extractedText}`,
+        text: `${label}\n\n${extractedText}`,
       });
       continue;
     }
 
-    if (attachment.renderedPageImages?.length) {
+    const renderedPageImages = attachment.renderedPageImages;
+    if (renderedPageImages?.length) {
       onStatusChange?.(attachment.id, { status: "uploading", error: undefined });
       const label = attachment.fileName
         ? `[Content from ${attachment.fileName}]`
         : "[Extracted PDF content]";
-      const text = await describeRenderedPagesAsText(attachment.renderedPageImages);
+      const text = await describeRenderedPagesAsText(renderedPageImages, {
+        onProgress: (message) => {
+          onStatusChange?.(attachment.id, {
+            status: "uploading",
+            error: undefined,
+            extractionSummary: message,
+          });
+        },
+      });
       attachment.extractedText = text;
       attachment.renderedPageImages = undefined;
       contentBlocks.push({

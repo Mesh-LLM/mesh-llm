@@ -436,11 +436,10 @@ export function DashboardPage({
             <StatusPill
               label={status?.node_status ?? "n/a"}
               tone={topologyStatusTone(status?.node_status ?? "n/a")}
-              tooltip={topologyStatusTooltip(status?.node_status ?? "n/a")}
             />
           }
           icon={<Hash className="h-4 w-4" />}
-          tooltip="Current node identifier in this mesh."
+          tooltip={`Current node identifier in this mesh. ${topologyStatusTooltip(status?.node_status ?? "n/a")}`}
         />
         <StatCard
           title="Owner"
@@ -449,11 +448,10 @@ export function DashboardPage({
             <StatusPill
               label={ownershipStatusLabel(status?.owner?.status)}
               tone={ownershipTone(status?.owner?.status)}
-              tooltip="Ownership certificate state for this node."
             />
           }
           icon={<Shield className="h-4 w-4" />}
-          tooltip="Stable owner identity from the keystore, if this node is attested."
+          tooltip="Stable owner identity from the keystore, if this node is attested. Ownership certificate state for this node."
         />
         <StatCard
           title="Active Models"

@@ -7,7 +7,6 @@ import {
   TooltipTrigger,
 } from "../../../../components/ui/tooltip";
 
-/* eslint-disable jsx-a11y/prefer-button */
 export function CapabilityBadge({
   label,
   icon,
@@ -27,14 +26,12 @@ export function CapabilityBadge({
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        {/* eslint-disable-next-line jsx-a11y/prefer-button, jsx-a11y/prefer-tag-over-role -- span avoids nested <button> when used inside StatCard */}
-        <span
-          role="button"
-          tabIndex={0}
+        <button
+          type="button"
           className="inline-flex rounded-full bg-transparent p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {badge}
-        </span>
+        </button>
       </TooltipTrigger>
       <TooltipContent side="bottom" align="center" sideOffset={8}>
         {tooltip}
