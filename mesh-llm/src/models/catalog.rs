@@ -727,7 +727,6 @@ pub async fn download_model_with_progress(model: &CatalogModel, progress: bool) 
         let mut handles = Vec::new();
         for (file, url) in needed {
             let path = dir.join(&file);
-            let progress = progress;
             let completed = completed.clone();
             handles.push(tokio::spawn(async move {
                 download_with_resume(&path, &url).await?;

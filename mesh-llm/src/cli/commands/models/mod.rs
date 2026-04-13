@@ -18,7 +18,7 @@ use formatters::{
 
 pub async fn run_model_search(
     query: &[String],
-    prefer_gguf: bool,
+    _prefer_gguf: bool,
     prefer_mlx: bool,
     catalog_only: bool,
     limit: usize,
@@ -28,8 +28,6 @@ pub async fn run_model_search(
     let query = query.join(" ");
     let filter = if prefer_mlx {
         SearchArtifactFilter::Mlx
-    } else if prefer_gguf {
-        SearchArtifactFilter::Gguf
     } else {
         SearchArtifactFilter::Gguf
     };

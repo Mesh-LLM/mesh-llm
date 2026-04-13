@@ -21,6 +21,14 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+
+/// Per-peer tunnel state: the allocated port and the task handle for the
+/// accept loop. Aborting the task drops the `TcpListener`, reclaiming the fd.
+struct TunnelHandle {
+    port: u16,
+    task: JoinHandle<()>,
+}
 
 /// Global byte counter for tunnel traffic
 static BYTES_TRANSFERRED: AtomicU64 = AtomicU64::new(0);
@@ -40,8 +48,8 @@ pub struct Manager {
     node: Node,
     rpc_port: Arc<AtomicU16>,
     http_port: Arc<AtomicU16>,
-    /// EndpointId → local tunnel port
-    tunnel_ports: Arc<Mutex<HashMap<EndpointId, u16>>>,
+    /// EndpointId → tunnel handle (port + task abort handle)
+    tunnels: Arc<Mutex<HashMap<EndpointId, TunnelHandle>>>,
     /// Port rewrite map for B2B: orchestrator tunnel port → local tunnel port
     port_rewrite_map: PortRewriteMap,
 }
@@ -68,7 +76,7 @@ impl Manager {
             node: node.clone(),
             rpc_port: Arc::new(AtomicU16::new(rpc_port)),
             http_port: Arc::new(AtomicU16::new(0)),
-            tunnel_ports: Arc::new(Mutex::new(HashMap::new())),
+            tunnels: Arc::new(Mutex::new(HashMap::new())),
             port_rewrite_map,
         };
 
@@ -145,7 +153,12 @@ impl Manager {
 
     /// Get the full mapping of EndpointId → local tunnel port
     pub async fn peer_ports_map(&self) -> HashMap<EndpointId, u16> {
-        self.tunnel_ports.lock().await.clone()
+        self.tunnels
+            .lock()
+            .await
+            .iter()
+            .map(|(id, handle)| (*id, handle.port))
+            .collect()
     }
 
     /// Update the B2B port rewrite map from all received remote tunnel maps.
@@ -159,19 +172,19 @@ impl Manager {
         &self,
         remote_maps: &HashMap<EndpointId, HashMap<EndpointId, u16>>,
     ) {
-        let my_tunnels = self.tunnel_ports.lock().await;
+        let my_tunnels = self.tunnels.lock().await;
         let mut rewrite = self.port_rewrite_map.write().await;
         rewrite.clear();
 
         for (remote_peer, their_map) in remote_maps {
             for (target_id, &their_port) in their_map {
-                if let Some(&my_port) = my_tunnels.get(target_id) {
-                    rewrite.insert(their_port, my_port);
+                if let Some(handle) = my_tunnels.get(target_id) {
+                    rewrite.insert(their_port, handle.port);
                     tracing::info!(
                         "B2B rewrite: peer {}'s port {} → my port {} (target {})",
                         remote_peer.fmt_short(),
                         their_port,
-                        my_port,
+                        handle.port,
                         target_id.fmt_short()
                     );
                 }
@@ -188,7 +201,8 @@ impl Manager {
         Ok((port, listener))
     }
 
-    /// Watch for peer changes and create a tunnel for each new peer
+    /// Watch for peer changes: create tunnels for new peers, tear down
+    /// tunnels for departed peers (reclaiming the `TcpListener` fd).
     async fn watch_peers(&self) {
         let mut rx = self.node.peer_change_rx.clone();
         loop {
@@ -197,10 +211,30 @@ impl Manager {
             }
 
             let peers = self.node.peers().await;
-            let mut ports = self.tunnel_ports.lock().await;
+            let live_ids: std::collections::HashSet<EndpointId> =
+                peers.iter().map(|p| p.id).collect();
+            let mut tunnels = self.tunnels.lock().await;
 
+            // Tear down tunnels for peers that have departed.
+            let stale: Vec<EndpointId> = tunnels
+                .keys()
+                .filter(|id| !live_ids.contains(*id))
+                .copied()
+                .collect();
+            for id in stale {
+                if let Some(handle) = tunnels.remove(&id) {
+                    handle.task.abort();
+                    tracing::info!(
+                        "Tunnel :{} → peer {} torn down (peer departed)",
+                        handle.port,
+                        id.fmt_short()
+                    );
+                }
+            }
+
+            // Create tunnels for new peers.
             for peer in &peers {
-                if ports.contains_key(&peer.id) {
+                if tunnels.contains_key(&peer.id) {
                     continue;
                 }
 
@@ -211,7 +245,6 @@ impl Manager {
                         continue;
                     }
                 };
-                ports.insert(peer.id, port);
 
                 self.node.set_tunnel_port(peer.id, port).await;
 
@@ -219,7 +252,7 @@ impl Manager {
 
                 let node = self.node.clone();
                 let peer_id = peer.id;
-                tokio::spawn(async move {
+                let task = tokio::spawn(async move {
                     if let Err(e) = run_outbound_tunnel(node, peer_id, listener).await {
                         tracing::error!(
                             "Outbound tunnel to {} on :{port} failed: {e}",
@@ -227,12 +260,16 @@ impl Manager {
                         );
                     }
                 });
+
+                tunnels.insert(peer.id, TunnelHandle { port, task });
             }
         }
     }
 }
 
 /// Run a local TCP listener that tunnels to a remote peer via QUIC bi-streams.
+/// The task is aborted (via `JoinHandle::abort()`) when the peer departs,
+/// which drops the `TcpListener` and reclaims the fd.
 async fn run_outbound_tunnel(node: Node, peer_id: EndpointId, listener: TcpListener) -> Result<()> {
     loop {
         let (tcp_stream, _addr) = listener.accept().await?;

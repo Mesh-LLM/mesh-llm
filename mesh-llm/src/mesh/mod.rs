@@ -4,7 +4,7 @@
 //! one QUIC connection per peer. Bi-streams are multiplexed by first byte:
 //! 0x01 = gossip, 0x02 = tunnel (RPC), 0x03 = tunnel map, 0x04 = tunnel (HTTP).
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::Engine;
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
@@ -53,6 +53,98 @@ fn current_time_unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn preflight_pushed_config_for_current_node(config: &crate::plugin::MeshConfig) -> Result<()> {
+    let survey = crate::system::hardware::query(&[
+        crate::system::hardware::Metric::GpuName,
+        crate::system::hardware::Metric::GpuFacts,
+    ]);
+    preflight_pushed_config_for_current_node_with_gpus(config, &survey.gpus)
+}
+
+fn preflight_pushed_config_for_current_node_with_gpus(
+    config: &crate::plugin::MeshConfig,
+    gpus: &[crate::system::hardware::GpuFacts],
+) -> Result<()> {
+    if config.gpu.assignment != crate::plugin::GpuAssignment::Pinned {
+        return Ok(());
+    }
+
+    for model in &config.models {
+        let gpu = crate::system::hardware::resolve_pinned_gpu(model.gpu_id.as_deref(), gpus)
+            .map_err(anyhow::Error::new)
+            .with_context(|| {
+                format!(
+                    "pushed config model '{}' failed pinned GPU preflight",
+                    model.model
+                )
+            })?;
+
+        let stable_id = gpu
+            .stable_id
+            .as_deref()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "pushed config model '{}' resolved pinned GPU at index {} without a stable_id",
+                    model.model,
+                    gpu.index
+                )
+            })
+            .with_context(|| {
+                format!(
+                    "pushed config model '{}' failed pinned GPU preflight",
+                    model.model
+                )
+            })?;
+
+        if gpu.backend_device.is_none() {
+            return Err(anyhow::anyhow!(
+                "pushed config model '{}' resolved pinned GPU '{}' at index {} without a backend_device",
+                model.model,
+                stable_id,
+                gpu.index
+            ))
+            .with_context(|| {
+                format!(
+                    "pushed config model '{}' failed pinned GPU preflight",
+                    model.model
+                )
+            });
+        }
+    }
+
+    Ok(())
+}
+
+const MIN_PINNED_GPU_CONFIG_PEER_VERSION: &str = "0.59.0";
+
+fn config_uses_pinned_gpu(config: &crate::plugin::MeshConfig) -> bool {
+    config.gpu.assignment == crate::plugin::GpuAssignment::Pinned
+}
+
+fn peer_supports_pinned_gpu_config(peer_version: Option<&str>) -> bool {
+    let Ok(min_version) = semver::Version::parse(MIN_PINNED_GPU_CONFIG_PEER_VERSION) else {
+        return false;
+    };
+    let Some(peer_version) = peer_version else {
+        return false;
+    };
+    let Ok(peer_version) = semver::Version::parse(peer_version) else {
+        return false;
+    };
+
+    peer_version >= min_version
+        || (peer_version.major == min_version.major
+            && peer_version.minor == min_version.minor
+            && peer_version.patch == min_version.patch)
+}
+
+fn pinned_gpu_config_peer_error(peer_version: Option<&str>) -> String {
+    let advertised = peer_version.unwrap_or("unknown");
+    format!(
+        "pinned gpu config sync requires mesh-llm >= {MIN_PINNED_GPU_CONFIG_PEER_VERSION}; subscriber advertised {advertised}"
+    )
 }
 
 fn endpoint_id_hex(id: EndpointId) -> String {
@@ -726,7 +818,6 @@ pub(crate) struct PeerAnnouncementV0 {
 }
 
 /// Merge two demand maps. For each model, take max of last_active and request_count.
-
 /// Role a node plays in the mesh.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum NodeRole {
@@ -3217,8 +3308,10 @@ impl Node {
                                         let mut state = node.state.lock().await;
                                         // Only insert if no other task raced and
                                         // established a connection while we were probing.
-                                        if !state.connections.contains_key(&dead_id) {
-                                            state.connections.insert(dead_id, new_conn.clone());
+                                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                                            state.connections.entry(dead_id)
+                                        {
+                                            entry.insert(new_conn.clone());
                                             drop(state);
                                             let n2 = node.clone();
                                             tokio::spawn(async move {
@@ -3478,8 +3571,31 @@ impl Node {
             return Ok(());
         }
 
+        let subscriber_version = {
+            let state = self.state.lock().await;
+            state
+                .peers
+                .get(&remote)
+                .and_then(|peer| peer.version.clone())
+        };
+
         let snapshot = {
             let state = self.config_state.lock().await;
+            if config_uses_pinned_gpu(state.config())
+                && !peer_supports_pinned_gpu_config(subscriber_version.as_deref())
+            {
+                let error_snapshot = crate::proto::node::ConfigSnapshotResponse {
+                    gen: NODE_PROTOCOL_GENERATION,
+                    node_id: vec![],
+                    revision: 0,
+                    config_hash: vec![],
+                    config: None,
+                    hostname: None,
+                    error: Some(pinned_gpu_config_peer_error(subscriber_version.as_deref())),
+                };
+                write_len_prefixed(&mut send, &error_snapshot.encode_to_vec()).await?;
+                return Ok(());
+            }
             let proto_cfg = mesh_config_to_proto(state.config());
             ConfigSnapshotResponse {
                 gen: NODE_PROTOCOL_GENERATION,
@@ -3502,6 +3618,16 @@ impl Node {
                     }
                     let notification = {
                         let state = self.config_state.lock().await;
+                        if config_uses_pinned_gpu(state.config())
+                            && !peer_supports_pinned_gpu_config(subscriber_version.as_deref())
+                        {
+                            tracing::warn!(
+                                "closing config subscribe stream to {}: {}",
+                                remote.fmt_short(),
+                                pinned_gpu_config_peer_error(subscriber_version.as_deref())
+                            );
+                            break;
+                        }
                         let proto_cfg = mesh_config_to_proto(state.config());
                         ConfigUpdateNotification {
                             gen: NODE_PROTOCOL_GENERATION,
@@ -3674,19 +3800,27 @@ impl Node {
         };
         let mesh_config = proto_config_to_mesh(config_snapshot);
 
-        // 6. Apply via CAS — use spawn_blocking so synchronous disk I/O in apply()
-        //    does not block the Tokio async runtime while the mutex is held.
+        // 6. Preflight + apply via CAS — use spawn_blocking so blocking hardware
+        //    probes and synchronous disk I/O do not run on the Tokio async runtime.
         let config_state = Arc::clone(&self.config_state);
         let expected_revision = push.expected_revision;
-        let (result, current_revision, current_hash) = tokio::task::spawn_blocking(move || {
+        let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            preflight_pushed_config_for_current_node(&mesh_config)?;
             let mut state = config_state.blocking_lock();
             let result = state.apply(mesh_config, expected_revision);
             let current_revision = state.revision();
             let current_hash = *state.config_hash();
-            (result, current_revision, current_hash)
+            Ok((result, current_revision, current_hash))
         })
         .await
         .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
+        let (result, current_revision, current_hash) = match apply_result {
+            Ok(values) => values,
+            Err(err) => {
+                send_push_error(&mut send, &err.to_string()).await?;
+                return Ok(());
+            }
+        };
 
         // 7. Build + send response
         use crate::proto::node::ConfigApplyMode as ProtoApplyMode;

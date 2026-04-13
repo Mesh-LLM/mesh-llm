@@ -392,7 +392,7 @@ fn hf_endpoint() -> String {
 fn remote_bash_script(spec: &JobSubmissionSpec) -> String {
     let analyze_command = spec.analyzer.analyze_command_with_env_ref();
     let share_command =
-        format!("./mesh-llm moe share \"$MODEL_REF\" --dataset-repo \"$DATASET_REPO\"");
+        "./mesh-llm moe share \"$MODEL_REF\" --dataset-repo \"$DATASET_REPO\"".to_string();
     HF_JOB_WRAPPER_TEMPLATE
         .replace("__ANALYZE_COMMAND__", &shell_single_quote(&analyze_command))
         .replace("__SHARE_COMMAND__", &shell_single_quote(&share_command))
