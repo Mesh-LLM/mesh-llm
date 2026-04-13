@@ -36,29 +36,41 @@ pub async fn find_vision_peer(node: &mesh::Node, exclude_model: &str) -> Option<
 }
 
 /// Find a peer serving a *different* model from the current one.
-/// Prefers peers with lower RTT. Does not require a specific capability —
-/// the value is in getting a different architecture's perspective.
+///
+/// Scoring prefers:
+/// 1. Similar tier (within ±1 of current) — a 4B model asking a 70B is slow and wasteful
+/// 2. Lower RTT — faster round-trip means less blocking time
+/// 3. Different model name — the whole point is a different perspective
+///
+/// Does not require a specific capability — the value is architectural diversity.
 pub async fn find_different_model_peer(
     node: &mesh::Node,
     current_model: &str,
 ) -> Option<(EndpointId, String)> {
+    use crate::network::router::profile_for;
+
+    let current_tier = profile_for(current_model).map(|p| p.tier).unwrap_or(2);
     let peers = node.peers().await;
+
     peers
         .iter()
         .filter_map(|p| {
-            // Find the first served model that's different from the current one
             let different = p.served_model_descriptors.iter().find(|d| {
                 d.identity.model_name != current_model && !d.identity.model_name.is_empty()
             });
             different.map(|d| {
-                (
-                    p.id,
-                    d.identity.model_name.clone(),
-                    p.rtt_ms.unwrap_or(u32::MAX),
-                )
+                let peer_tier = profile_for(&d.identity.model_name)
+                    .map(|p| p.tier)
+                    .unwrap_or(2);
+                let tier_distance = (peer_tier as i32 - current_tier as i32).unsigned_abs();
+                let rtt = p.rtt_ms.unwrap_or(500);
+                // Score: prefer similar tier (0 = same, 1 = adjacent, 2+ = far).
+                // Tie-break on RTT. tier_distance * 1000 dominates RTT.
+                let score = tier_distance * 1000 + rtt;
+                (p.id, d.identity.model_name.clone(), score)
             })
         })
-        .min_by_key(|(_, _, rtt)| *rtt)
+        .min_by_key(|(_, _, score)| *score)
         .map(|(id, model, _)| (id, model))
 }
 
@@ -208,39 +220,58 @@ pub async fn summarize_conversation(
     chat_completion(node, peer_id, model, summary_messages, 512).await
 }
 
-/// Ask a peer for a second opinion on a question.
-/// Sends the user's messages to a different model and returns its response.
+/// Ask a peer for a second opinion on the user's question.
+///
+/// Sends only the last user message (not the full conversation) and asks
+/// for a short, direct answer. The result is injected into the uncertain
+/// model's KV cache as context — it should be concise (a fact, a key point,
+/// a starting direction), not a full essay.
 pub async fn second_opinion(
     node: &mesh::Node,
     peer_id: EndpointId,
     model: &str,
     messages: &[Value],
 ) -> Result<String> {
-    // Send the conversation as-is (minus images/audio to keep it fast)
-    let text_messages: Vec<Value> = messages
+    // Extract just the last user message text
+    let last_user_text = messages
         .iter()
-        .map(|m| {
-            // If content is an array (multimodal), extract just the text parts
-            if let Some(parts) = m["content"].as_array() {
-                let text_parts: Vec<&Value> = parts
+        .rev()
+        .find(|m| m["role"].as_str() == Some("user"))
+        .and_then(|m| {
+            // Handle both string content and multimodal array content
+            if let Some(s) = m["content"].as_str() {
+                Some(s.to_string())
+            } else if let Some(parts) = m["content"].as_array() {
+                parts
                     .iter()
-                    .filter(|p| p["type"].as_str() == Some("text"))
-                    .collect();
-                if text_parts.len() == 1 {
-                    serde_json::json!({
-                        "role": m["role"],
-                        "content": text_parts[0]["text"]
-                    })
-                } else {
-                    m.clone()
-                }
+                    .find(|p| p["type"].as_str() == Some("text"))
+                    .and_then(|p| p["text"].as_str())
+                    .map(|s| s.to_string())
             } else {
-                m.clone()
+                None
             }
         })
-        .collect();
+        .unwrap_or_default();
 
-    chat_completion(node, peer_id, model, text_messages, 1024).await
+    if last_user_text.is_empty() {
+        anyhow::bail!("no user message found for second opinion");
+    }
+
+    // Truncate very long user messages — we want a fast answer
+    let user_text = if last_user_text.len() > 2000 {
+        format!("{}...", &last_user_text[..2000])
+    } else {
+        last_user_text
+    };
+
+    let ask_messages = vec![serde_json::json!({
+        "role": "user",
+        "content": format!(
+            "Answer this briefly and directly in 2-3 sentences:\n\n{user_text}"
+        )
+    })];
+
+    chat_completion(node, peer_id, model, ask_messages, 192).await
 }
 
 /// Ask a peer to verify whether generated text is accurate.

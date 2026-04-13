@@ -271,10 +271,11 @@ pub async fn handle_post_prefill(node: &mesh::Node, payload: &Value) -> Value {
 
     match consult::second_opinion(node, peer_id, &peer_model, &messages).await {
         Ok(opinion) => {
-            // Inject the other model's answer as context, not as the answer itself.
-            // The current model will incorporate this and generate its own response.
-            let trimmed = if opinion.len() > 1024 {
-                format!("{}...", &opinion[..1024])
+            // Inject as concise context — the model reads this and generates
+            // its own response from a more informed state. Keep it short:
+            // every injected token is decoded into KV and adds latency.
+            let trimmed = if opinion.len() > 512 {
+                format!("{}...", &opinion[..512])
             } else {
                 opinion
             };
@@ -284,7 +285,7 @@ pub async fn handle_post_prefill(node: &mesh::Node, payload: &Value) -> Value {
             );
             json!({
                 "action": "inject",
-                "text": format!("\n[Another model's perspective: {trimmed}]\n\n"),
+                "text": format!("\n[Context: {trimmed}]\n\n"),
             })
         }
         Err(e) => {
