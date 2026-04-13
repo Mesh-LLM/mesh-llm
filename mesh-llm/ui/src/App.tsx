@@ -7,13 +7,22 @@ import { AppHeader } from "./features/app-shell/components/AppHeader";
 import {
   type TopSection,
 } from "./features/app-shell/lib/routes";
+import {
+  applyThemeMode,
+  localRoutableModels,
+  overviewVramGb,
+  peerAssignedModels,
+  peerPrimaryModel,
+  peerRoutableModels,
+  peerStatusLabel,
+  readThemeMode,
+} from "./features/app-shell/lib/status-helpers";
 import { useAppRouting } from "./features/app-shell/hooks/useAppRouting";
 import {
   useStatusStream,
   type MeshModel,
-  type Peer,
-  type StatusPayload,
 } from "./features/app-shell/hooks/useStatusStream";
+import type { ModelServingStat, ThemeMode } from "./features/app-shell/lib/status-types";
 import { DashboardPage } from "./features/dashboard/components/DashboardPage";
 import { useChatSession } from "./features/chat/hooks/useChatSession";
 import {
@@ -44,72 +53,10 @@ const FLY_DOMAINS = [
   "www.anarchai.org",
 ];
 
-type ModelServingStat = {
-  nodes: number;
-  vramGb: number;
-};
-
-type ThemeMode = "auto" | "light" | "dark";
-
 const THEME_STORAGE_KEY = "mesh-llm-theme";
-function peerAssignedModels(peer: Peer): string[] {
-  return peer.serving_models?.filter(Boolean) ?? [];
-}
-
-function peerRoutableModels(peer: Peer): string[] {
-  const hosted = peer.hosted_models?.filter(Boolean) ?? [];
-  if (peer.hosted_models_known === false)
-    return hosted.length ? hosted : peerAssignedModels(peer);
-  return hosted;
-}
-
-function localRoutableModels(status: StatusPayload | null): string[] {
-  if (!status || status.is_client) return [];
-  const hosted = status.hosted_models?.filter(Boolean) ?? [];
-  if (hosted.length > 0) return hosted;
-  const serving = status.serving_models?.filter(Boolean) ?? [];
-  if (serving.length > 0) return serving;
-  return status.model_name ? [status.model_name] : [];
-}
-
-function peerPrimaryModel(peer: Peer): string {
-  return peerRoutableModels(peer)[0] ?? peerAssignedModels(peer)[0] ?? "";
-}
-
-function overviewVramGb(isClient: boolean, vramGb?: number | null) {
-  if (isClient) return 0;
-  return Math.max(0, vramGb || 0);
-}
-
-function peerStatusLabel(peer: Peer): string {
-  if (peer.role === "Client") return "Client";
-  if (peerRoutableModels(peer).some((model) => model !== "(idle)"))
-    return "Serving";
-  if (peerAssignedModels(peer).some((model) => model !== "(idle)"))
-    return "Assigned";
-  if (peer.role === "Host") return "Host";
-  return "Idle";
-}
-
-function readThemeMode(): ThemeMode {
-  if (typeof window === "undefined") return "auto";
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return stored === "light" || stored === "dark" || stored === "auto"
-    ? stored
-    : "auto";
-}
-
-function applyThemeMode(mode: ThemeMode) {
-  if (typeof window === "undefined") return;
-  const media = window.matchMedia("(prefers-color-scheme: dark)");
-  const dark = mode === "dark" || (mode === "auto" && media.matches);
-  document.documentElement.classList.toggle("dark", dark);
-  document.documentElement.style.colorScheme =
-    mode === "auto" ? "light dark" : dark ? "dark" : "light";
-}
 
 export function App() {
-  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode(THEME_STORAGE_KEY));
   const { status, statusError, meshModels, modelsLoading } = useStatusStream();
   const { section, routedChatId, navigateToSection, pushChatRoute, replaceChatRoute } =
     useAppRouting();

@@ -25,6 +25,20 @@ import {
   TableRow,
 } from "../../../../components/ui/table";
 import {
+  formatGpuMemory,
+  modelDisplayName,
+  ownershipStatusLabel,
+  shortName,
+  topologyStatusTone,
+  topologyStatusTooltip,
+  trimGpuVendor,
+  uniqueModels,
+} from "../../../app-shell/lib/status-helpers";
+import type {
+  MeshModel,
+  Ownership,
+} from "../../../app-shell/lib/status-types";
+import {
   SheetDescription,
   SheetHeader,
   SheetTitle,
@@ -33,22 +47,6 @@ import {
 import { ModelFactCard } from "./ModelFactCard";
 import { ModelMetaItem } from "./ModelMetaItem";
 import { StatusPill } from "./StatusPill";
-
-type MeshModel = {
-  name: string;
-  display_name?: string;
-  status: "warm" | "cold" | string;
-};
-
-type Ownership = {
-  owner_id?: string;
-  cert_id?: string;
-  status: string;
-  verified: boolean;
-  expires_at_unix_ms?: number;
-  node_label?: string;
-  hostname_hint?: string;
-};
 
 type NodeSidebarRecord = {
   id: string;
@@ -390,51 +388,6 @@ export function NodeSidebar({
   );
 }
 
-function modelDisplayName(model?: MeshModel | null) {
-  if (!model) return "";
-  return model.display_name || model.name;
-}
-
-function uniqueModels(...groups: Array<string[] | undefined>): string[] {
-  return [
-    ...new Set(
-      groups
-        .flatMap((group) => group ?? [])
-        .filter((model) => !!model && model !== "(idle)"),
-    ),
-  ];
-}
-
-function formatGpuMemory(bytes?: number | null) {
-  if (!bytes || !Number.isFinite(bytes)) return "Unknown";
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(0)} GB`;
-}
-
-function trimGpuVendor(name: string) {
-  return name
-    .replace(/^NVIDIA GeForce\s+/i, "")
-    .replace(/^NVIDIA Quadro\s+/i, "")
-    .replace(/^NVIDIA\s+/i, "")
-    .replace(/^AMD Radeon\s+/i, "")
-    .replace(/^AMD\s+/i, "")
-    .replace(/^Intel Arc\s+/i, "")
-    .replace(/^Intel\s+/i, "")
-    .replace(/^Apple\s+/i, "")
-    .trim();
-}
-
-function ownershipStatusLabel(status?: string) {
-  if (!status) return "Unknown";
-  return status
-    .split("_")
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-    .join(" ");
-}
-
-function shortName(name: string) {
-  return (name || "").replace(/-Q\w+$/, "").replace(/-Instruct/, "");
-}
-
 function nodeRoleTone(role: string): "good" | "info" | "neutral" {
   if (role === "Host") return "good";
   if (role === "Worker" || role === "Client") return "info";
@@ -500,37 +453,4 @@ function nodeModelFlagTooltip(flag: string) {
     return "This model has been requested on this node, but is not active yet.";
   }
   return "Current model role on this node.";
-}
-
-function topologyStatusTone(
-  status: string,
-): "good" | "info" | "warn" | "bad" | "neutral" {
-  if (status === "Serving" || status === "Serving (split)") return "good";
-  if (status === "Client") return "info";
-  if (status === "Host") return "info";
-  if (status === "Idle" || status === "Standby") return "neutral";
-  if (status === "Worker (split)") return "warn";
-  return "neutral";
-}
-
-function topologyStatusTooltip(status: string) {
-  if (status === "Serving") {
-    return "Actively serving a model.";
-  }
-  if (status === "Serving (split)") {
-    return "Serving a split model with the mesh.";
-  }
-  if (status === "Worker (split)") {
-    return "Contributing compute to a split model.";
-  }
-  if (status === "Host") {
-    return "Coordinating requests for the mesh.";
-  }
-  if (status === "Client") {
-    return "Sends requests, but does not contribute VRAM.";
-  }
-  if (status === "Idle" || status === "Standby") {
-    return "Connected, but not serving a model.";
-  }
-  return "Current serving role.";
 }

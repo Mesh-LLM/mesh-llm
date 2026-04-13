@@ -44,97 +44,21 @@ import {
   renderPdfPagesToImages,
 } from "../../../lib/pdf";
 import { validateAttachmentFile } from "../../../lib/attachments";
+import {
+  modelDisplayName,
+  shortName,
+} from "../../app-shell/lib/status-helpers";
+import type {
+  MeshModel,
+  ModelServingStat,
+  StatusPayload,
+} from "../../app-shell/lib/status-types";
 import { describeImageAttachmentForPrompt, describeRenderedPagesAsText } from "../lib/vision-describe";
 import { ChatComposer } from "./composer/ChatComposer";
 import { ChatBubble } from "./messages/ChatBubble";
 import { ConversationList } from "./sidebar/ConversationList";
 
 const DOCS_URL = "https://docs.anarchai.org";
-
-type Ownership = {
-  owner_id?: string;
-  cert_id?: string;
-  status: string;
-  verified: boolean;
-  expires_at_unix_ms?: number;
-  node_label?: string;
-  hostname_hint?: string;
-};
-
-type Peer = {
-  id: string;
-  owner?: Ownership;
-  role: string;
-  models: string[];
-  available_models?: string[];
-  requested_models?: string[];
-  vram_gb: number;
-  serving_models?: string[];
-  hosted_models?: string[];
-  hosted_models_known?: boolean;
-  rtt_ms?: number | null;
-  hostname?: string;
-  version?: string;
-  is_soc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
-};
-
-type LocalInstance = {
-  pid: number;
-  api_port: number | null;
-  version: string | null;
-  started_at_unix: number;
-  runtime_dir: string;
-  is_self: boolean;
-};
-
-type StatusPayload = {
-  version?: string;
-  latest_version?: string | null;
-  node_id: string;
-  owner?: Ownership;
-  token: string;
-  node_status: string;
-  is_host: boolean;
-  is_client: boolean;
-  llama_ready: boolean;
-  model_name: string;
-  models?: string[];
-  available_models?: string[];
-  requested_models?: string[];
-  serving_models?: string[];
-  hosted_models?: string[];
-  api_port: number;
-  my_vram_gb: number;
-  model_size_gb: number;
-  mesh_name?: string | null;
-  peers: Peer[];
-  local_instances?: LocalInstance[];
-  inflight_requests: number;
-  launch_pi?: string | null;
-  launch_goose?: string | null;
-  nostr_discovery?: boolean;
-  my_hostname?: string;
-  my_is_soc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
-};
-
-type MeshModel = {
-  name: string;
-  display_name?: string;
-  multimodal?: boolean;
-  vision?: boolean;
-  vision_status?: "supported" | "likely" | "none" | string;
-  audio?: boolean;
-  audio_status?: "supported" | "likely" | "none" | string;
-  reasoning?: boolean;
-  reasoning_status?: "supported" | "likely" | "none" | string;
-};
-
-type ModelServingStat = {
-  nodes: number;
-  vramGb: number;
-};
 
 type ChatAttachmentKind = "image" | "audio" | "file";
 type ChatAttachmentStatus = "pending" | "uploading" | "failed";
@@ -196,15 +120,6 @@ function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } | n
   const match = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl);
   if (!match) return null;
   return { mimeType: match[1], base64: match[2] };
-}
-
-function shortName(name: string) {
-  return (name || "").replace(/-Q\w+$/, "").replace(/-Instruct/, "");
-}
-
-function modelDisplayName(model?: MeshModel | null) {
-  if (!model) return "";
-  return model.display_name || model.name;
 }
 
 function visionBadge(model?: MeshModel | null) {

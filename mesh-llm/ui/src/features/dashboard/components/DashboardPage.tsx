@@ -51,6 +51,31 @@ import {
 } from "../../../components/ui/tooltip";
 import { cn } from "../../../lib/utils";
 import {
+  formatLatency,
+  localRoutableModels,
+  meshGpuVram,
+  modelDisplayName,
+  overviewVramGb,
+  ownershipPrimaryLabel,
+  ownershipStatusLabel,
+  ownershipTone,
+  peerAssignedModels,
+  peerPrimaryModel,
+  peerRoutableModels,
+  peerStatusLabel,
+  shortName,
+  topologyNodeRole,
+  topologyStatusTone,
+  topologyStatusTooltip,
+  uniqueModels,
+} from "../../app-shell/lib/status-helpers";
+import type {
+  MeshModel,
+  Ownership,
+  StatusPayload,
+  ThemeMode,
+} from "../../app-shell/lib/status-types";
+import {
   TOPOLOGY_LAYOUT_OPTIONS,
   isTopologyLayoutMode,
 } from "../../../topology/layouts";
@@ -68,50 +93,6 @@ import { MeshTopologyDiagram } from "./topology";
 import { useDashboardDetailStack } from "../hooks/useDashboardDetailStack";
 
 const DOCS_URL = "https://docs.anarchai.org";
-
-type MeshModel = {
-  name: string;
-  display_name?: string;
-  status: "warm" | "cold" | string;
-  node_count: number;
-  mesh_vram_gb?: number;
-  size_gb: number;
-  architecture?: string;
-  context_length?: number;
-  quantization?: string;
-  description?: string;
-  multimodal?: boolean;
-  multimodal_status?: "supported" | "none" | string;
-  vision?: boolean;
-  vision_status?: "supported" | "likely" | "none" | string;
-  audio?: boolean;
-  audio_status?: "supported" | "likely" | "none" | string;
-  reasoning?: boolean;
-  reasoning_status?: "supported" | "likely" | "none" | string;
-  tool_use?: boolean;
-  tool_use_status?: "supported" | "likely" | "none" | string;
-  moe?: boolean;
-  expert_count?: number;
-  used_expert_count?: number;
-  ranking_source?: string;
-  ranking_origin?: string;
-  ranking_prompt_count?: number;
-  ranking_tokens?: number;
-  ranking_layer_scope?: string;
-  draft_model?: string;
-  source_page_url?: string;
-  fit_label?: string;
-  fit_detail?: string;
-  download_command?: string;
-  run_command?: string;
-  auto_command?: string;
-  request_count?: number;
-  last_active_secs_ago?: number;
-  source_ref?: string;
-  source_revision?: string;
-  source_file?: string;
-  active_nodes?: string[];
-};
 
 type ActivePeerRow = {
   id: string;
@@ -145,76 +126,6 @@ type NodeSidebarRecord = {
   owner: Ownership;
   privacyLimited: boolean;
 };
-
-type Ownership = {
-  owner_id?: string;
-  cert_id?: string;
-  status: string;
-  verified: boolean;
-  expires_at_unix_ms?: number;
-  node_label?: string;
-  hostname_hint?: string;
-};
-
-type Peer = {
-  id: string;
-  owner?: Ownership;
-  role: string;
-  models: string[];
-  available_models?: string[];
-  requested_models?: string[];
-  vram_gb: number;
-  serving_models?: string[];
-  hosted_models?: string[];
-  hosted_models_known?: boolean;
-  rtt_ms?: number | null;
-  hostname?: string;
-  version?: string;
-  is_soc?: boolean;
-  gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
-};
-
-type LocalInstance = {
-  pid: number;
-  api_port: number | null;
-  version: string | null;
-  started_at_unix: number;
-  runtime_dir: string;
-  is_self: boolean;
-};
-
-type StatusPayload = {
-  version?: string;
-  latest_version?: string | null;
-  node_id: string;
-  owner?: Ownership;
-  token: string;
-  node_status: string;
-  is_host: boolean;
-  is_client: boolean;
-  llama_ready: boolean;
-  model_name: string;
-  models?: string[];
-  available_models?: string[];
-  requested_models?: string[];
-  serving_models?: string[];
-  hosted_models?: string[];
-  api_port: number;
-  my_vram_gb: number;
-  model_size_gb: number;
-  mesh_name?: string | null;
-  peers: Peer[];
-  local_instances?: LocalInstance[];
-  inflight_requests: number;
-  nostr_discovery?: boolean;
-};
-
-type ThemeMode = "auto" | "light" | "dark";
-
-function modelDisplayName(model?: MeshModel | null) {
-  if (!model) return "";
-  return model.display_name || model.name;
-}
 
 export function DashboardPage({
   status,
@@ -1089,152 +1000,4 @@ function StatCard({
       </TooltipContent>
     </Tooltip>
   );
-}
-
-function meshGpuVram(status: StatusPayload | null) {
-  if (!status) return 0;
-  return (
-    overviewVramGb(status.is_client, status.my_vram_gb) +
-    (status.peers || []).reduce(
-      (sum, peer) => sum + overviewVramGb(peer.role === "Client", peer.vram_gb),
-      0,
-    )
-  );
-}
-
-function overviewVramGb(isClient: boolean, vramGb?: number | null) {
-  if (isClient) return 0;
-  return Math.max(0, vramGb || 0);
-}
-
-function ownershipTone(status?: string): "good" | "warn" | "bad" | "neutral" {
-  switch (status) {
-    case "verified":
-      return "good";
-    case "expired":
-    case "untrusted_owner":
-      return "warn";
-    case "invalid_signature":
-    case "mismatched_node_id":
-    case "revoked_owner":
-    case "revoked_cert":
-    case "revoked_node_id":
-      return "bad";
-    default:
-      return "neutral";
-  }
-}
-
-function ownershipStatusLabel(status?: string) {
-  if (!status) return "Unknown";
-  return status
-    .split("_")
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-    .join(" ");
-}
-
-function shortIdentity(value?: string | null, size = 12) {
-  if (!value) return "n/a";
-  return value.length <= size ? value : value.slice(0, size);
-}
-
-function ownershipPrimaryLabel(owner?: Ownership | null) {
-  if (!owner) return "Unsigned";
-  if (owner.node_label) return owner.node_label;
-  if (owner.owner_id) return shortIdentity(owner.owner_id, 16);
-  return ownershipStatusLabel(owner.status);
-}
-
-function shortName(name: string) {
-  return (name || "").replace(/-Q\w+$/, "").replace(/-Instruct/, "");
-}
-
-function formatLatency(value?: number | null) {
-  if (value == null || !Number.isFinite(Number(value))) return "—";
-  const ms = Math.round(Number(value));
-  if (ms <= 0) return "<1 ms";
-  return `${ms} ms`;
-}
-
-function topologyStatusTone(
-  status: string,
-): "good" | "info" | "warn" | "bad" | "neutral" {
-  if (status === "Serving" || status === "Serving (split)") return "good";
-  if (status === "Client") return "info";
-  if (status === "Host") return "info";
-  if (status === "Idle" || status === "Standby") return "neutral";
-  if (status === "Worker (split)") return "warn";
-  return "neutral";
-}
-
-function topologyStatusTooltip(status: string) {
-  if (status === "Serving") {
-    return "Actively serving a model.";
-  }
-  if (status === "Serving (split)") {
-    return "Serving a split model with the mesh.";
-  }
-  if (status === "Worker (split)") {
-    return "Contributing compute to a split model.";
-  }
-  if (status === "Host") {
-    return "Coordinating requests for the mesh.";
-  }
-  if (status === "Client") {
-    return "Sends requests, but does not contribute VRAM.";
-  }
-  if (status === "Idle" || status === "Standby") {
-    return "Connected, but not serving a model.";
-  }
-  return "Current serving role.";
-}
-
-function peerAssignedModels(peer: Peer): string[] {
-  return peer.serving_models?.filter(Boolean) ?? [];
-}
-
-function peerRoutableModels(peer: Peer): string[] {
-  const hosted = peer.hosted_models?.filter(Boolean) ?? [];
-  if (peer.hosted_models_known === false) {
-    return hosted.length ? hosted : peerAssignedModels(peer);
-  }
-  return hosted;
-}
-
-function localRoutableModels(status: StatusPayload | null): string[] {
-  if (!status || status.is_client) return [];
-  const hosted = status.hosted_models?.filter(Boolean) ?? [];
-  if (hosted.length > 0) return hosted;
-  const serving = status.serving_models?.filter(Boolean) ?? [];
-  if (serving.length > 0) return serving;
-  return status.model_name ? [status.model_name] : [];
-}
-
-function peerPrimaryModel(peer: Peer): string {
-  return peerRoutableModels(peer)[0] ?? peerAssignedModels(peer)[0] ?? "";
-}
-
-function peerStatusLabel(peer: Peer): string {
-  if (peer.role === "Client") return "Client";
-  if (peerRoutableModels(peer).some((model) => model !== "(idle)")) return "Serving";
-  if (peerAssignedModels(peer).some((model) => model !== "(idle)")) return "Assigned";
-  if (peer.role === "Host") return "Host";
-  return "Idle";
-}
-
-function topologyNodeRole(node: Pick<TopologyNode, "client" | "host" | "serving">): string {
-  if (node.client) return "Client";
-  if (node.host) return "Host";
-  if (node.serving && node.serving !== "(idle)") return "Worker";
-  return "Idle";
-}
-
-function uniqueModels(...groups: Array<string[] | undefined>): string[] {
-  return [
-    ...new Set(
-      groups
-        .flatMap((group) => group ?? [])
-        .filter((model) => !!model && model !== "(idle)"),
-    ),
-  ];
 }

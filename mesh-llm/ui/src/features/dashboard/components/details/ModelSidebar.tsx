@@ -33,55 +33,14 @@ import {
   TableRow,
 } from "../../../../components/ui/table";
 import { cn } from "../../../../lib/utils";
+import { modelStatusTooltip } from "../../../app-shell/lib/status-helpers";
+import type { MeshModel } from "../../../app-shell/lib/status-types";
 
 import { CapabilityBadge } from "./CapabilityBadge";
 import { ModelFactCard } from "./ModelFactCard";
 import { ModelMetaItem } from "./ModelMetaItem";
 import { ModelMetaLinkItem } from "./ModelMetaLinkItem";
 import { StatusPill } from "./StatusPill";
-
-type MeshModel = {
-  name: string;
-  status: "warm" | "cold" | string;
-  node_count: number;
-  mesh_vram_gb?: number;
-  size_gb: number;
-  architecture?: string;
-  context_length?: number;
-  quantization?: string;
-  description?: string;
-  multimodal?: boolean;
-  multimodal_status?: "supported" | "none" | string;
-  vision?: boolean;
-  vision_status?: "supported" | "likely" | "none" | string;
-  audio?: boolean;
-  audio_status?: "supported" | "likely" | "none" | string;
-  reasoning?: boolean;
-  reasoning_status?: "supported" | "likely" | "none" | string;
-  tool_use?: boolean;
-  tool_use_status?: "supported" | "likely" | "none" | string;
-  moe?: boolean;
-  expert_count?: number;
-  used_expert_count?: number;
-  ranking_source?: string;
-  ranking_origin?: string;
-  ranking_prompt_count?: number;
-  ranking_tokens?: number;
-  ranking_layer_scope?: string;
-  draft_model?: string;
-  source_page_url?: string;
-  fit_label?: string;
-  fit_detail?: string;
-  download_command?: string;
-  run_command?: string;
-  auto_command?: string;
-  request_count?: number;
-  last_active_secs_ago?: number;
-  source_ref?: string;
-  source_revision?: string;
-  source_file?: string;
-  active_nodes?: string[];
-};
 
 type ActivePeerRow = {
   id: string;
@@ -543,16 +502,6 @@ function fitLabelTone(
   if (label === "Possible with tradeoffs") return "warn";
   if (label === "Likely too large") return "bad";
   return "neutral";
-}
-
-function modelStatusTooltip(status?: string) {
-  if (status === "warm") {
-    return "Loaded and serving in the mesh.";
-  }
-  if (status === "cold") {
-    return "Downloaded locally, but not currently serving.";
-  }
-  return "Current model availability in the mesh.";
 }
 
 function fitLabelTooltip(label?: string) {
