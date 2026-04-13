@@ -76,7 +76,13 @@ After prompt evaluation, before first token. Fires when the model looks uncertai
 }
 ```
 
-Only fires if Hook 1 set an `entropy_threshold`. Mostly informational — mesh-llm logs the uncertainty and may start background verification.
+Only fires if Hook 1 set an `entropy_threshold`.
+
+**Response options:**
+- `{"action": "inject", "text": "The relevant code is in auth.rs: ..."}` — text is tokenized and decoded into the KV cache. The model processes the injected context as if it were part of the original prompt, then generates from that informed state. This is the key mechanism: a small uncertain model receives context from a stronger model and generates a correct response.
+- `{"action": "none"}` — let the model generate from its uncertain state.
+
+**How injection works:** The inject text is tokenized, added to a temporary batch, and decoded in chunks (same as normal prefill). The KV cache is extended for this slot's sequence. After injection, `slot.i_batch` is updated so sampling reads logits from the last injected token. The signal window is reset since the model state has changed.
 
 ### Hook 3: Pre-response
 
@@ -170,9 +176,23 @@ Prompt is 3500 tokens in a 4096 context.
 4. Returns `{"action": "inject", "text": "[Summary: user asked about auth, then JWT debugging...]"}`
 5. Summary injected. Model has room for a full response.
 
+### Uncertain model gets live help (Hook 2)
+
+User asks a factual question. Small model finishes prefill but is uncertain how to start.
+
+1. Hook 1 fires: sets `entropy_threshold: 3.0` to arm Hook 2.
+2. Prefill completes. First-token entropy is 6.8, margin is 0.02 — Hook 2 fires.
+3. mesh-llm sees the model is uncertain, looks up the original request, sends it to a stronger model in the mesh.
+4. Stronger model returns a concise answer: "The auth flow uses JWT tokens validated in auth.rs."
+5. mesh-llm returns `{"action": "inject", "text": "The auth flow uses JWT tokens validated in auth.rs."}`.
+6. llama-server tokenizes the inject text, decodes it into the KV cache — the small model "reads" this context.
+7. Small model now generates confidently from the injected context, producing a correct detailed response.
+
+The caller sees a fast, correct response from the small model. They don't know a stronger model helped.
+
 ### Uncertain model — background verification
 
-Model is uncertain about a factual question.
+Model is uncertain about a factual question. Instead of blocking at Hook 2, use async verification.
 
 1. Hook 1 fires (some trigger). mesh-llm starts a background task: send the same prompt to a stronger model.
 2. Returns `{"action": "none", "verify": true}` — fast, doesn't block.
@@ -209,7 +229,7 @@ Files modified (all additive, zero deletions from upstream):
 | File | Change |
 |---|---|
 | `server-mesh-hook.h` | **New.** `mesh_hook_ctx`, `mesh_signal_window`, `mesh_compute_entropy()` |
-| `server-context.cpp` | Hook calls at 3 insertion points, signal computation in generation loop |
+| `server-context.cpp` | Hook calls at 3 insertion points, KV cache injection on Hook 2, signal computation in generation loop |
 | `server-task.h` | `mesh_hooks`, `mesh_port`, `mesh_n_turns`, `mesh_request_id` on `task_params` |
 | `server-task.cpp` | Parse those fields from request JSON |
 | `server-common.h` | `has_media()` accessor on `server_tokens` |

@@ -14,7 +14,7 @@
 //!     │ ── POST /mesh/hook ──────────>│
 //!     │    { hook: "pre_inference",   │
 //!     │      trigger: "context_pres." }│── handle_pre_inference()
-//!     │                               │     → action: inject / pending / none
+//!     │                               │     → action: inject / none
 //!     │ <──────────── response ───────│
 //!     │                               │
 //!     │   (generation proceeds)       │
@@ -22,8 +22,11 @@
 //!     │ ── POST /mesh/hook ──────────>│
 //!     │    { hook: "post_prefill",    │
 //!     │      signals: { entropy, … }} │── handle_post_prefill()
-//!     │                               │     → action: none (usually)
+//!     │                               │     → action: inject / none
 //!     │ <──────────── response ───────│
+//!     │   (inject → tokenize + decode │
+//!     │    into KV cache, model "sees"│
+//!     │    the context before gen.)   │
 //!     │                               │
 //!     │ ── POST /mesh/hook ──────────>│
 //!     │    { hook: "pre_response",    │
@@ -181,6 +184,12 @@ pub fn handle_pre_inference(payload: &Value) -> Value {
 /// - `signals.top_tokens`          — top 5 tokens with probabilities
 ///
 /// This hook fires only if Hook 1 set an `entropy_threshold`.
+///
+/// If this returns `{"action": "inject", "text": "..."}`, the C++ side
+/// tokenizes the text and decodes it into the KV cache. The model processes
+/// it as if it were part of the original prompt, then generates from that
+/// informed state. This is how a small uncertain model can receive context
+/// from a stronger model and produce a correct response.
 pub fn handle_post_prefill(payload: &Value) -> Value {
     let entropy = payload["signals"]["first_token_entropy"]
         .as_f64()
