@@ -88,6 +88,7 @@ struct task_params {
     int         mesh_port       = 0;  // 0 = use server default
     int         mesh_n_turns    = 0;  // number of messages in the conversation
     std::string mesh_request_id;      // correlation ID from mesh-llm proxy
+    json        mesh_messages;        // original messages array for hook payloads
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)

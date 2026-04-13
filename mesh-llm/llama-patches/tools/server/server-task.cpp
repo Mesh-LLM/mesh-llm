@@ -277,9 +277,12 @@ task_params server_task::params_from_json_cmpl(
     params.mesh_hooks       = json_value(data,       "mesh_hooks",         params_base.mesh_port > 0);
     params.mesh_port        = json_value(data,       "mesh_port",          params_base.mesh_port);
     params.mesh_request_id  = json_value(data,       "mesh_request_id",    std::string());
-    // count conversation turns from the messages array (if present)
+    // store conversation messages for hook payloads
     if (data.contains("messages") && data["messages"].is_array()) {
         params.mesh_n_turns = (int)data["messages"].size();
+        if (params.mesh_hooks) {
+            params.mesh_messages = data["messages"];
+        }
     }
 
     params.sampling.top_k              = json_value(data, "top_k",               defaults.sampling.top_k);

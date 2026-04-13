@@ -1249,6 +1249,7 @@ private:
                     {"model",              task.params.oaicompat_model},
                     {"n_prompt_tokens",    task.n_tokens()},
                     {"n_ctx",              slot.n_ctx},
+                    {"messages",           task.params.mesh_messages},
                 };
 
                 SLT_INF(slot, "mesh hook 1: pre_inference, trigger = %s\n",
@@ -1572,6 +1573,7 @@ private:
                     {"model",          slot.task->params.oaicompat_model},
                     {"generated_text", slot.generated_text},
                     {"n_decoded",      slot.n_decoded},
+                    {"messages",       slot.task->params.mesh_messages},
                     {"signals",        slot.mesh_hook.signals.to_json()},
                 };
 
@@ -2997,6 +2999,7 @@ private:
                                 {"request_id",      slot.mesh_hook.request_id},
                                 {"model",           slot.task->params.oaicompat_model},
                                 {"n_prompt_tokens",  slot.prompt.n_tokens()},
+                                {"messages",        slot.task->params.mesh_messages},
                                 {"signals", {
                                     {"first_token_entropy", entropy},
                                     {"first_token_margin",  margin},
@@ -3115,6 +3118,7 @@ private:
                             {"model",           slot.task->params.oaicompat_model},
                             {"generated_text",  slot.generated_text},
                             {"n_decoded",       slot.n_decoded},
+                            {"messages",        slot.task->params.mesh_messages},
                             {"signals",         slot.mesh_hook.signals.to_json()},
                         };
 
