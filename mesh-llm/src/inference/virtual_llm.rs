@@ -1,45 +1,31 @@
-//! Virtual LLM — the decision engine behind mesh hook callbacks.
+//! Virtual LLM — consult other models in the mesh during inference.
 //!
-//! llama-server calls POST /mesh/hook on the management API (port 3131)
-//! at key points during inference. Each hook blocks the slot until we
-//! respond. We can consult other models in the mesh over QUIC and tell
-//! the C++ side to inject context or replace the response.
+//! llama-server POSTs to /mesh/hook at key points. Each hook blocks the
+//! slot. We can ask mesh peers for help and tell C++ to inject context
+//! or replace the response.
 //!
-//! # Hooks
-//!
-//! | Hook             | When                          | What we can do              |
-//! |------------------|-------------------------------|-----------------------------|
-//! | pre_inference    | Before tokenization           | Inject (e.g. image caption) |
-//! | post_prefill     | After prefill, before gen     | Inject second opinion       |
-//! | mid_generation   | During gen, entropy spike     | Inject mid-course correction|
-//! | pre_response     | After gen, before sending     | Replace or pass through     |
-//!
-//! # Consultation
-//!
-//! All peer consultation goes through `consult.rs` which opens a QUIC
-//! stream directly to the peer — same path as normal mesh inference.
-//! Fan-out: race 2 peers, take the first response, abort the loser.
-//! 10s timeout on all consultations.
+//! | Function          | When                      | Action                    |
+//! |-------------------|---------------------------|---------------------------|
+//! | handle_image      | Image on text-only model  | Caption via vision peer   |
+//! | handle_uncertain  | High entropy at start     | Hint from different model |
+//! | handle_drift      | Entropy spike mid-gen     | Hint from different model |
+//! | handle_verify     | Bad signals after gen     | Check and maybe replace   |
 
 use crate::inference::consult;
 use crate::mesh;
 use serde_json::{json, Value};
 
 // ===========================================================================
-// Hook 1: pre_inference — before tokenization
+// handle_image — model can't see media, get a caption/transcript
 // ===========================================================================
 
-/// Fires on media triggers: images on a text-only model, audio on a
-/// non-audio model. We find a capable peer, get a caption/transcript,
-/// and inject it as text so the model can "see" the media.
-pub async fn handle_pre_inference(node: &mesh::Node, payload: &Value) -> Value {
-    let trigger = payload["trigger"].as_str().unwrap_or("unknown");
-    let model = payload["model"].as_str().unwrap_or("");
-
-    tracing::info!("virtual: pre_inference trigger={trigger} model={model}");
+/// The model received an image (or audio) but can't process it.
+/// Find a capable peer, get a text description, inject it into the prompt.
+pub async fn handle_image(node: &mesh::Node, trigger: &str, model: &str, payload: &Value) -> Value {
+    tracing::info!("virtual: handle_image trigger={trigger} model={model}");
 
     match trigger {
-        "images_no_multimodal" => caption_image(node, payload, model).await,
+        "images_no_multimodal" => caption_image(node, model, payload).await,
         "audio_no_support" => {
             tracing::info!("virtual: audio — not yet implemented");
             json!({ "action": "none" })
@@ -48,9 +34,8 @@ pub async fn handle_pre_inference(node: &mesh::Node, payload: &Value) -> Value {
     }
 }
 
-async fn caption_image(node: &mesh::Node, payload: &Value, current_model: &str) -> Value {
-    let vision_peer = consult::find_vision_peer(node, current_model).await;
-    let peer_id = match vision_peer {
+async fn caption_image(node: &mesh::Node, current_model: &str, payload: &Value) -> Value {
+    let peer_id = match consult::find_vision_peer(node, current_model).await {
         Some(id) => id,
         None => {
             tracing::info!("virtual: no vision peer available");
@@ -58,19 +43,21 @@ async fn caption_image(node: &mesh::Node, payload: &Value, current_model: &str) 
         }
     };
 
-    let peers = node.peers().await;
-    let vision_model = peers
-        .iter()
-        .find(|p| p.id == peer_id)
-        .and_then(|p| {
-            p.served_model_descriptors
-                .iter()
-                .find(|d| d.capabilities.supports_vision_runtime())
-                .map(|d| d.identity.model_name.clone())
-        })
-        .unwrap_or_default();
+    let vision_model = {
+        let peers = node.peers().await;
+        peers
+            .iter()
+            .find(|p| p.id == peer_id)
+            .and_then(|p| {
+                p.served_model_descriptors
+                    .iter()
+                    .find(|d| d.capabilities.supports_vision_runtime())
+                    .map(|d| d.identity.model_name.clone())
+            })
+            .unwrap_or_default()
+    };
 
-    let (image_url, user_text) = extract_image_from_payload(payload);
+    let (image_url, user_text) = extract_image(payload);
     if image_url.is_empty() {
         tracing::warn!("virtual: images trigger but no image in payload");
         return json!({ "action": "none" });
@@ -97,117 +84,86 @@ async fn caption_image(node: &mesh::Node, payload: &Value, current_model: &str) 
 }
 
 // ===========================================================================
-// Hook 2: post_prefill — model processed prompt, first token is uncertain
+// handle_uncertain — model stuck at start, get a hint from a peer
 // ===========================================================================
 
-/// The model doesn't know how to start its answer (high entropy on first
-/// token). Ask a different model the same question, inject its answer as
-/// context. The value is diversity — a different architecture's perspective.
-///
-/// Returns `{"action": "inject", "text": "..."}` or `{"action": "none"}`.
-/// C++ tokenizes the inject text and decodes it into KV cache — the model
-/// "reads" it as part of the prompt, then generates its own answer.
-pub async fn handle_post_prefill(node: &mesh::Node, payload: &Value) -> Value {
-    let entropy = payload["signals"]["first_token_entropy"]
-        .as_f64()
-        .unwrap_or(0.0);
-    let margin = payload["signals"]["first_token_margin"]
-        .as_f64()
-        .unwrap_or(1.0);
-    let model = payload["model"].as_str().unwrap_or("");
-
-    tracing::info!("virtual: post_prefill entropy={entropy:.2} margin={margin:.3} model={model}");
-
-    let messages = match extract_messages(payload) {
-        Some(m) => m,
-        None => return json!({ "action": "none" }),
-    };
-
-    race_second_opinion(node, model, &messages).await
-}
-
-// ===========================================================================
-// Hook 2b: mid_generation — sustained entropy spike during generation
-// ===========================================================================
-
-/// The model is generating but has been uncertain for many tokens in a row
-/// (sustained entropy spike). It may be going off the rails. Same approach
-/// as post_prefill: ask a peer the original question, inject the answer.
-///
-/// The payload includes `generated_text` (partial output so far) but we
-/// don't send that to the peer — we just re-ask the original question.
-/// The injection goes into KV cache at the current position, so the model
-/// reads it and course-corrects from there.
-pub async fn handle_mid_generation(node: &mesh::Node, payload: &Value) -> Value {
-    let n_decoded = payload["n_decoded"].as_i64().unwrap_or(0);
-    let model = payload["model"].as_str().unwrap_or("");
-
-    tracing::info!("virtual: mid_generation n_decoded={n_decoded} model={model}");
-
-    let messages = match extract_messages(payload) {
-        Some(m) => m,
-        None => return json!({ "action": "none" }),
-    };
-
-    race_second_opinion(node, model, &messages).await
-}
-
-// ===========================================================================
-// Hook 3: pre_response — generation complete, about to send to client
-// ===========================================================================
-
-/// The model finished generating but signals suggest the output is bad:
-/// tail entropy spike, high overall uncertainty, suspiciously short, or
-/// Hook 1 explicitly requested verification.
-///
-/// We send the last user message + tail of the generated text to a peer
-/// and ask "is this coherent?" If the peer says no, we replace the
-/// response entirely with the peer's corrected version.
-///
-/// Returns `{"action": "replace", "text": "..."}` or `{"action": "none"}`.
-pub async fn handle_pre_response(node: &mesh::Node, payload: &Value) -> Value {
-    let trigger = payload["trigger"].as_str().unwrap_or("unknown");
-    let generated_text = payload["generated_text"].as_str().unwrap_or("");
-    let n_decoded = payload["n_decoded"].as_i64().unwrap_or(0);
-    let mean_entropy = payload["signals"]["mean_entropy"].as_f64().unwrap_or(0.0);
-    let model = payload["model"].as_str().unwrap_or("");
-
+/// First token has high entropy — model doesn't know where to begin.
+/// Race 2 different-architecture peers for a short answer, inject the
+/// winner's response into KV cache as context.
+pub async fn handle_uncertain(
+    node: &mesh::Node,
+    model: &str,
+    messages: &[Value],
+    entropy: f64,
+    margin: f64,
+) -> Value {
     tracing::info!(
-        "virtual: pre_response trigger={trigger} n_decoded={n_decoded} \
-         mean_entropy={mean_entropy:.2}"
+        "virtual: handle_uncertain entropy={entropy:.2} margin={margin:.3} model={model}"
     );
 
-    match trigger {
-        "very_short" => {
-            tracing::info!("virtual: short response ({n_decoded} tokens), passing through");
-            json!({ "action": "none" })
-        }
-        "tail_entropy_spike" | "high_uncertainty" | "verify" => {
-            verify_and_maybe_replace(node, payload, model, trigger, generated_text).await
-        }
-        _ => json!({ "action": "none" }),
+    if messages.is_empty() {
+        tracing::debug!("virtual: no messages, skipping");
+        return json!({ "action": "none" });
     }
+
+    get_peer_hint(node, model, messages).await
 }
 
-async fn verify_and_maybe_replace(
+// ===========================================================================
+// handle_drift — model losing coherence mid-generation
+// ===========================================================================
+
+/// Sustained entropy spike during generation — the model may be going
+/// off the rails. Same approach: get a hint from a peer, inject it at
+/// the current KV position so the model course-corrects.
+pub async fn handle_drift(
     node: &mesh::Node,
-    payload: &Value,
-    current_model: &str,
+    model: &str,
+    messages: &[Value],
+    n_decoded: i64,
+) -> Value {
+    tracing::info!("virtual: handle_drift n_decoded={n_decoded} model={model}");
+
+    if messages.is_empty() {
+        tracing::debug!("virtual: no messages, skipping");
+        return json!({ "action": "none" });
+    }
+
+    get_peer_hint(node, model, messages).await
+}
+
+// ===========================================================================
+// handle_verify — check output before sending, maybe replace
+// ===========================================================================
+
+/// Generation finished but signals say the output is suspect:
+/// - tail_entropy_spike: entropy spiked in the last 16 tokens
+/// - high_uncertainty: >30% of tokens had high entropy
+/// - verify: Hook 1 explicitly requested verification
+///
+/// Ask a peer to check the tail of the output. If the peer says it's
+/// wrong, replace the entire response with the peer's corrected version.
+pub async fn handle_verify(
+    node: &mesh::Node,
+    model: &str,
+    messages: &[Value],
     trigger: &str,
     generated_text: &str,
+    n_decoded: i64,
+    mean_entropy: f64,
 ) -> Value {
-    let peer = consult::find_different_model_peer(node, current_model).await;
-    let (peer_id, peer_model) = match peer {
+    tracing::info!(
+        "virtual: handle_verify trigger={trigger} n_decoded={n_decoded} \
+         mean_entropy={mean_entropy:.2} model={model}"
+    );
+
+    // Find a peer to verify with
+    let (peer_id, peer_model) = match consult::find_different_model_peer(node, model).await {
         Some(p) => p,
         None => {
             tracing::info!("virtual: no peer available for verification");
             return json!({ "action": "none" });
         }
-    };
-
-    let messages = match payload["messages"].as_array() {
-        Some(m) => m.as_slice(),
-        None => return json!({ "action": "none" }),
     };
 
     tracing::info!(
@@ -241,10 +197,13 @@ async fn verify_and_maybe_replace(
 }
 
 // ===========================================================================
-// Shared: race 2 peers for a second opinion, return inject or none
+// get_peer_hint — race 2 peers, inject winner's answer
 // ===========================================================================
 
-async fn race_second_opinion(node: &mesh::Node, current_model: &str, messages: &[Value]) -> Value {
+/// Shared by handle_uncertain and handle_drift. Finds up to 2 peers
+/// serving a different model, races them for a second opinion, returns
+/// an inject action with the winner's answer.
+async fn get_peer_hint(node: &mesh::Node, current_model: &str, messages: &[Value]) -> Value {
     let peers = consult::find_different_model_peers(node, current_model, 2).await;
     if peers.is_empty() {
         tracing::info!("virtual: no different model available");
@@ -269,7 +228,7 @@ async fn race_second_opinion(node: &mesh::Node, current_model: &str, messages: &
                 opinion
             };
             tracing::info!(
-                "virtual: injecting from {} ({}) ({} chars)",
+                "virtual: hint from {} ({}) ({} chars)",
                 winner_id.fmt_short(),
                 winner_model,
                 trimmed.len()
@@ -290,17 +249,7 @@ async fn race_second_opinion(node: &mesh::Node, current_model: &str, messages: &
 // Helpers
 // ===========================================================================
 
-fn extract_messages(payload: &Value) -> Option<Vec<Value>> {
-    match payload["messages"].as_array() {
-        Some(m) if !m.is_empty() => Some(m.clone()),
-        _ => {
-            tracing::debug!("virtual: no messages in payload");
-            None
-        }
-    }
-}
-
-fn extract_image_from_payload(payload: &Value) -> (String, String) {
+fn extract_image(payload: &Value) -> (String, String) {
     let messages = match payload["messages"].as_array() {
         Some(m) => m,
         None => return (String::new(), String::new()),

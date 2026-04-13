@@ -1551,18 +1551,15 @@ private:
         // --- Mesh Hook 3: pre-response ---
         // Check if the generation has issues worth reporting to mesh-llm.
         if (slot.mesh_hook.enabled) {
-            bool is_very_short = (slot.n_decoded < 10 && slot.task->n_tokens() > 100);
             bool is_uncertain  = (slot.mesh_hook.signals.uncertain_ratio() > 0.3f);
             bool is_bad_ending = slot.mesh_hook.signals.tail_entropy_spike();
 
             bool trigger = slot.mesh_hook.verify
-                || is_very_short
                 || is_uncertain
                 || is_bad_ending;
 
             if (trigger) {
                 std::string trigger_name = "verify";
-                if (is_very_short)  trigger_name = "very_short";
                 if (is_uncertain)   trigger_name = "high_uncertainty";
                 if (is_bad_ending)  trigger_name = "tail_entropy_spike";
 
