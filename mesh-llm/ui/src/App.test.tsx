@@ -387,6 +387,7 @@ describe("App routing and status", () => {
     const networkLink = await screen.findByRole("link", { name: "Network" });
     expect(networkLink).toHaveAttribute("aria-current", "page");
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
   });
 
   it("/dashboard route renders without redirecting to /config", async () => {
@@ -396,6 +397,7 @@ describe("App routing and status", () => {
     const networkLink = await screen.findByRole("link", { name: "Network" });
     expect(networkLink).toHaveAttribute("aria-current", "page");
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
   });
 
   it("/chat route renders chat section content", async () => {
@@ -405,6 +407,10 @@ describe("App routing and status", () => {
     const chatLink = await screen.findByRole("link", { name: "Chat" });
     expect(chatLink).toHaveAttribute("aria-current", "page");
     await screen.findByRole("button", { name: /New chat/i });
+    await waitFor(() => expect(window.location.pathname).toBe("/chat"));
+    expect(
+      screen.queryByRole("link", { current: "page", name: "Network" }),
+    ).not.toBeInTheDocument();
   });
 
   it("boots /api/status on mount and consumes status payload", async () => {
@@ -433,8 +439,14 @@ describe("App routing and status", () => {
     render(<App />);
 
     const input = await screen.findByTestId("chat-input");
+    await waitFor(() =>
+      expect(mockFetch.mock.calls.some((call) => call[0] === "/api/models")).toBe(
+        true,
+      ),
+    );
     expect(input).toBeDisabled();
     expect(input).toHaveAttribute("placeholder", "Waiting for a warm model...");
+    expect(screen.getByTestId("chat-send")).toBeDisabled();
   });
 });
 

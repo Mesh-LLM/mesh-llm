@@ -1,0 +1,245 @@
+import {
+  describeImageAttachmentForPrompt,
+  describeRenderedPagesAsText,
+} from "./vision-describe";
+
+type ChatAttachmentKind = "image" | "audio" | "file";
+type ChatAttachmentStatus = "pending" | "uploading" | "failed";
+
+type ChatAttachment = {
+  id: string;
+  kind: ChatAttachmentKind;
+  dataUrl: string;
+  mimeType: string;
+  fileName?: string;
+  status?: ChatAttachmentStatus;
+  error?: string;
+  extractedText?: string;
+  extractionSummary?: string;
+  renderedPageImages?: string[];
+  imageDescription?: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  image?: string;
+  audio?: {
+    dataUrl: string;
+    mimeType: string;
+    fileName?: string;
+  };
+  attachments?: ChatAttachment[];
+};
+
+type AttachmentStatePatch = Partial<
+  Pick<
+    ChatAttachment,
+    "status" | "error" | "extractionSummary" | "imageDescription" | "renderedPageImages"
+  >
+>;
+
+function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } | null {
+  const match = /^data:([^;,]+);base64,(.+)$/s.exec(dataUrl);
+  if (!match) return null;
+  return { mimeType: match[1], base64: match[2] };
+}
+
+function messageAttachments(message: ChatMessage): ChatAttachment[] {
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+    return message.attachments;
+  }
+  const attachments: ChatAttachment[] = [];
+  if (message.image) {
+    attachments.push({
+      id: `${message.id}-image`,
+      kind: "image",
+      dataUrl: message.image,
+      mimeType: parseDataUrl(message.image)?.mimeType || "image/jpeg",
+      fileName: "image.jpg",
+    });
+  }
+  if (message.audio) {
+    attachments.push({
+      id: `${message.id}-audio`,
+      kind: "audio",
+      dataUrl: message.audio.dataUrl,
+      mimeType: message.audio.mimeType,
+      fileName: message.audio.fileName,
+    });
+  }
+  return attachments;
+}
+
+async function uploadRequestObject(params: {
+  requestId: string;
+  dataUrl: string;
+  fileName?: string;
+}): Promise<{ token: string }> {
+  const parsed = parseDataUrl(params.dataUrl);
+  if (!parsed) throw new Error("Attachment is not a valid base64 data URL");
+  const response = await fetch("/api/objects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      request_id: params.requestId,
+      mime_type: parsed.mimeType,
+      file_name: params.fileName,
+      bytes_base64: parsed.base64,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Attachment upload failed (${response.status})`);
+  }
+  return (await response.json()) as { token: string };
+}
+
+export function attachmentForMessage(
+  attachment: ChatAttachment,
+): Omit<ChatAttachment, "status" | "error"> {
+  const { status, error, ...persistedAttachment } = attachment;
+  if (persistedAttachment.extractedText) {
+    persistedAttachment.renderedPageImages = undefined;
+  }
+  return persistedAttachment;
+}
+
+export async function buildAttachmentBlocks(
+  attachments: ChatAttachment[],
+  requestId: string,
+  clientId: string,
+  onStatusChange?: (attachmentId: string, patch: AttachmentStatePatch) => void,
+) {
+  const contentBlocks: Array<Record<string, unknown>> = [];
+  for (const attachment of attachments) {
+    if (attachment.extractedText) {
+      attachment.renderedPageImages = undefined;
+      const label = attachment.fileName
+        ? `[Content from ${attachment.fileName}]`
+        : "[Extracted PDF content]";
+      contentBlocks.push({
+        type: "input_text",
+        text: `${label}\n\n${attachment.extractedText}`,
+      });
+      continue;
+    }
+
+    if (attachment.renderedPageImages?.length) {
+      onStatusChange?.(attachment.id, { status: "uploading", error: undefined });
+      const label = attachment.fileName
+        ? `[Content from ${attachment.fileName}]`
+        : "[Extracted PDF content]";
+      const text = await describeRenderedPagesAsText(attachment.renderedPageImages);
+      attachment.extractedText = text;
+      attachment.renderedPageImages = undefined;
+      contentBlocks.push({
+        type: "input_text",
+        text: `${label}\n\n${text}`,
+      });
+      onStatusChange?.(attachment.id, {
+        status: "pending",
+        error: undefined,
+        renderedPageImages: undefined,
+        extractionSummary: "Described scanned PDF pages in browser",
+      });
+      continue;
+    }
+
+    if (attachment.kind === "image") {
+      let imageDescription = attachment.imageDescription?.trim() ?? "";
+      if (!imageDescription) {
+        onStatusChange?.(attachment.id, {
+          status: "uploading",
+          error: undefined,
+          extractionSummary: "Describing image...",
+        });
+        const result = await describeImageAttachmentForPrompt(attachment.dataUrl, {
+          onProgress: (message) => {
+            onStatusChange?.(attachment.id, {
+              status: "uploading",
+              error: undefined,
+              extractionSummary: message,
+            });
+          },
+        });
+        imageDescription = result.imageDescription?.trim() ?? "";
+        attachment.imageDescription = result.imageDescription;
+        attachment.extractionSummary = result.extractionSummary;
+        attachment.error = result.error;
+        onStatusChange?.(attachment.id, {
+          status: result.error ? "failed" : "pending",
+          error: result.error,
+          extractionSummary: result.extractionSummary,
+          imageDescription: result.imageDescription,
+        });
+      }
+      contentBlocks.push({
+        type: "input_text",
+        text: imageDescription || "[Image attached but could not be described]",
+      });
+      continue;
+    }
+
+    onStatusChange?.(attachment.id, { status: "uploading", error: undefined });
+    try {
+      const upload = await uploadRequestObject({
+        requestId,
+        dataUrl: attachment.dataUrl,
+        fileName: attachment.fileName,
+      });
+      const url = `mesh://blob/${clientId}/${upload.token}`;
+      if (attachment.kind === "audio") {
+        contentBlocks.push({
+          type: "input_audio",
+          audio_url: url,
+        });
+      } else {
+        contentBlocks.push({
+          type: "input_file",
+          url,
+          mime_type: attachment.mimeType,
+          file_name: attachment.fileName,
+        });
+      }
+      onStatusChange?.(attachment.id, { status: "pending", error: undefined });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onStatusChange?.(attachment.id, { status: "failed", error: message });
+      throw error;
+    }
+  }
+  return contentBlocks;
+}
+
+export async function buildResponsesInput(
+  historyForRequest: ChatMessage[],
+  requestId: string,
+  clientId: string,
+  prebuiltContentByMessageId?: Record<string, Array<Record<string, unknown>>>,
+) {
+  return Promise.all(
+    historyForRequest.map(async (message) => {
+      const contentBlocks: Array<Record<string, unknown>> =
+        prebuiltContentByMessageId?.[message.id]?.slice() ?? [];
+      const attachments = messageAttachments(message);
+      if (message.content.trim()) {
+        contentBlocks.push({ type: "input_text", text: message.content });
+      }
+      if (!prebuiltContentByMessageId?.[message.id] && attachments.length > 0) {
+        contentBlocks.push(
+          ...(await buildAttachmentBlocks(attachments, requestId, clientId)),
+        );
+      }
+      return {
+        role: message.role,
+        content:
+          contentBlocks.length === 1 &&
+          attachments.length === 0 &&
+          contentBlocks[0].type === "input_text"
+            ? message.content
+            : contentBlocks,
+      };
+    }),
+  );
+}
