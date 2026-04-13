@@ -1688,7 +1688,7 @@ async fn route_local_attempt(
                     )
                     .await
                     {
-                        Ok(_result) => RouteAttemptResult::Delivered {
+                        Ok(RouteAttemptResult::Delivered { .. }) => RouteAttemptResult::Delivered {
                             status_code,
                             ttft_ms: if (200..300).contains(&status_code) {
                                 Some(ttft_ms)
@@ -1696,6 +1696,12 @@ async fn route_local_attempt(
                                 None
                             },
                         },
+                        Ok(RouteAttemptResult::RetryableContextOverflow) => {
+                            RouteAttemptResult::RetryableContextOverflow
+                        }
+                        Ok(RouteAttemptResult::RetryableUnavailable) => {
+                            RouteAttemptResult::RetryableUnavailable
+                        }
                         Err(err) => {
                             tracing::debug!("API proxy (local) ended after commit: {err}");
                             RouteAttemptResult::Delivered {
@@ -1755,7 +1761,7 @@ async fn route_remote_attempt(
                     )
                     .await
                     {
-                        Ok(_result) => RouteAttemptResult::Delivered {
+                        Ok(RouteAttemptResult::Delivered { .. }) => RouteAttemptResult::Delivered {
                             status_code,
                             ttft_ms: if (200..300).contains(&status_code) {
                                 Some(ttft_ms)
@@ -1763,6 +1769,12 @@ async fn route_remote_attempt(
                                 None
                             },
                         },
+                        Ok(RouteAttemptResult::RetryableContextOverflow) => {
+                            RouteAttemptResult::RetryableContextOverflow
+                        }
+                        Ok(RouteAttemptResult::RetryableUnavailable) => {
+                            RouteAttemptResult::RetryableUnavailable
+                        }
                         Err(err) => {
                             tracing::debug!("API proxy (remote) ended after commit: {err}");
                             RouteAttemptResult::Delivered {
