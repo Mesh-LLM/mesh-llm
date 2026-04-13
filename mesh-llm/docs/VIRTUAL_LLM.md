@@ -22,10 +22,8 @@ Before generation starts. Fires when the request has something the model can't h
 
 | Trigger | Check |
 |---|---|
-| Images + text-only model | Request has media but model has no mmproj |
-| Context pressure | Prompt tokens > 75% of context window |
-| Long session | Message count > 10 turns |
-| Large user paste | Last user message much larger than prior messages |
+| `images_no_multimodal` | Request has media but model has no mmproj |
+| `audio_no_support` | Request has audio but model can't process it |
 
 **What llama-server sends:**
 ```json
@@ -166,16 +164,6 @@ User sends an image to a text-only model.
 6. Caption injected into prompt. Text-only model answers about the image.
 
 Caller has no idea the model can't see images — they just get a useful answer.
-
-### Context summarization
-
-Prompt is 3500 tokens in a 4096 context.
-
-1. Hook 1 fires: `context_pressure`
-2. mesh-llm looks up the request, sees a long conversation history
-3. Sends early turns to a fast model: "Summarize this conversation"
-4. Returns `{"action": "inject", "text": "[Summary: user asked about auth, then JWT debugging...]"}`
-5. Summary injected. Model has room for a full response.
 
 ### Uncertain model gets live help (Hook 2)
 

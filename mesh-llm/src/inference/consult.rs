@@ -74,25 +74,6 @@ pub async fn find_different_model_peer(
         .map(|(id, model, _)| (id, model))
 }
 
-/// Find any peer serving a model (including same model on a different node).
-/// Used for summarization where we just need compute, not a specific capability.
-pub async fn find_any_peer(node: &mesh::Node) -> Option<(EndpointId, String)> {
-    let peers = node.peers().await;
-    peers
-        .iter()
-        .filter_map(|p| {
-            p.served_model_descriptors.first().map(|d| {
-                (
-                    p.id,
-                    d.identity.model_name.clone(),
-                    p.rtt_ms.unwrap_or(u32::MAX),
-                )
-            })
-        })
-        .min_by_key(|(_, _, rtt)| *rtt)
-        .map(|(id, model, _)| (id, model))
-}
-
 // ---------------------------------------------------------------------------
 // Consultation requests
 // ---------------------------------------------------------------------------
@@ -189,35 +170,6 @@ pub async fn caption_image(
     })];
 
     chat_completion(node, peer_id, model, messages, 256).await
-}
-
-/// Ask a peer to summarize conversation history.
-/// Takes the messages array and returns a condensed summary.
-pub async fn summarize_conversation(
-    node: &mesh::Node,
-    peer_id: EndpointId,
-    model: &str,
-    messages: &[Value],
-) -> Result<String> {
-    let conversation = messages
-        .iter()
-        .filter_map(|m| {
-            let role = m["role"].as_str()?;
-            let content = m["content"].as_str()?;
-            Some(format!("{role}: {content}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let summary_messages = vec![serde_json::json!({
-        "role": "user",
-        "content": format!(
-            "Summarize the following conversation concisely. \
-             Keep key facts, decisions, and context. Be brief.\n\n{conversation}"
-        )
-    })];
-
-    chat_completion(node, peer_id, model, summary_messages, 512).await
 }
 
 /// Ask a peer for a second opinion on the user's question.

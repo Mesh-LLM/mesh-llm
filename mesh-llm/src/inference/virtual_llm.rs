@@ -60,41 +60,32 @@ use serde_json::{json, Value};
 // Hook 1: pre-inference
 // ---------------------------------------------------------------------------
 
-/// Called when llama-server detects a structural trigger before inference:
+/// Called when llama-server detects a media trigger before inference:
 ///
 /// | Trigger                  | Meaning                                    |
 /// |--------------------------|--------------------------------------------|
 /// | `images_no_multimodal`   | Request has images but model is text-only  |
-/// | `context_pressure`       | Prompt fills >75% of context window        |
-/// | `long_session`           | Conversation has >10 turns                 |
-/// | `large_user_message`     | Last user message is unusually large       |
+/// | `audio_no_support`       | Request has audio but model can't process  |
 ///
 /// The response can:
-/// - Inject context (e.g. image caption, summary of early turns)
-/// - Set `entropy_threshold` to enable Hook 2
+/// - Inject context (e.g. image caption, audio transcription)
 /// - Set `verify: true` to enable Hook 3's verify trigger
 pub async fn handle_pre_inference(node: &mesh::Node, payload: &Value) -> Value {
     let trigger = payload["trigger"].as_str().unwrap_or("unknown");
     let model = payload["model"].as_str().unwrap_or("");
-    let n_prompt = payload["n_prompt_tokens"].as_i64().unwrap_or(0);
-    let n_ctx = payload["n_ctx"].as_i64().unwrap_or(0);
 
-    tracing::info!(
-        "virtual: pre_inference trigger={trigger} model={model} \
-         prompt={n_prompt}/{n_ctx}"
-    );
+    tracing::info!("virtual: pre_inference trigger={trigger} model={model}");
 
     match trigger {
         "images_no_multimodal" => handle_image_caption(node, payload, model).await,
-        "context_pressure" => handle_context_pressure(node, payload, model, n_prompt, n_ctx).await,
-        "long_session" => {
-            // Long sessions benefit from summarization too
-            handle_context_pressure(node, payload, model, n_prompt, n_ctx).await
+        "audio_no_support" => {
+            // TODO: find audio-capable peer, transcribe, inject text
+            tracing::info!("virtual: audio_no_support — not yet implemented");
+            json!({ "action": "none" })
         }
         _ => {
             tracing::debug!("virtual: pre_inference trigger={trigger}, no action");
-            // Arm Hook 2 with a moderate threshold so we catch uncertain starts
-            json!({ "action": "none", "entropy_threshold": 5.0 })
+            json!({ "action": "none" })
         }
     }
 }
@@ -154,65 +145,6 @@ async fn handle_image_caption(node: &mesh::Node, payload: &Value, current_model:
         }
         Err(e) => {
             tracing::warn!("virtual: image caption failed: {e}");
-            json!({ "action": "none", "entropy_threshold": 5.0 })
-        }
-    }
-}
-
-/// Context pressure: summarize early turns to free context space.
-async fn handle_context_pressure(
-    node: &mesh::Node,
-    payload: &Value,
-    _current_model: &str,
-    n_prompt: i64,
-    n_ctx: i64,
-) -> Value {
-    let pressure_pct = if n_ctx > 0 {
-        (n_prompt as f64 / n_ctx as f64 * 100.0) as u32
-    } else {
-        0
-    };
-    tracing::info!("virtual: context at {pressure_pct}%, looking for peer to summarize");
-
-    // Find any peer to do the summarization
-    let peer = consult::find_any_peer(node).await;
-    let (peer_id, peer_model) = match peer {
-        Some(p) => p,
-        None => {
-            tracing::info!("virtual: no peers available for summarization");
-            return json!({ "action": "none", "entropy_threshold": 5.0 });
-        }
-    };
-
-    // Extract messages from payload
-    let messages = match payload["messages"].as_array() {
-        Some(m) if m.len() > 4 => m,
-        _ => {
-            tracing::debug!("virtual: not enough messages to summarize");
-            return json!({ "action": "none", "entropy_threshold": 5.0 });
-        }
-    };
-
-    // Summarize all but the last 2 messages (keep recent context intact)
-    let to_summarize = &messages[..messages.len().saturating_sub(2)];
-
-    tracing::info!(
-        "virtual: summarizing {} early messages via peer {} model={peer_model}",
-        to_summarize.len(),
-        peer_id.fmt_short()
-    );
-
-    match consult::summarize_conversation(node, peer_id, &peer_model, to_summarize).await {
-        Ok(summary) => {
-            tracing::info!("virtual: got summary ({} chars)", summary.len());
-            json!({
-                "action": "inject",
-                "text": format!("[Conversation summary: {summary}]\n\n"),
-                "entropy_threshold": 5.0,
-            })
-        }
-        Err(e) => {
-            tracing::warn!("virtual: summarization failed: {e}");
             json!({ "action": "none", "entropy_threshold": 5.0 })
         }
     }

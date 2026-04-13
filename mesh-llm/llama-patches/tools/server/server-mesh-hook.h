@@ -104,9 +104,6 @@ struct mesh_hook_ctx {
     // pre-inference trigger state (computed from request)
     bool has_images_no_multimodal = false;
     bool has_audio_no_support     = false;
-    bool context_pressure         = false;
-    bool long_session             = false;
-    bool large_user_message       = false;
 
     // signal window — updated every token, read at Hook 3
     mesh_signal_window signals;
@@ -128,26 +125,17 @@ struct mesh_hook_ctx {
         verify = false;
         has_images_no_multimodal = false;
         has_audio_no_support = false;
-        context_pressure = false;
-        long_session = false;
-        large_user_message = false;
         signals.reset();
     }
 
     bool any_pre_inference_trigger() const {
         return has_images_no_multimodal
-            || has_audio_no_support
-            || context_pressure
-            || long_session
-            || large_user_message;
+            || has_audio_no_support;
     }
 
     std::string first_trigger_name() const {
         if (has_images_no_multimodal) return "images_no_multimodal";
         if (has_audio_no_support)     return "audio_no_support";
-        if (context_pressure)         return "context_pressure";
-        if (long_session)             return "long_session";
-        if (large_user_message)       return "large_user_message";
         return "unknown";
     }
 

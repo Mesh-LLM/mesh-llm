@@ -1236,8 +1236,7 @@ private:
             slot.mesh_hook.has_images_no_multimodal =
                 task.tokens.has_media() && !task.tokens.has_mtmd;
 
-            // context pressure: prompt > 75% of slot context
-            slot.mesh_hook.context_pressure = task.n_tokens() > (int)(slot.n_ctx * 0.75);
+            // TODO: wire has_audio_no_support when audio input lands
 
             // fire if any trigger matched
             if (slot.mesh_hook.any_pre_inference_trigger()) {
