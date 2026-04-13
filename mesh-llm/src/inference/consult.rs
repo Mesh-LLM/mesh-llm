@@ -35,7 +35,8 @@ pub async fn find_vision_peer(node: &mesh::Node, exclude_model: &str) -> Option<
         .map(|p| p.id)
 }
 
-/// Find a peer serving a *different* model from the current one.
+/// Find up to `n` peers serving a *different* model from the current one,
+/// ranked by score (best first).
 ///
 /// Scoring prefers:
 /// 1. Similar tier (within ±1 of current) — a 4B model asking a 70B is slow and wasteful
@@ -43,16 +44,17 @@ pub async fn find_vision_peer(node: &mesh::Node, exclude_model: &str) -> Option<
 /// 3. Different model name — the whole point is a different perspective
 ///
 /// Does not require a specific capability — the value is architectural diversity.
-pub async fn find_different_model_peer(
+pub async fn find_different_model_peers(
     node: &mesh::Node,
     current_model: &str,
-) -> Option<(EndpointId, String)> {
+    n: usize,
+) -> Vec<(EndpointId, String)> {
     use crate::network::router::profile_for;
 
     let current_tier = profile_for(current_model).map(|p| p.tier).unwrap_or(2);
     let peers = node.peers().await;
 
-    peers
+    let mut candidates: Vec<_> = peers
         .iter()
         .filter_map(|p| {
             let different = p.served_model_descriptors.iter().find(|d| {
@@ -70,21 +72,59 @@ pub async fn find_different_model_peer(
                 (p.id, d.identity.model_name.clone(), score)
             })
         })
-        .min_by_key(|(_, _, score)| *score)
-        .map(|(id, model, _)| (id, model))
+        .collect();
+
+    candidates.sort_by_key(|(_, _, score)| *score);
+    candidates.truncate(n);
+    candidates.into_iter().map(|(id, m, _)| (id, m)).collect()
+}
+
+/// Convenience: find the single best different-model peer.
+pub async fn find_different_model_peer(
+    node: &mesh::Node,
+    current_model: &str,
+) -> Option<(EndpointId, String)> {
+    find_different_model_peers(node, current_model, 1)
+        .await
+        .into_iter()
+        .next()
 }
 
 // ---------------------------------------------------------------------------
 // Consultation requests
 // ---------------------------------------------------------------------------
 
+/// Default consultation timeout. If the peer doesn't respond in this time,
+/// we give up and let the local model proceed without help.
+const CONSULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// Send a chat completion request to a peer over the mesh QUIC tunnel.
 /// Returns the assistant message content, or an error.
 ///
-/// This is a blocking call (from the caller's perspective) — it opens a
-/// tunnel, sends the HTTP request, reads the full response. Suitable for
-/// hook handlers where C++ is waiting on our response.
+/// Times out after CONSULT_TIMEOUT — hooks block the local model's slot,
+/// so we can't wait forever.
 pub async fn chat_completion(
+    node: &mesh::Node,
+    peer_id: EndpointId,
+    model: &str,
+    messages: Vec<Value>,
+    max_tokens: u32,
+) -> Result<String> {
+    match tokio::time::timeout(
+        CONSULT_TIMEOUT,
+        chat_completion_inner(node, peer_id, model, messages, max_tokens),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => anyhow::bail!(
+            "consultation timed out after {}s",
+            CONSULT_TIMEOUT.as_secs()
+        ),
+    }
+}
+
+async fn chat_completion_inner(
     node: &mesh::Node,
     peer_id: EndpointId,
     model: &str,
@@ -226,6 +266,70 @@ pub async fn second_opinion(
     chat_completion(node, peer_id, model, ask_messages, 192).await
 }
 
+/// Fan out a second-opinion request to up to 2 peers, return the first
+/// response. If only one peer is available, falls back to a single call.
+pub async fn race_second_opinion(
+    node: &mesh::Node,
+    peers: &[(EndpointId, String)],
+    messages: &[Value],
+) -> Option<(String, EndpointId, String)> {
+    if peers.is_empty() {
+        return None;
+    }
+
+    if peers.len() == 1 {
+        let (id, model) = &peers[0];
+        return match second_opinion(node, *id, model, messages).await {
+            Ok(text) => Some((text, *id, model.clone())),
+            Err(e) => {
+                tracing::warn!(
+                    "virtual: second opinion from {} failed: {e}",
+                    id.fmt_short()
+                );
+                None
+            }
+        };
+    }
+
+    // Race two peers — fire both via JoinSet, take first Ok, abort the rest.
+    let mut set = tokio::task::JoinSet::new();
+
+    for (id, model) in peers.iter().skip(1).take(1) {
+        let node = node.clone();
+        let msgs = messages.to_vec();
+        let id = *id;
+        let model = model.clone();
+        set.spawn(async move {
+            second_opinion(&node, id, &model, &msgs)
+                .await
+                .map(|text| (text, id, model))
+        });
+    }
+    // Spawn the best peer last so it appears in the set too
+    {
+        let node = node.clone();
+        let msgs = messages.to_vec();
+        let id = peers[0].0;
+        let model = peers[0].1.clone();
+        set.spawn(async move {
+            second_opinion(&node, id, &model, &msgs)
+                .await
+                .map(|text| (text, id, model))
+        });
+    }
+
+    while let Some(result) = set.join_next().await {
+        if let Ok(Ok((text, id, model))) = result {
+            tracing::info!("virtual: peer {} ({model}) won the race", id.fmt_short());
+            set.abort_all();
+            return Some((text, id, model));
+        }
+    }
+
+    tracing::warn!("virtual: all peers failed");
+    None
+}
+
 /// Ask a peer to verify whether generated text is accurate.
 /// Returns the peer's assessment.
 pub async fn verify_response(
@@ -243,17 +347,25 @@ pub async fn verify_response(
         .and_then(|m| m["content"].as_str())
         .unwrap_or("(unknown question)");
 
+    // Only send the tail of the response — that's where the spike happened.
+    // Sending the full generated text wastes peer compute on re-reading good content.
+    let tail = if generated_text.len() > 500 {
+        &generated_text[generated_text.len() - 500..]
+    } else {
+        generated_text
+    };
+
     let messages = vec![serde_json::json!({
         "role": "user",
         "content": format!(
             "A language model was asked: \"{last_user}\"\n\n\
-             It responded: \"{generated_text}\"\n\n\
-             Is this response accurate and coherent? \
+             The end of its response was: \"{tail}\"\n\n\
+             Is this ending accurate and coherent? \
              If it's fine, say exactly \"LOOKS_GOOD\" and nothing else. \
-             If the response is wrong, incoherent, or trails off into nonsense, \
-             provide a correct, complete answer to the original question."
+             If the ending is wrong or incoherent, provide a corrected \
+             version of the last 1-2 sentences only."
         )
     })];
 
-    chat_completion(node, peer_id, model, messages, 512).await
+    chat_completion(node, peer_id, model, messages, 256).await
 }

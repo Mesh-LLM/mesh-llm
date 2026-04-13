@@ -177,15 +177,12 @@ pub async fn handle_post_prefill(node: &mesh::Node, payload: &Value) -> Value {
 
     tracing::info!("virtual: post_prefill entropy={entropy:.2} margin={margin:.3} model={model}");
 
-    // Find a different model to get a second opinion
-    let peer = consult::find_different_model_peer(node, model).await;
-    let (peer_id, peer_model) = match peer {
-        Some(p) => p,
-        None => {
-            tracing::info!("virtual: no different model available for second opinion");
-            return json!({ "action": "none" });
-        }
-    };
+    // Find up to 2 different models — race them, use first response
+    let peers = consult::find_different_model_peers(node, model, 2).await;
+    if peers.is_empty() {
+        tracing::info!("virtual: no different model available for second opinion");
+        return json!({ "action": "none" });
+    }
 
     // Extract messages from the payload
     let messages = match payload["messages"].as_array() {
@@ -196,23 +193,27 @@ pub async fn handle_post_prefill(node: &mesh::Node, payload: &Value) -> Value {
         }
     };
 
+    let peer_names: Vec<_> = peers
+        .iter()
+        .map(|(id, m)| format!("{}={m}", id.fmt_short()))
+        .collect();
     tracing::info!(
-        "virtual: getting second opinion from peer {} model={peer_model} (current model={model} has entropy={entropy:.2})",
-        peer_id.fmt_short()
+        "virtual: racing {} peers for second opinion: [{}] (entropy={entropy:.2})",
+        peers.len(),
+        peer_names.join(", ")
     );
 
-    match consult::second_opinion(node, peer_id, &peer_model, &messages).await {
-        Ok(opinion) => {
-            // Inject as concise context — the model reads this and generates
-            // its own response from a more informed state. Keep it short:
-            // every injected token is decoded into KV and adds latency.
+    match consult::race_second_opinion(node, &peers, &messages).await {
+        Some((opinion, winner_id, winner_model)) => {
             let trimmed = if opinion.len() > 512 {
                 format!("{}...", &opinion[..512])
             } else {
                 opinion
             };
             tracing::info!(
-                "virtual: injecting second opinion ({} chars)",
+                "virtual: injecting second opinion from {} ({}) ({} chars)",
+                winner_id.fmt_short(),
+                winner_model,
                 trimmed.len()
             );
             json!({
@@ -220,8 +221,8 @@ pub async fn handle_post_prefill(node: &mesh::Node, payload: &Value) -> Value {
                 "text": format!("\n[Context: {trimmed}]\n\n"),
             })
         }
-        Err(e) => {
-            tracing::warn!("virtual: second opinion failed: {e}");
+        None => {
+            tracing::warn!("virtual: all peers failed for second opinion");
             json!({ "action": "none" })
         }
     }
