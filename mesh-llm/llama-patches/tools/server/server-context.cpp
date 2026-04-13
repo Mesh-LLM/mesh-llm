@@ -2927,7 +2927,7 @@ private:
                         SLT_DBG(slot, "mesh hook 2: check entropy=%.2f threshold=%.2f margin=%.3f\n",
                                 entropy, slot.mesh_hook.entropy_threshold, margin);
 
-                        if (entropy > slot.mesh_hook.entropy_threshold || margin < 0.05f) {
+                        if (slot.mesh_hook.debug || entropy > slot.mesh_hook.entropy_threshold || margin < 0.05f) {
                             // build top tokens list
                             json top_tokens = json::array();
                             for (int t = 0; t < std::min((int)probs.size(), 5); t++) {

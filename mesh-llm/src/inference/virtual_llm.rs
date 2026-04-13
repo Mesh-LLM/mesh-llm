@@ -233,7 +233,7 @@ async fn get_peer_hint(node: &mesh::Node, current_model: &str, messages: &[Value
             );
             json!({
                 "action": "inject",
-                "text": format!("\nHere is relevant information to help answer: {trimmed}\n\nNow answer the user's question directly:\n"),
+                "text": format!("\n\nReference answer: {trimmed}\n\nUse the reference above to provide an accurate response.\n"),
             })
         }
         None => {
