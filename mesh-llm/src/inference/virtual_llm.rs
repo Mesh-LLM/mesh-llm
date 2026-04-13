@@ -19,8 +19,15 @@ use serde_json::{json, Value};
 // handle_image — model can't see media, get a caption/transcript
 // ===========================================================================
 
-/// The model received an image (or audio) but can't process it.
-/// Find a capable peer, get a text description, inject it into the prompt.
+/// The model received media it can't process (image on text-only model,
+/// audio on non-audio model). Finds a capable peer, gets a text
+/// description, and returns it for injection before tokenization.
+///
+/// `trigger`: `"images_no_multimodal"` or `"audio_no_support"`
+/// `payload`: full hook payload (needed to extract image URLs from messages)
+///
+/// Returns `{"action": "inject", "text": "[Image description: ...]"}` or
+/// `{"action": "none"}` if no capable peer or captioning fails.
 pub async fn handle_image(node: &mesh::Node, trigger: &str, model: &str, payload: &Value) -> Value {
     tracing::info!("virtual: handle_image trigger={trigger} model={model}");
 
@@ -87,9 +94,16 @@ async fn caption_image(node: &mesh::Node, current_model: &str, payload: &Value) 
 // handle_uncertain — model stuck at start, get a hint from a peer
 // ===========================================================================
 
-/// First token has high entropy — model doesn't know where to begin.
-/// Race 2 different-architecture peers for a short answer, inject the
-/// winner's response into KV cache as context.
+/// Model doesn't know how to start its answer — first token has high
+/// entropy after prefill. Races 2 different-architecture peers with the
+/// last user message ("answer briefly in 2-3 sentences"), injects the
+/// winner's answer so the model reads it before generating.
+///
+/// `entropy`: first token entropy (higher = more uncertain)
+/// `margin`: gap between top two token probabilities (lower = more uncertain)
+///
+/// Returns `{"action": "inject", "text": "\n[Context: ...]\n\n"}` or
+/// `{"action": "none"}` if no peers available or all fail within 10s.
 pub async fn handle_uncertain(
     node: &mesh::Node,
     model: &str,
@@ -113,9 +127,15 @@ pub async fn handle_uncertain(
 // handle_drift — model losing coherence mid-generation
 // ===========================================================================
 
-/// Sustained entropy spike during generation — the model may be going
-/// off the rails. Same approach: get a hint from a peer, inject it at
-/// the current KV position so the model course-corrects.
+/// Model is losing coherence mid-generation — sustained entropy spike
+/// over the last 16 tokens. Same approach as handle_uncertain: races 2
+/// peers with the original question, injects the answer at the current
+/// KV position so the model reads it and course-corrects.
+///
+/// `n_decoded`: tokens generated so far (for logging)
+///
+/// Returns `{"action": "inject", "text": "\n[Context: ...]\n\n"}` or
+/// `{"action": "none"}`.
 pub async fn handle_drift(
     node: &mesh::Node,
     model: &str,
@@ -136,13 +156,16 @@ pub async fn handle_drift(
 // handle_verify — check output before sending, maybe replace
 // ===========================================================================
 
-/// Generation finished but signals say the output is suspect:
-/// - tail_entropy_spike: entropy spiked in the last 16 tokens
-/// - high_uncertainty: >30% of tokens had high entropy
-/// - verify: Hook 1 explicitly requested verification
+/// Generation finished but signals say the output is suspect. Sends the
+/// last user message + last 500 chars of generated text to a peer asking
+/// "is this coherent? say LOOKS_GOOD or correct it."
 ///
-/// Ask a peer to check the tail of the output. If the peer says it's
-/// wrong, replace the entire response with the peer's corrected version.
+/// `trigger`: why C++ fired this — `"tail_entropy_spike"` (last 16 tokens),
+///   `"high_uncertainty"` (>30% of tokens), or `"verify"` (Hook 1 requested)
+/// `generated_text`: the full model output (only tail is sent to peer)
+///
+/// Returns `{"action": "replace", "text": "corrected answer"}` if the peer
+/// says it's wrong, or `{"action": "none"}` if it passes or verification fails.
 pub async fn handle_verify(
     node: &mesh::Node,
     model: &str,
