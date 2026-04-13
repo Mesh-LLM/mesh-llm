@@ -24,24 +24,44 @@ use serde_json::{json, Value};
 /// description, and returns it for injection before tokenization.
 ///
 /// `trigger`: `"images_no_multimodal"` or `"audio_no_support"`
-/// `payload`: full hook payload (needed to extract image URLs from messages)
+/// `image_url`: data URL for the image (empty if audio trigger)
+/// `user_text`: the user's text alongside the media
 ///
 /// Returns `{"action": "inject", "text": "[Image description: ...]"}` or
 /// `{"action": "none"}` if no capable peer or captioning fails.
-pub async fn handle_image(node: &mesh::Node, trigger: &str, model: &str, payload: &Value) -> Value {
+pub async fn handle_image(
+    node: &mesh::Node,
+    trigger: &str,
+    model: &str,
+    image_url: &str,
+    user_text: &str,
+) -> Value {
     tracing::info!("virtual: handle_image trigger={trigger} model={model}");
 
     match trigger {
-        "images_no_multimodal" => caption_image(node, model, payload).await,
-        "audio_no_support" => {
-            tracing::info!("virtual: audio — not yet implemented");
+        "images_no_multimodal" => {
+            if image_url.is_empty() {
+                tracing::warn!("virtual: images trigger but no image URL");
+                return json!({ "action": "none" });
+            }
+            caption_image(node, model, image_url, user_text).await
+        }
+        "audio_no_support" => transcribe_audio(node, model).await,
+        "video_no_support" => {
+            // TODO: extract keyframes, caption via vision peer
+            tracing::info!("virtual: video — not yet implemented");
             json!({ "action": "none" })
         }
         _ => json!({ "action": "none" }),
     }
 }
 
-async fn caption_image(node: &mesh::Node, current_model: &str, payload: &Value) -> Value {
+async fn caption_image(
+    node: &mesh::Node,
+    current_model: &str,
+    image_url: &str,
+    user_text: &str,
+) -> Value {
     let peer_id = match consult::find_vision_peer(node, current_model).await {
         Some(id) => id,
         None => {
@@ -50,32 +70,16 @@ async fn caption_image(node: &mesh::Node, current_model: &str, payload: &Value) 
         }
     };
 
-    let vision_model = {
-        let peers = node.peers().await;
-        peers
-            .iter()
-            .find(|p| p.id == peer_id)
-            .and_then(|p| {
-                p.served_model_descriptors
-                    .iter()
-                    .find(|d| d.capabilities.supports_vision_runtime())
-                    .map(|d| d.identity.model_name.clone())
-            })
-            .unwrap_or_default()
-    };
-
-    let (image_url, user_text) = extract_image(payload);
-    if image_url.is_empty() {
-        tracing::warn!("virtual: images trigger but no image in payload");
-        return json!({ "action": "none" });
-    }
+    let vision_model =
+        peer_model_with_capability(node, peer_id, |d| d.capabilities.supports_vision_runtime())
+            .await;
 
     tracing::info!(
         "virtual: captioning via {} model={vision_model}",
         peer_id.fmt_short()
     );
 
-    match consult::caption_image(node, peer_id, &vision_model, &image_url, &user_text).await {
+    match consult::caption_image(node, peer_id, &vision_model, image_url, user_text).await {
         Ok(caption) => {
             tracing::info!("virtual: caption ({} chars)", caption.len());
             json!({
@@ -88,6 +92,47 @@ async fn caption_image(node: &mesh::Node, current_model: &str, payload: &Value) 
             json!({ "action": "none" })
         }
     }
+}
+
+async fn transcribe_audio(node: &mesh::Node, current_model: &str) -> Value {
+    let peer_id = match consult::find_audio_peer(node, current_model).await {
+        Some(id) => id,
+        None => {
+            tracing::info!("virtual: no audio peer available");
+            return json!({ "action": "none" });
+        }
+    };
+
+    let audio_model =
+        peer_model_with_capability(node, peer_id, |d| d.capabilities.supports_audio_runtime())
+            .await;
+
+    // TODO: extract audio data from payload and send to peer
+    // For now, log that we found a peer but can't extract audio yet
+    tracing::info!(
+        "virtual: found audio peer {} model={audio_model}, but audio extraction not yet wired",
+        peer_id.fmt_short()
+    );
+    json!({ "action": "none" })
+}
+
+/// Look up a peer's model name matching a capability predicate.
+async fn peer_model_with_capability(
+    node: &mesh::Node,
+    peer_id: iroh::EndpointId,
+    predicate: impl Fn(&crate::mesh::ServedModelDescriptor) -> bool,
+) -> String {
+    let peers = node.peers().await;
+    peers
+        .iter()
+        .find(|p| p.id == peer_id)
+        .and_then(|p| {
+            p.served_model_descriptors
+                .iter()
+                .find(|d| predicate(d))
+                .map(|d| d.identity.model_name.clone())
+        })
+        .unwrap_or_default()
 }
 
 // ===========================================================================
@@ -270,7 +315,7 @@ async fn get_peer_hint(node: &mesh::Node, current_model: &str, messages: &[Value
 // Helpers
 // ===========================================================================
 
-fn extract_image(payload: &Value) -> (String, String) {
+pub fn extract_image(payload: &Value) -> (String, String) {
     let messages = match payload["messages"].as_array() {
         Some(m) => m,
         None => return (String::new(), String::new()),

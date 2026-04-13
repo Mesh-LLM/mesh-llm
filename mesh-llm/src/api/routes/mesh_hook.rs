@@ -33,7 +33,8 @@ pub async fn handle(
     let response = match hook {
         "pre_inference" => {
             let trigger = payload["trigger"].as_str().unwrap_or("unknown");
-            virtual_llm::handle_image(&node, trigger, &model, &payload).await
+            let (image_url, user_text) = virtual_llm::extract_image(&payload);
+            virtual_llm::handle_image(&node, trigger, &model, &image_url, &user_text).await
         }
         "post_prefill" => {
             let entropy = payload["signals"]["first_token_entropy"]

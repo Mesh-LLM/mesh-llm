@@ -35,6 +35,21 @@ pub async fn find_vision_peer(node: &mesh::Node, exclude_model: &str) -> Option<
         .map(|p| p.id)
 }
 
+/// Find a peer that can handle audio.
+/// Returns None if no audio-capable peer exists in the mesh.
+pub async fn find_audio_peer(node: &mesh::Node, exclude_model: &str) -> Option<EndpointId> {
+    let peers = node.peers().await;
+    peers
+        .iter()
+        .filter(|p| {
+            p.served_model_descriptors.iter().any(|d| {
+                d.capabilities.supports_audio_runtime() && d.identity.model_name != exclude_model
+            })
+        })
+        .min_by_key(|p| p.rtt_ms.unwrap_or(u32::MAX))
+        .map(|p| p.id)
+}
+
 /// Find up to `n` peers serving a *different* model from the current one,
 /// ranked by score (best first).
 ///
