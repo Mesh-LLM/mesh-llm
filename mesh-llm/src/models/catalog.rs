@@ -1774,9 +1774,12 @@ mod tests {
         std::fs::write(&cached_file, b"gguf").unwrap();
 
         let model = CatalogModel {
+            id: "Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
+                .to_string(),
             name: "Qwen2.5-Coder-7B-Instruct-Q4_K_M".to_string(),
             file: "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf".to_string(),
             url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf".to_string(),
+            primary_size_bytes: Some(4_400_000_000),
             size: "4.4GB".to_string(),
             description: "".to_string(),
             draft: None,
@@ -1820,9 +1823,11 @@ mod tests {
         std::fs::write(&expected_file, b"right").unwrap();
 
         let model = CatalogModel {
+            id: "org/repo/nested/MODEL.gguf".to_string(),
             name: "Nested-Path-Model".to_string(),
             file: "model.gguf".to_string(),
             url: "https://huggingface.co/org/repo/resolve/main/nested/MODEL.gguf".to_string(),
+            primary_size_bytes: Some(1_000_000_000),
             size: "1GB".to_string(),
             description: "".to_string(),
             draft: None,
