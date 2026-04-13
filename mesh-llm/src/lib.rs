@@ -26,3 +26,4 @@ pub const VERSION: &str = "0.60.0-rc.2";
 pub async fn run() -> Result<()> {
     runtime::run().await
 }
+
