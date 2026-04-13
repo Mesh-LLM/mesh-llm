@@ -100,17 +100,6 @@ pub async fn find_different_model_peers(
     candidates.into_iter().map(|(id, m, _)| (id, m)).collect()
 }
 
-/// Convenience: find the single best different-model peer.
-pub async fn find_different_model_peer(
-    node: &mesh::Node,
-    current_model: &str,
-) -> Option<(EndpointId, String)> {
-    find_different_model_peers(node, current_model, 1)
-        .await
-        .into_iter()
-        .next()
-}
-
 // ---------------------------------------------------------------------------
 // Consultation requests
 // ---------------------------------------------------------------------------
@@ -349,44 +338,4 @@ pub async fn race_second_opinion(
 
     tracing::warn!("virtual: all peers failed");
     None
-}
-
-/// Ask a peer to verify whether generated text is accurate.
-/// Returns the peer's assessment.
-pub async fn verify_response(
-    node: &mesh::Node,
-    peer_id: EndpointId,
-    model: &str,
-    user_messages: &[Value],
-    generated_text: &str,
-) -> Result<String> {
-    // Build the last user message text for context
-    let last_user = user_messages
-        .iter()
-        .rev()
-        .find(|m| m["role"].as_str() == Some("user"))
-        .and_then(|m| m["content"].as_str())
-        .unwrap_or("(unknown question)");
-
-    // Only send the tail of the response — that's where the spike happened.
-    // Sending the full generated text wastes peer compute on re-reading good content.
-    let tail = if generated_text.len() > 500 {
-        &generated_text[generated_text.len() - 500..]
-    } else {
-        generated_text
-    };
-
-    let messages = vec![serde_json::json!({
-        "role": "user",
-        "content": format!(
-            "A language model was asked: \"{last_user}\"\n\n\
-             The end of its response was: \"{tail}\"\n\n\
-             Is this ending accurate and coherent? \
-             If it's fine, say exactly \"LOOKS_GOOD\" and nothing else. \
-             If the ending is wrong or incoherent, provide a corrected \
-             version of the last 1-2 sentences only."
-        )
-    })];
-
-    chat_completion(node, peer_id, model, messages, 256).await
 }

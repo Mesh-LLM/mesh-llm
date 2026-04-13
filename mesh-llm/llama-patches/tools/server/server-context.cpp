@@ -1258,10 +1258,9 @@ private:
                 auto resp = slot.mesh_hook.call_hook(payload);
                 auto inject_text = slot.mesh_hook.process_response(resp);
 
-                SLT_DBG(slot, "mesh hook 1: response action=%s entropy_threshold=%.2f verify=%d\n",
+                SLT_DBG(slot, "mesh hook 1: response action=%s entropy_threshold=%.2f\n",
                         resp.value("action", "none").c_str(),
-                        slot.mesh_hook.entropy_threshold,
-                        slot.mesh_hook.verify ? 1 : 0);
+                        slot.mesh_hook.entropy_threshold);
 
                 if (!inject_text.empty()) {
                     // Tokenize the inject text and append to prompt tokens.
@@ -1548,58 +1547,6 @@ private:
     }
 
     void send_final_response(server_slot & slot) {
-        // --- Mesh Hook 3: pre-response ---
-        // Check if the generation has issues worth reporting to mesh-llm.
-        if (slot.mesh_hook.enabled) {
-            bool is_uncertain  = (slot.mesh_hook.signals.uncertain_ratio() > 0.3f);
-            bool is_bad_ending = slot.mesh_hook.signals.tail_entropy_spike();
-
-            bool trigger = slot.mesh_hook.verify
-                || is_uncertain
-                || is_bad_ending;
-
-            if (trigger) {
-                std::string trigger_name = "verify";
-                if (is_uncertain)   trigger_name = "high_uncertainty";
-                if (is_bad_ending)  trigger_name = "tail_entropy_spike";
-
-                json payload = {
-                    {"hook",           "pre_response"},
-                    {"trigger",        trigger_name},
-                    {"request_id",     slot.mesh_hook.request_id},
-                    {"model",          slot.task->params.oaicompat_model},
-                    {"generated_text", slot.generated_text},
-                    {"n_decoded",      slot.n_decoded},
-                    {"messages",       slot.task->params.mesh_messages},
-                    {"signals",        slot.mesh_hook.signals.to_json()},
-                };
-
-                SLT_INF(slot, "mesh hook 3: pre_response, trigger = %s\n", trigger_name.c_str());
-
-                auto resp = slot.mesh_hook.call_hook(payload);
-                if (!resp.empty()) {
-                    auto action = resp.value("action", "none");
-                    if (action == "replace") {
-                        // Full replacement — peer's answer replaces the model's output entirely
-                        auto replace_text = resp.value("text", "");
-                        if (!replace_text.empty()) {
-                            SLT_INF(slot, "mesh hook 3: replacing response (%zu -> %zu chars)\n",
-                                    slot.generated_text.size(), replace_text.size());
-                            slot.generated_text = replace_text;
-                        }
-                    } else if (action == "inject") {
-                        // Append — add text after the model's output
-                        auto inject_text = resp.value("text", "");
-                        if (!inject_text.empty()) {
-                            SLT_INF(slot, "mesh hook 3: appending %zu chars to response\n",
-                                    inject_text.size());
-                            slot.generated_text += inject_text;
-                        }
-                    }
-                }
-            }
-        }
-
         auto res = std::make_unique<server_task_result_cmpl_final>();
 
         res->id      = slot.task->id;

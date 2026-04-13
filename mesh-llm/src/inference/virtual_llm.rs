@@ -9,7 +9,6 @@
 //! | handle_image      | Image on text-only model  | Caption via vision peer   |
 //! | handle_uncertain  | High entropy at start     | Hint from different model |
 //! | handle_drift      | Entropy spike mid-gen     | Hint from different model |
-//! | handle_verify     | Bad signals after gen     | Check and maybe replace   |
 
 use crate::inference::consult;
 use crate::mesh;
@@ -193,73 +192,6 @@ pub async fn handle_drift(
     }
 
     get_peer_hint(node, model, messages).await
-}
-
-// ===========================================================================
-// handle_verify — check output before sending, maybe replace
-// ===========================================================================
-
-/// Generation finished but signals say the output is suspect. Sends the
-/// last user message + last 500 chars of generated text to a peer asking
-/// "is this coherent? say LOOKS_GOOD or correct it."
-///
-/// `trigger`: why C++ fired this — `"tail_entropy_spike"` (last 16 tokens),
-///   `"high_uncertainty"` (>30% of tokens), or `"verify"` (Hook 1 requested)
-/// `generated_text`: the full model output (only tail is sent to peer)
-///
-/// Returns `{"action": "replace", "text": "corrected answer"}` if the peer
-/// says it's wrong, or `{"action": "none"}` if it passes or verification fails.
-pub async fn handle_verify(
-    node: &mesh::Node,
-    model: &str,
-    messages: &[Value],
-    trigger: &str,
-    generated_text: &str,
-    n_decoded: i64,
-    mean_entropy: f64,
-) -> Value {
-    tracing::info!(
-        "virtual: handle_verify trigger={trigger} n_decoded={n_decoded} \
-         mean_entropy={mean_entropy:.2} model={model}"
-    );
-
-    // Find a peer to verify with
-    let (peer_id, peer_model) = match consult::find_different_model_peer(node, model).await {
-        Some(p) => p,
-        None => {
-            tracing::info!("virtual: no peer available for verification");
-            return json!({ "action": "none" });
-        }
-    };
-
-    tracing::info!(
-        "virtual: verifying ({trigger}) via {} model={peer_model}",
-        peer_id.fmt_short()
-    );
-
-    match consult::verify_response(node, peer_id, &peer_model, messages, generated_text).await {
-        Ok(verdict) => {
-            if verdict.contains("LOOKS_GOOD") {
-                tracing::info!("virtual: verification passed");
-                json!({ "action": "none" })
-            } else {
-                let trimmed = if verdict.len() > 2048 {
-                    format!("{}...", &verdict[..2048])
-                } else {
-                    verdict
-                };
-                tracing::info!("virtual: replacing response ({} chars)", trimmed.len());
-                json!({
-                    "action": "replace",
-                    "text": trimmed,
-                })
-            }
-        }
-        Err(e) => {
-            tracing::warn!("virtual: verification failed: {e}");
-            json!({ "action": "none" })
-        }
-    }
 }
 
 // ===========================================================================

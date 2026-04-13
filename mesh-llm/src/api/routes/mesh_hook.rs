@@ -49,22 +49,6 @@ pub async fn handle(
             let n_decoded = payload["n_decoded"].as_i64().unwrap_or(0);
             virtual_llm::handle_drift(&node, &model, &messages, n_decoded).await
         }
-        "pre_response" => {
-            let trigger = payload["trigger"].as_str().unwrap_or("unknown");
-            let generated_text = payload["generated_text"].as_str().unwrap_or("");
-            let n_decoded = payload["n_decoded"].as_i64().unwrap_or(0);
-            let mean_entropy = payload["signals"]["mean_entropy"].as_f64().unwrap_or(0.0);
-            virtual_llm::handle_verify(
-                &node,
-                &model,
-                &messages,
-                trigger,
-                generated_text,
-                n_decoded,
-                mean_entropy,
-            )
-            .await
-        }
         _ => {
             tracing::warn!("mesh hook: unknown hook type: {hook}");
             serde_json::json!({ "action": "none" })

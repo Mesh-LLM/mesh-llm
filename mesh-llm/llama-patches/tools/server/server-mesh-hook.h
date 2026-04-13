@@ -114,7 +114,6 @@ struct mesh_hook_ctx {
 
     // configured by Hook 1 response (or defaults)
     float entropy_threshold = 3.0f;   // default: fire Hook 2 when entropy > 3.0 (~8 equally-likely tokens)
-    bool  verify            = false;  // false = Hook 3 only on triggers
 
     // mid-generation hook state
     int   last_midgen_token = -32;    // token index of last mid-gen hook fire (-32 = never)
@@ -148,7 +147,6 @@ struct mesh_hook_ctx {
     void reset() {
         request_id.clear();
         entropy_threshold = debug ? 0.5f : 3.0f;
-        verify = false;
         has_images_no_multimodal = false;
         has_audio_no_support = false;
         last_midgen_token = -MIDGEN_COOLDOWN;
@@ -191,19 +189,15 @@ struct mesh_hook_ctx {
         return {};
     }
 
-    // Process a hook response: apply entropy_threshold, verify.
+    // Process a hook response: apply entropy_threshold.
     // Returns inject text (empty = no injection).
     std::string process_response(const json & resp) {
         if (resp.empty()) return "";
 
         auto action = resp.value("action", "none");
 
-        // configure downstream hooks
         if (resp.contains("entropy_threshold")) {
             entropy_threshold = resp["entropy_threshold"].get<float>();
-        }
-        if (resp.contains("verify")) {
-            verify = resp["verify"].get<bool>();
         }
 
         if (action == "inject") {
