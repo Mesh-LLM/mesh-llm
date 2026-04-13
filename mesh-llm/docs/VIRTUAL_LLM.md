@@ -90,11 +90,12 @@ After generation, before response is sent. Fires when the output looks problemat
 
 | Trigger | Check |
 |---|---|
-| `max_tokens` | Hit the token limit — response may be cut off |
 | `very_short` | < 10 tokens generated for a substantial prompt |
 | `high_uncertainty` | > 30% of tokens had entropy above 4.0 |
 | `tail_entropy_spike` | Last 16 tokens had 2x the mean entropy |
 | `verify` | Hook 1 explicitly requested verification |
+
+Hook 3 does **not** fire on `max_tokens` — hitting the token limit is normal operation, and `finish_reason: "length"` already signals it to the caller.
 
 **What llama-server sends:**
 ```json
@@ -121,7 +122,7 @@ After generation, before response is sent. Fires when the output looks problemat
 **Key:** `generated_text` is the only data that only C++ has — the actual model output. mesh-llm combines this with the original request (looked up by `mesh_request_id`) for verification or augmentation.
 
 **Response options:**
-- `{"action": "inject", "text": "\n\n[Note: response truncated]"}` — appended to response
+- `{"action": "inject", "text": "\n\n[Correction: ...]"}` — appended to response (e.g. after verification)
 - `{"action": "none"}` — let it through as-is
 
 ---
@@ -199,15 +200,6 @@ Model is uncertain about a factual question. Instead of blocking at Hook 2, use 
 3. Small model generates its response (3-5 seconds).
 4. Hook 3 fires: `verify`. mesh-llm checks the DashMap — background task finished.
 5. Compares the two responses. If they agree, lets it through. If they disagree, appends a note.
-
-### Truncated response
-
-Generation hit max_tokens.
-
-1. Hook 3 fires: `max_tokens`
-2. mesh-llm sees the response was cut mid-sentence
-3. Returns `{"action": "inject", "text": "\n\n[Response truncated at token limit]"}`
-4. Or: sends the partial response to another model for completion, injects the continuation.
 
 ### Hallucination detection
 
