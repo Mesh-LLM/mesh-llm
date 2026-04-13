@@ -164,14 +164,7 @@ pub async fn handle_uncertain(
     }
 
     // Pre-generation: user is waiting for first token anyway, can afford longer timeout
-    get_peer_hint(
-        node,
-        model,
-        messages,
-        consult::TIMEOUT_PRE_GENERATION,
-        false,
-    )
-    .await
+    get_peer_hint(node, model, messages, consult::TIMEOUT_PRE_GENERATION).await
 }
 
 // ===========================================================================
@@ -199,7 +192,7 @@ pub async fn handle_drift(
     }
 
     // Mid-generation: user sees a stall, keep it short
-    get_peer_hint(node, model, messages, consult::TIMEOUT_MID_GENERATION, true).await
+    get_peer_hint(node, model, messages, consult::TIMEOUT_MID_GENERATION).await
 }
 
 // ===========================================================================
@@ -210,14 +203,11 @@ pub async fn handle_drift(
 /// serving a different model, races them for a second opinion, returns
 /// an inject action with the winner's answer.
 ///
-/// `compact`: if true, use shorter injection framing (for mid-generation
-/// where long text derails the model's continuation style).
 async fn get_peer_hint(
     node: &mesh::Node,
     current_model: &str,
     messages: &[Value],
     timeout: std::time::Duration,
-    compact: bool,
 ) -> Value {
     let peers = consult::find_different_model_peers(node, current_model, 2).await;
     if peers.is_empty() {
@@ -237,9 +227,8 @@ async fn get_peer_hint(
 
     match consult::race_second_opinion(node, &peers, messages, timeout).await {
         Some((opinion, winner_id, winner_model)) => {
-            let max_len = if compact { 256 } else { 512 };
-            let trimmed = if opinion.len() > max_len {
-                format!("{}...", &opinion[..max_len])
+            let trimmed = if opinion.len() > 512 {
+                format!("{}...", &opinion[..512])
             } else {
                 opinion
             };
@@ -249,16 +238,9 @@ async fn get_peer_hint(
                 winner_model,
                 trimmed.len()
             );
-            let text = if compact {
-                // Mid-generation: short anchor to course-correct
-                format!("\n\nKey fact: {trimmed}\n\n")
-            } else {
-                // Pre-generation: full reference for the model to build on
-                format!("\n\nReference answer: {trimmed}\n\nUse the reference above to provide an accurate response.\n")
-            };
             json!({
                 "action": "inject",
-                "text": text,
+                "text": format!("\n\nReference answer: {trimmed}\n\nUse the reference above to provide an accurate response.\n"),
             })
         }
         None => {

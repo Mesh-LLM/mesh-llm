@@ -135,6 +135,8 @@ fn framing_rag(hint: &str) -> String {
     )
 }
 
+
+
 // ── Test cases ──────────────────────────────────────────────────────────
 
 struct TestCase {
@@ -287,6 +289,7 @@ async fn test_injection_framing() {
         ("reference", framing_reference),
         ("assistant_draft", framing_assistant_draft),
         ("rag", framing_rag),
+
     ];
 
     // ── Baseline: no injection ──────────────────────────────────────
