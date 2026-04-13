@@ -112,7 +112,11 @@ pub(super) async fn nostr_rediscovery(
                     rejoined = true;
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Re-join failed: {e}");
+                    if let Some(invite_err) = e.downcast_ref::<mesh::InviteTokenError>() {
+                        eprintln!("⚠️  Re-join skipped: invalid Nostr invite token ({invite_err})");
+                    } else {
+                        eprintln!("⚠️  Re-join failed: {e}");
+                    }
                 }
             }
             if rejoined {

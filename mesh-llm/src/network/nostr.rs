@@ -64,6 +64,61 @@ pub struct DiscoveredMesh {
     pub expires_at: Option<u64>,
 }
 
+fn validate_listing(listing: &MeshListing) -> std::result::Result<(), String> {
+    const MAX_INVITE_TOKEN_LEN: usize = 16 * 1024;
+    const MAX_NAME_LEN: usize = 128;
+    const MAX_REGION_LEN: usize = 64;
+    const MAX_MODEL_ENTRIES: usize = 256;
+
+    if listing.invite_token.is_empty() {
+        return Err("missing invite token".into());
+    }
+    if listing.invite_token.len() > MAX_INVITE_TOKEN_LEN {
+        return Err(format!(
+            "invite token too large ({} bytes)",
+            listing.invite_token.len()
+        ));
+    }
+    crate::mesh::Node::decode_invite_token(&listing.invite_token)
+        .map_err(|err| format!("invalid invite token ({err})"))?;
+
+    if let Some(name) = &listing.name {
+        if name.len() > MAX_NAME_LEN {
+            return Err(format!("mesh name too long ({} bytes)", name.len()));
+        }
+    }
+    if let Some(region) = &listing.region {
+        if region.len() > MAX_REGION_LEN {
+            return Err(format!("region too long ({} bytes)", region.len()));
+        }
+    }
+
+    if listing.serving.len() > MAX_MODEL_ENTRIES {
+        return Err(format!(
+            "too many serving models ({})",
+            listing.serving.len()
+        ));
+    }
+    if listing.wanted.len() > MAX_MODEL_ENTRIES {
+        return Err(format!("too many wanted models ({})", listing.wanted.len()));
+    }
+    if listing.on_disk.len() > MAX_MODEL_ENTRIES {
+        return Err(format!(
+            "too many on-disk models ({})",
+            listing.on_disk.len()
+        ));
+    }
+
+    if listing.max_clients > 0 && listing.client_count > listing.max_clients.saturating_mul(8) {
+        return Err(format!(
+            "client count {} is implausible for max_clients {}",
+            listing.client_count, listing.max_clients
+        ));
+    }
+
+    Ok(())
+}
+
 impl std::fmt::Display for DiscoveredMesh {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let vram_gb = self.listing.total_vram_bytes as f64 / 1e9;
@@ -765,8 +820,23 @@ pub async fn discover(
 
         let listing: MeshListing = match serde_json::from_str(&event.content) {
             Ok(l) => l,
-            Err(_) => continue,
+            Err(err) => {
+                tracing::warn!(
+                    "Skipping Nostr mesh listing from {}: invalid listing JSON: {err}",
+                    event.pubkey.to_bech32().unwrap_or_default()
+                );
+                continue;
+            }
         };
+
+        if let Err(reason) = validate_listing(&listing) {
+            tracing::warn!(
+                "Skipping Nostr mesh listing from {}: {}",
+                event.pubkey.to_bech32().unwrap_or_default(),
+                reason
+            );
+            continue;
+        }
 
         let publisher_npub = event.pubkey.to_bech32().unwrap_or_default();
         let discovered = DiscoveredMesh {
@@ -1149,6 +1219,16 @@ mod auto_pack_tests {
 #[cfg(test)]
 mod scoring_tests {
     use super::*;
+    use iroh::{EndpointAddr, EndpointId, SecretKey};
+
+    pub(super) fn valid_invite_token(_label: &str) -> String {
+        let addr = EndpointAddr {
+            id: EndpointId::from(SecretKey::generate(&mut rand::rng()).public()),
+            addrs: Default::default(),
+        };
+        let json = serde_json::to_vec(&addr).expect("endpoint addr should serialize");
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+    }
 
     fn make_mesh(
         name: Option<&str>,
@@ -1161,7 +1241,7 @@ mod scoring_tests {
     ) -> DiscoveredMesh {
         DiscoveredMesh {
             listing: MeshListing {
-                invite_token: format!("invite-{}", mesh_id.unwrap_or("test")),
+                invite_token: valid_invite_token(mesh_id.unwrap_or("test")),
                 serving: serving.iter().map(|s| s.to_string()).collect(),
                 wanted: vec![],
                 on_disk: vec![],
@@ -1193,6 +1273,29 @@ mod scoring_tests {
         let score = score_mesh(&mesh, 1500, None);
         // base(100) + community(300) + headroom + nodes(15) + models(10)
         assert!(score > 400, "community mesh should score high, got {score}");
+    }
+
+    #[test]
+    fn validate_listing_rejects_bad_invite_token() {
+        let listing = MeshListing {
+            invite_token: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"not-json"),
+            serving: vec![],
+            wanted: vec![],
+            on_disk: vec![],
+            total_vram_bytes: 0,
+            node_count: 1,
+            client_count: 0,
+            max_clients: 0,
+            name: None,
+            region: None,
+            mesh_id: None,
+        };
+
+        let err = validate_listing(&listing).expect_err("listing must be rejected");
+        assert!(
+            err.contains("invalid invite token"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1778,7 +1881,7 @@ mod integration_tests {
             .await
             .expect("pub_a");
         let listing_a = MeshListing {
-            invite_token: "invite-a".into(),
+            invite_token: scoring_tests::valid_invite_token("publish-a"),
             serving: vec!["Qwen3-8B-Q4_K_M".into()],
             wanted: vec![],
             on_disk: vec![],
@@ -1798,7 +1901,7 @@ mod integration_tests {
             .await
             .expect("pub_b");
         let mut listing_b = listing_a.clone();
-        listing_b.invite_token = "invite-b".into();
+        listing_b.invite_token = scoring_tests::valid_invite_token("publish-b");
         pub_b.publish(&listing_b, 120).await.expect("publish B");
 
         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -1832,12 +1935,12 @@ mod integration_tests {
             .map(|m| m.listing.invite_token.as_str())
             .collect();
         assert!(
-            tokens.contains(&"invite-a"),
-            "missing invite-a in {tokens:?}"
+            tokens.contains(&listing_a.invite_token.as_str()),
+            "missing listing_a token in {tokens:?}"
         );
         assert!(
-            tokens.contains(&"invite-b"),
-            "missing invite-b in {tokens:?}"
+            tokens.contains(&listing_b.invite_token.as_str()),
+            "missing listing_b token in {tokens:?}"
         );
 
         // Second discover with same client still works

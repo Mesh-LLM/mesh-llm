@@ -359,13 +359,8 @@ pub(crate) async fn run() -> Result<()> {
             nostr::AutoDecision::Join { candidates } => {
                 if cli.client {
                     // Clients skip health probe — joining itself is the test.
-                    // Use the best candidate.
-                    let (token, mesh) = &candidates[0];
-                    if cli.mesh_name.is_none() {
-                        if let Some(ref name) = mesh.listing.name {
-                            cli.mesh_name = Some(name.clone());
-                        }
-                    }
+                    // Keep all candidates so a stale top-ranked invite can fall back.
+                    let (_, mesh) = &candidates[0];
                     eprintln!(
                         "✅ Joining: {} ({} nodes, {} models{})",
                         mesh.listing.name.as_deref().unwrap_or("unnamed"),
@@ -377,7 +372,7 @@ pub(crate) async fn run() -> Result<()> {
                             .map(|r| format!(", region: {r}"))
                             .unwrap_or_default()
                     );
-                    cli.join.push(token.clone());
+                    queue_auto_join_candidates(&mut cli, &mut auto_join_candidates, &candidates);
                 } else {
                     // GPU nodes: try to join each candidate directly.
                     // No ephemeral probe — it fails when the target has a firewall
@@ -415,19 +410,18 @@ pub(crate) async fn run() -> Result<()> {
                             if let nostr::AutoDecision::Join { candidates } =
                                 nostr::smart_auto(&retry_meshes, my_vram_gb, target_name)
                             {
-                                let (token, mesh) = &candidates[0];
-                                if cli.mesh_name.is_none() {
-                                    if let Some(ref name) = mesh.listing.name {
-                                        cli.mesh_name = Some(name.clone());
-                                    }
-                                }
+                                let (_, mesh) = &candidates[0];
                                 eprintln!(
                                     "✅ Joining: {} ({} nodes, {} models)",
                                     mesh.listing.name.as_deref().unwrap_or("unnamed"),
                                     mesh.listing.node_count,
                                     mesh.listing.serving.len()
                                 );
-                                cli.join.push(token.clone());
+                                queue_auto_join_candidates(
+                                    &mut cli,
+                                    &mut auto_join_candidates,
+                                    &candidates,
+                                );
                                 found = true;
                                 break;
                             }
@@ -957,6 +951,31 @@ fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
     }
 }
 
+fn queue_auto_join_candidates(
+    cli: &mut Cli,
+    auto_join_candidates: &mut Vec<(String, Option<String>)>,
+    candidates: &[(String, nostr::DiscoveredMesh)],
+) {
+    if cli.mesh_name.is_none() {
+        if let Some((_, best_mesh)) = candidates.first() {
+            if let Some(ref name) = best_mesh.listing.name {
+                cli.mesh_name = Some(name.clone());
+            }
+        }
+    }
+
+    auto_join_candidates.extend(
+        candidates
+            .iter()
+            .map(|(token, mesh)| (token.clone(), mesh.listing.name.clone())),
+    );
+}
+
+fn invalid_invite_token_message(err: &anyhow::Error) -> Option<String> {
+    err.downcast_ref::<mesh::InviteTokenError>()
+        .map(|invite_err| format!("invalid Nostr invite token ({invite_err})"))
+}
+
 fn node_display_name(cli: &Cli, node: &mesh::Node) -> String {
     cli.name
         .clone()
@@ -973,7 +992,13 @@ async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
                     eprintln!("Joined mesh");
                     return Ok(());
                 }
-                Err(err) => tracing::warn!("Failed to join via token: {err}"),
+                Err(err) => {
+                    if let Some(message) = invalid_invite_token_message(&err) {
+                        eprintln!("⚠️  Skipping mesh candidate: {message}");
+                    } else {
+                        tracing::warn!("Failed to join via token: {err}");
+                    }
+                }
             }
         }
         anyhow::bail!("Failed to join any peer for MCP mode");
@@ -990,19 +1015,35 @@ async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
         let meshes = nostr::discover(&relays, &filter, None).await?;
         match nostr::smart_auto(&meshes, 0.0, target_name) {
             nostr::AutoDecision::Join { candidates } => {
-                let (token, mesh) = &candidates[0];
-                eprintln!(
-                    "✅ Joining: {} ({} nodes, {} models{})",
-                    mesh.listing.name.as_deref().unwrap_or("unnamed"),
-                    mesh.listing.node_count,
-                    mesh.listing.serving.len(),
-                    mesh.listing
-                        .region
-                        .as_ref()
-                        .map(|r| format!(", region: {r}"))
-                        .unwrap_or_default()
-                );
-                node.join(token).await?;
+                let mut last_err: Option<anyhow::Error> = None;
+                for (token, mesh) in &candidates {
+                    eprintln!(
+                        "✅ Joining: {} ({} nodes, {} models{})",
+                        mesh.listing.name.as_deref().unwrap_or("unnamed"),
+                        mesh.listing.node_count,
+                        mesh.listing.serving.len(),
+                        mesh.listing
+                            .region
+                            .as_ref()
+                            .map(|r| format!(", region: {r}"))
+                            .unwrap_or_default()
+                    );
+                    match node.join(token).await {
+                        Ok(()) => return Ok(()),
+                        Err(err) => {
+                            if let Some(message) = invalid_invite_token_message(&err) {
+                                eprintln!("⚠️  Skipping mesh candidate: {message}");
+                            } else {
+                                tracing::warn!("Failed to join via token: {err}");
+                            }
+                            last_err = Some(err);
+                        }
+                    }
+                }
+                if let Some(err) = last_err {
+                    return Err(err);
+                }
+                anyhow::bail!("No valid mesh candidates found for MCP mode");
             }
             nostr::AutoDecision::StartNew { .. } => {
                 anyhow::bail!("No mesh found for MCP mode. Pass --join or start a mesh first.");
@@ -1218,7 +1259,13 @@ async fn run_auto(
                     successful_join = Some((t.clone(), mesh_name.clone()));
                     break;
                 }
-                Err(e) => tracing::warn!("Failed to join via token: {e}"),
+                Err(e) => {
+                    if let Some(message) = invalid_invite_token_message(&e) {
+                        eprintln!("⚠️  Skipping mesh candidate: {message}");
+                    } else {
+                        tracing::warn!("Failed to join via token: {e}");
+                    }
+                }
             }
         }
 
@@ -2390,6 +2437,27 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
+    fn discovered_mesh(name: Option<&str>) -> nostr::DiscoveredMesh {
+        nostr::DiscoveredMesh {
+            listing: nostr::MeshListing {
+                invite_token: "published-token".into(),
+                serving: vec!["Qwen".into()],
+                wanted: Vec::new(),
+                on_disk: Vec::new(),
+                total_vram_bytes: 64_000_000_000,
+                node_count: 2,
+                client_count: 0,
+                max_clients: 0,
+                name: name.map(str::to_string),
+                region: None,
+                mesh_id: None,
+            },
+            publisher_npub: "npub1test".into(),
+            published_at: 0,
+            expires_at: None,
+        }
+    }
+
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
             std::env::set_var(key, value);
@@ -2699,6 +2767,46 @@ mod tests {
             &cli,
             &startup_specs
         ));
+    }
+
+    #[test]
+    fn queue_auto_join_candidates_keeps_all_discovered_tokens() {
+        let mut cli = Cli::parse_from(["mesh-llm", "--client", "--auto"]);
+        let mut auto_join_candidates = Vec::new();
+        let candidates = vec![
+            ("token-a".to_string(), discovered_mesh(Some("Alpha"))),
+            ("token-b".to_string(), discovered_mesh(Some("Beta"))),
+        ];
+
+        queue_auto_join_candidates(&mut cli, &mut auto_join_candidates, &candidates);
+
+        assert_eq!(
+            auto_join_candidates,
+            vec![
+                ("token-a".to_string(), Some("Alpha".to_string())),
+                ("token-b".to_string(), Some("Beta".to_string())),
+            ]
+        );
+        assert_eq!(cli.mesh_name.as_deref(), Some("Alpha"));
+        assert!(
+            cli.join.is_empty(),
+            "auto join fallback should use candidate queue"
+        );
+    }
+
+    #[test]
+    fn queue_auto_join_candidates_preserves_explicit_mesh_name() {
+        let mut cli = Cli::parse_from(["mesh-llm", "--client", "--auto", "--mesh-name", "Pinned"]);
+        let mut auto_join_candidates = Vec::new();
+        let candidates = vec![("token-a".to_string(), discovered_mesh(Some("Alpha")))];
+
+        queue_auto_join_candidates(&mut cli, &mut auto_join_candidates, &candidates);
+
+        assert_eq!(cli.mesh_name.as_deref(), Some("Pinned"));
+        assert_eq!(
+            auto_join_candidates,
+            vec![("token-a".to_string(), Some("Alpha".to_string()))]
+        );
     }
 
     #[tokio::test]

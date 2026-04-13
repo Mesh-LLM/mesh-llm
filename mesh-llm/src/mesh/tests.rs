@@ -4487,6 +4487,29 @@ async fn config_subscribe_matching_owner_receives_snapshot() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn invite_token_round_trips_to_endpoint_addr() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Client).await?;
+    let token = node.invite_token();
+    let decoded = Node::decode_invite_token(&token).expect("invite token should decode");
+
+    assert_eq!(decoded.id, node.id());
+    assert_eq!(decoded.addrs, node.endpoint.addr().addrs);
+
+    Ok(())
+}
+
+#[test]
+fn invalid_invite_token_reports_json_error() {
+    let bad_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"not-json");
+    let err = Node::decode_invite_token(&bad_payload).expect_err("token must be rejected");
+
+    match err {
+        InviteTokenError::Json(_) => {}
+        other => panic!("expected JSON invite token error, got {other:?}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_subscribe_wrong_owner_returns_error() -> Result<()> {
     let server_owner = test_owner_keypair(0x22, 0x23);

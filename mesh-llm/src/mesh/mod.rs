@@ -12,6 +12,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use thiserror::Error;
 
 use tokio::sync::{watch, Mutex};
 
@@ -22,6 +23,14 @@ use crate::crypto::{
 };
 use crate::inference::moe;
 use crate::protocol::*;
+
+#[derive(Debug, Error)]
+pub enum InviteTokenError {
+    #[error("invalid invite token encoding: {0}")]
+    Decode(base64::DecodeError),
+    #[error("invalid invite token JSON: {0}")]
+    Json(serde_json::Error),
+}
 
 /// Demand signal for a model — tracks interest via API requests and --model declarations.
 /// Gossiped across the mesh and merged via max(). Decays naturally when last_active gets old.
@@ -1611,6 +1620,15 @@ impl Node {
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&json)
     }
 
+    pub fn decode_invite_token(
+        invite_token: &str,
+    ) -> std::result::Result<EndpointAddr, InviteTokenError> {
+        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(invite_token)
+            .map_err(InviteTokenError::Decode)?;
+        serde_json::from_slice(&json).map_err(InviteTokenError::Json)
+    }
+
     #[cfg(test)]
     pub async fn sync_from_peer_for_tests(&self, remote: &Self) {
         let remote_id = remote.endpoint.id();
@@ -1673,8 +1691,7 @@ impl Node {
     }
 
     pub async fn join(&self, invite_token: &str) -> Result<()> {
-        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(invite_token)?;
-        let addr: EndpointAddr = serde_json::from_slice(&json)?;
+        let addr = Self::decode_invite_token(invite_token)?;
         // Clear dead status — explicit join should always attempt connection
         self.state.lock().await.dead_peers.remove(&addr.id);
         self.connect_to_peer(addr).await
