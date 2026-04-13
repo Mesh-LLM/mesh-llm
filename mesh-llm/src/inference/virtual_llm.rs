@@ -163,7 +163,15 @@ pub async fn handle_uncertain(
         return json!({ "action": "none" });
     }
 
-    get_peer_hint(node, model, messages).await
+    // Pre-generation: user is waiting for first token anyway, can afford longer timeout
+    get_peer_hint(
+        node,
+        model,
+        messages,
+        consult::TIMEOUT_PRE_GENERATION,
+        false,
+    )
+    .await
 }
 
 // ===========================================================================
@@ -176,8 +184,7 @@ pub async fn handle_uncertain(
 ///
 /// `n_decoded`: tokens generated so far (for logging)
 ///
-/// Returns `{"action": "inject", "text": "\n[Context: ...]\n\n"}` or
-/// `{"action": "none"}`.
+/// Returns `{"action": "inject", "text": "..."}` or `{"action": "none"}`.
 pub async fn handle_drift(
     node: &mesh::Node,
     model: &str,
@@ -191,7 +198,8 @@ pub async fn handle_drift(
         return json!({ "action": "none" });
     }
 
-    get_peer_hint(node, model, messages).await
+    // Mid-generation: user sees a stall, keep it short
+    get_peer_hint(node, model, messages, consult::TIMEOUT_MID_GENERATION, true).await
 }
 
 // ===========================================================================
@@ -201,7 +209,16 @@ pub async fn handle_drift(
 /// Shared by handle_uncertain and handle_drift. Finds up to 2 peers
 /// serving a different model, races them for a second opinion, returns
 /// an inject action with the winner's answer.
-async fn get_peer_hint(node: &mesh::Node, current_model: &str, messages: &[Value]) -> Value {
+///
+/// `compact`: if true, use shorter injection framing (for mid-generation
+/// where long text derails the model's continuation style).
+async fn get_peer_hint(
+    node: &mesh::Node,
+    current_model: &str,
+    messages: &[Value],
+    timeout: std::time::Duration,
+    compact: bool,
+) -> Value {
     let peers = consult::find_different_model_peers(node, current_model, 2).await;
     if peers.is_empty() {
         tracing::info!("virtual: no different model available");
@@ -218,10 +235,11 @@ async fn get_peer_hint(node: &mesh::Node, current_model: &str, messages: &[Value
         peer_names.join(", ")
     );
 
-    match consult::race_second_opinion(node, &peers, messages).await {
+    match consult::race_second_opinion(node, &peers, messages, timeout).await {
         Some((opinion, winner_id, winner_model)) => {
-            let trimmed = if opinion.len() > 512 {
-                format!("{}...", &opinion[..512])
+            let max_len = if compact { 256 } else { 512 };
+            let trimmed = if opinion.len() > max_len {
+                format!("{}...", &opinion[..max_len])
             } else {
                 opinion
             };
@@ -231,9 +249,16 @@ async fn get_peer_hint(node: &mesh::Node, current_model: &str, messages: &[Value
                 winner_model,
                 trimmed.len()
             );
+            let text = if compact {
+                // Mid-generation: short anchor to course-correct
+                format!("\n\nKey fact: {trimmed}\n\n")
+            } else {
+                // Pre-generation: full reference for the model to build on
+                format!("\n\nReference answer: {trimmed}\n\nUse the reference above to provide an accurate response.\n")
+            };
             json!({
                 "action": "inject",
-                "text": format!("\n\nReference answer: {trimmed}\n\nUse the reference above to provide an accurate response.\n"),
+                "text": text,
             })
         }
         None => {

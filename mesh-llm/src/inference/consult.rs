@@ -104,33 +104,34 @@ pub async fn find_different_model_peers(
 // Consultation requests
 // ---------------------------------------------------------------------------
 
-/// Default consultation timeout. If the peer doesn't respond in this time,
-/// we give up and let the local model proceed without help.
-const CONSULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Hook 2 timeout: before generation starts, user is waiting for first token
+/// anyway. Can afford to wait longer for a good answer.
+pub const TIMEOUT_PRE_GENERATION: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// Hook 2b timeout: mid-generation, user sees a stall. Keep it short.
+pub const TIMEOUT_MID_GENERATION: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Hook 1 timeout: media captioning before generation. Similar to Hook 2.
+pub const TIMEOUT_MEDIA: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Send a chat completion request to a peer over the mesh QUIC tunnel.
 /// Returns the assistant message content, or an error.
-///
-/// Times out after CONSULT_TIMEOUT — hooks block the local model's slot,
-/// so we can't wait forever.
 pub async fn chat_completion(
     node: &mesh::Node,
     peer_id: EndpointId,
     model: &str,
     messages: Vec<Value>,
     max_tokens: u32,
+    timeout: std::time::Duration,
 ) -> Result<String> {
     match tokio::time::timeout(
-        CONSULT_TIMEOUT,
+        timeout,
         chat_completion_inner(node, peer_id, model, messages, max_tokens),
     )
     .await
     {
         Ok(result) => result,
-        Err(_) => anyhow::bail!(
-            "consultation timed out after {}s",
-            CONSULT_TIMEOUT.as_secs()
-        ),
+        Err(_) => anyhow::bail!("consultation timed out after {}s", timeout.as_secs()),
     }
 }
 
@@ -223,7 +224,7 @@ pub async fn caption_image(
         ]
     })];
 
-    chat_completion(node, peer_id, model, messages, 256).await
+    chat_completion(node, peer_id, model, messages, 256, TIMEOUT_MEDIA).await
 }
 
 /// Ask a peer for a second opinion on the user's question.
@@ -237,6 +238,7 @@ pub async fn second_opinion(
     peer_id: EndpointId,
     model: &str,
     messages: &[Value],
+    timeout: std::time::Duration,
 ) -> Result<String> {
     // Extract just the last user message text
     let last_user_text = messages
@@ -277,7 +279,7 @@ pub async fn second_opinion(
         )
     })];
 
-    chat_completion(node, peer_id, model, ask_messages, 192).await
+    chat_completion(node, peer_id, model, ask_messages, 192, timeout).await
 }
 
 /// Fan out a second-opinion request to up to 2 peers, return the first
@@ -286,6 +288,7 @@ pub async fn race_second_opinion(
     node: &mesh::Node,
     peers: &[(EndpointId, String)],
     messages: &[Value],
+    timeout: std::time::Duration,
 ) -> Option<(String, EndpointId, String)> {
     if peers.is_empty() {
         return None;
@@ -293,7 +296,7 @@ pub async fn race_second_opinion(
 
     if peers.len() == 1 {
         let (id, model) = &peers[0];
-        return match second_opinion(node, *id, model, messages).await {
+        return match second_opinion(node, *id, model, messages, timeout).await {
             Ok(text) => Some((text, *id, model.clone())),
             Err(e) => {
                 tracing::warn!(
@@ -313,8 +316,9 @@ pub async fn race_second_opinion(
         let msgs = messages.to_vec();
         let id = *id;
         let model = model.clone();
+        let t = timeout;
         set.spawn(async move {
-            second_opinion(&node, id, &model, &msgs)
+            second_opinion(&node, id, &model, &msgs, t)
                 .await
                 .map(|text| (text, id, model))
         });
@@ -325,8 +329,9 @@ pub async fn race_second_opinion(
         let msgs = messages.to_vec();
         let id = peers[0].0;
         let model = peers[0].1.clone();
+        let t = timeout;
         set.spawn(async move {
-            second_opinion(&node, id, &model, &msgs)
+            second_opinion(&node, id, &model, &msgs, t)
                 .await
                 .map(|text| (text, id, model))
         });
