@@ -54,6 +54,17 @@ fn normalize_down_proj_bias(prefix: &str, tensors: &mut HashMap<String, Array>) 
     }
 }
 
+fn normalize_expert_quant_bias(prefix: &str, tensors: &mut HashMap<String, Array>) {
+    let legacy_key = format!("{prefix}.bias");
+    let normalized_key = format!("{prefix}.biases");
+    if tensors.contains_key(&normalized_key) {
+        return;
+    }
+    if let Some(biases) = tensors.remove(&legacy_key) {
+        tensors.insert(normalized_key, biases);
+    }
+}
+
 pub(crate) fn transform_gpt_oss_tensors(
     tensors: &mut HashMap<String, Array>,
     prefixes: &TensorPrefixes,
@@ -69,6 +80,9 @@ pub(crate) fn transform_gpt_oss_tensors(
                 .with_context(|| format!("failed to sanitize GPT-OSS tensors for {mlp_prefix}"))?;
         }
         normalize_down_proj_bias(&mlp_prefix, tensors);
+        normalize_expert_quant_bias(&format!("{mlp_prefix}.gate_proj"), tensors);
+        normalize_expert_quant_bias(&format!("{mlp_prefix}.up_proj"), tensors);
+        normalize_expert_quant_bias(&format!("{mlp_prefix}.down_proj"), tensors);
     }
 
     Ok(())

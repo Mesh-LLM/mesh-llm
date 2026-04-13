@@ -484,6 +484,76 @@ fn qwen3_templates_strip_empty_reasoning_prefill_when_explicitly_disabled() {
     assert_eq!(prompt, "<|im_start|>assistant\n");
 }
 
+#[test]
+fn qwen3_templates_trim_leading_whitespace_from_assistant_history() {
+    let root = std::env::temp_dir().join(format!(
+        "mesh-llm-template-qwen3-assistant-history-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("tokenizer_config.json"),
+        serde_json::json!({
+            "chat_template": "{%- for message in messages %}{%- if message.content is string %}{%- set content = message.content %}{%- else %}{%- set content = '' %}{%- endif %}{%- if message.role == 'assistant' %}{%- if '</think>' in content %}{%- set content = content.split('</think>')[-1].lstrip('\\n') %}{%- endif %}{{- '<|im_start|>assistant\\n' + content + '<|im_end|>\\n' }}{%- else %}{{- '<|im_start|>' + message.role + '\\n' + content + '<|im_end|>\\n' }}{%- endif %}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\\n' }}{%- if enable_thinking is defined and enable_thinking is false %}{{- '<think>\\n\\n</think>\\n\\n' }}{%- endif %}{%- endif %}"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let template = PromptTemplate::detect(
+        &root,
+        &serde_json::json!({"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}),
+    );
+    let prompt = template
+        .render_request(&json!({
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "\n\nworld"}
+            ],
+            "enable_thinking": false
+        }))
+        .unwrap();
+
+    assert!(prompt.contains("<|im_start|>assistant\nworld<|im_end|>\n"));
+    assert!(!prompt.contains("<|im_start|>assistant\n\n\nworld<|im_end|>\n"));
+}
+
+#[test]
+fn qwen3_templates_preserve_empty_reasoning_prefill_for_followups() {
+    let root = std::env::temp_dir().join(format!(
+        "mesh-llm-template-qwen3-followup-prefill-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("tokenizer_config.json"),
+        serde_json::json!({
+            "chat_template": "{%- set ns = namespace(last_query_index=messages|length - 1) %}{%- for message in messages[::-1] %}{%- set index = (messages|length - 1) - loop.index0 %}{%- if message.role == 'user' %}{%- set ns.last_query_index = index %}{%- break %}{%- endif %}{%- endfor %}{%- for message in messages %}{%- if message.content is string %}{%- set content = message.content %}{%- else %}{%- set content = '' %}{%- endif %}{%- if message.role == 'assistant' %}{%- set reasoning_content = '' %}{%- if '</think>' in content %}{%- set reasoning_content = content.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') %}{%- set content = content.split('</think>')[-1].lstrip('\\n') %}{%- endif %}{%- if loop.index0 > ns.last_query_index %}{{- '<|im_start|>assistant\\n<think>\\n' + reasoning_content.strip('\\n') + '\\n</think>\\n\\n' + content.lstrip('\\n') + '<|im_end|>\\n' }}{%- else %}{{- '<|im_start|>assistant\\n' + content + '<|im_end|>\\n' }}{%- endif %}{%- else %}{{- '<|im_start|>' + message.role + '\\n' + content + '<|im_end|>\\n' }}{%- endif %}{%- endfor %}{%- if add_generation_prompt %}{{- '<|im_start|>assistant\\n' }}{%- if enable_thinking is defined and enable_thinking is false %}{{- '<think>\\n\\n</think>\\n\\n' }}{%- endif %}{%- endif %}"
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let template = PromptTemplate::detect(
+        &root,
+        &serde_json::json!({"model_type":"qwen3","architectures":["Qwen3ForCausalLM"]}),
+    );
+    let prompt = template
+        .render_request(&json!({
+            "messages": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "world"},
+                {"role": "user", "content": "follow up"}
+            ],
+            "enable_thinking": false
+        }))
+        .unwrap();
+
+    assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
+}
+
 fn corpus_fixture(repo: &str) -> HfTemplateFixture {
     hf_template_corpus()
         .into_iter()

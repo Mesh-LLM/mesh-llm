@@ -378,6 +378,7 @@ fn render_hf_template(
 
     Ok(strip_empty_reasoning_prefill(
         rendered,
+        template,
         req,
         reasoning_defaults,
     ))
@@ -385,6 +386,7 @@ fn render_hf_template(
 
 fn strip_empty_reasoning_prefill(
     rendered: String,
+    template: &str,
     req: &Value,
     reasoning_defaults: &ReasoningDefaults,
 ) -> String {
@@ -402,11 +404,27 @@ fn strip_empty_reasoning_prefill(
         let suffix_start = prefix_start + assistant_prefix.len();
         let suffix = &rendered[suffix_start..];
         if suffix.trim() == "<think>\n\n</think>" {
+            if is_old_qwen_reasoning_template(template) && request_has_assistant_history(req) {
+                return rendered;
+            }
             return rendered[..suffix_start].to_string();
         }
     }
 
     rendered
+}
+
+fn request_has_assistant_history(req: &Value) -> bool {
+    req.get("messages")
+        .and_then(Value::as_array)
+        .is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .is_some_and(|role| role == "assistant")
+            })
+        })
 }
 
 fn reasoning_defaults(config: &Value) -> ReasoningDefaults {
@@ -533,9 +551,7 @@ fn is_old_qwen_reasoning_template(template: &str) -> bool {
     .into_iter()
     .any(|needle| template.contains(needle));
 
-    splits_on_end_think
-        && !template.contains("reasoning_content")
-        && !template.contains("<SPECIAL_12>")
+    splits_on_end_think && !template.contains("<SPECIAL_12>")
 }
 
 fn template_kwarg(req: &Value, key: &str) -> Option<Value> {
@@ -554,6 +570,7 @@ fn normalize_hf_messages(template: &str, messages: Value) -> Value {
     let fill_tool_call_id = message_field_mentioned(template, "tool_call_id");
     let fill_name = message_field_mentioned(template, "name");
     let fill_tool_responses = message_field_mentioned(template, "tool_responses");
+    let trim_assistant_history = is_old_qwen_reasoning_template(template);
 
     Value::Array(
         messages
@@ -571,6 +588,16 @@ fn normalize_hf_messages(template: &str, messages: Value) -> Value {
                 ] {
                     if should_fill {
                         normalized.entry(key.to_string()).or_insert(value);
+                    }
+                }
+                if trim_assistant_history
+                    && normalized
+                        .get("role")
+                        .and_then(Value::as_str)
+                        .is_some_and(|role| role == "assistant")
+                {
+                    if let Some(Value::String(text)) = normalized.get_mut("content") {
+                        *text = text.trim_start().to_string();
                     }
                 }
                 Value::Object(normalized)

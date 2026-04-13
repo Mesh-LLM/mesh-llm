@@ -148,6 +148,7 @@ def selected_models(
                 if backend_name in model:
                     candidate_keys.add(model[backend_name].get("exact_case_id", ""))
                     candidate_keys.add(model[backend_name].get("behavior_case_id", ""))
+                    candidate_keys.add(model[backend_name].get("thinking_case_id", ""))
             if not candidate_keys.intersection(selectors):
                 continue
         if backend_filter in ("gguf", "mlx") and backend_filter not in model:
@@ -226,6 +227,26 @@ def exact_config_for(matrix: dict[str, Any], model: dict[str, Any]) -> dict[str,
         if "prompt_suite" in model_exact:
             exact_cfg["prompt_suite"] = [dict(item) for item in model_exact["prompt_suite"]]
     return exact_cfg
+
+
+def thinking_config_for(matrix: dict[str, Any], model: dict[str, Any], backend: str) -> dict[str, Any]:
+    thinking_cfg = dict(matrix["defaults"].get("thinking", {}))
+    if "prompt_suite" in thinking_cfg:
+        thinking_cfg["prompt_suite"] = [dict(item) for item in thinking_cfg["prompt_suite"]]
+    model_thinking = model.get("thinking")
+    if isinstance(model_thinking, dict):
+        thinking_cfg.update(model_thinking)
+        if "prompt_suite" in model_thinking:
+            thinking_cfg["prompt_suite"] = [dict(item) for item in model_thinking["prompt_suite"]]
+    backend_cfg = model.get(backend, {})
+    backend_thinking = backend_cfg.get("thinking")
+    if isinstance(backend_thinking, dict):
+        thinking_cfg.update(backend_thinking)
+        if "prompt_suite" in backend_thinking:
+            thinking_cfg["prompt_suite"] = [dict(item) for item in backend_thinking["prompt_suite"]]
+    elif "thinking_mode" in backend_cfg:
+        thinking_cfg["thinking_mode"] = backend_cfg["thinking_mode"]
+    return thinking_cfg
 
 
 def run_exact_case(
@@ -532,6 +553,113 @@ def run_behavior_case(
     return rc
 
 
+def thinking_report_path(root: Path, stamp: str, case_id: str) -> Path:
+    return case_dir(root, stamp, "thinking", case_id) / "report.json"
+
+
+def run_thinking_case(
+    root: Path,
+    stamp: str,
+    matrix: dict[str, Any],
+    model: dict[str, Any],
+    backend: str,
+    resolved_models: dict[tuple[str, str], str],
+    *,
+    wait_seconds: int,
+) -> int:
+    thinking_defaults = thinking_config_for(matrix, model, backend)
+    backend_cfg = model[backend]
+    case_id = backend_cfg["thinking_case_id"]
+    out_dir = case_dir(root, stamp, "thinking", case_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    report_path = thinking_report_path(root, stamp, case_id)
+    mesh_log_path = out_dir / "mesh.log"
+    env = {
+        **os.environ,
+        "VALIDATION_RESULTS_ROOT": str(root),
+        "VALIDATION_RESULTS_STAMP": suite_stamp(stamp, "thinking"),
+    }
+
+    run(["just", "stop"], env=env)
+
+    prompt_suite_json = json.dumps(thinking_defaults["prompt_suite"], separators=(",", ":"))
+    cmd = [
+        str(REPO_ROOT / "scripts" / "run-validation-case.sh"),
+        backend,
+        case_id,
+        "python3",
+        str(REPO_ROOT / "scripts" / "ci-thinking-smoke.py"),
+        "--backend",
+        backend,
+        "--mesh-llm",
+        "target/release/mesh-llm",
+        "--label",
+        model["label"],
+        "--prompt-suite-json",
+        prompt_suite_json,
+        "--thinking-mode",
+        thinking_defaults.get("thinking_mode", "nonempty"),
+        "--wait-seconds",
+        str(wait_seconds or thinking_defaults.get("wait_seconds", DEFAULT_WAIT_SECONDS)),
+        "--mesh-log-output",
+        str(mesh_log_path),
+        "--output-json",
+        str(report_path),
+    ]
+    if backend == "gguf":
+        model_arg = resolved_models[(backend, backend_cfg["model_ref"])]
+        cmd.extend(
+            [
+                "--bin-dir",
+                "llama.cpp/build/bin",
+                "--model",
+                model_arg,
+            ]
+        )
+    else:
+        model_arg = resolved_models[(backend, backend_cfg["model_ref"])]
+        cmd.extend(
+            [
+                "--model",
+                model_arg,
+                "--expected-template-source",
+                backend_cfg["template_source"],
+            ]
+        )
+
+    rc = run(cmd, env=env).returncode
+    failed_check_count = ""
+    check_count = ""
+    if report_path.exists():
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+        failed_check_count = str(payload.get("failed_check_count", ""))
+        check_count = str(payload.get("check_count", ""))
+    append_tsv(
+        summary_path(root, stamp, "thinking"),
+        [
+            "model_id",
+            "label",
+            "expectation_class",
+            "backend",
+            "case_id",
+            "exit",
+            "failed_checks",
+            "check_count",
+        ],
+        [
+            model["id"],
+            model["label"],
+            model["expectation_class"],
+            backend,
+            case_id,
+            str(rc),
+            failed_check_count,
+            check_count,
+        ],
+    )
+    return rc
+
+
 def aggregate(root: Path, stamp: str, models: list[dict[str, Any]]) -> None:
     exact_rows: dict[tuple[str, str], str] = {}
     behavior_rows: dict[tuple[str, str], tuple[str, str]] = {}
@@ -609,6 +737,23 @@ def planned_cases(models: list[dict[str, Any]], backend_filter: str, suite: str)
                 cases.append(
                     {
                         "suite": "behavior",
+                        "backend": backend,
+                        "model_id": model["id"],
+                        "label": model["label"],
+                        "case_id": case_id,
+                    }
+                )
+    if suite in ("thinking", "all"):
+        for backend in backend_order:
+            for model in models:
+                if backend not in requested_backends(model, backend_filter):
+                    continue
+                case_id = model[backend].get("thinking_case_id")
+                if not case_id:
+                    continue
+                cases.append(
+                    {
+                        "suite": "thinking",
                         "backend": backend,
                         "model_id": model["id"],
                         "label": model["label"],
@@ -877,6 +1022,95 @@ def compare_behavior_against_baseline(
     compare_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def compare_thinking_against_baseline(
+    baseline_cfg: dict[str, Any],
+    root: Path,
+    stamp: str,
+    models: list[dict[str, Any]],
+    backend_filter: str,
+) -> None:
+    thinking_path = summary_path(root, stamp, "thinking")
+    if not thinking_path.exists():
+        return
+    actual_rows: dict[tuple[str, str], dict[str, str]] = {}
+    for line in thinking_path.read_text(encoding="utf-8").splitlines()[1:]:
+        model_id, _label, _expectation, backend, case_id, exit_code, failed_checks, check_count = line.split("\t")
+        actual_rows[(model_id, backend)] = {
+            "case_id": case_id,
+            "exit": exit_code,
+            "failed_check_count": failed_checks,
+            "check_count": check_count,
+        }
+
+    compare_path = root / stamp / "thinking-baseline-comparison.tsv"
+    header = [
+        "model_id",
+        "backend",
+        "case_id",
+        "expected_exit",
+        "actual_exit",
+        "expected_failed_checks",
+        "actual_failed_checks",
+        "expected_check_count",
+        "actual_check_count",
+        "status",
+    ]
+    lines = ["\t".join(header)]
+    for model in models:
+        for backend in requested_backends(model, backend_filter):
+            expected = baseline_cfg.get("thinking", {}).get(backend, {}).get(model["id"])
+            actual = actual_rows.get((model["id"], backend))
+            if expected is None:
+                status = "no-baseline"
+                lines.append(
+                    "\t".join(
+                        [
+                            model["id"],
+                            backend,
+                            actual["case_id"] if actual else "",
+                            "",
+                            actual["exit"] if actual else "",
+                            "",
+                            actual["failed_check_count"] if actual else "",
+                            "",
+                            actual["check_count"] if actual else "",
+                            status,
+                        ]
+                    )
+                )
+                continue
+            expected_exit = str(expected.get("exit", ""))
+            expected_failed = str(expected.get("failed_check_count", ""))
+            expected_count = str(expected.get("check_count", ""))
+            actual_exit = actual["exit"] if actual else ""
+            actual_failed = actual["failed_check_count"] if actual else ""
+            actual_count = actual["check_count"] if actual else ""
+            status = (
+                "match"
+                if actual_exit == expected_exit
+                and actual_failed == expected_failed
+                and actual_count == expected_count
+                else "mismatch"
+            )
+            lines.append(
+                "\t".join(
+                    [
+                        model["id"],
+                        backend,
+                        actual["case_id"] if actual else expected.get("case_id", ""),
+                        expected_exit,
+                        actual_exit,
+                        expected_failed,
+                        actual_failed,
+                        expected_count,
+                        actual_count,
+                        status,
+                    ]
+                )
+            )
+    compare_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def compare_parity_to_canonical(
     baseline_cfg: dict[str, Any],
     root: Path,
@@ -1029,6 +1263,18 @@ def baseline_divergence_report(
             status = "same" if gguf_value == mlx_value else "diverged"
             lines.append("\t".join(["behavior", model["id"], gguf_value, mlx_value, status]))
 
+        gguf_thinking = baseline_cfg.get("thinking", {}).get("gguf", {}).get(model["id"])
+        mlx_thinking = baseline_cfg.get("thinking", {}).get("mlx", {}).get(model["id"])
+        if gguf_thinking is not None or mlx_thinking is not None:
+            gguf_failed = "" if gguf_thinking is None else str(gguf_thinking.get("failed_check_count", ""))
+            mlx_failed = "" if mlx_thinking is None else str(mlx_thinking.get("failed_check_count", ""))
+            gguf_count = "" if gguf_thinking is None else str(gguf_thinking.get("check_count", ""))
+            mlx_count = "" if mlx_thinking is None else str(mlx_thinking.get("check_count", ""))
+            gguf_value = f"{gguf_failed}/{gguf_count}".rstrip("/")
+            mlx_value = f"{mlx_failed}/{mlx_count}".rstrip("/")
+            status = "same" if gguf_value == mlx_value else "diverged"
+            lines.append("\t".join(["thinking", model["id"], gguf_value, mlx_value, status]))
+
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1041,7 +1287,7 @@ def promote_baselines(
     backend_filter: str,
     suite: str,
 ) -> None:
-    for section in ("exact", "behavior"):
+    for section in ("exact", "behavior", "thinking"):
         baseline_cfg.setdefault(section, {})
         baseline_cfg[section].setdefault("gguf", {})
         baseline_cfg[section].setdefault("mlx", {})
@@ -1105,13 +1351,40 @@ def promote_baselines(
                     "flagged_prompt_ids": flagged_prompt_summary(report_path),
                 }
 
+    if suite in ("thinking", "all"):
+        thinking_path = summary_path(root, stamp, "thinking")
+        if thinking_path.exists():
+            if "gguf" in requested:
+                strict_failures: list[str] = []
+                for line in thinking_path.read_text(encoding="utf-8").splitlines()[1:]:
+                    model_id, _label, expectation_class, backend, case_id, exit_code, failed_checks, _check_count = line.split("\t")
+                    if backend != "gguf" or expectation_class != "strict":
+                        continue
+                    if exit_code != "0" or (failed_checks and failed_checks != "0"):
+                        strict_failures.append(f"{case_id}=exit:{exit_code},failed:{failed_checks or '0'}")
+                if strict_failures:
+                    raise SystemExit(
+                        "❌ refusing to promote canonical GGUF thinking baseline; strict rows were flagged: "
+                        + ", ".join(strict_failures)
+                    )
+            for line in thinking_path.read_text(encoding="utf-8").splitlines()[1:]:
+                model_id, _label, _expectation, backend, case_id, exit_code, failed_checks, check_count = line.split("\t")
+                if backend not in requested:
+                    continue
+                baseline_cfg["thinking"][backend][model_id] = {
+                    "exit": int(exit_code),
+                    "case_id": case_id,
+                    "failed_check_count": int(failed_checks or "0"),
+                    "check_count": int(check_count or "0"),
+                }
+
     baseline_path.parent.mkdir(parents=True, exist_ok=True)
     baseline_path.write_text(json.dumps(baseline_cfg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--suite", choices=["exact", "behavior", "all"], default="all")
+    parser.add_argument("--suite", choices=["exact", "behavior", "thinking", "all"], default="all")
     parser.add_argument("--backend", choices=["gguf", "mlx", "both"], default="both")
     parser.add_argument("--stamp", default="")
     parser.add_argument("--root", default=str(DEFAULT_ROOT))
@@ -1206,6 +1479,7 @@ def main() -> int:
                 aggregate(root, stamp, models)
                 compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_thinking_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_parity_to_canonical(baselines, root, stamp, models)
                 compare_cross_backend_exact_parity(root, stamp, models)
                 baseline_divergence_report(baselines, root, stamp, models)
@@ -1261,6 +1535,60 @@ def main() -> int:
                 aggregate(root, stamp, models)
                 compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_thinking_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_parity_to_canonical(baselines, root, stamp, models)
+                compare_cross_backend_exact_parity(root, stamp, models)
+                baseline_divergence_report(baselines, root, stamp, models)
+                write_overall_progress(
+                    root,
+                    stamp,
+                    total_cases=total_cases,
+                    completed_cases=completed_cases,
+                    current={**current, "status": "completed", "exit_code": rc},
+                    overall_rc=overall_rc,
+                )
+
+    if args.suite in ("thinking", "all"):
+        for backend in backend_order:
+            for model in models:
+                if backend not in requested_backends(model, args.backend):
+                    continue
+                case_id = model[backend].get("thinking_case_id")
+                if not case_id:
+                    continue
+                current = {
+                    "suite": "thinking",
+                    "backend": backend,
+                    "model_id": model["id"],
+                    "label": model["label"],
+                    "case_id": case_id,
+                    "status": "running",
+                }
+                write_json(current_case_path, current)
+                write_overall_progress(
+                    root,
+                    stamp,
+                    total_cases=total_cases,
+                    completed_cases=completed_cases,
+                    current=current,
+                    overall_rc=overall_rc,
+                )
+                print(f"\n=== Running {case_id} ({backend}) ===")
+                rc = run_thinking_case(
+                    root,
+                    stamp,
+                    matrix,
+                    model,
+                    backend,
+                    resolved_models,
+                    wait_seconds=args.wait_seconds,
+                )
+                overall_rc = overall_rc or rc
+                completed_cases += 1
+                aggregate(root, stamp, models)
+                compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+                compare_thinking_against_baseline(baselines, root, stamp, models, args.backend)
                 compare_parity_to_canonical(baselines, root, stamp, models)
                 compare_cross_backend_exact_parity(root, stamp, models)
                 baseline_divergence_report(baselines, root, stamp, models)
@@ -1278,6 +1606,7 @@ def main() -> int:
         aggregate(root, stamp, models)
         compare_exact_against_baseline(baselines, root, stamp, models, args.backend)
         compare_behavior_against_baseline(baselines, root, stamp, models, args.backend)
+        compare_thinking_against_baseline(baselines, root, stamp, models, args.backend)
         compare_parity_to_canonical(baselines, root, stamp, models)
         compare_cross_backend_exact_parity(root, stamp, models)
         baseline_divergence_report(baselines, root, stamp, models)
@@ -1298,6 +1627,11 @@ def main() -> int:
             if behavior_path.exists():
                 print("\n=== Behavior summary ===")
                 print(behavior_path.read_text(encoding="utf-8"), end="")
+        if args.suite in ("thinking", "all"):
+            thinking_path = summary_path(root, stamp, "thinking")
+            if thinking_path.exists():
+                print("\n=== Thinking summary ===")
+                print(thinking_path.read_text(encoding="utf-8"), end="")
 
         aggregate_path = root / stamp / "validation-summary.tsv"
         if aggregate_path.exists():
@@ -1311,6 +1645,10 @@ def main() -> int:
         if behavior_compare_path.exists():
             print("\n=== Behavior baseline comparison ===")
             print(behavior_compare_path.read_text(encoding="utf-8"), end="")
+        thinking_compare_path = root / stamp / "thinking-baseline-comparison.tsv"
+        if thinking_compare_path.exists():
+            print("\n=== Thinking baseline comparison ===")
+            print(thinking_compare_path.read_text(encoding="utf-8"), end="")
         parity_compare_path = root / stamp / "parity-vs-canonical-baseline.tsv"
         if parity_compare_path.exists():
             print("\n=== Parity vs canonical baseline ===")

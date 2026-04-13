@@ -71,8 +71,6 @@ HEAVY_SPECS=(
   "cohere-command-r|CohereLabs/c4ai-command-r-v01"
   "jamba|ai21labs/AI21-Jamba-1.5-Mini"
   "mixtral|mistralai/Mixtral-8x7B-Instruct-v0.1"
-  "kimi-k2|moonshotai/Kimi-K2-Instruct"
-  "kimi-linear|moonshotai/Kimi-Linear-48B-A3B-Instruct"
 )
 
 function usage() {
@@ -87,7 +85,7 @@ Notes:
   - Downloads run serially with hf download into per-model directories.
   - The default set excludes families that are too large or risky for the
     full same-origin test workflow on studio54's 128 GB M1 Ultra.
-  - Use --include-heavy to add: mixtral, cohere-command-r, jamba, kimi-k2, kimi-linear.
+  - Use --include-heavy to add: mixtral, cohere-command-r, jamba.
   - If one repo fails or is gated, the script continues and reports it at the end.
   - Some repos in this list are very large and can consume substantial disk.
 EOF

@@ -34,7 +34,15 @@ struct GenerationConfig {
     max_tokens: usize,
     sampling: SamplingParams,
     stop_sequences: Vec<String>,
+    stop_token_ids: Vec<u32>,
+    hidden_reasoning: Option<HiddenReasoningTokens>,
     response_policy: ResponsePolicy,
+}
+
+#[derive(Clone, Copy)]
+struct HiddenReasoningTokens {
+    start_turn_token_id: u32,
+    end_reasoning_token_id: u32,
 }
 
 struct GenerationOutcome {
@@ -280,6 +288,12 @@ enum StreamEvent {
 struct ResponsePolicy {
     strip_reasoning_blocks: bool,
     tagged_reasoning: Vec<crate::mlx::template::TaggedReasoningBlock>,
+}
+
+#[derive(Default)]
+struct HiddenReasoningState {
+    active: bool,
+    skip_leading_whitespace: bool,
 }
 
 struct ResponseFilter {
@@ -1016,6 +1030,36 @@ fn save_prompt_cache(state: &mut InferState, tokens: Vec<u32>, caches: Vec<model
     state.prompt_cache = Some(PromptCache { tokens, caches });
 }
 
+fn is_stop_token(token: u32, generation: &GenerationConfig) -> bool {
+    generation.stop_token_ids.binary_search(&token).is_ok()
+}
+
+fn should_consume_hidden_reasoning_token(
+    token: u32,
+    generation: &GenerationConfig,
+    state: &mut HiddenReasoningState,
+    visible_tokens: usize,
+) -> bool {
+    let Some(hidden) = generation.hidden_reasoning else {
+        return false;
+    };
+
+    if state.active {
+        if token == hidden.end_reasoning_token_id {
+            state.active = false;
+            state.skip_leading_whitespace = true;
+        }
+        return true;
+    }
+
+    if visible_tokens == 0 && token == hidden.start_turn_token_id {
+        state.active = true;
+        return true;
+    }
+
+    false
+}
+
 /// Run inference synchronously (called from blocking thread).
 fn run_inference(
     state: &mut InferState,
@@ -1058,7 +1102,7 @@ fn run_inference(
         sampler.sample_next_token(&logits)?
     } else {
         let logits = prefill_logits(&state.model, suffix, &mut caches)?;
-        let logits = if state.model.tokenwise_prefill() {
+        let logits = if state.model.tokenwise_prefill() && state.model.can_replay_prompt_logits() {
             replay_last_prompt_token_logits(&state.model, &prompt_tokens, &mut caches)?
         } else {
             logits
@@ -1076,27 +1120,70 @@ fn run_inference(
     let mut text = String::new();
     let mut completion_tokens = 0usize;
     let mut finish_reason = "length";
+    let mut hidden_reasoning_state = HiddenReasoningState::default();
+    let max_sampled_tokens = if generation.hidden_reasoning.is_some() {
+        generation
+            .max_tokens
+            .saturating_mul(32)
+            .max(generation.max_tokens)
+    } else {
+        generation.max_tokens
+    };
 
     // Decode
-    for _ in 0..generation.max_tokens {
-        if is_eos(next_token, &state.model.config) {
+    for step in 0..max_sampled_tokens {
+        if is_eos(next_token, &state.model.config) || is_stop_token(next_token, generation) {
             finish_reason = "stop";
             break;
         }
-        completion_tokens += 1;
+
+        let pending_logits =
+            if completion_tokens < generation.max_tokens && step + 1 < max_sampled_tokens {
+                let input = Array::from_slice(&[next_token], &[1, 1]);
+                let logits = state.model.forward(&input, &mut caches)?;
+                mlx_rs::transforms::async_eval([&logits])?;
+                Some(logits)
+            } else {
+                None
+            };
+
+        if should_consume_hidden_reasoning_token(
+            next_token,
+            generation,
+            &mut hidden_reasoning_state,
+            completion_tokens,
+        ) {
+            if let Some(logits) = pending_logits {
+                next_token = sampler.sample_next_token(&logits)?;
+            }
+            continue;
+        }
+
         let piece = decode_stream
             .step(next_token)
             .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
             .unwrap_or_default();
+        if hidden_reasoning_state.skip_leading_whitespace && piece.trim().is_empty() {
+            if let Some(logits) = pending_logits {
+                next_token = sampler.sample_next_token(&logits)?;
+            }
+            continue;
+        }
+        hidden_reasoning_state.skip_leading_whitespace = false;
+        completion_tokens += 1;
         let chunk = stop_buffer.push(&piece);
         text.push_str(&response_filter.push(&chunk.emit));
         if chunk.matched {
             finish_reason = "stop";
             break;
         }
-        let input = Array::from_slice(&[next_token], &[1, 1]);
-        let logits = state.model.forward(&input, &mut caches)?;
-        next_token = sampler.sample_next_token(&logits)?;
+        if completion_tokens >= generation.max_tokens {
+            break;
+        }
+
+        if let Some(logits) = pending_logits {
+            next_token = sampler.sample_next_token(&logits)?;
+        }
     }
 
     text.push_str(&response_filter.push(&stop_buffer.finish()));
@@ -1148,7 +1235,7 @@ fn run_inference_streaming(
         sampler.sample_next_token(&logits)?
     } else {
         let logits = prefill_logits(&state.model, suffix, &mut caches)?;
-        let logits = if state.model.tokenwise_prefill() {
+        let logits = if state.model.tokenwise_prefill() && state.model.can_replay_prompt_logits() {
             replay_last_prompt_token_logits(&state.model, &prompt_tokens, &mut caches)?
         } else {
             logits
@@ -1158,18 +1245,58 @@ fn run_inference_streaming(
 
     let mut decode_stream = state.model.tokenizer.decode_stream(true);
     let mut finish_reason = "length";
+    let mut completion_tokens = 0usize;
+    let mut hidden_reasoning_state = HiddenReasoningState::default();
+    let max_sampled_tokens = if generation.hidden_reasoning.is_some() {
+        generation
+            .max_tokens
+            .saturating_mul(32)
+            .max(generation.max_tokens)
+    } else {
+        generation.max_tokens
+    };
 
     // Decode + stream
-    for _ in 0..generation.max_tokens {
-        if is_eos(next_token, &state.model.config) {
+    for step in 0..max_sampled_tokens {
+        if is_eos(next_token, &state.model.config) || is_stop_token(next_token, generation) {
             finish_reason = "stop";
             break;
+        }
+
+        let pending_logits =
+            if completion_tokens < generation.max_tokens && step + 1 < max_sampled_tokens {
+                let input = Array::from_slice(&[next_token], &[1, 1]);
+                let logits = state.model.forward(&input, &mut caches)?;
+                mlx_rs::transforms::async_eval([&logits])?;
+                Some(logits)
+            } else {
+                None
+            };
+
+        if should_consume_hidden_reasoning_token(
+            next_token,
+            generation,
+            &mut hidden_reasoning_state,
+            completion_tokens,
+        ) {
+            if let Some(logits) = pending_logits {
+                next_token = sampler.sample_next_token(&logits)?;
+            }
+            continue;
         }
 
         let piece = decode_stream
             .step(next_token)
             .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
             .unwrap_or_default();
+        if hidden_reasoning_state.skip_leading_whitespace && piece.trim().is_empty() {
+            if let Some(logits) = pending_logits {
+                next_token = sampler.sample_next_token(&logits)?;
+            }
+            continue;
+        }
+        hidden_reasoning_state.skip_leading_whitespace = false;
+        completion_tokens += 1;
         let chunk = stop_buffer.push(&piece);
         let filtered = response_filter.push(&chunk.emit);
         if !filtered.is_empty() {
@@ -1181,10 +1308,13 @@ fn run_inference_streaming(
             finish_reason = "stop";
             break;
         }
+        if completion_tokens >= generation.max_tokens {
+            break;
+        }
 
-        let input = Array::from_slice(&[next_token], &[1, 1]);
-        let logits = state.model.forward(&input, &mut caches)?;
-        next_token = sampler.sample_next_token(&logits)?;
+        if let Some(logits) = pending_logits {
+            next_token = sampler.sample_next_token(&logits)?;
+        }
     }
 
     let mut tail = response_filter.push(&stop_buffer.finish());
@@ -1227,25 +1357,49 @@ fn run_inference_cacheless(
     let mut text = String::new();
     let mut completion_tokens = 0usize;
     let mut finish_reason = "length";
+    let mut hidden_reasoning_state = HiddenReasoningState::default();
+    let max_sampled_tokens = if generation.hidden_reasoning.is_some() {
+        generation
+            .max_tokens
+            .saturating_mul(32)
+            .max(generation.max_tokens)
+    } else {
+        generation.max_tokens
+    };
 
-    for _ in 0..generation.max_tokens {
+    for _ in 0..max_sampled_tokens {
         let input = Array::from_slice(&tokens, &[1, tokens.len() as i32]);
         let logits = state.model.forward_no_cache(&input)?;
         let next_token = sampler.sample_next_token(&logits)?;
-        if is_eos(next_token, &state.model.config) {
+        if is_eos(next_token, &state.model.config) || is_stop_token(next_token, generation) {
             finish_reason = "stop";
             break;
         }
-        completion_tokens += 1;
         tokens.push(next_token);
+        if should_consume_hidden_reasoning_token(
+            next_token,
+            generation,
+            &mut hidden_reasoning_state,
+            completion_tokens,
+        ) {
+            continue;
+        }
         let piece = decode_stream
             .step(next_token)
             .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
             .unwrap_or_default();
+        if hidden_reasoning_state.skip_leading_whitespace && piece.trim().is_empty() {
+            continue;
+        }
+        hidden_reasoning_state.skip_leading_whitespace = false;
+        completion_tokens += 1;
         let chunk = stop_buffer.push(&piece);
         text.push_str(&response_filter.push(&chunk.emit));
         if chunk.matched {
             finish_reason = "stop";
+            break;
+        }
+        if completion_tokens >= generation.max_tokens {
             break;
         }
     }
@@ -1283,21 +1437,44 @@ fn run_inference_streaming_cacheless(
 
     let mut decode_stream = state.model.tokenizer.decode_stream(true);
     let mut finish_reason = "length";
+    let mut completion_tokens = 0usize;
+    let mut hidden_reasoning_state = HiddenReasoningState::default();
+    let max_sampled_tokens = if generation.hidden_reasoning.is_some() {
+        generation
+            .max_tokens
+            .saturating_mul(32)
+            .max(generation.max_tokens)
+    } else {
+        generation.max_tokens
+    };
 
-    for _ in 0..generation.max_tokens {
+    for _ in 0..max_sampled_tokens {
         let input = Array::from_slice(&tokens, &[1, tokens.len() as i32]);
         let logits = state.model.forward_no_cache(&input)?;
         let next_token = sampler.sample_next_token(&logits)?;
-        if is_eos(next_token, &state.model.config) {
+        if is_eos(next_token, &state.model.config) || is_stop_token(next_token, generation) {
             finish_reason = "stop";
             break;
         }
 
         tokens.push(next_token);
+        if should_consume_hidden_reasoning_token(
+            next_token,
+            generation,
+            &mut hidden_reasoning_state,
+            completion_tokens,
+        ) {
+            continue;
+        }
         let piece = decode_stream
             .step(next_token)
             .map_err(|e| anyhow::anyhow!("tokenizer decode: {e}"))?
             .unwrap_or_default();
+        if hidden_reasoning_state.skip_leading_whitespace && piece.trim().is_empty() {
+            continue;
+        }
+        hidden_reasoning_state.skip_leading_whitespace = false;
+        completion_tokens += 1;
         let chunk = stop_buffer.push(&piece);
         let filtered = response_filter.push(&chunk.emit);
         if !filtered.is_empty() && tx.blocking_send(StreamEvent::Text(filtered)).is_err() {
@@ -1305,6 +1482,9 @@ fn run_inference_streaming_cacheless(
         }
         if chunk.matched {
             finish_reason = "stop";
+            break;
+        }
+        if completion_tokens >= generation.max_tokens {
             break;
         }
     }
@@ -1327,6 +1507,7 @@ fn parse_generation_config(req: &serde_json::Value, model: &MlxModel) -> Generat
     stop_sequences.extend(parse_stop_sequences(req.get("stop")));
     stop_sequences.sort();
     stop_sequences.dedup();
+    let stop_token_ids = stop_token_ids(model, &stop_sequences);
     let requested_max_tokens = req["max_tokens"].as_u64().unwrap_or(2048) as usize;
     let message_count = req["messages"]
         .as_array()
@@ -1342,6 +1523,15 @@ fn parse_generation_config(req: &serde_json::Value, model: &MlxModel) -> Generat
     } else {
         requested_max_tokens
     };
+    let hidden_reasoning = hidden_reasoning_tokens(model, req);
+    let stop_token_ids = if let Some(hidden) = hidden_reasoning {
+        stop_token_ids
+            .into_iter()
+            .filter(|id| *id != hidden.start_turn_token_id)
+            .collect::<Vec<_>>()
+    } else {
+        stop_token_ids
+    };
     GenerationConfig {
         max_tokens,
         sampling: SamplingParams {
@@ -1355,6 +1545,8 @@ fn parse_generation_config(req: &serde_json::Value, model: &MlxModel) -> Generat
             suppressed_token_ids: suppressed_reasoning_token_ids(model, req),
         },
         stop_sequences,
+        stop_token_ids,
+        hidden_reasoning,
         response_policy: response_policy(req, model),
     }
 }
@@ -1389,6 +1581,36 @@ fn single_token_id_for_text(model: &MlxModel, text: &str) -> Option<u32> {
     }
 }
 
+fn stop_token_ids(model: &MlxModel, stop_sequences: &[String]) -> Vec<u32> {
+    let mut ids = stop_sequences
+        .iter()
+        .filter_map(|text| single_token_id_for_text(model, text))
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn hidden_reasoning_tokens(
+    model: &MlxModel,
+    req: &serde_json::Value,
+) -> Option<HiddenReasoningTokens> {
+    if !reasoning_disabled(
+        req,
+        model.reasoning_family,
+        &model.prompt_template.reasoning_template(),
+    ) {
+        return None;
+    }
+    if model.reasoning_family != model::ReasoningFamily::Qwen3 {
+        return None;
+    }
+    Some(HiddenReasoningTokens {
+        start_turn_token_id: single_token_id_for_text(model, "<|im_start|>")?,
+        end_reasoning_token_id: single_token_id_for_text(model, "</think>")?,
+    })
+}
+
 fn parse_stop_sequences(stop: Option<&serde_json::Value>) -> Vec<String> {
     match stop {
         Some(serde_json::Value::String(text)) if !text.is_empty() => vec![text.clone()],
@@ -1413,6 +1635,9 @@ fn default_stop_sequences(model: &MlxModel) -> Vec<String> {
             .reasoning_template()
             .default_stop_sequences,
     );
+    if model.prompt_template.behavior().prompt_template.as_deref() == Some("gemma3") {
+        stops.retain(|stop| stop != "<end_of_turn>");
+    }
     stops.sort();
     stops.dedup();
     stops
@@ -1436,9 +1661,7 @@ fn default_stop_sequences_for(
         Some("llama3") => {
             stops.push("<|eot_id|>".to_string());
         }
-        Some("gemma3") => {
-            stops.push("<end_of_turn>".to_string());
-        }
+        Some("gemma3") => {}
         _ => {}
     }
     match reasoning_family {
@@ -1960,6 +2183,8 @@ mod tests {
                 suppressed_token_ids: Vec::new(),
             },
             stop_sequences: Vec::new(),
+            stop_token_ids: Vec::new(),
+            hidden_reasoning: None,
             response_policy: ResponsePolicy::default(),
         };
 
@@ -1999,6 +2224,8 @@ mod tests {
                 suppressed_token_ids: Vec::new(),
             },
             stop_sequences: Vec::new(),
+            stop_token_ids: Vec::new(),
+            hidden_reasoning: None,
             response_policy: ResponsePolicy::default(),
         };
         let mut state = InferState {

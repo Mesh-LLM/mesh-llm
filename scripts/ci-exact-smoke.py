@@ -385,6 +385,7 @@ def main() -> int:
     parser.add_argument("--expect-contains-ci", default="")
     parser.add_argument("--forbid-contains", default="")
     parser.add_argument("--expect-exact", default="")
+    parser.add_argument("--max-tokens", type=int, default=32)
     parser.add_argument("--prompt-suite-json", default="")
     parser.add_argument("--wait-seconds", type=int, default=DEFAULT_WAIT_SECONDS)
     args = parser.parse_args()
@@ -440,6 +441,7 @@ def main() -> int:
                     "expect_contains_ci": args.expect_contains_ci,
                     "forbid_contains": args.forbid_contains,
                     "expect_exact": args.expect_exact,
+                    "max_tokens": args.max_tokens,
                 }
                 failures: list[tuple[str, str]] = []
 

@@ -625,13 +625,13 @@ impl Attention {
             self.rope_traditional,
             offset,
         )?;
-        let (k, v, key_start) = if let Some(shared_cache) = shared_cache {
+        let (cache_entries, key_start) = if let Some(shared_cache) = shared_cache {
             let (k, v) = shared_cache
                 .views()
                 .context("Gemma4 shared KV cache was empty")?;
             let key_start =
                 shared_cache.key_start_for_attention(l as usize, k.shape()[2] as usize) as i32;
-            (k, v, key_start)
+            (CachedKv::Dense { keys: k, values: v }, key_start)
         } else {
             let k = self.k_proj.forward(x)?;
             let v = self.v_proj.forward(x)?;
@@ -659,34 +659,66 @@ impl Attention {
                 self.rope_traditional,
                 offset,
             )?;
-            let (k, v) = cache.update(k, v)?;
+            let entries = cache.update_cached(k, v)?;
             let key_start =
-                (offset as usize + l as usize).saturating_sub(k.shape()[2] as usize) as i32;
-            (k, v, key_start)
+                (offset as usize + l as usize).saturating_sub(entries.key_len() as usize) as i32;
+            (entries, key_start)
         };
 
         // Causal mask for prefill (multi-token). Decode (l=1) needs no mask.
         let mask = if self.window_size.is_some() {
-            attention_mask(l, k.shape()[2], key_start, offset, self.window_size)?
+            attention_mask(
+                l,
+                cache_entries.key_len(),
+                key_start,
+                offset,
+                self.window_size,
+            )?
         } else {
             None
         };
-        let attn = if self.attn_logit_softcapping.is_some() || mask.is_some() {
-            manual_scaled_dot_product_attention_with_mask(
-                &q,
-                &k,
-                &v,
-                self.scale,
-                self.attn_logit_softcapping,
-                mask.as_ref(),
-            )?
-        } else {
-            let mask = if l > 1 {
-                Some(mlx_rs::fast::ScaledDotProductAttentionMask::Causal)
-            } else {
-                None
-            };
-            mlx_rs::fast::scaled_dot_product_attention(&q, &k, &v, self.scale, mask)?
+        let attn = match cache_entries {
+            CachedKv::Dense { keys, values } => {
+                if self.attn_logit_softcapping.is_some() || mask.is_some() {
+                    manual_scaled_dot_product_attention_with_mask(
+                        &q,
+                        &keys,
+                        &values,
+                        self.scale,
+                        self.attn_logit_softcapping,
+                        mask.as_ref(),
+                    )?
+                } else {
+                    let mask = if l > 1 {
+                        Some(mlx_rs::fast::ScaledDotProductAttentionMask::Causal)
+                    } else {
+                        None
+                    };
+                    mlx_rs::fast::scaled_dot_product_attention(
+                        &q, &keys, &values, self.scale, mask,
+                    )?
+                }
+            }
+            CachedKv::Quantized {
+                keys,
+                values,
+                group_size,
+                bits,
+            } => {
+                anyhow::ensure!(
+                    self.attn_logit_softcapping.is_none(),
+                    "quantized KV cache does not support attention softcapping yet"
+                );
+                quantized_scaled_dot_product_attention_with_mask(
+                    &q,
+                    &keys,
+                    &values,
+                    self.scale,
+                    mask.as_ref(),
+                    group_size,
+                    bits,
+                )?
+            }
         };
 
         let attn =
@@ -938,6 +970,96 @@ fn manual_scaled_dot_product_attention_with_mask(
     if repeats > 1 {
         output = output.reshape(&[batch, num_heads, query_len, head_dim])?;
     }
+    Ok(output)
+}
+
+fn quantized_scaled_dot_product_attention_with_mask(
+    q: &Array,
+    k: &QuantizedCacheArrays,
+    v: &QuantizedCacheArrays,
+    scale: f32,
+    mask: Option<&Array>,
+    group_size: i32,
+    bits: i32,
+) -> Result<Array> {
+    let num_heads = q.shape()[1];
+    let num_kv_heads = k.data.shape()[1];
+    anyhow::ensure!(
+        num_heads % num_kv_heads == 0,
+        "cannot align quantized attention heads: q_heads={}, kv_heads={}",
+        num_heads,
+        num_kv_heads
+    );
+    let repeats = num_heads / num_kv_heads;
+    let batch = q.shape()[0];
+    let query_len = q.shape()[2];
+    let head_dim = q.shape()[3];
+
+    let mut queries = q.clone();
+    if scale != 1.0 {
+        queries = queries.multiply(&array!(scale))?;
+    }
+
+    let (queries, keys, values) = if repeats > 1 {
+        (
+            queries.reshape(&[batch, num_kv_heads, repeats, query_len, head_dim])?,
+            QuantizedCacheArrays {
+                data: k.data.expand_dims(2)?,
+                scales: k.scales.expand_dims(2)?,
+                biases: k.biases.expand_dims(2)?,
+            },
+            QuantizedCacheArrays {
+                data: v.data.expand_dims(2)?,
+                scales: v.scales.expand_dims(2)?,
+                biases: v.biases.expand_dims(2)?,
+            },
+        )
+    } else {
+        (
+            queries,
+            QuantizedCacheArrays {
+                data: k.data.clone(),
+                scales: k.scales.clone(),
+                biases: k.biases.clone(),
+            },
+            QuantizedCacheArrays {
+                data: v.data.clone(),
+                scales: v.scales.clone(),
+                biases: v.biases.clone(),
+            },
+        )
+    };
+
+    let mut scores = mlx_rs::ops::quantized_matmul(
+        &queries,
+        &keys.data,
+        &keys.scales,
+        &keys.biases,
+        true,
+        group_size,
+        bits,
+    )?;
+
+    if let Some(mask) = mask {
+        let fill = array!(scores.dtype().finfo_min()? as f32).as_dtype(scores.dtype())?;
+        scores = mlx_rs::ops::r#where(mask, &scores, &fill)?;
+    }
+
+    let probs = mlx_rs::ops::softmax_axis(&scores, -1, true)?;
+    let mut output = mlx_rs::ops::quantized_matmul(
+        &probs,
+        &values.data,
+        &values.scales,
+        &values.biases,
+        false,
+        group_size,
+        bits,
+    )?;
+
+    if repeats > 1 {
+        output = output.reshape(&[batch, num_heads, query_len, head_dim])?;
+    }
+
     Ok(output)
 }
 
@@ -1699,12 +1821,123 @@ const KV_CACHE_STEP: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KVCacheMode {
     Standard,
-    Rotating { max_size: usize, keep: usize },
+    Rotating {
+        max_size: usize,
+        keep: usize,
+    },
+    Quantized {
+        group_size: i32,
+        bits: i32,
+        min_dense_tokens: usize,
+    },
+}
+
+struct QuantizedCacheArrays {
+    data: Array,
+    scales: Array,
+    biases: Array,
+}
+
+impl QuantizedCacheArrays {
+    fn arrays(&self) -> [&Array; 3] {
+        [&self.data, &self.scales, &self.biases]
+    }
+
+    fn prefix(&self, end: i32) -> Self {
+        Self {
+            data: self.data.index((
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                ..end,
+                std::ops::RangeFull,
+            )),
+            scales: self.scales.index((
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                ..end,
+                std::ops::RangeFull,
+            )),
+            biases: self.biases.index((
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                ..end,
+                std::ops::RangeFull,
+            )),
+        }
+    }
+
+    fn trim_to(&self, end: i32) -> Result<Self> {
+        Ok(Self {
+            data: materialize_cache_prefix(&self.data, end)?,
+            scales: materialize_cache_prefix(&self.scales, end)?,
+            biases: materialize_cache_prefix(&self.biases, end)?,
+        })
+    }
+
+    fn expand(&self, extra_steps: i32) -> Result<Self> {
+        let base_shape = self.data.shape();
+        let scale_shape = self.scales.shape();
+        let bias_shape = self.biases.shape();
+        let extra_data = mlx_rs::ops::zeros_dtype(
+            &[base_shape[0], base_shape[1], extra_steps, base_shape[3]],
+            self.data.dtype(),
+        )?;
+        let extra_scales = mlx_rs::ops::zeros_dtype(
+            &[scale_shape[0], scale_shape[1], extra_steps, scale_shape[3]],
+            self.scales.dtype(),
+        )?;
+        let extra_biases = mlx_rs::ops::zeros_dtype(
+            &[bias_shape[0], bias_shape[1], extra_steps, bias_shape[3]],
+            self.biases.dtype(),
+        )?;
+        Ok(Self {
+            data: mlx_rs::ops::concatenate_axis(&[&self.data, &extra_data], 2)?,
+            scales: mlx_rs::ops::concatenate_axis(&[&self.scales, &extra_scales], 2)?,
+            biases: mlx_rs::ops::concatenate_axis(&[&self.biases, &extra_biases], 2)?,
+        })
+    }
+}
+
+fn materialize_cache_prefix(array: &Array, end: i32) -> Result<Array> {
+    use std::ops::RangeFull;
+
+    let end = end.max(0);
+    let shape = array.shape();
+    let mut owned = mlx_rs::ops::zeros_dtype(&[shape[0], shape[1], end, shape[3]], array.dtype())?;
+    if end > 0 {
+        let prefix = array.index((RangeFull, RangeFull, ..end, RangeFull));
+        owned.try_index_mut((RangeFull, RangeFull, ..end, RangeFull), &prefix)?;
+    }
+    Ok(owned)
+}
+
+enum CachedKv {
+    Dense {
+        keys: Array,
+        values: Array,
+    },
+    Quantized {
+        keys: QuantizedCacheArrays,
+        values: QuantizedCacheArrays,
+        group_size: i32,
+        bits: i32,
+    },
+}
+
+impl CachedKv {
+    fn key_len(&self) -> i32 {
+        match self {
+            CachedKv::Dense { keys, .. } => keys.shape()[2],
+            CachedKv::Quantized { keys, .. } => keys.data.shape()[2],
+        }
+    }
 }
 
 pub struct KVCache {
     keys: Option<Array>,
     values: Option<Array>,
+    qkeys: Option<QuantizedCacheArrays>,
+    qvalues: Option<QuantizedCacheArrays>,
     start_offset: usize,
     offset: usize,
     idx: usize,
@@ -1716,6 +1949,8 @@ impl KVCache {
         KVCache {
             keys: None,
             values: None,
+            qkeys: None,
+            qvalues: None,
             start_offset: 0,
             offset: 0,
             idx: 0,
@@ -1727,10 +1962,29 @@ impl KVCache {
         KVCache {
             keys: None,
             values: None,
+            qkeys: None,
+            qvalues: None,
             start_offset: 0,
             offset: 0,
             idx: 0,
             mode: KVCacheMode::Rotating { max_size, keep },
+        }
+    }
+
+    pub fn new_quantized(group_size: i32, bits: i32, min_dense_tokens: usize) -> Self {
+        KVCache {
+            keys: None,
+            values: None,
+            qkeys: None,
+            qvalues: None,
+            start_offset: 0,
+            offset: 0,
+            idx: 0,
+            mode: KVCacheMode::Quantized {
+                group_size,
+                bits,
+                min_dense_tokens,
+            },
         }
     }
 
@@ -1753,11 +2007,23 @@ impl KVCache {
     /// Return references to cached arrays (for eval/materialization).
     pub fn arrays(&self) -> Vec<&Array> {
         let mut out = Vec::new();
-        if let Some(ref k) = self.keys {
-            out.push(k);
-        }
-        if let Some(ref v) = self.values {
-            out.push(v);
+        match self.mode {
+            KVCacheMode::Quantized { .. } => {
+                if let Some(ref k) = self.qkeys {
+                    out.extend(k.arrays());
+                }
+                if let Some(ref v) = self.qvalues {
+                    out.extend(v.arrays());
+                }
+            }
+            _ => {
+                if let Some(ref k) = self.keys {
+                    out.push(k);
+                }
+                if let Some(ref v) = self.values {
+                    out.push(v);
+                }
+            }
         }
         out
     }
@@ -1776,6 +2042,10 @@ impl KVCache {
 
         match self.mode {
             KVCacheMode::Standard => {
+                let end_i = self.offset as i32;
+                Ok(array.index((RangeFull, RangeFull, ..end_i, RangeFull)))
+            }
+            KVCacheMode::Quantized { .. } => {
                 let end_i = self.offset as i32;
                 Ok(array.index((RangeFull, RangeFull, ..end_i, RangeFull)))
             }
@@ -1812,9 +2082,23 @@ impl KVCache {
     }
 
     pub fn update(&mut self, k: Array, v: Array) -> Result<(Array, Array)> {
+        match self.update_cached(k, v)? {
+            CachedKv::Dense { keys, values } => Ok((keys, values)),
+            CachedKv::Quantized { .. } => bail!("quantized KV cache does not expose dense views"),
+        }
+    }
+
+    fn update_cached(&mut self, k: Array, v: Array) -> Result<CachedKv> {
         match self.mode {
-            KVCacheMode::Standard => self.update_standard(k, v),
+            KVCacheMode::Standard => self
+                .update_standard(k, v)
+                .map(|(keys, values)| CachedKv::Dense { keys, values }),
             KVCacheMode::Rotating { max_size, keep } => self.update_rotating(k, v, max_size, keep),
+            KVCacheMode::Quantized {
+                group_size,
+                bits,
+                min_dense_tokens,
+            } => self.update_quantized(k, v, group_size, bits, min_dense_tokens),
         }
     }
 
@@ -1896,7 +2180,7 @@ impl KVCache {
         v: Array,
         max_size: usize,
         keep: usize,
-    ) -> Result<(Array, Array)> {
+    ) -> Result<CachedKv> {
         let seq_len = k.shape()[2] as usize;
         if seq_len == 1 {
             return self.update_rotating_in_place(k, v, max_size, keep);
@@ -1910,7 +2194,7 @@ impl KVCache {
         v: Array,
         max_size: usize,
         keep: usize,
-    ) -> Result<(Array, Array)> {
+    ) -> Result<CachedKv> {
         let seq_len = k.shape()[2] as usize;
         if self.keys.is_none() {
             self.keys = Some(k);
@@ -1928,8 +2212,10 @@ impl KVCache {
 
         self.offset += seq_len;
         self.idx = self.keys.as_ref().unwrap().shape()[2] as usize;
-        self.views()
-            .context("rotating KV cache was empty after concat update")
+        let (keys, values) = self
+            .views()
+            .context("rotating KV cache was empty after concat update")?;
+        Ok(CachedKv::Dense { keys, values })
     }
 
     fn update_rotating_in_place(
@@ -1938,7 +2224,7 @@ impl KVCache {
         v: Array,
         max_size: usize,
         keep: usize,
-    ) -> Result<(Array, Array)> {
+    ) -> Result<CachedKv> {
         use std::ops::RangeFull;
 
         let seq_len = k.shape()[2] as usize;
@@ -2002,14 +2288,267 @@ impl KVCache {
         self.offset += seq_len;
         self.start_offset += evicted;
         self.idx += seq_len;
-        self.views()
-            .context("rotating KV cache was empty after in-place update")
+        let (keys, values) = self
+            .views()
+            .context("rotating KV cache was empty after in-place update")?;
+        Ok(CachedKv::Dense { keys, values })
+    }
+
+    fn quantize_dense_prefix(
+        &mut self,
+        group_size: i32,
+        bits: i32,
+        dense_len: usize,
+    ) -> Result<()> {
+        if dense_len == 0 {
+            return Ok(());
+        }
+
+        let dense_end = dense_len as i32;
+        let keys = self
+            .keys
+            .as_ref()
+            .context("missing dense keys while migrating to quantized KV")?
+            .index((
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                ..dense_end,
+                std::ops::RangeFull,
+            ));
+        let values = self
+            .values
+            .as_ref()
+            .context("missing dense values while migrating to quantized KV")?
+            .index((
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                ..dense_end,
+                std::ops::RangeFull,
+            ));
+        let [b, n_kv_heads, _, k_head_dim] = keys.shape()[..4] else {
+            bail!("unexpected dense key shape while migrating to quantized KV");
+        };
+        let v_head_dim = values.shape()[3];
+        let el_per_int = 32 / bits;
+
+        let (kq, ks, kb) = mlx_rs::ops::quantize(&keys, group_size, bits)?;
+        let (vq, vs, vb) = mlx_rs::ops::quantize(&values, group_size, bits)?;
+        self.qkeys = Some(QuantizedCacheArrays {
+            data: kq,
+            scales: ks,
+            biases: kb,
+        });
+        self.qvalues = Some(QuantizedCacheArrays {
+            data: vq,
+            scales: vs,
+            biases: vb,
+        });
+
+        let qkeys = self.qkeys.as_mut().unwrap();
+        if qkeys.data.shape()[2] != dense_end {
+            qkeys.data =
+                qkeys
+                    .data
+                    .reshape(&[b, n_kv_heads, dense_end, k_head_dim / el_per_int])?;
+            qkeys.scales =
+                qkeys
+                    .scales
+                    .reshape(&[b, n_kv_heads, dense_end, k_head_dim / group_size])?;
+            qkeys.biases =
+                qkeys
+                    .biases
+                    .reshape(&[b, n_kv_heads, dense_end, k_head_dim / group_size])?;
+        }
+
+        let qvalues = self.qvalues.as_mut().unwrap();
+        if qvalues.data.shape()[2] != dense_end {
+            qvalues.data =
+                qvalues
+                    .data
+                    .reshape(&[b, n_kv_heads, dense_end, v_head_dim / el_per_int])?;
+            qvalues.scales =
+                qvalues
+                    .scales
+                    .reshape(&[b, n_kv_heads, dense_end, v_head_dim / group_size])?;
+            qvalues.biases =
+                qvalues
+                    .biases
+                    .reshape(&[b, n_kv_heads, dense_end, v_head_dim / group_size])?;
+        }
+
+        self.keys = None;
+        self.values = None;
+        Ok(())
+    }
+
+    fn update_quantized(
+        &mut self,
+        k: Array,
+        v: Array,
+        group_size: i32,
+        bits: i32,
+        min_dense_tokens: usize,
+    ) -> Result<CachedKv> {
+        let seq_len = k.shape()[2] as usize;
+        let prev = self.offset;
+
+        if self.qkeys.is_none() && (prev + seq_len) <= min_dense_tokens {
+            return self
+                .update_standard(k, v)
+                .map(|(keys, values)| CachedKv::Dense { keys, values });
+        }
+
+        if self.qkeys.is_none() {
+            self.quantize_dense_prefix(group_size, bits, prev)?;
+        }
+
+        if self.qkeys.is_none()
+            || (prev + seq_len) > self.qkeys.as_ref().unwrap().data.shape()[2] as usize
+        {
+            let [b, n_kv_heads, _, k_head_dim] = k.shape()[..4] else {
+                bail!("unexpected quantized k shape");
+            };
+            let v_head_dim = v.shape()[3];
+            let el_per_int = 32 / bits;
+            let n_steps = ((KV_CACHE_STEP + seq_len - 1) / KV_CACHE_STEP) * KV_CACHE_STEP;
+
+            let init_quant = |head_dim: i32, dtype: Dtype| -> Result<QuantizedCacheArrays> {
+                Ok(QuantizedCacheArrays {
+                    data: mlx_rs::ops::zeros_dtype(
+                        &[b, n_kv_heads, n_steps as i32, head_dim / el_per_int],
+                        Dtype::Uint32,
+                    )?,
+                    scales: mlx_rs::ops::zeros_dtype(
+                        &[b, n_kv_heads, n_steps as i32, head_dim / group_size],
+                        dtype,
+                    )?,
+                    biases: mlx_rs::ops::zeros_dtype(
+                        &[b, n_kv_heads, n_steps as i32, head_dim / group_size],
+                        dtype,
+                    )?,
+                })
+            };
+
+            match (&self.qkeys, &self.qvalues) {
+                (Some(existing_k), Some(existing_v)) => {
+                    let (mut existing_k, mut existing_v) = (existing_k, existing_v);
+                    if prev % KV_CACHE_STEP != 0 {
+                        let end = prev as i32;
+                        self.qkeys = Some(existing_k.trim_to(end)?);
+                        self.qvalues = Some(existing_v.trim_to(end)?);
+                        existing_k = self.qkeys.as_ref().unwrap();
+                        existing_v = self.qvalues.as_ref().unwrap();
+                    }
+                    self.qkeys = Some(existing_k.expand(n_steps as i32)?);
+                    self.qvalues = Some(existing_v.expand(n_steps as i32)?);
+                }
+                _ => {
+                    self.qkeys = Some(init_quant(k_head_dim, k.dtype())?);
+                    self.qvalues = Some(init_quant(v_head_dim, v.dtype())?);
+                }
+            }
+        }
+
+        self.offset = prev + seq_len;
+        self.start_offset = 0;
+        let prev_i = prev as i32;
+        let end_i = self.offset as i32;
+
+        let (kq, ks, kb) = mlx_rs::ops::quantize(&k, group_size, bits)?;
+        let (vq, vs, vb) = mlx_rs::ops::quantize(&v, group_size, bits)?;
+        let qkeys = self.qkeys.as_mut().unwrap();
+        let qvalues = self.qvalues.as_mut().unwrap();
+        qkeys.data.try_index_mut(
+            (
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                prev_i..end_i,
+                std::ops::RangeFull,
+            ),
+            &kq,
+        )?;
+        qkeys.scales.try_index_mut(
+            (
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                prev_i..end_i,
+                std::ops::RangeFull,
+            ),
+            &ks,
+        )?;
+        qkeys.biases.try_index_mut(
+            (
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                prev_i..end_i,
+                std::ops::RangeFull,
+            ),
+            &kb,
+        )?;
+        qvalues.data.try_index_mut(
+            (
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                prev_i..end_i,
+                std::ops::RangeFull,
+            ),
+            &vq,
+        )?;
+        qvalues.scales.try_index_mut(
+            (
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                prev_i..end_i,
+                std::ops::RangeFull,
+            ),
+            &vs,
+        )?;
+        qvalues.biases.try_index_mut(
+            (
+                std::ops::RangeFull,
+                std::ops::RangeFull,
+                prev_i..end_i,
+                std::ops::RangeFull,
+            ),
+            &vb,
+        )?;
+
+        Ok(CachedKv::Quantized {
+            keys: qkeys.prefix(end_i),
+            values: qvalues.prefix(end_i),
+            group_size,
+            bits,
+        })
     }
 
     /// Rewind the cache to `n` tokens if the requested prefix is still retained.
     pub fn trim_to(&mut self, n: usize) -> Result<bool> {
         if !self.can_trim_to(n) {
             return Ok(false);
+        }
+        let retained_len = n.saturating_sub(self.start_offset) as i32;
+        match self.mode {
+            KVCacheMode::Standard => {
+                if n != self.offset {
+                    if let Some(keys) = &self.keys {
+                        self.keys = Some(materialize_cache_prefix(keys, retained_len)?);
+                    }
+                    if let Some(values) = &self.values {
+                        self.values = Some(materialize_cache_prefix(values, retained_len)?);
+                    }
+                }
+            }
+            KVCacheMode::Quantized { .. } => {
+                if n != self.offset {
+                    if let Some(keys) = &self.qkeys {
+                        self.qkeys = Some(keys.trim_to(retained_len)?);
+                    }
+                    if let Some(values) = &self.qvalues {
+                        self.qvalues = Some(values.trim_to(retained_len)?);
+                    }
+                }
+            }
+            KVCacheMode::Rotating { .. } => {}
         }
         if matches!(self.mode, KVCacheMode::Rotating { .. }) && n != self.offset {
             if let (Some(keys), Some(values)) = (&self.keys, &self.values) {
@@ -2136,6 +2675,7 @@ pub struct MlxModel {
     pub tokenizer_spacing_patch: Option<TokenizerSpacingPatch>,
     pub prompt_template: crate::mlx::template::PromptTemplate,
     pub reasoning_family: ReasoningFamily,
+    architecture: ModelArchitecture,
     tokenwise_prefill: bool,
     cacheless_generation: bool,
     prompt_cache_reuse: bool,
@@ -2152,9 +2692,12 @@ impl MlxModel {
             serde_json::from_str(&config_text).context("parsing config.json")?;
         ensure_supported_mlx_model(dir, &config_json)?;
         let effective_config_json = normalized_model_config_json(&config_json);
-        let config: ModelConfig =
-            serde_json::from_value(effective_config_json).context("parsing config.json")?;
         let arch = model_architecture(&config_json);
+        let mut config: ModelConfig =
+            serde_json::from_value(effective_config_json).context("parsing config.json")?;
+        if arch.is_gemma3() {
+            config.eos_token_id.retain(|id| *id != 106);
+        }
         let rope_traditional = uses_traditional_rope(&config_json);
 
         let quantized = config.quantization.as_ref();
@@ -3198,12 +3741,13 @@ impl MlxModel {
             tokenizer_spacing_patch,
             prompt_template,
             reasoning_family: reasoning_family(&config_json),
-            tokenwise_prefill: arch.is_gemma2() || arch.is_gemma4(),
+            architecture: arch,
+            tokenwise_prefill: arch.is_gemma2() || arch.is_gemma3() || arch.is_gemma4(),
             cacheless_generation: arch.is_gemma2()
                 || arch.is_gpt_oss()
                 || arch.is_kimi_linear()
                 || arch.is_lfm2(),
-            prompt_cache_reuse: true,
+            prompt_cache_reuse: !arch.is_gemma4(),
         })
     }
 
@@ -3374,11 +3918,16 @@ impl MlxModel {
     }
 
     pub fn new_caches(&self) -> Vec<KVCache> {
+        let quantized_kv = experimental_quantized_kv_config();
         self.layers
             .iter()
             .map(|layer| {
                 if let Some(window_size) = layer.attn.sliding_window_size() {
                     KVCache::new_rotating(window_size, 0)
+                } else if layer.attn.kv_shared_source().is_some() {
+                    KVCache::new()
+                } else if let Some((group_size, bits, min_dense_tokens)) = quantized_kv {
+                    KVCache::new_quantized(group_size, bits, min_dense_tokens)
                 } else {
                     KVCache::new()
                 }
@@ -3390,12 +3939,16 @@ impl MlxModel {
         self.tokenwise_prefill
     }
 
+    pub fn can_replay_prompt_logits(&self) -> bool {
+        !self.architecture.is_gemma3() && !self.architecture.is_gemma4()
+    }
+
     pub fn cacheless_generation(&self) -> bool {
         self.cacheless_generation
     }
 
     pub fn prompt_cache_reuse(&self) -> bool {
-        self.prompt_cache_reuse
+        self.prompt_cache_reuse && experimental_quantized_kv_config().is_none()
     }
 }
 
@@ -3492,6 +4045,64 @@ fn normalized_model_config_json(config: &Value) -> Value {
     }
     object.remove("hidden_act");
 
+    if model_architecture(config).is_gemma3() {
+        let sliding_window_pattern = object
+            .get("sliding_window_pattern")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(6);
+        if object.get("layer_types").is_none_or(Value::is_null) {
+            if let Some(num_hidden_layers) = object
+                .get("num_hidden_layers")
+                .and_then(|value| value.as_i64())
+            {
+                let layer_types = (0..num_hidden_layers)
+                    .map(|i| {
+                        if (i + 1) % sliding_window_pattern != 0 {
+                            Value::String("sliding_attention".to_string())
+                        } else {
+                            Value::String("full_attention".to_string())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                object.insert("layer_types".to_string(), Value::Array(layer_types));
+            }
+        }
+
+        if object.get("rope_parameters").is_none_or(Value::is_null) {
+            let full_theta = object
+                .get("rope_theta")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(1_000_000.0);
+            let sliding_theta = object
+                .get("rope_local_base_freq")
+                .and_then(|value| value.as_f64())
+                .unwrap_or(10_000.0);
+            object.insert(
+                "rope_parameters".to_string(),
+                serde_json::json!({
+                    "sliding_attention": {
+                        "rope_type": "default",
+                        "rope_theta": sliding_theta
+                    },
+                    "full_attention": {
+                        "rope_type": "default",
+                        "rope_theta": full_theta
+                    }
+                }),
+            );
+        }
+
+        if object
+            .get("use_bidirectional_attention")
+            .is_none_or(Value::is_null)
+        {
+            object.insert(
+                "use_bidirectional_attention".to_string(),
+                Value::Bool(false),
+            );
+        }
+    }
+
     normalized
 }
 
@@ -3569,6 +4180,26 @@ fn kv_shared_source_for_layer(
                 .map(|index| index)
         })
     })
+}
+
+fn experimental_quantized_kv_config() -> Option<(i32, i32, usize)> {
+    let bits = std::env::var("MESH_LLM_MLX_QUANTIZED_KV_BITS")
+        .ok()?
+        .parse::<i32>()
+        .ok()?;
+    if bits <= 0 {
+        return None;
+    }
+    let group_size = std::env::var("MESH_LLM_MLX_QUANTIZED_KV_GROUP_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(64);
+    let min_dense_tokens = std::env::var("MESH_LLM_MLX_QUANTIZED_KV_MIN_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256);
+    Some((group_size, bits, min_dense_tokens))
 }
 
 /// Argmax over the last position's logits. Returns the token ID.
@@ -4104,6 +4735,86 @@ mod tests {
         );
         assert!(!parsed.tie_word_embeddings);
         assert_eq!(parsed.eos_token_id, vec![1, 106]);
+    }
+
+    #[test]
+    fn normalized_gemma3_config_injects_hybrid_attention_defaults() {
+        let raw = serde_json::json!({
+            "model_type": "gemma3",
+            "architectures": ["Gemma3ForConditionalGeneration"],
+            "quantization": {"group_size": 64, "bits": 4},
+            "eos_token_id": [1, 106],
+            "tie_word_embeddings": false,
+            "head_dim": 256,
+            "query_pre_attn_scalar": 256,
+            "rms_norm_eps": 0.000001,
+            "rope_theta": 1000000.0,
+            "rope_local_base_freq": 10000.0,
+            "sliding_window": 512,
+            "sliding_window_pattern": 3,
+            "max_position_embeddings": 32768,
+            "text_config": {
+                "model_type": "gemma3_text",
+                "hidden_size": 1152,
+                "num_hidden_layers": 8,
+                "intermediate_size": 6912,
+                "num_attention_heads": 4,
+                "num_key_value_heads": 1,
+                "vocab_size": 262144,
+                "layer_types": null,
+                "rope_parameters": null,
+                "use_bidirectional_attention": null
+            }
+        });
+
+        let normalized = normalized_model_config_json(&raw);
+        let parsed: ModelConfig = serde_json::from_value(normalized.clone()).unwrap();
+
+        assert_eq!(
+            normalized
+                .get("layer_types")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "sliding_attention",
+                "sliding_attention",
+                "full_attention",
+                "sliding_attention",
+                "sliding_attention",
+                "full_attention",
+                "sliding_attention",
+                "sliding_attention",
+            ]
+        );
+        assert_eq!(
+            parsed
+                .rope_parameters
+                .as_ref()
+                .and_then(|params| params.get("sliding_attention"))
+                .and_then(|params| params.rope_theta),
+            Some(10_000.0)
+        );
+        assert_eq!(
+            parsed
+                .rope_parameters
+                .as_ref()
+                .and_then(|params| params.get("full_attention"))
+                .and_then(|params| params.rope_theta),
+            Some(1_000_000.0)
+        );
+        assert_eq!(
+            normalized
+                .get("use_bidirectional_attention")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            parsed.layer_types.as_ref().map(Vec::len),
+            Some(parsed.num_hidden_layers as usize)
+        );
     }
 
     #[test]
@@ -4985,6 +5696,14 @@ mod tests {
         }
     }
 
+    fn identity_dense_linear(dim: i32) -> QuantizedLinear {
+        let mut weight = vec![0.0f32; (dim * dim) as usize];
+        for i in 0..dim as usize {
+            weight[i * dim as usize + i] = 1.0;
+        }
+        dense_linear(&weight, dim, dim)
+    }
+
     fn assert_arrays_close(actual: &Array, expected: &Array, tol: f32) {
         let actual = actual.as_dtype(Dtype::Float32).unwrap();
         let expected = expected.as_dtype(Dtype::Float32).unwrap();
@@ -5038,6 +5757,115 @@ mod tests {
     }
 
     #[test]
+    fn attention_quantized_kv_cache_stays_close_to_dense_cache() {
+        let dim = 32i32;
+        let attn = Attention {
+            q_proj: identity_dense_linear(dim),
+            k_proj: identity_dense_linear(dim),
+            v_proj: identity_dense_linear(dim),
+            o_proj: identity_dense_linear(dim),
+            q_norm: None,
+            k_norm: None,
+            v_norm: None,
+            num_heads: 1,
+            num_kv_heads: 1,
+            head_dim: dim,
+            scale: 1.0 / (dim as f32).sqrt(),
+            attn_logit_softcapping: None,
+            rope_dim: dim,
+            rope_theta: 10000.0,
+            rope_traditional: false,
+            window_size: None,
+            kv_shared_source: None,
+        };
+
+        let values = (0..(4 * dim))
+            .map(|i| (i as f32 * 0.03125) - 1.0)
+            .collect::<Vec<_>>();
+        let full = Array::from_slice(&values, &[1, 4, dim]);
+
+        let mut dense_cache = KVCache::new();
+        let mut dense_outputs = Vec::new();
+        for step in 0..4i32 {
+            let x = full.index((0..1, step..step + 1, std::ops::RangeFull));
+            dense_outputs.push(attn.forward(&x, &mut dense_cache, None).unwrap());
+        }
+        let dense_output_refs: Vec<&Array> = dense_outputs.iter().collect();
+        let dense_actual = mlx_rs::ops::concatenate_axis(&dense_output_refs, 1).unwrap();
+
+        let mut quantized_cache = KVCache::new_quantized(32, 8, 0);
+        let mut quantized_outputs = Vec::new();
+        for step in 0..4i32 {
+            let x = full.index((0..1, step..step + 1, std::ops::RangeFull));
+            quantized_outputs.push(attn.forward(&x, &mut quantized_cache, None).unwrap());
+        }
+        let quantized_output_refs: Vec<&Array> = quantized_outputs.iter().collect();
+        let quantized_actual = mlx_rs::ops::concatenate_axis(&quantized_output_refs, 1).unwrap();
+
+        assert_eq!(quantized_cache.offset(), 4);
+        assert_arrays_close(&quantized_actual, &dense_actual, 5e-2);
+    }
+
+    #[test]
+    fn attention_quantized_kv_cache_threshold_migrates_after_dense_prefix() {
+        let dim = 32i32;
+        let attn = Attention {
+            q_proj: identity_dense_linear(dim),
+            k_proj: identity_dense_linear(dim),
+            v_proj: identity_dense_linear(dim),
+            o_proj: identity_dense_linear(dim),
+            q_norm: None,
+            k_norm: None,
+            v_norm: None,
+            num_heads: 1,
+            num_kv_heads: 1,
+            head_dim: dim,
+            scale: 1.0 / (dim as f32).sqrt(),
+            attn_logit_softcapping: None,
+            rope_dim: dim,
+            rope_theta: 10000.0,
+            rope_traditional: false,
+            window_size: None,
+            kv_shared_source: None,
+        };
+
+        let values = (0..(6 * dim))
+            .map(|i| (((i as usize % dim as usize) as f32) / dim as f32) - 0.5)
+            .collect::<Vec<_>>();
+        let full = Array::from_slice(&values, &[1, 6, dim]);
+
+        let mut dense_cache = KVCache::new();
+        let mut dense_outputs = Vec::new();
+        for step in 0..6i32 {
+            let x = full.index((0..1, step..step + 1, std::ops::RangeFull));
+            dense_outputs.push(attn.forward(&x, &mut dense_cache, None).unwrap());
+        }
+        let dense_output_refs: Vec<&Array> = dense_outputs.iter().collect();
+        let dense_actual = mlx_rs::ops::concatenate_axis(&dense_output_refs, 1).unwrap();
+
+        let mut quantized_cache = KVCache::new_quantized(32, 8, 4);
+        let mut quantized_outputs = Vec::new();
+        for step in 0..6i32 {
+            let x = full.index((0..1, step..step + 1, std::ops::RangeFull));
+            quantized_outputs.push(attn.forward(&x, &mut quantized_cache, None).unwrap());
+        }
+        let quantized_output_refs: Vec<&Array> = quantized_outputs.iter().collect();
+        let quantized_actual = mlx_rs::ops::concatenate_axis(&quantized_output_refs, 1).unwrap();
+
+        assert_eq!(quantized_cache.offset(), 6);
+        assert!(quantized_cache.qkeys.is_some());
+        assert!(quantized_cache.qvalues.is_some());
+        assert!(quantized_cache.keys.is_none());
+        assert!(quantized_cache.values.is_none());
+        let dense_prefix = dense_actual.index((0..1, 0..4, std::ops::RangeFull));
+        let quantized_prefix = quantized_actual.index((0..1, 0..4, std::ops::RangeFull));
+        let dense_tail = dense_actual.index((0..1, 4..6, std::ops::RangeFull));
+        let quantized_tail = quantized_actual.index((0..1, 4..6, std::ops::RangeFull));
+        assert_arrays_close(&quantized_prefix, &dense_prefix, 1e-4);
+        assert_arrays_close(&quantized_tail, &dense_tail, 2e-1);
+    }
+
+    #[test]
     fn rotating_kv_cache_cannot_trim_before_retained_window() {
         let mut cache = KVCache::new_rotating(2, 0);
         let k = Array::from_slice(&[1.0f32, 2.0], &[1, 1, 1, 2]);
@@ -5045,7 +5873,7 @@ mod tests {
 
         cache.update(k.clone(), v.clone()).unwrap();
         cache.update(k.clone(), v.clone()).unwrap();
-        cache.update(k, v).unwrap();
+        cache.update_cached(k, v).unwrap();
 
         assert_eq!(cache.offset(), 3);
         assert_eq!(cache.retained_start(), 1);
@@ -5072,6 +5900,39 @@ mod tests {
         assert_eq!(cache.retained_start(), 0);
         assert_eq!(keys.as_slice::<f32>(), &[1.0, 2.0, 9.0]);
         assert_eq!(values.as_slice::<f32>(), &[11.0, 12.0, 19.0]);
+    }
+
+    #[test]
+    fn standard_kv_cache_trim_materializes_prefix() {
+        let mut cache = KVCache::new();
+        let k = Array::from_slice(&[1.0f32, 2.0, 3.0, 4.0], &[1, 1, 2, 2]);
+        let v = Array::from_slice(&[5.0f32, 6.0, 7.0, 8.0], &[1, 1, 2, 2]);
+
+        cache.update_cached(k, v).unwrap();
+        assert!(cache.trim_to(1).unwrap());
+
+        assert_eq!(cache.offset(), 1);
+        assert_eq!(cache.keys.as_ref().unwrap().shape(), &[1, 1, 1, 2]);
+        assert_eq!(cache.values.as_ref().unwrap().shape(), &[1, 1, 1, 2]);
+        let (keys, values) = cache.views().unwrap();
+        assert_eq!(keys.as_slice::<f32>(), &[1.0, 2.0]);
+        assert_eq!(values.as_slice::<f32>(), &[5.0, 6.0]);
+    }
+
+    #[test]
+    fn quantized_kv_cache_trim_materializes_prefix() {
+        let mut cache = KVCache::new_quantized(64, 8, 0);
+        let k_data: Vec<f32> = (0..(3 * 64)).map(|i| (i as f32 / 64.0) - 1.0).collect();
+        let v_data: Vec<f32> = (0..(3 * 64)).map(|i| 1.0 - (i as f32 / 64.0)).collect();
+        let k = Array::from_slice(&k_data, &[1, 1, 3, 64]);
+        let v = Array::from_slice(&v_data, &[1, 1, 3, 64]);
+
+        cache.update_cached(k, v).unwrap();
+        assert!(cache.trim_to(2).unwrap());
+
+        assert_eq!(cache.offset(), 2);
+        assert_eq!(cache.qkeys.as_ref().unwrap().data.shape()[2], 2);
+        assert_eq!(cache.qvalues.as_ref().unwrap().data.shape()[2], 2);
     }
 
     #[test]
@@ -5277,15 +6138,15 @@ mod tests {
             &[1, 3, 2]
         );
         assert_eq!(
-            tensors["model.layers.0.mlp.experts.gate_proj.bias"].as_slice::<f32>(),
+            tensors["model.layers.0.mlp.experts.gate_proj.biases"].as_slice::<f32>(),
             &[0.0, 20.0, 40.0]
         );
         assert_eq!(
-            tensors["model.layers.0.mlp.experts.up_proj.bias"].as_slice::<f32>(),
+            tensors["model.layers.0.mlp.experts.up_proj.biases"].as_slice::<f32>(),
             &[10.0, 30.0, 50.0]
         );
         assert_eq!(
-            tensors["model.layers.0.mlp.experts.down_proj.bias"].as_slice::<f32>(),
+            tensors["model.layers.0.mlp.experts.down_proj.biases"].as_slice::<f32>(),
             &[1.0, 2.0, 3.0]
         );
     }
@@ -5793,6 +6654,34 @@ mod tests {
         let no_cache_logits = model.forward_no_cache(&input).expect("no-cache forward");
         let mut caches = model.new_caches();
         let cache_logits = model.forward(&input, &mut caches).expect("cache forward");
+
+        let no_cache_last = no_cache_logits
+            .index((0, (ids.len() as i32 - 1), std::ops::RangeFull))
+            .as_dtype(Dtype::Float32)
+            .expect("no-cache logits cast");
+        let cache_last = cache_logits
+            .index((0, (ids.len() as i32 - 1), std::ops::RangeFull))
+            .as_dtype(Dtype::Float32)
+            .expect("cache logits cast");
+        mlx_rs::transforms::eval([&no_cache_last, &cache_last]).expect("eval logits slices");
+        let describe_top = |name: &str, logits_slice: &[f32]| {
+            let mut pairs: Vec<(usize, f32)> = logits_slice.iter().copied().enumerate().collect();
+            pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let top10: Vec<(usize, f32, String)> = pairs
+                .into_iter()
+                .take(10)
+                .map(|(idx, val)| {
+                    (
+                        idx,
+                        val,
+                        model.tokenizer.id_to_token(idx as u32).unwrap_or_default(),
+                    )
+                })
+                .collect();
+            println!("{name} top10 {:?}", top10);
+        };
+        describe_top("gemma3 no_cache", no_cache_last.as_slice::<f32>());
+        describe_top("gemma3 cache", cache_last.as_slice::<f32>());
 
         let no_cache_token = argmax_last(&no_cache_logits).expect("argmax no-cache");
         let cache_token = argmax_last(&cache_logits).expect("argmax cache");

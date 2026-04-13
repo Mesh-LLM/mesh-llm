@@ -75,7 +75,6 @@ download-convert-validate workflow on `studio54`'s `128 GB` M1 Ultra:
 - `mixtral`
 - `cohere-command-r`
 - `jamba`
-- `kimi-linear`
 
 Those can be added explicitly with:
 

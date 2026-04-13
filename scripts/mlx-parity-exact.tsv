@@ -5,8 +5,8 @@ gguf	mistral-gguf-exact	meshllm/mistral-7b-instruct-v0.3-parity-f16-gguf/mistral
 mlx	mistral-mlx-exact	meshllm/mistral-7b-instruct-v0.3-parity-bf16-mlx	chat_template.jinja
 gguf	qwen25-gguf-exact	meshllm/qwen2.5-0.5b-instruct-parity-q8_0-gguf/qwen2.5-0.5b-instruct-q8_0.gguf	-
 mlx	qwen25-mlx-exact	meshllm/qwen2.5-0.5b-instruct-parity-8bit-mlx	chat_template.jinja
-gguf	qwen3-gguf-exact	meshllm/qwen3-0.6b-parity-q8_0-gguf/qwen3-0.6b-q8_0.gguf	-
-mlx	qwen3-mlx-exact	meshllm/qwen3-0.6b-parity-8bit-mlx	chat_template.jinja
+gguf	qwen3-gguf-exact	meshllm/qwen3-8b-parity-q8_0-gguf/qwen3-8b-q8_0.gguf	-
+mlx	qwen3-mlx-exact	meshllm/qwen3-8b-parity-8bit-mlx/model-00001-of-00002.safetensors	chat_template.jinja
 gguf	llama32-gguf-exact	meshllm/llama-3.2-1b-instruct-parity-f16-gguf/llama-3.2-1b-instruct-f16.gguf	-
 mlx	llama32-mlx-exact	meshllm/llama-3.2-1b-instruct-parity-bf16-mlx	chat_template.jinja
 gguf	gemma2-gguf-exact	meshllm/gemma-2-2b-it-parity-q8_0-gguf/gemma-2-2b-it-q8_0.gguf	-

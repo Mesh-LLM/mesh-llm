@@ -237,7 +237,6 @@ fn safe_prefix_len(text: &str, holdback_chars: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use array_macro::array;
 
     #[test]
     fn stop_buffer_holds_back_partial_match() {
@@ -264,7 +263,7 @@ mod tests {
 
     #[test]
     fn sampler_suppresses_tokens_during_argmax() {
-        let logits = array!([[[0.1f32, 0.9f32, 0.8f32]]]);
+        let logits = Array::from_slice(&[0.1f32, 0.9f32, 0.8f32], &[1, 1, 3]);
         let mut sampler = Sampler::new(SamplingParams {
             temperature: 0.0,
             top_p: 1.0,
