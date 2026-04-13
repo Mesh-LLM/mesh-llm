@@ -1070,8 +1070,10 @@ async fn run_auto(
     auto_join_candidates: Vec<(String, Option<String>)>,
 ) -> Result<()> {
     let resolved_plugins = resolve_plugins_from_config(&config, &cli)?;
-    let api_port = cli.port;
-    // Export API port for llama-server mesh hook callbacks
+    let api_port = cli.console;
+    // Export management API port for llama-server mesh hook callbacks.
+    // Must be the console/management port (default 3131), NOT the proxy port
+    // (default 9337) — hooks hitting the proxy would loop back to llama-server.
     std::env::set_var("MESH_API_PORT", api_port.to_string());
     let console_port = Some(cli.console);
     let is_client = cli.client;
