@@ -279,10 +279,7 @@ async fn run_analyze_micro(
     let artifact = moe::SharedRankingArtifact {
         kind: moe::SharedRankingKind::MicroAnalyze,
         origin: moe::SharedRankingOrigin::LocalMicroAnalyze,
-        ranking: totals
-            .iter()
-            .map(|(expert_id, _)| *expert_id)
-            .collect::<Vec<_>>(),
+        ranking: totals.keys().copied().collect::<Vec<_>>(),
         micro_prompt_count: Some(prompt_count),
         micro_tokens: Some(token_count),
         micro_layer_scope: Some(moe::MoeMicroLayerScope::All),

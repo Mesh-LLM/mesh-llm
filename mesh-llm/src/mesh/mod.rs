@@ -124,9 +124,17 @@ fn config_uses_pinned_gpu(config: &crate::plugin::MeshConfig) -> bool {
 }
 
 fn peer_supports_pinned_gpu_config(peer_version: Option<&str>) -> bool {
-    peer_version.is_some_and(|version| {
-        !crate::system::autoupdate::version_newer(MIN_PINNED_GPU_CONFIG_PEER_VERSION, version)
-    })
+    let Ok(min_version) = semver::Version::parse(MIN_PINNED_GPU_CONFIG_PEER_VERSION) else {
+        return false;
+    };
+    let Some(peer_version) = peer_version else {
+        return false;
+    };
+    let Ok(peer_version) = semver::Version::parse(peer_version) else {
+        return false;
+    };
+
+    peer_version >= min_version
 }
 
 fn pinned_gpu_config_peer_error(peer_version: Option<&str>) -> String {
@@ -807,7 +815,6 @@ pub(crate) struct PeerAnnouncementV0 {
 }
 
 /// Merge two demand maps. For each model, take max of last_active and request_count.
-
 /// Role a node plays in the mesh.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum NodeRole {
@@ -3276,8 +3283,10 @@ impl Node {
                                         let mut state = node.state.lock().await;
                                         // Only insert if no other task raced and
                                         // established a connection while we were probing.
-                                        if !state.connections.contains_key(&dead_id) {
-                                            state.connections.insert(dead_id, new_conn.clone());
+                                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                                            state.connections.entry(dead_id)
+                                        {
+                                            entry.insert(new_conn.clone());
                                             drop(state);
                                             let n2 = node.clone();
                                             tokio::spawn(async move {
@@ -3765,24 +3774,28 @@ impl Node {
             return Ok(());
         };
         let mesh_config = proto_config_to_mesh(config_snapshot);
-        if let Err(err) = preflight_pushed_config_for_current_node(&mesh_config) {
-            send_push_error(&mut send, &err.to_string()).await?;
-            return Ok(());
-        }
 
-        // 6. Apply via CAS — use spawn_blocking so synchronous disk I/O in apply()
-        //    does not block the Tokio async runtime while the mutex is held.
+        // 6. Preflight + apply via CAS — use spawn_blocking so blocking hardware
+        //    probes and synchronous disk I/O do not run on the Tokio async runtime.
         let config_state = Arc::clone(&self.config_state);
         let expected_revision = push.expected_revision;
-        let (result, current_revision, current_hash) = tokio::task::spawn_blocking(move || {
+        let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            preflight_pushed_config_for_current_node(&mesh_config)?;
             let mut state = config_state.blocking_lock();
             let result = state.apply(mesh_config, expected_revision);
             let current_revision = state.revision();
             let current_hash = *state.config_hash();
-            (result, current_revision, current_hash)
+            Ok((result, current_revision, current_hash))
         })
         .await
         .map_err(|e| anyhow::anyhow!("config apply task panicked: {e}"))?;
+        let (result, current_revision, current_hash) = match apply_result {
+            Ok(values) => values,
+            Err(err) => {
+                send_push_error(&mut send, &err.to_string()).await?;
+                return Ok(());
+            }
+        };
 
         // 7. Build + send response
         use crate::proto::node::ConfigApplyMode as ProtoApplyMode;

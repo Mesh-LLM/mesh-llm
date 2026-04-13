@@ -950,7 +950,7 @@ fn send_signal_if_matches(
         }
 
         tracing::warn!(pid, error = %err, ?signal, "failed to signal process");
-        return SignalOutcome::Failed;
+        SignalOutcome::Failed
     }
 
     #[cfg(windows)]

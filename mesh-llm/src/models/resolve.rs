@@ -268,7 +268,7 @@ pub async fn resolve_huggingface_model_identity(
                 .info()
                 .await
                 .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision}"))?;
-            return Ok(Some(HuggingFaceModelIdentity {
+            Ok(Some(HuggingFaceModelIdentity {
                 repo_id: repo.to_string(),
                 revision: detail.sha.clone(),
                 file: file.to_string(),
@@ -278,7 +278,7 @@ pub async fn resolve_huggingface_model_identity(
                     .and_then(|value| value.to_str())
                     .unwrap_or(file)
                     .to_string(),
-            }));
+            }))
         }
         ExactModelRef::HuggingFace {
             repo,
@@ -297,7 +297,7 @@ pub async fn resolve_huggingface_model_identity(
                 .info()
                 .await
                 .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision_ref}"))?;
-            return Ok(Some(HuggingFaceModelIdentity {
+            Ok(Some(HuggingFaceModelIdentity {
                 repo_id: repo.clone(),
                 revision: detail.sha.clone(),
                 canonical_ref: format!("{}@{}/{}", repo, detail.sha, resolved_file),
@@ -307,7 +307,7 @@ pub async fn resolve_huggingface_model_identity(
                     .unwrap_or(&resolved_file)
                     .to_string(),
                 file: resolved_file,
-            }));
+            }))
         }
         ExactModelRef::Url { url, .. } => {
             if let Some((repo, revision, file)) = parse_hf_resolve_url(&url) {

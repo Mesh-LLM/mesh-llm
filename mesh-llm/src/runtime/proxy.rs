@@ -420,12 +420,12 @@ fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
     let mut models: Vec<String> = targets
         .targets
         .iter()
-        .filter_map(|(model, candidates)| {
+        .filter(|(_, candidates)| {
             candidates
                 .iter()
                 .any(|target| !matches!(target, election::InferenceTarget::None))
-                .then(|| model.clone())
         })
+        .map(|(model, _)| model.clone())
         .collect();
     models.sort();
     models.dedup();

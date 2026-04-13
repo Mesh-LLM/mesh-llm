@@ -139,12 +139,12 @@ pub(crate) async fn plan_moe(args: MoePlanArgs) -> Result<MoePlanReport> {
             .map(|assignment| assignment.n_shared)
             .unwrap_or_default();
         let shared_mass_pct = mass_pct_for_experts(
-            &profile,
+            profile,
             &profile.ranking[..shared.min(profile.ranking.len())],
         );
         let node_mass: Vec<f64> = assignments
             .iter()
-            .map(|assignment| mass_pct_for_experts(&profile, &assignment.experts))
+            .map(|assignment| mass_pct_for_experts(profile, &assignment.experts))
             .collect();
         (
             Some(shared_mass_pct),
@@ -392,10 +392,12 @@ pub(crate) fn resolve_runtime_ranking(
         false,
     ) {
         Ok(remote) => remote,
-        Err(error) => return local_legacy.ok_or_else(|| error).map(Some),
+        Err(error) => return local_legacy.ok_or(error).map(Some),
     };
     Ok(select_preferred_ranking(local_legacy, remote))
 }
+
+type AnalysisDetails = (Option<&'static str>, Option<usize>, u32, u32, bool);
 
 fn resolve_local_runtime_ranking(model_path: &Path) -> Option<ResolvedRanking> {
     moe::best_shared_ranking_artifact(model_path).map(|artifact| {
@@ -749,7 +751,7 @@ fn build_metadata_json(
 fn infer_analysis_details(
     ranking: &ResolvedRanking,
     model: &MoeModelContext,
-) -> Result<(Option<&'static str>, Option<usize>, u32, u32, bool)> {
+) -> Result<AnalysisDetails> {
     let context_size_default = 4096;
     let log_path = analysis_log_path(model, &ranking.analyzer_id);
     let log_text = log_path

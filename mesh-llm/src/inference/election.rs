@@ -1641,8 +1641,9 @@ pub async fn election_loop(
         let requires_split = force_split || !model_fits_locally;
 
         let i_am_host = if requires_split {
-            // Distributed mode: elect one host from the model group
-            should_be_host_for_model(node.id(), local_launch_vram, &model_peers)
+            // Distributed mode: elect one host from the model group using the
+            // same advertised node capacity every peer observes through gossip.
+            should_be_host_for_model(node.id(), my_vram, &model_peers)
         } else if model_peers.is_empty() {
             // No other node serving this model — we must host
             true
@@ -2947,6 +2948,7 @@ mod tests {
                 total_group_vram: 80,
             }
         );
+        assert!(should_be_host_for_model(make_id(1), 80, &[peer.clone()]));
         assert!(!should_be_host_for_model(
             make_id(1),
             local_launch_vram,
