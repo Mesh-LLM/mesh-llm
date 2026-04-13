@@ -3005,8 +3005,65 @@ private:
                             auto inject_text = slot.mesh_hook.process_response(resp);
 
                             if (!inject_text.empty()) {
-                                SLT_INF(slot, "mesh hook 2: injecting %zu chars\n", inject_text.size());
-                                // TODO: inject tokens into KV cache
+                                // Tokenize the inject text and decode it into the KV cache.
+                                // After this, the model has "seen" the injected context and
+                                // will generate from a different (hopefully more confident) state.
+                                //
+                                // We use a temporary batch so the main batch iteration is not
+                                // disturbed. After decoding, the KV cache is extended for this
+                                // slot's sequence, and ctx holds logits from the last inject token.
+                                llama_tokens inject_toks = common_tokenize(ctx, inject_text, false);
+                                if (!inject_toks.empty()) {
+                                    SLT_INF(slot, "mesh hook 2: injecting %zu tokens (%zu chars) into KV cache\n",
+                                            inject_toks.size(), inject_text.size());
+
+                                    const int32_t n_batch_inject = llama_n_batch(ctx);
+                                    llama_batch batch_inject = llama_batch_init(n_batch_inject, 0, 1);
+                                    int last_logit_idx = 0;
+                                    bool decode_ok = true;
+
+                                    // Process inject tokens in chunks, same as normal prefill.
+                                    // Only the last token needs logits (for sampling the first generated token).
+                                    for (size_t j = 0; j < inject_toks.size(); j++) {
+                                        bool need_logits = (j == inject_toks.size() - 1);
+                                        common_batch_add(batch_inject, inject_toks[j],
+                                                         slot.prompt.tokens.pos_next(), { slot.id }, need_logits);
+                                        slot.prompt.tokens.push_back(inject_toks[j]);
+
+                                        // Decode when batch is full or on the last token.
+                                        if (batch_inject.n_tokens >= n_batch_inject || j == inject_toks.size() - 1) {
+                                            if (need_logits) {
+                                                // The last token is in this chunk — remember its
+                                                // position within the batch for sampling below.
+                                                last_logit_idx = batch_inject.n_tokens - 1;
+                                            }
+                                            int ret = llama_decode(ctx, batch_inject);
+                                            if (ret != 0) {
+                                                SLT_ERR(slot, "mesh hook 2: llama_decode failed (%d), aborting injection\n", ret);
+                                                decode_ok = false;
+                                                break;
+                                            }
+                                            common_batch_clear(batch_inject);
+                                        }
+                                    }
+
+                                    llama_batch_free(batch_inject);
+
+                                    if (decode_ok) {
+                                        // After decoding the inject batch, ctx holds logits from
+                                        // that batch — not from the original prefill batch. We
+                                        // set i_batch so that tok_idx (= i_batch - i) equals
+                                        // last_logit_idx, which is where the last inject token's
+                                        // logits are in the context.
+                                        slot.i_batch = i + last_logit_idx;
+
+                                        // Reset signal window — fresh start after injection.
+                                        slot.mesh_hook.signals.reset();
+
+                                        SLT_INF(slot, "mesh hook 2: injection complete, prompt now %d tokens\n",
+                                                slot.prompt.n_tokens());
+                                    }
+                                }
                             }
                         }
                     }
