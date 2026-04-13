@@ -53,12 +53,9 @@ pub async fn find_audio_peer(node: &mesh::Node, exclude_model: &str) -> Option<E
 /// Find up to `n` peers serving a *different* model from the current one,
 /// ranked by score (best first).
 ///
-/// Scoring prefers:
-/// 1. Similar tier (within ±1 of current) — a 4B model asking a 70B is slow and wasteful
-/// 2. Lower RTT — faster round-trip means less blocking time
-/// 3. Different model name — the whole point is a different perspective
-///
-/// Does not require a specific capability — the value is architectural diversity.
+/// Excludes models smaller than the current one — no point asking a weaker
+/// model for help. Same-tier or larger models are fine; larger is preferred
+/// slightly. Tie-break on RTT (faster = better).
 pub async fn find_different_model_peers(
     node: &mesh::Node,
     current_model: &str,
@@ -75,16 +72,21 @@ pub async fn find_different_model_peers(
             let different = p.served_model_descriptors.iter().find(|d| {
                 d.identity.model_name != current_model && !d.identity.model_name.is_empty()
             });
-            different.map(|d| {
+            different.and_then(|d| {
                 let peer_tier = profile_for(&d.identity.model_name)
                     .map(|p| p.tier)
                     .unwrap_or(2);
-                let tier_distance = (peer_tier as i32 - current_tier as i32).unsigned_abs();
+                // Skip smaller models — they can't help
+                if peer_tier < current_tier {
+                    return None;
+                }
                 let rtt = p.rtt_ms.unwrap_or(500);
-                // Score: prefer similar tier (0 = same, 1 = adjacent, 2+ = far).
-                // Tie-break on RTT. tier_distance * 1000 dominates RTT.
-                let score = tier_distance * 1000 + rtt;
-                (p.id, d.identity.model_name.clone(), score)
+                // Prefer larger models slightly (invert tier so bigger = lower score).
+                // A tier-4 model scores 0, tier-3 scores 1000, same-tier scores
+                // (4 - current_tier) * 1000. RTT breaks ties.
+                let tier_score = (4u32.saturating_sub(peer_tier as u32)) * 1000;
+                let score = tier_score + rtt;
+                Some((p.id, d.identity.model_name.clone(), score))
             })
         })
         .collect();
