@@ -79,7 +79,7 @@ Core multimodal is shipped: capability model, gossip advertisement, vision/audio
 
 Core virtual LLM hooks are working: Hook 1 (media), Hook 2 (post-prefill uncertainty), Hook 2b (mid-gen drift). See [VIRTUAL_LLM.md](docs/VIRTUAL_LLM.md), PR #225.
 
-- [ ] **Investigate slow peer consultations**: Some peers (e.g. MiniMax) have low QUIC RTT but take 7-10s for inference, hitting the 10s consultation timeout. Need to understand why — large model, slow hardware, queue depth? Consider tracking actual consultation response times per peer to prefer fast responders.
+- [ ] **Use TTFT perf data for peer selection**: PR #271 adds `InferenceTracker` with per-model per-target TTFT ring buffers. Use `best_ttft_for_target()` in `consult::find_different_model_peers()` to score candidates by observed inference speed instead of QUIC RTT. Peers like MiniMax that have low RTT but take 7-10s for actual inference would get deprioritized naturally.
 - [ ] **Wire audio extraction**: `find_audio_peer` works but extracting audio data from the request payload isn't implemented.
 - [ ] **Non-thinking model testing**: Current entropy gating doesn't work well for thinking models (first token is always `<think>`, very confident). Test with non-thinking models where Hook 2 fires on genuine first-token uncertainty.
 
