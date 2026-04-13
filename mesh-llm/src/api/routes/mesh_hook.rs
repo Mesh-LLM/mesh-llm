@@ -31,7 +31,9 @@ pub async fn handle(
 
     let response = match hook {
         "pre_inference" => virtual_llm::handle_pre_inference(&node, &payload).await,
-        "post_prefill" => virtual_llm::handle_post_prefill(&node, &payload).await,
+        "post_prefill" | "mid_generation" => {
+            virtual_llm::handle_post_prefill(&node, &payload).await
+        }
         "pre_response" => virtual_llm::handle_pre_response(&node, &payload).await,
         _ => {
             tracing::warn!("mesh hook: unknown hook type: {hook}");

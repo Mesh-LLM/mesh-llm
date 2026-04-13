@@ -615,6 +615,7 @@ struct common_params {
 
     // mesh hook callback port (0 = disabled)
     int32_t mesh_port = 0;
+    bool    mesh_hook_debug = false;
 
     // "advanced" endpoints are disabled by default for better security
     bool endpoint_slots   = true;

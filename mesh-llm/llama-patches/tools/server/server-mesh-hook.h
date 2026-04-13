@@ -6,7 +6,8 @@
 // Three hooks, all synchronous:
 //   Hook 1 (pre_inference)  — before generation starts, can inject into prompt
 //   Hook 2 (post_prefill)   — after prompt eval, when first token is uncertain
-//   Hook 3 (pre_response)   — before response is sent, can append to output
+//     2b   (mid_generation) — during generation, when sustained entropy spike detected
+//   Hook 3 (pre_response)   — before response is sent, can replace output
 //
 // mesh-llm may start background work on Hook 1 and collect results on Hook 3.
 // No polling — the C++ side just calls hooks and uses whatever comes back.
@@ -67,6 +68,18 @@ struct mesh_signal_window {
         return count > SIZE && tail_entropy_mean() > entropy_mean * 2.0f;
     }
 
+    // Check if the model has been consistently uncertain over the recent window.
+    // Used for mid-generation Hook 2b: sustained spike = model is lost.
+    bool sustained_spike(float spike_ratio) const {
+        if (count < SIZE) return false;
+        // Check how many of the last SIZE tokens had entropy > 4.0
+        int high_count = 0;
+        for (int i = 0; i < SIZE; i++) {
+            if (entropy[i] > 4.0f) high_count++;
+        }
+        return (float)high_count / SIZE >= spike_ratio;
+    }
+
     void reset() {
         pos = 0;
         count = 0;
@@ -87,6 +100,7 @@ struct mesh_signal_window {
             {"min_margin",            margin_min},
             {"uncertain_token_count", uncertain_count},
             {"tail_entropy_mean",     tail_entropy_mean()},
+            {"total_tokens",          count},
         };
     }
 };
@@ -94,37 +108,50 @@ struct mesh_signal_window {
 // Per-slot mesh hook context.
 struct mesh_hook_ctx {
     bool enabled = false;
+    bool debug   = false;  // --mesh-hook-debug: lower all thresholds
     int  port    = 0;
     std::string request_id;
 
-    // configured by Hook 1 response
+    // configured by Hook 1 response (or defaults)
     float entropy_threshold = 5.0f;   // default: fire Hook 2 when entropy > 5.0
     bool  verify            = false;  // false = Hook 3 only on triggers
+
+    // mid-generation hook state
+    int   last_midgen_token = -32;    // token index of last mid-gen hook fire (-32 = never)
+    static constexpr int MIDGEN_COOLDOWN = 32;  // minimum tokens between mid-gen hooks
+    static constexpr float MIDGEN_SPIKE_RATIO = 0.75f;  // 75% of window must be high entropy
 
     // pre-inference trigger state (computed from request)
     bool has_images_no_multimodal = false;
     bool has_audio_no_support     = false;
 
-    // signal window — updated every token, read at Hook 3
+    // signal window — updated every token, read at Hook 2b and Hook 3
     mesh_signal_window signals;
 
     // reusable HTTP client (one per slot, kept alive across requests)
     std::unique_ptr<httplib::Client> client;
 
-    void init(int mesh_port) {
+    void init(int mesh_port, bool debug_mode) {
         port = mesh_port;
+        debug = debug_mode;
         enabled = true;
         client = std::make_unique<httplib::Client>("localhost", mesh_port);
         client->set_connection_timeout(0, 200000);  // 200ms connect
-        client->set_read_timeout(60);               // 60s read (Hook 1 may block for consultation)
+        client->set_read_timeout(60);               // 60s read (hooks may block for consultation)
+
+        if (debug) {
+            // Debug mode: fire hooks on almost anything
+            entropy_threshold = 0.5f;
+        }
     }
 
     void reset() {
         request_id.clear();
-        entropy_threshold = 5.0f;
+        entropy_threshold = debug ? 0.5f : 5.0f;
         verify = false;
         has_images_no_multimodal = false;
         has_audio_no_support = false;
+        last_midgen_token = -MIDGEN_COOLDOWN;
         signals.reset();
     }
 
@@ -137,6 +164,15 @@ struct mesh_hook_ctx {
         if (has_images_no_multimodal) return "images_no_multimodal";
         if (has_audio_no_support)     return "audio_no_support";
         return "unknown";
+    }
+
+    // Check if mid-generation hook should fire.
+    // Requires: sustained spike in rolling window + cooldown elapsed.
+    bool should_fire_midgen() const {
+        float ratio = debug ? 0.25f : MIDGEN_SPIKE_RATIO;
+        int cooldown = debug ? 8 : MIDGEN_COOLDOWN;
+        return signals.sustained_spike(ratio)
+            && (signals.count - last_midgen_token) >= cooldown;
     }
 
     // --- Hook helpers ---

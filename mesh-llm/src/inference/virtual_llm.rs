@@ -317,18 +317,20 @@ async fn handle_tail_verification(
                 tracing::info!("virtual: verification passed");
                 json!({ "action": "none" })
             } else {
+                // Verification says the response is bad — replace it entirely
+                // with the peer's corrected version.
                 tracing::info!(
-                    "virtual: verification suggests correction ({} chars)",
+                    "virtual: replacing response with peer correction ({} chars)",
                     verdict.len()
                 );
-                let trimmed = if verdict.len() > 512 {
-                    format!("{}...", &verdict[..512])
+                let trimmed = if verdict.len() > 2048 {
+                    format!("{}...", &verdict[..2048])
                 } else {
                     verdict
                 };
                 json!({
-                    "action": "inject",
-                    "text": format!("\n\n[Correction: {trimmed}]"),
+                    "action": "replace",
+                    "text": trimmed,
                 })
             }
         }

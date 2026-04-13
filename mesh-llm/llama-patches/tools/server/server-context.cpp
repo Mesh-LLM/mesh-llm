@@ -805,8 +805,10 @@ private:
 
             // initialize mesh hooks if --mesh-port was set
             if (params_base.mesh_port > 0) {
-                slot.mesh_hook.init(params_base.mesh_port);
-                SLT_INF(slot, "mesh hooks enabled, callback port = %d\n", params_base.mesh_port);
+                slot.mesh_hook.init(params_base.mesh_port, params_base.mesh_hook_debug);
+                SLT_INF(slot, "mesh hooks enabled, callback port = %d%s\n",
+                        params_base.mesh_port,
+                        params_base.mesh_hook_debug ? " (DEBUG: low thresholds)" : "");
             }
 
             slot.callback_on_release = [this](int id_slot) {
@@ -1578,7 +1580,16 @@ private:
                 auto resp = slot.mesh_hook.call_hook(payload);
                 if (!resp.empty()) {
                     auto action = resp.value("action", "none");
-                    if (action == "inject") {
+                    if (action == "replace") {
+                        // Full replacement — peer's answer replaces the model's output entirely
+                        auto replace_text = resp.value("text", "");
+                        if (!replace_text.empty()) {
+                            SLT_INF(slot, "mesh hook 3: replacing response (%zu -> %zu chars)\n",
+                                    slot.generated_text.size(), replace_text.size());
+                            slot.generated_text = replace_text;
+                        }
+                    } else if (action == "inject") {
+                        // Append — add text after the model's output
                         auto inject_text = resp.value("text", "");
                         if (!inject_text.empty()) {
                             SLT_INF(slot, "mesh hook 3: appending %zu chars to response\n",
@@ -3089,6 +3100,77 @@ private:
                     float entropy = mesh_compute_entropy(probs);
                     float margin  = probs.size() >= 2 ? probs[0].p - probs[1].p : 1.0f;
                     slot.mesh_hook.signals.push(entropy, margin);
+
+                    // --- Mesh Hook 2b: mid-generation ---
+                    // Sustained entropy spike = model is lost. Fire hook with
+                    // generated text so far, get context injection to course-correct.
+                    // Cooldown prevents spamming (min 32 tokens between fires, 8 in debug).
+                    if (slot.mesh_hook.should_fire_midgen()) {
+                        slot.mesh_hook.last_midgen_token = slot.mesh_hook.signals.count;
+
+                        json midgen_payload = {
+                            {"hook",            "mid_generation"},
+                            {"trigger",         "sustained_entropy_spike"},
+                            {"request_id",      slot.mesh_hook.request_id},
+                            {"model",           slot.task->params.oaicompat_model},
+                            {"generated_text",  slot.generated_text},
+                            {"n_decoded",       slot.n_decoded},
+                            {"signals",         slot.mesh_hook.signals.to_json()},
+                        };
+
+                        SLT_INF(slot, "mesh hook 2b: mid_generation, n_decoded=%d tail_entropy=%.2f mean=%.2f\n",
+                                slot.n_decoded, slot.mesh_hook.signals.tail_entropy_mean(),
+                                slot.mesh_hook.signals.entropy_mean);
+
+                        auto resp = slot.mesh_hook.call_hook(midgen_payload);
+                        auto inject_text = slot.mesh_hook.process_response(resp);
+
+                        if (!inject_text.empty()) {
+                            // Same KV injection as Hook 2: tokenize, decode into KV via temp batch.
+                            // Model continues generating but now "remembers" the injected context.
+                            llama_tokens inject_toks = common_tokenize(ctx, inject_text, false);
+                            if (!inject_toks.empty()) {
+                                SLT_INF(slot, "mesh hook 2b: injecting %zu tokens into KV cache mid-generation\n",
+                                        inject_toks.size());
+
+                                const int32_t n_batch_inject = llama_n_batch(ctx);
+                                llama_batch batch_inject = llama_batch_init(n_batch_inject, 0, 1);
+                                int last_logit_idx = 0;
+                                bool decode_ok = true;
+
+                                for (size_t j = 0; j < inject_toks.size(); j++) {
+                                    bool need_logits = (j == inject_toks.size() - 1);
+                                    common_batch_add(batch_inject, inject_toks[j],
+                                                     slot.prompt.tokens.pos_next(), { slot.id }, need_logits);
+                                    slot.prompt.tokens.push_back(inject_toks[j]);
+
+                                    if (batch_inject.n_tokens >= n_batch_inject || j == inject_toks.size() - 1) {
+                                        if (need_logits) {
+                                            last_logit_idx = batch_inject.n_tokens - 1;
+                                        }
+                                        int ret = llama_decode(ctx, batch_inject);
+                                        if (ret != 0) {
+                                            SLT_ERR(slot, "mesh hook 2b: llama_decode failed (%d)\n", ret);
+                                            decode_ok = false;
+                                            break;
+                                        }
+                                        common_batch_clear(batch_inject);
+                                    }
+                                }
+
+                                llama_batch_free(batch_inject);
+
+                                if (decode_ok) {
+                                    // After injection, we need to resample from the new state.
+                                    // The next iteration of the generation loop will decode the
+                                    // next token using the extended KV cache.
+                                    slot.mesh_hook.signals.reset();
+                                    SLT_INF(slot, "mesh hook 2b: injection complete, prompt now %d tokens\n",
+                                            slot.prompt.n_tokens());
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement

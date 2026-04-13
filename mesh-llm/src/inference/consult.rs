@@ -248,12 +248,12 @@ pub async fn verify_response(
         "content": format!(
             "A language model was asked: \"{last_user}\"\n\n\
              It responded: \"{generated_text}\"\n\n\
-             Is the ending of this response accurate and complete, \
-             or does it trail off into nonsense? \
-             If the ending is wrong, provide a corrected version of \
-             just the last sentence or two. If it's fine, say \"LOOKS_GOOD\"."
+             Is this response accurate and coherent? \
+             If it's fine, say exactly \"LOOKS_GOOD\" and nothing else. \
+             If the response is wrong, incoherent, or trails off into nonsense, \
+             provide a correct, complete answer to the original question."
         )
     })];
 
-    chat_completion(node, peer_id, model, messages, 256).await
+    chat_completion(node, peer_id, model, messages, 512).await
 }

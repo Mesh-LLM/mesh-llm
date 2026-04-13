@@ -1171,6 +1171,9 @@ pub async fn start_llama_server(
     if let Ok(api_port) = std::env::var("MESH_API_PORT") {
         args.extend_from_slice(&["--mesh-port".to_string(), api_port]);
     }
+    if std::env::var("MESH_HOOK_DEBUG").is_ok() {
+        args.push("--mesh-hook-debug".to_string());
+    }
 
     // KV cache quantization — asymmetric K/V strategy.
     //
