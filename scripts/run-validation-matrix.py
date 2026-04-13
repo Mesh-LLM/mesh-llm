@@ -24,7 +24,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MATRIX = REPO_ROOT / "testdata" / "validation" / "matrix.json"
 DEFAULT_BASELINES = REPO_ROOT / "testdata" / "validation" / "baselines.json"
-DEFAULT_ROOT = REPO_ROOT / "MLX_VALIDATION_RESULTS"
+DEFAULT_ROOT = REPO_ROOT / ".cache" / "mlx-validation"
 DEFAULT_WAIT_SECONDS = 300
 COMMON_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"]
 

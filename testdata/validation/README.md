@@ -22,7 +22,7 @@ for the GGUF and MLX backends.
 
 ## Runtime artifacts
 
-Each validation run writes local artifacts under `MLX_VALIDATION_RESULTS/<stamp>/`.
+Each validation run writes local artifacts under `.cache/mlx-validation/<stamp>/`.
 
 For exact runs, each case directory now includes:
 

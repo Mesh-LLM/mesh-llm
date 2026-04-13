@@ -16,19 +16,19 @@ scripts/run-validation-matrix.py --stamp rerun-$(date +%Y%m%d-%H%M%S)
 
 Outputs:
 
-- exact summary TSV: `MLX_VALIDATION_RESULTS/<stamp>/exact-summary.tsv`
-- behavior summary TSV: `MLX_VALIDATION_RESULTS/<stamp>/behavior-summary.tsv`
-- combined summary TSV: `MLX_VALIDATION_RESULTS/<stamp>/validation-summary.tsv`
-- exact baseline comparison TSV: `MLX_VALIDATION_RESULTS/<stamp>/exact-baseline-comparison.tsv`
-- behavior baseline comparison TSV: `MLX_VALIDATION_RESULTS/<stamp>/behavior-baseline-comparison.tsv`
-- parity-vs-baseline TSV: `MLX_VALIDATION_RESULTS/<stamp>/parity-vs-canonical-baseline.tsv`
+- exact summary TSV: `.cache/mlx-validation/<stamp>/exact-summary.tsv`
+- behavior summary TSV: `.cache/mlx-validation/<stamp>/behavior-summary.tsv`
+- combined summary TSV: `.cache/mlx-validation/<stamp>/validation-summary.tsv`
+- exact baseline comparison TSV: `.cache/mlx-validation/<stamp>/exact-baseline-comparison.tsv`
+- behavior baseline comparison TSV: `.cache/mlx-validation/<stamp>/behavior-baseline-comparison.tsv`
+- parity-vs-baseline TSV: `.cache/mlx-validation/<stamp>/parity-vs-canonical-baseline.tsv`
 - raw logs per case:
-  - `MLX_VALIDATION_RESULTS/<stamp>/exact/<case-id>/`
-  - `MLX_VALIDATION_RESULTS/<stamp>/behavior/<case-id>/`
+  - `.cache/mlx-validation/<stamp>/exact/<case-id>/`
+  - `.cache/mlx-validation/<stamp>/behavior/<case-id>/`
 - per-prompt raw request/response artifacts for exact runs:
-  - `MLX_VALIDATION_RESULTS/<stamp>/exact/<case-id>/chat/<label>.json`
+  - `.cache/mlx-validation/<stamp>/exact/<case-id>/chat/<label>.json`
 - raw `/v1/models` payload for exact runs:
-  - `MLX_VALIDATION_RESULTS/<stamp>/exact/<case-id>/models/v1-models.json`
+  - `.cache/mlx-validation/<stamp>/exact/<case-id>/models/v1-models.json`
 
 Useful options:
 

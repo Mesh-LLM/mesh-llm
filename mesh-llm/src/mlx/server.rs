@@ -1635,9 +1635,6 @@ fn default_stop_sequences(model: &MlxModel) -> Vec<String> {
             .reasoning_template()
             .default_stop_sequences,
     );
-    if model.prompt_template.behavior().prompt_template.as_deref() == Some("gemma3") {
-        stops.retain(|stop| stop != "<end_of_turn>");
-    }
     stops.sort();
     stops.dedup();
     stops
@@ -1661,7 +1658,9 @@ fn default_stop_sequences_for(
         Some("llama3") => {
             stops.push("<|eot_id|>".to_string());
         }
-        Some("gemma3") => {}
+        Some("gemma3") => {
+            stops.push("<end_of_turn>".to_string());
+        }
         _ => {}
     }
     match reasoning_family {
@@ -1816,6 +1815,12 @@ mod tests {
         stops.sort();
         stops.dedup();
         assert!(stops.contains(&"<turn|>".to_string()));
+    }
+
+    #[test]
+    fn gemma3_default_stop_sequences_include_end_of_turn() {
+        let stops = default_stop_sequences_for(Some("gemma3"), model::ReasoningFamily::None);
+        assert!(stops.contains(&"<end_of_turn>".to_string()));
     }
 
     #[test]
