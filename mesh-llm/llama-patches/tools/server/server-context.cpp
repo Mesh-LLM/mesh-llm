@@ -947,6 +947,7 @@ private:
                 /* tmpls                 */ std::move(chat_templates),
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
+                /* mesh_hooks            */ params_base.mesh_port > 0,
                 /* enable_thinking       */ enable_thinking,
                 /* reasoning_budget      */ params_base.reasoning_budget,
                 /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
@@ -1232,11 +1233,21 @@ private:
                 : task.params.mesh_request_id;
 
             // evaluate pre-inference triggers
-            // images present but model has no multimodal context
-            // has_mtmd is true when the model has a multimodal context (mmproj loaded)
-            // has_media() is true when the request actually contains images/audio
-            slot.mesh_hook.has_images_no_multimodal =
-                task.tokens.has_media() && !task.tokens.has_mtmd;
+            // Check if messages contained images but model has no multimodal.
+            // When mesh_hooks strips images to "[image attached]", has_media() is false,
+            // so we check mesh_messages for mesh_image_url (preserved by the parser).
+            if (!task.tokens.has_mtmd) {
+                for (const auto & msg : task.params.mesh_messages) {
+                    if (!msg.contains("content") || !msg["content"].is_array()) continue;
+                    for (const auto & part : msg["content"]) {
+                        if (part.contains("mesh_image_url") || part.value("type", "") == "image_url") {
+                            slot.mesh_hook.has_images_no_multimodal = true;
+                            break;
+                        }
+                    }
+                    if (slot.mesh_hook.has_images_no_multimodal) break;
+                }
+            }
 
             // TODO: wire has_audio_no_support when audio input lands
 

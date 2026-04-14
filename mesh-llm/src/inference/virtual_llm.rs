@@ -275,6 +275,13 @@ pub fn extract_image(payload: &Value) -> (String, String) {
                         }
                     }
                     Some("text") => {
+                        // Check for mesh_image_url — preserved by llama-server's
+                        // content parser when mesh hooks strip unsupported images.
+                        if image_url.is_empty() {
+                            if let Some(url) = part["mesh_image_url"]["url"].as_str() {
+                                image_url = url.to_string();
+                            }
+                        }
                         text = part["text"].as_str().unwrap_or("").to_string();
                     }
                     _ => {}

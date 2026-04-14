@@ -13,6 +13,7 @@ LLAMA="$REPO_ROOT/llama.cpp"
 FILES=(
     "tools/server/server-mesh-hook.h"
     "tools/server/server-context.cpp"
+    "tools/server/server-common.cpp"
     "tools/server/server-task.h"
     "tools/server/server-task.cpp"
     "tools/server/server-common.h"
