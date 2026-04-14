@@ -303,6 +303,9 @@ describe("ChatPage", () => {
 
     expect(screen.getByText("Retry")).toBeInTheDocument();
     expect(
+      screen.getByText("Image description failed: model init failed"),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText("Image description failed — retry or send placeholder text"),
     ).toBeInTheDocument();
   });
@@ -387,6 +390,32 @@ describe("App routing and status", () => {
     const networkLink = await screen.findByRole("link", { name: "Network" });
     expect(networkLink).toHaveAttribute("aria-current", "page");
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
+  });
+
+  it("mobile unknown path fallback also syncs dashboard state", async () => {
+    const previousInnerWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      writable: true,
+      value: 640,
+    });
+    setPath("/unknown-path");
+
+    try {
+      render(<App />);
+
+      const networkLink = await screen.findByRole("link", { name: "Network" });
+      expect(networkLink).toHaveAttribute("aria-current", "page");
+      await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+      expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        writable: true,
+        value: previousInnerWidth,
+      });
+    }
   });
 
   it("/dashboard route renders without redirecting to /config", async () => {
@@ -396,6 +425,7 @@ describe("App routing and status", () => {
     const networkLink = await screen.findByRole("link", { name: "Network" });
     expect(networkLink).toHaveAttribute("aria-current", "page");
     await waitFor(() => expect(window.location.pathname).toBe("/dashboard"));
+    expect(screen.queryByRole("button", { name: /New chat/i })).not.toBeInTheDocument();
   });
 
   it("/chat route renders chat section content", async () => {
@@ -405,6 +435,10 @@ describe("App routing and status", () => {
     const chatLink = await screen.findByRole("link", { name: "Chat" });
     expect(chatLink).toHaveAttribute("aria-current", "page");
     await screen.findByRole("button", { name: /New chat/i });
+    await waitFor(() => expect(window.location.pathname).toBe("/chat"));
+    expect(
+      screen.queryByRole("link", { current: "page", name: "Network" }),
+    ).not.toBeInTheDocument();
   });
 
   it("boots /api/status on mount and consumes status payload", async () => {
@@ -433,13 +467,20 @@ describe("App routing and status", () => {
     render(<App />);
 
     const input = await screen.findByTestId("chat-input");
+    await waitFor(() =>
+      expect(mockFetch.mock.calls.some((call) => call[0] === "/api/models")).toBe(
+        true,
+      ),
+    );
     expect(input).toBeDisabled();
     expect(input).toHaveAttribute("placeholder", "Waiting for a warm model...");
+    expect(screen.getByTestId("chat-send")).toBeDisabled();
   });
 });
 
 describe("describeRenderedPagesAsText", () => {
   it("combines page descriptions and preserves failures as placeholders", async () => {
+    const onProgress = vi.fn();
     const describe = vi
       .fn<
         (dataUrl: string) => Promise<{
@@ -466,12 +507,24 @@ describe("describeRenderedPagesAsText", () => {
         "data:image/png;base64,two",
         "data:image/png;base64,three",
       ],
-      { describe },
+      { describe, onProgress },
     );
 
     expect(text).toContain("[Page 1]\nFirst page OCR");
     expect(text).toContain("[Page 2]\n[Unable to describe page]");
     expect(text).toContain("[Page 3]\n[Unable to describe page]");
+    expect(onProgress).toHaveBeenNthCalledWith(
+      1,
+      "Describing scanned PDF page 1/3...",
+    );
+    expect(onProgress).toHaveBeenNthCalledWith(
+      2,
+      "Describing scanned PDF page 2/3...",
+    );
+    expect(onProgress).toHaveBeenNthCalledWith(
+      3,
+      "Describing scanned PDF page 3/3...",
+    );
   });
 });
 

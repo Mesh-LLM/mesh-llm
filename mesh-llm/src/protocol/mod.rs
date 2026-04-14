@@ -1488,10 +1488,31 @@ mod tests {
         };
 
         let proto_pa = local_ann_to_proto_ann(&ann);
-        assert_eq!(proto_pa.gpu_reserved_bytes.as_deref(), Some("1073741824"));
-        assert_eq!(proto_pa.gpu_mem_bandwidth_gbps.as_deref(), Some("1948.70"));
-        assert_eq!(proto_pa.gpu_compute_tflops_fp32.as_deref(), Some("19.50"));
-        assert_eq!(proto_pa.gpu_compute_tflops_fp16.as_deref(), Some("312.00"));
+        let hardware = proto_pa
+            .hardware
+            .as_ref()
+            .expect("hardware info must be present");
+        assert_eq!(hardware.hostname.as_deref(), Some("worker-01"));
+        assert_eq!(hardware.is_soc, Some(false));
+        assert_eq!(hardware.gpus.len(), 1);
+        assert_eq!(hardware.gpus[0].name.as_deref(), Some("NVIDIA A100"));
+        assert_eq!(hardware.gpus[0].vram_bytes.as_deref(), Some("51539607552"));
+        assert_eq!(
+            hardware.gpus[0].reserved_bytes.as_deref(),
+            Some("1073741824")
+        );
+        assert_eq!(
+            hardware.gpus[0].mem_bandwidth_gbps.as_deref(),
+            Some("1948.70")
+        );
+        assert_eq!(
+            hardware.gpus[0].compute_tflops_fp32.as_deref(),
+            Some("19.50")
+        );
+        assert_eq!(
+            hardware.gpus[0].compute_tflops_fp16.as_deref(),
+            Some("312.00")
+        );
 
         let (_, roundtripped) =
             proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
@@ -1521,10 +1542,18 @@ mod tests {
             role: NodeRole::Worker as i32,
             gpu_name: Some("NVIDIA A100".to_string()),
             gpu_vram: Some("51539607552".to_string()),
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: Some("1948.70".to_string()),
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
+            hardware: Some(crate::proto::node::HardwareInfo {
+                is_soc: Some(false),
+                hostname: None,
+                gpus: vec![crate::proto::node::GpuInfo {
+                    name: Some("NVIDIA A100".to_string()),
+                    vram_bytes: Some("51539607552".to_string()),
+                    reserved_bytes: None,
+                    mem_bandwidth_gbps: Some("1948.70".to_string()),
+                    compute_tflops_fp32: None,
+                    compute_tflops_fp16: None,
+                }],
+            }),
             ..Default::default()
         };
 
@@ -1537,6 +1566,64 @@ mod tests {
         );
         assert_eq!(roundtripped.gpu_compute_tflops_fp32, None);
         assert_eq!(roundtripped.gpu_compute_tflops_fp16, None);
+    }
+
+    #[test]
+    fn test_proto_gpu_info_preserves_legacy_fields_for_old_consumers() {
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xCE; 32]).public());
+        let proto_pa = crate::proto::node::PeerAnnouncement {
+            endpoint_id: peer_id.as_bytes().to_vec(),
+            role: NodeRole::Worker as i32,
+            hardware: Some(crate::proto::node::HardwareInfo {
+                is_soc: Some(false),
+                hostname: Some("worker-01".to_string()),
+                gpus: vec![
+                    crate::proto::node::GpuInfo {
+                        name: Some("NVIDIA A100".to_string()),
+                        vram_bytes: Some("51539607552".to_string()),
+                        reserved_bytes: Some("1073741824".to_string()),
+                        mem_bandwidth_gbps: Some("1948.70".to_string()),
+                        compute_tflops_fp32: Some("19.50".to_string()),
+                        compute_tflops_fp16: Some("312.00".to_string()),
+                    },
+                    crate::proto::node::GpuInfo {
+                        name: Some("NVIDIA A100".to_string()),
+                        vram_bytes: Some("51539607552".to_string()),
+                        reserved_bytes: None,
+                        mem_bandwidth_gbps: Some("1948.70".to_string()),
+                        compute_tflops_fp32: Some("19.50".to_string()),
+                        compute_tflops_fp16: Some("312.00".to_string()),
+                    },
+                ],
+            }),
+            ..Default::default()
+        };
+
+        let (_, roundtripped) =
+            proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+        assert_eq!(roundtripped.hostname.as_deref(), Some("worker-01"));
+        assert_eq!(roundtripped.gpu_name.as_deref(), Some("2× NVIDIA A100"));
+        assert_eq!(
+            roundtripped.gpu_vram.as_deref(),
+            Some("51539607552,51539607552")
+        );
+        assert_eq!(
+            roundtripped.gpu_reserved_bytes.as_deref(),
+            Some("1073741824,")
+        );
+        assert_eq!(
+            roundtripped.gpu_mem_bandwidth_gbps.as_deref(),
+            Some("1948.70,1948.70")
+        );
+        assert_eq!(
+            roundtripped.gpu_compute_tflops_fp32.as_deref(),
+            Some("19.50,19.50")
+        );
+        assert_eq!(
+            roundtripped.gpu_compute_tflops_fp16.as_deref(),
+            Some("312.00,312.00")
+        );
+        assert_eq!(roundtripped.is_soc, Some(false));
     }
 
     #[test]

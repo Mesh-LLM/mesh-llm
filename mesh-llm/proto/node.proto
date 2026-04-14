@@ -13,17 +13,17 @@ message PeerAnnouncement {
   NodeRole role = 2;
   optional uint32 http_port = 3;
   optional string version = 4;
-  optional string gpu_name = 5;
-  optional string hostname = 6;
-  optional bool is_soc = 7;
-  optional string gpu_vram = 8;
-  repeated string available_models = 9;
-  repeated string serving_models = 10;
+  optional string gpu_name = 5;                      // Deprecated in v0.60.0: prefer hardware.gpus[].name
+  optional string hostname = 6;                      // Deprecated in v0.60.0: prefer hardware.hostname
+  optional bool is_soc = 7;                          // Deprecated in v0.60.0: prefer hardware.is_soc; true for system-on-chip / unified-memory hosts such as Apple Silicon and Jetson
+  optional string gpu_vram = 8;                      // Deprecated in v0.60.0: prefer hardware.gpus[].vram_bytes
+  repeated string available_models = 9;              // Deprecated in v0.55.0 for protobuf gossip; compatibility surface only
+  repeated string serving_models = 10;               // Deprecated in v0.55.0: prefer served_model_identities and served_model_runtime
   repeated string requested_models = 11;
   repeated CompactModelMetadata available_model_metadata = 12;
   optional ExpertsSummary experts_summary = 13;
   optional uint32 rtt_ms = 14;
-  repeated string catalog_models = 15;              // GGUF model names (mesh catalog contribution; was JSON `models`)
+  repeated string catalog_models = 15;               // GGUF model names (mesh catalog contribution; was JSON `models`)
   uint64 vram_bytes = 16;                            // GPU VRAM in bytes
   optional string model_source = 17;                 // how to obtain this node's model
   optional string primary_serving = 18;              // primary serving model (backward compat; was JSON `serving`)
@@ -37,10 +37,26 @@ message PeerAnnouncement {
   repeated ServedModelIdentity served_model_identities = 26;
   repeated ModelRuntimeDescriptor served_model_runtime = 27;
   optional SignedNodeOwnership owner_attestation = 28;
-  optional string gpu_mem_bandwidth_gbps = 29;
-  optional string gpu_compute_tflops_fp32 = 30;
-  optional string gpu_compute_tflops_fp16 = 31;
-  optional string gpu_reserved_bytes = 32;
+  optional string gpu_mem_bandwidth_gbps = 29;      // Deprecated in v0.60.0: prefer hardware.gpus[].mem_bandwidth_gbps
+  optional string gpu_compute_tflops_fp32 = 30;     // Deprecated in v0.60.0: prefer hardware.gpus[].compute_tflops_fp32
+  optional string gpu_compute_tflops_fp16 = 31;     // Deprecated in v0.60.0: prefer hardware.gpus[].compute_tflops_fp16
+  optional string gpu_reserved_bytes = 32;          // Deprecated in v0.60.0: prefer hardware.gpus[].reserved_bytes
+  optional HardwareInfo hardware = 33;              // Introduced in v0.60.0; preferred structured hardware inventory
+}
+
+message HardwareInfo {
+  optional bool is_soc = 1;                          // True for system-on-chip / unified-memory hosts such as Apple Silicon and Jetson
+  optional string hostname = 2;
+  repeated GpuInfo gpus = 3;
+}
+
+message GpuInfo {
+  optional string name = 1;
+  optional string vram_bytes = 2;
+  optional string reserved_bytes = 3;
+  optional string mem_bandwidth_gbps = 4;
+  optional string compute_tflops_fp32 = 5;
+  optional string compute_tflops_fp16 = 6;
 }
 
 message SignedNodeOwnership {

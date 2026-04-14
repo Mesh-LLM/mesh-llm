@@ -196,6 +196,8 @@ Before committing, run the local checks most likely to fail in CI for the files 
 - Format only the changed Rust files from the repo root, for example with `cargo fmt --all -- path/to/file.rs`, and include those formatting changes in the commit.
 - After Rust changes, run `cargo check -p mesh-llm`.
 - If you touched tests, public APIs, routing, inference, gossip, plugin protocol, or CLI behavior, run the relevant tests before committing.
+- If you touched `proto/`, `mesh-llm/src/protocol/`, `mesh-llm/src/mesh/gossip.rs`, `mesh-llm/src/mesh/mod.rs`, routing, election, or API serialization, do not stop at build-only validation: run at least `cargo test -p mesh-llm --lib` and wait for it to exit successfully before committing.
+- Do not report a build or test step as complete until the command has actually exited with code `0`.
 - Run Rust validation serially. Do not run multiple `cargo` commands at the same time.
 
 ### UI changes
