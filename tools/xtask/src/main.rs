@@ -314,6 +314,7 @@ fn check_package_release_assets(
             .arg(fixture_version)
             .arg(&tmp_output_dir),
     );
+    // Clean up before propagating any error so the temp dir is always removed.
     let _ = std::fs::remove_dir_all(&tmp_output_dir);
     let output = output?;
     ensure_status(1, output.status.code(), "Linux/armv7l packaging exit code")?;
