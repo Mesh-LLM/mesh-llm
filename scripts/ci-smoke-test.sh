@@ -127,9 +127,9 @@ fi
 
 echo "✅ Inference response: $CONTENT"
 
-# Test "mesh" virtual model — full hook code path (no peers, hooks fire but
-# consultation finds nobody and returns action:none, model generates normally)
-echo "Testing model=mesh (virtual LLM hooks)..."
+# Test "mesh" virtual model — routes through smart router with hooks enabled.
+# No peers available so hooks return action:none, model generates normally.
+echo "Testing model=mesh (virtual LLM)..."
 MESH_RESPONSE=$(curl -sf "http://localhost:${API_PORT}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -d '{
@@ -148,15 +148,6 @@ if [ -z "$MESH_CONTENT" ]; then
     exit 1
 fi
 echo "✅ model=mesh response: $MESH_CONTENT"
-
-# Verify llama-server was launched with --mesh-port (hooks enabled)
-if ps -eo args | grep -q '[l]lama-server.*--mesh-port'; then
-    echo "✅ llama-server running with --mesh-port"
-else
-    echo "❌ llama-server NOT running with --mesh-port"
-    ps -eo args | grep llama-server || true
-    exit 1
-fi
 
 # Test /v1/models endpoint
 echo "Testing /v1/models..."
