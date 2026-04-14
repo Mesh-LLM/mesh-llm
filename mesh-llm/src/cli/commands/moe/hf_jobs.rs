@@ -468,11 +468,6 @@ pub(crate) fn release_target_versioned_linux_asset_name(
     linux_x86_64_release_target(flavor).versioned_asset_name(release_tag)
 }
 
-#[cfg(test)]
-pub(crate) fn release_target_job_image_for(release_target: HfJobReleaseTarget) -> &'static str {
-    job_image(release_target)
-}
-
 fn release_download_url(release_repo: &str, release_tag: &str, asset_name: &str) -> String {
     if release_tag == "latest" {
         format!("https://github.com/{release_repo}/releases/latest/download/{asset_name}")

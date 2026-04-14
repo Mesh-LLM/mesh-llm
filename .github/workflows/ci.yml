@@ -44,7 +44,7 @@ jobs:
               - 'mesh-llm/plugin/**'
               - 'mesh-llm/tests/**'
               - 'mesh-llm/proto/**'
-              - 'xtask/**'
+              - 'tools/xtask/**'
               - 'mesh-llm/Cargo.toml'
               - 'mesh-llm/Cargo.lock'
               - 'Cargo.toml'

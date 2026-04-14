@@ -40,10 +40,12 @@ fn check_release_targets() -> DynResult<()> {
 }
 
 fn repo_root() -> DynResult<PathBuf> {
+    // CARGO_MANIFEST_DIR is <repo>/tools/xtask; go up two levels to reach the repo root.
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
+        .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .ok_or_else(|| "xtask manifest directory has no parent".into())
+        .ok_or_else(|| "could not determine repo root from xtask manifest directory".into())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -302,7 +304,7 @@ fn check_package_release_assets(
         "linux/arm fixture versioned asset",
     )?;
 
-    let tmp_output_dir = unique_temp_dir(repo_root, "check-release");
+    let tmp_output_dir = unique_temp_dir("check-release");
     let output = run_command(
         Command::new("bash")
             .current_dir(repo_root)
@@ -311,7 +313,9 @@ fn check_package_release_assets(
             .arg("scripts/package-release.sh")
             .arg(fixture_version)
             .arg(&tmp_output_dir),
-    )?;
+    );
+    let _ = std::fs::remove_dir_all(&tmp_output_dir);
+    let output = output?;
     ensure_status(1, output.status.code(), "Linux/armv7l packaging exit code")?;
     let actual_message = trimmed_stderr_or_stdout(&output);
     ensure_eq(
@@ -500,12 +504,12 @@ fn trimmed_stderr_or_stdout(output: &Output) -> String {
     }
 }
 
-fn unique_temp_dir(repo_root: &Path, prefix: &str) -> PathBuf {
+fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    repo_root.join(format!(".tmp-{prefix}-{}-{nanos}", std::process::id()))
+    std::env::temp_dir().join(format!(".tmp-{prefix}-{}-{nanos}", std::process::id()))
 }
 
 fn ensure_eq(expected: &str, actual: &str, context: &str) -> DynResult<()> {

@@ -38,15 +38,6 @@ impl CanonicalArch {
             _ => None,
         }
     }
-
-    #[cfg(test)]
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::X86_64 => "x86_64",
-            Self::Aarch64 => "aarch64",
-            Self::Arm => "arm",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,11 +65,6 @@ pub(crate) enum SupportStatus {
 impl SupportStatus {
     pub(crate) fn is_supported(self) -> bool {
         self == Self::Supported
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_recognized_unsupported(self) -> bool {
-        self == Self::RecognizedUnsupported
     }
 }
 
@@ -187,22 +173,6 @@ impl ReleaseTarget {
             None => Some(format!("mesh-llm-{triple}{flavor_suffix}.{archive}")),
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_canonical_arch_for(raw: &str) -> Option<&'static str> {
-    CanonicalArch::parse(raw).map(CanonicalArch::as_str)
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_parse_error_message_for(
-    os: &str,
-    arch: &str,
-    flavor: BinaryFlavor,
-) -> Option<String> {
-    ReleaseTarget::from_raw(os, arch, flavor)
-        .err()
-        .map(|err| err.to_string())
 }
 
 #[cfg(test)]

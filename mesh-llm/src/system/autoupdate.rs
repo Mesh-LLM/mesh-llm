@@ -110,38 +110,12 @@ fn platform_has_release_assets() -> bool {
     platform_has_release_assets_for(std::env::consts::OS, std::env::consts::ARCH)
 }
 
-#[cfg(test)]
-fn platform_is_recognized_unsupported(os: &str, arch: &str) -> bool {
-    ReleaseTarget::from_raw(os, arch, launch::BinaryFlavor::Cpu)
-        .map(|target| target.support_status().is_recognized_unsupported())
-        .unwrap_or(false)
-}
-
 fn platform_has_release_assets_for(os: &str, arch: &str) -> bool {
     launch::BinaryFlavor::ALL.into_iter().any(|flavor| {
         ReleaseTarget::from_raw(os, arch, flavor)
             .map(|target| target.support_status().is_supported())
             .unwrap_or(false)
     })
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_has_release_assets_for(os: &str, arch: &str) -> bool {
-    platform_has_release_assets_for(os, arch)
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_recognizes_unsupported_for(os: &str, arch: &str) -> bool {
-    platform_is_recognized_unsupported(os, arch)
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_stable_asset_name_for(
-    os: &str,
-    arch: &str,
-    flavor: launch::BinaryFlavor,
-) -> Option<String> {
-    stable_release_asset_name_for(os, arch, flavor)
 }
 
 pub(crate) async fn maybe_auto_update(cli: &Cli) -> Result<bool> {
@@ -441,29 +415,6 @@ fn release_has_any_platform_asset(release: &ReleaseInfo, os: &str, arch: &str) -
             })
             .is_some()
     })
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_platform_asset_published_for(
-    os: &str,
-    arch: &str,
-    release_tag: &str,
-    assets: &[String],
-) -> bool {
-    let release = ReleaseInfo {
-        tag: release_tag.to_string(),
-        version: release_tag.trim_start_matches('v').to_string(),
-        assets: assets.to_vec(),
-    };
-    release_has_any_platform_asset(&release, os, arch)
-}
-
-#[cfg(test)]
-pub(crate) fn release_target_bundle_install_dir_for(
-    exe: &Path,
-    requested_flavor: Option<launch::BinaryFlavor>,
-) -> Option<(PathBuf, launch::BinaryFlavor)> {
-    bundle_install_dir(exe, requested_flavor)
 }
 
 fn mesh_binary_name() -> String {
