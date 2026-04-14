@@ -18,6 +18,9 @@ UI_DIR="$MESH_DIR/ui"
 AMDGPU_TARGETS="${1:-gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201}"
 ROCM_PATH="${ROCM_PATH:-/opt/rocm}"
 LLAMA_PIN_SHA="${MESH_LLM_LLAMA_PIN_SHA:-}"
+if [[ -z "$LLAMA_PIN_SHA" && -f "$REPO_ROOT/LLAMA_CPP_SHA" ]]; then
+    LLAMA_PIN_SHA="$(tr -d '[:space:]' < "$REPO_ROOT/LLAMA_CPP_SHA")"
+fi
 
 if [[ ! -d "$ROCM_PATH" ]]; then
     echo "Error: ROCm not found at $ROCM_PATH" >&2

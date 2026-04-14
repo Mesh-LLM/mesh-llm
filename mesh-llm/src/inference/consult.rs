@@ -261,7 +261,11 @@ pub async fn second_opinion(
 
     // Truncate very long user messages — we want a fast answer
     let user_text = if last_user_text.len() > 2000 {
-        format!("{}...", &last_user_text[..2000])
+        let end = last_user_text[..2000]
+            .char_indices()
+            .last()
+            .map_or(0, |(i, _)| i);
+        format!("{}...", &last_user_text[..end])
     } else {
         last_user_text
     };

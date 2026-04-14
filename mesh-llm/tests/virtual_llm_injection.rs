@@ -307,10 +307,10 @@ async fn test_injection_framing() {
         let display = if content.is_empty() {
             format!(
                 "(reasoning only) {}",
-                &reasoning[..reasoning.len().min(100)]
+                &reasoning.chars().take(100).collect::<String>()
             )
         } else {
-            content[..content.len().min(100)].to_string()
+            content.chars().take(100).collect::<String>()
         };
         eprintln!("  {} {}", if passed { "✅" } else { "❌" }, tc.question);
         eprintln!("     → {display}");
@@ -345,10 +345,10 @@ async fn test_injection_framing() {
             let display = if content.is_empty() {
                 format!(
                     "(reasoning only) {}",
-                    &reasoning[..reasoning.len().min(100)]
+                    &reasoning.chars().take(100).collect::<String>()
                 )
             } else {
-                content[..content.len().min(100)].to_string()
+                content.chars().take(100).collect::<String>()
             };
             eprintln!(
                 "  {} {hook_str} {}",

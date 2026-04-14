@@ -139,8 +139,8 @@ jobs:
           if [[ -f LLAMA_CPP_SHA ]]; then
             SHA=$(tr -d '[:space:]' < LLAMA_CPP_SHA)
             cd llama.cpp
-            git fetch --depth 1 origin "$SHA" 2>/dev/null || true
-            git checkout "$SHA" 2>/dev/null || echo "SHA $SHA not found, using master HEAD"
+            git fetch --depth 1 origin "$SHA"
+            git checkout "$SHA"
             cd ..
           fi
 
@@ -267,8 +267,8 @@ jobs:
           if [[ -f LLAMA_CPP_SHA ]]; then
             SHA=$(tr -d '[:space:]' < LLAMA_CPP_SHA)
             cd llama.cpp
-            git fetch --depth 1 origin "$SHA" 2>/dev/null || true
-            git checkout "$SHA" 2>/dev/null || echo "SHA $SHA not found, using master HEAD"
+            git fetch --depth 1 origin "$SHA"
+            git checkout "$SHA"
             cd ..
           fi
 

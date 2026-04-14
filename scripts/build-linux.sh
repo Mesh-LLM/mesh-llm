@@ -245,9 +245,11 @@ esac
 # `llama.cpp/build/` directory will be inconsistent with the source tree and
 # cmake will silently rebuild things.
 #
-# When unset (the default for local `just build`), behaviour is unchanged:
-# clone-or-pull `master` HEAD as before.
+# Pin priority: env var > LLAMA_CPP_SHA file > unpinned (track master HEAD)
 LLAMA_PIN_SHA="${MESH_LLM_LLAMA_PIN_SHA:-}"
+if [[ -z "$LLAMA_PIN_SHA" && -f "$REPO_ROOT/LLAMA_CPP_SHA" ]]; then
+    LLAMA_PIN_SHA="$(tr -d '[:space:]' < "$REPO_ROOT/LLAMA_CPP_SHA")"
+fi
 
 if [[ ! -d "$LLAMA_DIR" ]]; then
     if [[ -n "$LLAMA_PIN_SHA" ]]; then
