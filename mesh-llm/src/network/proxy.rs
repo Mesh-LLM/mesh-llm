@@ -1876,6 +1876,48 @@ fn endpoint_forward_path(base_url: &Url, request_path: &str) -> String {
     }
 }
 
+/// Inject `"mesh_hooks": true/false` into the JSON body of an HTTP request.
+///
+/// Inserts the field right after the opening `{` in the body, then rebuilds
+/// the Content-Length header to match.
+fn inject_mesh_hooks_flag(raw: &mut Vec<u8>, enabled: bool) {
+    let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4) else {
+        return;
+    };
+    let body = &raw[header_end..];
+    let Some(brace) = body.iter().position(|&b| b == b'{') else {
+        return;
+    };
+
+    // Build new body with mesh_hooks injected after opening brace
+    let fragment = if enabled {
+        &b"\"mesh_hooks\":true,"[..]
+    } else {
+        &b"\"mesh_hooks\":false,"[..]
+    };
+    let mut new_body = Vec::with_capacity(body.len() + fragment.len());
+    new_body.extend_from_slice(&body[..brace + 1]);
+    new_body.extend_from_slice(fragment);
+    new_body.extend_from_slice(&body[brace + 1..]);
+
+    // Rebuild headers with correct Content-Length
+    let headers = std::str::from_utf8(&raw[..header_end - 4]).unwrap_or("");
+    let mut rebuilt = String::new();
+    for line in headers.split("\r\n") {
+        if line.to_ascii_lowercase().starts_with("content-length:") {
+            rebuilt.push_str(&format!("Content-Length: {}", new_body.len()));
+        } else {
+            rebuilt.push_str(line);
+        }
+        rebuilt.push_str("\r\n");
+    }
+    rebuilt.push_str("\r\n");
+
+    let mut result = rebuilt.into_bytes();
+    result.extend_from_slice(&new_body);
+    *raw = result;
+}
+
 fn rewrite_http_request_target(
     raw: &[u8],
     new_path: &str,
@@ -1939,7 +1981,7 @@ pub async fn handle_mesh_request(
 ) {
     let mut tcp_stream = tcp_stream;
     let plugin_manager = node.plugin_manager().await;
-    let request =
+    let mut request =
         match read_http_request_with_plugin_manager(&mut tcp_stream, plugin_manager.as_ref()).await
         {
             Ok(v) => v,
@@ -1960,47 +2002,53 @@ pub async fn handle_mesh_request(
     // Demand tracking for rebalancing (done after routing so we track the actual model used)
     // We'll track below after routing resolves the effective model
 
-    // Smart routing: if no model specified (or model="auto"), classify and pick
-    let routed_model =
-        if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
-            if let Some(body_json) = request.body_json.as_ref() {
-                let cl = router::classify(body_json);
-                let served = node.models_being_served().await;
-                let media = router::media_requirements(body_json);
-                let available: Vec<(&str, f64)> = served
-                    .iter()
-                    .filter(|name| {
-                        let caps = crate::models::installed_model_capabilities(name);
-                        (!media.needs_vision || caps.vision_label().is_some())
-                            && (!media.needs_audio || caps.audio_label().is_some())
-                    })
-                    .map(|name| (name.as_str(), 0.0))
-                    .collect();
-                let available: Vec<(&str, f64)> = if available.is_empty() {
-                    served.iter().map(|name| (name.as_str(), 0.0)).collect()
-                } else {
-                    available
-                };
-                let picked = router::pick_model_classified(&cl, &available);
-                if let Some(name) = picked {
-                    tracing::info!(
-                        "router: {:?}/{:?} tools={} media={} → {name}",
-                        cl.category,
-                        cl.complexity,
-                        cl.needs_tools,
-                        cl.has_media_inputs
-                    );
-                    Some(name.to_string())
-                } else {
-                    None
-                }
+    // Smart routing: if no model specified (or model="auto"/"mesh"), classify and pick
+    let routed_model = if request.model_name.is_none()
+        || request.model_name.as_deref() == Some("auto")
+        || request.model_name.as_deref() == Some("mesh")
+    {
+        if let Some(body_json) = request.body_json.as_ref() {
+            let cl = router::classify(body_json);
+            let served = node.models_being_served().await;
+            let media = router::media_requirements(body_json);
+            let available: Vec<(&str, f64)> = served
+                .iter()
+                .filter(|name| {
+                    let caps = crate::models::installed_model_capabilities(name);
+                    (!media.needs_vision || caps.vision_label().is_some())
+                        && (!media.needs_audio || caps.audio_label().is_some())
+                })
+                .map(|name| (name.as_str(), 0.0))
+                .collect();
+            let available: Vec<(&str, f64)> = if available.is_empty() {
+                served.iter().map(|name| (name.as_str(), 0.0)).collect()
+            } else {
+                available
+            };
+            let picked = router::pick_model_classified(&cl, &available);
+            if let Some(name) = picked {
+                tracing::info!(
+                    "router: {:?}/{:?} tools={} media={} → {name}",
+                    cl.category,
+                    cl.complexity,
+                    cl.needs_tools,
+                    cl.has_media_inputs
+                );
+                Some(name.to_string())
             } else {
                 None
             }
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
     let effective_model = routed_model.or(request.model_name.clone());
+
+    // Enable mesh hooks only when the user explicitly requests the virtual model.
+    let mesh_hooks_enabled = request.model_name.as_deref() == Some("mesh");
+    inject_mesh_hooks_flag(&mut request.raw, mesh_hooks_enabled);
 
     // Demand tracking for rebalancing
     if track_demand {
@@ -2517,6 +2565,18 @@ pub async fn send_models_list(mut stream: TcpStream, models: &[String]) -> std::
             })
         })
         .collect();
+    // Add the virtual "mesh" model — auto-routes like "auto" but with inter-model
+    // collaboration hooks enabled.
+    let mut data = data;
+    if !models.is_empty() {
+        data.push(serde_json::json!({
+            "id": "mesh",
+            "display_name": "Mesh (inter-model collaboration)",
+            "object": "model",
+            "owned_by": "mesh-llm",
+            "capabilities": ["text", "collaboration"],
+        }));
+    }
     let body = serde_json::json!({ "object": "list", "data": data }).to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
@@ -3212,5 +3272,57 @@ mod tests {
         assert!(response.contains("model not available"));
 
         server.await.unwrap();
+    }
+
+    #[test]
+    fn test_inject_mesh_hooks_enabled() {
+        let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 27\r\n\r\n{\"model\":\"mesh\",\"stream\":0}".to_vec();
+        inject_mesh_hooks_flag(&mut raw, true);
+        let s = String::from_utf8(raw).unwrap();
+        let body_start = s.find("\r\n\r\n").unwrap() + 4;
+        let body = &s[body_start..];
+        assert!(body.starts_with("{\"mesh_hooks\":true,"), "body: {body}");
+        // Content-Length updated
+        let cl: usize = s
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .unwrap()
+            .split(':')
+            .nth(1)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(cl, body.len());
+    }
+
+    #[test]
+    fn test_inject_mesh_hooks_disabled() {
+        let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"qwen\",\"temp\":1}".to_vec();
+        inject_mesh_hooks_flag(&mut raw, false);
+        let s = String::from_utf8(raw).unwrap();
+        let body_start = s.find("\r\n\r\n").unwrap() + 4;
+        let body = &s[body_start..];
+        assert!(body.starts_with("{\"mesh_hooks\":false,"), "body: {body}");
+        let cl: usize = s
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .unwrap()
+            .split(':')
+            .nth(1)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(cl, body.len());
+    }
+
+    #[test]
+    fn test_inject_mesh_hooks_no_body() {
+        let mut raw = b"GET /v1/models HTTP/1.1\r\n\r\n".to_vec();
+        let original = raw.clone();
+        inject_mesh_hooks_flag(&mut raw, true);
+        // No JSON body, no brace — unchanged
+        assert_eq!(raw, original);
     }
 }

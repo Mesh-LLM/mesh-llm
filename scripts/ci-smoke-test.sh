@@ -127,6 +127,37 @@ fi
 
 echo "✅ Inference response: $CONTENT"
 
+# Test "mesh" virtual model — full hook code path (no peers, hooks fire but
+# consultation finds nobody and returns action:none, model generates normally)
+echo "Testing model=mesh (virtual LLM hooks)..."
+MESH_RESPONSE=$(curl -sf "http://localhost:${API_PORT}/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "mesh",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "max_tokens": 16,
+        "temperature": 0
+    }' 2>&1)
+
+MESH_CONTENT=$(echo "$MESH_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])" 2>/dev/null || echo "")
+if [ -z "$MESH_CONTENT" ]; then
+    echo "❌ model=mesh returned empty response"
+    echo "Raw: $MESH_RESPONSE"
+    echo "--- Log tail ---"
+    tail -30 "$LOG" || true
+    exit 1
+fi
+echo "✅ model=mesh response: $MESH_CONTENT"
+
+# Verify llama-server was launched with --mesh-port (hooks enabled)
+if ps -eo args | grep -q '[l]lama-server.*--mesh-port'; then
+    echo "✅ llama-server running with --mesh-port"
+else
+    echo "❌ llama-server NOT running with --mesh-port"
+    ps -eo args | grep llama-server || true
+    exit 1
+fi
+
 # Test /v1/models endpoint
 echo "Testing /v1/models..."
 MODELS=$(curl -sf "http://localhost:${API_PORT}/v1/models" 2>&1)
@@ -137,6 +168,15 @@ if [ "$MODEL_COUNT" -eq 0 ]; then
     exit 1
 fi
 echo "✅ /v1/models returned $MODEL_COUNT model(s)"
+
+# Verify "mesh" virtual model appears in models list
+HAS_MESH=$(echo "$MODELS" | python3 -c "import sys,json; ids=[m['id'] for m in json.load(sys.stdin).get('data',[])]; print('mesh' in ids)" 2>/dev/null || echo "False")
+if [ "$HAS_MESH" != "True" ]; then
+    echo "❌ 'mesh' model not in /v1/models"
+    echo "$MODELS"
+    exit 1
+fi
+echo "✅ 'mesh' virtual model listed in /v1/models"
 
 echo ""
 echo "=== All smoke tests passed ==="
