@@ -111,7 +111,8 @@ jobs:
 
       # Early-fail gate: runs before expensive compile/test work.
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        working-directory: mesh-llm
+        run: cargo fmt -- --check
 
       # Build in dev/debug profile, NOT release. Two reasons:
       #  1. Build + Unit tests steps share one target/ subdir and one
@@ -246,7 +247,8 @@ jobs:
       # Early-fail gate: runs before expensive compile/test work.
       - name: Check formatting
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' }}
-        run: cargo fmt --all -- --check
+        working-directory: mesh-llm
+        run: cargo fmt -- --check
 
       # See linux job for rationale on building in dev/debug, not release.
       - name: Build mesh-llm binary (debug)
