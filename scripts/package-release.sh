@@ -161,16 +161,16 @@ normalized_release_platform() {
     arch_name="$(canonical_release_arch)"
 
     case "$os_name/$arch_name" in
-        Darwin/arm64|Darwin/aarch64)
+        Darwin/aarch64)
             printf 'macos/aarch64\n'
             ;;
         Linux/x86_64)
             printf 'linux/x86_64\n'
             ;;
-        Linux/arm64|Linux/aarch64)
+        Linux/aarch64)
             printf 'linux/aarch64\n'
             ;;
-        Linux/armv7l|Linux/armv6l|Linux/arm)
+        Linux/arm)
             printf 'linux/arm\n'
             ;;
         *)

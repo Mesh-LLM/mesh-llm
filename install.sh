@@ -124,6 +124,9 @@ platform_arch() {
     fi
 
     case "$os/$arch" in
+        Linux/amd64)
+            printf 'x86_64\n'
+            ;;
         Linux/arm64|Linux/aarch64)
             printf 'aarch64\n'
             ;;
