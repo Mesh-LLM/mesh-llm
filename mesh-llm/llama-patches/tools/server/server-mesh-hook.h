@@ -26,10 +26,11 @@ using json = nlohmann::ordered_json;
 // Rolling window of per-token signal stats.
 // Updated every token during generation — just cheap arithmetic.
 //
-// Tracks three independent trigger signals:
-//   1. Entropy spike  — sustained high entropy (original Hook 2b)
-//   2. Repetition     — 3-gram loops in generated token IDs
-//   3. Surprise break — sudden NLL spike after a calm generation run
+// Tracks four independent trigger signals:
+//   1. Entropy spike     — sustained high entropy (original Hook 2b)
+//   2. Repetition        — 3-gram loops in generated token IDs
+//   3. Surprise break    — sudden NLL spike after a calm generation run
+//   4. Rank instability  — top-8 candidate tokens thrashing between steps
 //
 struct mesh_signal_window {
     static constexpr int SIZE = 16;
@@ -49,6 +50,17 @@ struct mesh_signal_window {
     int   token_ids[REP_WINDOW] = {};
     int   token_pos = 0;
     int   token_count = 0;
+
+    // --- Rank instability detection ---
+    // Track top-8 token IDs from previous step, compute Jaccard similarity.
+    // Low Jaccard sustained over several tokens = model is thrashing.
+    static constexpr int TOP_K = 8;
+    static constexpr int JACCARD_WINDOW = 6;  // how many recent Jaccard values to check
+    int   prev_top_k[TOP_K] = {};
+    bool  prev_top_k_valid = false;
+    float jaccard_history[JACCARD_WINDOW] = {};
+    int   jaccard_pos = 0;
+    int   jaccard_count = 0;
 
     // --- Surprise break detection ---
     // EWMA of -log(p_chosen) with z-score spike detection.
@@ -72,18 +84,44 @@ struct mesh_signal_window {
         }
     }
 
-    // Call after sampling to record the chosen token ID and its probability.
-    void push_token(int token_id, float p_chosen) {
+    // Call after sampling to record the chosen token ID, its probability,
+    // and the current top-k token IDs (from sorted probability distribution).
+    void push_token(int token_id, float p_chosen, const int * top_ids, int n_top) {
         // --- Repetition ---
         token_ids[token_pos] = token_id;
         token_pos = (token_pos + 1) % REP_WINDOW;
         token_count++;
 
+        // --- Rank instability (Jaccard of top-8) ---
+        int cur_top[TOP_K] = {};
+        int k = std::min(n_top, TOP_K);
+        for (int i = 0; i < k; i++) cur_top[i] = top_ids[i];
+
+        if (prev_top_k_valid && k > 0) {
+            // Jaccard = |intersection| / |union|
+            int intersect = 0;
+            for (int i = 0; i < k; i++) {
+                for (int j = 0; j < k; j++) {
+                    if (cur_top[i] == prev_top_k[j]) { intersect++; break; }
+                }
+            }
+            // |union| = 2k - |intersect| (both sets have k elements)
+            float jaccard = (2 * k - intersect > 0)
+                ? (float)intersect / (2 * k - intersect)
+                : 1.0f;
+            jaccard_history[jaccard_pos] = jaccard;
+            jaccard_pos = (jaccard_pos + 1) % JACCARD_WINDOW;
+            jaccard_count++;
+        }
+
+        // Store current as previous for next step
+        for (int i = 0; i < TOP_K; i++) cur_top[i] > 0 ? prev_top_k[i] = cur_top[i] : prev_top_k[i] = 0;
+        prev_top_k_valid = (k > 0);
+
         // --- Surprise break ---
         float surprise = (p_chosen > 1e-10f) ? -std::log2(p_chosen) : 20.0f;
 
         if (count <= 1) {
-            // first token: init EWMA
             surprise_ewma    = surprise;
             surprise_ewma_sq = surprise * surprise;
         } else {
@@ -91,16 +129,13 @@ struct mesh_signal_window {
             surprise_ewma_sq = SURPRISE_ALPHA * (surprise * surprise) + (1.0f - SURPRISE_ALPHA) * surprise_ewma_sq;
         }
 
-        // Track recent spikes for surprise_break()
         float var = surprise_ewma_sq - surprise_ewma * surprise_ewma;
         float std_dev = (var > 1e-6f) ? std::sqrt(var) : 1.0f;
         float z = (count > SURPRISE_WARMUP) ? (surprise - surprise_ewma) / std_dev : 0.0f;
 
-        // Shift spike/calm tracking (simple 8-token lookback)
         if (z > 2.5f) {
             recent_spike_count++;
         }
-        // "calm" = low z-score tokens before current 8-token window
         if (count > 8 && z < 0.5f) {
             recent_calm_count++;
         }
@@ -164,8 +199,32 @@ struct mesh_signal_window {
     // True when 2+ recent tokens had z-score >2.5 AND the preceding run was calm.
     bool surprise_break() const {
         if (count < SURPRISE_WARMUP + 8) return false;
-        // Need at least 2 spikes in recent generation after a calm run
         return recent_spike_count >= 2 && recent_calm_count >= 4;
+    }
+
+    // Rank instability: are the top-8 candidates thrashing between steps?
+    // True when 5+ of the last 6 Jaccard values are below 0.25.
+    // Low Jaccard = the model is considering completely different tokens each step,
+    // even if it picks one confidently (low entropy). Catches "confident but incoherent."
+    // Requires 24+ tokens generated — early generation naturally has low Jaccard
+    // as the model transitions from prompt context to its own direction.
+    bool rank_unstable() const {
+        if (jaccard_count < JACCARD_WINDOW) return false;
+        if (count < 24) return false;  // skip early generation churn
+        int low_count = 0;
+        for (int i = 0; i < JACCARD_WINDOW; i++) {
+            if (jaccard_history[i] < 0.25f) low_count++;
+        }
+        return low_count >= 5;
+    }
+
+    // Current mean Jaccard over the window (for logging).
+    float jaccard_mean() const {
+        int n = std::min(jaccard_count, JACCARD_WINDOW);
+        if (n == 0) return 1.0f;
+        float sum = 0;
+        for (int i = 0; i < n; i++) sum += jaccard_history[i];
+        return sum / n;
     }
 
     void reset() {
@@ -185,6 +244,12 @@ struct mesh_signal_window {
         for (int i = 0; i < REP_WINDOW; i++) {
             token_ids[i] = 0;
         }
+        // rank instability
+        prev_top_k_valid = false;
+        jaccard_pos = 0;
+        jaccard_count = 0;
+        for (int i = 0; i < TOP_K; i++) prev_top_k[i] = 0;
+        for (int i = 0; i < JACCARD_WINDOW; i++) jaccard_history[i] = 1.0f;
         // surprise
         surprise_ewma = 0;
         surprise_ewma_sq = 0;
@@ -203,6 +268,8 @@ struct mesh_signal_window {
             {"repetition_ratio",      repetition_ratio()},
             {"surprise_ewma",         surprise_ewma},
             {"surprise_break",        surprise_break()},
+            {"jaccard_mean",          jaccard_mean()},
+            {"rank_unstable",         rank_unstable()},
         };
     }
 };
@@ -267,10 +334,11 @@ struct mesh_hook_ctx {
     }
 
     // Check if mid-generation hook should fire.
-    // Any of three independent signals can trigger:
+    // Any of four independent signals can trigger:
     //   1. Sustained entropy spike (original) — model is lost/incoherent
     //   2. Repetition loop — model is degenerating into 3-gram repeats
     //   3. Surprise break — model was calm then suddenly spiked (hallucination onset)
+    //   4. Rank instability — top-8 candidates thrashing between steps
     // All require cooldown to have elapsed and warmup period to have passed.
     bool should_fire_midgen() const {
         float ratio = debug ? 0.25f : MIDGEN_SPIKE_RATIO;
@@ -292,6 +360,12 @@ struct mesh_hook_ctx {
         // Trigger 3: surprise break (calm then suddenly spiked)
         if (signals.surprise_break()) return true;
 
+        // Trigger 4: rank instability (top-8 thrashing)
+        // DISABLED: Gemma-4B has inherently unstable top-8 — fires on ~100% of
+        // queries even with strict thresholds (5/6, count>=24). Needs per-model
+        // baseline calibration or combination with another signal to be useful.
+        // if (signals.rank_unstable()) return true;
+
         return false;
     }
 
@@ -303,6 +377,7 @@ struct mesh_hook_ctx {
         if (signals.sustained_spike(ratio)) return "sustained_entropy_spike";
         if (signals.repetition_ratio() >= rep_threshold) return "repetition_loop";
         if (signals.surprise_break()) return "surprise_break";
+        if (signals.rank_unstable()) return "rank_instability";
         return "unknown";
     }
 

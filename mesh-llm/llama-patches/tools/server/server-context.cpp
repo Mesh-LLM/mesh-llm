@@ -3048,12 +3048,17 @@ private:
                     float margin  = probs.size() >= 2 ? probs[0].p - probs[1].p : 1.0f;
                     slot.mesh_hook.signals.push(entropy, margin);
 
-                    // Find chosen token's probability for surprise tracking
+                    // Extract chosen token probability and top-8 IDs for signal tracking
                     float p_chosen = 0.0f;
+                    int top_ids[8] = {};
+                    int n_top = std::min((int)probs.size(), 8);
+                    for (int ti = 0; ti < n_top; ti++) {
+                        top_ids[ti] = probs[ti].id;
+                    }
                     for (const auto & p : probs) {
                         if (p.id == id) { p_chosen = p.p; break; }
                     }
-                    slot.mesh_hook.signals.push_token(id, p_chosen);
+                    slot.mesh_hook.signals.push_token(id, p_chosen, top_ids, n_top);
 
                     // --- Mesh Hook 2b: mid-generation ---
                     // Three independent triggers: entropy spike, repetition loop, surprise break.
