@@ -36,7 +36,7 @@ import { ChatPage } from "./features/chat/components/ChatPage";
 import { cn } from "./lib/utils";
 import type {
   TopologyNode,
-} from "./topology/layouts/types";
+} from "./features/app-shell/lib/topology-types";
 import githubBlackLogo from "./assets/icons/github-invertocat-black.svg";
 import githubWhiteLogo from "./assets/icons/github-invertocat-white.svg";
 

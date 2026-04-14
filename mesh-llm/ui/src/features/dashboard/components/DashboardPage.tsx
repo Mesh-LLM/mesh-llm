@@ -10,7 +10,6 @@ import {
   AlertTriangle,
   Copy,
   Cpu,
-  FolderTree,
   Gauge,
   Hash,
   Info,
@@ -76,14 +75,7 @@ import type {
   StatusPayload,
   ThemeMode,
 } from "../../app-shell/lib/status-types";
-import {
-  TOPOLOGY_LAYOUT_OPTIONS,
-  isTopologyLayoutMode,
-} from "../../../topology/layouts";
-import type {
-  TopologyLayoutMode,
-  TopologyNode,
-} from "../../../topology/layouts/types";
+import type { TopologyNode } from "../../app-shell/lib/topology-types";
 import {
   DashboardPanelEmpty,
   ModelSidebar,
@@ -154,8 +146,6 @@ export function DashboardPage({
   const [modelFilter, setModelFilter] = useState<"all" | "warm" | "cold">("all");
   const [isMeshOverviewFullscreen, setIsMeshOverviewFullscreen] = useState(false);
   const [selectedTopologyNodeId, setSelectedTopologyNodeId] = useState<string>("");
-  const [meshTopologyLayoutMode, setMeshTopologyLayoutMode] =
-    useState<TopologyLayoutMode>("elk");
   const {
     activeDetail,
     closeDetailPanel,
@@ -343,31 +333,6 @@ export function DashboardPage({
     setIsMeshOverviewFullscreen((prev) => !prev);
   }
 
-  const meshTopologyLayoutControl = (
-    <Select
-      value={meshTopologyLayoutMode}
-      onValueChange={(value) => {
-        if (isTopologyLayoutMode(value)) setMeshTopologyLayoutMode(value);
-      }}
-    >
-      <SelectTrigger
-        className="h-8 w-[118px] gap-1.5 px-2 text-xs"
-        aria-label="Select topology layout"
-        title="Select topology layout"
-      >
-        <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <SelectValue placeholder="Layout" />
-      </SelectTrigger>
-      <SelectContent align="end" className={isMeshOverviewFullscreen ? "z-[130]" : undefined}>
-        {TOPOLOGY_LAYOUT_OPTIONS.map((option) => (
-          <SelectItem key={option.value} value={option.value} className="text-xs">
-            {option.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-
   const gpuNodeCount = topologyDiagramNodes.filter((node) => !node.client).length;
   const clientCount = topologyDiagramNodes.filter((node) => node.client).length;
 
@@ -505,7 +470,6 @@ export function DashboardPage({
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-sm">Mesh Overview</CardTitle>
                 <div className="flex items-center gap-2">
-                  {meshTopologyLayoutControl}
                   <Button
                     type="button"
                     variant="outline"
@@ -529,7 +493,6 @@ export function DashboardPage({
                   status={status}
                   nodes={topologyDiagramNodes}
                   selectedModel={selectedModel}
-                  layoutMode={meshTopologyLayoutMode}
                   themeMode={themeMode}
                   onOpenNode={openNodeDetail}
                   highlightedNodeId={highlightedNodeId}
@@ -755,7 +718,6 @@ export function DashboardPage({
                     <div className="flex items-center justify-between gap-2">
                       <CardTitle className="text-sm">Mesh Overview</CardTitle>
                       <div className="flex items-center gap-2">
-                        {meshTopologyLayoutControl}
                         <Button
                           type="button"
                           variant="outline"
@@ -774,7 +736,6 @@ export function DashboardPage({
                       status={status}
                       nodes={topologyDiagramNodes}
                       selectedModel={selectedModel}
-                      layoutMode={meshTopologyLayoutMode}
                       themeMode={themeMode}
                       onOpenNode={openNodeDetail}
                       highlightedNodeId={highlightedNodeId}

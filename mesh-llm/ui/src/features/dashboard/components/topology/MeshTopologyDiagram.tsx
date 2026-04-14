@@ -1,349 +1,782 @@
 import {
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import {
-  Background,
-  BackgroundVariant,
-  Controls,
-  Handle,
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
-  type NodeTypes,
-  type ReactFlowInstance,
-} from "@xyflow/react";
-import {
-  Cpu,
-  Gauge,
-  Gpu,
-  Laptop,
-  MemoryStick,
-  Network,
-  Server,
-  Sparkles,
-  Wifi,
-} from "lucide-react";
+import { Minus, Plus, RotateCcw } from "lucide-react";
 
-import { Badge } from "../../../../components/ui/badge";
 import { cn } from "../../../../lib/utils";
-import { TOPOLOGY_LAYOUTS } from "../../../../topology/layouts";
-import { TOPOLOGY_NODE_WIDTH } from "../../../../topology/layouts/constants";
-import { estimateTopologyNodeHeight } from "../../../../topology/layouts/elk";
 import {
   formatLatency,
   shortName,
-  topologyStatusTone,
-  topologyStatusTooltip,
-  trimGpuVendor,
 } from "../../../app-shell/lib/status-helpers";
-import type {
-  BucketedTopologyNode,
-  PositionedTopologyNode,
-  TopologyLayoutMode,
-  TopologyNode,
-  TopologyNodeInfo,
-} from "../../../../topology/layouts/types";
-import { EmptyPanel, StatusPill } from "../details";
+import type { TopologyNode } from "../../../app-shell/lib/topology-types";
+import { EmptyPanel } from "../details";
 
 type TopologyStatusPayload = {
   model_name?: string | null;
 };
 
-type TopologyFlowNodeData = {
-  node: PositionedTopologyNode;
-  info: TopologyNodeInfo;
-  selected: boolean;
-  sameModelAsCurrent: boolean;
-  layoutDirection: "horizontal" | "vertical";
+type RenderNode = {
+  id: string;
+  label: string;
+  subtitle: string;
+  hostname?: string;
+  role: string;
+  statusLabel: string;
+  latencyLabel: string;
+  vramLabel: string;
+  modelLabel: string;
+  gpuLabel: string;
+  x: number;
+  y: number;
+  size: number;
+  color: [number, number, number, number];
+  lineColor: [number, number, number, number];
+  pulse: number;
+  selectedModelMatch: boolean;
+  z: number;
 };
 
-type TopologyFlowDiagramNode = Node<
-  TopologyFlowNodeData,
-  "topologyNode" | "clientDot"
->;
+type ScreenNode = RenderNode & {
+  px: number;
+  py: number;
+};
 
-function TopologyFlowNode({ data }: NodeProps<TopologyFlowDiagramNode>) {
-  const isCenter = data.node.bucket === "center";
-  const isHorizontal = data.layoutDirection === "horizontal";
-  const dotClass = isCenter
-    ? "bg-primary border-primary"
-    : "bg-muted border-border";
-  const baseHandleStyle = {
-    opacity: 0,
-    width: 1,
-    height: 1,
-    border: 0,
-    pointerEvents: "none" as const,
-  };
+type ResolvedTheme = "light" | "dark";
+type EntryAnimation = {
+  fromX: number;
+  fromY: number;
+  control1X: number;
+  control1Y: number;
+  control2X: number;
+  control2Y: number;
+  toX: number;
+  toY: number;
+  normalX: number;
+  normalY: number;
+  meanderAmplitude: number;
+  meanderCycles: number;
+  meanderPhase: number;
+  startedAt: number;
+};
+type ExitAnimation = {
+  node: RenderNode;
+  startedAt: number;
+};
+type UpdateTwinkle = {
+  startedAt: number;
+};
 
-  return (
-    <div className="relative w-[246px] pt-2">
-      <div className={cn("relative mx-auto h-7 w-7 rounded-full border-2", dotClass)}>
-        <Handle
-          type="target"
-          position={isHorizontal ? Position.Left : Position.Top}
-          style={baseHandleStyle}
-        />
-        <Handle
-          type="source"
-          position={isHorizontal ? Position.Right : Position.Bottom}
-          style={baseHandleStyle}
-        />
-      </div>
-      <div className="mt-1 flex items-center justify-center gap-1 text-[10px] leading-3 text-foreground">
-        <span className="break-all">{data.node.id}</span>
-        {data.node.self ? (
-          <Badge className="h-4 rounded-full border-sky-500/45 bg-sky-500/10 px-1.5 text-[9px] font-medium text-sky-700 dark:border-sky-400/55 dark:bg-sky-400/15 dark:text-sky-200">
-            You
-          </Badge>
-        ) : null}
-      </div>
+const TAU = Math.PI * 2;
 
-      <div
-        className={cn(
-          "mt-1 rounded-md border bg-card p-2",
-          data.sameModelAsCurrent
-            ? "border-emerald-500/60 dark:border-emerald-400/70"
-            : data.selected
-              ? "border-ring"
-              : "border-border/90",
-          data.selected ? "ring-1 ring-ring/50" : null,
-        )}
-      >
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0 flex-1">
-            {data.info.loadedModels.length > 1 ? (
-              <div className="flex flex-col gap-0.5">
-                {data.info.loadedModels.map((model) => (
-                  <div
-                    key={model}
-                    className="inline-flex items-center gap-1 text-[11px] font-medium leading-4"
-                  >
-                    <Sparkles className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 truncate" title={model}>
-                      {shortName(model)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="inline-flex items-center gap-1 text-[11px] font-medium leading-4">
-                <Sparkles className="h-3 w-3 shrink-0 text-muted-foreground" />
-                <span
-                  className="min-w-0 truncate"
-                  title={data.info.loadedModels[0] || data.info.loadedModel}
-                >
-                  {data.info.loadedModel}
-                </span>
-              </div>
-            )}
-          </div>
-          <StatusPill
-            className="text-[9px]"
-            label={data.info.statusLabel}
-            tone={topologyStatusTone(data.info.statusLabel)}
-            tooltip={topologyStatusTooltip(data.info.statusLabel)}
-          />
-        </div>
-
-        <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] leading-3">
-          {data.info.hostname && (
-            <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
-              <Server className="h-3 w-3 text-muted-foreground" />
-              <span className="text-muted-foreground">Host</span>
-              <span className="font-medium">{data.info.hostname}</span>
-            </div>
-          )}
-          <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
-            <Network className="h-3 w-3 text-muted-foreground" />
-            <span className="text-muted-foreground">Role</span>
-            <span className="font-medium">{data.info.role}</span>
-          </div>
-          {!data.node.self ? (
-            <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
-              <Wifi className="h-3 w-3 text-muted-foreground" />
-              <span className="text-muted-foreground">Latency</span>
-              <span className="font-medium">{formatLatency(data.info.latencyMs)}</span>
-            </div>
-          ) : null}
-          <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
-            <MemoryStick className="h-3 w-3 text-muted-foreground" />
-            <span className="text-muted-foreground">VRAM</span>
-            <span className="font-medium">{data.info.vramGb.toFixed(1)} GB</span>
-          </div>
-          <div className="inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1">
-            <Gauge className="h-3 w-3 text-muted-foreground" />
-            <span className="text-muted-foreground">Share</span>
-            <span className="whitespace-nowrap font-medium">{data.info.vramSharePct}%</span>
-          </div>
-          {data.info.gpus?.map((gpu, index) => {
-            const duplicateCount =
-              data.info.gpus
-                ?.slice(0, index)
-                .filter(
-                  (candidate) =>
-                    candidate.name === gpu.name &&
-                    candidate.vram_bytes === gpu.vram_bytes,
-                ).length ?? 0;
-            const lower = gpu.name.toLowerCase();
-            const isNvidia = lower.includes("nvidia") || lower.includes("jetson");
-            const isAmd = lower.includes("amd");
-            const isIntel = lower.includes("intel");
-            const iconColor = isNvidia
-              ? "#76b900"
-              : isAmd
-                ? "#ED1C24"
-                : isIntel
-                  ? "#0071C5"
-                  : undefined;
-            const model = trimGpuVendor(gpu.name);
-            const vramGb = gpu.vram_bytes / (1024 * 1024 * 1024);
-            const GpuIcon = data.info.isSoc ? Cpu : Gpu;
-
-            return (
-              <div
-                key={`${data.node.id}-${gpu.name}-${gpu.vram_bytes}-${duplicateCount}`}
-                className="group/gpu inline-flex items-center gap-1 rounded-full border bg-muted/30 px-2 py-1"
-              >
-                <GpuIcon
-                  className="h-3 w-3"
-                  style={iconColor ? { color: iconColor } : undefined}
-                />
-                <span className="text-muted-foreground">
-                  {data.info.isSoc ? "SoC" : "GPU"}
-                </span>
-                <span className="relative inline-flex font-medium">
-                  <span className="group-hover/gpu:invisible">{model}</span>
-                  <span className="absolute left-0 top-0 whitespace-nowrap opacity-0 transition-opacity duration-200 group-hover/gpu:opacity-100">
-                    {`${Math.round(vramGb)} GB`}
-                  </span>
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
+function hashString(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
 }
 
-function TopologyClientDot({ data }: NodeProps<TopologyFlowDiagramNode>) {
-  const isHorizontal = data.layoutDirection === "horizontal";
-  const handleStyle = {
-    opacity: 0,
-    width: 1,
-    height: 1,
-    border: 0,
-    pointerEvents: "none" as const,
-  };
-
-  return (
-    <div className="relative w-[120px]">
-      <div
-        className={cn(
-          "relative mx-auto h-5 w-5 rounded-full border-2 bg-muted",
-          data.selected ? "border-ring" : "border-border",
-        )}
-      >
-        <Handle
-          type="target"
-          position={isHorizontal ? Position.Left : Position.Top}
-          style={handleStyle}
-        />
-        <Handle
-          type="source"
-          position={isHorizontal ? Position.Right : Position.Bottom}
-          style={handleStyle}
-        />
-      </div>
-      <div
-        className={cn(
-          "mt-1 rounded-md border bg-card p-1.5",
-          data.selected ? "border-ring ring-1 ring-ring/50" : "border-border/90",
-        )}
-      >
-        <div className="flex items-center justify-between gap-1">
-          <div className="flex min-w-0 items-center gap-1">
-            <Laptop className="h-3 w-3 shrink-0 text-muted-foreground" />
-            <span className="truncate text-[10px] font-medium leading-3">
-              {data.node.hostname || data.node.id.slice(0, 8)}
-            </span>
-          </div>
-        </div>
-        <div className="mt-1 text-[9px] leading-none text-muted-foreground">Client</div>
-      </div>
-    </div>
-  );
+function color(hex: string, alpha = 1): [number, number, number, number] {
+  const normalized = hex.replace("#", "");
+  const expanded =
+    normalized.length === 3
+      ? normalized
+          .split("")
+          .map((part) => `${part}${part}`)
+          .join("")
+      : normalized;
+  const r = parseInt(expanded.slice(0, 2), 16) / 255;
+  const g = parseInt(expanded.slice(2, 4), 16) / 255;
+  const b = parseInt(expanded.slice(4, 6), 16) / 255;
+  return [r, g, b, alpha];
 }
 
-const topologyNodeTypes = {
-  topologyNode: TopologyFlowNode,
-  clientDot: TopologyClientDot,
-} as NodeTypes;
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
-function positionedTopologyLayoutsEqual(
-  left: PositionedTopologyNode[],
-  right: PositionedTopologyNode[],
-) {
-  if (left === right) return true;
-  if (left.length !== right.length) return false;
+function distributePerimeterClients(nodes: TopologyNode[]) {
+  const placed: Array<{ x: number; y: number }> = [];
 
-  for (let index = 0; index < left.length; index += 1) {
-    const a = left[index];
-    const b = right[index];
-    if (
-      a.id !== b.id ||
-      a.bucket !== b.bucket ||
-      Math.abs(a.x - b.x) > 0.5 ||
-      Math.abs(a.y - b.y) > 0.5
-    ) {
-      return false;
+  return nodes.map((node) => {
+    const angle = hashString(`${node.id}:angle`) * TAU;
+    const edgeBias = 0.74 + hashString(`${node.id}:radius`) * 0.16;
+    const ellipseX = 0.5 + Math.cos(angle) * 0.4 * edgeBias;
+    const ellipseY = 0.5 + Math.sin(angle) * 0.35 * edgeBias;
+    const tangentJitter = (hashString(`${node.id}:tangent`) - 0.5) * 0.06;
+    const radialJitter = (hashString(`${node.id}:radial`) - 0.5) * 0.025;
+    const tangentAngle = angle + Math.PI / 2;
+    let x = clamp(
+      ellipseX +
+        Math.cos(tangentAngle) * tangentJitter +
+        Math.cos(angle) * radialJitter,
+      0.08,
+      0.92,
+    );
+    let y = clamp(
+      ellipseY +
+        Math.sin(tangentAngle) * tangentJitter +
+        Math.sin(angle) * radialJitter,
+      0.1,
+      0.9,
+    );
+
+    for (const prior of placed) {
+      const dx = x - prior.x;
+      const dy = y - prior.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > 0 && distance < 0.032) {
+        const push = (0.032 - distance) * 0.5;
+        x = clamp(x + (dx / distance) * push, 0.08, 0.92);
+        y = clamp(y + (dy / distance) * push, 0.1, 0.9);
+      }
     }
+    placed.push({ x, y });
+
+    return {
+      node,
+      x,
+      y,
+    };
+  });
+}
+
+function normalizedLatency(node: TopologyNode, minLatency: number, maxLatency: number) {
+  if (node.latencyMs == null || !Number.isFinite(node.latencyMs)) {
+    return 0.45;
+  }
+  if (maxLatency <= minLatency) {
+    return 0.2;
+  }
+  return clamp((node.latencyMs - minLatency) / (maxLatency - minLatency), 0, 1);
+}
+
+function distributeLatencyBand(
+  nodes: TopologyNode[],
+  minLatency: number,
+  maxLatency: number,
+  angleStart: number,
+  angleEnd: number,
+  innerRadiusX: number,
+  outerRadiusX: number,
+  innerRadiusY: number,
+  outerRadiusY: number,
+) {
+  const placed: Array<{ x: number; y: number }> = [];
+
+  return nodes.map((node) => {
+    const t = normalizedLatency(node, minLatency, maxLatency);
+    const angleBase = angleStart + hashString(`${node.id}:angle`) * (angleEnd - angleStart);
+    const angle = angleBase + (hashString(`${node.id}:angle-jitter`) - 0.5) * 0.16;
+    const radiusX = innerRadiusX + (outerRadiusX - innerRadiusX) * t;
+    const radiusY = innerRadiusY + (outerRadiusY - innerRadiusY) * t;
+    const driftX = (hashString(`${node.id}:drift-x`) - 0.5) * 0.03;
+    const driftY = (hashString(`${node.id}:drift-y`) - 0.5) * 0.03;
+    let x = clamp(0.5 + Math.cos(angle) * radiusX + driftX, 0.12, 0.88);
+    let y = clamp(0.52 + Math.sin(angle) * radiusY + driftY, 0.16, 0.84);
+
+    for (const prior of placed) {
+      const dx = x - prior.x;
+      const dy = y - prior.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance > 0 && distance < 0.05) {
+        const push = (0.05 - distance) * 0.5;
+        x = clamp(x + (dx / distance) * push, 0.12, 0.88);
+        y = clamp(y + (dy / distance) * push, 0.16, 0.84);
+      }
+    }
+    placed.push({ x, y });
+
+    return {
+      node,
+      latencyNorm: t,
+      x,
+      y,
+    };
+  });
+}
+
+function nodeSize(node: TopologyNode, emphasis: number) {
+  const base = node.client ? 8 : 10;
+  const vramBoost = node.client ? 0 : Math.sqrt(Math.max(0, node.vram)) * 1.55;
+  return clamp(base + vramBoost + emphasis, node.client ? 6 : 10, 38);
+}
+
+function nodeUpdateSignature(node: TopologyNode) {
+  return JSON.stringify({
+    vram: node.vram,
+    host: node.host,
+    client: node.client,
+    serving: node.serving,
+    servingModels: node.servingModels,
+    statusLabel: node.statusLabel,
+    latencyMs: node.latencyMs,
+    hostname: node.hostname,
+    isSoc: node.isSoc,
+    gpus:
+      node.gpus?.map((gpu) => ({
+        name: gpu.name,
+        vram_bytes: gpu.vram_bytes,
+        bandwidth_gbps: gpu.bandwidth_gbps,
+      })) ?? [],
+  });
+}
+
+function createDebugNode(
+  index: number,
+  selectedModel: string,
+  fallbackModel: string,
+): TopologyNode {
+  const pattern = index % 3;
+  const model =
+    selectedModel && selectedModel !== "auto"
+      ? selectedModel
+      : fallbackModel || "Qwen3-8B";
+
+  if (pattern === 0) {
+    return {
+      id: `debug-serving-${index}`,
+      vram: 24 + (index % 4) * 6,
+      self: false,
+      host: false,
+      client: false,
+      serving: model,
+      servingModels: [model],
+      statusLabel: "Serving",
+      latencyMs: 14 + (index % 5) * 8,
+      hostname: `test-serving-${index}`,
+      isSoc: false,
+      gpus: [{ name: "Synthetic GPU", vram_bytes: 24 * 1024 ** 3 }],
+    };
   }
 
-  return true;
+  if (pattern === 1) {
+    return {
+      id: `debug-worker-${index}`,
+      vram: 12 + (index % 3) * 4,
+      self: false,
+      host: false,
+      client: false,
+      serving: "",
+      servingModels: [],
+      statusLabel: "Standby",
+      latencyMs: 24 + (index % 6) * 10,
+      hostname: `test-worker-${index}`,
+      isSoc: index % 2 === 0,
+      gpus:
+        index % 2 === 0
+          ? []
+          : [{ name: "Synthetic GPU", vram_bytes: 12 * 1024 ** 3 }],
+    };
+  }
+
+  return {
+    id: `debug-client-${index}`,
+    vram: 0,
+    self: false,
+    host: false,
+    client: true,
+    serving: "",
+    servingModels: [],
+    statusLabel: "Client",
+    latencyMs: 42 + (index % 7) * 12,
+    hostname: `test-client-${index}`,
+    isSoc: false,
+    gpus: [],
+  };
 }
 
-function topologyLayoutSignature(
-  nodes: Pick<BucketedTopologyNode, "id" | "bucket" | "width" | "height">[],
-  nodeRadius: number,
-) {
-  return `${nodeRadius}:${nodes
-    .map((node) => `${node.id}:${node.bucket}:${node.width}:${node.height}`)
-    .join(",")}`;
-}
+function useRadarFieldNodes(nodes: TopologyNode[], selectedModel: string, fallbackModel: string) {
+  return useMemo<RenderNode[]>(() => {
+    if (!nodes.length) return [];
 
-function positionedTopologySignature(nodes: PositionedTopologyNode[]) {
-  return nodes
-    .map(
+    const focusModel = selectedModel || fallbackModel || "";
+    const selfNode = nodes.find((node) => node.self) ?? nodes[0];
+    const others = nodes.filter((node) => node.id !== selfNode.id);
+
+    const selectedServing = others.filter(
       (node) =>
-        `${node.id}:${node.bucket}:${Math.round(node.x)}:${Math.round(node.y)}`,
-    )
-    .join(",");
+        !node.client &&
+        !!focusModel &&
+        node.servingModels.some((model) => model === focusModel),
+    );
+    const selectedIds = new Set(selectedServing.map((node) => node.id));
+    const serving = others.filter(
+      (node) =>
+        !node.client &&
+        !selectedIds.has(node.id) &&
+        node.servingModels.some((model) => model && model !== "(idle)"),
+    );
+    const clients = others.filter((node) => node.client);
+    const workers = others.filter(
+      (node) => !node.client && !selectedIds.has(node.id) && !serving.some((entry) => entry.id === node.id),
+    );
+
+    const latencyNodes = others.filter(
+      (node) => !node.client && node.latencyMs != null && Number.isFinite(node.latencyMs),
+    );
+    const minLatency =
+      latencyNodes.length > 0
+        ? Math.min(...latencyNodes.map((node) => Number(node.latencyMs)))
+        : 0;
+    const maxLatency =
+      latencyNodes.length > 0
+        ? Math.max(...latencyNodes.map((node) => Number(node.latencyMs)))
+        : 1;
+
+    const servingNodes = distributeLatencyBand(
+      selectedServing,
+      minLatency,
+      maxLatency,
+      -0.5,
+      0.95,
+      0.13,
+      0.25,
+      0.12,
+      0.2,
+    );
+    const workerNodes = distributeLatencyBand(
+      workers,
+      minLatency,
+      maxLatency,
+      1.9,
+      4.15,
+      0.14,
+      0.3,
+      0.12,
+      0.24,
+    );
+    const clientNodes = distributePerimeterClients(clients);
+    const activeNodes = distributeLatencyBand(
+      serving,
+      minLatency,
+      maxLatency,
+      0.4,
+      1.85,
+      0.13,
+      0.24,
+      0.12,
+      0.2,
+    );
+
+    const output: RenderNode[] = [];
+
+    for (const { node, x, y } of clientNodes) {
+      output.push({
+        id: node.id,
+        label: node.hostname || node.id,
+        subtitle: "Client",
+        hostname: node.hostname,
+        role: "Client",
+        statusLabel: node.statusLabel,
+        latencyLabel: formatLatency(node.latencyMs),
+        vramLabel: "n/a",
+        modelLabel: "API-only",
+        gpuLabel: "No GPU",
+        x,
+        y,
+        size: nodeSize(node, 1.5),
+        color: color("#94a3b8", 0.84),
+        lineColor: color("#7c8ba1", 0),
+        pulse: 0.28 + hashString(`${node.id}:pulse`) * 0.24,
+        selectedModelMatch: false,
+        z: 1,
+      });
+    }
+
+    for (const { node, x, y, latencyNorm } of workerNodes) {
+      const models = node.servingModels.filter((model) => model && model !== "(idle)");
+      const glowAlpha = 0.96 - latencyNorm * 0.22;
+      output.push({
+        id: node.id,
+        label: node.hostname || node.id,
+        subtitle: node.statusLabel,
+        hostname: node.hostname,
+        role: node.host ? "Host" : "Worker",
+        statusLabel: node.statusLabel,
+        latencyLabel: formatLatency(node.latencyMs),
+        vramLabel: `${Math.max(0, node.vram).toFixed(1)} GB`,
+        modelLabel: models.length > 0 ? models.map(shortName).join(", ") : "idle",
+        gpuLabel:
+          node.gpus && node.gpus.length > 0
+            ? `${node.gpus.length} GPU${node.gpus.length === 1 ? "" : "s"}`
+            : node.isSoc
+              ? "SoC"
+              : "GPU unknown",
+        x,
+        y,
+        size: nodeSize(node, 3),
+        color: color("#7dd3fc", glowAlpha),
+        lineColor: color("#38bdf8", 0),
+        pulse: 0.42 + (1 - latencyNorm) * 0.34 + hashString(`${node.id}:pulse`) * 0.36,
+        selectedModelMatch: false,
+        z: 2,
+      });
+    }
+
+    for (const { node, x, y, latencyNorm } of activeNodes) {
+      const models = node.servingModels.filter((model) => model && model !== "(idle)");
+      const glowAlpha = 0.95 - latencyNorm * 0.18;
+      output.push({
+        id: node.id,
+        label: node.hostname || node.id,
+        subtitle: node.statusLabel,
+        hostname: node.hostname,
+        role: node.host ? "Host" : "Serving",
+        statusLabel: node.statusLabel,
+        latencyLabel: formatLatency(node.latencyMs),
+        vramLabel: `${Math.max(0, node.vram).toFixed(1)} GB`,
+        modelLabel: models.length > 0 ? models.map(shortName).join(", ") : "idle",
+        gpuLabel:
+          node.gpus && node.gpus.length > 0
+            ? `${node.gpus.length} GPU${node.gpus.length === 1 ? "" : "s"}`
+            : node.isSoc
+              ? "SoC"
+              : "GPU unknown",
+        x,
+        y,
+        size: nodeSize(node, 5),
+        color: color("#4ade80", glowAlpha),
+        lineColor: color("#4ade80", 0),
+        pulse: 0.68 + (1 - latencyNorm) * 0.4 + hashString(`${node.id}:pulse`) * 0.34,
+        selectedModelMatch: false,
+        z: 3,
+      });
+    }
+
+    for (const { node, x, y, latencyNorm } of servingNodes) {
+      const models = node.servingModels.filter((model) => model && model !== "(idle)");
+      const glowAlpha = 1 - latencyNorm * 0.12;
+      output.push({
+        id: node.id,
+        label: node.hostname || node.id,
+        subtitle: focusModel ? shortName(focusModel) : node.statusLabel,
+        hostname: node.hostname,
+        role: node.host ? "Host" : "Serving",
+        statusLabel: node.statusLabel,
+        latencyLabel: formatLatency(node.latencyMs),
+        vramLabel: `${Math.max(0, node.vram).toFixed(1)} GB`,
+        modelLabel: models.length > 0 ? models.map(shortName).join(", ") : "idle",
+        gpuLabel:
+          node.gpus && node.gpus.length > 0
+            ? `${node.gpus.length} GPU${node.gpus.length === 1 ? "" : "s"}`
+            : node.isSoc
+              ? "SoC"
+              : "GPU unknown",
+        x,
+        y,
+        size: nodeSize(node, 9),
+        color: color("#f8fafc", glowAlpha),
+        lineColor: color("#facc15", 0.22),
+        pulse: 1.02 + (1 - latencyNorm) * 0.46 + hashString(`${node.id}:pulse`) * 0.28,
+        selectedModelMatch: true,
+        z: 4,
+      });
+    }
+
+    output.push({
+      id: selfNode.id,
+      label: selfNode.hostname || (selfNode.client ? "this client" : "this node"),
+      subtitle: selfNode.client ? "This client" : "This node",
+      hostname: selfNode.hostname,
+      role: selfNode.client ? "Client" : selfNode.host ? "Host" : "Node",
+      statusLabel: selfNode.statusLabel,
+      latencyLabel: "local",
+      vramLabel: selfNode.client ? "n/a" : `${Math.max(0, selfNode.vram).toFixed(1)} GB`,
+      modelLabel: selfNode.client
+        ? "API-only"
+        : selfNode.servingModels.filter((model) => model && model !== "(idle)").length > 0
+          ? selfNode.servingModels
+              .filter((model) => model && model !== "(idle)")
+              .map(shortName)
+              .join(", ")
+          : "idle",
+      gpuLabel:
+        selfNode.client
+          ? "No GPU"
+          : selfNode.gpus && selfNode.gpus.length > 0
+            ? `${selfNode.gpus.length} GPU${selfNode.gpus.length === 1 ? "" : "s"}`
+            : selfNode.isSoc
+              ? "SoC"
+              : "GPU unknown",
+      x: 0.5,
+      y: 0.52,
+      size: nodeSize(selfNode, 15),
+      color: color("#c084fc", 1),
+      lineColor:
+        focusModel && selfNode.servingModels.includes(focusModel)
+          ? color("#facc15", 0.34)
+          : color("#c084fc", 0.16),
+      pulse: 1.4,
+      selectedModelMatch:
+        !!focusModel && selfNode.servingModels.some((model) => model === focusModel),
+      z: 5,
+    });
+
+    return output.sort((left, right) => left.z - right.z || left.size - right.size);
+  }, [fallbackModel, nodes, selectedModel]);
 }
+
+function createShader(
+  gl: WebGLRenderingContext,
+  type: number,
+  source: string,
+) {
+  const shader = gl.createShader(type);
+  if (!shader) return null;
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    gl.deleteShader(shader);
+    return null;
+  }
+  return shader;
+}
+
+function createProgram(
+  gl: WebGLRenderingContext,
+  vertexSource: string,
+  fragmentSource: string,
+) {
+  const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  if (!vertexShader || !fragmentShader) return null;
+
+  const program = gl.createProgram();
+  if (!program) return null;
+
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  gl.deleteShader(vertexShader);
+  gl.deleteShader(fragmentShader);
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    gl.deleteProgram(program);
+    return null;
+  }
+
+  return program;
+}
+
+function easeOutCubic(value: number) {
+  return 1 - Math.pow(1 - value, 3);
+}
+
+function lerp(start: number, end: number, t: number) {
+  return start + (end - start) * t;
+}
+
+function quadraticBezier(start: number, control: number, end: number, t: number) {
+  const inv = 1 - t;
+  return inv * inv * start + 2 * inv * t * control + t * t * end;
+}
+
+function cubicBezier(
+  start: number,
+  control1: number,
+  control2: number,
+  end: number,
+  t: number,
+) {
+  const inv = 1 - t;
+  return (
+    inv * inv * inv * start +
+    3 * inv * inv * t * control1 +
+    3 * inv * t * t * control2 +
+    t * t * t * end
+  );
+}
+
+function createTravelAnimation(
+  nodeId: string,
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  startedAt: number,
+  randomSource = `${nodeId}:entry`,
+): EntryAnimation {
+  const horizontalSpan = toX - fromX;
+  const verticalSpan = toY - fromY;
+  const distance = Math.max(1, Math.hypot(horizontalSpan, verticalSpan));
+  const normalX = -verticalSpan / distance;
+  const normalY = horizontalSpan / distance;
+  const bendDirection = hashString(`${randomSource}:bend`) > 0.5 ? 1 : -1;
+  const bendAmount =
+    Math.min(distance * 0.18, 82) *
+    (0.6 + hashString(`${randomSource}:arc`) * 0.9) *
+    bendDirection;
+  const lateralJitter = (hashString(`${randomSource}:lateral`) - 0.5) * 42;
+
+  return {
+    fromX,
+    fromY,
+    control1X: fromX + horizontalSpan * 0.24 + normalX * bendAmount + lateralJitter,
+    control1Y: fromY + verticalSpan * 0.18 + normalY * bendAmount,
+    control2X:
+      fromX +
+      horizontalSpan * 0.72 -
+      normalX * bendAmount * 0.56 -
+      lateralJitter * 0.35,
+    control2Y: fromY + verticalSpan * 0.82 - normalY * bendAmount * 0.56,
+    toX,
+    toY,
+    normalX,
+    normalY,
+    meanderAmplitude: Math.min(distance * 0.06, 28) * (0.6 + hashString(`${randomSource}:meander`) * 0.8),
+    meanderCycles: 1.15 + hashString(`${randomSource}:cycles`) * 1.35,
+    meanderPhase: hashString(`${randomSource}:phase`) * Math.PI,
+    startedAt,
+  };
+}
+
+function useResolvedTheme(themeMode: "light" | "dark" | "auto"): ResolvedTheme {
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(
+    themeMode === "dark" ? "dark" : "light",
+  );
+
+  useEffect(() => {
+    if (themeMode !== "auto") {
+      setResolvedTheme(themeMode);
+      return;
+    }
+    if (typeof document === "undefined") {
+      setResolvedTheme("light");
+      return;
+    }
+
+    const root = document.documentElement;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateTheme = () => {
+      setResolvedTheme(root.classList.contains("dark") ? "dark" : "light");
+    };
+
+    updateTheme();
+    const observer = new MutationObserver(updateTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    media.addEventListener("change", updateTheme);
+
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", updateTheme);
+    };
+  }, [themeMode]);
+
+  return resolvedTheme;
+}
+
+const POINT_VERTEX_SHADER = `
+attribute vec2 a_position;
+attribute float a_size;
+attribute vec4 a_color;
+attribute float a_pulse;
+attribute float a_twinkle;
+uniform vec2 u_resolution;
+uniform float u_time;
+varying vec4 v_color;
+varying float v_glow;
+varying float v_twinkle;
+
+void main() {
+  vec2 zeroToOne = a_position / u_resolution;
+  vec2 clip = zeroToOne * 2.0 - 1.0;
+  gl_Position = vec4(clip * vec2(1.0, -1.0), 0.0, 1.0);
+  float pulse = 0.94 + 0.1 * sin(u_time * (0.55 + a_pulse * 0.18) + a_pulse * 6.2831);
+  gl_PointSize = a_size * pulse * (1.0 + a_twinkle * 0.12);
+  v_color = a_color;
+  v_glow = 0.45 + a_pulse * 0.16;
+  v_twinkle = a_twinkle;
+}
+`;
+
+const POINT_FRAGMENT_SHADER = `
+precision mediump float;
+varying vec4 v_color;
+varying float v_glow;
+varying float v_twinkle;
+
+void main() {
+  vec2 centered = gl_PointCoord * 2.0 - 1.0;
+  float distanceFromCenter = length(centered);
+  if (distanceFromCenter > 1.0) {
+    discard;
+  }
+
+  float glow = smoothstep(1.0, 0.08, distanceFromCenter);
+  float core = smoothstep(0.45, 0.0, distanceFromCenter);
+  float rim = smoothstep(0.92, 0.58, distanceFromCenter) * 0.42;
+  vec2 twinkleCoords = centered;
+  twinkleCoords.x *= mix(1.0, 0.82, v_twinkle);
+  twinkleCoords.y *= mix(1.0, 1.08, v_twinkle);
+  float starAxis = max(
+    smoothstep(0.11, 0.0, abs(twinkleCoords.x)) * smoothstep(1.0, 0.14, abs(twinkleCoords.y)),
+    smoothstep(0.11, 0.0, abs(twinkleCoords.y)) * smoothstep(1.0, 0.14, abs(twinkleCoords.x))
+  );
+  float starDiagonal = max(
+    smoothstep(0.12, 0.0, abs(twinkleCoords.x - twinkleCoords.y)) *
+      smoothstep(1.08, 0.2, abs(twinkleCoords.x + twinkleCoords.y)),
+    smoothstep(0.12, 0.0, abs(twinkleCoords.x + twinkleCoords.y)) *
+      smoothstep(1.08, 0.2, abs(twinkleCoords.x - twinkleCoords.y))
+  );
+  float starNeedle = pow(max(abs(centered.x), abs(centered.y)), 0.35);
+  float starSpark = smoothstep(0.24, 0.0, distanceFromCenter) * v_twinkle;
+  float starFlare = ((starAxis * 1.25 + starDiagonal * 0.55) * (1.0 - starNeedle * 0.42) + starSpark * 0.75) * v_twinkle;
+  vec3 colorMix = mix(
+    v_color.rgb * 0.62,
+    vec3(1.0, 0.98, 0.92),
+    core * 0.34 + rim * 0.16 + starFlare * 0.82
+  );
+  float alpha = glow * v_glow + core * 0.65 + rim + starFlare * 1.18;
+
+  gl_FragColor = vec4(colorMix, alpha * v_color.a);
+}
+`;
+
+const LINE_VERTEX_SHADER = `
+attribute vec2 a_position;
+attribute vec4 a_color;
+uniform vec2 u_resolution;
+varying vec4 v_color;
+
+void main() {
+  vec2 zeroToOne = a_position / u_resolution;
+  vec2 clip = zeroToOne * 2.0 - 1.0;
+  gl_Position = vec4(clip * vec2(1.0, -1.0), 0.0, 1.0);
+  v_color = a_color;
+}
+`;
+
+const LINE_FRAGMENT_SHADER = `
+precision mediump float;
+varying vec4 v_color;
+
+void main() {
+  gl_FragColor = v_color;
+}
+`;
 
 export function MeshTopologyDiagram({
   status,
   nodes,
   selectedModel,
-  layoutMode,
   themeMode,
   onOpenNode,
   highlightedNodeId,
-  fullscreen = false,
+  fullscreen,
   heightClass,
   containerStyle,
 }: {
   status: TopologyStatusPayload | null;
   nodes: TopologyNode[];
   selectedModel: string;
-  layoutMode: TopologyLayoutMode;
   themeMode: "light" | "dark" | "auto";
   onOpenNode?: (nodeId: string) => void;
   highlightedNodeId?: string;
@@ -359,26 +792,24 @@ export function MeshTopologyDiagram({
   }
 
   return (
-    <MeshTopologyFlow
+    <MeshRadarField
       status={status}
       nodes={nodes}
       selectedModel={selectedModel}
-      layoutMode={layoutMode}
       themeMode={themeMode}
       onOpenNode={onOpenNode}
       highlightedNodeId={highlightedNodeId}
-      fullscreen={fullscreen}
+      fullscreen={fullscreen ?? false}
       heightClass={heightClass}
       containerStyle={containerStyle}
     />
   );
 }
 
-function MeshTopologyFlow({
+function MeshRadarField({
   status,
   nodes,
   selectedModel,
-  layoutMode,
   themeMode,
   onOpenNode,
   highlightedNodeId,
@@ -389,7 +820,6 @@ function MeshTopologyFlow({
   status: TopologyStatusPayload;
   nodes: TopologyNode[];
   selectedModel: string;
-  layoutMode: TopologyLayoutMode;
   themeMode: "light" | "dark" | "auto";
   onOpenNode?: (nodeId: string) => void;
   highlightedNodeId?: string;
@@ -397,426 +827,958 @@ function MeshTopologyFlow({
   heightClass?: string;
   containerStyle?: CSSProperties;
 }) {
-  const { center, serving, workers, clients, nodeRadius, meshVramGb } = useMemo(() => {
-    const center = nodes.find((node) => node.host) || nodes.find((node) => node.self) || nodes[0];
-    const others = nodes
-      .filter((node) => node.id !== center.id)
-      .sort((a, b) => b.vram - a.vram || a.id.localeCompare(b.id));
-    const focusModel = selectedModel || status.model_name || "";
-    const serving = others.filter(
-      (node) => !node.client && !!node.serving && (!focusModel || node.serving === focusModel),
-    );
-    const servingIds = new Set(serving.map((node) => node.id));
-    const clients = others.filter((node) => node.client);
-    const workers = others.filter((node) => !node.client && !servingIds.has(node.id));
-
-    const total = nodes.length;
-    const nodeRadius =
-      total >= 500
-        ? 3.6
-        : total >= 280
-          ? 4.8
-          : total >= 160
-            ? 6.2
-            : total >= 90
-              ? 7.4
-              : total >= 50
-                ? 8.8
-                : 10.4;
-    const meshVramGb = nodes
-      .filter((node) => !node.client)
-      .reduce((sum, node) => sum + Math.max(0, node.vram), 0);
-
-    return {
-      center,
-      serving,
-      workers,
-      clients,
-      nodeRadius,
-      meshVramGb,
-    };
-  }, [nodes, selectedModel, status.model_name]);
-
-  const currentNodeServingModel = useMemo(() => {
-    const current = nodes.find((node) => node.self);
-    if (!current || current.client || !current.serving || current.serving === "(idle)") {
-      return "";
-    }
-    return current.serving;
-  }, [nodes]);
-
-  const [selectedNodeId, setSelectedNodeId] = useState(center.id);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const screenNodesRef = useRef<ScreenNode[]>([]);
+  const animationRef = useRef<Map<string, EntryAnimation>>(new Map());
+  const exitAnimationRef = useRef<Map<string, ExitAnimation>>(new Map());
+  const twinkleAnimationRef = useRef<Map<string, UpdateTwinkle>>(new Map());
+  const previousRenderNodesRef = useRef<Map<string, RenderNode>>(new Map());
+  const lastScreenPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const previousNodeSignaturesRef = useRef<Map<string, string>>(
+    new Map(nodes.map((node) => [node.id, nodeUpdateSignature(node)])),
+  );
+  const seenNodeIdsRef = useRef<Set<string>>(new Set(nodes.map((node) => node.id)));
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const [hoveredNode, setHoveredNode] = useState<ScreenNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => {
+    const selfNode = nodes.find((node) => node.self);
+    return highlightedNodeId || selfNode?.id || nodes[0]?.id || "";
+  });
+  const selectedNodeIdRef = useRef(selectedNodeId);
+  const hoveredNodeIdRef = useRef<string | null>(null);
+  const debugNodeCounterRef = useRef(0);
+  const selfNode = useMemo(() => nodes.find((node) => node.self) ?? nodes[0], [nodes]);
+  const [tooltipStyle, setTooltipStyle] = useState<CSSProperties | null>(null);
+  const [hostSize, setHostSize] = useState({ width: 0, height: 0 });
+  const resolvedTheme = useResolvedTheme(themeMode);
+  const isDark = resolvedTheme === "dark";
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  const panRef = useRef({ x: 0, y: 0 });
+  const [debugNodes, setDebugNodes] = useState<TopologyNode[]>([]);
+  const displayNodes = useMemo(() => [...nodes, ...debugNodes], [debugNodes, nodes]);
+  const renderNodes = useRadarFieldNodes(
+    displayNodes,
+    selectedModel,
+    status.model_name ?? "",
+  );
+  const dragRef = useRef<{
+    active: boolean;
+    originX: number;
+    originY: number;
+    panX: number;
+    panY: number;
+    moved: boolean;
+  }>({
+    active: false,
+    originX: 0,
+    originY: 0,
+    panX: 0,
+    panY: 0,
+    moved: false,
+  });
 
   useEffect(() => {
-    setSelectedNodeId((previous) =>
-      nodes.some((node) => node.id === previous) ? previous : center.id,
-    );
-  }, [nodes, center.id]);
-
-  const nodeIdsRef = useRef(new Set(nodes.map((node) => node.id)));
-  useEffect(() => {
-    nodeIdsRef.current = new Set(nodes.map((node) => node.id));
-  }, [nodes]);
-  useEffect(() => {
-    if (highlightedNodeId && nodeIdsRef.current.has(highlightedNodeId)) {
+    if (highlightedNodeId) {
       setSelectedNodeId(highlightedNodeId);
     }
   }, [highlightedNodeId]);
 
-  const nodeInfoById = useMemo(() => {
-    const output = new Map<string, TopologyNodeInfo>();
-    for (const node of nodes) {
-      const servingModel =
-        !node.client && node.serving && node.serving !== "(idle)" ? node.serving : "";
-      const servingModels = !node.client
-        ? node.servingModels.filter((model) => model && model !== "(idle)")
-        : [];
-      const role = node.client
-        ? "Client"
-        : node.host
-          ? "Host"
-          : servingModel
-            ? "Worker"
-            : "Idle";
-      const vramSharePct =
-        !node.client && meshVramGb > 0
-          ? Math.round((Math.max(0, node.vram) / meshVramGb) * 100)
-          : 0;
-      output.set(node.id, {
-        role,
-        statusLabel: node.statusLabel,
-        latencyMs: node.latencyMs ?? null,
-        loadedModel: node.client
-          ? "n/a"
-          : servingModels.length > 0
-            ? servingModels.map(shortName).join(", ")
-            : servingModel
-              ? shortName(servingModel)
-              : "idle",
-        loadedModels: node.client
-          ? []
-          : servingModels.length > 0
-            ? servingModels
-            : servingModel
-              ? [servingModel]
-              : [],
-        vramGb: Math.max(0, node.vram),
-        vramSharePct,
-        hostname: node.hostname,
-        isSoc: node.isSoc,
-        gpus: node.gpus,
-      });
-    }
-    return output;
-  }, [nodes, meshVramGb]);
-
-  const activeLayout = TOPOLOGY_LAYOUTS[layoutMode];
-  const topologyLayoutNodes = useMemo<BucketedTopologyNode[]>(() => {
-    const toBucketedNode = (
-      node: TopologyNode,
-      bucket: BucketedTopologyNode["bucket"],
-    ): BucketedTopologyNode => ({
-      ...node,
-      bucket,
-      width: node.client ? 120 : TOPOLOGY_NODE_WIDTH,
-      height: node.client ? 64 : estimateTopologyNodeHeight(node, nodeInfoById.get(node.id)),
-    });
-
-    return [
-      toBucketedNode(center, "center"),
-      ...serving.map((node) => toBucketedNode(node, "serving")),
-      ...workers.map((node) => toBucketedNode(node, "worker")),
-      ...clients.map((node) => toBucketedNode(node, "client")),
-    ];
-  }, [center, clients, nodeInfoById, serving, workers]);
-
-  const layoutContext = useMemo(
-    () => ({
-      center,
-      serving,
-      workers,
-      clients,
-      nodeRadius,
-      nodes: topologyLayoutNodes,
-    }),
-    [center, clients, nodeRadius, serving, topologyLayoutNodes, workers],
-  );
-  const layoutInputSignature = useMemo(
-    () => topologyLayoutSignature(topologyLayoutNodes, nodeRadius),
-    [nodeRadius, topologyLayoutNodes],
-  );
-  const layoutInputSignatureRef = useRef(layoutInputSignature);
-  layoutInputSignatureRef.current = layoutInputSignature;
-  const layoutContextRef = useRef(layoutContext);
-  layoutContextRef.current = layoutContext;
-  const [positioned, setPositioned] = useState<PositionedTopologyNode[]>([]);
+  useEffect(() => {
+    selectedNodeIdRef.current = selectedNodeId;
+  }, [selectedNodeId]);
 
   useEffect(() => {
-    let cancelled = false;
-    const runSignature = layoutInputSignature;
-    const nextLayoutContext = layoutContextRef.current;
+    hoveredNodeIdRef.current = hoveredNode?.id ?? null;
+  }, [hoveredNode?.id]);
 
-    const immediateLayout = activeLayout.getImmediateLayout(nextLayoutContext);
-    setPositioned((previous) =>
-      positionedTopologyLayoutsEqual(previous, immediateLayout) ? previous : immediateLayout,
+  useEffect(() => {
+    setDebugNodes((current) =>
+      current.filter((node) => !nodes.some((realNode) => realNode.id === node.id)),
     );
-
-    void activeLayout
-      .getLayout(nextLayoutContext)
-      .then((next) => {
-        if (!cancelled && layoutInputSignatureRef.current === runSignature) {
-          setPositioned((previous) =>
-            positionedTopologyLayoutsEqual(previous, next) ? previous : next,
-          );
-        }
-      })
-      .catch(() => {
-        if (!cancelled && layoutInputSignatureRef.current === runSignature) {
-          setPositioned((previous) =>
-            positionedTopologyLayoutsEqual(previous, immediateLayout)
-              ? previous
-              : immediateLayout,
-          );
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeLayout, layoutInputSignature]);
-
-  const positionedIdsKey = useMemo(
-    () => positioned.map((node) => node.id).sort().join(","),
-    [positioned],
-  );
-  const expectedPositionIdsKey = useMemo(
-    () => topologyLayoutNodes.map((node) => node.id).sort().join(","),
-    [topologyLayoutNodes],
-  );
-  const layoutReady = positioned.length > 0 && positionedIdsKey === expectedPositionIdsKey;
-  const [resolvedColorMode, setResolvedColorMode] = useState<"light" | "dark">(() =>
-    themeMode === "dark" ? "dark" : "light",
-  );
+  }, [nodes]);
 
   useEffect(() => {
-    if (themeMode !== "auto") {
-      setResolvedColorMode(themeMode);
-      return;
-    }
-    if (typeof document === "undefined") {
-      setResolvedColorMode("light");
-      return;
-    }
+    const host = hostRef.current;
+    if (!host) return;
 
-    const root = document.documentElement;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const updateColorMode = () => {
-      setResolvedColorMode(root.classList.contains("dark") ? "dark" : "light");
+    const updateSize = () => {
+      const rect = host.getBoundingClientRect();
+      setHostSize({ width: rect.width, height: rect.height });
     };
 
-    updateColorMode();
-    const observer = new MutationObserver(updateColorMode);
-    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
-    media.addEventListener("change", updateColorMode);
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(host);
 
-    return () => {
-      observer.disconnect();
-      media.removeEventListener("change", updateColorMode);
-    };
-  }, [themeMode]);
-
-  const layoutFitSignature = useMemo(
-    () => `${fullscreen ? "fs" : "std"}:${layoutMode}:${positionedTopologySignature(positioned)}`,
-    [fullscreen, layoutMode, positioned],
-  );
-  const flowContainerRef = useRef<HTMLDivElement | null>(null);
-  const flowInstanceRef = useRef<ReactFlowInstance<TopologyFlowDiagramNode, Edge> | null>(null);
-  const [flowReady, setFlowReady] = useState(false);
-  const [containerReady, setContainerReady] = useState(false);
-  const [containerSizeSignature, setContainerSizeSignature] = useState("");
-  const fitViewOptions = useMemo(() => ({ padding: 0.12, maxZoom: 1.45 }), []);
-  const fitDuration = fullscreen ? 220 : 0;
-
-  useEffect(() => {
-    if (
-      !flowInstanceRef.current ||
-      !flowReady ||
-      !layoutReady ||
-      !containerReady ||
-      !layoutFitSignature ||
-      !containerSizeSignature
-    ) {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      flowInstanceRef.current?.fitView({
-        ...fitViewOptions,
-        duration: fitDuration,
-      });
-    });
-
-    return () => {
-      window.cancelAnimationFrame(frame);
-    };
-  }, [
-    containerReady,
-    containerSizeSignature,
-    fitDuration,
-    fitViewOptions,
-    flowReady,
-    layoutFitSignature,
-    layoutReady,
-  ]);
-
-  useEffect(() => {
-    const container = flowContainerRef.current;
-    if (!container) return;
-
-    const update = () => {
-      const rect = container.getBoundingClientRect();
-      const ready = rect.width > 8 && rect.height > 8;
-      const size = ready ? `${Math.round(rect.width)}x${Math.round(rect.height)}` : "";
-
-      setContainerReady((previous) => (previous === ready ? previous : ready));
-      setContainerSizeSignature((previous) => (previous === size ? previous : size));
-    };
-
-    update();
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", update);
-      return () => window.removeEventListener("resize", update);
-    }
-
-    const observer = new ResizeObserver(update);
-    observer.observe(container);
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
-    if (containerReady && layoutReady) return;
-    flowInstanceRef.current = null;
-    setFlowReady(false);
-  }, [containerReady, layoutReady]);
+    const previousSignatures = previousNodeSignaturesRef.current;
+    const nextSignatures = new Map<string, string>();
+    const now = performance.now();
 
-  const flowNodes = useMemo<TopologyFlowDiagramNode[]>(() => {
-    const isHorizontal = activeLayout.direction === "horizontal";
-    return positioned.map((node) => ({
-      id: node.id,
-      type: node.client ? "clientDot" : "topologyNode",
-      position: { x: node.x, y: node.y },
-      origin: [0.5, 0],
-      sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
-      targetPosition: isHorizontal ? Position.Left : Position.Top,
-      data: {
-        node,
-        layoutDirection: activeLayout.direction,
-        info: nodeInfoById.get(node.id) ?? {
-          role: "Node",
-          statusLabel: "n/a",
-          latencyMs: null,
-          loadedModel: "idle",
-          loadedModels: [],
-          vramGb: 0,
-          vramSharePct: 0,
-        },
-        selected: node.id === selectedNodeId,
-        sameModelAsCurrent:
-          !!currentNodeServingModel && !node.client && node.serving === currentNodeServingModel,
-      },
-      draggable: false,
-      selectable: false,
-      connectable: false,
-      zIndex: node.id === center.id ? 10 : 1,
-    }));
-  }, [
-    activeLayout.direction,
-    positioned,
-    nodeInfoById,
-    selectedNodeId,
-    center.id,
-    currentNodeServingModel,
-  ]);
+    for (const node of displayNodes) {
+      const signature = nodeUpdateSignature(node);
+      nextSignatures.set(node.id, signature);
+      const previousSignature = previousSignatures.get(node.id);
+      if (previousSignature && previousSignature !== signature) {
+        twinkleAnimationRef.current.set(node.id, { startedAt: now });
+      }
+    }
 
-  const flowEdges = useMemo<Edge[]>(() => {
-    return positioned
-      .filter((node) => node.id !== center.id)
-      .map((node) => {
-        const isClient = node.bucket === "client";
-        const stroke = isClient
-          ? "rgba(160,160,160,0.15)"
-          : node.bucket === "serving"
-            ? "rgba(34,197,94,0.35)"
-            : "rgba(56,189,248,0.3)";
-        return {
-          id: `edge-${center.id}-${node.id}`,
-          source: center.id,
-          target: node.id,
-          type: activeLayout.edgeType,
-          className: `mesh-edge mesh-edge--${node.bucket}`,
-          animated: false,
-          pathOptions:
-            activeLayout.edgeType === "smoothstep"
-              ? { borderRadius: 18, offset: 24 }
-              : undefined,
-          style: {
-            stroke,
-            strokeWidth: isClient ? 1 : 2.4,
-            strokeDasharray: isClient ? "1 4" : "2 6",
-          },
-        };
-      });
-  }, [activeLayout.edgeType, positioned, center.id]);
+    for (const key of twinkleAnimationRef.current.keys()) {
+      if (!nextSignatures.has(key)) {
+        twinkleAnimationRef.current.delete(key);
+      }
+    }
+
+    previousNodeSignaturesRef.current = nextSignatures;
+  }, [displayNodes]);
+
+  useEffect(() => {
+    const previous = previousRenderNodesRef.current;
+    const currentIds = new Set(renderNodes.map((node) => node.id));
+    const now = performance.now();
+
+    for (const [id, node] of previous.entries()) {
+      if (!currentIds.has(id) && id !== selfNode?.id && !exitAnimationRef.current.has(id)) {
+        exitAnimationRef.current.set(id, {
+          node,
+          startedAt: now,
+        });
+      }
+    }
+
+    previousRenderNodesRef.current = new Map(renderNodes.map((node) => [node.id, node]));
+  }, [renderNodes, selfNode?.id]);
+
+  useEffect(() => {
+    if (!hoveredNode || !hostRef.current || !tooltipRef.current) {
+      setTooltipStyle(null);
+      return;
+    }
+
+    const hostRect = hostRef.current.getBoundingClientRect();
+    const tooltipRect = tooltipRef.current.getBoundingClientRect();
+    const nodeX = hoveredNode.px;
+    const nodeY = hoveredNode.py;
+    const gutter = 16;
+
+    let left = nodeX + gutter;
+    let top = nodeY - 12;
+    let transform = "translateY(-100%)";
+
+    if (left + tooltipRect.width > hostRect.width - 8) {
+      left = nodeX - tooltipRect.width - gutter;
+    }
+    if (left < 8) {
+      left = 8;
+    }
+
+    const topWithTransform = top - tooltipRect.height;
+    if (topWithTransform < 8) {
+      top = Math.min(nodeY + gutter, hostRect.height - tooltipRect.height - 8);
+      transform = "none";
+    }
+
+    setTooltipStyle({
+      left: `${left}px`,
+      top: `${top}px`,
+      transform,
+    });
+  }, [hoveredNode]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const host = hostRef.current;
+    if (!canvas || !host) return;
+
+    const gl = canvas.getContext("webgl", {
+      alpha: true,
+      antialias: true,
+      premultipliedAlpha: true,
+    });
+    if (!gl) return;
+
+    const pointProgram = createProgram(gl, POINT_VERTEX_SHADER, POINT_FRAGMENT_SHADER);
+    const lineProgram = createProgram(gl, LINE_VERTEX_SHADER, LINE_FRAGMENT_SHADER);
+    if (!pointProgram || !lineProgram) return;
+
+    const pointPositionLocation = gl.getAttribLocation(pointProgram, "a_position");
+    const pointSizeLocation = gl.getAttribLocation(pointProgram, "a_size");
+    const pointColorLocation = gl.getAttribLocation(pointProgram, "a_color");
+    const pointPulseLocation = gl.getAttribLocation(pointProgram, "a_pulse");
+    const pointTwinkleLocation = gl.getAttribLocation(pointProgram, "a_twinkle");
+    const pointResolutionLocation = gl.getUniformLocation(pointProgram, "u_resolution");
+    const pointTimeLocation = gl.getUniformLocation(pointProgram, "u_time");
+
+    const linePositionLocation = gl.getAttribLocation(lineProgram, "a_position");
+    const lineColorLocation = gl.getAttribLocation(lineProgram, "a_color");
+    const lineResolutionLocation = gl.getUniformLocation(lineProgram, "u_resolution");
+
+    const pointPositionBuffer = gl.createBuffer();
+    const pointSizeBuffer = gl.createBuffer();
+    const pointColorBuffer = gl.createBuffer();
+    const pointPulseBuffer = gl.createBuffer();
+    const pointTwinkleBuffer = gl.createBuffer();
+    const linePositionBuffer = gl.createBuffer();
+    const lineColorBuffer = gl.createBuffer();
+    if (
+      !pointPositionBuffer ||
+      !pointSizeBuffer ||
+      !pointColorBuffer ||
+      !pointPulseBuffer ||
+      !pointTwinkleBuffer ||
+      !linePositionBuffer ||
+      !lineColorBuffer
+    ) {
+      return;
+    }
+
+    let frame = 0;
+    let animationFrame = 0;
+    let width = 0;
+    let height = 0;
+    let cssWidth = 0;
+    let cssHeight = 0;
+    let devicePixelRatio = 1;
+
+    const resize = () => {
+      const rect = host.getBoundingClientRect();
+      devicePixelRatio = window.devicePixelRatio || 1;
+      cssWidth = Math.max(1, rect.width);
+      cssHeight = Math.max(1, rect.height);
+      width = Math.max(1, Math.round(rect.width * devicePixelRatio));
+      height = Math.max(1, Math.round(rect.height * devicePixelRatio));
+      canvas.width = width;
+      canvas.height = height;
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      gl.viewport(0, 0, width, height);
+    };
+
+    const buildFrameData = () => {
+      const pointPositions: number[] = [];
+      const pointSizes: number[] = [];
+      const pointColors: number[] = [];
+      const pointPulses: number[] = [];
+      const pointTwinkles: number[] = [];
+      const linePositions: number[] = [];
+      const lineColors: number[] = [];
+      const screenNodes: ScreenNode[] = [];
+      const centerNode =
+        renderNodes.find((node) => node.id === selfNode?.id) ??
+        renderNodes[renderNodes.length - 1];
+      const now = performance.now();
+      const highlightedSet = new Set<string>();
+      if (selectedNodeIdRef.current) highlightedSet.add(selectedNodeIdRef.current);
+      if (hoveredNodeIdRef.current) highlightedSet.add(hoveredNodeIdRef.current);
+      const activeIds = new Set(renderNodes.map((node) => node.id));
+
+      for (const key of animationRef.current.keys()) {
+        if (!activeIds.has(key)) {
+          animationRef.current.delete(key);
+        }
+      }
+      for (const [key, exit] of exitAnimationRef.current.entries()) {
+        if (activeIds.has(key)) {
+          exitAnimationRef.current.delete(key);
+          continue;
+        }
+        if (now - exit.startedAt > 320) {
+          exitAnimationRef.current.delete(key);
+        }
+      }
+      for (const [key, twinkle] of twinkleAnimationRef.current.entries()) {
+        if (!activeIds.has(key) || now - twinkle.startedAt > 1100) {
+          twinkleAnimationRef.current.delete(key);
+        }
+      }
+
+      for (const node of renderNodes) {
+        const currentZoom = zoomRef.current;
+        const currentPan = panRef.current;
+        if (
+          node.id !== selfNode?.id &&
+          !seenNodeIdsRef.current.has(node.id) &&
+          !animationRef.current.has(node.id)
+        ) {
+          const approachAngle = hashString(`${node.id}:entry-angle`) * TAU;
+          const entryRadius =
+            Math.max(cssWidth, cssHeight) * (0.72 + hashString(`${node.id}:entry-radius`) * 0.28);
+          const fromX = cssWidth * 0.5 + Math.cos(approachAngle) * entryRadius;
+          const fromY = cssHeight * 0.5 + Math.sin(approachAngle) * entryRadius;
+          const toX = node.x * cssWidth;
+          const toY = node.y * cssHeight;
+          animationRef.current.set(
+            node.id,
+            createTravelAnimation(node.id, fromX, fromY, toX, toY, now),
+          );
+        } else if (node.id !== selfNode?.id && !animationRef.current.has(node.id)) {
+          const nextX = node.x * cssWidth;
+          const nextY = node.y * cssHeight;
+          const previousPosition = lastScreenPositionsRef.current.get(node.id);
+          if (previousPosition) {
+            const moveDistance = Math.hypot(nextX - previousPosition.x, nextY - previousPosition.y);
+            if (moveDistance > 18) {
+              animationRef.current.set(
+                node.id,
+                createTravelAnimation(
+                  node.id,
+                  previousPosition.x,
+                  previousPosition.y,
+                  nextX,
+                  nextY,
+                  now,
+                  `${node.id}:move`,
+                ),
+              );
+            }
+          }
+        }
+
+        let px = node.x * cssWidth;
+        let py = node.y * cssHeight;
+        let entryOpacity = 1;
+        let entryScale = 1;
+        const entry = animationRef.current.get(node.id);
+        if (entry) {
+          entry.toX = node.x * cssWidth;
+          entry.toY = node.y * cssHeight;
+          const progress = clamp((now - entry.startedAt) / 1100, 0, 1);
+          const eased = easeOutCubic(progress);
+          px = cubicBezier(
+            entry.fromX,
+            entry.control1X,
+            entry.control2X,
+            entry.toX,
+            eased,
+          );
+          py = cubicBezier(
+            entry.fromY,
+            entry.control1Y,
+            entry.control2Y,
+            entry.toY,
+            eased,
+          );
+          const meanderEnvelope = Math.sin(progress * Math.PI);
+          const meanderOffset =
+            Math.sin(progress * Math.PI * entry.meanderCycles + entry.meanderPhase) *
+            entry.meanderAmplitude *
+            meanderEnvelope;
+          px += entry.normalX * meanderOffset;
+          py += entry.normalY * meanderOffset;
+          entryOpacity = 0.2 + eased * 0.8;
+          entryScale = 0.72 + eased * 0.28;
+          if (progress >= 1) {
+            animationRef.current.delete(node.id);
+            px = entry.toX;
+            py = entry.toY;
+            entryOpacity = 1;
+            entryScale = 1;
+          }
+        }
+        seenNodeIdsRef.current.add(node.id);
+        px = px * currentZoom + currentPan.x;
+        py = py * currentZoom + currentPan.y;
+        const isHighlighted = highlightedSet.has(node.id);
+        const twinkle = twinkleAnimationRef.current.get(node.id);
+        const twinkleProgress = twinkle
+          ? clamp((now - twinkle.startedAt) / 1100, 0, 1)
+          : 1;
+        const twinkleStrength = twinkle
+          ? Math.sin(twinkleProgress * Math.PI * 3.2) *
+              (1 - twinkleProgress) *
+              0.42
+          : 0;
+        const size =
+          (node.size + (isHighlighted ? 6 : 0) + twinkleStrength * 16) * entryScale;
+        const colorBoost = isHighlighted ? 0.18 : 0;
+        const twinkleBoost = Math.max(0, twinkleStrength);
+        pointPositions.push(px * devicePixelRatio, py * devicePixelRatio);
+        pointSizes.push(size * devicePixelRatio);
+        pointColors.push(
+          clamp(node.color[0] + colorBoost + twinkleBoost * 0.72, 0, 1),
+          clamp(node.color[1] + colorBoost + twinkleBoost * 0.72, 0, 1),
+          clamp(node.color[2] + colorBoost + twinkleBoost * 0.78, 0, 1),
+          clamp(node.color[3] * entryOpacity + twinkleBoost * 0.34, 0, 1),
+        );
+        pointPulses.push(node.pulse + (isHighlighted ? 0.35 : 0) + twinkleBoost * 2.2);
+        pointTwinkles.push(twinkleBoost);
+        screenNodes.push({
+          ...node,
+          px,
+          py,
+          size,
+        });
+        lastScreenPositionsRef.current.set(node.id, {
+          x: node.x * cssWidth,
+          y: node.y * cssHeight,
+        });
+
+        if (
+          centerNode &&
+          node.id !== centerNode.id &&
+          (node.selectedModelMatch || highlightedSet.has(node.id)) &&
+          node.lineColor[3] > 0
+        ) {
+          const centerPx = centerNode.x * cssWidth * currentZoom + currentPan.x;
+          const centerPy = centerNode.y * cssHeight * currentZoom + currentPan.y;
+          linePositions.push(
+            centerPx * devicePixelRatio,
+            centerPy * devicePixelRatio,
+            px * devicePixelRatio,
+            py * devicePixelRatio,
+          );
+          lineColors.push(
+            node.lineColor[0],
+            node.lineColor[1],
+            node.lineColor[2],
+            node.lineColor[3],
+            node.lineColor[0],
+            node.lineColor[1],
+            node.lineColor[2],
+            0.02,
+          );
+        }
+      }
+
+      for (const { node, startedAt } of exitAnimationRef.current.values()) {
+        const progress = clamp((now - startedAt) / 320, 0, 1);
+        const flash = Math.sin(progress * Math.PI);
+        const shockwave = Math.sin(progress * Math.PI * 0.92);
+        const shockFront = Math.max(0, Math.sin(progress * Math.PI * 1.35 - 0.35));
+        const collapse = 1 - Math.pow(progress, 1.55);
+        const currentZoom = zoomRef.current;
+        const currentPan = panRef.current;
+        const px = node.x * cssWidth * currentZoom + currentPan.x;
+        const py = node.y * cssHeight * currentZoom + currentPan.y;
+        const exitScale = 1 + flash * 1.15 + shockFront * 0.42 + progress * 0.22;
+        const exitAlpha = collapse * (0.28 + flash * 1.1 + shockFront * 0.18);
+        const whiteCore = Math.max(0, Math.sin(progress * Math.PI * 1.8)) * (1 - progress);
+        const hotCore = flash * 0.68 + whiteCore * 0.42;
+        const coolFade = Math.max(0, 1 - progress * 1.25);
+
+        pointPositions.push(px * devicePixelRatio, py * devicePixelRatio);
+        pointSizes.push(node.size * exitScale * devicePixelRatio);
+        pointColors.push(
+          clamp(node.color[0] + hotCore * 1.25 + 0.26, 0, 1),
+          clamp(node.color[1] + hotCore * 0.82 + 0.16, 0, 1),
+          clamp(node.color[2] + coolFade * 0.34 + shockwave * 0.16 + whiteCore * 0.12, 0, 1),
+          clamp(node.color[3] * exitAlpha, 0, 1),
+        );
+        pointPulses.push(node.pulse + flash * 2.8 + shockwave * 0.9 + shockFront * 0.65);
+        pointTwinkles.push(Math.min(1, whiteCore * 1.35 + shockFront * 0.3));
+      }
+
+      screenNodesRef.current = screenNodes.sort(
+        (left, right) => right.z - left.z || right.size - left.size,
+      );
+      for (const key of lastScreenPositionsRef.current.keys()) {
+        if (!activeIds.has(key)) {
+          lastScreenPositionsRef.current.delete(key);
+        }
+      }
+
+      return {
+        pointPositions: new Float32Array(pointPositions),
+        pointSizes: new Float32Array(pointSizes),
+        pointColors: new Float32Array(pointColors),
+        pointPulses: new Float32Array(pointPulses),
+        pointTwinkles: new Float32Array(pointTwinkles),
+        linePositions: new Float32Array(linePositions),
+        lineColors: new Float32Array(lineColors),
+      };
+    };
+
+    const render = () => {
+      frame += 1;
+      const {
+        pointPositions,
+        pointSizes,
+        pointColors,
+        pointPulses,
+        pointTwinkles,
+        linePositions,
+        lineColors,
+      } = buildFrameData();
+
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+
+      if (linePositions.length > 0) {
+        gl.useProgram(lineProgram);
+        gl.uniform2f(lineResolutionLocation, width, height);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, linePositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, linePositions, gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(linePositionLocation);
+        gl.vertexAttribPointer(linePositionLocation, 2, gl.FLOAT, false, 0, 0);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, lineColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, lineColors, gl.DYNAMIC_DRAW);
+        gl.enableVertexAttribArray(lineColorLocation);
+        gl.vertexAttribPointer(lineColorLocation, 4, gl.FLOAT, false, 0, 0);
+
+        gl.lineWidth(1);
+        gl.drawArrays(gl.LINES, 0, linePositions.length / 2);
+      }
+
+      gl.useProgram(pointProgram);
+      gl.uniform2f(pointResolutionLocation, width, height);
+      gl.uniform1f(pointTimeLocation, frame / 60);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointPositionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, pointPositions, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(pointPositionLocation);
+      gl.vertexAttribPointer(pointPositionLocation, 2, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointSizeBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, pointSizes, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(pointSizeLocation);
+      gl.vertexAttribPointer(pointSizeLocation, 1, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointColorBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, pointColors, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(pointColorLocation);
+      gl.vertexAttribPointer(pointColorLocation, 4, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointPulseBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, pointPulses, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(pointPulseLocation);
+      gl.vertexAttribPointer(pointPulseLocation, 1, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, pointTwinkleBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, pointTwinkles, gl.DYNAMIC_DRAW);
+      gl.enableVertexAttribArray(pointTwinkleLocation);
+      gl.vertexAttribPointer(pointTwinkleLocation, 1, gl.FLOAT, false, 0, 0);
+
+      gl.drawArrays(gl.POINTS, 0, pointPositions.length / 2);
+
+      animationFrame = window.requestAnimationFrame(render);
+    };
+
+    resize();
+    render();
+
+    const observer = new ResizeObserver(() => resize());
+    observer.observe(host);
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+      gl.deleteBuffer(pointPositionBuffer);
+      gl.deleteBuffer(pointSizeBuffer);
+      gl.deleteBuffer(pointColorBuffer);
+      gl.deleteBuffer(pointPulseBuffer);
+      gl.deleteBuffer(pointTwinkleBuffer);
+      gl.deleteBuffer(linePositionBuffer);
+      gl.deleteBuffer(lineColorBuffer);
+      gl.deleteProgram(pointProgram);
+      gl.deleteProgram(lineProgram);
+    };
+  }, [renderNodes, selfNode?.id, status.model_name]);
+
+  const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current.active) {
+      const nextPanX = dragRef.current.panX + (event.clientX - dragRef.current.originX);
+      const nextPanY = dragRef.current.panY + (event.clientY - dragRef.current.originY);
+      if (
+        Math.abs(event.clientX - dragRef.current.originX) > 3 ||
+        Math.abs(event.clientY - dragRef.current.originY) > 3
+      ) {
+        dragRef.current.moved = true;
+      }
+      const nextPan = { x: nextPanX, y: nextPanY };
+      panRef.current = nextPan;
+      setPan(nextPan);
+      setHoveredNode(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const nextNode =
+      screenNodesRef.current.find((node) => {
+        const dx = x - node.px;
+        const dy = y - node.py;
+        return Math.hypot(dx, dy) <= node.size * 0.8 + 10;
+      }) ?? null;
+
+    setHoveredNode((previous) => (previous?.id === nextNode?.id ? previous : nextNode));
+  };
+
+  const handlePointerLeave = () => {
+    dragRef.current.active = false;
+    setHoveredNode(null);
+  };
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = {
+      active: true,
+      originX: event.clientX,
+      originY: event.clientY,
+      panX: panRef.current.x,
+      panY: panRef.current.y,
+      moved: false,
+    };
+  };
+
+  const handlePointerUp = () => {
+    dragRef.current.active = false;
+  };
+
+  const handleClick = () => {
+    if (dragRef.current.moved || !hoveredNode) return;
+    setSelectedNodeId(hoveredNode.id);
+    onOpenNode?.(hoveredNode.id);
+  };
+
+  const handleWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    if (!hostRef.current) return;
+    const rect = hostRef.current.getBoundingClientRect();
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const currentZoom = zoomRef.current;
+    const currentPan = panRef.current;
+    const nextZoom = clamp(currentZoom * (event.deltaY > 0 ? 0.92 : 1.08), 0.7, 2.4);
+    const worldX = (pointerX - currentPan.x) / currentZoom;
+    const worldY = (pointerY - currentPan.y) / currentZoom;
+    const nextPan = {
+      x: pointerX - worldX * nextZoom,
+      y: pointerY - worldY * nextZoom,
+    };
+    zoomRef.current = nextZoom;
+    panRef.current = nextPan;
+    setZoom(nextZoom);
+    setPan(nextPan);
+  };
+
+  const resetView = () => {
+    zoomRef.current = 1;
+    panRef.current = { x: 0, y: 0 };
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const selfLabelStyle: CSSProperties = {
+    left: `${0.5 * hostSize.width * zoom + pan.x}px`,
+    top: `${0.52 * hostSize.height * zoom + pan.y}px`,
+    transform: "translate(-50%, -50%)",
+  };
+  const nebulaStyle: CSSProperties = {
+    transform: `translate(${pan.x * 0.06}px, ${pan.y * 0.06}px) scale(${1 + (zoom - 1) * 0.04})`,
+  };
+  const selfHaloStyle: CSSProperties = {
+    left: `${0.5 * hostSize.width * zoom + pan.x}px`,
+    top: `${0.52 * hostSize.height * zoom + pan.y}px`,
+    transform: `translate(-50%, -50%) scale(${0.92 + zoom * 0.08})`,
+  };
+  const showDebugControls = import.meta.env.DEV;
+
+  const addDebugNode = () => {
+    debugNodeCounterRef.current += 1;
+    setDebugNodes((current) => [
+      ...current,
+      createDebugNode(
+        debugNodeCounterRef.current,
+        selectedModel,
+        status.model_name ?? "",
+      ),
+    ]);
+  };
+
+  const removeDebugNode = () => {
+    setDebugNodes((current) => current.slice(0, -1));
+  };
+
+  const triggerRandomTwinkle = () => {
+    const candidates = displayNodes.filter((node) => !node.self);
+    if (candidates.length === 0) return;
+    const randomIndex = Math.floor(Math.random() * candidates.length);
+    const node = candidates[randomIndex];
+    twinkleAnimationRef.current.set(node.id, { startedAt: performance.now() });
+  };
 
   return (
     <div
+      ref={hostRef}
       className={cn(
-        "overflow-hidden rounded-lg border",
+        "relative overflow-hidden rounded-[20px] border",
+        isDark
+          ? "border-white/10 bg-[#06111f] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_20px_60px_rgba(0,0,0,0.28)]"
+          : "border-slate-300/70 bg-[#f2f6fb] shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_16px_42px_rgba(148,163,184,0.18)]",
         heightClass ?? "h-[360px] md:h-[420px] lg:h-[460px] xl:h-[520px]",
+        onOpenNode ? "cursor-crosshair" : undefined,
       )}
-      ref={flowContainerRef}
       style={containerStyle}
+      onPointerMove={handlePointerMove}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onPointerLeave={handlePointerLeave}
+      onClick={handleClick}
+      onWheel={handleWheel}
     >
-      {containerReady && layoutReady ? (
-        <ReactFlow<TopologyFlowDiagramNode, Edge>
-          className="h-full w-full"
-          style={{ width: "100%", height: "100%" }}
-          nodes={flowNodes}
-          edges={flowEdges}
-          nodeTypes={topologyNodeTypes}
-          colorMode={resolvedColorMode}
-          minZoom={0.2}
-          maxZoom={1.6}
-          zoomOnScroll={false}
-          zoomOnPinch={false}
-          panOnScroll={false}
-          panOnDrag
-          nodesDraggable={false}
-          nodesConnectable={false}
-          elementsSelectable={false}
-          onInit={(instance) => {
-            flowInstanceRef.current = instance;
-            setFlowReady(true);
+      <div
+        className="pointer-events-none absolute inset-0 opacity-95"
+        style={{
+          background: isDark
+            ? `
+                radial-gradient(circle at 50% 52%, rgba(59,130,246,0.12), transparent 22%),
+                radial-gradient(circle at 72% 34%, rgba(250,204,21,0.10), transparent 26%),
+                radial-gradient(circle at 30% 58%, rgba(56,189,248,0.08), transparent 32%),
+                radial-gradient(circle at 50% 52%, rgba(255,255,255,0.035) 0, transparent 38%),
+                linear-gradient(180deg, rgba(12,24,40,0.98), rgba(6,17,31,1))
+              `
+            : `
+                radial-gradient(circle at 50% 52%, rgba(59,130,246,0.12), transparent 24%),
+                radial-gradient(circle at 72% 34%, rgba(250,204,21,0.08), transparent 28%),
+                radial-gradient(circle at 30% 58%, rgba(56,189,248,0.07), transparent 34%),
+                radial-gradient(circle at 50% 52%, rgba(255,255,255,0.46) 0, transparent 42%),
+                linear-gradient(180deg, rgba(245,248,252,0.98), rgba(234,240,247,1))
+              `,
+        }}
+      />
+      <div
+        className="pointer-events-none absolute inset-[-8%] mix-blend-screen"
+        style={{
+          ...nebulaStyle,
+          opacity: isDark ? 0.48 : 0.32,
+          background: isDark
+            ? `
+                radial-gradient(40% 28% at 28% 60%, rgba(56,189,248,0.11), transparent 72%),
+                radial-gradient(34% 26% at 72% 32%, rgba(250,204,21,0.1), transparent 74%),
+                radial-gradient(46% 32% at 50% 54%, rgba(99,102,241,0.08), transparent 78%)
+              `
+            : `
+                radial-gradient(40% 28% at 28% 60%, rgba(56,189,248,0.08), transparent 72%),
+                radial-gradient(34% 26% at 72% 32%, rgba(245,158,11,0.07), transparent 74%),
+                radial-gradient(46% 32% at 50% 54%, rgba(59,130,246,0.06), transparent 78%)
+              `,
+          filter: "blur(16px)",
+        }}
+      />
+      <div
+        className={cn(
+          "pointer-events-none absolute inset-0",
+          isDark ? "opacity-[0.1]" : "opacity-[0.08]",
+        )}
+        style={{
+          backgroundImage: `
+            linear-gradient(${isDark ? "rgba(255,255,255,0.04)" : "rgba(15,23,42,0.05)"} 1px, transparent 1px),
+            linear-gradient(90deg, ${isDark ? "rgba(255,255,255,0.04)" : "rgba(15,23,42,0.05)"} 1px, transparent 1px)
+          `,
+          backgroundSize: fullscreen ? "64px 64px" : "56px 56px",
+          maskImage: "radial-gradient(circle at center, black 20%, transparent 82%)",
+        }}
+      />
+      <div
+        className="pointer-events-none absolute h-28 w-28 rounded-full"
+        style={{
+          ...selfHaloStyle,
+          background: isDark
+            ? "radial-gradient(circle, rgba(255,255,255,0.18) 0%, rgba(192,132,252,0.14) 18%, rgba(59,130,246,0.08) 42%, transparent 72%)"
+            : "radial-gradient(circle, rgba(255,255,255,0.38) 0%, rgba(192,132,252,0.16) 18%, rgba(59,130,246,0.08) 42%, transparent 72%)",
+          filter: "blur(10px)",
+        }}
+      />
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      <div className="absolute bottom-4 right-4 flex flex-col gap-2">
+        <button
+          type="button"
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur",
+            isDark
+              ? "border-white/10 bg-slate-950/70 text-slate-100 hover:bg-slate-900/80"
+              : "border-slate-300 bg-white/85 text-slate-700 hover:bg-white",
+          )}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const nextZoom = clamp(zoomRef.current * 1.12, 0.7, 2.4);
+            zoomRef.current = nextZoom;
+            setZoom(nextZoom);
           }}
-          onNodeClick={(_, node) => {
-            setSelectedNodeId(node.id);
-            onOpenNode?.(node.id);
-          }}
-          proOptions={{ hideAttribution: true }}
         >
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={18}
-            size={1}
-            color="hsl(var(--border))"
-          />
-          <Controls showInteractive={false} position="bottom-right" />
-        </ReactFlow>
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
-          Preparing topology view...
+          <Plus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur",
+            isDark
+              ? "border-white/10 bg-slate-950/70 text-slate-100 hover:bg-slate-900/80"
+              : "border-slate-300 bg-white/85 text-slate-700 hover:bg-white",
+          )}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            const nextZoom = clamp(zoomRef.current * 0.88, 0.7, 2.4);
+            zoomRef.current = nextZoom;
+            setZoom(nextZoom);
+          }}
+        >
+          <Minus className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          className={cn(
+            "flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur",
+            isDark
+              ? "border-white/10 bg-slate-950/70 text-slate-100 hover:bg-slate-900/80"
+              : "border-slate-300 bg-white/85 text-slate-700 hover:bg-white",
+          )}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => {
+            event.stopPropagation();
+            resetView();
+          }}
+        >
+          <RotateCcw className="h-4 w-4" />
+        </button>
+      </div>
+      {showDebugControls ? (
+        <div className="absolute left-4 top-4 flex gap-2">
+          <button
+            type="button"
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] backdrop-blur",
+              isDark
+                ? "border-white/10 bg-slate-950/72 text-slate-100 hover:bg-slate-900/80"
+                : "border-slate-300 bg-white/86 text-slate-700 hover:bg-white",
+            )}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              addDebugNode();
+            }}
+          >
+            Add node
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] backdrop-blur disabled:cursor-not-allowed disabled:opacity-45",
+              isDark
+                ? "border-white/10 bg-slate-950/72 text-slate-100 hover:bg-slate-900/80"
+                : "border-slate-300 bg-white/86 text-slate-700 hover:bg-white",
+            )}
+            disabled={displayNodes.length <= 1}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              triggerRandomTwinkle();
+            }}
+          >
+            Twinkle
+          </button>
+          <button
+            type="button"
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] backdrop-blur disabled:cursor-not-allowed disabled:opacity-45",
+              isDark
+                ? "border-white/10 bg-slate-950/72 text-slate-100 hover:bg-slate-900/80"
+                : "border-slate-300 bg-white/86 text-slate-700 hover:bg-white",
+            )}
+            disabled={debugNodes.length === 0}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              removeDebugNode();
+            }}
+          >
+            Remove node
+          </button>
         </div>
-      )}
+      ) : null}
+
+      {selectedModel && selectedModel !== "auto" ? (
+        <div className="pointer-events-none absolute right-5 top-4 rounded-full border border-amber-300/20 bg-amber-300/10 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.22em] text-amber-100/90">
+          {shortName(selectedModel)}
+        </div>
+      ) : null}
+      <div
+        className="pointer-events-none absolute text-center"
+        style={selfLabelStyle}
+      >
+        <div
+          className={cn(
+            "text-[11px] font-medium uppercase tracking-[0.28em]",
+            isDark ? "text-white/88" : "text-slate-900/78",
+          )}
+        >
+          {selfNode?.hostname || "you / host"}
+        </div>
+        <div
+          className={cn(
+            "mt-1 text-[10px] uppercase tracking-[0.22em]",
+            isDark ? "text-slate-400" : "text-slate-500",
+          )}
+        >
+          {selfNode?.statusLabel || "connected"}
+        </div>
+      </div>
+      {hoveredNode ? (
+        <div
+          ref={tooltipRef}
+          className={cn(
+            "pointer-events-none absolute w-[9rem] rounded-xl border px-3 py-2 shadow-2xl backdrop-blur",
+            isDark
+              ? "border-white/10 bg-slate-950/88 text-white"
+              : "border-slate-300/85 bg-white/88 text-slate-950 shadow-slate-300/60",
+          )}
+          style={tooltipStyle ?? { opacity: 0 }}
+        >
+          <div className="max-w-[16rem] text-xs font-medium">
+            {hoveredNode.label}
+          </div>
+          <div className={cn("mt-0.5 text-[11px]", isDark ? "text-slate-300" : "text-slate-600")}>
+            {hoveredNode.subtitle}
+          </div>
+          <div className={cn("mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]", isDark ? "text-slate-300" : "text-slate-700")}>
+            <div className={cn(isDark ? "text-slate-500" : "text-slate-500")}>Role</div>
+            <div>{hoveredNode.role}</div>
+            <div className={cn(isDark ? "text-slate-500" : "text-slate-500")}>Status</div>
+            <div>{hoveredNode.statusLabel}</div>
+            <div className={cn(isDark ? "text-slate-500" : "text-slate-500")}>VRAM</div>
+            <div>{hoveredNode.vramLabel}</div>
+            <div className={cn(isDark ? "text-slate-500" : "text-slate-500")}>Latency</div>
+            <div>{hoveredNode.latencyLabel}</div>
+            {!(hoveredNode.role === "Client" && hoveredNode.modelLabel === "API-only") ? (
+              <>
+                <div className={cn(isDark ? "text-slate-500" : "text-slate-500")}>Model</div>
+                <div className="truncate" title={hoveredNode.modelLabel}>
+                  {hoveredNode.modelLabel}
+                </div>
+              </>
+            ) : null}
+            <div className={cn(isDark ? "text-slate-500" : "text-slate-500")}>Compute</div>
+            <div>{hoveredNode.gpuLabel}</div>
+          </div>
+          <div
+            className={cn(
+              "mt-2 border-t pt-2 text-[10px]",
+              isDark ? "border-white/10 text-slate-400" : "border-slate-200 text-slate-500",
+            )}
+          >
+            <div className="truncate" title={hoveredNode.id}>
+              {hoveredNode.id}
+            </div>
+            {hoveredNode.hostname && hoveredNode.hostname !== hoveredNode.label ? (
+              <div className="truncate" title={hoveredNode.hostname}>
+                {hoveredNode.hostname}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
