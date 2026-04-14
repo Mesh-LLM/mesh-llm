@@ -270,6 +270,11 @@ release-bundle-arm64 version output="dist":
     @scripts/package-release.sh "{{ version }}" "{{ output }}"
 
 # Run repo-level release-target consistency checks.
+[unix]
+check-release:
+    cargo run -p xtask -- repo-consistency release-targets
+
+[windows]
 check-release:
     cargo run -p xtask -- repo-consistency release-targets
 

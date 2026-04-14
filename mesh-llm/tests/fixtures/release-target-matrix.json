@@ -48,6 +48,62 @@
     "versioned_asset": "mesh-llm-v0.60.0-aarch64-unknown-linux-gnu.tar.gz"
   },
   {
+    "os": "linux",
+    "arch": "aarch64",
+    "flavor": "cuda",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
+    "os": "linux",
+    "arch": "aarch64",
+    "flavor": "rocm",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
+    "os": "linux",
+    "arch": "aarch64",
+    "flavor": "vulkan",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
+    "os": "macos",
+    "arch": "aarch64",
+    "flavor": "cpu",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
+    "os": "macos",
+    "arch": "aarch64",
+    "flavor": "cuda",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
+    "os": "macos",
+    "arch": "aarch64",
+    "flavor": "rocm",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
+    "os": "macos",
+    "arch": "aarch64",
+    "flavor": "vulkan",
+    "support": "unknown",
+    "stable_asset": null,
+    "versioned_asset": null
+  },
+  {
     "os": "windows",
     "arch": "x86_64",
     "flavor": "cpu",

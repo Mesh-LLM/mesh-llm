@@ -84,6 +84,8 @@ just release v0.X.0
 
 Run this from a clean local `main` branch. It bumps the version in source + Cargo manifests, refreshes `Cargo.lock` without upgrading dependencies, commits as `v0.X.0: release`, pushes `main`, and then pushes only the new release tag.
 
+On native Windows, `just check-release` still runs the Rust/docs/workflow invariant checks, but it skips the Bash-only `install.sh` and `scripts/package-release.sh` parity checks. Run the release-target parity check on macOS or Linux before cutting a tag if you need full shell-script coverage.
+
 ### 5a. Prerelease
 
 ```bash

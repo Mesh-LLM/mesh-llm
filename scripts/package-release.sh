@@ -179,16 +179,65 @@ normalized_release_platform() {
     esac
 }
 
+effective_release_flavor() {
+    case "$(normalized_release_platform)" in
+        macos/aarch64)
+            printf '%s\n' "${RELEASE_FLAVOR:-metal}"
+            ;;
+        linux/x86_64|linux/aarch64|linux/arm)
+            printf '%s\n' "${RELEASE_FLAVOR:-cpu}"
+            ;;
+        *)
+            printf '%s\n' "$RELEASE_FLAVOR"
+            ;;
+    esac
+}
+
+supported_release_flavors() {
+    case "$(normalized_release_platform)" in
+        macos/aarch64)
+            printf 'metal\n'
+            ;;
+        linux/x86_64)
+            printf 'cpu cuda rocm vulkan\n'
+            ;;
+        linux/aarch64)
+            printf 'cpu\n'
+            ;;
+        *)
+            printf '\n'
+            ;;
+    esac
+}
+
+release_target_flavor_supported() {
+    local effective_flavor
+    local supported_flavor
+
+    effective_flavor="$(effective_release_flavor)"
+    for supported_flavor in $(supported_release_flavors); do
+        if [[ "$supported_flavor" == "$effective_flavor" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
 release_target_support() {
     case "$(normalized_release_platform)" in
-        macos/aarch64|linux/x86_64|linux/aarch64)
-            printf 'supported\n'
-            ;;
         linux/arm)
             printf 'recognized-unsupported\n'
             ;;
-        *)
+        unsupported)
             printf 'unsupported\n'
+            ;;
+        *)
+            if release_target_flavor_supported; then
+                printf 'supported\n'
+            else
+                printf 'unsupported\n'
+            fi
             ;;
     esac
 }
@@ -197,31 +246,52 @@ release_target_error_message() {
     local os_name
     local arch_name
     local normalized
+    local effective_flavor
+    local support
 
     os_name="$(release_os_name)"
     arch_name="$(release_arch_name)"
     normalized="$(normalized_release_platform)"
+    effective_flavor="$(effective_release_flavor)"
+    support="$(release_target_support)"
 
-    case "$normalized" in
-        linux/arm)
+    case "$support" in
+        supported)
+            printf 'release target is supported: %s\n' "$normalized"
+            ;;
+        recognized-unsupported)
             printf 'Recognized but unsupported release target: %s/%s (normalized: %s)\n' "$os_name" "$arch_name" "$normalized"
             ;;
-        unsupported)
-            printf 'Unsupported OS/arch for packaging: %s/%s\n' "$os_name" "$arch_name"
-            ;;
         *)
-            printf 'release target is supported: %s\n' "$normalized"
+            if [[ "$normalized" == "unsupported" ]]; then
+                printf 'Unsupported OS/arch for packaging: %s/%s\n' "$os_name" "$arch_name"
+            else
+                printf 'Unsupported release target/flavor for packaging: %s/%s with flavor %s (normalized: %s)\n' "$os_name" "$arch_name" "$effective_flavor" "$normalized"
+            fi
             ;;
     esac
 }
 
 resolve_release_target() {
     local normalized
+    local support
+    local effective_flavor
 
     normalized="$(normalized_release_platform)"
+    support="$(release_target_support)"
+    effective_flavor="$(effective_release_flavor)"
     BIN_EXT=""
     ARCHIVE_EXT="tar.gz"
     LEGACY_ASSET=""
+
+    case "$support" in
+        recognized-unsupported)
+            return 2
+            ;;
+        unsupported)
+            return 1
+            ;;
+    esac
 
     case "$normalized" in
         macos/aarch64)
@@ -234,16 +304,13 @@ resolve_release_target() {
         linux/aarch64)
             TARGET_TRIPLE="aarch64-unknown-linux-gnu"
             ;;
-        linux/arm)
-            return 2
-            ;;
         *)
             return 1
             ;;
     esac
 
-    STABLE_ASSET="$(render_asset_name "$TARGET_TRIPLE" "$ARCHIVE_EXT")"
-    TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$RELEASE_FLAVOR")"
+    STABLE_ASSET="$(printf 'mesh-llm-%s%s.%s\n' "$TARGET_TRIPLE" "$(flavor_suffix "$effective_flavor")" "$ARCHIVE_EXT")"
+    TARGET_TRIPLE="${TARGET_TRIPLE}$(flavor_suffix "$effective_flavor")"
 
     return 0
 }

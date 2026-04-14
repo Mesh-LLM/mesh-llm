@@ -145,6 +145,8 @@ just compat-smoke ~/.cache/huggingface/hub/<model>.gguf   # optional 2-node + 1-
 just --list           # list all recipes
 ```
 
+On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks. Run it on macOS or Linux when you need full shell parity coverage.
+
 ## CI / GitHub Actions
 
 CI uses [`dorny/paths-filter`](https://github.com/dorny/paths-filter) to skip jobs when unchanged areas of the repo are modified. A `changes` detection job runs first on every push and PR, then each build job gates on its output.

@@ -30,13 +30,23 @@ fn check_release_targets() -> DynResult<()> {
     let fixture_rows = fixture_rows(&repo_root)?;
     let fixture_version = fixture_release_tag(&fixture_rows)?;
 
-    check_installer_outcomes(&repo_root, &fixture_rows)?;
-    check_package_release_assets(&repo_root, &fixture_rows, &fixture_version)?;
+    if host_supports_shell_parity_checks() {
+        check_installer_outcomes(&repo_root, &fixture_rows)?;
+        check_package_release_assets(&repo_root, &fixture_rows, &fixture_version)?;
+    } else {
+        println!(
+            "note: skipping bash-dependent release parity checks on native Windows; run `just check-release` on macOS/Linux for install.sh and package-release.sh parity"
+        );
+    }
     check_windows_name_invariance(&fixture_rows, &fixture_version)?;
     check_docs_and_workflow_invariants(&repo_root)?;
 
     println!("repo consistency checks passed: release-targets");
     Ok(())
+}
+
+fn host_supports_shell_parity_checks() -> bool {
+    !cfg!(windows)
 }
 
 fn repo_root() -> DynResult<PathBuf> {
@@ -228,10 +238,10 @@ fn check_package_release_assets(
     fixture_version: &str,
 ) -> DynResult<()> {
     for row in rows {
-        if row.support != "supported" {
+        if row.os != "linux" && row.os != "macos" {
             continue;
         }
-        if row.os != "linux" && row.os != "macos" {
+        if row.support == "recognized-unsupported" {
             continue;
         }
 
@@ -240,7 +250,7 @@ fn check_package_release_assets(
                 ("MESH_RELEASE_OS", raw_case.raw_os),
                 ("MESH_RELEASE_ARCH", raw_case.raw_arch),
             ];
-            if row.flavor != "cpu" && row.flavor != "metal" {
+            if row.flavor != implicit_release_flavor(row) {
                 envs.push(("MESH_RELEASE_FLAVOR", row.flavor.as_str()));
             }
 
@@ -252,13 +262,44 @@ fn check_package_release_assets(
                 &[],
             )?;
             ensure_eq(
-                &row.support,
+                shell_support(row),
                 &actual_support,
                 &format!(
                     "{}/{}/{} package support ({})",
                     row.os, row.arch, row.flavor, raw_case.label
                 ),
             )?;
+
+            if row.support != "supported" {
+                let tmp_output_dir = unique_temp_dir("check-release-unsupported");
+                let output = run_command(
+                    Command::new("bash")
+                        .current_dir(repo_root)
+                        .envs(envs.iter().copied())
+                        .arg("scripts/package-release.sh")
+                        .arg(fixture_version)
+                        .arg(&tmp_output_dir),
+                );
+                let _ = std::fs::remove_dir_all(&tmp_output_dir);
+                let output = output?;
+                ensure_status(
+                    1,
+                    output.status.code(),
+                    &format!(
+                        "{}/{}/{} unsupported packaging exit code ({})",
+                        row.os, row.arch, row.flavor, raw_case.label
+                    ),
+                )?;
+                ensure_eq(
+                    &unsupported_release_target_message(&raw_case, row),
+                    &trimmed_stderr_or_stdout(&output),
+                    &format!(
+                        "{}/{}/{} unsupported packaging message ({})",
+                        row.os, row.arch, row.flavor, raw_case.label
+                    ),
+                )?;
+                continue;
+            }
 
             let actual_stable = sourced_script_stdout(
                 repo_root,
@@ -369,6 +410,28 @@ fn raw_targets(row: &FixtureRow) -> DynResult<Vec<RawTargetCase>> {
     }
 }
 
+fn implicit_release_flavor(row: &FixtureRow) -> &'static str {
+    match (row.os.as_str(), row.arch.as_str()) {
+        ("macos", "aarch64") => "metal",
+        ("linux", "x86_64") | ("linux", "aarch64") | ("linux", "arm") => "cpu",
+        _ => "",
+    }
+}
+
+fn shell_support(row: &FixtureRow) -> &str {
+    match row.support.as_str() {
+        "unknown" => "unsupported",
+        other => other,
+    }
+}
+
+fn unsupported_release_target_message(raw_case: &RawTargetCase, row: &FixtureRow) -> String {
+    format!(
+        "Unsupported release target/flavor for packaging: {}/{} with flavor {} (normalized: {}/{})",
+        raw_case.raw_os, raw_case.raw_arch, row.flavor, row.os, row.arch
+    )
+}
+
 fn check_windows_name_invariance(rows: &[FixtureRow], fixture_version: &str) -> DynResult<()> {
     for row in rows {
         if row.os != "windows" {
@@ -477,6 +540,16 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &contributing,
         "just check-release",
         "CONTRIBUTING release consistency command",
+    )?;
+    ensure_contains(
+        &contributing,
+        "On native Windows, `just check-release` runs the host-safe Rust/doc invariant subset and skips the Bash-only `install.sh` / `package-release.sh` parity checks",
+        "CONTRIBUTING Windows check-release note",
+    )?;
+    ensure_contains(
+        &release,
+        "On native Windows, `just check-release` still runs the Rust/docs/workflow invariant checks, but it skips the Bash-only `install.sh` and `scripts/package-release.sh` parity checks",
+        "RELEASE Windows check-release note",
     )?;
     ensure_contains(
         &ci_workflow,
