@@ -561,9 +561,7 @@ async fn test_api_proxy_integration_fragmented_post_body() {
     let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
 
     assert!(response.starts_with("HTTP/1.1 200 OK"));
-    // Body may have mesh_hooks injected, so check key fields rather than exact bytes
-    assert!(raw.contains(r#""model":"test""#) || raw.contains(r#""model": "test""#));
-    assert!(raw.contains(r#""content":"hello""#) || raw.contains(r#""content": "hello""#));
+    assert!(raw.contains(&body));
     assert!(raw.contains("Connection: close"));
 
     proxy_handle.abort();
@@ -1220,9 +1218,7 @@ async fn test_api_proxy_integration_expect_continue() {
         .starts_with("HTTP/1.1 200 OK"));
     assert!(!raw.contains("Expect: 100-continue"));
     assert!(raw.contains("Connection: close"));
-    // Body may have mesh_hooks injected, so check key fields rather than exact bytes
-    assert!(raw.contains(r#""model":"test""#));
-    assert!(raw.contains(r#""content":"expect""#));
+    assert!(raw.contains(std::str::from_utf8(body).unwrap()));
 
     proxy_handle.abort();
     let _ = upstream_handle.await;

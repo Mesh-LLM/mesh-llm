@@ -1830,8 +1830,11 @@ pub async fn handle_mesh_request(
 
     // Enable mesh hooks only when the user explicitly requests the virtual model.
     // Other model values (auto, explicit names, None) pass through without hooks.
-    let mesh_hooks_enabled = request.model_name.as_deref() == Some("mesh");
-    inject_mesh_hooks_flag(&mut request.raw, mesh_hooks_enabled);
+    // Enable mesh hooks only for the virtual "mesh" model. Non-mesh
+    // requests are not mutated — no body injection, no extra fields.
+    if request.model_name.as_deref() == Some("mesh") {
+        inject_mesh_hooks_flag(&mut request.raw, true);
+    }
 
     // Demand tracking for rebalancing
     if track_demand {

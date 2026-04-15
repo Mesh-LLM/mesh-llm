@@ -177,10 +177,11 @@ pub(crate) async fn api_proxy(
                         (request.model_name.clone(), None)
                     };
                     // Enable mesh hooks only when the user explicitly requests
-                    // the virtual "mesh" model. All other model values pass
-                    // through without hooks.
-                    let mesh_hooks_enabled = request.model_name.as_deref() == Some("mesh");
-                    proxy::inject_mesh_hooks_flag(&mut request.raw, mesh_hooks_enabled);
+                    // the virtual "mesh" model. Non-mesh requests are not
+                    // mutated at all — no body injection, no extra fields.
+                    if request.model_name.as_deref() == Some("mesh") {
+                        proxy::inject_mesh_hooks_flag(&mut request.raw, true);
+                    }
 
                     let required_tokens = proxy::request_budget_tokens_from_parts(
                         request.body_len_bytes,
