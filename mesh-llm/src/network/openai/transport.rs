@@ -1145,7 +1145,7 @@ async fn relay_translated_responses_json<R: AsyncRead + Unpin>(
 ///
 /// Inserts the field right after the opening `{` in the body, then rebuilds
 /// the Content-Length header to match.
-fn inject_mesh_hooks_flag(raw: &mut Vec<u8>, enabled: bool) {
+pub fn inject_mesh_hooks_flag(raw: &mut Vec<u8>, enabled: bool) {
     let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4) else {
         return;
     };
