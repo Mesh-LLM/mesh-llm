@@ -1,5 +1,5 @@
 import type { MeshModel, Ownership, Peer, StatusPayload, ThemeMode } from "./status-types";
-import type { TopologyNode } from "../../../topology/layouts/types";
+import type { TopologyNode } from "./topology-types";
 
 export function modelDisplayName(model?: MeshModel | null) {
   if (!model) return "";

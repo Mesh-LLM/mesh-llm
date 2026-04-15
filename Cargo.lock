@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm"
-version = "0.60.0-rc.4"
+version = "0.61.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -2755,7 +2755,7 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-plugin"
-version = "0.60.0-rc.4"
+version = "0.61.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6357,6 +6357,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
 dependencies = [
  "xml-rs",
+]
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

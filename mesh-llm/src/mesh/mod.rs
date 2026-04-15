@@ -10,7 +10,7 @@ use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use prost::Message;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use tokio::sync::{watch, Mutex};
@@ -1203,8 +1203,8 @@ struct MeshState {
     /// Peers confirmed dead — don't reconnect from gossip discovery.
     /// Cleared when the peer successfully reconnects via rejoin/join.
     dead_peers: std::collections::HashSet<EndpointId>,
-    seen_plugin_messages: HashSet<String>,
-    seen_plugin_message_order: VecDeque<String>,
+    seen_plugin_messages: HashMap<String, std::time::Instant>,
+    seen_plugin_message_order: VecDeque<(std::time::Instant, String)>,
     /// Last policy-rejection status per peer — used to suppress duplicate log lines.
     /// Only logs when the status transitions (first rejection or status change).
     policy_rejected_peers: HashMap<EndpointId, OwnershipStatus>,
@@ -1522,7 +1522,7 @@ impl Node {
                 connections: HashMap::new(),
                 remote_tunnel_maps: HashMap::new(),
                 dead_peers: std::collections::HashSet::new(),
-                seen_plugin_messages: HashSet::new(),
+                seen_plugin_messages: HashMap::new(),
                 seen_plugin_message_order: VecDeque::new(),
                 policy_rejected_peers: HashMap::new(),
             })),
@@ -1620,7 +1620,7 @@ impl Node {
                 connections: HashMap::new(),
                 remote_tunnel_maps: HashMap::new(),
                 dead_peers: std::collections::HashSet::new(),
-                seen_plugin_messages: HashSet::new(),
+                seen_plugin_messages: HashMap::new(),
                 seen_plugin_message_order: VecDeque::new(),
                 policy_rejected_peers: HashMap::new(),
             })),
@@ -2337,18 +2337,42 @@ impl Node {
     }
 
     async fn remember_plugin_message(&self, message_id: String) -> bool {
-        const MAX_SEEN_PLUGIN_MESSAGES: usize = 4096;
+        /// How long to remember a message ID. Any duplicate arriving within
+        /// this window is suppressed. This must be longer than the worst-case
+        /// propagation delay across alternate mesh paths — 120s is generous.
+        const DEDUP_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+        /// Hard cap to bound memory even if message volume is extreme.
+        const DEDUP_HARD_CAP: usize = 100_000;
 
+        let now = std::time::Instant::now();
         let mut state = self.state.lock().await;
-        if !state.seen_plugin_messages.insert(message_id.clone()) {
-            return false;
-        }
-        state.seen_plugin_message_order.push_back(message_id);
-        while state.seen_plugin_message_order.len() > MAX_SEEN_PLUGIN_MESSAGES {
-            if let Some(oldest) = state.seen_plugin_message_order.pop_front() {
-                state.seen_plugin_messages.remove(&oldest);
+
+        // Evict entries older than the TTL
+        while let Some((ts, _)) = state.seen_plugin_message_order.front() {
+            if now.duration_since(*ts) >= DEDUP_TTL {
+                if let Some((_, id)) = state.seen_plugin_message_order.pop_front() {
+                    state.seen_plugin_messages.remove(&id);
+                }
+            } else {
+                break;
             }
         }
+
+        // Already seen?
+        if state.seen_plugin_messages.contains_key(&message_id) {
+            return false;
+        }
+
+        // Hard cap: if under extreme load we still accumulate too many,
+        // evict the oldest regardless of TTL.
+        while state.seen_plugin_message_order.len() >= DEDUP_HARD_CAP {
+            if let Some((_, id)) = state.seen_plugin_message_order.pop_front() {
+                state.seen_plugin_messages.remove(&id);
+            }
+        }
+
+        state.seen_plugin_messages.insert(message_id.clone(), now);
+        state.seen_plugin_message_order.push_back((now, message_id));
         true
     }
 
@@ -2430,7 +2454,7 @@ impl Node {
 
     async fn handle_plugin_channel_stream(
         &self,
-        remote: EndpointId,
+        _remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
@@ -2471,9 +2495,38 @@ impl Node {
             }
         }
 
-        if message.target_peer_id != local_peer_id {
-            self.broadcast_plugin_channel_frame(&frame, Some(remote))
-                .await?;
+        // Targeted messages: forward only to the specific target peer if we
+        // have a direct connection.  Do NOT flood-broadcast targeted messages
+        // to all connections — that causes O(N²) amplification across the mesh.
+        // Untargeted broadcasts: deliver locally only.  The originator already
+        // sent to all their direct connections.
+        if !message.target_peer_id.is_empty() && message.target_peer_id != local_peer_id {
+            // Look up connection to the target peer by hex ID
+            let target_conn = {
+                let state = self.state.lock().await;
+                state
+                    .connections
+                    .iter()
+                    .find(|(id, _)| endpoint_id_hex(**id) == message.target_peer_id)
+                    .map(|(id, conn)| (*id, conn.clone()))
+            };
+            if let Some((_target_id, conn)) = target_conn {
+                let data = frame.encode_to_vec();
+                tokio::spawn(async move {
+                    let result = async {
+                        let (mut send, _recv) = conn.open_bi().await?;
+                        send.write_all(&[STREAM_PLUGIN_CHANNEL]).await?;
+                        send.write_all(&(data.len() as u32).to_le_bytes()).await?;
+                        send.write_all(&data).await?;
+                        send.finish()?;
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    .await;
+                    if let Err(e) = result {
+                        tracing::debug!("Failed to forward targeted plugin frame: {e}");
+                    }
+                });
+            }
         }
 
         Ok(())
@@ -2481,7 +2534,7 @@ impl Node {
 
     async fn handle_plugin_bulk_stream(
         &self,
-        remote: EndpointId,
+        _remote: EndpointId,
         mut send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
     ) -> Result<()> {
@@ -2522,9 +2575,35 @@ impl Node {
             }
         }
 
-        if message.target_peer_id != local_peer_id {
-            self.broadcast_plugin_bulk_frame(&frame, Some(remote))
-                .await?;
+        // Same policy as channel frames: targeted → forward to target only,
+        // broadcast → deliver locally only (originator already sent to their
+        // direct connections).
+        if !message.target_peer_id.is_empty() && message.target_peer_id != local_peer_id {
+            let target_conn = {
+                let state = self.state.lock().await;
+                state
+                    .connections
+                    .iter()
+                    .find(|(id, _)| endpoint_id_hex(**id) == message.target_peer_id)
+                    .map(|(id, conn)| (*id, conn.clone()))
+            };
+            if let Some((_target_id, conn)) = target_conn {
+                let data = frame.encode_to_vec();
+                tokio::spawn(async move {
+                    let result = async {
+                        let (mut send, _recv) = conn.open_bi().await?;
+                        send.write_all(&[STREAM_PLUGIN_BULK_TRANSFER]).await?;
+                        send.write_all(&(data.len() as u32).to_le_bytes()).await?;
+                        send.write_all(&data).await?;
+                        send.finish()?;
+                        Ok::<_, anyhow::Error>(())
+                    }
+                    .await;
+                    if let Err(e) = result {
+                        tracing::debug!("Failed to forward targeted plugin bulk frame: {e}");
+                    }
+                });
+            }
         }
 
         Ok(())

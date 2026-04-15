@@ -31,6 +31,7 @@ on:
         default: ''
 
 permissions:
+  actions: read
   contents: read
 
 env:
@@ -162,3 +163,51 @@ jobs:
           key: ${{ steps.llama_cache.outputs.cache-primary-key }}
           lookup-only: true
           fail-on-cache-miss: true
+
+      - name: Verify llama.cpp ${{ inputs.cache_label }} cache is visible on main
+        if: ${{ github.ref == 'refs/heads/main' && steps.llama_cache.outputs.cache-hit != 'true' }}
+        uses: actions/github-script@v8
+        env:
+          EXPECTED_KEY: ${{ steps.llama_cache.outputs.cache-primary-key }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const key = process.env.EXPECTED_KEY;
+            const ref = 'refs/heads/main';
+            const attempts = 6;
+            const delayMs = 30000;
+
+            for (let attempt = 1; attempt <= attempts; attempt += 1) {
+              const { data } = await github.request(
+                'GET /repos/{owner}/{repo}/actions/caches',
+                {
+                  owner,
+                  repo,
+                  key,
+                  ref,
+                  per_page: 100,
+                },
+              );
+
+              const matches = data.actions_caches || [];
+              core.notice(
+                `Main visibility probe ${attempt}/${attempts} for ${key}: ${matches.length} match(es)`
+              );
+
+              if (matches.length > 0) {
+                const cache = matches[0];
+                core.notice(
+                  `Visible on ${ref}: id=${cache.id} size=${cache.size_in_bytes} created_at=${cache.created_at}`
+                );
+                return;
+              }
+
+              if (attempt < attempts) {
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+              }
+            }
+
+            core.setFailed(
+              `Warmed cache ${key} never became visible on ${ref} within ${attempts * delayMs / 1000}s`
+            );

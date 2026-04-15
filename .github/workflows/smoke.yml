@@ -70,7 +70,7 @@ jobs:
 
       - name: Cache integration model
         id: cache-model
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: ~/.models/${{ env.MODEL_FILE }}
           key: ${{ inputs.cache_key_prefix }}${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-model-${{ env.MODEL_FILE }}-${{ hashFiles('.github/cache-version.txt', '.github/workflows/smoke.yml', inputs.workflow_cache_file) }}
@@ -81,6 +81,13 @@ jobs:
           mkdir -p ~/.models
           curl -fSL "$MODEL_URL" -o ~/.models/$MODEL_FILE
           ls -lh ~/.models/$MODEL_FILE
+
+      - name: Save integration model cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.cache-model.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.models/${{ env.MODEL_FILE }}
+          key: ${{ steps.cache-model.outputs.cache-primary-key }}
 
       - name: Smoke test (real inference)
         run: |
@@ -105,7 +112,7 @@ jobs:
 
       - name: Cache MoE model
         id: cache-moe-model
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: ~/.models/${{ env.MOE_MODEL_FILE }}
           key: ${{ inputs.cache_key_prefix }}${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-model-${{ env.MOE_MODEL_FILE }}-${{ hashFiles('.github/cache-version.txt', '.github/workflows/smoke.yml', inputs.workflow_cache_file) }}
@@ -116,6 +123,13 @@ jobs:
           mkdir -p ~/.models
           curl -fSL "$MOE_MODEL_URL" -o ~/.models/$MOE_MODEL_FILE
           ls -lh ~/.models/$MOE_MODEL_FILE
+
+      - name: Save MoE model cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.cache-moe-model.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.models/${{ env.MOE_MODEL_FILE }}
+          key: ${{ steps.cache-moe-model.outputs.cache-primary-key }}
 
       - name: MoE split test (expert sharding)
         run: |

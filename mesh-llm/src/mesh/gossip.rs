@@ -253,17 +253,25 @@ impl Node {
         }
 
         if discover_peers {
-            for (addr, _) in &their_announcements {
+            let my_role = self.role.lock().await.clone();
+            for (addr, ann) in &their_announcements {
                 let peer_id = addr.id;
-                if peer_id != self.endpoint.id() {
-                    let has_conn = self.state.lock().await.connections.contains_key(&peer_id);
-                    if !has_conn {
-                        if let Err(e) = Box::pin(self.connect_to_peer(addr.clone())).await {
-                            tracing::debug!(
-                                "Could not connect to discovered peer {}: {e}",
-                                peer_id.fmt_short()
-                            );
-                        }
+                if peer_id == self.endpoint.id() {
+                    continue;
+                }
+                // Clients skip connecting to other clients
+                if matches!(my_role, super::NodeRole::Client)
+                    && matches!(ann.role, super::NodeRole::Client)
+                {
+                    continue;
+                }
+                let has_conn = self.state.lock().await.connections.contains_key(&peer_id);
+                if !has_conn {
+                    if let Err(e) = Box::pin(self.connect_to_peer(addr.clone())).await {
+                        tracing::debug!(
+                            "Could not connect to discovered peer {}: {e}",
+                            peer_id.fmt_short()
+                        );
                     }
                 }
             }
@@ -343,9 +351,17 @@ impl Node {
             }
         }
 
-        for (addr, _) in their_announcements {
+        let my_role = self.role.lock().await.clone();
+        for (addr, ann) in their_announcements {
             let peer_id = addr.id;
             if peer_id == self.endpoint.id() {
+                continue;
+            }
+            // Clients should only connect to hosts/workers — not other clients.
+            // This avoids O(N²) client-to-client connections in large meshes.
+            if matches!(my_role, super::NodeRole::Client)
+                && matches!(ann.role, super::NodeRole::Client)
+            {
                 continue;
             }
             let already_known = self.state.lock().await.peers.contains_key(&peer_id);

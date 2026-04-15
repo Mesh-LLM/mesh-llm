@@ -5,6 +5,7 @@ use super::heartbeat::{
 };
 use super::*;
 use crate::proto::node::{GossipFrame, NodeRole, PeerAnnouncement, RouteTableRequest};
+use std::collections::HashSet;
 use tokio::sync::watch;
 
 async fn make_test_node(role: super::NodeRole) -> Result<Node> {
@@ -34,7 +35,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
             connections: HashMap::new(),
             remote_tunnel_maps: HashMap::new(),
             dead_peers: HashSet::new(),
-            seen_plugin_messages: HashSet::new(),
+            seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),
         })),
@@ -4311,7 +4312,7 @@ async fn make_test_node_with_owner(
             connections: HashMap::new(),
             remote_tunnel_maps: HashMap::new(),
             dead_peers: HashSet::new(),
-            seen_plugin_messages: HashSet::new(),
+            seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),
         })),

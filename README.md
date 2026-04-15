@@ -90,7 +90,7 @@ just build
 
 Requires: `just`, `cmake`, Rust toolchain, Node.js 24 + npm. NVIDIA GPU builds need `nvcc` (CUDA toolkit). AMD GPU builds need ROCm/HIP. Vulkan GPU builds need the Vulkan development files plus `glslc`. CPU-only and Jetson/Tegra also work. For source builds, `just build` auto-detects CUDA vs ROCm vs Vulkan on Linux, or you can force `backend=rocm` or `backend=vulkan`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-Windows source builds are also supported for `cuda`, `rocm`/`hip`, `vulkan`, and `cpu` via `just build`. Metal remains macOS-only. Tagged GitHub releases now publish Windows `.zip` bundles for `cpu`, `cuda`, `rocm`, and `vulkan`, and you can generate the same artifacts locally with `just release-build-windows`, `just release-build-cuda-windows`, `just release-build-rocm-windows`, `just release-build-vulkan-windows`, and the matching `release-bundle-*-windows` recipes.
+Windows source builds are also supported for `cuda`, `rocm`/`hip`, `vulkan`, and `cpu` via `just build`. Metal remains macOS-only. Tagged GitHub releases currently publish macOS bundles plus Linux CPU, Linux ARM64 CPU, Linux CUDA, Linux ROCm, and Linux Vulkan bundles. The Linux ARM64 CPU artifact is `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`. In install and release contexts, `arm64` and `aarch64` mean the same 64-bit ARM target, and generic 32-bit ARM is not a published release target. Windows publish jobs are currently commented out in `.github/workflows/release.yml`, but you can still generate the matching local Windows artifacts with `just release-build-windows`, `just release-build-cuda-windows`, `just release-build-rocm-windows`, `just release-build-vulkan-windows`, and the matching `release-bundle-*-windows` recipes.
 
 ## Run
 Once installed, you can run:
@@ -351,7 +351,7 @@ Build-from-source and UI development instructions are in [CONTRIBUTING.md](CONTR
 
 mesh-llm exposes an OpenAI-compatible API on `localhost:9337`. Any tool that supports custom OpenAI endpoints works. `/v1/models` lists available models; the `model` field in requests routes to the right node.
 
-For built-in launcher integrations (`goose`, `claude`):
+For built-in launcher integrations (`goose`, `claude`, `opencode`):
 
 - If a mesh is already running locally on `--port`, it is reused.
 - If not, `mesh-llm` auto-starts a background client node that auto-joins the mesh.
@@ -373,6 +373,20 @@ mesh-llm goose --model MiniMax-M2.5-Q4_K_M
 ```
 
 This command writes/updates `~/.config/goose/custom_providers/mesh.json` and launches Goose.
+
+### opencode
+
+OpenCode uses a temporary provider config injected by Mesh, so you don't need to edit local config files by hand. For the full advanced or manual setup, see [docs/AGENTS.md](docs/AGENTS.md).
+
+```bash
+mesh-llm opencode
+```
+
+Use a specific model (example: MiniMax):
+
+```bash
+mesh-llm opencode --model MiniMax-M2.5-Q4_K_M
+```
 
 ### pi
 
@@ -455,6 +469,9 @@ Installed release bundles use flavor-specific llama.cpp binaries:
 
 - macOS: `metal`
 - Linux: `cpu`, `cuda`, `rocm`, `vulkan`
+- Linux ARM64 CPU: `cpu` (asset triple: `aarch64-unknown-linux-gnu`)
+
+For release and install naming, `arm64` and `aarch64` both refer to the same 64-bit ARM target. Generic 32-bit ARM is not a published release target.
 
 To update a bundle install to the latest release:
 

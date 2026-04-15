@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       restart_ci:
-        description: Run CI after deleting caches to prewarm them again.
+        description: Run the GPU cache warmer after deleting caches.
         required: false
         default: true
         type: boolean
@@ -82,7 +82,7 @@ jobs:
 
             return String(caches.length);
 
-      - name: Trigger CI repopulation run
+      - name: Trigger GPU cache warm run
         if: ${{ inputs.restart_ci }}
         uses: actions/github-script@v8
         env:
@@ -93,13 +93,13 @@ jobs:
             const repo = context.repo.repo;
             const ref = process.env.CI_REF;
 
-            core.notice(`Dispatching ci.yml on ${ref} to repopulate caches.`);
+            core.notice(`Dispatching warm-caches.yml on ${ref} to repopulate GPU caches.`);
             await github.request(
               "POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches",
               {
                 owner,
                 repo,
-                workflow_id: "ci.yml",
+                workflow_id: "warm-caches.yml",
                 ref,
               },
             );
@@ -115,8 +115,8 @@ jobs:
             echo
             echo "- Deleted caches: ${DELETED_COUNT}"
             if [ "${RESTART_CI}" = "true" ]; then
-              echo "- CI dispatched on ref: ${CI_REF}"
+              echo "- GPU cache warm dispatched on ref: ${CI_REF}"
             else
-              echo "- CI dispatched: no"
+              echo "- GPU cache warm dispatched: no"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

@@ -2,6 +2,7 @@
 members = [
     "mesh-llm",
     "mesh-llm/plugin",
+    "tools/xtask",
 ]
 default-members = [
     "mesh-llm",
