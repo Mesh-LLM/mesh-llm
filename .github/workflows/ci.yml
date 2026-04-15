@@ -393,7 +393,7 @@ jobs:
     container:
       # CUDA_VERSION is a repository Actions variable and the single source of truth
       # for both workflow CUDA image tags and warm-cache key suffixes.
-      # It should contain the full CUDA version (for example, 12.8.0).
+      # It should contain the exact CUDA tag version fragment to use.
       image: nvidia/cuda:${{ vars.CUDA_VERSION || '12.8.0' }}-devel-ubuntu22.04
     outputs:
       benchmark_artifact_ready: ${{ steps.benchmark_gate.outputs.ready }}
