@@ -16,6 +16,7 @@ UI_DIR="$MESH_DIR/ui"
 
 compiler_launcher_flags=()
 rustc_wrapper=""
+LLAMA_BRANCH="${LLAMA_BRANCH:-upstream-latest}"
 
 detect_jobs() {
     sysctl -n hw.ncpu 2>/dev/null || echo 4
@@ -71,6 +72,7 @@ cmake_flags=(
     -B "$BUILD_DIR"
     -S "$LLAMA_DIR"
     -DGGML_METAL=ON
+    -DGGML_NATIVE=OFF
     -DGGML_RPC=ON
     -DBUILD_SHARED_LIBS=OFF
     -DLLAMA_OPENSSL=OFF

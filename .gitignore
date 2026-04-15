@@ -10,9 +10,11 @@ mesh-llm/ui/dist/
 evals/results/
 .sisyphus/
 .playwright-mcp/
+.cache/mlx-validation/
+MLX_VALIDATION_RESULTS/
 .envrc
 .moe-cache/
 __pycache__/
-*.pyc
+*.py[cod]
 .venv/
 .pytest_cache/

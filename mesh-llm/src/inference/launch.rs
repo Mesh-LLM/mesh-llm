@@ -215,17 +215,51 @@ fn resolve_binary_path(
 pub struct InferenceServerHandle {
     pid: u32,
     expected_exit: Arc<AtomicBool>,
+    shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
     expected_comm: String,
     expected_start_time: Option<i64>,
     pub(crate) _pidfile_guard: Option<crate::runtime::instance::PidfileGuard>,
 }
 
 impl InferenceServerHandle {
+    fn process(
+        pid: u32,
+        expected_exit: Arc<AtomicBool>,
+        expected_comm: String,
+        expected_start_time: Option<i64>,
+        pidfile_guard: Option<crate::runtime::instance::PidfileGuard>,
+    ) -> Self {
+        Self {
+            pid,
+            expected_exit,
+            shutdown_tx: None,
+            expected_comm,
+            expected_start_time,
+            _pidfile_guard: pidfile_guard,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn in_process(shutdown_tx: tokio::sync::watch::Sender<bool>) -> Self {
+        Self {
+            pid: std::process::id(),
+            expected_exit: Arc::new(AtomicBool::new(true)),
+            shutdown_tx: Some(shutdown_tx),
+            expected_comm: String::new(),
+            expected_start_time: None,
+            _pidfile_guard: None,
+        }
+    }
+
     pub fn pid(&self) -> u32 {
         self.pid
     }
 
     pub async fn shutdown(&self) {
+        if let Some(tx) = &self.shutdown_tx {
+            let _ = tx.send(true);
+            return;
+        }
         self.expected_exit.store(true, Ordering::Relaxed);
         terminate_process_with_wait(
             self.pid,
@@ -1361,13 +1395,13 @@ pub async fn start_llama_server(
             };
             let pidfile_guard = runtime.write_pidfile("llama-server", &metadata)?;
             let expected_exit = Arc::new(AtomicBool::new(false));
-            let handle = InferenceServerHandle {
+            let handle = InferenceServerHandle::process(
                 pid,
-                expected_exit: expected_exit.clone(),
-                expected_comm: llama_server_name,
-                expected_start_time: child_started_at,
-                _pidfile_guard: Some(pidfile_guard),
-            };
+                expected_exit.clone(),
+                llama_server_name,
+                child_started_at,
+                Some(pidfile_guard),
+            );
             let (death_tx, death_rx) = tokio::sync::oneshot::channel();
             let pidfile_path = runtime.pidfile_path("llama-server");
             tokio::spawn(async move {

@@ -263,7 +263,7 @@ pub fn runtime_root() -> Result<PathBuf> {
 pub struct InstanceRuntime {
     dir: PathBuf,
     pid: u32,
-    _lock_file: File,
+    lock_file: File,
 }
 
 impl InstanceRuntime {
@@ -342,7 +342,7 @@ impl InstanceRuntime {
         Ok(Self {
             dir,
             pid,
-            _lock_file: lock_file,
+            lock_file,
         })
     }
 
@@ -376,6 +376,20 @@ impl InstanceRuntime {
         let path = self.pidfile_path(name);
         metadata.write_atomic(&path)?;
         Ok(PidfileGuard::new(path))
+    }
+}
+
+impl Drop for InstanceRuntime {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+
+            let fd = self.lock_file.as_raw_fd();
+            // SAFETY: flock is safe to call with a valid fd. This is best-effort
+            // cleanup on drop; the fd close that follows is still the hard backstop.
+            let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
+        }
     }
 }
 

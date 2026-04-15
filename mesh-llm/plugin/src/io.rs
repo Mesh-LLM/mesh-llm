@@ -158,7 +158,7 @@ pub async fn bind_side_stream(plugin_id: &str, stream_id: &str) -> Result<LocalL
         let server = tokio::net::windows::named_pipe::ServerOptions::new()
             .create(&endpoint)
             .with_context(|| format!("Failed to create side stream pipe {endpoint}"))?;
-        return Ok(LocalListener::Pipe(endpoint, server));
+        Ok(LocalListener::Pipe(endpoint, server))
     }
 }
 

@@ -270,6 +270,16 @@ fn stop_requested(stop_rx: &watch::Receiver<bool>) -> bool {
     *stop_rx.borrow()
 }
 
+fn local_backend_name(model: &Path) -> &'static str {
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = crate::mlx::mlx_model_dir(model) {
+        if crate::mlx::is_mlx_model_dir(dir) {
+            return "MLX server";
+        }
+    }
+    "llama-server"
+}
+
 async fn wait_for_peer_moe_ranking(
     model_name: &str,
     model_path: &Path,
@@ -1868,8 +1878,13 @@ pub async fn election_loop(
             .await;
             llama_process = Some(process);
             if let Some(ref process) = llama_process {
+                let backend = if local_backend_name(&model) == "MLX server" {
+                    "mlx"
+                } else {
+                    "llama"
+                };
                 on_process(Some(LocalProcessInfo {
-                    backend: "llama".into(),
+                    backend: backend.into(),
                     pid: process.handle.pid(),
                     port: llama_port,
                     context_length: process.context_length,
@@ -1877,8 +1892,9 @@ pub async fn election_loop(
             }
             on_change(true, true);
             eprintln!(
-                "✅ [{}] llama-server ready on internal port {llama_port}",
-                model_name
+                "✅ [{}] {} ready on internal port {llama_port}",
+                model_name,
+                local_backend_name(&model)
             );
         } else {
             // We're a worker in split mode. Find who the host is.
@@ -2196,7 +2212,7 @@ async fn moe_election_loop(
         last_plan_change_at = tokio::time::Instant::now();
 
         if matches!(role, MoePlacementRole::Standby) {
-            node.set_model_runtime_context_length(&model_name, None)
+            node.set_model_runtime_context_length(&model_name, None, None)
                 .await;
             node.regossip().await;
             eprintln!(
@@ -2285,8 +2301,13 @@ async fn moe_election_loop(
                     current_local_port = Some(local_proxy_port);
                     llama_process = Some(process);
                     if let Some(ref process) = llama_process {
+                        let backend = if local_backend_name(&model) == "MLX server" {
+                            "mlx"
+                        } else {
+                            "llama"
+                        };
                         on_process(Some(LocalProcessInfo {
-                            backend: "llama".into(),
+                            backend: backend.into(),
                             pid: process.handle.pid(),
                             port: llama_port,
                             context_length: process.context_length,
@@ -2314,7 +2335,7 @@ async fn moe_election_loop(
             }
         } else if plan.active_ids.len() == 1 {
             if model_fits {
-                node.set_model_runtime_context_length(&model_name, None)
+                node.set_model_runtime_context_length(&model_name, None, None)
                     .await;
                 node.regossip().await;
                 eprintln!(
@@ -2389,8 +2410,13 @@ async fn moe_election_loop(
                         current_local_port = Some(local_proxy_port);
                         llama_process = Some(process);
                         if let Some(ref process) = llama_process {
+                            let backend = if local_backend_name(&model) == "MLX server" {
+                                "mlx"
+                            } else {
+                                "llama"
+                            };
                             on_process(Some(LocalProcessInfo {
-                                backend: "llama".into(),
+                                backend: backend.into(),
                                 pid: process.handle.pid(),
                                 port: llama_port,
                                 context_length: process.context_length,
@@ -2414,7 +2440,7 @@ async fn moe_election_loop(
                     }
                 }
             } else {
-                node.set_model_runtime_context_length(&model_name, None)
+                node.set_model_runtime_context_length(&model_name, None, None)
                     .await;
                 node.regossip().await;
                 eprintln!("⚠️  [{}] MoE model too large to serve entirely ({:.1}GB model, {:.1}GB capacity) — waiting for peers",
@@ -2467,7 +2493,7 @@ async fn moe_election_loop(
                     }
                     Err(e) => {
                         eprintln!("  ❌ moe-split failed: {e}");
-                        node.set_model_runtime_context_length(&model_name, None)
+                        node.set_model_runtime_context_length(&model_name, None, None)
                             .await;
                         node.regossip().await;
                         if peer_rx.changed().await.is_err() {
@@ -2550,8 +2576,13 @@ async fn moe_election_loop(
                     current_local_port = Some(local_proxy_port);
                     llama_process = Some(process);
                     if let Some(ref process) = llama_process {
+                        let backend = if local_backend_name(&shard_path) == "MLX server" {
+                            "mlx"
+                        } else {
+                            "llama"
+                        };
                         on_process(Some(LocalProcessInfo {
-                            backend: "llama".into(),
+                            backend: backend.into(),
                             pid: process.handle.pid(),
                             port: llama_port,
                             context_length: process.context_length,
@@ -2586,7 +2617,7 @@ async fn moe_election_loop(
                         "  ⚠️  [{}] Refusing to enter MoE split mode on this node until the shard validates",
                         model_name
                     );
-                    node.set_model_runtime_context_length(&model_name, None)
+                    node.set_model_runtime_context_length(&model_name, None, None)
                         .await;
                     node.regossip().await;
                 }
@@ -2739,6 +2770,30 @@ async fn start_llama(
         ctx_size_override,
         pinned_gpu,
     } = params;
+    // ── MLX native backend: if model normalizes to a safetensors directory, run in-process ──
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = crate::mlx::mlx_model_dir(model) {
+        if crate::mlx::is_mlx_model_dir(dir) {
+            let llama_port = match find_free_port().await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("  Failed to find free port: {e}");
+                    return None;
+                }
+            };
+            eprintln!("🍎 MLX native backend: loading {model_name}...");
+            match crate::mlx::start_mlx_server(dir, model_name.to_string(), llama_port).await {
+                Ok(process) => {
+                    eprintln!("✅ MLX server ready on port {llama_port}");
+                    return Some((llama_port, process));
+                }
+                Err(e) => {
+                    eprintln!("  ❌ MLX server failed: {e}");
+                    return None;
+                }
+            }
+        }
+    }
     let my_vram = node.vram_bytes();
     let local_launch_vram = effective_local_launch_vram(my_vram, pinned_gpu);
     let model_bytes = total_model_bytes(model);
@@ -2870,6 +2925,26 @@ async fn start_llama(
     } else {
         None
     };
+
+    #[cfg(target_os = "macos")]
+    let should_start_mlx = rpc_ports.is_empty() && crate::mlx::model::is_mlx_model_dir(model);
+    #[cfg(not(target_os = "macos"))]
+    let should_start_mlx = false;
+
+    if should_start_mlx {
+        #[cfg(target_os = "macos")]
+        {
+            match crate::mlx::server::start_mlx_server(model, model_name.to_string(), llama_port)
+                .await
+            {
+                Ok(process) => return Some((llama_port, process)),
+                Err(e) => {
+                    eprintln!("  Failed to start MLX server: {e}");
+                    return None;
+                }
+            }
+        }
+    }
 
     match launch::start_llama_server(
         runtime,

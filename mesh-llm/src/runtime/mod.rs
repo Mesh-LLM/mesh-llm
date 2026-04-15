@@ -38,8 +38,16 @@ struct StartupModelSpec {
     model_ref: PathBuf,
     mmproj_ref: Option<PathBuf>,
     ctx_size: Option<u32>,
+    backend_hint: StartupBackendHint,
     gpu_id: Option<String>,
     config_owned: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartupBackendHint {
+    Auto,
+    Gguf,
+    Mlx,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +64,7 @@ struct StartupModelPlan {
     resolved_path: PathBuf,
     mmproj_path: Option<PathBuf>,
     ctx_size: Option<u32>,
+    backend_hint: StartupBackendHint,
     gpu_id: Option<String>,
     pinned_gpu: Option<StartupPinnedGpuTarget>,
 }
@@ -242,9 +251,9 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     let config = plugin::load_config(cli.config.as_deref())?;
-    let cli_has_explicit_models = cli_has_explicit_models(&cli);
+    let has_cli_explicit_models = cli_has_explicit_models(&cli);
     let has_config_models = !config.models.is_empty();
-    let has_startup_models = cli_has_explicit_models || has_config_models;
+    let has_startup_models = has_cli_explicit_models || has_config_models;
 
     // Acquire the per-instance runtime directory and flock (skip for --client — no local servers).
     // Wrap in Arc so it can be cheaply shared with election/spawn tasks that
@@ -460,14 +469,16 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     // --- Validation ---
-    if cli.client && (!cli.model.is_empty() || !cli.gguf.is_empty()) {
-        anyhow::bail!("--client and --model are mutually exclusive");
+    if cli.client
+        && (!cli.model.is_empty() || !cli.gguf_file.is_empty() || !cli.mlx_file.is_empty())
+    {
+        anyhow::bail!("--client is mutually exclusive with model selection flags: --model, --gguf-file, --mlx-file");
     }
     if let Some(mmproj) = &cli.mmproj {
         anyhow::ensure!(!cli.client, "--mmproj cannot be used with --client");
         anyhow::ensure!(
-            !cli.model.is_empty() || !cli.gguf.is_empty(),
-            "--mmproj requires an explicit primary model via --model or --gguf"
+            cli_has_explicit_models(&cli),
+            "--mmproj requires an explicit primary model via --model, --gguf-file, or --mlx-file"
         );
         anyhow::ensure!(
             mmproj.is_file(),
@@ -484,7 +495,7 @@ pub(crate) async fn run() -> Result<()> {
                 .join("config.toml")
         });
         eprintln!(
-            "⚠️ `mesh-llm serve` needs at least one startup model.\n  Add `[[models]]` to {}, or pass `--model` / `--gguf` explicitly.",
+            "⚠️ `mesh-llm serve` needs at least one startup model.\n  Add `[[models]]` to {}, or pass `--model`, `--gguf-file`, or `--mlx-file` explicitly.",
             config_path.display()
         );
         Cli::command().print_help().ok();
@@ -503,11 +514,7 @@ pub(crate) async fn run() -> Result<()> {
     // Strip split GGUF suffix so "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
     let requested_model_names: Vec<String> = resolved_models
         .iter()
-        .filter_map(|m| {
-            m.file_stem()
-                .and_then(|s| s.to_str())
-                .map(router::strip_split_suffix_owned)
-        })
+        .map(|m| resolved_model_name(m))
         .collect();
 
     let bin_dir = match &cli.bin_dir {
@@ -529,11 +536,21 @@ pub(crate) async fn run() -> Result<()> {
 
 /// Resolve a model path: local file, catalog name, or HuggingFace URL.
 async fn resolve_model(input: &std::path::Path) -> Result<PathBuf> {
+    let s = input.to_string_lossy();
+
+    // Already a local file
+    if input.exists() {
+        return Ok(input.to_path_buf());
+    }
+    if s.contains('/') {
+        return models::download_exact_ref(&s).await;
+    }
+
     models::resolve_model_spec(input).await
 }
 
 fn cli_has_explicit_models(cli: &Cli) -> bool {
-    !cli.model.is_empty() || !cli.gguf.is_empty()
+    !cli.model.is_empty() || !cli.gguf_file.is_empty() || !cli.mlx_file.is_empty()
 }
 
 fn build_startup_model_specs(
@@ -544,9 +561,16 @@ fn build_startup_model_specs(
         return Ok(Vec::new());
     }
 
+    #[cfg(not(target_os = "macos"))]
+    {
+        if !cli.mlx_file.is_empty() {
+            anyhow::bail!("MLX model selection is only supported on macOS");
+        }
+    }
+
     let mut specs = Vec::new();
     if cli_has_explicit_models(cli) {
-        for path in &cli.gguf {
+        for path in &cli.gguf_file {
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
@@ -554,6 +578,17 @@ fn build_startup_model_specs(
                 model_ref: path.clone(),
                 mmproj_ref: None,
                 ctx_size: cli.ctx_size,
+                backend_hint: StartupBackendHint::Gguf,
+                gpu_id: None,
+                config_owned: false,
+            });
+        }
+        for path in &cli.mlx_file {
+            specs.push(StartupModelSpec {
+                model_ref: path.clone(),
+                mmproj_ref: None,
+                ctx_size: cli.ctx_size,
+                backend_hint: StartupBackendHint::Mlx,
                 gpu_id: None,
                 config_owned: false,
             });
@@ -563,6 +598,7 @@ fn build_startup_model_specs(
                 model_ref: model.clone(),
                 mmproj_ref: None,
                 ctx_size: cli.ctx_size,
+                backend_hint: StartupBackendHint::Auto,
                 gpu_id: None,
                 config_owned: false,
             });
@@ -580,6 +616,7 @@ fn build_startup_model_specs(
             model_ref: PathBuf::from(model.model.clone()),
             mmproj_ref: model.mmproj.as_ref().map(PathBuf::from),
             ctx_size: cli.ctx_size.or(model.ctx_size),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: model.gpu_id.clone(),
             config_owned: true,
         });
@@ -600,6 +637,7 @@ async fn resolve_startup_models(specs: &[StartupModelSpec]) -> Result<Vec<Startu
             resolved_path,
             mmproj_path,
             ctx_size: spec.ctx_size,
+            backend_hint: spec.backend_hint,
             gpu_id: spec.gpu_id.clone(),
             pinned_gpu: None,
         });
@@ -1554,15 +1592,7 @@ async fn run_auto(
         }
     };
 
-    let model_name = {
-        let stem = model
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
-        router::strip_split_suffix_owned(&stem)
-    };
+    let model_name = resolved_model_name(&model);
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = primary_startup_model
@@ -1595,31 +1625,42 @@ async fn run_auto(
         let _ = crate::runtime::instance::reap::reap_own_stale_pidfiles(rt.dir()).await;
     }
 
-    // Serve mode (non-client) always has the InstanceRuntime acquired above.
-    // The fallback was only relevant during the T1-T11 staging when acquisition
-    // wasn't yet wired into run() — keep an explicit error here so any future
-    // refactor that drops the acquire surfaces immediately instead of panicking
-    // mid-spawn from a child task.
+    #[cfg(target_os = "macos")]
+    let is_mlx = primary_startup_model
+        .as_ref()
+        .is_some_and(|model| model.backend_hint == StartupBackendHint::Mlx)
+        || crate::mlx::is_mlx_model_dir(&model);
+    #[cfg(not(target_os = "macos"))]
+    let is_mlx = false;
+
     let runtime_arc = runtime
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("serve mode requires an instance runtime"))?
         .clone();
-    let rpc_handle = launch::start_rpc_server(
-        &runtime_arc,
-        &bin_dir,
-        cli.llama_flavor,
-        startup_rpc_backend_device(cli.device.as_deref(), primary_startup_model.as_ref())?,
-        Some(&model),
-    )
-    .await?;
-    tracing::info!(
-        "rpc-server on 127.0.0.1:{} (pid {}) serving {model_name}",
-        rpc_handle.port,
-        rpc_handle.pid
-    );
+
+    let rpc_handle = if is_mlx {
+        tracing::info!("MLX model detected — skipping rpc-server");
+        None
+    } else {
+        let handle = launch::start_rpc_server(
+            &runtime_arc,
+            &bin_dir,
+            cli.llama_flavor,
+            startup_rpc_backend_device(cli.device.as_deref(), primary_startup_model.as_ref())?,
+            Some(&model),
+        )
+        .await?;
+        tracing::info!(
+            "rpc-server on 127.0.0.1:{} (pid {}) serving {model_name}",
+            handle.port,
+            handle.pid
+        );
+        Some(handle)
+    };
+    let rpc_port = rpc_handle.as_ref().map(|handle| handle.port).unwrap_or(0);
 
     let tunnel_mgr =
-        tunnel::Manager::start(node.clone(), rpc_handle.port, channels.rpc, channels.http).await?;
+        tunnel::Manager::start(node.clone(), rpc_port, channels.rpc, channels.http).await?;
 
     // Election publishes per-model targets
     let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
@@ -1673,7 +1714,6 @@ async fn run_auto(
             plugin_manager.clone(),
             affinity_router.clone(),
         );
-        cs.set_primary_backend("llama".into()).await;
         cs.set_runtime_control(control_tx.clone()).await;
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
         cs.set_nostr_discovery(cli.nostr_discovery).await;
@@ -1742,6 +1782,12 @@ async fn run_auto(
     let force_split = cli.split;
     let llama_flavor = cli.llama_flavor;
     let cb_console_port = console_port;
+    let primary_backend_label =
+        if crate::mlx::mlx_model_dir(&model).is_some_and(crate::mlx::is_mlx_model_dir) {
+            "MLX server"
+        } else {
+            "llama-server"
+        };
     let model_name_for_cb = model_name.clone();
     let model_name_for_election = model_name.clone();
     let node_for_cb = node.clone();
@@ -1770,7 +1816,7 @@ async fn run_auto(
                 node: node2,
                 tunnel_mgr: tunnel_mgr2,
                 ingress_http_port: api_port,
-                rpc_port: rpc_handle.port,
+                rpc_port,
                 bin_dir: bin_dir2,
                 model: model2,
                 model_name: model_name_for_election,
@@ -1811,7 +1857,7 @@ async fn run_auto(
                     eprintln!("  pi:    pi --provider mesh --model {model_name_for_cb}");
                     eprintln!("  goose: GOOSE_PROVIDER=openai OPENAI_HOST={url} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name_for_cb} goose session");
                 } else if is_host {
-                    eprintln!("⏳ Starting llama-server...");
+                    eprintln!("⏳ Starting {primary_backend_label}...");
                 } else {
                     eprintln!("  API: http://localhost:{api_port} (proxied to host)");
                 }
@@ -1833,9 +1879,11 @@ async fn run_auto(
                                 &context_node,
                                 &model_name,
                                 Some(process.context_length),
+                                Some(&process.backend),
                             )
                             .await;
                             if let Some(cs) = console_state {
+                                cs.set_primary_backend(process.backend.clone()).await;
                                 cs.upsert_local_process(local_process_payload(
                                     &model_name,
                                     &process.backend,
@@ -1846,8 +1894,10 @@ async fn run_auto(
                             }
                         }
                         None => {
-                            set_advertised_model_context(&context_node, &model_name, None).await;
+                            set_advertised_model_context(&context_node, &model_name, None, None)
+                                .await;
                             if let Some(cs) = console_state {
+                                cs.clear_primary_backend().await;
                                 cs.remove_local_process(&model_name).await;
                             }
                         }
@@ -1875,27 +1925,13 @@ async fn run_auto(
         // Announce all models to mesh
         let all_names: Vec<String> = startup_models
             .iter()
-            .map(|m| {
-                m.resolved_path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
+            .map(|m| resolved_model_name(&m.resolved_path))
             .collect();
         node.set_models(all_names).await;
         node.regossip().await;
 
         for extra_model in startup_models.iter().skip(1) {
-            let extra_name = {
-                let stem = extra_model
-                    .resolved_path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                router::strip_split_suffix_owned(&stem)
-            };
+            let extra_name = resolved_model_name(&extra_model.resolved_path);
             let extra_node = node.clone();
             let extra_tunnel = tunnel_mgr.clone();
             let extra_bin = bin_dir.clone();
@@ -1969,6 +2005,7 @@ async fn run_auto(
                                         &context_node,
                                         &model_name,
                                         Some(process.context_length),
+                                        Some(&process.backend),
                                     )
                                     .await;
                                     if let Some(cs) = console_state {
@@ -1982,8 +2019,13 @@ async fn run_auto(
                                     }
                                 }
                                 None => {
-                                    set_advertised_model_context(&context_node, &model_name, None)
-                                        .await;
+                                    set_advertised_model_context(
+                                        &context_node,
+                                        &model_name,
+                                        None,
+                                        None,
+                                    )
+                                    .await;
                                     if let Some(cs) = console_state {
                                         cs.remove_local_process(&model_name).await;
                                     }
@@ -2049,7 +2091,10 @@ async fn run_auto(
                     api::RuntimeControlRequest::Load { spec, resp } => {
                         let mut assigned_runtime_model: Option<String> = None;
                         let result = async {
-                            let model_path = resolve_model(&PathBuf::from(&spec)).await?;
+                            let model_path = resolve_model(
+                                &PathBuf::from(&spec),
+                            )
+                            .await?;
                             let runtime_model_name = resolved_model_name(&model_path);
                             let already_loaded = managed_models.contains_key(&runtime_model_name)
                                 || runtime_models.contains_key(&runtime_model_name);
@@ -2077,6 +2122,7 @@ async fn run_auto(
                                 &node,
                                 &loaded_name,
                                 Some(handle.context_length),
+                                Some(&handle.backend),
                             )
                             .await;
                             advertise_model_ready(&node, &primary_model_name, &loaded_name).await;
@@ -2222,7 +2268,9 @@ async fn run_auto(
 
     node.set_serving_models(Vec::new()).await;
     node.set_hosted_models(Vec::new()).await;
-    rpc_handle.shutdown().await;
+    if let Some(handle) = rpc_handle {
+        handle.shutdown().await;
+    }
     if let Some(rt) = runtime {
         let outstanding_refs = std::sync::Arc::strong_count(&rt);
         if outstanding_refs == 1 {
@@ -2519,15 +2567,7 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
     let clean_name = router::strip_split_suffix_owned(model_name);
     let mut all: Vec<String> = resolved_models
         .iter()
-        .map(|m| {
-            let stem = m
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            // Strip split GGUF suffix: "Model-00001-of-00004" → "Model"
-            router::strip_split_suffix_owned(&stem)
-        })
+        .map(|m| resolved_model_name(m))
         .collect();
     if !all.contains(&clean_name) {
         all.insert(0, clean_name);
@@ -2847,6 +2887,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(8192),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: specs[0].gpu_id.clone(),
             pinned_gpu: None,
         }];
@@ -2901,6 +2942,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: None,
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: specs[0].gpu_id.clone(),
             pinned_gpu: None,
         }];
@@ -2927,6 +2969,7 @@ mod tests {
             model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
             mmproj_ref: None,
             ctx_size: None,
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: None,
             config_owned: true,
         }];
@@ -2935,6 +2978,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: None,
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: None,
             pinned_gpu: None,
         }];
@@ -2961,6 +3005,7 @@ mod tests {
             model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
             mmproj_ref: None,
             ctx_size: Some(4096),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("uuid:GPU-123".into()),
             config_owned: true,
         }];
@@ -2969,6 +3014,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(4096),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("uuid:GPU-123".into()),
             pinned_gpu: None,
         }];
@@ -2996,6 +3042,7 @@ mod tests {
             model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
             mmproj_ref: None,
             ctx_size: Some(4096),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("uuid:GPU-123".into()),
             config_owned: true,
         }];
@@ -3004,6 +3051,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(4096),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("uuid:GPU-123".into()),
             pinned_gpu: None,
         }];
@@ -3030,6 +3078,7 @@ mod tests {
             model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
             mmproj_ref: None,
             ctx_size: None,
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("pci:0000:b3:00.0".into()),
             config_owned: true,
         }];
@@ -3038,6 +3087,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: None,
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("pci:0000:b3:00.0".into()),
             pinned_gpu: None,
         }];
@@ -3066,6 +3116,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(8192),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("pci:0000:65:00.0".into()),
             pinned_gpu: Some(StartupPinnedGpuTarget {
                 index: 0,
@@ -3088,6 +3139,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(8192),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("pci:0000:65:00.0".into()),
             pinned_gpu: Some(StartupPinnedGpuTarget {
                 index: 0,
@@ -3109,6 +3161,7 @@ mod tests {
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
             mmproj_path: None,
             ctx_size: Some(8192),
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: Some("pci:0000:65:00.0".into()),
             pinned_gpu: Some(StartupPinnedGpuTarget {
                 index: 0,
@@ -3145,6 +3198,7 @@ mod tests {
             model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
             mmproj_ref: None,
             ctx_size: None,
+            backend_hint: StartupBackendHint::Auto,
             gpu_id: None,
             config_owned: false,
         }];

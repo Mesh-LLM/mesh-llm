@@ -177,10 +177,17 @@ pub async fn run_model_download(
 ) -> Result<()> {
     let formatter = models_formatter(json_output);
     let details = show_exact_model(model_ref).await.ok();
-    let download_ref = details
-        .as_ref()
-        .map(|d| d.exact_ref.as_str())
-        .unwrap_or(model_ref);
+    let explicit_file_ref = model_ref.ends_with(".gguf")
+        || model_ref.ends_with(".safetensors")
+        || model_ref.ends_with(".safetensors.index.json");
+    let download_ref = if explicit_file_ref {
+        model_ref
+    } else {
+        details
+            .as_ref()
+            .map(|d| d.exact_ref.as_str())
+            .unwrap_or(model_ref)
+    };
     let path = download_exact_ref(download_ref).await?;
     if !include_draft {
         return formatter.render_download(model_ref, &path, details.as_ref(), false, None);

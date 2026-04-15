@@ -230,6 +230,17 @@ mod tests {
         format!("test-{}-{}", tag, rand::random::<u64>())
     }
 
+    fn is_headless_keychain_error(err: &CryptoError) -> bool {
+        match err {
+            CryptoError::KeychainUnavailable { reason }
+            | CryptoError::KeychainAccessDenied { reason } => {
+                reason.contains("User interaction is not allowed.")
+                    || reason.contains("User interaction is not allowed")
+            }
+            _ => false,
+        }
+    }
+
     #[test]
     #[serial]
     fn round_trip_set_get_delete() {
@@ -240,14 +251,41 @@ mod tests {
         let account = test_account("round-trip");
         let secret = "correct horse battery staple";
 
-        set_secret(KEYCHAIN_SERVICE, &account, secret).unwrap();
-        let got = get_secret(KEYCHAIN_SERVICE, &account).unwrap();
+        if let Err(err) = set_secret(KEYCHAIN_SERVICE, &account, secret) {
+            if is_headless_keychain_error(&err) {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            panic!("unexpected keychain set failure: {err}");
+        }
+        let got = match get_secret(KEYCHAIN_SERVICE, &account) {
+            Ok(value) => value,
+            Err(err) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            Err(err) => panic!("unexpected keychain get failure: {err}"),
+        };
         assert_eq!(got.as_deref(), Some(secret));
 
-        let removed = delete_secret(KEYCHAIN_SERVICE, &account).unwrap();
+        let removed = match delete_secret(KEYCHAIN_SERVICE, &account) {
+            Ok(value) => value,
+            Err(err) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            Err(err) => panic!("unexpected keychain delete failure: {err}"),
+        };
         assert!(removed);
 
-        let after = get_secret(KEYCHAIN_SERVICE, &account).unwrap();
+        let after = match get_secret(KEYCHAIN_SERVICE, &account) {
+            Ok(value) => value,
+            Err(err) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            Err(err) => panic!("unexpected keychain get failure after delete: {err}"),
+        };
         assert_eq!(after, None);
     }
 
@@ -283,10 +321,29 @@ mod tests {
             return;
         }
         let account = test_account("overwrite");
-        set_secret(KEYCHAIN_SERVICE, &account, "first").unwrap();
-        set_secret(KEYCHAIN_SERVICE, &account, "second").unwrap();
+        if let Err(err) = set_secret(KEYCHAIN_SERVICE, &account, "first") {
+            if is_headless_keychain_error(&err) {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            panic!("unexpected first keychain set failure: {err}");
+        }
+        if let Err(err) = set_secret(KEYCHAIN_SERVICE, &account, "second") {
+            if is_headless_keychain_error(&err) {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            panic!("unexpected overwrite keychain set failure: {err}");
+        }
 
-        let got = get_secret(KEYCHAIN_SERVICE, &account).unwrap();
+        let got = match get_secret(KEYCHAIN_SERVICE, &account) {
+            Ok(value) => value,
+            Err(err) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                return;
+            }
+            Err(err) => panic!("unexpected overwrite keychain get failure: {err}"),
+        };
         assert_eq!(got.as_deref(), Some("second"));
 
         delete_secret(KEYCHAIN_SERVICE, &account).ok();

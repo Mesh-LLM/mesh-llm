@@ -4,6 +4,7 @@ pub mod gguf;
 pub mod inventory;
 pub mod local;
 mod maintenance;
+pub mod prompt;
 mod resolve;
 pub mod search;
 pub mod topology;
@@ -20,6 +21,7 @@ pub use local::{
     scan_local_models,
 };
 pub use maintenance::{run_update, warn_about_updates_for_paths};
+pub use prompt::{infer_prompt_behavior_for_dir, ModelPromptBehavior};
 pub(crate) use resolve::resolve_model_spec_with_progress;
 pub use resolve::{
     download_exact_ref, find_catalog_model_exact, installed_model_capabilities,

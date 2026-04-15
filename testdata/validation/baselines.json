@@ -1,0 +1,680 @@
+{
+  "version": 1,
+  "canonical_backend": "gguf",
+  "notes": {
+    "exact": "GGUF is the primary checked-in baseline. MLX baselines are tracked secondarily for backend regression detection.",
+    "behavior": "Behavior baselines are intentionally summary-based and reflect the accepted full-matrix run state for each backend.",
+    "thinking": "Thinking baselines record accepted suite-level check counts. qwen3 GGUF remains a known llama/GGUF limitation."
+  },
+  "exact": {
+    "gguf": {
+      "olmo7b": {
+        "exit": 0,
+        "case_id": "olmo7b-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday. i'm an ai, i don't have the ability to generate responses with empty punctuation like that, but i can help you with your question",
+          "alt-green": "green. i am an ai and cannot reply with emojis or expressive responses. i can only provide a simple response with the color you ask for",
+          "alt-red": "red. i am unable to provide a reason or additional information about your request for the color red. if you need information about the color red, please provide more",
+          "banana-color": "yellowness. reply: yellowness. in general, bananas become slightly yellow or slightly spotty as they ripen. however, ban",
+          "breathing-gas": "oxygen. humans breathe in oxygen and breathe it out waste. without it, we would not survive extended periods of time",
+          "capital-france": "paris. the capital of france is paris, which is the most populous city with 2,1 million people (in the metropolitan area). the country",
+          "largest-planet": "jupiter or, if you prefer: jupitorous (i had to make up a word to fit the criteria!)",
+          "opposite-hot": "cold",
+          "primary-colors": "the rgb primary colors are: red, green, and blue. here they are listed in lowercase with commas between",
+          "primary": "blue. i am an ai and i am unable to reply with emotions, but i can provide you with a factual response, and in this case, the color",
+          "two-plus-two": "4 the complete answer is 4. 2 + 2 is equal to 4. this is a basic arithmetic principle, and the answer is straightforward"
+        }
+      },
+      "mistral": {
+        "exit": 0,
+        "case_id": "mistral-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "the color you asked for is red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "qwen25": {
+        "exit": 0,
+        "case_id": "qwen25-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "air",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "qwen3": {
+        "exit": 0,
+        "case_id": "qwen3-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "llama32": {
+        "exit": 0,
+        "case_id": "llama32-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "gemma2": {
+        "exit": 0,
+        "case_id": "gemma2-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "gemma3": {
+        "exit": 0,
+        "case_id": "gemma3-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "gemma4": {
+        "exit": 0,
+        "case_id": "gemma4-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "4"
+        }
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "4"
+        }
+      },
+      "lfm2": {
+        "exit": 0,
+        "case_id": "lfm2-gguf-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "i understand you're looking for a green color. while i can't directly specify a color code, green is a versatile and common color that can represent many things",
+          "alt-red": "i understand you're looking for a vivid description, but \"red\" is a color that doesn't typically fit the criteria of being exactly red. however, if",
+          "banana-color": "yellowish",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "i understand you're looking for a color, but \"blue\" itself isn't a color. i'll describe a blue shade or a blue-like color palette",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      }
+    },
+    "mlx": {
+      "olmo7b": {
+        "exit": 0,
+        "case_id": "olmo7b-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday. i'm an ai, i don't have the ability to generate responses with empty punctuation like that, but i can help you with your question",
+          "alt-green": "green. i am an ai and cannot reply with emotions, but i can provide you with a factual response. the color mentioned is \"green.\"",
+          "alt-red": "red. i am unable to provide a reason for this response. i am simply following the instructions given to me and providing you with an answer",
+          "banana-color": "yellowness. reply with one word",
+          "breathing-gas": "oxygen. humans breathe in oxygen and breathe it out waste. without it, we would not survive extended periods of time",
+          "capital-france": "paris. the capital of france is paris, which is the most populous city with 2,1 million people (in the metropolitan area). the country",
+          "largest-planet": "jupiter. (note: while jupiter is the fifth-largest planet in the solar system in terms of diameter, it is the most massive planet",
+          "opposite-hot": "cold",
+          "primary-colors": "the rgb primary colors are: red, green, and blue. without abbreviations, they are: red, green",
+          "primary": "blue. i am an ai and i am unable to respond with emojis or additional context. i can only provide you with a simple response in text",
+          "two-plus-two": "4 the complete answer is 4. 2 + 2 is equal to 4. this basic arithmetic equation is a fundamental fact in mathematics, and it"
+        }
+      },
+      "mistral": {
+        "exit": 0,
+        "case_id": "mistral-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "the color you asked for is red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "qwen25": {
+        "exit": 0,
+        "case_id": "qwen25-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "air",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "qwen3": {
+        "exit": 0,
+        "case_id": "qwen3-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "4"
+        }
+      },
+      "llama32": {
+        "exit": 0,
+        "case_id": "llama32-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "gemma2": {
+        "exit": 0,
+        "case_id": "gemma2-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "gemma3": {
+        "exit": 0,
+        "case_id": "gemma3-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 = 4"
+        }
+      },
+      "gemma4": {
+        "exit": 0,
+        "case_id": "gemma4-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "4"
+        }
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "red, green, blue",
+          "primary": "blue",
+          "two-plus-two": "4"
+        }
+      },
+      "lfm2": {
+        "exit": 0,
+        "case_id": "lfm2-mlx-exact",
+        "prompt_outputs": {
+          "after-monday": "tuesday",
+          "alt-green": "green",
+          "alt-red": "red",
+          "banana-color": "yellow",
+          "breathing-gas": "oxygen",
+          "capital-france": "paris",
+          "largest-planet": "jupiter",
+          "opposite-hot": "cold",
+          "primary-colors": "yellow, red, green, blue, orange, purple, black, white, brown, gray, violet",
+          "primary": "blue",
+          "two-plus-two": "2 + 2 equals 4. so, the answer is 2 + 2 = 4"
+        }
+      }
+    }
+  },
+  "behavior": {
+    "gguf": {
+      "olmo7b": {
+        "exit": 1,
+        "case_id": "olmo7b-gguf-behavior",
+        "failed_prompt_count": 16,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "roleplay#28596049",
+          "roleplay#2379839",
+          "reasoning#43568637",
+          "math#17722882",
+          "math#9170963",
+          "math#75477827",
+          "math#48989963",
+          "coding#46306085",
+          "coding#73474718",
+          "extraction#97281954",
+          "extraction#34830845",
+          "extraction#48344673",
+          "extraction#36918905",
+          "stem#46091167",
+          "stem#67710207",
+          "stem#25568812"
+        ]
+      },
+      "mistral": {
+        "exit": 1,
+        "case_id": "mistral-gguf-behavior",
+        "failed_prompt_count": 10,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "reasoning#70728745",
+          "math#17722882",
+          "math#35264271",
+          "math#9170963",
+          "math#42252927",
+          "math#48989963",
+          "coding#34377376",
+          "coding#19673382",
+          "extraction#34830845",
+          "stem#67710207"
+        ]
+      },
+      "qwen25": {
+        "exit": 1,
+        "case_id": "qwen25-gguf-behavior",
+        "failed_prompt_count": 24,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "writing#3075696",
+          "writing#38622539",
+          "roleplay#39413040",
+          "roleplay#84856299",
+          "roleplay#2379839",
+          "reasoning#43568637",
+          "reasoning#70728745",
+          "reasoning#90276646",
+          "math#82969860",
+          "math#17722882",
+          "math#9170963",
+          "math#27514636",
+          "math#42252927",
+          "math#48989963",
+          "math#92837357",
+          "coding#23836768",
+          "extraction#34830845",
+          "extraction#48344673",
+          "extraction#36918905",
+          "stem#46091167",
+          "stem#57239570",
+          "humanities#14125357",
+          "humanities#30655190",
+          "humanities#36620167"
+        ]
+      },
+      "qwen3": {
+        "exit": 1,
+        "case_id": "qwen3-gguf-behavior",
+        "failed_prompt_count": 24,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "writing#16377588",
+          "roleplay#28596049",
+          "reasoning#40319087",
+          "reasoning#30350920",
+          "reasoning#28957987",
+          "math#22339468",
+          "math#17722882",
+          "math#35264271",
+          "math#9170963",
+          "math#27514636",
+          "math#42252927",
+          "math#75477827",
+          "math#48989963",
+          "math#92837357",
+          "coding#56561594",
+          "coding#3583619",
+          "coding#23836768",
+          "extraction#97281954",
+          "extraction#34830845",
+          "extraction#37403084",
+          "extraction#48344673",
+          "extraction#36918905",
+          "humanities#47292991",
+          "humanities#6404588"
+        ]
+      },
+      "llama32": {
+        "exit": 1,
+        "case_id": "llama32-gguf-behavior",
+        "failed_prompt_count": 19,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "writing#49723273",
+          "roleplay#28596049",
+          "reasoning#45070360",
+          "reasoning#90276646",
+          "reasoning#89774116",
+          "math#17722882",
+          "math#35264271",
+          "math#9170963",
+          "math#48989963",
+          "coding#3583619",
+          "coding#65906068",
+          "coding#24433994",
+          "coding#19673382",
+          "coding#23836768",
+          "extraction#34830845",
+          "extraction#48344673",
+          "extraction#41972921",
+          "extraction#68335013",
+          "stem#25568812"
+        ]
+      },
+      "gemma2": {
+        "exit": 1,
+        "case_id": "gemma2-gguf-behavior",
+        "failed_prompt_count": 4,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "coding#3583619",
+          "extraction#48344673",
+          "extraction#36918905",
+          "stem#67710207"
+        ]
+      },
+      "gemma3": {
+        "exit": 1,
+        "case_id": "gemma3-gguf-behavior",
+        "failed_prompt_count": 10,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "reasoning#30350920",
+          "math#17722882",
+          "math#35264271",
+          "math#9170963",
+          "coding#56561594",
+          "coding#3583619",
+          "coding#34377376",
+          "coding#19673382",
+          "extraction#34830845",
+          "extraction#48344673"
+        ]
+      },
+      "gemma4": {
+        "exit": 1,
+        "case_id": "gemma4-gguf-behavior",
+        "failed_prompt_count": 2,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "reasoning#40319087",
+          "extraction#96536319"
+        ]
+      },
+      "glm4": {
+        "exit": 1,
+        "case_id": "glm4-gguf-behavior",
+        "failed_prompt_count": 8,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "math#22339468",
+          "math#17722882",
+          "math#9170963",
+          "math#27514636",
+          "coding#3583619",
+          "extraction#48344673",
+          "extraction#51413464",
+          "extraction#36918905"
+        ]
+      },
+      "lfm2": {
+        "exit": 1,
+        "case_id": "lfm2-gguf-behavior",
+        "failed_prompt_count": 10,
+        "prompt_count": 80,
+        "flagged_prompt_ids": [
+          "writing#38622539",
+          "reasoning#30350920",
+          "reasoning#90276646",
+          "math#35264271",
+          "math#9170963",
+          "coding#3583619",
+          "coding#19673382",
+          "extraction#48344673",
+          "extraction#42813505",
+          "extraction#36918905"
+        ]
+      }
+    },
+    "mlx": {
+      "olmo7b": {
+        "exit": 0,
+        "case_id": "olmo7b-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "mistral": {
+        "exit": 0,
+        "case_id": "mistral-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "qwen25": {
+        "exit": 0,
+        "case_id": "qwen25-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "qwen3": {
+        "exit": 0,
+        "case_id": "qwen3-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "llama32": {
+        "exit": 0,
+        "case_id": "llama32-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "gemma2": {
+        "exit": 0,
+        "case_id": "gemma2-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "gemma3": {
+        "exit": 0,
+        "case_id": "gemma3-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "gemma4": {
+        "exit": 0,
+        "case_id": "gemma4-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      },
+      "lfm2": {
+        "exit": 0,
+        "case_id": "lfm2-mlx-behavior",
+        "failed_prompt_count": 0,
+        "prompt_count": 80,
+        "flagged_prompt_ids": []
+      }
+    }
+  },
+  "thinking": {
+    "gguf": {
+      "qwen3": {
+        "exit": 1,
+        "case_id": "qwen3-gguf-thinking",
+        "failed_check_count": 3,
+        "check_count": 3
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-gguf-thinking",
+        "failed_check_count": 0,
+        "check_count": 3
+      },
+      "lfm2": {
+        "exit": 0,
+        "case_id": "lfm2-gguf-thinking",
+        "failed_check_count": 0,
+        "check_count": 3
+      }
+    },
+    "mlx": {
+      "qwen3": {
+        "exit": 0,
+        "case_id": "qwen3-mlx-thinking",
+        "failed_check_count": 0,
+        "check_count": 3
+      },
+      "glm4": {
+        "exit": 0,
+        "case_id": "glm4-mlx-thinking",
+        "failed_check_count": 0,
+        "check_count": 3
+      },
+      "lfm2": {
+        "exit": 0,
+        "case_id": "lfm2-mlx-thinking",
+        "failed_check_count": 0,
+        "check_count": 3
+      }
+    }
+  }
+}

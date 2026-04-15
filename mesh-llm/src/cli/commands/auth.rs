@@ -785,6 +785,47 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    fn is_headless_keychain_error(err: &crate::crypto::CryptoError) -> bool {
+        match err {
+            crate::crypto::CryptoError::KeychainUnavailable { reason }
+            | crate::crypto::CryptoError::KeychainAccessDenied { reason } => {
+                reason.contains("User interaction is not allowed.")
+                    || reason.contains("User interaction is not allowed")
+            }
+            _ => false,
+        }
+    }
+
+    fn is_headless_keychain_anyhow(err: &anyhow::Error) -> bool {
+        err.chain().any(|cause| {
+            cause
+                .downcast_ref::<crate::crypto::CryptoError>()
+                .is_some_and(is_headless_keychain_error)
+        })
+    }
+
+    fn keychain_set_or_skip(account: &str, secret: &str) -> bool {
+        match crate::crypto::keychain_set(KEYCHAIN_SERVICE, account, secret) {
+            Ok(()) => true,
+            Err(err) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                false
+            }
+            Err(err) => panic!("unexpected keychain set failure: {err}"),
+        }
+    }
+
+    fn keychain_get_or_skip(account: &str) -> Option<Option<String>> {
+        match crate::crypto::keychain_get(KEYCHAIN_SERVICE, account) {
+            Ok(value) => Some(value),
+            Err(err) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                None
+            }
+            Err(err) => panic!("unexpected keychain get failure: {err}"),
+        }
+    }
+
     #[test]
     fn defaults_to_keychain_for_new_keystore_when_available() {
         assert!(should_default_to_keychain(false, false, true));
@@ -832,7 +873,9 @@ mod tests {
 
         let account = crate::crypto::owner_keychain_account_for_path(&bad_path);
         let previous_secret = "previous-unlock-secret-do-not-lose";
-        crate::crypto::keychain_set(KEYCHAIN_SERVICE, &account, previous_secret).unwrap();
+        if !keychain_set_or_skip(&account, previous_secret) {
+            return;
+        }
 
         let result = run_init(Some(bad_path.clone()), true, false, true);
         assert!(
@@ -840,7 +883,9 @@ mod tests {
             "run_init must fail when save cannot succeed"
         );
 
-        let restored = crate::crypto::keychain_get(KEYCHAIN_SERVICE, &account).unwrap();
+        let Some(restored) = keychain_get_or_skip(&account) else {
+            return;
+        };
         assert_eq!(
             restored.as_deref(),
             Some(previous_secret),
@@ -875,7 +920,9 @@ mod tests {
             "run_init must fail when save cannot succeed"
         );
 
-        let residual = crate::crypto::keychain_get(KEYCHAIN_SERVICE, &account).unwrap();
+        let Some(residual) = keychain_get_or_skip(&account) else {
+            return;
+        };
         assert_eq!(
             residual, None,
             "a fresh init failure must leave no keychain entry behind"
@@ -897,8 +944,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("owner-keystore.json");
 
-        run_init(Some(path.clone()), false, false, false)
-            .expect("auth init should default to keychain when available");
+        if let Err(err) = run_init(Some(path.clone()), false, false, false) {
+            if is_headless_keychain_anyhow(&err) {
+                eprintln!("headless keychain access denied, skipping");
+                std::fs::remove_dir_all(&dir).ok();
+                return;
+            }
+            panic!("auth init should default to keychain when available: {err}");
+        }
 
         assert!(path.exists(), "keystore file should exist");
         let info = keystore_metadata(&path).unwrap();
@@ -908,13 +961,25 @@ mod tests {
         );
 
         let account = crate::crypto::owner_keychain_account_for_path(&path);
-        let stored = crate::crypto::keychain_get(KEYCHAIN_SERVICE, &account).unwrap();
+        let Some(stored) = keychain_get_or_skip(&account) else {
+            std::fs::remove_dir_all(&dir).ok();
+            return;
+        };
         assert!(
             stored.is_some(),
             "keychain must have a passphrase entry for this keystore path"
         );
 
-        let kp = load_owner_keypair_from_keychain(&path).expect("load via keychain must succeed");
+        let kp = match load_owner_keypair_from_keychain(&path) {
+            Ok(value) => value,
+            Err(OwnerKeychainLoadError::Crypto(err)) if is_headless_keychain_error(&err) => {
+                eprintln!("headless keychain access denied, skipping");
+                crate::crypto::keychain_delete(KEYCHAIN_SERVICE, &account).ok();
+                std::fs::remove_dir_all(&dir).ok();
+                return;
+            }
+            Err(err) => panic!("load via keychain must succeed: {err:?}"),
+        };
         assert_eq!(kp.owner_id(), info.owner_id);
 
         crate::crypto::keychain_delete(KEYCHAIN_SERVICE, &account).ok();

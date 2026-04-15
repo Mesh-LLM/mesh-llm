@@ -44,7 +44,7 @@ pub enum ModelsCommand {
     },
     /// Show details for one exact model reference.
     Show {
-        /// Exact catalog id, Hugging Face ref, or direct URL.
+        /// Exact catalog id, Hugging Face ref, repo shorthand, or direct URL.
         model: String,
         /// Emit JSON output.
         #[arg(long)]
@@ -52,7 +52,7 @@ pub enum ModelsCommand {
     },
     /// Download one exact model reference.
     Download {
-        /// Exact catalog id, Hugging Face ref, or direct URL.
+        /// Exact catalog id, Hugging Face ref, repo shorthand, or direct URL.
         model: String,
         /// Also download the recommended draft model for speculative decoding.
         #[arg(long)]

@@ -47,6 +47,12 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 hf-hub = { git = "https://github.com/i386/hf-hub.git", rev = "d938c23e74bc7d8a3919843daa8065eb8f10fdf8", default-features = false, features = ["ureq", "tokio", "rustls-tls", "cache-manager"] }
 unicode-width = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+mlx-rs = { version = "0.25", features = ["safetensors"] }
+minijinja = { version = "2", features = ["json", "loop_controls"] }
+tokenizers = "0.21"
+
 [dev-dependencies]
 axum = "0.8"
 serial_test = "3"
