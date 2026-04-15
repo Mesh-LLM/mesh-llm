@@ -115,9 +115,14 @@ fn local_gguf_paths() -> Vec<PathBuf> {
         }
 
         let cache = huggingface_hub_cache();
-        if let Ok(cache_info) = hf_hub::cache::CacheInfo::scan_dir(Some(cache.path())) {
+        let cache_info = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()
+            .and_then(|runtime| runtime.block_on(hf_hub::cache::scan_cache_dir(&cache)).ok());
+        if let Some(cache_info) = cache_info {
             for repo in &cache_info.repos {
-                if !repo.cache_id().starts_with("model/") {
+                if repo.repo_type != hf_hub::RepoType::Model {
                     continue;
                 }
                 for revision in &repo.revisions {

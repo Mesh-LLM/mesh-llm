@@ -2,10 +2,11 @@ use super::local::HuggingFaceModelIdentity;
 use super::ModelCapabilities;
 use super::{capabilities, catalog, find_model_path, format_size_bytes};
 use anyhow::{anyhow, bail, Context, Result};
-use hf_hub::{Repo, RepoType};
+use hf_hub::{ListModelsParams, RepoInfo, RepoInfoParams};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tokio_stream::StreamExt;
 
 #[derive(Clone, Debug)]
 pub struct ModelDetails {
@@ -259,20 +260,27 @@ pub async fn resolve_huggingface_model_identity(
             };
             let revision = revision.unwrap_or("main");
             let api = super::build_hf_tokio_api(false)?;
+            let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
             let detail = api
-                .repo(Repo::with_revision(
-                    repo.to_string(),
-                    RepoType::Model,
-                    revision.to_string(),
-                ))
-                .info()
+                .model(owner, name)
+                .info(
+                    &RepoInfoParams::builder()
+                        .revision(revision.to_string())
+                        .build(),
+                )
                 .await
                 .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision}"))?;
+            let RepoInfo::Model(detail) = detail else {
+                return Ok(None);
+            };
             Ok(Some(HuggingFaceModelIdentity {
                 repo_id: repo.to_string(),
-                revision: detail.sha.clone(),
+                revision: detail.sha.clone().unwrap_or_else(|| revision.to_string()),
                 file: file.to_string(),
-                canonical_ref: format!("{repo}@{}/{file}", detail.sha),
+                canonical_ref: format!(
+                    "{repo}@{}/{file}",
+                    detail.sha.as_deref().unwrap_or(revision)
+                ),
                 local_file_name: Path::new(file)
                     .file_name()
                     .and_then(|value| value.to_str())
@@ -288,19 +296,27 @@ pub async fn resolve_huggingface_model_identity(
             let resolved_file = resolve_huggingface_file(&repo, revision.as_deref(), &file).await?;
             let revision_ref = revision.as_deref().unwrap_or("main");
             let api = super::build_hf_tokio_api(false)?;
+            let (owner, name) = repo.split_once('/').unwrap_or(("", repo.as_str()));
             let detail = api
-                .repo(Repo::with_revision(
-                    repo.clone(),
-                    RepoType::Model,
-                    revision_ref.to_string(),
-                ))
-                .info()
+                .model(owner, name)
+                .info(
+                    &RepoInfoParams::builder()
+                        .revision(revision_ref.to_string())
+                        .build(),
+                )
                 .await
                 .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision_ref}"))?;
+            let RepoInfo::Model(detail) = detail else {
+                return Ok(None);
+            };
+            let resolved_revision = detail
+                .sha
+                .clone()
+                .unwrap_or_else(|| revision_ref.to_string());
             Ok(Some(HuggingFaceModelIdentity {
                 repo_id: repo.clone(),
-                revision: detail.sha.clone(),
-                canonical_ref: format!("{}@{}/{}", repo, detail.sha, resolved_file),
+                revision: resolved_revision.clone(),
+                canonical_ref: format!("{}@{}/{}", repo, resolved_revision, resolved_file),
                 local_file_name: Path::new(&resolved_file)
                     .file_name()
                     .and_then(|value| value.to_str())
@@ -313,19 +329,27 @@ pub async fn resolve_huggingface_model_identity(
             if let Some((repo, revision, file)) = parse_hf_resolve_url(&url) {
                 let revision_ref = revision.as_deref().unwrap_or("main");
                 let api = super::build_hf_tokio_api(false)?;
+                let (owner, name) = repo.split_once('/').unwrap_or(("", repo.as_str()));
                 let detail = api
-                    .repo(Repo::with_revision(
-                        repo.clone(),
-                        RepoType::Model,
-                        revision_ref.to_string(),
-                    ))
-                    .info()
+                    .model(owner, name)
+                    .info(
+                        &RepoInfoParams::builder()
+                            .revision(revision_ref.to_string())
+                            .build(),
+                    )
                     .await
                     .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision_ref}"))?;
+                let RepoInfo::Model(detail) = detail else {
+                    return Ok(None);
+                };
+                let resolved_revision = detail
+                    .sha
+                    .clone()
+                    .unwrap_or_else(|| revision_ref.to_string());
                 return Ok(Some(HuggingFaceModelIdentity {
                     repo_id: repo.clone(),
-                    revision: detail.sha.clone(),
-                    canonical_ref: format!("{}@{}/{}", repo, detail.sha, file),
+                    revision: resolved_revision.clone(),
+                    canonical_ref: format!("{}@{}/{}", repo, resolved_revision, file),
                     local_file_name: Path::new(&file)
                         .file_name()
                         .and_then(|value| value.to_str())
@@ -357,18 +381,24 @@ where
 
     let api = super::build_hf_tokio_api(false)?;
     let revision_ref = revision.as_deref().unwrap_or("main");
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo.as_str()));
     let detail = api
-        .repo(Repo::with_revision(
-            repo.clone(),
-            RepoType::Model,
-            revision_ref.to_string(),
-        ))
-        .info()
+        .model(owner, name)
+        .info(
+            &RepoInfoParams::builder()
+                .revision(revision_ref.to_string())
+                .build(),
+        )
         .await
         .with_context(|| format!("Fetch Hugging Face repo {repo}"))?;
+    let RepoInfo::Model(detail) = detail else {
+        return Ok(Some(Vec::new()));
+    };
 
     let sibling_entries: Vec<(String, Option<u64>)> = detail
         .siblings
+        .clone()
+        .unwrap_or_default()
         .iter()
         .map(|sibling| (sibling.rfilename.clone(), sibling.size))
         .collect();
@@ -842,15 +872,19 @@ fn select_strong_repo_hit(query: &str, repo_ids: &[String]) -> Option<String> {
 
 async fn discover_hf_repo_for_bare_name(name: &str) -> Result<Option<String>> {
     let api = super::build_hf_tokio_api(false)?;
-    let rows = api
-        .search(RepoType::Model)
-        .with_query(name)
-        .with_filter("gguf")
-        .with_limit(20)
-        .run()
-        .await
+    let params = ListModelsParams::builder()
+        .search(name.to_string())
+        .filter("gguf".to_string())
+        .limit(20_usize)
+        .build();
+    let stream = api
+        .list_models(&params)
         .with_context(|| format!("Search Hugging Face for '{name}'"))?;
-    let repo_ids: Vec<String> = rows.into_iter().map(|repo| repo.id).collect();
+    tokio::pin!(stream);
+    let mut repo_ids = Vec::new();
+    while let Some(repo) = stream.next().await {
+        repo_ids.push(repo?.id);
+    }
     Ok(select_strong_repo_hit(name, &repo_ids))
 }
 
@@ -1168,17 +1202,23 @@ async fn resolve_huggingface_file(
 
     let revision = revision.unwrap_or("main");
     let api = super::build_hf_tokio_api(false)?;
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
     let detail = api
-        .repo(Repo::with_revision(
-            repo.to_string(),
-            RepoType::Model,
-            revision.to_string(),
-        ))
-        .info()
+        .model(owner, name)
+        .info(
+            &RepoInfoParams::builder()
+                .revision(revision.to_string())
+                .build(),
+        )
         .await
         .with_context(|| format!("Fetch Hugging Face repo {repo}@{revision}"))?;
+    let RepoInfo::Model(detail) = detail else {
+        bail!("Expected model repo info for {repo}@{revision}");
+    };
     let sibling_entries: Vec<(String, Option<u64>)> = detail
         .siblings
+        .clone()
+        .unwrap_or_default()
         .iter()
         .map(|sibling| (sibling.rfilename.clone(), sibling.size))
         .collect();
@@ -1271,7 +1311,7 @@ async fn remote_size_label(url: &str) -> Option<String> {
 }
 
 pub(super) async fn remote_hf_size_label_with_api(
-    _api: &hf_hub::api::tokio::Api,
+    _api: &hf_hub::HFClient,
     repo: &str,
     revision: Option<&str>,
     file: &str,

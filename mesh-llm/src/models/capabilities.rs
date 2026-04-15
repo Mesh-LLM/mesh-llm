@@ -1,6 +1,6 @@
 use super::build_hf_tokio_api;
 use super::catalog;
-use hf_hub::{Repo, RepoType};
+use hf_hub::{RepoDownloadFileParams, RepoType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -660,13 +660,17 @@ async fn fetch_remote_metadata_jsons(repo: &str, revision: Option<&str>) -> Vec<
 
 async fn fetch_remote_json(repo: &str, revision: Option<&str>, file: &str) -> Option<Value> {
     let api = build_hf_tokio_api(false).ok()?;
-    let repo = match revision {
-        Some(revision) => {
-            Repo::with_revision(repo.to_string(), RepoType::Model, revision.to_string())
-        }
-        None => Repo::new(repo.to_string(), RepoType::Model),
-    };
-    let path = api.repo(repo).get(file).await.ok()?;
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo));
+    let path = api
+        .repo(RepoType::Model, owner, name)
+        .download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(file.to_string())
+                .revision(revision.unwrap_or("main").to_string())
+                .build(),
+        )
+        .await
+        .ok()?;
     let text = tokio::fs::read_to_string(path).await.ok()?;
     serde_json::from_str(&text).ok()
 }

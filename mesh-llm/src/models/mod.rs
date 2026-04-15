@@ -9,15 +9,13 @@ pub mod search;
 pub mod topology;
 
 use anyhow::{Context, Result};
-use hf_hub::api::sync::{Api, ApiBuilder};
-use hf_hub::api::tokio::{Api as TokioApi, ApiBuilder as TokioApiBuilder};
+use hf_hub::{HFClient, HFClientBuilder, HFClientSync};
 
 pub use capabilities::{CapabilityLevel, ModelCapabilities};
 pub use inventory::{scan_local_inventory_snapshot_with_progress, LocalModelInventorySnapshot};
 pub use local::{
-    find_mmproj_path, find_model_path, huggingface_hub_cache, huggingface_hub_cache_dir,
-    huggingface_identity_for_path, mesh_llm_cache_dir, resolve_mmproj_path, scan_installed_models,
-    scan_local_models,
+    find_mmproj_path, find_model_path, huggingface_hub_cache_dir, huggingface_identity_for_path,
+    mesh_llm_cache_dir, resolve_mmproj_path, scan_installed_models, scan_local_models,
 };
 pub use maintenance::{run_update, warn_about_updates_for_paths};
 pub(crate) use resolve::resolve_model_spec_with_progress;
@@ -31,27 +29,32 @@ pub use search::{
 };
 pub use topology::{infer_local_model_topology, ModelMoeInfo, ModelTopology};
 
-pub(crate) fn build_hf_api(progress: bool) -> Result<Api> {
-    let mut builder = ApiBuilder::from_cache(huggingface_hub_cache()).with_progress(progress);
+pub(crate) fn build_hf_api(_progress: bool) -> Result<HFClientSync> {
+    let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
     if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
         let endpoint = endpoint.trim();
         if !endpoint.is_empty() {
-            builder = builder.with_endpoint(endpoint.to_string());
+            builder = builder.endpoint(endpoint.to_string());
         }
     }
-    builder = builder.with_token(hf_token_override());
-    builder.build().context("Build Hugging Face API client")
+    if let Some(token) = hf_token_override() {
+        builder = builder.token(token);
+    }
+    HFClientSync::from_api(builder.build().context("Build Hugging Face API client")?)
+        .context("Build Hugging Face sync API client")
 }
 
-pub(crate) fn build_hf_tokio_api(progress: bool) -> Result<TokioApi> {
-    let mut builder = TokioApiBuilder::from_cache(huggingface_hub_cache()).with_progress(progress);
+pub(crate) fn build_hf_tokio_api(_progress: bool) -> Result<HFClient> {
+    let mut builder = HFClientBuilder::new().cache_dir(huggingface_hub_cache_dir());
     if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {
         let endpoint = endpoint.trim();
         if !endpoint.is_empty() {
-            builder = builder.with_endpoint(endpoint.to_string());
+            builder = builder.endpoint(endpoint.to_string());
         }
     }
-    builder = builder.with_token(hf_token_override());
+    if let Some(token) = hf_token_override() {
+        builder = builder.token(token);
+    }
     builder
         .build()
         .context("Build Hugging Face async API client")

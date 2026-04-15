@@ -5,10 +5,9 @@ use super::resolve::{
 use super::ModelCapabilities;
 use super::{build_hf_tokio_api, capabilities, catalog};
 use anyhow::{Context, Result};
-use hf_hub::api::tokio::Api as TokioApi;
-use hf_hub::api::RepoSummary;
-use hf_hub::RepoType;
+use hf_hub::{ListModelsParams, ModelInfo, RepoInfo, RepoInfoParams};
 use tokio::task::JoinSet;
+use tokio_stream::StreamExt;
 
 #[derive(Clone, Debug)]
 pub struct SearchHit {
@@ -76,16 +75,23 @@ where
     let repo_limit = limit.clamp(1, 100);
     progress(SearchProgress::SearchingHub);
     let api = build_hf_tokio_api(false)?;
-    let mut search = api.search(RepoType::Model).with_query(query);
-    search = match filter {
-        SearchArtifactFilter::Gguf => search.with_filter("gguf"),
-        SearchArtifactFilter::Mlx => search.with_filter("mlx"),
-    };
-    let repos = search
-        .with_limit(repo_limit)
-        .run()
-        .await
-        .context("Search Hugging Face")?;
+    let params = ListModelsParams::builder()
+        .search(query.to_string())
+        .filter(
+            match filter {
+                SearchArtifactFilter::Gguf => "gguf",
+                SearchArtifactFilter::Mlx => "mlx",
+            }
+            .to_string(),
+        )
+        .limit(repo_limit)
+        .build();
+    let stream = api.list_models(&params).context("Search Hugging Face")?;
+    tokio::pin!(stream);
+    let mut repos = Vec::new();
+    while let Some(repo) = stream.next().await {
+        repos.push(repo.context("Search Hugging Face repo summary")?);
+    }
 
     let total = repos.len();
     progress(SearchProgress::InspectingRepos {
@@ -137,28 +143,33 @@ where
 }
 
 async fn build_search_hit(
-    api: TokioApi,
-    repo: RepoSummary,
+    api: hf_hub::HFClient,
+    repo: ModelInfo,
     filter: SearchArtifactFilter,
 ) -> Result<Vec<SearchHit>> {
+    let repo_id = repo.id.clone();
+    let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id.as_str()));
     let detail = api
-        .repo(repo.repo())
-        .info()
+        .model(owner, name)
+        .info(&RepoInfoParams::default())
         .await
-        .with_context(|| format!("Fetch Hugging Face repo {}", repo.id))?;
+        .with_context(|| format!("Fetch Hugging Face repo {}", repo_id))?;
+    let RepoInfo::Model(detail) = detail else {
+        return Ok(Vec::new());
+    };
 
-    let repo_id = detail
-        .id
-        .clone()
-        .or(detail.model_id.clone())
-        .unwrap_or(repo.id.clone());
+    let repo_id = detail.model_id.clone().unwrap_or(detail.id.clone());
     let sibling_names: Vec<String> = detail
         .siblings
+        .clone()
+        .unwrap_or_default()
         .iter()
         .map(|sibling| sibling.rfilename.clone())
         .collect();
     let sibling_size_entries: Vec<(String, Option<u64>)> = detail
         .siblings
+        .clone()
+        .unwrap_or_default()
         .iter()
         .map(|sibling| (sibling.rfilename.clone(), sibling.size))
         .collect();

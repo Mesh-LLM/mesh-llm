@@ -1,8 +1,7 @@
 //! Built-in model catalog plus managed acquisition helpers.
 
 use anyhow::{Context, Result};
-use hf_hub::api::Progress as HfProgress;
-use hf_hub::{Repo, RepoType};
+use hf_hub::RepoDownloadFileParams;
 use serde::Deserialize;
 #[cfg(test)]
 use std::collections::HashMap;
@@ -13,7 +12,6 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 #[cfg(test)]
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 #[derive(Clone, Debug, Deserialize)]
 pub struct CatalogAsset {
@@ -187,8 +185,10 @@ struct HfAsset {
 }
 
 impl HfAsset {
-    fn repo_handle(&self) -> Repo {
-        Repo::with_revision(self.repo.clone(), RepoType::Model, self.revision.clone())
+    fn repo_parts(&self) -> (&str, &str) {
+        self.repo
+            .split_once('/')
+            .unwrap_or(("", self.repo.as_str()))
     }
 }
 
@@ -301,18 +301,15 @@ fn parse_safetensors_index_shards(index: &serde_json::Value) -> Result<Vec<Strin
     Ok(shards.into_iter().collect())
 }
 
-fn ensure_cached_hf_asset(
-    api: &hf_hub::api::sync::Api,
-    cache: &hf_hub::Cache,
-    asset: &HfAsset,
-) -> Result<PathBuf> {
-    let repo_handle = asset.repo_handle();
-    let cache_repo = cache.repo(repo_handle.clone());
-    if let Some(path) = cache_repo.get(&asset.file) {
-        return Ok(path);
-    }
-    api.repo(repo_handle)
-        .download(&asset.file)
+fn ensure_cached_hf_asset(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<PathBuf> {
+    let (owner, name) = asset.repo_parts();
+    api.model(owner, name)
+        .download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(asset.file.clone())
+                .revision(asset.revision.clone())
+                .build(),
+        )
         .with_context(|| {
             format!(
                 "Cache Hugging Face asset {}/{}@{}",
@@ -321,15 +318,11 @@ fn ensure_cached_hf_asset(
         })
 }
 
-fn mlx_sharded_weight_assets(
-    api: &hf_hub::api::sync::Api,
-    cache: &hf_hub::Cache,
-    asset: &HfAsset,
-) -> Result<Vec<HfAsset>> {
+fn mlx_sharded_weight_assets(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<Vec<HfAsset>> {
     if asset.file != "model.safetensors.index.json" {
         return Ok(Vec::new());
     }
-    let index_path = ensure_cached_hf_asset(api, cache, asset)?;
+    let index_path = ensure_cached_hf_asset(api, asset)?;
     let index_text = std::fs::read_to_string(&index_path)
         .with_context(|| format!("Read {}", index_path.display()))?;
     let index: serde_json::Value = serde_json::from_str(&index_text)
@@ -394,91 +387,12 @@ async fn download_hf_assets(
         .context("Join Hugging Face download task")?
 }
 
-struct MeshDownloadProgress {
-    filename: String,
-    total: usize,
-    downloaded: usize,
-    last_draw: Option<Instant>,
-}
-
-impl MeshDownloadProgress {
-    fn new() -> Self {
-        Self {
-            filename: String::new(),
-            total: 0,
-            downloaded: 0,
-            last_draw: None,
-        }
-    }
-
-    fn draw(&mut self, force: bool) {
-        let now = Instant::now();
-        if !force
-            && self
-                .last_draw
-                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(150))
-        {
-            return;
-        }
-        self.last_draw = Some(now);
-        let percent = if self.total == 0 {
-            0
-        } else {
-            ((self.downloaded as f64 / self.total as f64) * 100.0).round() as usize
-        };
-        eprint!(
-            "\r   ⏬ {} {:>3}% ({}/{})",
-            self.filename,
-            percent.min(100),
-            format_download_bytes(self.downloaded as u64),
-            format_download_bytes(self.total as u64)
-        );
-        let _ = std::io::stderr().flush();
-        if force {
-            eprintln!();
-        }
-    }
-}
-
-impl HfProgress for MeshDownloadProgress {
-    fn init(&mut self, size: usize, filename: &str) {
-        self.filename = filename.to_string();
-        self.total = size;
-        self.downloaded = 0;
-        self.last_draw = None;
-        self.draw(false);
-    }
-
-    fn update(&mut self, size: usize) {
-        self.downloaded = self.downloaded.saturating_add(size);
-        self.draw(false);
-    }
-
-    fn finish(&mut self) {
-        self.downloaded = self.total;
-        self.draw(true);
-    }
-}
-
-fn format_download_bytes(bytes: u64) -> String {
-    if bytes >= 1_000_000_000 {
-        format!("{:.1}GB", bytes as f64 / 1e9)
-    } else if bytes >= 1_000_000 {
-        format!("{:.0}MB", bytes as f64 / 1e6)
-    } else if bytes >= 1_000 {
-        format!("{:.0}KB", bytes as f64 / 1e3)
-    } else {
-        format!("{bytes}B")
-    }
-}
-
 fn download_hf_assets_blocking(
     label: &str,
     assets: Vec<HfAsset>,
     progress: bool,
 ) -> Result<Vec<PathBuf>> {
     let api = super::build_hf_api(false)?;
-    let cache = crate::models::huggingface_hub_cache();
     let mut download_plan = std::collections::BTreeSet::new();
     let mut config_repos = std::collections::BTreeSet::new();
 
@@ -497,7 +411,7 @@ fn download_hf_assets_blocking(
             download_plan.insert(sidecar);
         }
         // Expand shards from an index file (downloads index to discover shard names)
-        for shard in mlx_sharded_weight_assets(&api, &cache, &asset)? {
+        for shard in mlx_sharded_weight_assets(&api, &asset)? {
             download_plan.insert((true, shard));
         }
         // Expand shards from a first-shard ref without needing to download the index
@@ -522,55 +436,37 @@ fn download_hf_assets_blocking(
 
     let mut primary_paths = Vec::new();
     for (required, asset) in download_plan {
-        let repo_handle = asset.repo_handle();
-        let cache_repo = cache.repo(repo_handle.clone());
-        let api_repo = api.repo(repo_handle);
-        let path = match cache_repo.get(&asset.file) {
-            Some(path) => {
+        let (owner, name) = asset.repo_parts();
+        let api_repo = api.model(owner, name);
+        if progress && required {
+            eprintln!("   📥 Ensuring model {}", asset.file);
+        }
+        let path = match api_repo.download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(asset.file.clone())
+                .revision(asset.revision.clone())
+                .build(),
+        ) {
+            Ok(path) => {
                 if progress {
                     if required {
-                        eprintln!("   ✅ Using cached model {}", asset.file);
+                        eprintln!("   ✅ Ready {}", asset.file);
                     } else {
-                        eprintln!("   🧾 Using cached model metadata");
+                        eprintln!("   🧾 Downloaded model metadata");
                     }
                 }
                 path
             }
-            None => {
-                if progress && required {
-                    eprintln!("   📥 Downloading model {}", asset.file);
-                }
-                match if required {
-                    if progress {
-                        api_repo.download_with_progress(&asset.file, MeshDownloadProgress::new())
-                    } else {
-                        api_repo.download(&asset.file)
-                    }
-                } else {
-                    api_repo.download(&asset.file)
-                } {
-                    Ok(path) => {
-                        if progress {
-                            if required {
-                                eprintln!("   ✅ Ready {}", asset.file);
-                            } else {
-                                eprintln!("   🧾 Downloaded model metadata");
-                            }
-                        }
-                        path
-                    }
-                    Err(_) if is_optional_metadata(required, &asset) => {
-                        continue;
-                    }
-                    Err(err) => {
-                        return Err(err).with_context(|| {
-                            format!(
-                                "Cache Hugging Face asset {}/{}@{}",
-                                asset.repo, asset.file, asset.revision
-                            )
-                        });
-                    }
-                }
+            Err(_) if is_optional_metadata(required, &asset) => {
+                continue;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Cache Hugging Face asset {}/{}@{}",
+                        asset.repo, asset.file, asset.revision
+                    )
+                });
             }
         };
         if required && asset.file != "config.json" {
