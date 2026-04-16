@@ -218,6 +218,7 @@ pub(crate) mod commands;
 pub mod models;
 pub(crate) mod moe;
 pub(crate) mod runtime;
+pub(crate) mod terminal_progress;
 
 #[derive(Parser, Debug)]
 #[command(

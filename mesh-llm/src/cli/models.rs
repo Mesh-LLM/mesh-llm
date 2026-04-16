@@ -1,4 +1,15 @@
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ModelSearchSort {
+    Trending,
+    Downloads,
+    Likes,
+    Created,
+    Updated,
+    MostParameters,
+    LeastParameters,
+}
 
 #[derive(Subcommand, Debug)]
 pub enum ModelsCommand {
@@ -38,6 +49,9 @@ pub enum ModelsCommand {
         /// Maximum number of results to show.
         #[arg(long, default_value = "20")]
         limit: usize,
+        /// Sort search results.
+        #[arg(long, value_enum, default_value = "trending")]
+        sort: ModelSearchSort,
         /// Emit JSON output.
         #[arg(long)]
         json: bool,

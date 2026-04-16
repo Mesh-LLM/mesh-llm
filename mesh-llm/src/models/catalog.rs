@@ -1,19 +1,14 @@
 //! Built-in model catalog plus managed acquisition helpers.
 
+use crate::cli::terminal_progress::{start_spinner, SpinnerHandle};
 use anyhow::{Context, Result};
-use hf_hub::api::Progress as HfProgress;
-use hf_hub::{Repo, RepoType};
+use hf_hub::{DownloadEvent, Progress, ProgressEvent, ProgressHandler, RepoDownloadFileParams};
 use serde::Deserialize;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::Arc;
-use std::sync::LazyLock;
-#[cfg(test)]
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock, Mutex};
 use tokio::io::AsyncWriteExt;
 #[derive(Clone, Debug, Deserialize)]
 pub struct CatalogAsset {
@@ -187,8 +182,10 @@ struct HfAsset {
 }
 
 impl HfAsset {
-    fn repo_handle(&self) -> Repo {
-        Repo::with_revision(self.repo.clone(), RepoType::Model, self.revision.clone())
+    fn repo_parts(&self) -> (&str, &str) {
+        self.repo
+            .split_once('/')
+            .unwrap_or(("", self.repo.as_str()))
     }
 }
 
@@ -301,18 +298,15 @@ fn parse_safetensors_index_shards(index: &serde_json::Value) -> Result<Vec<Strin
     Ok(shards.into_iter().collect())
 }
 
-fn ensure_cached_hf_asset(
-    api: &hf_hub::api::sync::Api,
-    cache: &hf_hub::Cache,
-    asset: &HfAsset,
-) -> Result<PathBuf> {
-    let repo_handle = asset.repo_handle();
-    let cache_repo = cache.repo(repo_handle.clone());
-    if let Some(path) = cache_repo.get(&asset.file) {
-        return Ok(path);
-    }
-    api.repo(repo_handle)
-        .download(&asset.file)
+fn ensure_cached_hf_asset(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<PathBuf> {
+    let (owner, name) = asset.repo_parts();
+    api.model(owner, name)
+        .download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(asset.file.clone())
+                .revision(asset.revision.clone())
+                .build(),
+        )
         .with_context(|| {
             format!(
                 "Cache Hugging Face asset {}/{}@{}",
@@ -321,15 +315,11 @@ fn ensure_cached_hf_asset(
         })
 }
 
-fn mlx_sharded_weight_assets(
-    api: &hf_hub::api::sync::Api,
-    cache: &hf_hub::Cache,
-    asset: &HfAsset,
-) -> Result<Vec<HfAsset>> {
+fn mlx_sharded_weight_assets(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<Vec<HfAsset>> {
     if asset.file != "model.safetensors.index.json" {
         return Ok(Vec::new());
     }
-    let index_path = ensure_cached_hf_asset(api, cache, asset)?;
+    let index_path = ensure_cached_hf_asset(api, asset)?;
     let index_text = std::fs::read_to_string(&index_path)
         .with_context(|| format!("Read {}", index_path.display()))?;
     let index: serde_json::Value = serde_json::from_str(&index_text)
@@ -349,11 +339,21 @@ type DownloadHfAssetsOverrideFn =
     Arc<dyn Fn(&str, Vec<HfAsset>) -> Result<Vec<PathBuf>> + Send + Sync>;
 
 #[cfg(test)]
+type DownloadPlanObserverFn = Arc<dyn Fn(&str, Vec<(bool, String)>) + Send + Sync>;
+
+#[cfg(test)]
 static DOWNLOAD_HF_ASSETS_OVERRIDE: LazyLock<Mutex<HashMap<String, DownloadHfAssetsOverrideFn>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(test)]
-struct DownloadHfAssetsOverrideGuard(String);
+static DOWNLOAD_PLAN_OBSERVER: LazyLock<Mutex<Option<DownloadPlanObserverFn>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+pub(crate) struct DownloadHfAssetsOverrideGuard(String);
+
+#[cfg(test)]
+pub(crate) struct DownloadPlanObserverGuard;
 
 #[cfg(test)]
 impl DownloadHfAssetsOverrideGuard {
@@ -365,10 +365,49 @@ impl DownloadHfAssetsOverrideGuard {
 }
 
 #[cfg(test)]
+pub(crate) fn set_download_hf_assets_label_override(
+    label: String,
+    func: Arc<dyn Fn(&str) -> Result<Vec<PathBuf>> + Send + Sync>,
+) -> DownloadHfAssetsOverrideGuard {
+    DownloadHfAssetsOverrideGuard::set(
+        label,
+        Arc::new(move |label, assets| {
+            if let Some(observer) = DOWNLOAD_PLAN_OBSERVER.lock().unwrap().clone() {
+                let plan = initial_download_plan_for_assets(assets)?;
+                observer(
+                    label,
+                    plan.into_iter()
+                        .map(|(required, asset)| (required, asset.file))
+                        .collect(),
+                );
+            }
+            func(label)
+        }),
+    )
+}
+
+#[cfg(test)]
+impl DownloadPlanObserverGuard {
+    pub(crate) fn set(func: DownloadPlanObserverFn) -> Self {
+        let mut slot = DOWNLOAD_PLAN_OBSERVER.lock().unwrap();
+        *slot = Some(func);
+        Self
+    }
+}
+
+#[cfg(test)]
 impl Drop for DownloadHfAssetsOverrideGuard {
     fn drop(&mut self) {
         let mut map = DOWNLOAD_HF_ASSETS_OVERRIDE.lock().unwrap();
         map.remove(&self.0);
+    }
+}
+
+#[cfg(test)]
+impl Drop for DownloadPlanObserverGuard {
+    fn drop(&mut self) {
+        let mut slot = DOWNLOAD_PLAN_OBSERVER.lock().unwrap();
+        *slot = None;
     }
 }
 
@@ -394,69 +433,154 @@ async fn download_hf_assets(
         .context("Join Hugging Face download task")?
 }
 
-struct MeshDownloadProgress {
+struct MeshDownloadProgressState {
     filename: String,
-    total: usize,
-    downloaded: usize,
-    last_draw: Option<Instant>,
+    total: u64,
+    downloaded: u64,
+    bytes_per_sec: Option<f64>,
+    last_draw: Option<std::time::Instant>,
+}
+
+struct MeshDownloadProgress {
+    preflight_spinner: Mutex<Option<SpinnerHandle>>,
+    state: Mutex<MeshDownloadProgressState>,
 }
 
 impl MeshDownloadProgress {
-    fn new() -> Self {
+    fn new(filename: String) -> Self {
+        let spinner_message = format!("Preparing download {}", filename);
         Self {
-            filename: String::new(),
-            total: 0,
-            downloaded: 0,
-            last_draw: None,
+            preflight_spinner: Mutex::new(Some(start_spinner(&spinner_message))),
+            state: Mutex::new(MeshDownloadProgressState {
+                filename,
+                total: 0,
+                downloaded: 0,
+                bytes_per_sec: None,
+                last_draw: None,
+            }),
         }
     }
 
-    fn draw(&mut self, force: bool) {
-        let now = Instant::now();
+    fn draw(state: &mut MeshDownloadProgressState, force: bool) {
+        if !force && state.downloaded == 0 && state.total == 0 {
+            return;
+        }
+        let now = std::time::Instant::now();
         if !force
-            && self
-                .last_draw
-                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(150))
+            && state.last_draw.is_some_and(|last| {
+                now.duration_since(last) < std::time::Duration::from_millis(150)
+            })
         {
             return;
         }
-        self.last_draw = Some(now);
-        let percent = if self.total == 0 {
+        state.last_draw = Some(now);
+        let percent = if state.total == 0 {
             0
         } else {
-            ((self.downloaded as f64 / self.total as f64) * 100.0).round() as usize
+            ((state.downloaded as f64 / state.total as f64) * 1000.0).round() as usize
         };
+        let percent_major = (percent.min(1000)) / 10;
+        let percent_minor = (percent.min(1000)) % 10;
+        let speed_suffix = state
+            .bytes_per_sec
+            .filter(|bytes_per_sec| *bytes_per_sec > 0.0)
+            .map(|bytes_per_sec| format!(" at {}/s", format_download_bytes(bytes_per_sec as u64)))
+            .unwrap_or_default();
         eprint!(
-            "\r   ⏬ {} {:>3}% ({}/{})",
-            self.filename,
-            percent.min(100),
-            format_download_bytes(self.downloaded as u64),
-            format_download_bytes(self.total as u64)
+            "\r\x1b[K   ⏬ {} {:>3}.{:01}% ({}/{}){}",
+            state.filename,
+            percent_major,
+            percent_minor,
+            format_download_bytes(state.downloaded),
+            format_download_bytes(state.total),
+            speed_suffix,
         );
         let _ = std::io::stderr().flush();
         if force {
             eprintln!();
         }
     }
+
+    fn apply_download_event(state: &mut MeshDownloadProgressState, event: &DownloadEvent) {
+        match event {
+            DownloadEvent::Start { total_bytes, .. } => {
+                if *total_bytes > 0 {
+                    state.total = state.total.max(*total_bytes);
+                }
+            }
+            DownloadEvent::Progress { files } => {
+                if let Some(first) = files.first() {
+                    if !first.filename.is_empty() {
+                        state.filename = first.filename.clone();
+                    }
+                }
+                if !files.is_empty() {
+                    let reported_downloaded: u64 =
+                        files.iter().map(|file| file.bytes_completed).sum();
+                    state.downloaded = state.downloaded.max(reported_downloaded);
+                    let reported_total: u64 = files.iter().map(|file| file.total_bytes).sum();
+                    if reported_total > 0 {
+                        state.total = state.total.max(reported_total);
+                    }
+                }
+            }
+            DownloadEvent::AggregateProgress {
+                bytes_completed,
+                total_bytes,
+                bytes_per_sec,
+            } => {
+                state.downloaded = state.downloaded.max(*bytes_completed);
+                if *total_bytes > 0 {
+                    state.total = state.total.max(*total_bytes);
+                }
+                state.bytes_per_sec = *bytes_per_sec;
+            }
+            DownloadEvent::Complete => {
+                if state.total > 0 {
+                    state.downloaded = state.total;
+                }
+                state.bytes_per_sec = None;
+            }
+        }
+    }
+
+    fn showed_meaningful_progress(&self) -> bool {
+        self.state
+            .lock()
+            .map(|state| state.downloaded > 0 || state.total > 0)
+            .unwrap_or(false)
+    }
 }
 
-impl HfProgress for MeshDownloadProgress {
-    fn init(&mut self, size: usize, filename: &str) {
-        self.filename = filename.to_string();
-        self.total = size;
-        self.downloaded = 0;
-        self.last_draw = None;
-        self.draw(false);
+impl ProgressHandler for MeshDownloadProgress {
+    fn on_progress(&self, event: &ProgressEvent) {
+        let ProgressEvent::Download(event) = event else {
+            return;
+        };
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        Self::apply_download_event(&mut state, event);
+        let should_show_progress = state.downloaded > 0 || state.total > 0;
+        let force = matches!(event, DownloadEvent::Complete) && should_show_progress;
+        if should_show_progress {
+            if let Ok(mut spinner) = self.preflight_spinner.lock() {
+                spinner.take();
+            }
+            Self::draw(&mut state, force);
+        } else if matches!(event, DownloadEvent::Complete) {
+            if let Ok(mut spinner) = self.preflight_spinner.lock() {
+                spinner.take();
+            }
+        }
     }
+}
 
-    fn update(&mut self, size: usize) {
-        self.downloaded = self.downloaded.saturating_add(size);
-        self.draw(false);
-    }
-
-    fn finish(&mut self) {
-        self.downloaded = self.total;
-        self.draw(true);
+impl Drop for MeshDownloadProgress {
+    fn drop(&mut self) {
+        if let Ok(mut spinner) = self.preflight_spinner.lock() {
+            spinner.take();
+        }
     }
 }
 
@@ -478,16 +602,7 @@ fn download_hf_assets_blocking(
     progress: bool,
 ) -> Result<Vec<PathBuf>> {
     let api = super::build_hf_api(false)?;
-    let cache = crate::models::huggingface_hub_cache();
-    let mut download_plan = std::collections::BTreeSet::new();
-    let mut config_repos = std::collections::BTreeSet::new();
-
-    for asset in assets {
-        for expanded in expand_split_asset(&asset)? {
-            config_repos.insert((expanded.repo.clone(), expanded.revision.clone()));
-            download_plan.insert((true, expanded));
-        }
-    }
+    let mut download_plan = initial_download_plan_for_assets(assets)?;
     let current_plan: Vec<(bool, HfAsset)> = download_plan.iter().cloned().collect();
     for (_, asset) in current_plan {
         if !is_mlx_primary_asset(&asset.file) {
@@ -497,7 +612,7 @@ fn download_hf_assets_blocking(
             download_plan.insert(sidecar);
         }
         // Expand shards from an index file (downloads index to discover shard names)
-        for shard in mlx_sharded_weight_assets(&api, &cache, &asset)? {
+        for shard in mlx_sharded_weight_assets(&api, &asset)? {
             download_plan.insert((true, shard));
         }
         // Expand shards from a first-shard ref without needing to download the index
@@ -505,6 +620,103 @@ fn download_hf_assets_blocking(
             download_plan.insert((true, shard));
         }
     }
+    if progress {
+        eprintln!("📥 Ensuring {} is available locally...", label);
+    }
+
+    #[cfg(test)]
+    {
+        if let Some(observer) = DOWNLOAD_PLAN_OBSERVER.lock().unwrap().clone() {
+            observer(
+                label,
+                download_plan
+                    .iter()
+                    .map(|(required, asset)| (*required, asset.file.clone()))
+                    .collect(),
+            );
+        }
+    }
+
+    let mut primary_paths = Vec::new();
+    for (required, asset) in download_plan {
+        let (owner, name) = asset.repo_parts();
+        let api_repo = api.model(owner, name);
+        if progress && required {
+            eprintln!("   📥 Ensuring model {}", asset.file);
+        }
+        let progress_tracker = if progress && required {
+            Some(Arc::new(MeshDownloadProgress::new(asset.file.clone())))
+        } else {
+            None
+        };
+        let progress_handler: Progress = if let Some(tracker) = &progress_tracker {
+            Some(tracker.clone())
+        } else {
+            None
+        };
+        let path = match api_repo.download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(asset.file.clone())
+                .revision(asset.revision.clone())
+                .progress(progress_handler)
+                .build(),
+        ) {
+            Ok(path) => {
+                if progress {
+                    if required {
+                        let showed_progress = progress_tracker
+                            .as_ref()
+                            .is_some_and(|tracker| tracker.showed_meaningful_progress());
+                        if showed_progress {
+                            eprintln!("   ✅ Ready {}", asset.file);
+                        } else if let Ok(meta) = std::fs::metadata(&path) {
+                            eprintln!(
+                                "   ✅ Ready {} ({})",
+                                asset.file,
+                                format_download_bytes(meta.len())
+                            );
+                        } else {
+                            eprintln!("   ✅ Ready {}", asset.file);
+                        }
+                    } else {
+                        eprintln!("   🧾 Downloaded model metadata");
+                    }
+                }
+                path
+            }
+            Err(_) if is_optional_metadata(required, &asset) => {
+                continue;
+            }
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!(
+                        "Cache Hugging Face asset {}/{}@{}",
+                        asset.repo, asset.file, asset.revision
+                    )
+                });
+            }
+        };
+        if required && asset.file != "config.json" {
+            primary_paths.push(path);
+        }
+    }
+
+    Ok(primary_paths)
+}
+
+fn initial_download_plan_for_assets(
+    assets: Vec<HfAsset>,
+) -> Result<std::collections::BTreeSet<(bool, HfAsset)>> {
+    let mut download_plan = std::collections::BTreeSet::new();
+    let mut config_repos = std::collections::BTreeSet::new();
+
+    for asset in assets {
+        for expanded in expand_split_asset(&asset)? {
+            config_repos.insert((expanded.repo.clone(), expanded.revision.clone()));
+            download_plan.insert((true, expanded));
+        }
+    }
+
     for (repo, revision) in config_repos {
         download_plan.insert((
             false,
@@ -516,69 +728,7 @@ fn download_hf_assets_blocking(
         ));
     }
 
-    if progress {
-        eprintln!("📥 Ensuring {} is available locally...", label);
-    }
-
-    let mut primary_paths = Vec::new();
-    for (required, asset) in download_plan {
-        let repo_handle = asset.repo_handle();
-        let cache_repo = cache.repo(repo_handle.clone());
-        let api_repo = api.repo(repo_handle);
-        let path = match cache_repo.get(&asset.file) {
-            Some(path) => {
-                if progress {
-                    if required {
-                        eprintln!("   ✅ Using cached model {}", asset.file);
-                    } else {
-                        eprintln!("   🧾 Using cached model metadata");
-                    }
-                }
-                path
-            }
-            None => {
-                if progress && required {
-                    eprintln!("   📥 Downloading model {}", asset.file);
-                }
-                match if required {
-                    if progress {
-                        api_repo.download_with_progress(&asset.file, MeshDownloadProgress::new())
-                    } else {
-                        api_repo.download(&asset.file)
-                    }
-                } else {
-                    api_repo.download(&asset.file)
-                } {
-                    Ok(path) => {
-                        if progress {
-                            if required {
-                                eprintln!("   ✅ Ready {}", asset.file);
-                            } else {
-                                eprintln!("   🧾 Downloaded model metadata");
-                            }
-                        }
-                        path
-                    }
-                    Err(_) if is_optional_metadata(required, &asset) => {
-                        continue;
-                    }
-                    Err(err) => {
-                        return Err(err).with_context(|| {
-                            format!(
-                                "Cache Hugging Face asset {}/{}@{}",
-                                asset.repo, asset.file, asset.revision
-                            )
-                        });
-                    }
-                }
-            }
-        };
-        if required && asset.file != "config.json" {
-            primary_paths.push(path);
-        }
-    }
-
-    Ok(primary_paths)
+    Ok(download_plan)
 }
 
 pub async fn download_hf_repo_file(
@@ -595,18 +745,30 @@ pub async fn download_hf_repo_file_with_progress(
     file: &str,
     progress: bool,
 ) -> Result<PathBuf> {
+    download_hf_repo_file_with_progress_label(
+        repo,
+        revision,
+        file,
+        &format!("{repo}/{file}@{}", revision.unwrap_or("main")),
+        progress,
+    )
+    .await
+}
+
+pub async fn download_hf_repo_file_with_progress_label(
+    repo: &str,
+    revision: Option<&str>,
+    file: &str,
+    label: &str,
+    progress: bool,
+) -> Result<PathBuf> {
     let revision = revision.unwrap_or("main").to_string();
     let asset = HfAsset {
         repo: repo.to_string(),
         revision: revision.clone(),
         file: file.to_string(),
     };
-    let mut paths = download_hf_assets(
-        &format!("{repo}/{file}@{revision}"),
-        vec![asset.clone()],
-        progress,
-    )
-    .await?;
+    let mut paths = download_hf_assets(label, vec![asset.clone()], progress).await?;
     paths.sort();
     paths
         .into_iter()
@@ -1004,7 +1166,7 @@ async fn download_with_resume(dest: &Path, url: &str) -> Result<()> {
                     eprintln!();
                     eprintln!(
                         "  ⚠️ {label}: interrupted at {}: {e}",
-                        format_size_bytes(downloaded)
+                        format_download_bytes(downloaded)
                     );
                     // If we got data, reset attempt counter (connection was working)
                     if got_data {
@@ -1070,32 +1232,31 @@ fn print_transfer_status(
     phase: &str,
 ) -> Result<()> {
     let progress = match total {
-        Some(total) if total > 0 => format!(
-            "{:>5.1}%  {}/{}",
-            (downloaded as f64 / total as f64) * 100.0,
-            format_size_bytes(downloaded),
-            format_size_bytes(total)
-        ),
-        _ => format!("      {}", format_size_bytes(downloaded)),
+        Some(total) if total > 0 => {
+            let percent = ((downloaded as f64 / total as f64) * 1000.0).round() as usize;
+            format!(
+                "{:>3}.{:01}% ({}/{})",
+                (percent.min(1000)) / 10,
+                (percent.min(1000)) % 10,
+                format_download_bytes(downloaded),
+                format_download_bytes(total)
+            )
+        }
+        _ => format!("      {}", format_download_bytes(downloaded)),
     };
     let resume = if attempt > 1 {
         format!("  attempt {}", attempt)
     } else {
         String::new()
     };
-    eprint!("\r  📥 {}  {:<11} {}{}", label, phase, progress, resume);
+    eprint!(
+        "\r\x1b[K   ⏬ {} {:<11} {}{}",
+        label, phase, progress, resume
+    );
     std::io::stderr()
         .flush()
         .context("Flush transfer progress")?;
     Ok(())
-}
-
-fn format_size_bytes(bytes: u64) -> String {
-    if bytes >= 1_000_000_000 {
-        format!("{:.1}GB", bytes as f64 / 1e9)
-    } else {
-        format!("{:.0}MB", bytes as f64 / 1e6)
-    }
 }
 
 /// List available models
@@ -1340,6 +1501,105 @@ mod tests {
         assert_eq!(resolved, cached_file);
     }
 
+    #[test]
+    fn download_progress_state_merges_http_events_consistently() {
+        let mut state = MeshDownloadProgressState {
+            filename: "model.gguf".to_string(),
+            total: 0,
+            downloaded: 0,
+            bytes_per_sec: None,
+            last_draw: None,
+        };
+
+        MeshDownloadProgress::apply_download_event(
+            &mut state,
+            &DownloadEvent::Start {
+                total_files: 1,
+                total_bytes: 1_000,
+            },
+        );
+        MeshDownloadProgress::apply_download_event(
+            &mut state,
+            &DownloadEvent::Progress {
+                files: vec![hf_hub::FileProgress {
+                    filename: "model.gguf".to_string(),
+                    bytes_completed: 250,
+                    total_bytes: 1_000,
+                    status: hf_hub::FileStatus::InProgress,
+                }],
+            },
+        );
+        MeshDownloadProgress::apply_download_event(
+            &mut state,
+            &DownloadEvent::Progress {
+                files: vec![hf_hub::FileProgress {
+                    filename: "model.gguf".to_string(),
+                    bytes_completed: 700,
+                    total_bytes: 1_000,
+                    status: hf_hub::FileStatus::InProgress,
+                }],
+            },
+        );
+
+        assert_eq!(state.filename, "model.gguf");
+        assert_eq!(state.downloaded, 700);
+        assert_eq!(state.total, 1_000);
+        assert_eq!(state.bytes_per_sec, None);
+    }
+
+    #[test]
+    fn download_progress_state_keeps_xet_progress_monotonic_when_per_file_lags() {
+        let mut state = MeshDownloadProgressState {
+            filename: "model.gguf".to_string(),
+            total: 0,
+            downloaded: 0,
+            bytes_per_sec: None,
+            last_draw: None,
+        };
+
+        MeshDownloadProgress::apply_download_event(
+            &mut state,
+            &DownloadEvent::AggregateProgress {
+                bytes_completed: 32_000_000,
+                total_bytes: 17_300_000_000,
+                bytes_per_sec: Some(128_000_000.0),
+            },
+        );
+        MeshDownloadProgress::apply_download_event(
+            &mut state,
+            &DownloadEvent::Progress {
+                files: vec![hf_hub::FileProgress {
+                    filename: "gemma-4-31B-it-Q4_0.gguf".to_string(),
+                    bytes_completed: 4_000_000,
+                    total_bytes: 17_300_000_000,
+                    status: hf_hub::FileStatus::InProgress,
+                }],
+            },
+        );
+
+        assert_eq!(state.filename, "gemma-4-31B-it-Q4_0.gguf");
+        assert_eq!(state.downloaded, 32_000_000);
+        assert_eq!(state.total, 17_300_000_000);
+        assert_eq!(state.bytes_per_sec, Some(128_000_000.0));
+    }
+
+    #[test]
+    fn download_progress_state_clears_speed_and_finishes_at_total() {
+        let mut state = MeshDownloadProgressState {
+            filename: "model.gguf".to_string(),
+            total: 1_000,
+            downloaded: 700,
+            bytes_per_sec: Some(42_000_000.0),
+            last_draw: None,
+        };
+
+        MeshDownloadProgress::apply_download_event(&mut state, &DownloadEvent::Complete);
+
+        assert_eq!(state.downloaded, 1_000);
+        assert_eq!(state.total, 1_000);
+        assert_eq!(state.bytes_per_sec, None);
+    }
+
     #[tokio::test]
     async fn download_model_matches_hf_cache_file_case_insensitively() {
         let unique = std::time::SystemTime::now()
@@ -1469,6 +1729,36 @@ mod tests {
         };
         let shards = expand_split_mlx_first_shard(&asset);
         assert!(shards.is_empty());
+    }
+
+    #[test]
+    fn gemma_bf16_first_shard_plans_full_split_download() {
+        let plan = initial_download_plan_for_assets(vec![HfAsset {
+            repo: "unsloth/gemma-4-31B-it-GGUF".to_string(),
+            revision: "main".to_string(),
+            file: "BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf".to_string(),
+        }])
+        .unwrap();
+
+        let files: Vec<_> = plan
+            .into_iter()
+            .map(|(required, asset)| (required, asset.file))
+            .collect();
+
+        assert_eq!(
+            files,
+            vec![
+                (false, "config.json".to_string()),
+                (
+                    true,
+                    "BF16/gemma-4-31B-it-BF16-00001-of-00002.gguf".to_string()
+                ),
+                (
+                    true,
+                    "BF16/gemma-4-31B-it-BF16-00002-of-00002.gguf".to_string()
+                ),
+            ]
+        );
     }
 
     #[test]

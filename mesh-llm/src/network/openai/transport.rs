@@ -1141,6 +1141,48 @@ async fn relay_translated_responses_json<R: AsyncRead + Unpin>(
     })
 }
 
+/// Inject `"mesh_hooks": true/false` into the JSON body of an HTTP request.
+///
+/// Inserts the field right after the opening `{` in the body, then rebuilds
+/// the Content-Length header to match.
+pub fn inject_mesh_hooks_flag(raw: &mut Vec<u8>, enabled: bool) {
+    let Some(header_end) = raw.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4) else {
+        return;
+    };
+    let body = &raw[header_end..];
+    let Some(brace) = body.iter().position(|&b| b == b'{') else {
+        return;
+    };
+
+    // Build new body with mesh_hooks injected after opening brace
+    let fragment = if enabled {
+        &b"\"mesh_hooks\":true,"[..]
+    } else {
+        &b"\"mesh_hooks\":false,"[..]
+    };
+    let mut new_body = Vec::with_capacity(body.len() + fragment.len());
+    new_body.extend_from_slice(&body[..brace + 1]);
+    new_body.extend_from_slice(fragment);
+    new_body.extend_from_slice(&body[brace + 1..]);
+
+    // Rebuild headers with correct Content-Length
+    let headers = std::str::from_utf8(&raw[..header_end - 4]).unwrap_or("");
+    let mut rebuilt = String::new();
+    for line in headers.split("\r\n") {
+        if line.to_ascii_lowercase().starts_with("content-length:") {
+            rebuilt.push_str(&format!("Content-Length: {}", new_body.len()));
+        } else {
+            rebuilt.push_str(line);
+        }
+        rebuilt.push_str("\r\n");
+    }
+    rebuilt.push_str("\r\n");
+
+    let mut result = rebuilt.into_bytes();
+    result.extend_from_slice(&new_body);
+    *raw = result;
+}
+
 pub fn is_models_list_request(method: &str, path: &str) -> bool {
     let path = path.split('?').next().unwrap_or(path);
     method == "GET" && (path == "/v1/models" || path == "/models")
@@ -1749,17 +1791,23 @@ pub async fn handle_mesh_request(
                 let cl = router::classify(&body_json);
                 let served = node.models_being_served().await;
                 let media = router::media_requirements(body_json);
-                let available: Vec<(&str, f64)> = served
+                let with_caps: Vec<(&str, f64, crate::models::ModelCapabilities)> = served
                     .iter()
-                    .filter(|name| {
+                    .map(|name| {
                         let caps = crate::models::installed_model_capabilities(name);
+                        (name.as_str(), 0.0, caps)
+                    })
+                    .collect();
+                let available: Vec<(&str, f64, crate::models::ModelCapabilities)> = with_caps
+                    .iter()
+                    .filter(|(_, _, caps)| {
                         (!media.needs_vision || caps.vision_label().is_some())
                             && (!media.needs_audio || caps.audio_label().is_some())
                     })
-                    .map(|name| (name.as_str(), 0.0))
+                    .cloned()
                     .collect();
-                let available: Vec<(&str, f64)> = if available.is_empty() {
-                    served.iter().map(|name| (name.as_str(), 0.0)).collect()
+                let available = if available.is_empty() {
+                    with_caps
                 } else {
                     available
                 };
@@ -1783,6 +1831,14 @@ pub async fn handle_mesh_request(
             None
         };
     let effective_model = routed_model.or(request.model_name.clone());
+
+    // Enable mesh hooks for auto-routed requests. When the smart router
+    // picks the model, hooks allow the local model to consult peers during
+    // inference (e.g. caption images via a vision peer, get a second opinion
+    // on uncertain answers). Explicit model names pass through without hooks.
+    if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
+        inject_mesh_hooks_flag(&mut request.raw, true);
+    }
 
     // Demand tracking for rebalancing
     if track_demand {
@@ -2400,6 +2456,7 @@ pub async fn send_models_list(mut stream: TcpStream, models: &[String]) -> std::
             })
         })
         .collect();
+
     let body = serde_json::json!({ "object": "list", "data": data }).to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
@@ -3146,5 +3203,39 @@ mod tests {
         assert!(response.contains("model not available"));
 
         server.await.unwrap();
+    }
+
+    #[test]
+    fn test_inject_mesh_hooks_enabled() {
+        let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"auto\",\"n\":1}".to_vec();
+        inject_mesh_hooks_flag(&mut raw, true);
+        let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        let body = std::str::from_utf8(&raw[body_start..]).unwrap();
+        assert!(body.starts_with("{\"mesh_hooks\":true,"), "body: {body}");
+        // Content-Length must match actual body length
+        let cl_line = std::str::from_utf8(&raw[..body_start])
+            .unwrap()
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+            .unwrap();
+        let declared: usize = cl_line.split(':').nth(1).unwrap().trim().parse().unwrap();
+        assert_eq!(declared, raw.len() - body_start);
+    }
+
+    #[test]
+    fn test_inject_mesh_hooks_disabled() {
+        let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"auto\",\"n\":1}".to_vec();
+        inject_mesh_hooks_flag(&mut raw, false);
+        let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        let body = std::str::from_utf8(&raw[body_start..]).unwrap();
+        assert!(body.starts_with("{\"mesh_hooks\":false,"), "body: {body}");
+    }
+
+    #[test]
+    fn test_inject_mesh_hooks_no_body() {
+        let mut raw = b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec();
+        let before = raw.clone();
+        inject_mesh_hooks_flag(&mut raw, true);
+        assert_eq!(raw, before, "GET with no body should be unchanged");
     }
 }

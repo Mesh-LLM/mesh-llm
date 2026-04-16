@@ -153,10 +153,15 @@ pub(crate) async fn api_proxy(
                                     }
                                 }
                             }
-                            let available: Vec<(&str, f64)> = available_models
-                                .iter()
-                                .map(|name| (name.as_str(), 0.0))
-                                .collect();
+                            let available: Vec<(&str, f64, crate::models::ModelCapabilities)> =
+                                available_models
+                                    .iter()
+                                    .map(|name| {
+                                        let caps =
+                                            crate::models::installed_model_capabilities(name);
+                                        (name.as_str(), 0.0, caps)
+                                    })
+                                    .collect();
                             let picked = router::pick_model_classified(&cl, &available);
                             if let Some(name) = picked {
                                 tracing::info!(
@@ -175,6 +180,16 @@ pub(crate) async fn api_proxy(
                     } else {
                         (request.model_name.clone(), None)
                     };
+                    // Enable mesh hooks for auto-routed requests. When the
+                    // smart router picks the model, hooks allow the local
+                    // model to consult peers during inference (e.g. caption
+                    // images via a vision peer, get a second opinion on
+                    // uncertain answers).
+                    if request.model_name.is_none() || request.model_name.as_deref() == Some("auto")
+                    {
+                        proxy::inject_mesh_hooks_flag(&mut request.raw, true);
+                    }
+
                     let required_tokens = proxy::request_budget_tokens_from_parts(
                         request.body_len_bytes,
                         request.completion_tokens,

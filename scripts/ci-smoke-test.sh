@@ -127,6 +127,29 @@ fi
 
 echo "✅ Inference response: $CONTENT"
 
+# Test model=auto with hooks — routes through smart router with inter-model
+# collaboration hooks enabled. No peers available so hooks return action:none,
+# model generates normally.
+echo "Testing model=auto (virtual LLM hooks)..."
+AUTO_HOOK_RESPONSE=$(curl -sf "http://localhost:${API_PORT}/v1/chat/completions" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "auto",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "max_tokens": 16,
+        "temperature": 0
+    }' 2>&1)
+
+AUTO_HOOK_CONTENT=$(echo "$AUTO_HOOK_RESPONSE" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])" 2>/dev/null || echo "")
+if [ -z "$AUTO_HOOK_CONTENT" ]; then
+    echo "❌ model=auto returned empty response"
+    echo "Raw: $AUTO_HOOK_RESPONSE"
+    echo "--- Log tail ---"
+    tail -30 "$LOG" || true
+    exit 1
+fi
+echo "✅ model=auto response: $AUTO_HOOK_CONTENT"
+
 # Test /v1/models endpoint
 echo "Testing /v1/models..."
 MODELS=$(curl -sf "http://localhost:${API_PORT}/v1/models" 2>&1)
@@ -137,6 +160,8 @@ if [ "$MODEL_COUNT" -eq 0 ]; then
     exit 1
 fi
 echo "✅ /v1/models returned $MODEL_COUNT model(s)"
+
+
 
 echo ""
 echo "=== All smoke tests passed ==="

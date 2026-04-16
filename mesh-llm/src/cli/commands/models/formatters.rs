@@ -1,28 +1,39 @@
 use crate::models::{
     capabilities, catalog, huggingface_hub_cache_dir, ModelCapabilities, ModelDetails,
-    SearchArtifactFilter, SearchHit,
+    SearchArtifactFilter, SearchHit, SearchSort,
 };
 use crate::system::hardware;
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use unicode_width::UnicodeWidthStr;
 
 pub(crate) trait SearchFormatter {
     fn is_json(&self) -> bool;
-    fn render_catalog_empty(&self, query: &str, filter: SearchArtifactFilter) -> Result<()>;
+    fn render_catalog_empty(
+        &self,
+        query: &str,
+        filter: SearchArtifactFilter,
+        sort: SearchSort,
+    ) -> Result<()>;
     fn render_catalog_results(
         &self,
         query: &str,
         filter: SearchArtifactFilter,
         results: &[&'static catalog::CatalogModel],
         limit: usize,
+        sort: SearchSort,
     ) -> Result<()>;
-    fn render_hf_empty(&self, query: &str, filter: SearchArtifactFilter) -> Result<()>;
+    fn render_hf_empty(
+        &self,
+        query: &str,
+        filter: SearchArtifactFilter,
+        sort: SearchSort,
+    ) -> Result<()>;
     fn render_hf_results(
         &self,
         query: &str,
         filter: SearchArtifactFilter,
+        sort: SearchSort,
         results: &[SearchHit],
     ) -> Result<()>;
 }
@@ -30,6 +41,7 @@ pub(crate) trait SearchFormatter {
 #[derive(Clone)]
 pub(crate) struct InstalledRow {
     pub(crate) name: String,
+    pub(crate) model_ref: String,
     pub(crate) path: PathBuf,
     pub(crate) size: Option<u64>,
     pub(crate) catalog_model: Option<&'static catalog::CatalogModel>,
@@ -84,9 +96,37 @@ pub(crate) fn filter_name(filter: SearchArtifactFilter) -> &'static str {
     }
 }
 
+pub(crate) fn sort_label(sort: SearchSort) -> &'static str {
+    match sort {
+        SearchSort::Trending => "trending",
+        SearchSort::Downloads => "most downloads",
+        SearchSort::Likes => "most likes",
+        SearchSort::Created => "recently created",
+        SearchSort::Updated => "recently updated",
+        SearchSort::ParametersDesc => "most parameters",
+        SearchSort::ParametersAsc => "least parameters",
+    }
+}
+
+pub(crate) fn sort_name(sort: SearchSort) -> &'static str {
+    match sort {
+        SearchSort::Trending => "trending",
+        SearchSort::Downloads => "downloads",
+        SearchSort::Likes => "likes",
+        SearchSort::Created => "created",
+        SearchSort::Updated => "updated",
+        SearchSort::ParametersDesc => "most_parameters",
+        SearchSort::ParametersAsc => "least_parameters",
+    }
+}
+
 pub(crate) fn print_json(value: Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+pub(crate) fn huggingface_repo_url(repo_id: &str) -> String {
+    format!("https://huggingface.co/{repo_id}")
 }
 
 pub(crate) fn format_installed_size(bytes: u64) -> String {
@@ -225,20 +265,6 @@ pub(crate) fn variant_selector_label(exact_ref: &str) -> String {
         .and_then(|value| value.to_str())
         .unwrap_or(exact_ref)
         .to_string()
-}
-
-pub(crate) fn display_width(value: &str) -> usize {
-    UnicodeWidthStr::width(value)
-}
-
-pub(crate) fn pad_right_display(value: &str, width: usize) -> String {
-    let pad = width.saturating_sub(display_width(value));
-    format!("{value}{}", " ".repeat(pad))
-}
-
-pub(crate) fn pad_left_display(value: &str, width: usize) -> String {
-    let pad = width.saturating_sub(display_width(value));
-    format!("{}{value}", " ".repeat(pad))
 }
 
 pub(crate) fn catalog_model_is_mlx(model: &catalog::CatalogModel) -> bool {

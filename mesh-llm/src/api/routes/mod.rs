@@ -1,5 +1,6 @@
 mod chat;
 mod discover;
+mod mesh_hook;
 mod objects;
 mod plugins;
 mod runtime;
@@ -124,6 +125,11 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("POST", "/api/blackboard/post") => {
                     dispatch_blackboard(stream, state, method, path, path_only, body, raw_request)
                         .await?;
+                    Ok(true)
+                }
+                // Mesh hook callbacks from llama-server
+                ("POST", "/mesh/hook") => {
+                    mesh_hook::handle(stream, state, method, path_only, body).await?;
                     Ok(true)
                 }
                 ("POST", "/api/objects")

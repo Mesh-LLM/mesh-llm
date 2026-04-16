@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use hf_hub::{Repo, RepoType};
+use hf_hub::{RepoDownloadFileParams, RepoInfoParams};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -545,17 +545,23 @@ fn fetch_remote_ranking(
     progress: bool,
 ) -> Result<Option<ResolvedRanking>> {
     let api = build_hf_api(progress).context("Build Hugging Face client for MoE ranking lookup")?;
-    let dataset_repo = api.repo(Repo::with_revision(
-        dataset_repo_name.to_string(),
-        RepoType::Dataset,
-        DEFAULT_DATASET_REVISION.to_string(),
-    ));
-    let info = dataset_repo.info()?;
+    let (owner, name) = dataset_repo_name
+        .split_once('/')
+        .unwrap_or(("", dataset_repo_name));
+    let dataset_repo = api.dataset(owner, name);
+    let info = dataset_repo.info(
+        &RepoInfoParams::builder()
+            .revision(DEFAULT_DATASET_REVISION.to_string())
+            .build(),
+    )?;
+    let hf_hub::RepoInfo::Dataset(info) = info else {
+        bail!("Expected dataset repo info for {}", dataset_repo_name);
+    };
     find_remote_ranking(
         &api,
         dataset_repo_name,
-        &info.sha,
-        &info.siblings,
+        info.sha.as_deref().unwrap_or(DEFAULT_DATASET_REVISION),
+        info.siblings.as_deref().unwrap_or(&[]),
         source_repo,
         source_revision,
         distribution_id,
@@ -563,10 +569,10 @@ fn fetch_remote_ranking(
 }
 
 fn find_remote_ranking(
-    api: &hf_hub::api::sync::Api,
+    api: &hf_hub::HFClientSync,
     dataset_repo: &str,
     dataset_revision: &str,
-    siblings: &[hf_hub::api::Siblings],
+    siblings: &[hf_hub::RepoSibling],
     source_repo: &str,
     source_revision: &str,
     distribution_id: &str,
@@ -581,16 +587,23 @@ fn find_remote_ranking(
             continue;
         }
 
-        let pinned = api.repo(Repo::with_revision(
-            dataset_repo.to_string(),
-            RepoType::Dataset,
-            dataset_revision.to_string(),
-        ));
+        let (owner, name) = dataset_repo.split_once('/').unwrap_or(("", dataset_repo));
+        let pinned = api.dataset(owner, name);
         let metadata_path = pinned
-            .download(&metadata_rel)
+            .download_file(
+                &RepoDownloadFileParams::builder()
+                    .filename(metadata_rel.clone())
+                    .revision(dataset_revision.to_string())
+                    .build(),
+            )
             .with_context(|| format!("Download {}", metadata_rel))?;
         let ranking_path = pinned
-            .download(&ranking_rel)
+            .download_file(
+                &RepoDownloadFileParams::builder()
+                    .filename(ranking_rel.clone())
+                    .revision(dataset_revision.to_string())
+                    .build(),
+            )
             .with_context(|| format!("Download {}", ranking_rel))?;
         return Ok(Some(ResolvedRanking {
             path: ranking_path,

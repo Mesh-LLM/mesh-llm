@@ -1,7 +1,6 @@
 //! Mesh membership via iroh QUIC connections.
 //!
-//! Multiple ALPNs are accepted for backward compatibility, but control traffic still uses
-//! one QUIC connection per peer. Bi-streams are multiplexed by first byte:
+//! Control traffic uses one QUIC connection per peer. Bi-streams are multiplexed by first byte:
 //! 0x01 = gossip, 0x02 = tunnel (RPC), 0x03 = tunnel map, 0x04 = tunnel (HTTP).
 
 use anyhow::{Context, Result};
@@ -764,59 +763,6 @@ fn upsert_mesh_catalog_descriptor(
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PeerAnnouncementV0 {
-    addr: EndpointAddr,
-    #[serde(default)]
-    role: NodeRole,
-    #[serde(default)]
-    models: Vec<String>,
-    #[serde(default)]
-    vram_bytes: u64,
-    #[serde(default)]
-    model_source: Option<String>,
-    #[serde(default)]
-    serving: Option<String>,
-    #[serde(default)]
-    serving_models: Vec<String>,
-    #[serde(default)]
-    available_models: Vec<String>,
-    #[serde(default)]
-    requested_models: Vec<String>,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    model_demand: HashMap<String, ModelDemand>,
-    #[serde(default)]
-    mesh_id: Option<String>,
-    #[serde(default)]
-    gpu_name: Option<String>,
-    #[serde(default)]
-    hostname: Option<String>,
-    #[serde(default)]
-    is_soc: Option<bool>,
-    #[serde(default)]
-    gpu_vram: Option<String>,
-    #[serde(default)]
-    gpu_reserved_bytes: Option<String>,
-    #[serde(
-        default,
-        rename = "gpu_bandwidth_gbps",
-        alias = "gpu_mem_bandwidth_gbps"
-    )]
-    gpu_mem_bandwidth_gbps: Option<String>,
-    #[serde(default)]
-    gpu_compute_tflops_fp32: Option<String>,
-    #[serde(default)]
-    gpu_compute_tflops_fp16: Option<String>,
-    #[serde(default)]
-    available_model_sizes: HashMap<String, u64>,
-    #[serde(skip_serializing, skip_deserializing, default)]
-    served_model_descriptors: Vec<ServedModelDescriptor>,
-    #[serde(skip_serializing, skip_deserializing, default)]
-    served_model_runtime: Vec<ModelRuntimeDescriptor>,
-}
-
 /// Merge two demand maps. For each model, take max of last_active and request_count.
 /// Role a node plays in the mesh.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -1378,7 +1324,7 @@ impl Node {
             .build();
         let mut builder = Endpoint::empty_builder()
             .secret_key(secret_key)
-            .alpns(vec![ALPN_V1.to_vec(), ALPN_V0.to_vec()])
+            .alpns(vec![ALPN_V1.to_vec()])
             .transport_config(transport_config);
 
         {
@@ -2820,7 +2766,6 @@ impl Node {
             }
         }
     }
-
     pub fn vram_bytes(&self) -> u64 {
         self.vram_bytes
     }
@@ -2900,11 +2845,6 @@ impl Node {
     ) -> Result<()> {
         use prost::Message as _;
 
-        let legacy_json: HashMap<String, u16> = my_tunnel_map
-            .iter()
-            .map(|(id, port)| (hex::encode(id.as_bytes()), *port))
-            .collect();
-        let legacy_bytes = serde_json::to_vec(&legacy_json)?;
         let owner_peer_id = self.endpoint.id().as_bytes().to_vec();
         let entries: Vec<crate::proto::mesh::TunnelEntry> = my_tunnel_map
             .iter()
@@ -2932,19 +2872,13 @@ impl Node {
 
         for (peer_id, conn) in conns {
             let proto_bytes = proto_bytes.clone();
-            let legacy_bytes = legacy_bytes.clone();
-            let protocol = connection_protocol(&conn);
             tokio::spawn(async move {
                 match conn.open_bi().await {
                     Ok((mut send, _recv)) => {
                         if send.write_all(&[STREAM_TUNNEL_MAP]).await.is_err() {
                             return;
                         }
-                        let body = match protocol {
-                            ControlProtocol::ProtoV1 => &proto_bytes,
-                            ControlProtocol::JsonV0 => &legacy_bytes,
-                        };
-                        if write_len_prefixed(&mut send, body).await.is_err() {
+                        if write_len_prefixed(&mut send, &proto_bytes).await.is_err() {
                             return;
                         }
                         let _ = send.finish();
@@ -3262,71 +3196,40 @@ impl Node {
                         use prost::Message as _;
                         let mut send = send;
                         let table = node.routing_table().await;
-                        match protocol {
-                            ControlProtocol::ProtoV1 => {
-                                let proto_table = routing_table_to_proto(&table);
-                                let _ = write_len_prefixed(&mut send, &proto_table.encode_to_vec())
-                                    .await;
-                            }
-                            ControlProtocol::JsonV0 => {
-                                if let Ok(json) = serde_json::to_vec(&table) {
-                                    let _ = send.write_all(&json).await;
-                                }
-                            }
-                        }
+                        let proto_table = routing_table_to_proto(&table);
+                        let _ = write_len_prefixed(&mut send, &proto_table.encode_to_vec()).await;
                         let _ = send.finish();
                     });
                 }
                 STREAM_PEER_DOWN => {
                     let node = self.clone();
                     tokio::spawn(async move {
-                        let peer_id_arr: [u8; 32] = match protocol {
-                            ControlProtocol::ProtoV1 => {
-                                let proto_buf = match read_len_prefixed(&mut recv).await {
-                                    Ok(buf) => buf,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "PeerDown: failed to read proto body — rejecting: {e}"
-                                        );
-                                        return;
-                                    }
-                                };
-                                let frame = match crate::proto::mesh::PeerDown::decode(
-                                    proto_buf.as_slice(),
-                                ) {
-                                    Ok(f) => f,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "PeerDown: invalid protobuf — rejecting: {e}"
-                                        );
-                                        return;
-                                    }
-                                };
-                                if let Err(e) = frame.validate_frame() {
-                                    tracing::warn!(
-                                        "PeerDown: frame validation failed — rejecting: {e}"
-                                    );
-                                    return;
-                                }
-                                match frame.peer_id.as_slice().try_into() {
-                                    Ok(b) => b,
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "PeerDown: peer_id is not 32 bytes — rejecting"
-                                        );
-                                        return;
-                                    }
-                                }
+                        let proto_buf = match read_len_prefixed(&mut recv).await {
+                            Ok(buf) => buf,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "PeerDown: failed to read proto body — rejecting: {e}"
+                                );
+                                return;
                             }
-                            ControlProtocol::JsonV0 => {
-                                let mut id_bytes = [0u8; 32];
-                                if recv.read_exact(&mut id_bytes).await.is_err() {
-                                    tracing::warn!(
-                                        "PeerDown: missing legacy endpoint id bytes — rejecting"
-                                    );
-                                    return;
-                                }
-                                id_bytes
+                        };
+                        let frame = match crate::proto::mesh::PeerDown::decode(proto_buf.as_slice())
+                        {
+                            Ok(f) => f,
+                            Err(e) => {
+                                tracing::warn!("PeerDown: invalid protobuf — rejecting: {e}");
+                                return;
+                            }
+                        };
+                        if let Err(e) = frame.validate_frame() {
+                            tracing::warn!("PeerDown: frame validation failed — rejecting: {e}");
+                            return;
+                        }
+                        let peer_id_arr: [u8; 32] = match frame.peer_id.as_slice().try_into() {
+                            Ok(b) => b,
+                            Err(_) => {
+                                tracing::warn!("PeerDown: peer_id is not 32 bytes — rejecting");
+                                return;
                             }
                         };
                         let pk = match iroh::PublicKey::from_bytes(&peer_id_arr) {
@@ -3440,72 +3343,38 @@ impl Node {
                 STREAM_PEER_LEAVING => {
                     let node = self.clone();
                     tokio::spawn(async move {
-                        let leaving_id = match protocol {
-                            ControlProtocol::ProtoV1 => {
-                                let proto_buf = match read_len_prefixed(&mut recv).await {
-                                    Ok(buf) => buf,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "PeerLeaving: failed to read proto body — rejecting: {e}"
-                                        );
-                                        return;
-                                    }
-                                };
-                                let frame = match crate::proto::mesh::PeerLeaving::decode(
-                                    proto_buf.as_slice(),
-                                ) {
-                                    Ok(f) => f,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "PeerLeaving: invalid protobuf — rejecting: {e}"
-                                        );
-                                        return;
-                                    }
-                                };
-                                if let Err(e) = frame.validate_frame() {
-                                    tracing::warn!(
-                                        "PeerLeaving: frame validation failed — rejecting: {e}"
-                                    );
-                                    return;
-                                }
-                                match resolve_peer_leaving(remote, &frame) {
-                                    Ok(id) => id,
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "PeerLeaving from {}: rejected ({})",
-                                            remote.fmt_short(),
-                                            e
-                                        );
-                                        return;
-                                    }
-                                }
+                        let proto_buf = match read_len_prefixed(&mut recv).await {
+                            Ok(buf) => buf,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "PeerLeaving: failed to read proto body — rejecting: {e}"
+                                );
+                                return;
                             }
-                            ControlProtocol::JsonV0 => {
-                                let mut id_bytes = [0u8; 32];
-                                if recv.read_exact(&mut id_bytes).await.is_err() {
+                        };
+                        let frame =
+                            match crate::proto::mesh::PeerLeaving::decode(proto_buf.as_slice()) {
+                                Ok(f) => f,
+                                Err(e) => {
                                     tracing::warn!(
-                                        "PeerLeaving: missing legacy endpoint id bytes — rejecting"
+                                        "PeerLeaving: invalid protobuf — rejecting: {e}"
                                     );
                                     return;
                                 }
-                                let pk = match iroh::PublicKey::from_bytes(&id_bytes) {
-                                    Ok(k) => k,
-                                    Err(_) => {
-                                        tracing::warn!(
-                                            "PeerLeaving: endpoint id is not a valid public key — rejecting"
-                                        );
-                                        return;
-                                    }
-                                };
-                                let leaving_id = EndpointId::from(pk);
-                                if leaving_id != remote {
-                                    tracing::warn!(
-                                        "PeerLeaving from {}: rejected (legacy sender mismatch)",
-                                        remote.fmt_short()
-                                    );
-                                    return;
-                                }
-                                leaving_id
+                            };
+                        if let Err(e) = frame.validate_frame() {
+                            tracing::warn!("PeerLeaving: frame validation failed — rejecting: {e}");
+                            return;
+                        }
+                        let leaving_id = match resolve_peer_leaving(remote, &frame) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                tracing::warn!(
+                                    "PeerLeaving from {}: rejected ({})",
+                                    remote.fmt_short(),
+                                    e
+                                );
+                                return;
                             }
                         };
                         eprintln!(
@@ -4147,15 +4016,9 @@ impl Node {
         use prost::Message as _;
 
         let buf = read_len_prefixed(&mut recv).await?;
-        let frame = match protocol {
-            ControlProtocol::ProtoV1 => crate::proto::mesh::TunnelMap::decode(buf.as_slice())
-                .map_err(|e| anyhow::anyhow!("TunnelMap decode error: {e}"))?,
-            ControlProtocol::JsonV0 => {
-                let mut frame = decode_legacy_tunnel_map_frame(&buf)?;
-                frame.owner_peer_id = remote.as_bytes().to_vec();
-                frame
-            }
-        };
+        let _ = protocol;
+        let frame = crate::proto::mesh::TunnelMap::decode(buf.as_slice())
+            .map_err(|e| anyhow::anyhow!("TunnelMap decode error: {e}"))?;
 
         frame
             .validate_frame()

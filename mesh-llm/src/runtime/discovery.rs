@@ -239,7 +239,13 @@ pub(crate) async fn check_mesh(
         }
         m.clone()
     } else {
-        let available: Vec<(&str, f64)> = models.iter().map(|n| (n.as_str(), 0.0)).collect();
+        let available: Vec<(&str, f64, crate::models::ModelCapabilities)> = models
+            .iter()
+            .map(|n| {
+                let caps = crate::models::installed_model_capabilities(n);
+                (n.as_str(), 0.0, caps)
+            })
+            .collect();
         let agentic = router::Classification {
             category: router::Category::Code,
             complexity: router::Complexity::Deep,

@@ -38,22 +38,18 @@ configure_compiler_cache() {
     )
 }
 
+LLAMA_REPO="https://github.com/Mesh-LLM/llama.cpp.git"
+LLAMA_PIN_SHA="$(tr -d '[:space:]' < "$REPO_ROOT/LLAMA_CPP_SHA")"
+
 clone_or_update_llama() {
     if [[ ! -d "$LLAMA_DIR" ]]; then
-        echo "Cloning michaelneale/llama.cpp (upstream-latest)..."
-        git clone -b upstream-latest \
-            https://github.com/michaelneale/llama.cpp.git "$LLAMA_DIR"
-        return
+        git clone -b master "$LLAMA_REPO" "$LLAMA_DIR"
     fi
-
-    pushd "$LLAMA_DIR" >/dev/null
-    current_branch="$(git branch --show-current)"
-    if [[ "$current_branch" != "upstream-latest" ]]; then
-        echo "Switching llama.cpp from '$current_branch' to 'upstream-latest'..."
-        git checkout upstream-latest
-    fi
-    git pull --ff-only origin upstream-latest
-    popd >/dev/null
+    cd "$LLAMA_DIR"
+    git fetch origin
+    git checkout "$LLAMA_PIN_SHA" --detach
+    echo "llama.cpp at $(git rev-parse --short HEAD)"
+    cd "$REPO_ROOT"
 }
 
 os_name="$(uname -s)"

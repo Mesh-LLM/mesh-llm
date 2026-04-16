@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use super::local::{
     direct_hf_cache_root_gguf_paths, gguf_metadata_cache_path, huggingface_hub_cache,
-    huggingface_hub_cache_dir,
+    huggingface_hub_cache_dir, scan_hf_cache_info,
 };
 
 #[derive(Clone, Debug, Default)]
@@ -115,9 +115,10 @@ fn local_gguf_paths() -> Vec<PathBuf> {
         }
 
         let cache = huggingface_hub_cache();
-        if let Ok(cache_info) = hf_hub::cache::CacheInfo::scan_dir(Some(cache.path())) {
+        let cache_info = scan_hf_cache_info(&cache);
+        if let Some(cache_info) = cache_info {
             for repo in &cache_info.repos {
-                if !repo.cache_id().starts_with("model/") {
+                if repo.repo_type != hf_hub::RepoType::Model {
                     continue;
                 }
                 for revision in &repo.revisions {

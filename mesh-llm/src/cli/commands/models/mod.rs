@@ -2,14 +2,17 @@ mod formatters;
 mod formatters_console;
 mod formatters_json;
 
+use crate::cli::models::ModelSearchSort;
 use crate::cli::models::ModelsCommand;
+use crate::cli::terminal_progress::{clear_stderr_line, start_spinner, DeterminateProgressLine};
 use crate::models::{
-    catalog, download_exact_ref, find_catalog_model_exact, installed_model_capabilities,
-    scan_installed_models, search_catalog_models, search_huggingface, show_exact_model,
-    show_model_variants_with_progress, SearchArtifactFilter, SearchProgress, ShowVariantsProgress,
+    catalog, download_model_ref_with_progress_details, find_catalog_model_exact,
+    installed_model_capabilities, scan_installed_models, search_catalog_models, search_huggingface,
+    show_exact_model, show_model_variants_with_progress, SearchArtifactFilter, SearchProgress,
+    SearchSort, ShowVariantsProgress,
 };
 use anyhow::{anyhow, Result};
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::time::Instant;
 
 use formatters::{
@@ -22,6 +25,7 @@ pub async fn run_model_search(
     prefer_mlx: bool,
     catalog_only: bool,
     limit: usize,
+    sort: ModelSearchSort,
     json_output: bool,
 ) -> Result<()> {
     let formatter = search_formatter(json_output);
@@ -31,6 +35,7 @@ pub async fn run_model_search(
     } else {
         SearchArtifactFilter::Gguf
     };
+    let search_sort = map_search_sort(sort);
 
     if catalog_only {
         let results: Vec<_> = search_catalog_models(&query)
@@ -41,47 +46,81 @@ pub async fn run_model_search(
             })
             .collect();
         if results.is_empty() {
-            return formatter.render_catalog_empty(&query, filter);
+            return formatter.render_catalog_empty(&query, filter, search_sort);
         }
-        return formatter.render_catalog_results(&query, filter, &results, limit);
+        return formatter.render_catalog_results(&query, filter, &results, limit, search_sort);
     }
 
-    if !formatter.is_json() {
-        eprintln!(
-            "🔎 Searching Hugging Face {} repos for '{}'...",
+    let mut announced_repo_scan = false;
+    let mut last_reported_completed = 0usize;
+    let mut search_spinner = if formatter.is_json() {
+        None
+    } else {
+        Some(start_spinner(&format!(
+            "Searching Hugging Face {} repos for '{}'",
             formatters::filter_label(filter),
             query
-        );
-    }
-    let mut announced_repo_scan = false;
-    let results = search_huggingface(&query, limit, filter, |progress| match progress {
-        SearchProgress::SearchingHub => {}
-        SearchProgress::InspectingRepos { completed, total } => {
-            if formatter.is_json() {
-                return;
+        )))
+    };
+    let mut repo_spinner = None;
+    let repo_progress = DeterminateProgressLine::new("🔎");
+    let results = search_huggingface(
+        &query,
+        limit,
+        filter,
+        search_sort,
+        |progress| match progress {
+            SearchProgress::SearchingHub => {}
+            SearchProgress::InspectingRepos { completed, total } => {
+                if formatter.is_json() {
+                    return;
+                }
+                if let Some(mut spinner) = search_spinner.take() {
+                    spinner.finish();
+                }
+                if total == 0 {
+                    return;
+                }
+                if !announced_repo_scan {
+                    announced_repo_scan = true;
+                    repo_spinner = Some(start_spinner(&format!(
+                        "Inspecting {total} candidate repos..."
+                    )));
+                }
+                if completed == 0 {
+                    return;
+                }
+                if let Some(mut spinner) = repo_spinner.take() {
+                    spinner.finish();
+                }
+                if completed < total && completed < last_reported_completed.saturating_add(5) {
+                    return;
+                }
+                last_reported_completed = completed;
+                let _ = repo_progress.draw_counts(
+                    "Inspecting repos",
+                    completed,
+                    total,
+                    Some(" candidate repos"),
+                );
+                if completed == total {
+                    let _ = clear_stderr_line();
+                    eprintln!("   Inspected {completed}/{total} candidate repos...");
+                }
             }
-            if total == 0 {
-                return;
-            }
-            if !announced_repo_scan {
-                announced_repo_scan = true;
-                eprintln!("   Inspecting {total} candidate repos...");
-            }
-            if completed == 0 {
-                return;
-            }
-            eprint!("\r   Inspected {completed}/{total} candidate repos...");
-            let _ = std::io::stderr().flush();
-            if completed == total {
-                eprintln!();
-            }
-        }
-    })
+        },
+    )
     .await?;
-    if results.is_empty() {
-        return formatter.render_hf_empty(&query, filter);
+    if let Some(mut spinner) = search_spinner.take() {
+        spinner.finish();
     }
-    formatter.render_hf_results(&query, filter, &results)
+    if let Some(mut spinner) = repo_spinner.take() {
+        spinner.finish();
+    }
+    if results.is_empty() {
+        return formatter.render_hf_empty(&query, filter, search_sort);
+    }
+    formatter.render_hf_results(&query, filter, search_sort, &results)
 }
 
 pub fn run_model_recommended(json_output: bool) -> Result<()> {
@@ -96,11 +135,28 @@ pub fn run_model_installed(json_output: bool) -> Result<()> {
         .into_iter()
         .map(|name| {
             let path = crate::models::find_model_path(&name);
-            let size = std::fs::metadata(&path).map(|meta| meta.len()).ok();
+            let display_name = crate::models::installed_model_display_name(&name);
             let catalog_model = find_catalog_model_exact(&name);
+            let model_ref = if let Some(model) = catalog_model {
+                model.name.clone()
+            } else if let Some(identity) = crate::models::huggingface_identity_for_path(&path) {
+                crate::models::installed_model_huggingface_ref(&identity)
+            } else {
+                name.clone()
+            };
+            let size = if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+            {
+                Some(crate::inference::election::total_model_bytes(&path))
+            } else {
+                std::fs::metadata(&path).map(|meta| meta.len()).ok()
+            };
             let capabilities = installed_model_capabilities(&name);
             InstalledRow {
-                name,
+                name: display_name,
+                model_ref,
                 path,
                 size,
                 catalog_model,
@@ -131,6 +187,7 @@ pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
         if interactive {
             eprintln!("🔎 Fetching GGUF variants from Hugging Face...");
         }
+        let variants_progress = DeterminateProgressLine::new("🔎");
         let variants = show_model_variants_with_progress(&details.exact_ref, |progress| {
             if !interactive {
                 return;
@@ -140,10 +197,14 @@ pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
                     if total == 0 {
                         return;
                     }
-                    eprint!("\r   Inspecting variant sizes {completed}/{total}...");
-                    let _ = std::io::stderr().flush();
+                    let _ = variants_progress.draw_counts(
+                        "Inspecting variant sizes",
+                        completed,
+                        total,
+                        None,
+                    );
                     if completed == total {
-                        eprintln!();
+                        let _ = clear_stderr_line();
                     }
                 }
             }
@@ -176,12 +237,7 @@ pub async fn run_model_download(
     json_output: bool,
 ) -> Result<()> {
     let formatter = models_formatter(json_output);
-    let details = show_exact_model(model_ref).await.ok();
-    let download_ref = details
-        .as_ref()
-        .map(|d| d.exact_ref.as_str())
-        .unwrap_or(model_ref);
-    let path = download_exact_ref(download_ref).await?;
+    let (path, details) = download_model_ref_with_progress_details(model_ref, !json_output).await?;
     if !include_draft {
         return formatter.render_download(model_ref, &path, details.as_ref(), false, None);
     }
@@ -221,8 +277,9 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
             mlx,
             catalog,
             limit,
+            sort,
             json,
-        } => run_model_search(query, *gguf, *mlx, *catalog, *limit, *json).await?,
+        } => run_model_search(query, *gguf, *mlx, *catalog, *limit, *sort, *json).await?,
         ModelsCommand::Show { model, json } => run_model_show(model, *json).await?,
         ModelsCommand::Download { model, draft, json } => {
             run_model_download(model, *draft, *json).await?
@@ -233,12 +290,32 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
             check,
             json,
         } => {
-            crate::models::run_update(repo.as_deref(), *all, *check)?;
+            let repo_for_update = repo.clone();
+            let repo_for_render = repo.clone();
+            let all = *all;
+            let check = *check;
+            tokio::task::spawn_blocking(move || {
+                crate::models::run_update(repo_for_update.as_deref(), all, check)
+            })
+            .await
+            .map_err(anyhow::Error::from)??;
             if *json {
                 let formatter = models_formatter(*json);
-                formatter.render_updates_status(repo.as_deref(), *all, *check)?;
+                formatter.render_updates_status(repo_for_render.as_deref(), all, check)?;
             }
         }
     }
     Ok(())
+}
+
+fn map_search_sort(sort: ModelSearchSort) -> SearchSort {
+    match sort {
+        ModelSearchSort::Trending => SearchSort::Trending,
+        ModelSearchSort::Downloads => SearchSort::Downloads,
+        ModelSearchSort::Likes => SearchSort::Likes,
+        ModelSearchSort::Created => SearchSort::Created,
+        ModelSearchSort::Updated => SearchSort::Updated,
+        ModelSearchSort::MostParameters => SearchSort::ParametersDesc,
+        ModelSearchSort::LeastParameters => SearchSort::ParametersAsc,
+    }
 }

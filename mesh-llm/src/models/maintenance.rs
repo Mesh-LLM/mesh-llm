@@ -1,10 +1,9 @@
-use super::{build_hf_api, huggingface_hub_cache, huggingface_hub_cache_dir, short_revision};
+use super::local::huggingface_snapshot_path;
+use super::{build_hf_api, huggingface_hub_cache_dir, short_revision};
+use crate::cli::terminal_progress::{clear_stderr_line, DeterminateProgressLine};
 use anyhow::{Context, Result};
-use hf_hub::api::sync::Api;
-use hf_hub::api::RepoInfo;
-use hf_hub::{Repo, RepoType};
+use hf_hub::{RepoDownloadFileParams, RepoInfo, RepoInfoParams, RepoType};
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 struct CachedRepo {
@@ -154,25 +153,16 @@ pub fn warn_about_updates_for_paths(paths: &[PathBuf]) {
 }
 
 fn print_update_check_progress(current: usize, total: usize, repo_id: &str) -> Result<()> {
-    let pct = if total > 0 {
-        (current as f64 / total as f64) * 100.0
-    } else {
-        100.0
-    };
-    eprint!(
-        "\r🔄 Checking updates {:>5.1}%  [{}/{}] {}",
-        pct, current, total, repo_id
-    );
-    std::io::stderr()
-        .flush()
-        .context("Flush update check progress")?;
-    Ok(())
+    DeterminateProgressLine::new("🔄").draw_counts(
+        "Checking updates",
+        current,
+        total,
+        Some(&format!(" {repo_id}")),
+    )
 }
 
 fn clear_progress_line() -> Result<()> {
-    eprint!("\r{: <140}\r", "");
-    std::io::stderr().flush().context("Flush progress clear")?;
-    Ok(())
+    clear_stderr_line()
 }
 
 fn cached_repos() -> Result<Vec<CachedRepo>> {
@@ -316,18 +306,26 @@ fn collect_ref_files(root: &Path, dir: &Path, refs: &mut Vec<(String, String)>) 
     Ok(())
 }
 
-fn remote_repo_info(api: &Api, repo_id: &str, ref_name: &str) -> Result<RepoInfo> {
-    let repo = Repo::with_revision(repo_id.to_string(), RepoType::Model, ref_name.to_string());
-    api.repo(repo)
-        .info()
+fn remote_repo_info(api: &hf_hub::HFClientSync, repo_id: &str, ref_name: &str) -> Result<RepoInfo> {
+    let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id));
+    api.model(owner, name)
+        .info(
+            &RepoInfoParams::builder()
+                .revision(ref_name.to_string())
+                .build(),
+        )
         .with_context(|| format!("Fetch repo info for {repo_id}@{ref_name}"))
 }
 
 fn repo_info_sha(info: &RepoInfo) -> String {
-    info.sha.clone()
+    match info {
+        RepoInfo::Model(info) => info.sha.clone().unwrap_or_default(),
+        RepoInfo::Dataset(info) => info.sha.clone().unwrap_or_default(),
+        RepoInfo::Space(info) => info.sha.clone().unwrap_or_default(),
+    }
 }
 
-fn check_repo_update(api: &Api, repo: &CachedRepo) -> Result<Option<String>> {
+fn check_repo_update(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<Option<String>> {
     let remote = remote_repo_info(api, &repo.repo_id, &repo.ref_name)?;
     let remote_revision = repo_info_sha(&remote);
     if remote_revision == repo.local_revision {
@@ -337,10 +335,12 @@ fn check_repo_update(api: &Api, repo: &CachedRepo) -> Result<Option<String>> {
     }
 }
 
-fn update_cached_repo(api: &Api, repo: &CachedRepo) -> Result<UpdateCounts> {
-    let repo_handle =
-        Repo::with_revision(repo.repo_id.clone(), RepoType::Model, repo.ref_name.clone());
-    let api_repo = api.repo(repo_handle);
+fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<UpdateCounts> {
+    let (owner, name) = repo
+        .repo_id
+        .split_once('/')
+        .unwrap_or(("", repo.repo_id.as_str()));
+    let api_repo = api.model(owner, name);
     let files = cached_repo_files(repo)?;
     if files.is_empty() {
         eprintln!("⚠️ {} has no cached files to refresh", repo.repo_id);
@@ -362,7 +362,12 @@ fn update_cached_repo(api: &Api, repo: &CachedRepo) -> Result<UpdateCounts> {
         }
         position += 1;
         eprintln!("   ↻ [{}/{}] {}", position, total_files, file);
-        match api_repo.download(&file) {
+        match api_repo.download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(file.clone())
+                .revision(repo.ref_name.clone())
+                .build(),
+        ) {
             Ok(path) => {
                 eprintln!("   ✅ {}", path.display());
                 counts.refreshed += 1;
@@ -390,10 +395,7 @@ fn is_not_found_error(message: &str) -> bool {
 }
 
 fn cached_repo_files(repo: &CachedRepo) -> Result<Vec<String>> {
-    let cache = huggingface_hub_cache();
-    let repo_handle =
-        Repo::with_revision(repo.repo_id.clone(), RepoType::Model, repo.ref_name.clone());
-    let root = cache.repo(repo_handle).pointer_path(&repo.local_revision);
+    let root = huggingface_snapshot_path(&repo.repo_id, RepoType::Model, &repo.local_revision);
     if !root.is_dir() {
         return Ok(Vec::new());
     }

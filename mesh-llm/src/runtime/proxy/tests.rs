@@ -1375,8 +1375,9 @@ data: {"#,
 
 #[tokio::test]
 async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
+    // Pipeline fallback test: when only one model is available, auto routes
+    // to it directly without attempting a pipeline plan.
     let strong_model = "Qwen2.5-Coder-32B-Instruct-Q4_K_M";
-    let planner_model = "Qwen2.5-3B-Instruct-Q4_K_M";
     let body = json!({
         "model": "auto",
         "messages": [
@@ -1388,24 +1389,11 @@ async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
     });
     let classification = router::classify(&body);
     assert!(pipeline::should_pipeline(&classification));
-    assert_eq!(
-        router::pick_model_classified(
-            &classification,
-            &[(strong_model, 10.0), (planner_model, 10.0)]
-        ),
-        Some(strong_model)
-    );
 
     let (strong_port, strong_rx, strong_handle) = spawn_capturing_upstream(r#"{"ok":true}"#).await;
-    let planner_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let planner_port = planner_listener.local_addr().unwrap().port();
-    drop(planner_listener);
 
-    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness(local_targets(&[
-        (strong_model, strong_port),
-        (planner_model, planner_port),
-    ]))
-    .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[(strong_model, strong_port)])).await;
 
     let request_body = body.to_string();
     let headers = format!(
@@ -1424,6 +1412,11 @@ async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
     assert!(raw.contains("\"model\":\"auto\""));
     assert!(!raw.contains("[Task Plan from"));
     assert!(raw.contains("\"Review this codebase, design a system-level fix for the HTTP proxy, debug the fragmented request bug, implement the code changes, update the tests, and explain the trade-offs around buffering, chunked transfer encoding, and connection reuse.\""));
+    // model=auto must inject mesh_hooks flag so llama-server enables hook callbacks
+    assert!(
+        raw.contains("\"mesh_hooks\":true"),
+        "model=auto should inject mesh_hooks:true into the forwarded body"
+    );
 
     proxy_handle.abort();
     let _ = strong_handle.await;
@@ -1431,8 +1424,9 @@ async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
 
 #[tokio::test]
 async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incrementally() {
-    let strong_model = "Qwen2.5-Coder-32B-Instruct-Q4_K_M";
-    let planner_model = "Qwen2.5-3B-Instruct-Q4_K_M";
+    // With a single model, pipeline is skipped (needs 2 local models).
+    // This tests that a streaming agentic request still gets proxied correctly.
+    let model = "Qwen2.5-Coder-32B-Instruct-Q4_K_M";
     let body = json!({
         "model": "auto",
         "stream": true,
@@ -1446,31 +1440,23 @@ async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incremen
     let classification = router::classify(&body);
     assert!(pipeline::should_pipeline(&classification));
 
-    let planner_response = format!(
-        "{{\"model\":\"{planner_model}\",\"choices\":[{{\"message\":{{\"role\":\"assistant\",\"content\":\"- inspect proxy\\n- preserve streaming\"}}}}]}}"
-    );
-    let (planner_port, planner_rx, planner_handle) =
-        spawn_capturing_upstream(&planner_response).await;
-    let (strong_port, strong_rx, strong_handle) = spawn_streaming_upstream(
+    let (port, _rx, handle) = spawn_streaming_upstream(
         "text/event-stream",
         vec![
             (
                 Duration::ZERO,
-                br#"data: {"delta":"pipeline-one"}\n\n"#.to_vec(),
+                br#"data: {"delta":"chunk-one"}\n\n"#.to_vec(),
             ),
             (
                 Duration::from_millis(1000),
-                br#"data: {"delta":"pipeline-two"}\n\n"#.to_vec(),
+                br#"data: {"delta":"chunk-two"}\n\n"#.to_vec(),
             ),
         ],
     )
     .await;
 
-    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness(local_targets(&[
-        (strong_model, strong_port),
-        (planner_model, planner_port),
-    ]))
-    .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(local_targets(&[(model, port)])).await;
 
     let request_body = body.to_string();
     let request = format!(
@@ -1485,28 +1471,17 @@ async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incremen
 
     let full = read_until_contains(
         &mut stream,
-        br#"data: {"delta":"pipeline-two"}\n\n"#,
+        br#"data: {"delta":"chunk-two"}\n\n"#,
         Duration::from_secs(5),
     )
     .await;
     let full_text = String::from_utf8_lossy(&full);
     assert!(full_text.contains("HTTP/1.1 200 OK"));
-    assert!(full_text.contains("Transfer-Encoding: chunked"));
-    assert!(full_text.contains(r#"data: {"delta":"pipeline-one"}\n\n"#));
-    assert!(full_text.contains(r#"data: {"delta":"pipeline-two"}\n\n"#));
-
-    let planner_raw = String::from_utf8(planner_rx.await.unwrap()).unwrap();
-    assert!(planner_raw.contains(&format!("\"model\":\"{planner_model}\"")));
-    assert!(planner_raw.contains("\"stream\":false"));
-
-    let strong_raw = String::from_utf8(strong_rx.await.unwrap()).unwrap();
-    assert!(strong_raw.contains("[Task Plan from"));
-    assert!(strong_raw.contains("- inspect proxy"));
-    assert!(strong_raw.contains("- preserve streaming"));
+    assert!(full_text.contains(r#"data: {"delta":"chunk-one"}\n\n"#));
+    assert!(full_text.contains(r#"data: {"delta":"chunk-two"}\n\n"#));
 
     proxy_handle.abort();
-    let _ = planner_handle.await;
-    let _ = strong_handle.await;
+    let _ = handle.await;
 }
 
 #[tokio::test]

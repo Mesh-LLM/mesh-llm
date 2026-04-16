@@ -1,10 +1,10 @@
 use super::formatters::{
     capabilities_json, catalog_model_capabilities, catalog_model_kind_code, filter_name,
-    fit_code_for_size_label, huggingface_cache_dir, installed_model_kind_code, local_capacity_json,
-    model_kind_code, moe_json, print_json, InstalledRow, JsonFormatter, ModelsFormatter,
-    SearchFormatter,
+    fit_code_for_size_label, huggingface_cache_dir, huggingface_repo_url,
+    installed_model_kind_code, local_capacity_json, model_kind_code, moe_json, print_json,
+    sort_name, InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter,
 };
-use crate::models::{catalog, ModelDetails, SearchArtifactFilter, SearchHit};
+use crate::models::{catalog, ModelDetails, SearchArtifactFilter, SearchHit, SearchSort};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -14,10 +14,16 @@ impl SearchFormatter for JsonFormatter {
         true
     }
 
-    fn render_catalog_empty(&self, query: &str, filter: SearchArtifactFilter) -> Result<()> {
+    fn render_catalog_empty(
+        &self,
+        query: &str,
+        filter: SearchArtifactFilter,
+        sort: SearchSort,
+    ) -> Result<()> {
         print_json(json!({
             "query": query,
             "filter": filter_name(filter),
+            "sort": sort_name(sort),
             "source": "catalog",
             "machine": local_capacity_json(),
             "results": [],
@@ -30,6 +36,7 @@ impl SearchFormatter for JsonFormatter {
         filter: SearchArtifactFilter,
         results: &[&'static catalog::CatalogModel],
         limit: usize,
+        sort: SearchSort,
     ) -> Result<()> {
         let payload_results: Vec<Value> = results
             .iter()
@@ -53,16 +60,23 @@ impl SearchFormatter for JsonFormatter {
         print_json(json!({
             "query": query,
             "filter": filter_name(filter),
+            "sort": sort_name(sort),
             "source": "catalog",
             "machine": local_capacity_json(),
             "results": payload_results,
         }))
     }
 
-    fn render_hf_empty(&self, query: &str, filter: SearchArtifactFilter) -> Result<()> {
+    fn render_hf_empty(
+        &self,
+        query: &str,
+        filter: SearchArtifactFilter,
+        sort: SearchSort,
+    ) -> Result<()> {
         print_json(json!({
             "query": query,
             "filter": filter_name(filter),
+            "sort": sort_name(sort),
             "source": "huggingface",
             "machine": local_capacity_json(),
             "results": [],
@@ -73,6 +87,7 @@ impl SearchFormatter for JsonFormatter {
         &self,
         query: &str,
         filter: SearchArtifactFilter,
+        sort: SearchSort,
         results: &[SearchHit],
     ) -> Result<()> {
         let payload_results: Vec<Value> = results
@@ -80,6 +95,7 @@ impl SearchFormatter for JsonFormatter {
             .map(|result| {
                 json!({
                     "repo_id": result.repo_id,
+                    "repo_url": huggingface_repo_url(&result.repo_id),
                     "type": model_kind_code(result.kind),
                     "size": result.size_label,
                     "downloads": result.downloads,
@@ -105,6 +121,7 @@ impl SearchFormatter for JsonFormatter {
         print_json(json!({
             "query": query,
             "filter": filter_name(filter),
+            "sort": sort_name(sort),
             "source": "huggingface",
             "machine": local_capacity_json(),
             "results": payload_results,
@@ -148,9 +165,9 @@ impl ModelsFormatter for JsonFormatter {
                     "size_bytes": row.size,
                     "size": row.size.map(super::formatters::format_installed_size),
                     "capabilities": capabilities_json(row.capabilities),
-                    "ref": row.name,
-                    "show": format!("mesh-llm models show {}", row.name),
-                    "download": format!("mesh-llm models download {}", row.name),
+                    "ref": row.model_ref,
+                    "show": format!("mesh-llm models show {}", row.model_ref),
+                    "download": format!("mesh-llm models download {}", row.model_ref),
                     "path": row.path,
                     "about": row.catalog_model.map(|m| m.description.clone()),
                     "draft": row.catalog_model.and_then(|m| m.draft.clone()),

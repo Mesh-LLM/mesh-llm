@@ -13,14 +13,10 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli::moe::{HfJobArgs, MoeAnalyzeCommand, MoeCommand};
+use crate::cli::terminal_progress::start_spinner;
 use crate::cli::Cli;
 use crate::inference::moe;
 use crate::models;
@@ -386,18 +382,26 @@ async fn run_share(model: &str, ranking_file: Option<&Path>, dataset_repo: &str)
     let log_path = log_path_for(&resolved.path, &ranking.analyzer_id);
     let bundle = moe_planner::build_submit_bundle(&resolved, &ranking, Some(log_path.as_path()))?;
     let api = models::build_hf_api(false).context("Build Hugging Face client for MoE share")?;
-    let dataset = api.repo(hf_hub::Repo::with_revision(
-        dataset_repo.to_string(),
-        hf_hub::RepoType::Dataset,
-        "main".to_string(),
-    ));
+    let (owner, name) = dataset_repo.split_once('/').unwrap_or(("", dataset_repo));
+    let dataset = api.dataset(owner, name);
     let info = dataset
-        .info()
+        .info(
+            &hf_hub::RepoInfoParams::builder()
+                .revision("main".to_string())
+                .build(),
+        )
         .with_context(|| format!("Fetch dataset info for {}", dataset_repo))?;
+    let hf_hub::RepoInfo::Dataset(info) = info else {
+        anyhow::bail!("Expected dataset repo info for {}", dataset_repo);
+    };
     let existing = bundle
         .dataset_paths
         .iter()
-        .filter(|path| info.siblings.iter().any(|entry| &entry.rfilename == *path))
+        .filter(|path| {
+            info.siblings
+                .as_ref()
+                .is_some_and(|siblings| siblings.iter().any(|entry| &entry.rfilename == *path))
+        })
         .cloned()
         .collect::<Vec<_>>();
 
@@ -664,61 +668,6 @@ fn read_analyze_rows(path: &Path) -> Result<Vec<AnalyzeRow>> {
         });
     }
     Ok(rows)
-}
-
-struct SpinnerHandle {
-    done: Arc<AtomicBool>,
-    message: Arc<Mutex<String>>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-impl SpinnerHandle {
-    fn set_message(&self, message: impl Into<String>) {
-        if let Ok(mut guard) = self.message.lock() {
-            *guard = message.into();
-        }
-    }
-
-    fn finish(&mut self) {
-        self.done.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-        eprint!("\r\x1b[2K");
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-    }
-}
-
-impl Drop for SpinnerHandle {
-    fn drop(&mut self) {
-        self.finish();
-    }
-}
-
-fn start_spinner(message: &str) -> SpinnerHandle {
-    let done = Arc::new(AtomicBool::new(false));
-    let done_thread = Arc::clone(&done);
-    let message = Arc::new(Mutex::new(message.to_string()));
-    let message_thread = Arc::clone(&message);
-    let thread = thread::spawn(move || {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let mut index = 0usize;
-        while !done_thread.load(Ordering::Relaxed) {
-            let current = message_thread
-                .lock()
-                .map(|guard| guard.clone())
-                .unwrap_or_else(|_| "Working".to_string());
-            eprint!("\r{} {}\x1b[K", frames[index % frames.len()], current);
-            let _ = std::io::Write::flush(&mut std::io::stderr());
-            index += 1;
-            thread::sleep(Duration::from_millis(120));
-        }
-    });
-    SpinnerHandle {
-        done,
-        message,
-        thread: Some(thread),
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

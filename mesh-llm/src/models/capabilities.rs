@@ -1,6 +1,6 @@
 use super::build_hf_tokio_api;
 use super::catalog;
-use hf_hub::{Repo, RepoType};
+use hf_hub::{RepoDownloadFileParams, RepoType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -204,12 +204,22 @@ pub async fn infer_remote_hf_capabilities(
     file: &str,
     siblings: Option<&[String]>,
 ) -> ModelCapabilities {
+    let metadata = fetch_remote_hf_metadata_jsons(repo, revision).await;
+    infer_remote_hf_capabilities_with_metadata(repo, file, siblings, &metadata)
+}
+
+pub fn infer_remote_hf_capabilities_with_metadata(
+    repo: &str,
+    file: &str,
+    siblings: Option<&[String]>,
+    metadata: &[Value],
+) -> ModelCapabilities {
     let mut caps = ModelCapabilities::default();
     caps = merge_name_signals(caps, &[repo, file]);
     if let Some(files) = siblings {
         caps = merge_sibling_signals(caps, files.iter().map(String::as_str));
     }
-    for config in fetch_remote_metadata_jsons(repo, revision).await {
+    for config in metadata {
         caps = merge_config_signals(caps, &config);
     }
     caps.normalize()
@@ -248,6 +258,10 @@ pub fn merge_name_signals(mut caps: ModelCapabilities, values: &[&str]) -> Model
     } else if values
         .iter()
         .any(|value| likely_tool_use_name_signal(value))
+    {
+        caps.upgrade_tool_use(CapabilityLevel::Likely);
+    } else if caps.tool_use == CapabilityLevel::None
+        && values.iter().any(|value| known_tool_capable_family(value))
     {
         caps.upgrade_tool_use(CapabilityLevel::Likely);
     }
@@ -580,6 +594,22 @@ fn likely_tool_use_name_signal(value: &str) -> bool {
         .any(|needle| value.contains(needle))
 }
 
+/// Known model families that support tool calling even when their config
+/// files don't contain standard tool tokens. Checked as a last-resort
+/// fallback when detection finds nothing.
+///
+/// Matches against any segment of the value (split on `/`, `-`, `_`, `.`)
+/// so repo paths like "Qwen/Qwen3-32B" and filenames both work.
+fn known_tool_capable_family(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    let prefixes = ["qwen3", "minimax", "hermes", "gemma"];
+    // Check if any segment of the value starts with a known prefix.
+    // Segments are split on common separators in model names/paths.
+    lower
+        .split(&['/', '-', '_', '.'][..])
+        .any(|seg| prefixes.iter().any(|p| seg.starts_with(p)))
+}
+
 fn json_contains_reasoning_tokens(value: &Value) -> bool {
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
@@ -648,25 +678,51 @@ fn read_local_metadata_jsons(path: &Path) -> Vec<Value> {
     values
 }
 
-async fn fetch_remote_metadata_jsons(repo: &str, revision: Option<&str>) -> Vec<Value> {
+pub async fn fetch_remote_hf_metadata_jsons(repo: &str, revision: Option<&str>) -> Vec<Value> {
+    let Some(api) = build_hf_tokio_api(false).ok() else {
+        return Vec::new();
+    };
+    let revision = revision.unwrap_or("main").to_string();
+    let config = fetch_remote_json_with_api(
+        api.clone(),
+        repo.to_string(),
+        revision.clone(),
+        "config.json",
+    );
+    let tokenizer = fetch_remote_json_with_api(
+        api.clone(),
+        repo.to_string(),
+        revision.clone(),
+        "tokenizer_config.json",
+    );
+    let chat_template =
+        fetch_remote_json_with_api(api, repo.to_string(), revision, "chat_template.json");
+
+    let (config, tokenizer, chat_template) = tokio::join!(config, tokenizer, chat_template);
     let mut values = Vec::new();
-    for filename in ["config.json", "tokenizer_config.json", "chat_template.json"] {
-        if let Some(value) = fetch_remote_json(repo, revision, filename).await {
-            values.push(value);
-        }
+    for value in [config, tokenizer, chat_template].into_iter().flatten() {
+        values.push(value);
     }
     values
 }
 
-async fn fetch_remote_json(repo: &str, revision: Option<&str>, file: &str) -> Option<Value> {
-    let api = build_hf_tokio_api(false).ok()?;
-    let repo = match revision {
-        Some(revision) => {
-            Repo::with_revision(repo.to_string(), RepoType::Model, revision.to_string())
-        }
-        None => Repo::new(repo.to_string(), RepoType::Model),
-    };
-    let path = api.repo(repo).get(file).await.ok()?;
+async fn fetch_remote_json_with_api(
+    api: hf_hub::HFClient,
+    repo: String,
+    revision: String,
+    file: &'static str,
+) -> Option<Value> {
+    let (owner, name) = repo.split_once('/').unwrap_or(("", repo.as_str()));
+    let path = api
+        .repo(RepoType::Model, owner, name)
+        .download_file(
+            &RepoDownloadFileParams::builder()
+                .filename(file.to_string())
+                .revision(revision)
+                .build(),
+        )
+        .await
+        .ok()?;
     let text = tokio::fs::read_to_string(path).await.ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -686,5 +742,48 @@ mod tests {
         );
         assert_eq!(caps.vision, CapabilityLevel::Supported);
         assert!(caps.multimodal);
+    }
+
+    #[test]
+    fn known_families_get_tool_use_likely() {
+        for name in [
+            "Qwen3-8B-Q4_K_M",
+            "Qwen3.5-9B-Q4_K_M",
+            "MiniMax-M2.5-Q4_K_M",
+            "Hermes-2-Pro-Mistral-7B-Q4_K_M",
+            "gemma-4-31B-it-Q8_0",
+            "gemma-4-26B-A4B-it-UD-Q4_K_M",
+        ] {
+            let caps = merge_name_signals(Default::default(), &[name]);
+            assert_ne!(
+                caps.tool_use,
+                CapabilityLevel::None,
+                "{name} should have tool_use from known family"
+            );
+        }
+    }
+
+    #[test]
+    fn known_families_match_repo_paths() {
+        // Repo-style values like "Qwen/Qwen3-32B" should also match
+        for value in [
+            "Qwen/Qwen3-32B-Instruct-GGUF",
+            "MiniMax/MiniMax-M2.5-GGUF",
+            "google/gemma-4-27B-it-GGUF",
+            "NousResearch/Hermes-2-Pro-Mistral-7B-GGUF",
+        ] {
+            let caps = merge_name_signals(Default::default(), &[value]);
+            assert_ne!(
+                caps.tool_use,
+                CapabilityLevel::None,
+                "{value} should match known family via repo path"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_model_no_tool_use() {
+        let caps = merge_name_signals(Default::default(), &["SomeRandomModel-7B"]);
+        assert_eq!(caps.tool_use, CapabilityLevel::None);
     }
 }

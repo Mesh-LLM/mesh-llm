@@ -1165,6 +1165,16 @@ pub async fn start_llama_server(
         "--reasoning-budget".to_string(),
         "0".to_string(),
     ]);
+
+    // Mesh hooks — tell llama-server where to call back.
+    // Uses the management API port (default 3131) as the callback target.
+    if let Ok(api_port) = std::env::var("MESH_API_PORT") {
+        args.extend_from_slice(&["--mesh-port".to_string(), api_port]);
+    }
+    if std::env::var("MESH_HOOK_DEBUG").is_ok() {
+        args.push("--mesh-hook-debug".to_string());
+    }
+
     // KV cache quantization — asymmetric K/V strategy.
     //
     // K precision dominates quality: K controls attention routing via softmax,

@@ -1,5 +1,6 @@
-use hf_hub::cache::CacheInfo;
-use hf_hub::Cache;
+use hf_hub::cache::scan_cache_dir;
+use hf_hub::types::cache::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
+use hf_hub::RepoType;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -25,20 +26,73 @@ fn hf_hub_cache_override() -> Option<PathBuf> {
     }
 }
 
-/// Build the effective Hugging Face cache handle.
-///
-/// `hf-hub` already resolves `HF_HOME` and the default cache location.
-/// We only patch in `HF_HUB_CACHE` here because the crate does not honor it.
-pub fn huggingface_hub_cache() -> Cache {
+pub fn huggingface_hub_cache() -> PathBuf {
     if let Some(path) = hf_hub_cache_override() {
-        Cache::new(path)
+        path
     } else {
-        Cache::from_env()
+        if let Ok(path) = std::env::var("HF_HOME") {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join("hub");
+            }
+        }
+        if let Ok(path) = std::env::var("XDG_CACHE_HOME") {
+            let trimmed = path.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join("huggingface").join("hub");
+            }
+        }
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(".cache")
+            .join("huggingface")
+            .join("hub")
     }
 }
 
 pub fn huggingface_hub_cache_dir() -> PathBuf {
-    huggingface_hub_cache().path().clone()
+    huggingface_hub_cache()
+}
+
+pub(crate) fn huggingface_repo_folder_name(repo_id: &str, repo_type: RepoType) -> String {
+    let type_plural = format!("{}s", repo_type);
+    std::iter::once(type_plural.as_str())
+        .chain(repo_id.split('/'))
+        .collect::<Vec<_>>()
+        .join("--")
+}
+
+pub(crate) fn huggingface_snapshot_path(
+    repo_id: &str,
+    repo_type: RepoType,
+    revision: &str,
+) -> PathBuf {
+    huggingface_hub_cache_dir()
+        .join(huggingface_repo_folder_name(repo_id, repo_type))
+        .join("snapshots")
+        .join(revision)
+}
+
+pub(crate) fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
+    let cache_root = cache_root.to_path_buf();
+    let scan = move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        runtime.block_on(scan_cache_dir(&cache_root)).ok()
+    };
+
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::spawn(scan).join().ok().flatten()
+    } else {
+        scan()
+    }
+}
+
+fn cache_repo_id(repo: &CachedRepoInfo) -> Option<&str> {
+    (repo.repo_type == RepoType::Model).then_some(repo.repo_id.as_str())
 }
 
 pub fn mesh_llm_cache_dir() -> PathBuf {
@@ -94,13 +148,15 @@ fn identity_from_cache_snapshot_path(
     })
 }
 
-fn scan_hf_cache_identity_for_path(path: &Path, cache: &Cache) -> Option<HuggingFaceModelIdentity> {
-    let cache_info = CacheInfo::scan_dir(Some(cache.path())).ok()?;
+fn scan_hf_cache_identity_for_path(
+    path: &Path,
+    cache_root: &Path,
+) -> Option<HuggingFaceModelIdentity> {
+    let cache_info = scan_hf_cache_info(cache_root)?;
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     for repo in &cache_info.repos {
-        let cache_id = repo.cache_id();
-        let Some(repo_id) = cache_id.strip_prefix("model/") else {
+        let Some(repo_id) = cache_repo_id(repo) else {
             continue;
         };
         for revision in &repo.revisions {
@@ -143,9 +199,8 @@ fn scan_hf_cache_identity_for_path(path: &Path, cache: &Cache) -> Option<Hugging
 }
 
 pub fn huggingface_identity_for_path(path: &Path) -> Option<HuggingFaceModelIdentity> {
-    let cache = huggingface_hub_cache();
-    let cache_root = cache.path();
-    if let Some(identity) = identity_from_cache_snapshot_path(path, cache_root) {
+    let cache_root = huggingface_hub_cache_dir();
+    if let Some(identity) = identity_from_cache_snapshot_path(path, &cache_root) {
         return Some(identity);
     }
     let resolved_cache_root = cache_root
@@ -158,7 +213,7 @@ pub fn huggingface_identity_for_path(path: &Path) -> Option<HuggingFaceModelIden
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if resolved != path {
-        if let Some(identity) = identity_from_cache_snapshot_path(&resolved, cache_root) {
+        if let Some(identity) = identity_from_cache_snapshot_path(&resolved, &cache_root) {
             return Some(identity);
         }
         if resolved_cache_root != *cache_root {
@@ -169,7 +224,7 @@ pub fn huggingface_identity_for_path(path: &Path) -> Option<HuggingFaceModelIden
             }
         }
     }
-    scan_hf_cache_identity_for_path(path, &cache)
+    scan_hf_cache_identity_for_path(path, &cache_root)
 }
 
 pub fn gguf_metadata_cache_path(path: &Path) -> Option<PathBuf> {
@@ -223,16 +278,16 @@ pub(crate) fn direct_hf_cache_root_gguf_paths(root: &Path) -> Vec<PathBuf> {
 
 fn cache_scanned_file_path(
     cache_root: &Path,
-    repo: &hf_hub::cache::CachedRepo,
-    revision: &hf_hub::cache::CachedRevision,
-    file: &hf_hub::cache::CachedFile,
+    repo: &CachedRepoInfo,
+    revision: &CachedRevisionInfo,
+    file: &CachedFileInfo,
 ) -> PathBuf {
     let relative = file
         .file_path
         .strip_prefix(&revision.snapshot_path)
         .unwrap_or(file.file_path.as_path());
     cache_root
-        .join(repo.repo.folder_name())
+        .join(huggingface_repo_folder_name(&repo.repo_id, repo.repo_type))
         .join("snapshots")
         .join(&revision.commit_hash)
         .join(relative)
@@ -264,18 +319,17 @@ fn push_model_name(
 }
 
 fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min_size_bytes: u64) {
-    let cache = huggingface_hub_cache();
-    let cache_root = cache.path().clone();
+    let cache_root = huggingface_hub_cache_dir();
 
     for path in direct_hf_cache_root_gguf_paths(&cache_root) {
         push_model_name(&path, names, seen, min_size_bytes);
     }
 
-    let Ok(cache_info) = CacheInfo::scan_dir(Some(cache.path())) else {
+    let Some(cache_info) = scan_hf_cache_info(&cache_root) else {
         return;
     };
     for repo in &cache_info.repos {
-        if !repo.cache_id().starts_with("model/") {
+        if repo.repo_type != RepoType::Model {
             continue;
         }
         for revision in &repo.revisions {
@@ -319,13 +373,12 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
     }
 
     let split_prefix = format!("{stem}-00001-of-");
-    let cache = huggingface_hub_cache();
-    let cache_root = cache.path().clone();
-    let Ok(cache_info) = CacheInfo::scan_dir(Some(cache.path())) else {
+    let cache_root = huggingface_hub_cache_dir();
+    let Some(cache_info) = scan_hf_cache_info(&cache_root) else {
         return None;
     };
     for repo in &cache_info.repos {
-        if !repo.cache_id().starts_with("model/") {
+        if repo.repo_type != RepoType::Model {
             continue;
         }
         for revision in &repo.revisions {
@@ -366,13 +419,12 @@ fn split_gguf_base_name(stem: &str) -> Option<&str> {
 /// Find a GGUF model file by stem name in the Hugging Face cache.
 /// For split GGUFs, finds the first part (name-00001-of-NNNNN.gguf).
 pub fn find_model_path(stem: &str) -> PathBuf {
-    let filename = format!("{stem}.gguf");
     let canonical_dir = huggingface_hub_cache_dir();
     if let Some(found) = find_hf_cache_model_path(&canonical_dir, stem) {
         return found;
     }
 
-    canonical_dir.join(&filename)
+    canonical_dir.join(format!("{stem}.gguf"))
 }
 
 /// Strip common GGUF quantization suffixes from a lowercased stem.
