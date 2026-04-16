@@ -1791,17 +1791,23 @@ pub async fn handle_mesh_request(
                 let cl = router::classify(&body_json);
                 let served = node.models_being_served().await;
                 let media = router::media_requirements(body_json);
-                let available: Vec<(&str, f64)> = served
+                let with_caps: Vec<(&str, f64, crate::models::ModelCapabilities)> = served
                     .iter()
-                    .filter(|name| {
+                    .map(|name| {
                         let caps = crate::models::installed_model_capabilities(name);
+                        (name.as_str(), 0.0, caps)
+                    })
+                    .collect();
+                let available: Vec<(&str, f64, crate::models::ModelCapabilities)> = with_caps
+                    .iter()
+                    .filter(|(_, _, caps)| {
                         (!media.needs_vision || caps.vision_label().is_some())
                             && (!media.needs_audio || caps.audio_label().is_some())
                     })
-                    .map(|name| (name.as_str(), 0.0))
+                    .cloned()
                     .collect();
-                let available: Vec<(&str, f64)> = if available.is_empty() {
-                    served.iter().map(|name| (name.as_str(), 0.0)).collect()
+                let available = if available.is_empty() {
+                    with_caps
                 } else {
                     available
                 };

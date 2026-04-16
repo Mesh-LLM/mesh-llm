@@ -53,17 +53,16 @@ pub async fn find_audio_peer(node: &mesh::Node, exclude_model: &str) -> Option<E
 /// Find up to `n` peers serving a *different* model from the current one,
 /// ranked by score (best first).
 ///
-/// Excludes models smaller than the current one — no point asking a weaker
-/// model for help. Same-tier or larger models are fine; larger is preferred
-/// slightly. Tie-break on RTT (faster = better).
+/// Picks peers running a different model for diversity. Prefers reasoning-capable
+/// models, then lower RTT. Deduplicates by model name — two nodes running the
+/// same model don't give diversity, just redundancy.
 pub async fn find_different_model_peers(
     node: &mesh::Node,
     current_model: &str,
     n: usize,
 ) -> Vec<(EndpointId, String)> {
-    use crate::network::router::profile_for;
+    use crate::models::CapabilityLevel;
 
-    let current_tier = profile_for(current_model).map(|p| p.tier).unwrap_or(2);
     let peers = node.peers().await;
 
     let mut candidates: Vec<_> = peers
@@ -72,28 +71,18 @@ pub async fn find_different_model_peers(
             let different = p.served_model_descriptors.iter().find(|d| {
                 d.identity.model_name != current_model && !d.identity.model_name.is_empty()
             });
-            different.and_then(|d| {
-                let peer_tier = profile_for(&d.identity.model_name)
-                    .map(|p| p.tier)
-                    .unwrap_or(2);
-                // Skip smaller models — they can't help
-                if peer_tier < current_tier {
-                    return None;
-                }
+            different.map(|d| {
                 let rtt = p.rtt_ms.unwrap_or(500);
-                // Prefer larger models slightly (invert tier so bigger = lower score).
-                // A tier-4 model scores 0, tier-3 scores 1000, same-tier scores
-                // (4 - current_tier) * 1000. RTT breaks ties.
-                let tier_score = (4u32.saturating_sub(peer_tier as u32)) * 1000;
-                let score = tier_score + rtt;
-                Some((p.id, d.identity.model_name.clone(), score))
+                let has_reasoning = d.capabilities.reasoning != CapabilityLevel::None;
+                // Sort key: reasoning models first (0), then non-reasoning (1), then RTT
+                let score = if has_reasoning { rtt } else { 10_000 + rtt };
+                (p.id, d.identity.model_name.clone(), score)
             })
         })
         .collect();
 
     candidates.sort_by_key(|(_, _, score)| *score);
-    // Deduplicate by model name — two nodes running the same model
-    // don't give diversity, just redundancy. Keep the best-scored one.
+    // Deduplicate by model name — keep the best-scored peer for each model.
     let mut seen_models = std::collections::HashSet::new();
     candidates.retain(|(_, model, _)| seen_models.insert(model.clone()));
     candidates.truncate(n);
