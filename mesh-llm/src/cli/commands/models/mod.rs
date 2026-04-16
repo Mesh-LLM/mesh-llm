@@ -3,7 +3,7 @@ mod formatters_console;
 mod formatters_json;
 
 use crate::cli::models::ModelsCommand;
-use crate::cli::terminal_progress::{clear_stderr_line, DeterminateProgressLine};
+use crate::cli::terminal_progress::{clear_stderr_line, start_spinner, DeterminateProgressLine};
 use crate::models::{
     catalog, download_model_ref_with_progress_details, find_catalog_model_exact,
     installed_model_capabilities, scan_installed_models, search_catalog_models, search_huggingface,
@@ -57,6 +57,7 @@ pub async fn run_model_search(
     }
     let mut announced_repo_scan = false;
     let mut last_reported_completed = 0usize;
+    let mut repo_spinner = None;
     let repo_progress = DeterminateProgressLine::new("🔎");
     let results = search_huggingface(&query, limit, filter, |progress| match progress {
         SearchProgress::SearchingHub => {}
@@ -70,9 +71,15 @@ pub async fn run_model_search(
             if !announced_repo_scan {
                 announced_repo_scan = true;
                 eprintln!("   Inspecting {total} candidate repos...");
+                repo_spinner = Some(start_spinner(&format!(
+                    "Inspecting {total} candidate repos..."
+                )));
             }
             if completed == 0 {
                 return;
+            }
+            if let Some(mut spinner) = repo_spinner.take() {
+                spinner.finish();
             }
             if completed < total && completed < last_reported_completed.saturating_add(5) {
                 return;
@@ -91,6 +98,9 @@ pub async fn run_model_search(
         }
     })
     .await?;
+    if let Some(mut spinner) = repo_spinner.take() {
+        spinner.finish();
+    }
     if results.is_empty() {
         return formatter.render_hf_empty(&query, filter);
     }

@@ -70,7 +70,7 @@ pub async fn search_huggingface<F>(
 where
     F: FnMut(SearchProgress),
 {
-    const SEARCH_CONCURRENCY: usize = 6;
+    const SEARCH_CONCURRENCY: usize = 10;
 
     let repo_limit = limit.clamp(1, 100);
     progress(SearchProgress::SearchingHub);
