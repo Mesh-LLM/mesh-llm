@@ -13,7 +13,6 @@ function createScreenNode(id: string, x: number, y: number): ScreenNode {
     label: id,
     subtitle: id,
     role: "Worker",
-    statusLabel: "Ready",
     latencyLabel: "0ms",
     vramLabel: "0 GB",
     modelLabel: "",

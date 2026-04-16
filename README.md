@@ -315,7 +315,7 @@ sudo loginctl enable-linger "$USER"
 mesh-llm serve --model Qwen2.5-32B    # dashboard at http://localhost:3131
 ```
 
-Live topology, per-node GPU capacity, model picker, and built-in chat. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
+Live topology, per-node GPU capacity, model picker, and built-in chat. Live members show only the `Client`, `Standby`, `Loading`, and `Serving` badges. Wakeable provider-backed capacity is shown separately from topology and stays out of routing until it rejoins. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
 
 ## Multimodal Support
 
@@ -512,7 +512,7 @@ When a node is running, open:
 http://localhost:3131
 ```
 
-The console shows live topology, VRAM usage, loaded models, and built-in chat. It is backed by `/api/status` and `/api/events`.
+The console shows live topology with only `Client`, `Standby`, `Loading`, and `Serving` badges for live members, plus separate wakeable capacity, VRAM usage, loaded models, and built-in chat. Wakeable inventory is not part of topology peers or routing until it rejoins. It is backed by `/api/status` and `/api/events`.
 
 You can also try the hosted demo:
 

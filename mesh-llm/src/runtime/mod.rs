@@ -3,6 +3,7 @@ mod discovery;
 pub mod instance;
 mod local;
 mod proxy;
+pub(crate) mod wakeable;
 
 use self::discovery::{nostr_rediscovery, start_new_mesh};
 use self::local::{

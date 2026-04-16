@@ -39,7 +39,7 @@ src/
 └── system/                  Hardware detection, benchmarking, self-update
 ```
 
-## Node Roles
+## Topology Roles
 
 ```rust
 enum NodeRole {
@@ -49,7 +49,7 @@ enum NodeRole {
 }
 ```
 
-Roles are exchanged via gossip over `meshllm.node.v1` protobuf on QUIC ALPN `mesh-llm/1`. A node transitions Worker → Host when elected.
+Roles are exchanged via gossip. Live-state badges are separate and use `Client`, `Standby`, `Loading`, and `Serving`. Preferred peers use `meshllm.node.v1` protobuf on QUIC ALPN `mesh-llm/1`; legacy peers may still negotiate `mesh-llm/0` and use the older JSON gossip payloads. A node transitions Worker → Host when elected.
 
 A newly connected peer is quarantined until it sends a valid `GossipFrame` with `gen = 1` (quarantine-until-gossip admission model). Only streams 0x01 (GOSSIP) and 0x05 (ROUTE_REQUEST) are accepted before admission. All other streams are rejected until the peer is admitted.
 

@@ -25,6 +25,7 @@ import {
   TableRow,
 } from "../../../../components/ui/table";
 import {
+  formatLiveNodeState,
   formatGpuMemory,
   modelDisplayName,
   modelStatusTooltip,
@@ -36,6 +37,7 @@ import {
   uniqueModels,
 } from "../../../app-shell/lib/status-helpers";
 import type {
+  LiveNodeState,
   MeshModel,
   Ownership,
 } from "../../../app-shell/lib/status-types";
@@ -54,8 +56,8 @@ type NodeSidebarRecord = {
   title: string;
   hostname?: string;
   self: boolean;
+  state: LiveNodeState;
   role: string;
-  statusLabel: string;
   latencyLabel: string;
   vramGb: number;
   vramSharePct: number | null;
@@ -140,10 +142,10 @@ export function NodeSidebar({
                   tooltip={nodeRoleTooltip(node.role)}
                 />
                 <StatusPill
-                  label={node.statusLabel}
-                  tone={topologyStatusTone(node.statusLabel)}
+                  label={formatLiveNodeState(node.state)}
+                  tone={topologyStatusTone(node.state)}
                   dot
-                  tooltip={topologyStatusTooltip(node.statusLabel)}
+                  tooltip={topologyStatusTooltip(node.state)}
                 />
               </div>
               <SheetDescription className="mt-1.5 text-sm text-muted-foreground [overflow-wrap:anywhere]">

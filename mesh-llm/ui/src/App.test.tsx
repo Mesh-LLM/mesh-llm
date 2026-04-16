@@ -92,6 +92,7 @@ import {
   describeImageAttachmentForPrompt,
   describeRenderedPagesAsText,
 } from "./App";
+import type { StatusPayload } from "./features/app-shell/lib/status-types";
 
 function buildProps(
   overrides: Partial<Parameters<typeof ChatPage>[0]> = {},
@@ -100,7 +101,8 @@ function buildProps(
     status: {
       node_id: "node-1",
       token: "invite-token",
-      node_status: "host",
+      node_state: "serving",
+      node_status: "Serving",
       is_host: true,
       is_client: false,
       llama_ready: true,
@@ -162,12 +164,13 @@ function buildProps(
   };
 }
 
-const statusTemplate = {
+const statusTemplate: StatusPayload = {
   version: "1.0.0",
   latest_version: null,
   node_id: "node-1",
   token: "token-123",
-  node_status: "Host",
+  node_state: "serving",
+  node_status: "Serving",
   is_host: true,
   is_client: false,
   llama_ready: true,
@@ -185,7 +188,7 @@ const statusTemplate = {
   inflight_requests: 0,
   nostr_discovery: false,
   my_hostname: "host.local",
-  gpus: [] as unknown[],
+  gpus: [],
 };
 
 let statusPayload = createStatusPayload();
@@ -199,8 +202,8 @@ function createStatusPayload() {
     models: [] as typeof statusTemplate.models,
     available_models: [] as typeof statusTemplate.available_models,
     requested_models: [] as typeof statusTemplate.requested_models,
-    serving_models: [...statusTemplate.serving_models],
-    hosted_models: [...statusTemplate.hosted_models],
+    serving_models: [...(statusTemplate.serving_models ?? [])],
+    hosted_models: [...(statusTemplate.hosted_models ?? [])],
     gpus: [] as typeof statusTemplate.gpus,
   };
 }
@@ -548,6 +551,43 @@ describe("App routing and status", () => {
       ),
     );
     await screen.findByText("Mesh LLM v1.0.0");
+  });
+
+  it("renders dashboard live-state labels from node_state and peer state", async () => {
+    statusPayload = {
+      ...createStatusPayload(),
+      node_state: "loading",
+      node_status: "Serving",
+      is_host: false,
+      llama_ready: false,
+      model_name: "",
+      hosted_models: [],
+      serving_models: [],
+      peers: [
+        {
+          id: "peer-standby",
+          role: "Host",
+          state: "standby",
+          models: [],
+          available_models: [],
+          requested_models: [],
+          serving_models: [],
+          hosted_models: [],
+          hosted_models_known: true,
+          vram_gb: 16,
+          rtt_ms: 18,
+          hostname: "peer-host.local",
+        },
+      ],
+    };
+
+    setPath("/dashboard");
+    render(<App />);
+
+    expect((await screen.findAllByText("Loading")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Standby")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Host")).toBeInTheDocument();
+    expect(screen.queryAllByText("Serving")).toHaveLength(0);
   });
 
   it("keeps client chat disabled until /api/models reports a warm model", async () => {

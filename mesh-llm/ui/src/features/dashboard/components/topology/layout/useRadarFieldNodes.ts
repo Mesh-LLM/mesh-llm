@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 
-import { formatLatency, shortName } from "../../../../app-shell/lib/status-helpers";
+import { formatLatency, formatLiveNodeState, shortName } from "../../../../app-shell/lib/status-helpers";
 import type { TopologyNode } from "../../../../app-shell/lib/topology-types";
 
 import { color, hashString, nodeUpdateSignature, TAU } from "../helpers";
@@ -253,8 +253,6 @@ export function useRadarFieldNodes(
         subtitle: "Client",
         hostname: node.hostname,
         role: "Client",
-        statusLabel: node.statusLabel,
-        ageSeconds: node.ageSeconds,
         latencyLabel: formatLatency(node.latencyMs),
         vramLabel: "n/a",
         modelLabel: "API-only",
@@ -288,11 +286,9 @@ export function useRadarFieldNodes(
       output.push({
         id: node.id,
         label: node.hostname || node.id,
-        subtitle: node.statusLabel,
+        subtitle: formatLiveNodeState(node.state),
         hostname: node.hostname,
         role: node.host ? "Host" : "Worker",
-        statusLabel: node.statusLabel,
-        ageSeconds: node.ageSeconds,
         latencyLabel: formatLatency(node.latencyMs),
         vramLabel: `${Math.max(0, node.vram).toFixed(1)} GB`,
         modelLabel: modelLabel(models),
@@ -326,11 +322,9 @@ export function useRadarFieldNodes(
       output.push({
         id: node.id,
         label: node.hostname || node.id,
-        subtitle: node.statusLabel,
+        subtitle: formatLiveNodeState(node.state),
         hostname: node.hostname,
         role: node.host ? "Host" : "Serving",
-        statusLabel: node.statusLabel,
-        ageSeconds: node.ageSeconds,
         latencyLabel: formatLatency(node.latencyMs),
         vramLabel: `${Math.max(0, node.vram).toFixed(1)} GB`,
         modelLabel: modelLabel(models),
@@ -364,11 +358,9 @@ export function useRadarFieldNodes(
       output.push({
         id: node.id,
         label: node.hostname || node.id,
-        subtitle: focusModel ? shortName(focusModel) : node.statusLabel,
+        subtitle: focusModel ? shortName(focusModel) : formatLiveNodeState(node.state),
         hostname: node.hostname,
         role: node.host ? "Host" : "Serving",
-        statusLabel: node.statusLabel,
-        ageSeconds: node.ageSeconds,
         latencyLabel: formatLatency(node.latencyMs),
         vramLabel: `${Math.max(0, node.vram).toFixed(1)} GB`,
         modelLabel: modelLabel(models),
@@ -404,8 +396,6 @@ export function useRadarFieldNodes(
       subtitle: selfNode.client ? "This client" : "This node",
       hostname: selfNode.hostname,
       role: selfNode.client ? "Client" : selfNode.host ? "Host" : "Node",
-      statusLabel: selfNode.statusLabel,
-      ageSeconds: selfNode.ageSeconds,
       latencyLabel: "local",
       vramLabel: selfNode.client ? "n/a" : `${Math.max(0, selfNode.vram).toFixed(1)} GB`,
       modelLabel: selfNode.client ? "API-only" : modelLabel(selfModels),

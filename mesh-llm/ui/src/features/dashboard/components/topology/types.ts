@@ -88,8 +88,6 @@ export type RenderNode = {
   subtitle: string;
   hostname?: string;
   role: string;
-  statusLabel: string;
-  ageSeconds?: number | null;
   latencyLabel: string;
   vramLabel: string;
   modelLabel: string;

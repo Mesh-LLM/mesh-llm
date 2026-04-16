@@ -60,7 +60,7 @@ export function nodeUpdateSignature(node: TopologyNode) {
     client: node.client,
     serving: node.serving,
     servingModels: node.servingModels,
-    statusLabel: node.statusLabel,
+    state: node.state,
     latencyMs: node.latencyMs,
     hostname: node.hostname,
     isSoc: node.isSoc,

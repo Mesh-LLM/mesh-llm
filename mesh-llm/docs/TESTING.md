@@ -162,7 +162,7 @@ mesh-llm serve --join <TOKEN>
 ```
 
 - Joiner scans the Hugging Face cache and picks an unserved model already on disk
-- Log: "Assigned to serve GLM-4.7-Flash (needed by mesh, already on disk)"
+- Log: "Selected to serve GLM-4.7-Flash (needed by mesh, already on disk)"
 
 ### 8. Lite client with multi-model
 
@@ -216,6 +216,20 @@ curl -X DELETE localhost:3131/api/runtime/models/Llama-3.2-1B-Instruct-Q4_K_M
 - Dropdown appears when >1 warm model
 - Switching models highlights the serving node in topology view
 - Chat routes to selected model via API proxy
+
+### 11. Console live-state and wakeable capacity
+
+```bash
+cd mesh-llm/ui/
+npm run test:run
+npm run typecheck
+just build
+```
+
+- Live badges show only `Client`, `Standby`, `Loading`, and `Serving`
+- Wakeable capacity renders in a separate section from topology peers and live nodes
+- Wakeable entries do not appear in the topology peer list
+- Validation uses `npm run test:run`, `npm run typecheck`, and `just build`
 
 ## Mesh Identity
 

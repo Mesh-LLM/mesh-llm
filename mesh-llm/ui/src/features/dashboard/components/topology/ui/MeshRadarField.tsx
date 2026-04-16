@@ -8,7 +8,6 @@ import {
   useState,
 } from "react";
 import {
-  Clock3,
   Cpu,
   MemoryStick,
   Minus,
@@ -20,7 +19,8 @@ import {
 
 import { useResolvedTheme } from "../../../../../lib/resolved-theme";
 import { cn } from "../../../../../lib/utils";
-import { shortName } from "../../../../app-shell/lib/status-helpers";
+import { formatLiveNodeState, shortName } from "../../../../app-shell/lib/status-helpers";
+import type { LiveNodeState } from "../../../../app-shell/lib/status-types";
 import type { TopologyNode } from "../../../../app-shell/lib/topology-types";
 
 import { nodeUpdateSignature, clamp } from "../helpers";
@@ -38,14 +38,6 @@ import type {
   ScreenNode,
   UpdateTwinkle,
 } from "../types";
-
-function formatAge(seconds?: number | null) {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return "n/a";
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
-  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
-  return `${Math.round(seconds / 86400)}d`;
-}
 
 function createDebugNode(
   index: number,
@@ -67,7 +59,7 @@ function createDebugNode(
       client: false,
       serving: model,
       servingModels: [model],
-      statusLabel: "Serving",
+      state: "serving" as LiveNodeState,
       latencyMs: 14 + (index % 5) * 8,
       hostname: `test-serving-${index}`,
       isSoc: false,
@@ -84,7 +76,7 @@ function createDebugNode(
       client: false,
       serving: "",
       servingModels: [],
-      statusLabel: "Standby",
+      state: "standby" as LiveNodeState,
       latencyMs: 24 + (index % 6) * 10,
       hostname: `test-worker-${index}`,
       isSoc: index % 2 === 0,
@@ -101,10 +93,10 @@ function createDebugNode(
     self: false,
     host: false,
     client: true,
-    serving: "",
-    servingModels: [],
-    statusLabel: "Client",
-    latencyMs: 42 + (index % 7) * 12,
+      serving: "",
+      servingModels: [],
+      state: "client" as LiveNodeState,
+      latencyMs: 42 + (index % 7) * 12,
     hostname: `test-client-${index}`,
     isSoc: false,
     gpus: [],
@@ -451,11 +443,6 @@ export function MeshRadarField({
     hoveredNode && hoveredNode.label !== hoveredNode.id ? hoveredNode.id : null;
   const hoveredNodeShowsModel =
     hoveredNode != null && !(hoveredNode.role === "Client" && hoveredNode.modelLabel === "API-only");
-  const hoveredNodeShowsStatusChip =
-    hoveredNode != null &&
-    hoveredNode.statusLabel !== hoveredNode.role &&
-    !(hoveredNode.role === "Client" && hoveredNode.statusLabel === "Client");
-
   const addDebugNode = () => {
     debugNodeCounterRef.current += 1;
     setDebugNodes((current) => [
@@ -682,7 +669,7 @@ export function MeshRadarField({
           )}
           style={{ textShadow: scene.selfLabelTextShadow }}
         >
-          {selfNode?.statusLabel || "connected"}
+          {selfNode ? formatLiveNodeState(selfNode.state) : "connected"}
         </div>
       </div>
       {hoveredNode ? (
@@ -719,16 +706,7 @@ export function MeshRadarField({
             >
               {hoveredNode.role}
             </span>
-            {hoveredNodeShowsStatusChip ? (
-              <span
-                className={cn(
-                  "inline-flex items-center rounded-full border bg-black/[0.04] px-2 py-0.5 dark:bg-white/[0.04]",
-                  scene.tooltipDividerClassName,
-                )}
-              >
-                {hoveredNode.statusLabel}
-              </span>
-            ) : null}
+
           </div>
           <div className={cn("mt-2.5 space-y-2.5 border-t pt-2.5", scene.tooltipDividerClassName)}>
             {hoveredNodeShowsModel ? (
@@ -769,24 +747,6 @@ export function MeshRadarField({
                     Latency
                   </div>
                   <div className="text-[11px] font-medium leading-snug">{hoveredNode.latencyLabel}</div>
-                </div>
-              </div>
-              <div className="flex min-w-0 items-start gap-2">
-                <Clock3
-                  className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", scene.tooltipMutedTextClassName)}
-                />
-                <div className="min-w-0">
-                  <div
-                    className={cn(
-                      "text-[10px] font-semibold uppercase tracking-[0.18em]",
-                      scene.tooltipMutedTextClassName,
-                    )}
-                  >
-                    Age
-                  </div>
-                  <div className="text-[11px] font-medium leading-snug">
-                    {formatAge(hoveredNode.ageSeconds)}
-                  </div>
                 </div>
               </div>
               <div className="flex min-w-0 items-start gap-2">

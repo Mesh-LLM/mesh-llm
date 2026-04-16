@@ -62,4 +62,5 @@ pub(super) struct ApiInner {
     pub(super) inventory_scan_waiters:
         Vec<tokio::sync::oneshot::Sender<crate::models::LocalModelInventorySnapshot>>,
     pub(super) local_instances: Arc<Mutex<Vec<crate::runtime::instance::LocalInstanceSnapshot>>>,
+    pub(super) wakeable_inventory: crate::runtime::wakeable::WakeableInventory,
 }

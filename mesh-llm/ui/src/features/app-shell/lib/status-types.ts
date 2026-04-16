@@ -1,3 +1,14 @@
+export type LiveNodeState = "client" | "standby" | "loading" | "serving";
+
+export type WakeableNodeState = "sleeping" | "waking";
+
+export const LIVE_NODE_STATE_LABELS: Record<LiveNodeState, string> = {
+  client: "Client",
+  standby: "Standby",
+  loading: "Loading",
+  serving: "Serving",
+};
+
 export type MeshModel = {
   name: string;
   display_name?: string;
@@ -56,6 +67,7 @@ export type Peer = {
   id: string;
   owner?: Ownership;
   role: string;
+  state: LiveNodeState;
   models: string[];
   available_models?: string[];
   requested_models?: string[];
@@ -79,12 +91,22 @@ export type LocalInstance = {
   is_self: boolean;
 };
 
+export type WakeableNode = {
+  logical_id: string;
+  models: string[];
+  vram_gb: number;
+  provider?: string;
+  state: WakeableNodeState;
+  wake_eta_secs?: number;
+};
+
 export type StatusPayload = {
   version?: string;
   latest_version?: string | null;
   node_id: string;
   owner?: Ownership;
   token: string;
+  node_state: LiveNodeState;
   node_status: string;
   is_host: boolean;
   is_client: boolean;
@@ -100,6 +122,7 @@ export type StatusPayload = {
   model_size_gb: number;
   mesh_name?: string | null;
   peers: Peer[];
+  wakeable_nodes?: WakeableNode[];
   local_instances?: LocalInstance[];
   inflight_requests: number;
   launch_pi?: string | null;

@@ -1,4 +1,12 @@
-import type { MeshModel, Ownership, Peer, StatusPayload, ThemeMode } from "./status-types";
+import { LIVE_NODE_STATE_LABELS } from "./status-types";
+import type {
+  LiveNodeState,
+  MeshModel,
+  Ownership,
+  Peer,
+  StatusPayload,
+  ThemeMode,
+} from "./status-types";
 import type { TopologyNode } from "./topology-types";
 
 export function modelDisplayName(model?: MeshModel | null) {
@@ -23,7 +31,7 @@ export function peerRoutableModels(peer: Peer): string[] {
 }
 
 export function localRoutableModels(status: StatusPayload | null): string[] {
-  if (!status || status.is_client) return [];
+  if (!status || status.node_state === "client") return [];
   const hosted = status.hosted_models?.filter(Boolean) ?? [];
   if (hosted.length > 0) return hosted;
   const serving = status.serving_models?.filter(Boolean) ?? [];
@@ -40,20 +48,23 @@ export function overviewVramGb(isClient: boolean, vramGb?: number | null) {
   return Math.max(0, vramGb || 0);
 }
 
-export function peerStatusLabel(peer: Peer): string {
-  if (peer.role === "Client") return "Client";
-  if (peerRoutableModels(peer).some((model) => model !== "(idle)")) return "Serving";
-  if (peerAssignedModels(peer).some((model) => model !== "(idle)")) return "Assigned";
-  if (peer.role === "Host") return "Host";
-  return "Idle";
+function assertLiveNodeState(state: LiveNodeState): LiveNodeState {
+  if (!(state in LIVE_NODE_STATE_LABELS)) {
+    throw new Error(`Unsupported live node state: ${state}`);
+  }
+  return state;
+}
+
+export function formatLiveNodeState(state: LiveNodeState): string {
+  return LIVE_NODE_STATE_LABELS[assertLiveNodeState(state)];
 }
 
 export function meshGpuVram(status: StatusPayload | null) {
   if (!status) return 0;
   return (
-    overviewVramGb(status.is_client, status.my_vram_gb) +
+    overviewVramGb(status.node_state === "client", status.my_vram_gb) +
     (status.peers || []).reduce(
-      (sum, peer) => sum + overviewVramGb(peer.role === "Client", peer.vram_gb),
+      (sum, peer) => sum + overviewVramGb(peer.state === "client", peer.vram_gb),
       0,
     )
   );
@@ -105,36 +116,31 @@ export function formatLatency(value?: number | null) {
 }
 
 export function topologyStatusTone(
-  status: string,
+  state: LiveNodeState,
 ): "good" | "info" | "warn" | "bad" | "neutral" {
-  if (status === "Serving" || status === "Serving (split)") return "good";
-  if (status === "Client") return "info";
-  if (status === "Host") return "info";
-  if (status === "Idle" || status === "Standby") return "neutral";
-  if (status === "Worker (split)") return "warn";
-  return "neutral";
+  switch (assertLiveNodeState(state)) {
+    case "serving":
+      return "good";
+    case "client":
+      return "info";
+    case "loading":
+      return "warn";
+    case "standby":
+      return "neutral";
+  }
 }
 
-export function topologyStatusTooltip(status: string) {
-  if (status === "Serving") {
-    return "Actively serving a model.";
+export function topologyStatusTooltip(state: LiveNodeState) {
+  switch (assertLiveNodeState(state)) {
+    case "serving":
+      return "Actively serving a model.";
+    case "loading":
+      return "Initializing model work before it can serve requests.";
+    case "client":
+      return "Sends requests, but does not contribute VRAM.";
+    case "standby":
+      return "Connected, but not currently serving a model.";
   }
-  if (status === "Serving (split)") {
-    return "Serving a split model with the mesh.";
-  }
-  if (status === "Worker (split)") {
-    return "Contributing compute to a split model.";
-  }
-  if (status === "Host") {
-    return "Coordinating requests for the mesh.";
-  }
-  if (status === "Client") {
-    return "Sends requests, but does not contribute VRAM.";
-  }
-  if (status === "Idle" || status === "Standby") {
-    return "Connected, but not serving a model.";
-  }
-  return "Current serving role.";
 }
 
 export function modelStatusTooltip(status?: string) {
@@ -175,11 +181,10 @@ export function trimGpuVendor(name: string) {
     .trim();
 }
 
-export function topologyNodeRole(node: Pick<TopologyNode, "client" | "host" | "serving">): string {
+export function topologyNodeRole(node: Pick<TopologyNode, "client" | "host">): string {
   if (node.client) return "Client";
   if (node.host) return "Host";
-  if (node.serving && node.serving !== "(idle)") return "Worker";
-  return "Idle";
+  return "Worker";
 }
 
 export function readThemeMode(storageKey: string): ThemeMode {

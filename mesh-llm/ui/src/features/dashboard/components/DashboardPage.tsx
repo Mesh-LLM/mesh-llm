@@ -51,6 +51,7 @@ import {
 } from "../../../components/ui/tooltip";
 import { cn } from "../../../lib/utils";
 import {
+  formatLiveNodeState,
   formatLatency,
   localRoutableModels,
   meshGpuVram,
@@ -62,7 +63,6 @@ import {
   peerAssignedModels,
   peerPrimaryModel,
   peerRoutableModels,
-  peerStatusLabel,
   shortName,
   topologyNodeRole,
   topologyStatusTone,
@@ -70,6 +70,7 @@ import {
   uniqueModels,
 } from "../../app-shell/lib/status-helpers";
 import type {
+  LiveNodeState,
   MeshModel,
   Ownership,
   StatusPayload,
@@ -84,6 +85,7 @@ import {
 } from "./details";
 import { MeshTopologyDiagram } from "./topology";
 import { useDashboardDetailStack } from "../hooks/useDashboardDetailStack";
+import { WakeableCapacity } from "./WakeableCapacity";
 
 const DOCS_URL = "https://docs.anarchai.org";
 
@@ -99,8 +101,8 @@ type NodeSidebarRecord = {
   title: string;
   hostname?: string;
   self: boolean;
+  state: LiveNodeState;
   role: string;
-  statusLabel: string;
   latencyLabel: string;
   vramGb: number;
   vramSharePct: number | null;
@@ -187,27 +189,25 @@ export function DashboardPage({
   }, [status]);
   const sortedPeers = useMemo(() => {
     return [...(status?.peers ?? [])].sort((a, b) => {
-      const bOverviewVramGb = overviewVramGb(b.role === "Client", b.vram_gb);
-      const aOverviewVramGb = overviewVramGb(a.role === "Client", a.vram_gb);
+      const bOverviewVramGb = overviewVramGb(b.state === "client", b.vram_gb);
+      const aOverviewVramGb = overviewVramGb(a.state === "client", a.vram_gb);
       return bOverviewVramGb - aOverviewVramGb || a.id.localeCompare(b.id);
     });
   }, [status?.peers]);
   const peerRows = useMemo(() => {
     return sortedPeers.map((peer) => {
-      const statusLabel = peer.role === "Client" ? "Client" : peerStatusLabel(peer);
       const primaryModel = peerPrimaryModel(peer);
       const modelLabel =
         primaryModel && primaryModel !== "(idle)" ? shortName(primaryModel) : "idle";
       const latencyLabel = formatLatency(peer.rtt_ms);
-      const displayVramGb = overviewVramGb(peer.role === "Client", peer.vram_gb);
+      const displayVramGb = overviewVramGb(peer.state === "client", peer.vram_gb);
       const sharePct =
-        peer.role !== "Client" && totalMeshVramGb > 0
+        peer.state !== "client" && totalMeshVramGb > 0
           ? Math.round((displayVramGb / totalMeshVramGb) * 100)
           : null;
       return {
         ...peer,
         displayVramGb,
-        statusLabel,
         modelLabel,
         latencyLabel,
         shareLabel: sharePct == null ? "n/a" : `${sharePct}%`,
@@ -226,15 +226,15 @@ export function DashboardPage({
     const totalModelVram = selectedCatalogModel.mesh_vram_gb ?? 0;
     const rows: ActivePeerRow[] = [];
     const localServing = localRoutableModels(status).includes(targetModel);
-    if (localServing && !status.is_client) {
-      const localVram = overviewVramGb(status.is_client, status.my_vram_gb);
+    const localClientVram = overviewVramGb(status.node_state === "client", status.my_vram_gb);
+    if (localServing && status.node_state !== "client") {
       rows.push({
         id: status.node_id,
         latencyLabel: "local",
-        vramLabel: `${localVram.toFixed(1)} GB`,
+        vramLabel: `${localClientVram.toFixed(1)} GB`,
         shareLabel:
           totalModelVram > 0
-            ? `${Math.round((localVram / totalModelVram) * 100)}%`
+            ? `${Math.round((localClientVram / totalModelVram) * 100)}%`
             : "n/a",
       });
     }
@@ -242,7 +242,7 @@ export function DashboardPage({
       const servesTarget =
         peerRoutableModels(peer).includes(targetModel) ||
         peerAssignedModels(peer).includes(targetModel);
-      if (!servesTarget || peer.role === "Client") continue;
+      if (!servesTarget || peer.state === "client") continue;
       rows.push({
         id: peer.id,
         latencyLabel: peer.latencyLabel,
@@ -279,11 +279,11 @@ export function DashboardPage({
       title: topologyNode.hostname || topologyNode.id,
       hostname: topologyNode.hostname,
       self: topologyNode.self,
+      state: topologyNode.state,
       role: topologyNodeRole(topologyNode),
-      statusLabel: topologyNode.statusLabel,
       latencyLabel: topologyNode.self ? "local" : formatLatency(topologyNode.latencyMs),
       vramGb: Math.max(0, topologyNode.vram),
-      vramSharePct: topologyNode.client
+      vramSharePct: topologyNode.state === "client"
         ? null
         : totalMeshVramGb <= 0
           ? 0
@@ -333,8 +333,8 @@ export function DashboardPage({
     setIsMeshOverviewFullscreen((prev) => !prev);
   }
 
-  const gpuNodeCount = topologyDiagramNodes.filter((node) => !node.client).length;
-  const clientCount = topologyDiagramNodes.filter((node) => node.client).length;
+  const gpuNodeCount = topologyDiagramNodes.filter((node) => node.state !== "client").length;
+  const clientCount = topologyDiagramNodes.filter((node) => node.state === "client").length;
 
   return (
     <div className="space-y-4">
@@ -411,12 +411,14 @@ export function DashboardPage({
           value={status?.node_id ?? "n/a"}
           valueSuffix={
             <StatusPill
-              label={status?.node_status ?? "n/a"}
-              tone={topologyStatusTone(status?.node_status ?? "n/a")}
+              label={status ? formatLiveNodeState(status.node_state) : "n/a"}
+              tone={status ? topologyStatusTone(status.node_state) : "neutral"}
             />
           }
           icon={<Hash className="h-4 w-4" />}
-          tooltip={`Current node identifier in this mesh. ${topologyStatusTooltip(status?.node_status ?? "n/a")}`}
+          tooltip={status
+            ? `Current node identifier in this mesh. ${topologyStatusTooltip(status.node_state)}`
+            : "Current node identifier in this mesh."}
         />
         <StatCard
           title="Owner"
@@ -682,13 +684,13 @@ export function DashboardPage({
                             <span className="text-muted-foreground">unknown</span>
                           )}
                         </TableCell>
-                        <TableCell>{peer.statusLabel}</TableCell>
+                        <TableCell>{formatLiveNodeState(peer.state)}</TableCell>
                         <TableCell className="max-w-[180px] truncate">
                           {peer.modelLabel}
                         </TableCell>
                         <TableCell className="text-right">{peer.latencyLabel}</TableCell>
                         <TableCell className="text-right">
-                          {peer.role === "Client" ? "n/a" : `${peer.displayVramGb.toFixed(1)} GB`}
+                          {peer.state === "client" ? "n/a" : `${peer.displayVramGb.toFixed(1)} GB`}
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
                           {peer.shareLabel}
@@ -708,6 +710,8 @@ export function DashboardPage({
           )}
         </CardContent>
       </Card>
+
+      <WakeableCapacity wakeableNodes={status?.wakeable_nodes} />
 
       {isMeshOverviewFullscreen && typeof document !== "undefined"
         ? createPortal(

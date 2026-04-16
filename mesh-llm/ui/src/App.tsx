@@ -32,7 +32,6 @@ import {
   peerAssignedModels,
   peerPrimaryModel,
   peerRoutableModels,
-  peerStatusLabel,
   readThemeMode,
   shortName,
 } from "./features/app-shell/lib/status-helpers";
@@ -350,7 +349,7 @@ export function App() {
       if (model && model !== "(idle)") addServingNode(model, status.my_vram_gb);
     }
     for (const peer of status.peers ?? []) {
-      if (peer.role === "Client") continue;
+      if (peer.state === "client") continue;
       for (const model of new Set(peerRoutableModels(peer))) {
         if (model && model !== "(idle)") addServingNode(model, peer.vram_gb);
       }
@@ -446,24 +445,21 @@ export function App() {
         ?.started_at_unix;
       nodes.push({
         id: status.node_id,
-        vram: overviewVramGb(status.is_client, status.my_vram_gb),
+        vram: overviewVramGb(status.node_state === "client", status.my_vram_gb),
+        state: status.node_state,
         self: true,
         host: status.is_host,
-        client: status.is_client,
+        client: status.node_state === "client",
         serving: status.model_name || "",
         servingModels:
           status.hosted_models && status.hosted_models.length > 0
             ? status.hosted_models
             : status.serving_models && status.serving_models.length > 0
               ? status.serving_models
-              : status.model_name
+            : status.model_name
                 ? [status.model_name]
                 : [],
-        statusLabel:
-          status.node_status ||
-          (status.is_client ? "Client" : status.is_host ? "Host" : "Idle"),
-        ageSeconds:
-          elapsedSecondsFrom(selfStartedAtUnix) ?? elapsedSecondsFrom(selfFirstSeenAt),
+
         latencyMs: null,
         hostname: status.my_hostname,
         isSoc: status.my_is_soc,
@@ -477,14 +473,14 @@ export function App() {
           : peerAssignedModels(p);
       nodes.push({
         id: p.id,
-        vram: overviewVramGb(p.role === "Client", p.vram_gb),
+        vram: overviewVramGb(p.state === "client", p.vram_gb),
+        state: p.state,
         self: false,
         host: /^Host/.test(p.role),
-        client: p.role === "Client",
+        client: p.state === "client",
         serving: peerPrimaryModel(p),
         servingModels: pModels,
-        statusLabel: peerStatusLabel(p),
-        ageSeconds: elapsedSecondsFrom(ensureFirstSeenAt(p.id)),
+
         latencyMs: p.rtt_ms ?? null,
         hostname: p.hostname,
         isSoc: p.is_soc,
