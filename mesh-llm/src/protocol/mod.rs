@@ -1,30 +1,15 @@
-//! # V0 Sunset Checklist
-//!
-//! To remove legacy v0 protocol support:
-//! 1. Delete `v0.rs`
-//! 2. Remove `mod v0;` and `pub(crate) use v0::*;` from this file
-//! 3. Remove `ControlProtocol::JsonV0` variant from the enum
-//! 4. Remove `JsonV0 =>` match arms from: write_gossip_payload, decode_gossip_payload
-//! 5. Remove `with_additional_alpns` from `connect_mesh()` (use direct `connect()`)
-//! 6. In mesh.rs: remove `JsonV0 =>` match arms from broadcast_peer_down,
-//!    broadcast_leaving, broadcast_tunnel_map, _dispatch_streams inline handlers
-//! 7. Remove v0-related tests (search for "legacy" and "v0" in test names)
-//! 8. Update message_protocol.md to remove v0 references
-
 // Protocol infrastructure — extracted from mesh.rs
 
 #[cfg(test)]
 use crate::mesh::NodeRole;
-use crate::mesh::{PeerAnnouncement, PeerAnnouncementV0};
+use crate::mesh::PeerAnnouncement;
 
 pub(crate) mod convert;
-pub(crate) mod v0;
 use anyhow::Result;
 pub(crate) use convert::*;
-use iroh::endpoint::{ConnectOptions, Connection};
+use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use prost::Message;
-pub(crate) use v0::*;
 pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 #[cfg(test)]
 pub const ALPN: &[u8] = ALPN_V1;
@@ -50,7 +35,6 @@ const _: () = {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ControlProtocol {
     ProtoV1,
-    JsonV0,
 }
 
 #[derive(Debug, PartialEq)]
@@ -350,11 +334,8 @@ fn validate_public_key_length(len: usize) -> Result<(), ControlFrameError> {
 }
 
 pub(crate) fn protocol_from_alpn(alpn: &[u8]) -> ControlProtocol {
-    if alpn == ALPN_V0 {
-        ControlProtocol::JsonV0
-    } else {
-        ControlProtocol::ProtoV1
-    }
+    let _ = alpn;
+    ControlProtocol::ProtoV1
 }
 
 pub(crate) fn connection_protocol(conn: &Connection) -> ControlProtocol {
@@ -362,9 +343,8 @@ pub(crate) fn connection_protocol(conn: &Connection) -> ControlProtocol {
 }
 
 pub(crate) async fn connect_mesh(endpoint: &Endpoint, addr: EndpointAddr) -> Result<Connection> {
-    let opts = ConnectOptions::new().with_additional_alpns(vec![ALPN_V0.to_vec()]);
-    let connecting = endpoint.connect_with_opts(addr, ALPN_V1, opts).await?;
-    Ok(connecting.await?)
+    let connecting = endpoint.connect(addr, ALPN_V1).await?;
+    Ok(connecting)
 }
 
 pub(crate) async fn write_len_prefixed(
@@ -394,22 +374,9 @@ pub(crate) async fn write_gossip_payload(
     anns: &[PeerAnnouncement],
     sender_id: EndpointId,
 ) -> Result<()> {
-    match protocol {
-        ControlProtocol::ProtoV1 => {
-            let frame = build_gossip_frame(anns, sender_id);
-            write_len_prefixed(send, &frame.encode_to_vec()).await?;
-        }
-        ControlProtocol::JsonV0 => {
-            let sanitized: Vec<PeerAnnouncement> = anns
-                .iter()
-                .map(crate::protocol::convert::sanitize_gossip_announcement_for_wire)
-                .collect();
-            let legacy_anns: Vec<PeerAnnouncementV0> =
-                sanitized.iter().map(PeerAnnouncementV0::from).collect();
-            let json = serde_json::to_vec(&legacy_anns)?;
-            write_len_prefixed(send, &json).await?;
-        }
-    }
+    let _ = protocol;
+    let frame = build_gossip_frame(anns, sender_id);
+    write_len_prefixed(send, &frame.encode_to_vec()).await?;
     Ok(())
 }
 
@@ -418,40 +385,23 @@ pub(crate) fn decode_gossip_payload(
     remote: EndpointId,
     buf: &[u8],
 ) -> Result<Vec<(EndpointAddr, PeerAnnouncement)>> {
-    match protocol {
-        ControlProtocol::ProtoV1 => {
-            let frame = crate::proto::node::GossipFrame::decode(buf)
-                .map_err(|e| anyhow::anyhow!("gossip decode from {}: {e}", remote.fmt_short()))?;
-            frame.validate_frame().map_err(|e| {
-                anyhow::anyhow!("invalid gossip frame from {}: {e}", remote.fmt_short())
-            })?;
-            if frame.sender_id.as_slice() != remote.as_bytes() {
-                anyhow::bail!(
-                    "gossip sender_id mismatch from {}: connection identity does not match frame sender_id",
-                    remote.fmt_short()
-                );
-            }
-            Ok(frame
-                .peers
-                .iter()
-                .filter_map(proto_ann_to_local)
-                .collect::<Vec<_>>())
-        }
-        ControlProtocol::JsonV0 => {
-            let anns: Vec<PeerAnnouncementV0> = serde_json::from_slice(buf)?;
-            Ok(anns
-                .into_iter()
-                .map(|ann| {
-                    let mut ann = ann.into_internal();
-                    ann.available_models.clear();
-                    ann.available_model_metadata.clear();
-                    ann.available_model_sizes.clear();
-                    crate::mesh::backfill_legacy_descriptors(&mut ann);
-                    (ann.addr.clone(), ann)
-                })
-                .collect::<Vec<_>>())
-        }
+    let _ = protocol;
+    let frame = crate::proto::node::GossipFrame::decode(buf)
+        .map_err(|e| anyhow::anyhow!("gossip decode from {}: {e}", remote.fmt_short()))?;
+    frame
+        .validate_frame()
+        .map_err(|e| anyhow::anyhow!("invalid gossip frame from {}: {e}", remote.fmt_short()))?;
+    if frame.sender_id.as_slice() != remote.as_bytes() {
+        anyhow::bail!(
+            "gossip sender_id mismatch from {}: connection identity does not match frame sender_id",
+            remote.fmt_short()
+        );
     }
+    Ok(frame
+        .peers
+        .iter()
+        .filter_map(proto_ann_to_local)
+        .collect::<Vec<_>>())
 }
 
 #[cfg(test)]
@@ -505,7 +455,7 @@ pub(crate) fn decode_control_frame<T: ValidateControlFrame>(
 mod tests {
     use super::*;
     use crate::crypto::OwnershipSummary;
-    use crate::mesh::{resolve_peer_down, resolve_peer_leaving, ModelDemand, PeerInfo};
+    use crate::mesh::{resolve_peer_down, resolve_peer_leaving, PeerInfo};
     use crate::proto::node::{
         ConfigPush, ConfigPushResponse, ConfigSnapshotResponse, ConfigSubscribe,
         ConfigUpdateNotification, ConfiguredModelRef, GossipFrame, NodeConfigSnapshot,
@@ -606,85 +556,13 @@ mod tests {
     }
 
     #[test]
-    fn protocol_from_alpn_supports_v1_and_legacy_v0() {
+    fn protocol_from_alpn_defaults_to_v1() {
         assert_eq!(protocol_from_alpn(ALPN_V1), ControlProtocol::ProtoV1);
-        assert_eq!(protocol_from_alpn(ALPN_V0), ControlProtocol::JsonV0);
         assert_eq!(
             protocol_from_alpn(b"mesh-llm/999"),
             ControlProtocol::ProtoV1
         );
     }
-
-    #[test]
-    fn legacy_json_gossip_payload_decodes() {
-        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x42; 32]).public());
-        let ann = super::PeerAnnouncement {
-            addr: EndpointAddr {
-                id: peer_id,
-                addrs: Default::default(),
-            },
-            role: super::NodeRole::Host { http_port: 3131 },
-            models: vec!["Qwen".into()],
-            vram_bytes: 48_000_000_000,
-            model_source: Some("Qwen.gguf".into()),
-            serving_models: vec!["Qwen".into()],
-            hosted_models: Some(vec!["Qwen".into()]),
-            available_models: vec!["Qwen".into()],
-            requested_models: vec!["Qwen".into()],
-            version: Some("0.52.0".into()),
-            model_demand: HashMap::from([(
-                "Qwen".into(),
-                ModelDemand {
-                    last_active: 123,
-                    request_count: 7,
-                },
-            )]),
-            mesh_id: Some("mesh-compat".into()),
-            gpu_name: Some("NVIDIA A100".into()),
-            hostname: Some("worker-01".into()),
-            is_soc: Some(false),
-            gpu_vram: Some("51539607552".into()),
-            gpu_reserved_bytes: Some("1073741824".into()),
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
-            available_model_sizes: HashMap::from([("Qwen".into(), 1234_u64)]),
-            served_model_descriptors: vec![],
-            served_model_runtime: vec![],
-            owner_attestation: None,
-        };
-        let json = serde_json::to_vec(&vec![PeerAnnouncementV0::from(&ann)]).unwrap();
-
-        let decoded = decode_gossip_payload(ControlProtocol::JsonV0, peer_id, &json).unwrap();
-
-        assert_eq!(decoded.len(), 1);
-        assert_eq!(decoded[0].0.id, peer_id);
-        assert_eq!(
-            decoded[0].1.serving_models.first().map(String::as_str),
-            Some("Qwen")
-        );
-        assert_eq!(decoded[0].1.mesh_id.as_deref(), Some("mesh-compat"));
-        assert!(
-            decoded[0].1.available_models.is_empty(),
-            "legacy JSON gossip must not populate passive available_models"
-        );
-    }
-
-    #[test]
-    fn legacy_json_tunnel_map_decodes() {
-        let target = EndpointId::from(SecretKey::from_bytes(&[0x24; 32]).public());
-        let json = serde_json::to_vec(&HashMap::from([(hex::encode(target.as_bytes()), 9337_u16)]))
-            .unwrap();
-
-        let frame = decode_legacy_tunnel_map_frame(&json).unwrap();
-
-        assert_eq!(frame.entries.len(), 1);
-        assert_eq!(frame.entries[0].target_peer_id, target.as_bytes().to_vec());
-        assert_eq!(frame.entries[0].tunnel_port, 9337);
-    }
-
     #[test]
     fn control_frame_roundtrip() {
         let frame = make_valid_gossip_frame();
@@ -1292,100 +1170,6 @@ mod tests {
             .expect_err("GossipFrame gen=2 (future version) must be rejected");
         assert!(matches!(err, ControlFrameError::BadGeneration { got: 2 }));
     }
-
-    #[test]
-    fn v0_gossip_without_generation_field_accepted() {
-        use prost::Message as _;
-
-        let remote_id = EndpointId::from(SecretKey::from_bytes(&[0x11; 32]).public());
-        let ann = super::PeerAnnouncement {
-            addr: EndpointAddr {
-                id: remote_id,
-                addrs: Default::default(),
-            },
-            role: super::NodeRole::Worker,
-            models: vec!["v0-model".to_string()],
-            vram_bytes: 8 * 1024 * 1024 * 1024,
-            model_source: None,
-            serving_models: vec!["v0-model".to_string()],
-            hosted_models: Some(vec!["v0-model".to_string()]),
-            available_models: vec![],
-            requested_models: vec![],
-            version: Some("0.49.0".to_string()),
-            model_demand: HashMap::new(),
-            mesh_id: Some("gossip-gen-test".to_string()),
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
-            available_model_sizes: HashMap::new(),
-            served_model_descriptors: vec![],
-            served_model_runtime: vec![],
-            owner_attestation: None,
-        };
-        let json = serde_json::to_vec(&vec![PeerAnnouncementV0::from(&ann)])
-            .expect("JSON serialization must succeed");
-
-        let decoded = decode_gossip_payload(ControlProtocol::JsonV0, remote_id, &json)
-            .expect("v0 JSON gossip without gen field must be accepted");
-        assert_eq!(
-            decoded.len(),
-            1,
-            "must decode exactly one peer announcement"
-        );
-        assert_eq!(
-            decoded[0].0.id, remote_id,
-            "decoded addr id must match remote_id"
-        );
-        assert_eq!(
-            decoded[0].1.serving_models.first().map(String::as_str),
-            Some("v0-model"),
-            "serving model must round-trip correctly through JSON decode"
-        );
-        assert_eq!(
-            decoded[0].1.mesh_id.as_deref(),
-            Some("gossip-gen-test"),
-            "mesh_id must round-trip correctly through JSON decode"
-        );
-
-        let sender_id = EndpointId::from(SecretKey::from_bytes(&[0x22; 32]).public());
-        let good_frame = GossipFrame {
-            gen: NODE_PROTOCOL_GENERATION,
-            sender_id: sender_id.as_bytes().to_vec(),
-            peers: vec![PeerAnnouncement {
-                endpoint_id: sender_id.as_bytes().to_vec(),
-                role: NodeRole::Worker as i32,
-                ..Default::default()
-            }],
-        };
-        let good_encoded = good_frame.encode_to_vec();
-        let v1_result = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &good_encoded)
-            .expect("ProtoV1 gossip with correct gen must be accepted");
-        assert_eq!(
-            v1_result.len(),
-            1,
-            "ProtoV1 gossip must decode one peer entry"
-        );
-
-        let bad_frame = GossipFrame {
-            gen: 99,
-            sender_id: sender_id.as_bytes().to_vec(),
-            peers: vec![],
-        };
-        let bad_encoded = bad_frame.encode_to_vec();
-        let bad_result = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &bad_encoded);
-        assert!(
-            bad_result.is_err(),
-            "ProtoV1 gossip with gen=99 must be rejected by the generation gate"
-        );
-    }
-
     #[test]
     fn owner_fields_roundtrip_through_proto_announcement() {
         let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAB; 32]).public());
@@ -1761,135 +1545,6 @@ mod tests {
             "legacy-only and dual-encoded snapshots currently have distinct hashes"
         );
     }
-
-    #[test]
-    fn config_sync_v0_gossip_accepted() {
-        // Prove that a V0 JSON gossip frame (PeerAnnouncementV0 without owner fields)
-        // is accepted by the v1 gossip decoder and produces a PeerAnnouncement without
-        // ownership metadata.
-        let remote_id = EndpointId::from(SecretKey::from_bytes(&[0x33; 32]).public());
-        let ann = super::PeerAnnouncement {
-            addr: EndpointAddr {
-                id: remote_id,
-                addrs: Default::default(),
-            },
-            role: super::NodeRole::Worker,
-            models: vec!["test-model".to_string()],
-            vram_bytes: 16 * 1024 * 1024 * 1024,
-            model_source: None,
-            serving_models: vec!["test-model".to_string()],
-            hosted_models: Some(vec!["test-model".to_string()]),
-            available_models: vec![],
-            requested_models: vec![],
-            version: Some("0.50.0".to_string()),
-            model_demand: HashMap::new(),
-            mesh_id: Some("v0-compat-test".to_string()),
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
-            available_model_sizes: HashMap::new(),
-            served_model_descriptors: vec![],
-            served_model_runtime: vec![],
-            owner_attestation: None,
-        };
-        let json = serde_json::to_vec(&vec![PeerAnnouncementV0::from(&ann)])
-            .expect("JSON serialization must succeed");
-
-        let decoded = decode_gossip_payload(ControlProtocol::JsonV0, remote_id, &json)
-            .expect("v0 JSON gossip must be accepted");
-
-        assert_eq!(
-            decoded.len(),
-            1,
-            "must decode exactly one peer announcement"
-        );
-        assert_eq!(
-            decoded[0].0.id, remote_id,
-            "decoded addr id must match remote_id"
-        );
-        assert_eq!(
-            decoded[0].1.owner_attestation, None,
-            "v0 gossip without owner metadata must decode to None"
-        );
-        assert_eq!(
-            decoded[0].1.serving_models.first().map(String::as_str),
-            Some("test-model"),
-            "serving model must round-trip correctly"
-        );
-    }
-
-    #[test]
-    fn config_sync_v0_announcement_roundtrip() {
-        // PeerAnnouncementV0 must ignore ownership metadata so old JSON peers remain compatible.
-        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x44; 32]).public());
-        let ann = super::PeerAnnouncement {
-            addr: EndpointAddr {
-                id: peer_id,
-                addrs: Default::default(),
-            },
-            role: super::NodeRole::Worker,
-            models: vec![],
-            vram_bytes: 0,
-            model_source: None,
-            serving_models: vec![],
-            hosted_models: None,
-            available_models: vec![],
-            requested_models: vec![],
-            version: None,
-            model_demand: HashMap::new(),
-            mesh_id: None,
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
-            available_model_sizes: HashMap::new(),
-            served_model_descriptors: vec![],
-            served_model_runtime: vec![],
-            owner_attestation: Some(crate::crypto::SignedNodeOwnership {
-                claim: crate::crypto::NodeOwnershipClaim {
-                    version: 1,
-                    cert_id: "cert-v0".to_string(),
-                    owner_id: "test-owner".to_string(),
-                    owner_sign_public_key: "44".repeat(32),
-                    node_endpoint_id: "55".repeat(32),
-                    issued_at_unix_ms: 10,
-                    expires_at_unix_ms: 20,
-                    node_label: None,
-                    hostname_hint: None,
-                },
-                signature: "66".repeat(64),
-            }),
-        };
-
-        let v0 = PeerAnnouncementV0::from(&ann);
-        let json_str = serde_json::to_string(&v0).expect("JSON serialization must succeed");
-        assert!(
-            !json_str.contains("owner_attestation"),
-            "v0 JSON must not serialize owner attestation metadata"
-        );
-
-        let deserialized: PeerAnnouncementV0 =
-            serde_json::from_str(&json_str).expect("v0 JSON format must deserialize");
-        let restored = deserialized.into_internal();
-        assert_eq!(
-            restored.owner_attestation, None,
-            "v0 JSON round-trip must drop owner attestation metadata"
-        );
-    }
-
     #[test]
     fn config_sync_full_config_roundtrip() {
         use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry, PluginConfigEntry};
@@ -2167,119 +1822,6 @@ mod tests {
             "tampered payload must fail verification"
         );
     }
-
-    #[test]
-    fn config_sync_v0_mesh_coexistence() {
-        // Prove round-trip through the V0 conversion path correctly handles config metadata.
-        // This documents the intentional behavior: config_hash is ephemeral in v0 gossip
-        // (lost in JSON round-trip due to skip_serializing).
-        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x66; 32]).public());
-
-        let ann = super::PeerAnnouncement {
-            addr: EndpointAddr {
-                id: peer_id,
-                addrs: Default::default(),
-            },
-            role: super::NodeRole::Worker,
-            models: vec![],
-            vram_bytes: 0,
-            model_source: None,
-            serving_models: vec![],
-            hosted_models: None,
-            available_models: vec![],
-            requested_models: vec![],
-            version: None,
-            model_demand: HashMap::new(),
-            mesh_id: None,
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
-            available_model_sizes: HashMap::new(),
-            served_model_descriptors: vec![],
-            served_model_runtime: vec![],
-            owner_attestation: Some(crate::crypto::SignedNodeOwnership {
-                claim: crate::crypto::NodeOwnershipClaim {
-                    version: 1,
-                    cert_id: "mesh-cert".to_string(),
-                    owner_id: "mesh-owner".to_string(),
-                    owner_sign_public_key: "aa".repeat(32),
-                    node_endpoint_id: "bb".repeat(32),
-                    issued_at_unix_ms: 10,
-                    expires_at_unix_ms: 20,
-                    node_label: None,
-                    hostname_hint: None,
-                },
-                signature: "cc".repeat(64),
-            }),
-        };
-
-        // Convert to V0, serialize to JSON, deserialize back, then convert to internal
-        let v0 = PeerAnnouncementV0::from(&ann);
-        let json = serde_json::to_vec(&vec![v0]).expect("JSON serialization must succeed");
-        let v0_deserialized: Vec<PeerAnnouncementV0> =
-            serde_json::from_slice(&json).expect("JSON deserialization must succeed");
-        let restored = v0_deserialized[0].clone().into_internal();
-
-        assert_eq!(
-            restored.owner_attestation, None,
-            "v0 JSON round-trip must drop owner attestation metadata"
-        );
-    }
-
-    #[test]
-    fn config_sync_v0_peer_no_config_metadata() {
-        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x77; 32]).public());
-        let ann = super::PeerAnnouncement {
-            addr: EndpointAddr {
-                id: peer_id,
-                addrs: Default::default(),
-            },
-            role: super::NodeRole::Worker,
-            models: vec!["v0-model".to_string()],
-            vram_bytes: 0,
-            model_source: None,
-            serving_models: vec!["v0-model".to_string()],
-            hosted_models: None,
-            available_models: vec![],
-            requested_models: vec![],
-            version: Some("0.49.0".to_string()),
-            model_demand: HashMap::new(),
-            mesh_id: None,
-            gpu_name: None,
-            hostname: None,
-            is_soc: None,
-            gpu_vram: None,
-            gpu_reserved_bytes: None,
-            gpu_mem_bandwidth_gbps: None,
-            gpu_compute_tflops_fp32: None,
-            gpu_compute_tflops_fp16: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
-            available_model_sizes: HashMap::new(),
-            served_model_descriptors: vec![],
-            served_model_runtime: vec![],
-            owner_attestation: None,
-        };
-
-        let v0 = PeerAnnouncementV0::from(&ann);
-        let json = serde_json::to_vec(&vec![v0]).expect("JSON serialization must succeed");
-        let v0_deserialized: Vec<PeerAnnouncementV0> =
-            serde_json::from_slice(&json).expect("JSON deserialization must succeed");
-        let internal = v0_deserialized[0].clone().into_internal();
-
-        assert_eq!(
-            internal.owner_attestation, None,
-            "v0 peer has no ownership attestation"
-        );
-    }
-
     #[test]
     fn config_sync_push_validates_signature_length_too_short() {
         use crate::proto::node::ConfigPush;

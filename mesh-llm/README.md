@@ -42,7 +42,7 @@ plugins/
 - Routing and demand tracking are mesh-wide. Nodes can serve different models at the same time.
 - Discovery is optional and Nostr-backed. Private meshes work with explicit join tokens only.
 
-The current control plane prefers protocol `mesh-llm/1` with protobuf framing, while keeping backward-compatible support for older `mesh-llm/0` peers in `src/protocol/`.
+The control plane uses protocol `mesh-llm/1` with protobuf framing for mesh traffic.
 
 ## API surface
 

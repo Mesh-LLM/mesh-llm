@@ -669,18 +669,12 @@ impl Node {
                 let res = async {
                     let (mut send, _recv) = conn.open_bi().await?;
                     send.write_all(&[STREAM_PEER_DOWN]).await?;
-                    match protocol {
-                        ControlProtocol::ProtoV1 => {
-                            let proto_msg = crate::proto::node::PeerDown {
-                                peer_id: bytes,
-                                gen: NODE_PROTOCOL_GENERATION,
-                            };
-                            write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
-                        }
-                        ControlProtocol::JsonV0 => {
-                            send.write_all(&bytes).await?;
-                        }
-                    }
+                    let _ = protocol;
+                    let proto_msg = crate::proto::node::PeerDown {
+                        peer_id: bytes,
+                        gen: NODE_PROTOCOL_GENERATION,
+                    };
+                    write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
                     send.finish()?;
                     Ok::<_, anyhow::Error>(())
                 }
@@ -713,18 +707,12 @@ impl Node {
                 let res = async {
                     let (mut send, _recv) = conn.open_bi().await?;
                     send.write_all(&[STREAM_PEER_LEAVING]).await?;
-                    match protocol {
-                        ControlProtocol::ProtoV1 => {
-                            let proto_msg = crate::proto::node::PeerLeaving {
-                                peer_id: bytes,
-                                gen: NODE_PROTOCOL_GENERATION,
-                            };
-                            write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
-                        }
-                        ControlProtocol::JsonV0 => {
-                            send.write_all(&bytes).await?;
-                        }
-                    }
+                    let _ = protocol;
+                    let proto_msg = crate::proto::node::PeerLeaving {
+                        peer_id: bytes,
+                        gen: NODE_PROTOCOL_GENERATION,
+                    };
+                    write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
                     send.finish()?;
                     Ok::<_, anyhow::Error>(())
                 }

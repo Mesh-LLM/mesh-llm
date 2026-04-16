@@ -479,7 +479,7 @@ mesh-llm --model Qwen3-Coder-Next-Q4_K_M --auto --no-self-update --split --join 
 
 ## Control-Plane Protocol (Protobuf v1)
 
-The control plane prefers QUIC ALPN `mesh-llm/1` using the `meshllm.node.v1` protobuf schema. On `/1`, all five scoped control-plane streams use 4-byte LE framing followed by protobuf bytes. For backward compatibility, nodes may also negotiate `mesh-llm/0`, which keeps the legacy JSON/raw payloads on those same streams.
+The control plane uses QUIC ALPN `mesh-llm/1` with the `meshllm.node.v1` protobuf schema. All five scoped control-plane streams use 4-byte LE framing followed by protobuf bytes.
 
 | Stream | Type | Format |
 |--------|------|--------|
@@ -491,9 +491,6 @@ The control plane prefers QUIC ALPN `mesh-llm/1` using the `meshllm.node.v1` pro
 
 Raw TCP relay streams (0x02 RPC, 0x04 HTTP) are unchanged.
 
-### Testing legacy fallback (`mesh-llm/0`)
-
-To verify backward compatibility, start a node built from the pre-cutover branch (or any build with `ALPN = b"mesh-llm/0"`) and attempt to join a `mesh-llm/1` mesh. The connection should negotiate `/0`, complete gossip, and exchange the legacy JSON/raw control-plane payloads without breaking peer discovery or route-table fetches.
 
 ### Verifying protobuf gossip in logs
 

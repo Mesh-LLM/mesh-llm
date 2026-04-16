@@ -1,12 +1,11 @@
 # mesh-llm Message Protocol
 
-This document describes the wire protocol for control-plane communication between mesh-llm nodes. Control-plane traffic prefers the `meshllm.node.v1` protobuf schema on QUIC ALPN `mesh-llm/1`, with backward-compatible support for the legacy `mesh-llm/0` JSON/raw payloads.
+This document describes the wire protocol for control-plane communication between mesh-llm nodes over the `meshllm.node.v1` protobuf schema on QUIC ALPN `mesh-llm/1`.
 
 ## ALPN
 
 Control-plane connections prefer ALPN `mesh-llm/1`.
 
-Peers may also negotiate the legacy ALPN `mesh-llm/0` for backward compatibility. Mixed meshes containing both `/0` and `/1` nodes are supported, but `/0` links only exchange the legacy field set.
 
 ## Stream Types
 
@@ -57,7 +56,7 @@ A newly connected peer is quarantined until it sends a valid `GossipFrame` with 
 - All other streams (0x02, 0x03, 0x04, 0x06, 0x07, 0x08, 0x09, 0x0a) are rejected and the stream is closed.
 - The QUIC connection itself stays open so gossip can complete.
 
-A peer is admitted when its negotiated gossip payload decodes successfully and passes validation checks. On `/1` this is a protobuf `GossipFrame`; on `/0` this is the legacy JSON gossip payload.
+A peer is admitted when its `GossipFrame` decodes successfully and passes validation checks.
 
 ## Stream 0x01 — Gossip (`GossipFrame`)
 
@@ -247,8 +246,7 @@ The following are explicitly NOT protobuf and are not described here:
 
 ## Compatibility
 
-`mesh-llm/1` remains the preferred protocol, but negotiation keeps older nodes working:
+`mesh-llm/1` is the only supported control-plane protocol.
 
-- Nodes advertise both `mesh-llm/1` and `mesh-llm/0` on accept.
-- Connectors prefer `/1` and offer `/0` as a fallback when needed.
-- All five scoped control-plane streams (0x01, 0x03, 0x05, 0x06, 0x07) use protobuf framing on `/1` and the legacy JSON/raw formats on `/0`.
+- Nodes advertise `mesh-llm/1` on accept.
+- All five scoped control-plane streams (0x01, 0x03, 0x05, 0x06, 0x07) use protobuf framing.
