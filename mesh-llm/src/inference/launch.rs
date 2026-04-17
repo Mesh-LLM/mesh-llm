@@ -66,7 +66,7 @@ impl BinaryFlavor {
         match self {
             BinaryFlavor::Cpu => &["CPU"],
             BinaryFlavor::Cuda => &["CUDA0", "CPU"],
-            BinaryFlavor::Rocm => &["HIP0", "CPU"],
+            BinaryFlavor::Rocm => &["ROCm0", "CPU"],
             BinaryFlavor::Vulkan => &["Vulkan0", "CPU"],
             BinaryFlavor::Metal => &["MTL0", "CPU"],
         }
@@ -659,7 +659,7 @@ fn preferred_device(available: &[String], flavor: Option<BinaryFlavor>) -> Optio
     let candidates: &[&str] = if let Some(flavor) = flavor {
         flavor.preferred_devices()
     } else {
-        &["MTL0", "CUDA0", "HIP0", "Vulkan0", "CPU"]
+        &["MTL0", "CUDA0", "ROCm0", "Vulkan0", "CPU"]
     };
 
     for candidate in candidates {
@@ -1532,7 +1532,7 @@ fn detect_device() -> String {
 
     // ROCm/HIP
     if has_rocm_backend() {
-        return "HIP0".to_string();
+        return "ROCm0".to_string();
     }
 
     // Vulkan

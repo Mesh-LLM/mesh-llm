@@ -1012,7 +1012,7 @@ fn backend_device_for_name_for_platform(
         || upper.contains("INSTINCT")
         || upper.starts_with("MI")
     {
-        Some(format!("HIP{index}"))
+        Some(format!("ROCm{index}"))
     } else {
         None
     }
