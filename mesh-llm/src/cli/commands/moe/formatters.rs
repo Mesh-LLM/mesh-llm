@@ -51,6 +51,7 @@ pub(crate) fn plan_json(report: &MoePlanReport) -> Value {
             "reason": report.ranking.reason,
             "path": report.ranking.path,
             "metadata_path": report.ranking.metadata_path,
+            "analysis_path": report.ranking.analysis_path,
         },
         "target": {
             "vram_bytes": report.target_vram_bytes,

@@ -1,19 +1,25 @@
 use anyhow::{bail, Context, Result};
 use hf_hub::{RepoDownloadFileParams, RepoInfoParams};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::cli::terminal_progress::start_spinner;
 use crate::inference::{election, moe};
 use crate::models::{
-    build_hf_api, catalog, huggingface_identity_for_path, resolve_model_spec,
-    resolve_model_spec_with_progress,
+    build_hf_api, catalog, gguf::GgufTensorByteProfile, huggingface_identity_for_path,
+    resolve_model_spec, resolve_model_spec_with_progress,
 };
 
 const DEFAULT_DATASET_REVISION: &str = "main";
 pub(crate) const DEFAULT_MOE_RANKINGS_DATASET: &str = "meshllm/moe-rankings";
+const ANALYSIS_JSON_FILENAME: &str = "analysis.json";
+const DEFAULT_MASS_CHECKPOINTS: [usize; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+const MODEL_LOAD_HEADROOM_NUMERATOR: u64 = 11;
+const MODEL_LOAD_HEADROOM_DENOMINATOR: u64 = 10;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MoePlanArgs {
@@ -58,6 +64,7 @@ pub(crate) struct MoeModelContext {
 pub(crate) struct ResolvedRanking {
     pub path: PathBuf,
     pub metadata_path: Option<PathBuf>,
+    pub analysis_path: Option<PathBuf>,
     pub analyzer_id: String,
     pub source: RankingSource,
     pub reason: String,
@@ -69,9 +76,74 @@ pub(crate) struct MoeSubmitBundle {
     pub dataset_paths: Vec<String>,
     pub ranking_path: PathBuf,
     pub metadata_content: String,
+    pub analysis_content: String,
     pub log_path: Option<PathBuf>,
     pub commit_message: String,
     pub commit_description: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct MoeAnalysisJson {
+    pub schema_version: u32,
+    pub ranking: MoeAnalysisRanking,
+    pub model: MoeAnalysisModel,
+    pub memory: MoeAnalysisMemory,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct MoeAnalysisRanking {
+    pub sha256: String,
+    pub rows: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct MoeAnalysisModel {
+    pub expert_count: u32,
+    pub expert_used_count: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub(crate) struct MoeAnalysisMemory {
+    pub full_model_bytes: u64,
+    pub base_resident_bytes: u64,
+    pub shard_file_overhead_bytes: u64,
+    pub expert_tensor_bytes_total: u64,
+    pub expert_bytes: MoeAnalysisExpertBytes,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum MoeAnalysisExpertBytes {
+    Uniform { bytes_per_expert: u64 },
+    DensePerExpert { values: Vec<u64> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MoeStartupFitEstimate {
+    pub analyzer_id: String,
+    pub ranking_source: &'static str,
+    pub target_vram_bytes: u64,
+    pub required_experts_per_node: u32,
+    pub full_model_bytes: u64,
+    pub full_model_launch_bytes: u64,
+    pub recommended_nodes: Option<usize>,
+    pub predicted_max_shard_bytes: Option<u64>,
+    pub predicted_max_shard_launch_bytes: Option<u64>,
+}
+
+impl MoeStartupFitEstimate {
+    pub(crate) fn full_model_fits(&self) -> bool {
+        self.full_model_launch_bytes <= self.target_vram_bytes
+    }
+
+    pub(crate) fn shard_plan_fits(&self) -> bool {
+        self.predicted_max_shard_launch_bytes
+            .is_some_and(|bytes| bytes <= self.target_vram_bytes)
+    }
+
+    pub(crate) fn any_fit_exists(&self) -> bool {
+        self.full_model_fits() || self.shard_plan_fits()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -98,13 +170,21 @@ struct AnalyzeMassProfile {
     total_mass: f64,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AggregatedTensorByteProfile {
+    full_model_bytes: u64,
+    base_resident_bytes: u64,
+    expert_tensor_bytes: u64,
+    file_overhead_bytes: u64,
+}
+
 pub(crate) async fn plan_moe(args: MoePlanArgs) -> Result<MoePlanReport> {
     if let Some(nodes) = args.nodes {
         if nodes == 0 {
             bail!("--nodes must be at least 1");
         }
     }
-    let model = resolve_model_context_with_progress(&args.model, args.progress).await?;
+    let mut model = resolve_model_context_with_progress(&args.model, args.progress).await?;
     let ranking = resolve_best_ranking(&model, &args).await?;
     let target_vram_bytes = resolve_target_vram_bytes(args.max_vram_gb);
     if target_vram_bytes == 0 {
@@ -113,18 +193,120 @@ pub(crate) async fn plan_moe(args: MoePlanArgs) -> Result<MoePlanReport> {
         );
     }
 
-    let recommended_nodes = args.nodes.unwrap_or_else(|| {
-        ((model.total_model_bytes as f64) / target_vram_bytes as f64)
-            .ceil()
-            .max(1.0) as usize
-    });
-    let max_supported_nodes = (model.expert_count / model.min_experts_per_node.max(1)) as usize;
-    let max_supported_nodes = max_supported_nodes.max(1);
-    let feasible = recommended_nodes <= max_supported_nodes;
-
     let ranking_vec = moe::load_cached_ranking(&ranking.path)
         .ok_or_else(|| anyhow::anyhow!("cached ranking not found: {}", ranking.path.display()))
         .with_context(|| format!("Load ranking {}", ranking.path.display()))?;
+    let heuristic_recommended_nodes = ((model.total_model_bytes as f64) / target_vram_bytes as f64)
+        .ceil()
+        .max(1.0) as usize;
+    let analysis = ranking
+        .analysis_path
+        .as_deref()
+        .map(read_analysis_json)
+        .transpose()?;
+
+    let (recommended_nodes, max_supported_nodes, feasible, mut assumptions) = if let Some(
+        ref analysis,
+    ) = analysis
+    {
+        let fit = estimate_startup_fit_from_analysis(
+            &ranking.path,
+            analysis,
+            target_vram_bytes,
+            &ranking.analyzer_id,
+            ranking.source.label(),
+        )?;
+        let required_experts_per_node = fit.required_experts_per_node;
+        model.min_experts_per_node = required_experts_per_node;
+        let max_supported_nodes =
+            (model.expert_count / required_experts_per_node.max(1)).max(1) as usize;
+        let recommended_nodes = args
+            .nodes
+            .unwrap_or_else(|| fit.recommended_nodes.unwrap_or(max_supported_nodes));
+        let feasible = if recommended_nodes == 1 {
+            fit.full_model_fits()
+        } else if recommended_nodes > max_supported_nodes {
+            false
+        } else {
+            let (_, _, predicted_max_shard_launch_bytes) = predict_plan_fit_for_nodes(
+                &ranking_vec,
+                analysis,
+                recommended_nodes,
+                required_experts_per_node,
+            )?;
+            predicted_max_shard_launch_bytes <= target_vram_bytes
+        };
+
+        let mut assumptions = vec![
+            format!(
+                "Full-model launch estimate from analysis.json: {:.1}GB against {:.1}GB target",
+                fit.full_model_launch_bytes as f64 / 1e9,
+                target_vram_bytes as f64 / 1e9
+            ),
+            format!(
+                "Shared core uses the current 50% planning heuristic: {} / {} experts per node",
+                required_experts_per_node, model.expert_count
+            ),
+        ];
+        if recommended_nodes > 1 {
+            let (_, predicted_max_shard_bytes, predicted_max_shard_launch_bytes) =
+                predict_plan_fit_for_nodes(
+                    &ranking_vec,
+                    analysis,
+                    recommended_nodes,
+                    required_experts_per_node,
+                )?;
+            assumptions.push(format!(
+                    "Estimated shard launch for {} nodes from analysis.json: {:.1}GB max per node ({:.1}GB raw shard bytes)",
+                    recommended_nodes,
+                    predicted_max_shard_launch_bytes as f64 / 1e9,
+                    predicted_max_shard_bytes as f64 / 1e9
+                ));
+        }
+        if args.nodes.is_none() && !fit.any_fit_exists() {
+            assumptions.push(
+                    "No node count up to the current max useful node count fits this VRAM target under the conservative shared-core heuristic."
+                        .to_string(),
+                );
+        } else if args.nodes.is_some() && !feasible {
+            assumptions.push(format!(
+                    "Requested node count {} does not fit this VRAM target under the current shared-core heuristic.",
+                    recommended_nodes
+                ));
+        }
+
+        (
+            recommended_nodes,
+            max_supported_nodes,
+            feasible,
+            assumptions,
+        )
+    } else {
+        let recommended_nodes = args.nodes.unwrap_or(heuristic_recommended_nodes);
+        let max_supported_nodes =
+            (model.expert_count / model.min_experts_per_node.max(1)).max(1) as usize;
+        let feasible = recommended_nodes <= max_supported_nodes;
+        let assumptions = vec![
+            format!(
+                "Minimum nodes estimated from total model bytes / target VRAM: {:.1}GB / {:.1}GB",
+                model.total_model_bytes as f64 / 1e9,
+                target_vram_bytes as f64 / 1e9
+            ),
+            format!(
+                "Minimum experts per node falls back to local planner state: {}",
+                model.min_experts_per_node
+            ),
+            "No analysis.json was available, so shard byte fit uses the legacy heuristic."
+                .to_string(),
+        ];
+        (
+            recommended_nodes,
+            max_supported_nodes,
+            feasible,
+            assumptions,
+        )
+    };
+
     let assignments = moe::compute_assignments_with_overlap(
         &ranking_vec,
         recommended_nodes,
@@ -154,18 +336,6 @@ pub(crate) async fn plan_moe(args: MoePlanArgs) -> Result<MoePlanReport> {
     } else {
         (None, None, None)
     };
-
-    let mut assumptions = vec![
-        format!(
-            "Minimum nodes estimated from total model bytes / target VRAM: {:.1}GB / {:.1}GB",
-            model.total_model_bytes as f64 / 1e9,
-            target_vram_bytes as f64 / 1e9
-        ),
-        format!(
-            "Minimum experts per node uses catalog or 50% fallback: {}",
-            model.min_experts_per_node
-        ),
-    ];
     if profile.is_none() {
         assumptions.push(
             "Ranking file does not include gate-mass columns, so shared/node mass percentages are unavailable."
@@ -270,9 +440,11 @@ pub(crate) fn local_submit_ranking(
             )
         })?;
         let metadata_path = sibling_metadata_path(path);
+        let analysis_path = sibling_analysis_path(path);
         return Ok(ResolvedRanking {
             path: path.to_path_buf(),
             metadata_path,
+            analysis_path,
             analyzer_id: inferred.to_string(),
             source: RankingSource::Override,
             reason: "explicit --ranking-file override".to_string(),
@@ -293,6 +465,7 @@ pub(crate) fn local_submit_ranking(
         moe::SharedRankingKind::MicroAnalyze => "micro-v1",
     };
     Ok(ResolvedRanking {
+        analysis_path: sibling_analysis_path(&path),
         path,
         metadata_path: None,
         analyzer_id: analyzer_id.to_string(),
@@ -365,6 +538,12 @@ fn sibling_metadata_path(path: &Path) -> Option<PathBuf> {
     metadata.exists().then_some(metadata)
 }
 
+fn sibling_analysis_path(path: &Path) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let analysis = parent.join(ANALYSIS_JSON_FILENAME);
+    analysis.exists().then_some(analysis)
+}
+
 pub(crate) fn resolve_runtime_ranking(
     model_path: &Path,
     dataset_repo_name: &str,
@@ -408,6 +587,9 @@ fn resolve_local_runtime_ranking(model_path: &Path) -> Option<ResolvedRanking> {
         ResolvedRanking {
             path: moe::shared_ranking_cache_path(model_path, &artifact),
             metadata_path: None,
+            analysis_path: sibling_analysis_path(&moe::shared_ranking_cache_path(
+                model_path, &artifact,
+            )),
             analyzer_id: analyzer_id.to_string(),
             source: RankingSource::LocalCache,
             reason: format!(
@@ -431,12 +613,14 @@ async fn resolve_best_ranking(
             bail!("Ranking file not found: {}", path.display());
         }
         let metadata_path = sibling_metadata_path(path);
+        let analysis_path = sibling_analysis_path(path);
         let analyzer_id = infer_analyzer_from_ranking_path(path)
             .unwrap_or("override")
             .to_string();
         return Ok(ResolvedRanking {
             path: path.to_path_buf(),
             metadata_path,
+            analysis_path,
             analyzer_id,
             source: RankingSource::Override,
             reason: "explicit --ranking-file override".to_string(),
@@ -480,6 +664,18 @@ async fn resolve_best_ranking(
     let remote_source_revision = source_revision.clone();
     let remote_distribution_id = distribution_id.clone();
     let remote_progress = args.progress;
+    let mut remote_spinner = args.progress.then(|| {
+        start_spinner(&format!(
+            "Checking published MoE data for {}",
+            model.display_name
+        ))
+    });
+    if let Some(spinner) = remote_spinner.as_mut() {
+        spinner.set_message(format!(
+            "Fetching published MoE ranking and analysis for {}",
+            model.display_name
+        ));
+    }
     let remote_lookup = tokio::task::spawn_blocking(move || {
         fetch_remote_ranking(
             &remote_dataset_repo,
@@ -489,8 +685,12 @@ async fn resolve_best_ranking(
             remote_progress,
         )
     })
-    .await
-    .context("Join blocking Hugging Face MoE ranking lookup task")?;
+    .await;
+    if let Some(spinner) = remote_spinner.as_mut() {
+        spinner.finish();
+    }
+    let remote_lookup =
+        remote_lookup.context("Join blocking Hugging Face MoE ranking lookup task")?;
 
     let remote = match remote_lookup {
         Ok(remote) => remote,
@@ -581,9 +781,11 @@ fn find_remote_ranking(
     for analyzer_id in ["full-v1", "micro-v1"] {
         let metadata_rel = format!("{prefix}/{analyzer_id}/metadata.json");
         let ranking_rel = format!("{prefix}/{analyzer_id}/ranking.csv");
+        let analysis_rel = format!("{prefix}/{analyzer_id}/{ANALYSIS_JSON_FILENAME}");
         let has_metadata = siblings.iter().any(|entry| entry.rfilename == metadata_rel);
         let has_ranking = siblings.iter().any(|entry| entry.rfilename == ranking_rel);
-        if !(has_metadata && has_ranking) {
+        let has_analysis = siblings.iter().any(|entry| entry.rfilename == analysis_rel);
+        if !(has_metadata && has_ranking && has_analysis) {
             continue;
         }
 
@@ -605,7 +807,16 @@ fn find_remote_ranking(
                     .build(),
             )
             .with_context(|| format!("Download {}", ranking_rel))?;
+        let analysis_path = pinned
+            .download_file(
+                &RepoDownloadFileParams::builder()
+                    .filename(analysis_rel.clone())
+                    .revision(dataset_revision.to_string())
+                    .build(),
+            )
+            .with_context(|| format!("Download {}", analysis_rel))?;
         return Ok(Some(ResolvedRanking {
+            analysis_path: Some(analysis_path),
             path: ranking_path,
             metadata_path: Some(metadata_path),
             analyzer_id: analyzer_id.to_string(),
@@ -654,6 +865,7 @@ pub(crate) fn build_submit_bundle(
     );
     let ranking_rel = format!("{dataset_prefix}/ranking.csv");
     let metadata_rel = format!("{dataset_prefix}/metadata.json");
+    let analysis_rel = format!("{dataset_prefix}/{ANALYSIS_JSON_FILENAME}");
     let log_rel = format!("{dataset_prefix}/run.log");
 
     let model_files = discover_distribution_files(model)?;
@@ -663,8 +875,14 @@ pub(crate) fn build_submit_bundle(
     } else {
         serde_json::to_string_pretty(&build_metadata_json(model, ranking, &model_files)?)? + "\n"
     };
+    let analysis_content = if let Some(existing) = ranking.analysis_path.as_ref() {
+        fs::read_to_string(existing)
+            .with_context(|| format!("Read existing analysis {}", existing.display()))?
+    } else {
+        serde_json::to_string_pretty(&build_analysis_json(model, ranking, &model_files)?)? + "\n"
+    };
 
-    let mut dataset_paths = vec![ranking_rel, metadata_rel];
+    let mut dataset_paths = vec![ranking_rel, metadata_rel, analysis_rel];
     let log_path = log_path.filter(|path| path.exists()).map(Path::to_path_buf);
     if log_path.is_some() {
         dataset_paths.push(log_rel);
@@ -677,6 +895,7 @@ pub(crate) fn build_submit_bundle(
         dataset_paths,
         ranking_path: ranking.path.clone(),
         metadata_content,
+        analysis_content,
         log_path,
         commit_message: format!(
             "Add {} {} for {}@{}",
@@ -759,6 +978,316 @@ fn build_metadata_json(
         "created_at": iso8601_now(),
         "status": "complete",
     }))
+}
+
+fn build_analysis_json(
+    model: &MoeModelContext,
+    ranking: &ResolvedRanking,
+    model_files: &[(String, PathBuf)],
+) -> Result<Value> {
+    let mass_profile = load_analyze_mass_profile(&ranking.path)?;
+    let tensor_profile = aggregate_tensor_byte_profile(model_files)?;
+    Ok(json!({
+        "schema_version": 1,
+        "ranking": {
+            "sha256": sha256_file(&ranking.path)?,
+            "rows": mass_profile.ranking.len(),
+            "mass_checkpoints": build_mass_checkpoints(&mass_profile),
+        },
+        "model": {
+            "expert_count": model.expert_count,
+            "expert_used_count": model.used_expert_count,
+        },
+        "memory": {
+            "full_model_bytes": tensor_profile.full_model_bytes,
+            "base_resident_bytes": tensor_profile.base_resident_bytes,
+            "shard_file_overhead_bytes": tensor_profile.file_overhead_bytes,
+            "expert_tensor_bytes_total": tensor_profile.expert_tensor_bytes,
+            "expert_bytes": expert_bytes_json(tensor_profile.expert_tensor_bytes, model.expert_count)?,
+        }
+    }))
+}
+
+pub(crate) fn read_analysis_json(path: &Path) -> Result<MoeAnalysisJson> {
+    let content =
+        fs::read_to_string(path).with_context(|| format!("Read analysis {}", path.display()))?;
+    let parsed: MoeAnalysisJson = serde_json::from_str(&content)
+        .with_context(|| format!("Parse analysis {}", path.display()))?;
+    if parsed.schema_version != 1 {
+        bail!(
+            "Unsupported analysis schema {} in {}",
+            parsed.schema_version,
+            path.display()
+        );
+    }
+    Ok(parsed)
+}
+
+pub(crate) fn estimate_startup_fit_from_analysis(
+    ranking_path: &Path,
+    analysis: &MoeAnalysisJson,
+    target_vram_bytes: u64,
+    analyzer_id: &str,
+    ranking_source: &'static str,
+) -> Result<MoeStartupFitEstimate> {
+    let ranking = moe::load_cached_ranking(ranking_path)
+        .ok_or_else(|| anyhow::anyhow!("Could not parse ranking {}", ranking_path.display()))?;
+    if analysis.ranking.rows != ranking.len() {
+        bail!(
+            "Ranking row count mismatch for {}: analysis says {}, CSV has {}",
+            ranking_path.display(),
+            analysis.ranking.rows,
+            ranking.len()
+        );
+    }
+
+    let required_experts_per_node = default_required_experts_per_node(analysis.model.expert_count);
+    let full_model_launch_bytes = apply_model_load_headroom(analysis.memory.full_model_bytes);
+    let mut estimate = MoeStartupFitEstimate {
+        analyzer_id: analyzer_id.to_string(),
+        ranking_source,
+        target_vram_bytes,
+        required_experts_per_node,
+        full_model_bytes: analysis.memory.full_model_bytes,
+        full_model_launch_bytes,
+        recommended_nodes: None,
+        predicted_max_shard_bytes: None,
+        predicted_max_shard_launch_bytes: None,
+    };
+
+    if estimate.full_model_fits() {
+        estimate.recommended_nodes = Some(1);
+        return Ok(estimate);
+    }
+
+    let max_supported_nodes =
+        (analysis.model.expert_count / required_experts_per_node.max(1)).max(1) as usize;
+    let mut best_failed_shard: Option<(u64, u64)> = None;
+    for nodes in 2..=max_supported_nodes {
+        let assignments =
+            moe::compute_assignments_with_overlap(&ranking, nodes, required_experts_per_node, 1);
+        let max_shard_bytes = assignments
+            .iter()
+            .map(|assignment| predict_shard_bytes(&analysis.memory, &assignment.experts))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .unwrap_or_default();
+        let max_shard_launch_bytes = apply_model_load_headroom(max_shard_bytes);
+        if max_shard_launch_bytes <= target_vram_bytes {
+            estimate.recommended_nodes = Some(nodes);
+            estimate.predicted_max_shard_bytes = Some(max_shard_bytes);
+            estimate.predicted_max_shard_launch_bytes = Some(max_shard_launch_bytes);
+            return Ok(estimate);
+        }
+        best_failed_shard = Some((max_shard_bytes, max_shard_launch_bytes));
+    }
+
+    if let Some((max_shard_bytes, max_shard_launch_bytes)) = best_failed_shard {
+        estimate.predicted_max_shard_bytes = Some(max_shard_bytes);
+        estimate.predicted_max_shard_launch_bytes = Some(max_shard_launch_bytes);
+    } else if max_supported_nodes == 1 {
+        let max_shard_bytes = predict_shard_bytes(&analysis.memory, &ranking)?;
+        estimate.predicted_max_shard_bytes = Some(max_shard_bytes);
+        estimate.predicted_max_shard_launch_bytes =
+            Some(apply_model_load_headroom(max_shard_bytes));
+    }
+
+    Ok(estimate)
+}
+
+pub(crate) fn fetch_remote_startup_fit(
+    dataset_repo_name: &str,
+    source_repo: &str,
+    source_revision: &str,
+    distribution_id: &str,
+    target_vram_bytes: u64,
+    progress: bool,
+) -> Result<Option<MoeStartupFitEstimate>> {
+    let Some(ranking) = fetch_remote_ranking(
+        dataset_repo_name,
+        source_repo,
+        source_revision,
+        distribution_id,
+        progress,
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(analysis_path) = ranking.analysis_path.as_ref() else {
+        return Ok(None);
+    };
+    let analysis = read_analysis_json(analysis_path)?;
+    let estimate = estimate_startup_fit_from_analysis(
+        &ranking.path,
+        &analysis,
+        target_vram_bytes,
+        &ranking.analyzer_id,
+        ranking.source.label(),
+    )?;
+    Ok(Some(estimate))
+}
+
+fn build_mass_checkpoints(profile: &AnalyzeMassProfile) -> Vec<Value> {
+    let mut checkpoints = DEFAULT_MASS_CHECKPOINTS
+        .into_iter()
+        .filter(|top_n| *top_n <= profile.masses.len())
+        .collect::<Vec<_>>();
+    if !checkpoints.contains(&profile.masses.len()) {
+        checkpoints.push(profile.masses.len());
+    }
+    checkpoints
+        .into_iter()
+        .map(|top_n| {
+            let captured_mass = profile
+                .masses
+                .iter()
+                .take(top_n)
+                .map(|(_, mass)| *mass)
+                .sum::<f64>();
+            json!({
+                "top_n": top_n,
+                "mass_fraction": if profile.total_mass > f64::EPSILON {
+                    captured_mass / profile.total_mass
+                } else {
+                    0.0
+                }
+            })
+        })
+        .collect()
+}
+
+fn aggregate_tensor_byte_profile(
+    model_files: &[(String, PathBuf)],
+) -> Result<AggregatedTensorByteProfile> {
+    let mut aggregated = AggregatedTensorByteProfile::default();
+    for (_, path) in model_files {
+        let profile: GgufTensorByteProfile =
+            crate::models::gguf::scan_gguf_tensor_byte_profile(path).ok_or_else(|| {
+                anyhow::anyhow!("Could not derive GGUF tensor bytes for {}", path.display())
+            })?;
+        aggregated.full_model_bytes = aggregated
+            .full_model_bytes
+            .saturating_add(profile.full_model_bytes);
+        aggregated.base_resident_bytes = aggregated
+            .base_resident_bytes
+            .saturating_add(profile.base_resident_bytes);
+        aggregated.expert_tensor_bytes = aggregated
+            .expert_tensor_bytes
+            .saturating_add(profile.expert_tensor_bytes);
+        aggregated.file_overhead_bytes = aggregated
+            .file_overhead_bytes
+            .saturating_add(profile.file_overhead_bytes);
+    }
+    Ok(aggregated)
+}
+
+fn expert_bytes_json(expert_tensor_bytes: u64, expert_count: u32) -> Result<Value> {
+    if expert_count == 0 {
+        bail!("cannot derive expert bytes for expert_count=0");
+    }
+    let expert_count_u64 = u64::from(expert_count);
+    if expert_tensor_bytes % expert_count_u64 == 0 {
+        return Ok(json!({
+            "kind": "uniform",
+            "bytes_per_expert": expert_tensor_bytes / expert_count_u64,
+        }));
+    }
+
+    let base = expert_tensor_bytes / expert_count_u64;
+    let remainder = (expert_tensor_bytes % expert_count_u64) as usize;
+    let mut values = vec![base; expert_count as usize];
+    for value in values.iter_mut().take(remainder) {
+        *value += 1;
+    }
+    Ok(json!({
+        "kind": "dense_per_expert",
+        "values": values,
+    }))
+}
+
+fn default_required_experts_per_node(expert_count: u32) -> u32 {
+    ((expert_count as f64) * 0.5).ceil() as u32
+}
+
+fn apply_model_load_headroom(bytes: u64) -> u64 {
+    bytes
+        .saturating_mul(MODEL_LOAD_HEADROOM_NUMERATOR)
+        .div_ceil(MODEL_LOAD_HEADROOM_DENOMINATOR)
+}
+
+fn predict_plan_fit_for_nodes(
+    ranking: &[u32],
+    analysis: &MoeAnalysisJson,
+    nodes: usize,
+    required_experts_per_node: u32,
+) -> Result<(Vec<moe::NodeAssignment>, u64, u64)> {
+    let assignments =
+        moe::compute_assignments_with_overlap(ranking, nodes, required_experts_per_node, 1);
+    let max_shard_bytes = assignments
+        .iter()
+        .map(|assignment| predict_shard_bytes(&analysis.memory, &assignment.experts))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .max()
+        .unwrap_or_default();
+    Ok((
+        assignments,
+        max_shard_bytes,
+        apply_model_load_headroom(max_shard_bytes),
+    ))
+}
+
+fn predict_shard_bytes(memory: &MoeAnalysisMemory, experts: &[u32]) -> Result<u64> {
+    let mut total = memory
+        .base_resident_bytes
+        .saturating_add(memory.shard_file_overhead_bytes);
+    for expert_id in experts {
+        total = total
+            .checked_add(memory.expert_bytes.bytes_for(*expert_id)?)
+            .ok_or_else(|| anyhow::anyhow!("predicted shard bytes overflow"))?;
+    }
+    Ok(total)
+}
+
+impl MoeAnalysisExpertBytes {
+    fn bytes_for(&self, expert_id: u32) -> Result<u64> {
+        match self {
+            Self::Uniform { bytes_per_expert } => Ok(*bytes_per_expert),
+            Self::DensePerExpert { values } => values
+                .get(expert_id as usize)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("expert id {} missing from analysis", expert_id)),
+        }
+    }
+}
+
+pub(crate) fn write_analysis_json(
+    model: &MoeModelContext,
+    ranking_path: &Path,
+    analyzer_id: &str,
+) -> Result<PathBuf> {
+    let ranking = ResolvedRanking {
+        path: ranking_path.to_path_buf(),
+        metadata_path: None,
+        analysis_path: None,
+        analyzer_id: analyzer_id.to_string(),
+        source: RankingSource::LocalCache,
+        reason: "local analysis artifact".to_string(),
+    };
+    let model_files = discover_distribution_files(model)?;
+    let content =
+        serde_json::to_string_pretty(&build_analysis_json(model, &ranking, &model_files)?)? + "\n";
+    let analysis_path = ranking_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(ANALYSIS_JSON_FILENAME);
+    if let Some(parent) = analysis_path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("Create {}", parent.display()))?;
+    }
+    fs::write(&analysis_path, content)
+        .with_context(|| format!("Write {}", analysis_path.display()))?;
+    Ok(analysis_path)
 }
 
 fn infer_analysis_details(
@@ -1012,6 +1541,7 @@ mod tests {
         ResolvedRanking {
             path: PathBuf::from(path),
             metadata_path: None,
+            analysis_path: None,
             analyzer_id: analyzer_id.to_string(),
             source,
             reason: "test fixture".to_string(),
@@ -1060,9 +1590,11 @@ mod tests {
         let analyzer_dir = dir.join("micro-v1");
         let ranking_path = analyzer_dir.join("ranking.csv");
         let metadata_path = analyzer_dir.join("metadata.json");
+        let analysis_path = analyzer_dir.join("analysis.json");
         fs::create_dir_all(&analyzer_dir).unwrap();
         fs::write(&ranking_path, "0\n1\n").unwrap();
         fs::write(&metadata_path, "{}\n").unwrap();
+        fs::write(&analysis_path, "{}\n").unwrap();
 
         let model = MoeModelContext {
             input: "demo".to_string(),
@@ -1082,6 +1614,108 @@ mod tests {
         assert_eq!(
             resolved.metadata_path.as_deref(),
             Some(metadata_path.as_path())
+        );
+        assert_eq!(
+            resolved.analysis_path.as_deref(),
+            Some(analysis_path.as_path())
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn write_test_ranking(path: &Path, rows: &[(u32, f64)]) {
+        let mut content = String::from("expert_id,total_mass,mass_fraction,selection_count\n");
+        for (expert_id, mass) in rows {
+            content.push_str(&format!("{expert_id},{mass},0.0,1\n"));
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    fn test_analysis(full_model_bytes: u64, base_resident_bytes: u64) -> MoeAnalysisJson {
+        MoeAnalysisJson {
+            schema_version: 1,
+            ranking: MoeAnalysisRanking {
+                sha256: "sha256:test".to_string(),
+                rows: 4,
+            },
+            model: MoeAnalysisModel {
+                expert_count: 4,
+                expert_used_count: 2,
+            },
+            memory: MoeAnalysisMemory {
+                full_model_bytes,
+                base_resident_bytes,
+                shard_file_overhead_bytes: 100_000_000,
+                expert_tensor_bytes_total: 4_000_000_000,
+                expert_bytes: MoeAnalysisExpertBytes::Uniform {
+                    bytes_per_expert: 1_000_000_000,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn estimate_startup_fit_reports_full_model_fit() {
+        let dir = temp_case_dir("startup-fit-full");
+        let ranking_path = dir.join("ranking.csv");
+        write_test_ranking(&ranking_path, &[(0, 4.0), (1, 3.0), (2, 2.0), (3, 1.0)]);
+
+        let estimate = estimate_startup_fit_from_analysis(
+            &ranking_path,
+            &test_analysis(8_000_000_000, 2_000_000_000),
+            9_000_000_000,
+            "full-v1",
+            "Hugging Face dataset",
+        )
+        .unwrap();
+
+        assert!(estimate.full_model_fits());
+        assert_eq!(estimate.recommended_nodes, Some(1));
+        assert_eq!(estimate.predicted_max_shard_bytes, None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn estimate_startup_fit_reports_split_fit_when_full_model_is_too_large() {
+        let dir = temp_case_dir("startup-fit-split");
+        let ranking_path = dir.join("ranking.csv");
+        write_test_ranking(&ranking_path, &[(0, 4.0), (1, 3.0), (2, 2.0), (3, 1.0)]);
+
+        let estimate = estimate_startup_fit_from_analysis(
+            &ranking_path,
+            &test_analysis(10_000_000_000, 500_000_000),
+            4_000_000_000,
+            "full-v1",
+            "Hugging Face dataset",
+        )
+        .unwrap();
+
+        assert!(!estimate.full_model_fits());
+        assert!(estimate.shard_plan_fits());
+        assert_eq!(estimate.recommended_nodes, Some(2));
+        assert_eq!(estimate.predicted_max_shard_bytes, Some(3_600_000_000));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn estimate_startup_fit_reports_no_viable_fit() {
+        let dir = temp_case_dir("startup-fit-none");
+        let ranking_path = dir.join("ranking.csv");
+        write_test_ranking(&ranking_path, &[(0, 4.0), (1, 3.0), (2, 2.0), (3, 1.0)]);
+
+        let estimate = estimate_startup_fit_from_analysis(
+            &ranking_path,
+            &test_analysis(10_000_000_000, 500_000_000),
+            3_800_000_000,
+            "full-v1",
+            "Hugging Face dataset",
+        )
+        .unwrap();
+
+        assert!(!estimate.any_fit_exists());
+        assert_eq!(estimate.recommended_nodes, None);
+        assert_eq!(
+            estimate.predicted_max_shard_launch_bytes,
+            Some(3_960_000_000)
         );
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1118,9 +1752,11 @@ mod tests {
         let dir = temp_case_dir("submit-bundle");
         let analyzer_dir = dir.join("full-v1");
         let ranking_path = analyzer_dir.join("ranking.csv");
+        let analysis_path = analyzer_dir.join("analysis.json");
         let log_path = analyzer_dir.join("run.log");
         fs::create_dir_all(&analyzer_dir).unwrap();
         fs::write(&ranking_path, "0\n1\n").unwrap();
+        fs::write(&analysis_path, "{}\n").unwrap();
         fs::write(&log_path, "ok\n").unwrap();
 
         let model_file = dir.join("gemma-4-26B-A4B-it-UD-Q4_K_S.gguf");
@@ -1140,6 +1776,7 @@ mod tests {
         let ranking = ResolvedRanking {
             path: ranking_path,
             metadata_path: None,
+            analysis_path: Some(analysis_path),
             analyzer_id: "full-v1".to_string(),
             source: RankingSource::LocalCache,
             reason: "test".to_string(),
@@ -1156,6 +1793,9 @@ mod tests {
         assert!(bundle
             .dataset_paths
             .contains(&format!("{}/metadata.json", bundle.dataset_prefix)));
+        assert!(bundle
+            .dataset_paths
+            .contains(&format!("{}/analysis.json", bundle.dataset_prefix)));
         assert!(bundle
             .dataset_paths
             .contains(&format!("{}/run.log", bundle.dataset_prefix)));

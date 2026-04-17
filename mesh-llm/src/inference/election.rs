@@ -834,6 +834,7 @@ fn refresh_auto_moe_config_from_cache(
     let resolved = crate::system::moe_planner::ResolvedRanking {
         path: moe::shared_ranking_cache_path(model_path, &artifact),
         metadata_path: None,
+        analysis_path: None,
         analyzer_id: match artifact.kind {
             moe::SharedRankingKind::Analyze => "full-v1",
             moe::SharedRankingKind::MicroAnalyze => "micro-v1",

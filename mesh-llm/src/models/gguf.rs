@@ -4,6 +4,7 @@ use std::path::Path;
 const MAX_GGUF_STRING_BYTES: u64 = 1_000_000;
 const MAX_GGUF_ARRAY_ELEMENTS: u64 = 1_000_000;
 const MAX_GGUF_ARRAY_DEPTH: u32 = 64;
+const MAX_GGUF_TENSOR_DIMS: u32 = 8;
 
 /// MoE info extracted from a GGUF file header.
 #[derive(Clone, Debug)]
@@ -261,6 +262,22 @@ pub struct GgufCompactMeta {
     pub expert_used_count: u32,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GgufTensorByteProfile {
+    pub expert_count: u32,
+    pub expert_used_count: u32,
+    pub full_model_bytes: u64,
+    pub base_resident_bytes: u64,
+    pub expert_tensor_bytes: u64,
+    pub file_overhead_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+struct GgufTensorInfo {
+    name: String,
+    offset: u64,
+}
+
 /// Scan a GGUF file header and return compact structural metadata.
 /// Reads only the KV section, never tensor data. Returns None on any parse failure.
 pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
@@ -363,6 +380,155 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
     Some(meta)
 }
 
+fn align_offset(value: u64, alignment: u32) -> u64 {
+    let alignment = u64::from(alignment.max(1));
+    let remainder = value % alignment;
+    if remainder == 0 {
+        value
+    } else {
+        value + (alignment - remainder)
+    }
+}
+
+fn read_tensor_infos(
+    f: &mut std::fs::File,
+    n_tensors: i64,
+) -> std::io::Result<Vec<GgufTensorInfo>> {
+    let n_tensors = u64::try_from(n_tensors).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "negative tensor count")
+    })?;
+    let mut tensors = Vec::with_capacity(n_tensors as usize);
+    for _ in 0..n_tensors {
+        let name = read_gguf_string(f)?;
+        let n_dims = read_u32(f)?;
+        if n_dims > MAX_GGUF_TENSOR_DIMS {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "too many GGUF tensor dimensions",
+            ));
+        }
+        for _ in 0..n_dims {
+            let _ = read_u64(f)?;
+        }
+        let _ = read_u32(f)?;
+        let offset = read_u64(f)?;
+        tensors.push(GgufTensorInfo { name, offset });
+    }
+    Ok(tensors)
+}
+
+fn is_expert_partitioned_tensor(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("shared_expert") || lower.contains("sharedexpert") || lower.contains("shexp")
+    {
+        return false;
+    }
+
+    lower.contains("ffn_gate_exps")
+        || lower.contains("ffn_up_exps")
+        || lower.contains("ffn_down_exps")
+        || lower.contains("exp_probs")
+        || lower.contains(".expert")
+        || lower.contains("_expert")
+}
+
+/// Scan GGUF tensor metadata and estimate which bytes are always resident versus
+/// expert-partitioned. Reads only the header and tensor-info tables.
+pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfile> {
+    let mut f = std::fs::File::open(path).ok()?;
+    let file_len = f.metadata().ok()?.len();
+
+    let mut magic = [0u8; 4];
+    f.read_exact(&mut magic).ok()?;
+    if &magic != b"GGUF" {
+        return None;
+    }
+    let version = read_u32(&mut f).ok()?;
+    if version < 2 {
+        return None;
+    }
+
+    let n_tensors = read_i64(&mut f).ok()?;
+    let n_kv = read_i64(&mut f).ok()?;
+
+    let mut expert_count = 0u32;
+    let mut expert_used_count = 0u32;
+    let mut alignment = 32u32;
+
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut f).ok()?;
+        let vtype = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+
+        if key == "general.alignment" {
+            if let Ok(Some(value)) = read_gguf_value_as_u32(&mut f, vtype) {
+                alignment = value.max(1);
+            }
+        } else if key.ends_with(".expert_count") {
+            if let Ok(Some(value)) = read_gguf_value_as_u32(&mut f, vtype) {
+                expert_count = value;
+            }
+        } else if key.ends_with(".expert_used_count") {
+            if let Ok(Some(value)) = read_gguf_value_as_u32(&mut f, vtype) {
+                expert_used_count = value;
+            }
+        } else {
+            skip_gguf_value(&mut f, vtype).ok()?;
+        }
+    }
+
+    let mut tensors = read_tensor_infos(&mut f, n_tensors).ok()?;
+    if tensors.is_empty() {
+        return Some(GgufTensorByteProfile {
+            expert_count,
+            expert_used_count,
+            full_model_bytes: file_len,
+            base_resident_bytes: 0,
+            expert_tensor_bytes: 0,
+            file_overhead_bytes: file_len,
+        });
+    }
+
+    let tensor_info_end = f.stream_position().ok()?;
+    let data_start = align_offset(tensor_info_end, alignment);
+    if data_start > file_len {
+        return None;
+    }
+    let data_len = file_len - data_start;
+
+    tensors.sort_by_key(|tensor| tensor.offset);
+    if tensors.first()?.offset > data_len {
+        return None;
+    }
+
+    let mut base_resident_bytes = 0u64;
+    let mut expert_tensor_bytes = 0u64;
+    for (index, tensor) in tensors.iter().enumerate() {
+        let next_offset = tensors
+            .get(index + 1)
+            .map(|next| next.offset)
+            .unwrap_or(data_len);
+        if next_offset < tensor.offset || next_offset > data_len {
+            return None;
+        }
+        let tensor_bytes = next_offset - tensor.offset;
+        if is_expert_partitioned_tensor(&tensor.name) {
+            expert_tensor_bytes = expert_tensor_bytes.saturating_add(tensor_bytes);
+        } else {
+            base_resident_bytes = base_resident_bytes.saturating_add(tensor_bytes);
+        }
+    }
+
+    let file_overhead_bytes = file_len.saturating_sub(base_resident_bytes + expert_tensor_bytes);
+    Some(GgufTensorByteProfile {
+        expert_count,
+        expert_used_count,
+        full_model_bytes: file_len,
+        base_resident_bytes,
+        expert_tensor_bytes,
+        file_overhead_bytes,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +560,14 @@ mod tests {
     fn push_gguf_string(bytes: &mut Vec<u8>, value: &str) {
         bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
         bytes.extend_from_slice(value.as_bytes());
+    }
+
+    fn push_tensor_info(bytes: &mut Vec<u8>, name: &str, offset: u64) {
+        push_gguf_string(bytes, name);
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&16u64.to_le_bytes());
+        bytes.extend_from_slice(&(GgufType::Uint8 as u32).to_le_bytes());
+        bytes.extend_from_slice(&offset.to_le_bytes());
     }
 
     #[test]
@@ -443,6 +617,47 @@ mod tests {
 
         let path = write_bytes("mesh-llm-gguf-malicious", &bytes);
         assert!(scan_gguf_compact_meta(&path).is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_tensor_byte_profile_splits_base_and_expert_bytes() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&2i64.to_le_bytes());
+        bytes.extend_from_slice(&3i64.to_le_bytes());
+
+        push_gguf_string(&mut bytes, "general.alignment");
+        bytes.extend_from_slice(&(GgufType::Uint32 as u32).to_le_bytes());
+        bytes.extend_from_slice(&32u32.to_le_bytes());
+
+        push_gguf_string(&mut bytes, "llama.expert_count");
+        bytes.extend_from_slice(&(GgufType::Uint32 as u32).to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+
+        push_gguf_string(&mut bytes, "llama.expert_used_count");
+        bytes.extend_from_slice(&(GgufType::Uint32 as u32).to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+
+        push_tensor_info(&mut bytes, "blk.0.ffn_up_exps.weight", 0);
+        push_tensor_info(&mut bytes, "blk.0.attn_q.weight", 64);
+
+        let data_start = align_offset(bytes.len() as u64, 32) as usize;
+        bytes.resize(data_start, 0);
+        bytes.resize(data_start + 96, 0);
+
+        let path = write_bytes("mesh-llm-gguf-tensors", &bytes);
+        let profile = scan_gguf_tensor_byte_profile(&path).unwrap();
+        assert_eq!(profile.expert_count, 8);
+        assert_eq!(profile.expert_used_count, 2);
+        assert_eq!(profile.expert_tensor_bytes, 64);
+        assert_eq!(profile.base_resident_bytes, 32);
+        assert_eq!(profile.full_model_bytes, bytes.len() as u64);
+        assert_eq!(
+            profile.full_model_bytes,
+            profile.base_resident_bytes + profile.expert_tensor_bytes + profile.file_overhead_bytes
+        );
         let _ = std::fs::remove_file(path);
     }
 }

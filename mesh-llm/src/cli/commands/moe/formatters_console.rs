@@ -32,6 +32,9 @@ impl MoePlanFormatter for ConsoleFormatter {
             report.ranking.analyzer_id, ranking_hint
         );
         println!("   file: {}", report.ranking.path.display());
+        if let Some(path) = &report.ranking.analysis_path {
+            println!("   analysis: {}", path.display());
+        }
         println!("   reason: {}", report.ranking.reason);
         println!();
 
