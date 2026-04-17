@@ -12,7 +12,7 @@ This file is the human-readable counterpart to `.github/workflows/docker-prechec
 |----------|--------|----------|
 | Q1: CLI form | `mesh-llm --client --auto --port 9337 --console 3131 --listen-all` (bare flags) | mesh-llm/src/cli/mod.rs — top-level Cli struct accepts bare flags |
 | Q2: :latest tag target | `client` (most portable, smallest, no GPU dependency) | Design decision |
-| Q3: CUDA compute_120 (Blackwell) | Works with CUDA 12.8.0 (compute_120 included in Justfile release-build-cuda) | Justfile line 53, release.yml line 78 |
+| Q3: CUDA compute_120 (Blackwell) | Works with CUDA 12.6.3 (compute_120 included in Justfile release-build-cuda). Pinned to 12.6.3 (not 12.8.0) because nvcc 12.8 cubins are rejected at load by the R535-series driver on SM 8.0 (A30/A100) with `device kernel image is invalid`. | Justfile line 53, release.yml line 78 |
 | Q4: Non-root user policy | Stay root (matches existing fly/Dockerfile; K3S users override via securityContext) | Design decision |
 
 ## Spec Compliance Table
