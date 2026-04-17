@@ -137,14 +137,7 @@ async fn run_plan(
         dataset_repo: dataset_repo.to_string(),
         progress: !json_output,
         floor_strategy: moe_planner::MoeFloorStrategy {
-            mode: match floor_mode {
-                ExperimentalMoeFloorMode::Fixed50Pct => moe_planner::MoeFloorMode::Fixed50Pct,
-                ExperimentalMoeFloorMode::TopkMultiplier => {
-                    moe_planner::MoeFloorMode::TopkMultiplier
-                }
-                ExperimentalMoeFloorMode::MassThreshold => moe_planner::MoeFloorMode::MassThreshold,
-                ExperimentalMoeFloorMode::Hybrid => moe_planner::MoeFloorMode::Hybrid,
-            },
+            mode: floor_mode.into(),
             topk_multiplier,
             mass_threshold,
             floor_min,

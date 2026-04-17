@@ -140,3 +140,14 @@ pub(crate) enum ExperimentalMoeFloorMode {
     #[value(name = "hybrid")]
     Hybrid,
 }
+
+impl From<ExperimentalMoeFloorMode> for crate::system::moe_planner::MoeFloorMode {
+    fn from(value: ExperimentalMoeFloorMode) -> Self {
+        match value {
+            ExperimentalMoeFloorMode::Fixed50Pct => Self::Fixed50Pct,
+            ExperimentalMoeFloorMode::TopkMultiplier => Self::TopkMultiplier,
+            ExperimentalMoeFloorMode::MassThreshold => Self::MassThreshold,
+            ExperimentalMoeFloorMode::Hybrid => Self::Hybrid,
+        }
+    }
+}

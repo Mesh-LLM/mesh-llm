@@ -161,6 +161,17 @@ impl Default for MoeFloorStrategy {
     }
 }
 
+impl MoeFloorStrategy {
+    pub(crate) fn mode_label(&self) -> &'static str {
+        match self.mode {
+            MoeFloorMode::Fixed50Pct => "fixed_50pct",
+            MoeFloorMode::TopkMultiplier => "topk_multiplier",
+            MoeFloorMode::MassThreshold => "mass_threshold",
+            MoeFloorMode::Hybrid => "hybrid",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct MoeFloorDecision {
     required_experts_per_node: u32,
@@ -1154,7 +1165,9 @@ pub(crate) fn fetch_remote_startup_fit(
     distribution_id: &str,
     target_vram_bytes: u64,
     progress: bool,
+    floor_strategy: &MoeFloorStrategy,
 ) -> Result<Option<MoeStartupFitEstimate>> {
+    validate_floor_strategy(floor_strategy)?;
     let Some(ranking) = fetch_remote_ranking(
         dataset_repo_name,
         source_repo,
@@ -1169,13 +1182,19 @@ pub(crate) fn fetch_remote_startup_fit(
         return Ok(None);
     };
     let analysis = read_analysis_json(analysis_path)?;
+    let floor_decision = derive_floor_decision(
+        floor_strategy,
+        analysis.model.expert_count,
+        analysis.model.expert_used_count,
+        &ranking.path,
+    )?;
     let estimate = estimate_startup_fit_from_analysis(
         &ranking.path,
         &analysis,
         target_vram_bytes,
         &ranking.analyzer_id,
         ranking.source.label(),
-        default_required_experts_per_node(analysis.model.expert_count),
+        floor_decision.required_experts_per_node,
     )?;
     Ok(Some(estimate))
 }
@@ -1350,7 +1369,7 @@ impl MoeFloorDecision {
 const DEFAULT_TOPK_MULTIPLIER: u32 = 4;
 const DEFAULT_MASS_THRESHOLD: f64 = 0.70;
 
-fn validate_floor_strategy(strategy: &MoeFloorStrategy) -> Result<()> {
+pub(crate) fn validate_floor_strategy(strategy: &MoeFloorStrategy) -> Result<()> {
     if strategy.topk_multiplier.unwrap_or(DEFAULT_TOPK_MULTIPLIER) == 0 {
         bail!("--experimental-moe-topk-multiplier must be at least 1");
     }
