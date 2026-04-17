@@ -2,7 +2,7 @@ import XCTest
 @testable import MeshLLM
 
 func makeOwnerKeypairBytesHex() -> String {
-    #if canImport(mesh_ffiFFI)
+    #if canImport(MeshLLMFFI)
     return generateOwnerKeypairHex()
     #else
     return "test-owner-keypair"

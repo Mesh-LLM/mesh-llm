@@ -62,7 +62,7 @@ public struct ResponsesRequest: Sendable {
     }
 }
 
-#if canImport(mesh_ffiFFI)
+#if canImport(MeshLLMFFI)
 public final class MeshClient: @unchecked Sendable {
     private let inviteToken: InviteToken
     private let ownerKeypairBytesHex: String

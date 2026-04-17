@@ -2,10 +2,13 @@ import java.io.File
 
 plugins {
     kotlin("jvm") version "2.0.21"
+    `maven-publish`
 }
 
 group = "ai.meshllm"
 version = "0.1.0"
+
+val androidArtifactId = "meshllm-android"
 
 repositories {
     mavenCentral()
@@ -122,9 +125,8 @@ val assembleAar by tasks.registering(Zip::class) {
 
     dependsOn(buildNativeLibs)
     dependsOn("jar")
-    dependsOn(buildNativeLibs)
 
-    archiveFileName.set("meshllm.aar")
+    archiveFileName.set("$androidArtifactId.aar")
     destinationDirectory.set(layout.buildDirectory.dir("outputs/aar"))
 
     // Compiled Kotlin classes, renamed to the standard AAR entry name
@@ -142,4 +144,110 @@ val assembleAar by tasks.registering(Zip::class) {
 
     // Minimal AndroidManifest required by the AAR format
     from("src/main/AndroidManifest.xml")
+}
+
+val sourcesJar by tasks.registering(Jar::class) {
+    description = "Assemble Kotlin sources jar for Maven publication"
+    group = "build"
+
+    archiveClassifier.set("sources")
+    from("src/main/kotlin")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("aar") {
+            groupId = project.group.toString()
+            artifactId = androidArtifactId
+            version = project.version.toString()
+
+            artifact(assembleAar) {
+                extension = "aar"
+            }
+            artifact(sourcesJar)
+
+            pom {
+                name.set("MeshLLM Android SDK")
+                description.set("Android/Kotlin bindings for connecting to mesh-llm meshes.")
+                url.set("https://github.com/Mesh-LLM/mesh-llm")
+
+                licenses {
+                    license {
+                        name.set("MIT")
+                        url.set("https://github.com/Mesh-LLM/mesh-llm/blob/main/LICENSE")
+                    }
+                }
+
+                scm {
+                    url.set("https://github.com/Mesh-LLM/mesh-llm")
+                    connection.set("scm:git:https://github.com/Mesh-LLM/mesh-llm.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/Mesh-LLM/mesh-llm.git")
+                }
+
+                withXml {
+                    val projectNode = asNode()
+                    val dependenciesNode = (projectNode.get("dependencies") as? groovy.util.NodeList)
+                        ?.firstOrNull() as? groovy.util.Node
+                        ?: projectNode.appendNode("dependencies")
+
+                    fun dependencyNodes(): List<groovy.util.Node> =
+                        dependenciesNode.children().filterIsInstance<groovy.util.Node>()
+
+                    fun childText(node: groovy.util.Node, name: String): String? =
+                        node.get(name).let { children ->
+                            (children as? groovy.util.NodeList)
+                                ?.firstOrNull()
+                                ?.let { it as? groovy.util.Node }
+                                ?.text()
+                        }
+
+                    fun ensureDependency(group: String, artifactId: String, version: String, scope: String) {
+                        val dependencyNode = dependencyNodes().firstOrNull {
+                            childText(it, "groupId") == group && childText(it, "artifactId") == artifactId
+                        } ?: dependenciesNode.appendNode("dependency").also {
+                            it.appendNode("groupId", group)
+                            it.appendNode("artifactId", artifactId)
+                            it.appendNode("version", version)
+                        }
+
+                        val scopeNode = (dependencyNode.get("scope") as? groovy.util.NodeList)
+                            ?.firstOrNull() as? groovy.util.Node
+                        if (scopeNode == null) {
+                            dependencyNode.appendNode("scope", scope)
+                        } else {
+                            scopeNode.setValue(scope)
+                        }
+                    }
+
+                    ensureDependency(
+                        group = "org.jetbrains.kotlinx",
+                        artifactId = "kotlinx-coroutines-core",
+                        version = "1.7.3",
+                        scope = "compile"
+                    )
+                    ensureDependency(
+                        group = "net.java.dev.jna",
+                        artifactId = "jna",
+                        version = "5.14.0",
+                        scope = "runtime"
+                    )
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/Mesh-LLM/mesh-llm")
+            credentials {
+                username = providers.environmentVariable("GITHUB_ACTOR")
+                    .orElse(providers.gradleProperty("gpr.user"))
+                    .orNull
+                password = providers.environmentVariable("GITHUB_TOKEN")
+                    .orElse(providers.gradleProperty("gpr.key"))
+                    .orNull
+            }
+        }
+    }
 }

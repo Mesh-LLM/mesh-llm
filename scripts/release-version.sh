@@ -74,6 +74,23 @@ update_mesh_client_dependency_version() {
     printf '%s\n' "$after" >"$file"
 }
 
+update_gradle_project_version() {
+    local file="$1"
+    local next="$2"
+    local before
+    local after
+    before="$(cat "$file")"
+    after="$(perl -0777 -pe 's/(\nversion\s*=\s*")[^"]+(")/${1}'"$next"'$2/s' "$file")"
+    if [[ "$before" == "$after" ]]; then
+        if perl -0777 -ne 'exit((/\nversion\s*=\s*"'"$next"'"/s) ? 0 : 1)' "$file"; then
+            return
+        fi
+        echo "failed to update Gradle project version in $file" >&2
+        exit 1
+    fi
+    printf '%s\n' "$after" >"$file"
+}
+
 manifests=()
 while IFS= read -r manifest; do
     manifests+=("$manifest")
@@ -106,6 +123,11 @@ for relative_manifest in "${manifests[@]}"; do
     update_mesh_client_dependency_version "$manifest" "$version"
     versioned_files+=("$manifest")
 done
+
+kotlin_build_file="$REPO_ROOT/sdk/kotlin/build.gradle.kts"
+require_file "$kotlin_build_file"
+update_gradle_project_version "$kotlin_build_file" "$version"
+versioned_files+=("$kotlin_build_file")
 
 echo "Refreshing Cargo.lock workspace package versions..."
 (cd "$REPO_ROOT" && cargo metadata --format-version 1 >/dev/null)

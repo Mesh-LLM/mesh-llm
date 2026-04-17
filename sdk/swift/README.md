@@ -4,11 +4,11 @@ Swift Package for connecting to mesh-llm meshes from iOS and macOS apps.
 
 ## Installation
 
-Add to your `Package.swift`:
+Add to your app's `Package.swift` using a tagged release:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/michaelneale/mesh-llm", from: "0.1.0"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.1.0"),
 ],
 targets: [
     .target(
@@ -20,13 +20,23 @@ targets: [
 ]
 ```
 
+The repo root is the Swift package entrypoint. Tagged releases resolve the
+prebuilt XCFramework automatically through SwiftPM.
+
 For development from a local checkout, build the native artifact first:
 
 ```bash
 ./sdk/swift/scripts/build-xcframework.sh
 ```
 
-That generates `sdk/swift/Generated/mesh_ffiFFI.xcframework`, which the Swift package picks up automatically for the real UniFFI-backed implementation.
+That generates `sdk/swift/Generated/MeshLLMFFI.xcframework`, which the root
+Swift package picks up automatically for the real UniFFI-backed implementation.
+
+If you only want to run the pure Swift fallback without the XCFramework, set:
+
+```bash
+MESH_SWIFT_FORCE_STUB=1 swift test
+```
 
 ## Usage
 

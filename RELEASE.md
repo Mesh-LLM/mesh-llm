@@ -99,11 +99,14 @@ The same Release workflow handles prereleases. Set `prerelease=true` and provide
 
 Running `.github/workflows/release.yml` via `workflow_dispatch` triggers the release flow, which:
 
+- builds the Swift XCFramework zip on macOS before the tag exists so SwiftPM gets the exact release URL and checksum baked into the tagged `Package.swift`
 - creates and pushes the release commit and tag before any build jobs start
 - serializes releases so two manual runs cannot race each other
 - builds release bundles on macOS, Linux CPU, Linux ARM64 CPU, Linux CUDA, Linux ROCm, and Linux Vulkan
 - keeps the Windows publish block commented out for now, so GitHub release publishing does not currently upload Windows bundles
 - still leaves the local Windows bundle recipes available in `Justfile` for manual builds
+- uploads `MeshLLMFFI.xcframework.zip` for Swift Package Manager consumers
+- publishes the Android AAR to GitHub Packages as `ai.meshllm:meshllm-android:<version>`
 - uploads versioned assets such as `mesh-llm-v0.X.0-aarch64-apple-darwin.tar.gz`
 - uploads the Linux ARM64 CPU asset as `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`
 - uploads stable `latest` assets such as `mesh-llm-x86_64-unknown-linux-gnu.tar.gz`
@@ -115,6 +118,7 @@ Running `.github/workflows/release.yml` via `workflow_dispatch` triggers the rel
 - marks hyphenated tags such as `v0.X.0-rc.1` as GitHub prereleases
 - publishes `mesh-llm-client` and `mesh-api` to crates.io after the release succeeds on stable tags such as `v0.X.0`
 - skips crates.io publishing for prerelease tags such as `v0.X.0-rc.1`
+- resets the target branch back to the placeholder Swift `Package.swift` after the release finishes, so day-to-day branch builds do not keep pointing at the most recent published XCFramework
 
 ### 6a. Autoupdater behavior and compatibility
 
@@ -128,6 +132,8 @@ Running `.github/workflows/release.yml` via `workflow_dispatch` triggers the rel
 
 After the workflow finishes, verify:
 
+- `MeshLLMFFI.xcframework.zip` exists for Swift Package Manager installs
+- `ai.meshllm:meshllm-android:<version>` is visible in the GitHub Packages Maven registry for the repo
 - `mesh-bundle.tar.gz` still exists for direct macOS archive installs
 - `mesh-llm-aarch64-apple-darwin.tar.gz` exists
 - `mesh-llm-aarch64-unknown-linux-gnu.tar.gz` exists
@@ -143,8 +149,9 @@ After the workflow finishes, verify:
 - The default Linux release bundle is a generic CPU build.
 - Windows source builds exist, and the `*-windows` release recipes in `Justfile` still generate local `.zip` artifacts.
 - The workflow is now responsible for creating and pushing release tags; pushing a tag manually does not trigger a release build anymore.
-- The workflow mutates the target branch by creating and pushing the release commit before it starts the build matrix.
+- The workflow mutates the target branch by pushing the release commit before it starts the build matrix, then pushes a follow-up commit that restores the placeholder Swift package manifest after a successful release.
 - Tagged GitHub releases do not currently publish Windows bundles because the Windows release job remains commented out in `.github/workflows/release.yml`.
+- Android Maven publication currently targets GitHub Packages, not Maven Central.
 - Release bundles use flavor-specific `rpc-server-<flavor>` and `llama-server-<flavor>` names so multiple flavors can coexist in one install directory. Use `mesh-llm --llama-flavor <flavor>` to force a specific pair.
 - The CUDA Linux release bundle is built in CI with an explicit multi-arch `CMAKE_CUDA_ARCHITECTURES` list and is not runtime-tested during the workflow.
 - The ROCm and Vulkan Linux release bundles are compile-tested in CI, but not runtime-tested against real GPUs during the workflow.

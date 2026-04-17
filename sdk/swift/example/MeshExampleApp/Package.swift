@@ -7,13 +7,13 @@ let package = Package(
         .macOS(.v13),
     ],
     dependencies: [
-        .package(path: "../.."),
+        .package(path: "../../../.."),
     ],
     targets: [
         .executableTarget(
             name: "MeshExampleApp",
             dependencies: [
-                .product(name: "MeshLLM", package: "swift"),
+                .product(name: "MeshLLM", package: "mesh-llm"),
             ],
             path: "Sources/MeshExampleApp"
         ),

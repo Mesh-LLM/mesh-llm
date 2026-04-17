@@ -1,5 +1,5 @@
-framework module mesh_ffiFFI {
-  header "mesh_ffiFFI.h"
+framework module MeshLLMFFI {
+  header "MeshLLMFFI.h"
   export *
   use "Darwin"
   use "_Builtin_stdbool"
