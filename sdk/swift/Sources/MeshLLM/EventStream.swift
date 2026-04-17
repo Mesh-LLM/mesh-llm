@@ -42,19 +42,18 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
     }
 
     public func onEvent(event: EventDto) {
-        stateLock.lock()
-        let isFinished = finished
-        stateLock.unlock()
-        guard !isFinished else {
-            return
-        }
-
         let mapped = MeshClient.mapEvent(event)
-        continuation.yield(mapped)
         switch mapped {
         case .completed, .failed, .disconnected:
-            finish()
+            finish(with: mapped)
         default:
+            stateLock.lock()
+            let isFinished = finished
+            stateLock.unlock()
+            guard !isFinished else {
+                return
+            }
+            continuation.yield(mapped)
             break
         }
     }
@@ -91,6 +90,20 @@ public final class EventStreamBridge: EventListener, @unchecked Sendable {
             return
         }
         onCancel(requestId)
+    }
+
+    private func finish(with event: MeshEvent) {
+        stateLock.lock()
+        guard !finished else {
+            stateLock.unlock()
+            return
+        }
+        finished = true
+        requestId = nil
+        stateLock.unlock()
+
+        continuation.yield(event)
+        continuation.finish()
     }
 }
 #else

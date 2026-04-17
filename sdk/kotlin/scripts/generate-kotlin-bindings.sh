@@ -18,7 +18,7 @@ BINDGEN="$BINDGEN_ROOT/bin/uniffi-bindgen"
 
 if [ ! -x "$BINDGEN" ]; then
     echo "Installing uniffi-bindgen 0.31.0 into $BINDGEN_ROOT ..."
-    cargo install uniffi --version =0.31.0 --features cli --bin uniffi-bindgen \
+    cargo install uniffi --version 0.31.0 --features cli --bin uniffi-bindgen \
         --root "$BINDGEN_ROOT"
 fi
 

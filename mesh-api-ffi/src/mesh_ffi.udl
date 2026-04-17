@@ -9,6 +9,7 @@ namespace mesh_ffi {
 enum FfiError {
     "InvalidInviteToken",
     "InvalidOwnerKeypair",
+    "BuildFailed",
     "JoinFailed",
     "DiscoveryFailed",
     "StreamFailed",

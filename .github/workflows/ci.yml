@@ -132,9 +132,9 @@ jobs:
         run: |
           cargo tree -p mesh-client --prefix=none --no-dedupe > /tmp/mesh-client-deps.txt
           FORBIDDEN="keyring|rpassword|hf-hub|dirs|clap|include_dir|rmcp|keyring-core"
-          if grep -wE "^[[:space:]│├└─-]*($FORBIDDEN)\b" /tmp/mesh-client-deps.txt; then
+          if grep -E "^[[:space:]│├└─-]*($FORBIDDEN)([[:space:]]|$)" /tmp/mesh-client-deps.txt; then
             echo "ERROR: Forbidden dependency found in mesh-client"
-            grep -wE "^[[:space:]│├└─-]*($FORBIDDEN)\b" /tmp/mesh-client-deps.txt
+            grep -E "^[[:space:]│├└─-]*($FORBIDDEN)([[:space:]]|$)" /tmp/mesh-client-deps.txt
             exit 1
           fi
           echo "PASS: No forbidden dependencies found"

@@ -62,11 +62,9 @@ TDD across all surfaces. Every extraction follows the recipe: write a failing te
 | iOS / Android | `--no-default-features` |
 | macOS host | `--features host` |
 
-`mesh-client` has a strict dependency allowlist. Only these 18 crates are permitted:
+`mesh-client` has a strict dependency policy. Its dependency tree is allowed to include the transport, protocol, crypto, parsing, and async crates needed for an embedded QUIC client, including the current set used in this PR such as `iroh`, `tokio`, `prost`, `bytes`, `rustls`, `quinn`, `serde`, `serde_json`, `thiserror`, `anyhow`, `tracing`, `sha2`, `ed25519-dalek`, `hex`, `uuid`, `url`, `http`, `base64`, `nostr-sdk`, `crypto_box`, `rand`, `async-trait`, and `httparse`.
 
-`iroh`, `tokio`, `prost`, `bytes`, `rustls`, `quinn`, `serde`, `serde_json`, `thiserror`, `anyhow`, `tracing`, `sha2`, `ed25519-dalek`, `hex`, `uuid`, `url`, `http`, `base64`
-
-No crate outside this list may appear in `mesh-client`'s dependency tree. This keeps the mobile binary size predictable and prevents accidental inclusion of desktop-only dependencies.
+The actual CI-enforced constraint is that `mesh-client` must not pull in desktop/host-oriented crates such as credential stores, CLI frameworks, or plugin/runtime host dependencies. This keeps the mobile binary size predictable and prevents accidental inclusion of desktop-only code.
 
 `mesh-api-ffi` must not directly depend on `iroh`, `tokio`, or `prost`. It reaches those through `mesh-client` only.
 
@@ -90,13 +88,13 @@ impl MeshClient {
     pub async fn cancel(&self, request_id: RequestId) -> Result<(), MeshError>;
     pub async fn status(&self) -> Result<MeshStatus, MeshError>;
     pub async fn disconnect(&mut self) -> Result<(), MeshError>;
-    pub fn reconnect(&mut self) -> Result<(), MeshError>;
+    pub async fn reconnect(&mut self) -> Result<(), MeshError>;
 }
 ```
 
 Nine methods. No more, no fewer.
 
-`chat` maps to the `/v1/chat/completions` endpoint. `responses` maps to `/v1/responses`. Both deliver tokens incrementally via `EventListener`. `cancel` terminates an in-flight request by `RequestId`. `reconnect` is synchronous and is intended to be called from `UIApplication.willEnterForegroundNotification` on iOS after the app returns from background.
+`chat` maps to the `/v1/chat/completions` endpoint. `responses` maps to `/v1/responses`. Both deliver tokens incrementally via `EventListener`. `cancel` terminates an in-flight request by `RequestId`. `reconnect` is async and is intended to be awaited from foreground-resume handling after the app returns from background.
 
 ### MeshHost
 

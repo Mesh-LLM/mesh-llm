@@ -1923,6 +1923,8 @@ sealed class FfiException(message: String): kotlin.Exception(message) {
         
         class InvalidOwnerKeypair(message: String) : FfiException(message)
         
+        class BuildFailed(message: String) : FfiException(message)
+        
         class JoinFailed(message: String) : FfiException(message)
         
         class DiscoveryFailed(message: String) : FfiException(message)
@@ -1950,12 +1952,13 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
             return when(buf.getInt()) {
             1 -> FfiException.InvalidInviteToken(FfiConverterString.read(buf))
             2 -> FfiException.InvalidOwnerKeypair(FfiConverterString.read(buf))
-            3 -> FfiException.JoinFailed(FfiConverterString.read(buf))
-            4 -> FfiException.DiscoveryFailed(FfiConverterString.read(buf))
-            5 -> FfiException.StreamFailed(FfiConverterString.read(buf))
-            6 -> FfiException.Cancelled(FfiConverterString.read(buf))
-            7 -> FfiException.ReconnectFailed(FfiConverterString.read(buf))
-            8 -> FfiException.HostUnavailable(FfiConverterString.read(buf))
+            3 -> FfiException.BuildFailed(FfiConverterString.read(buf))
+            4 -> FfiException.JoinFailed(FfiConverterString.read(buf))
+            5 -> FfiException.DiscoveryFailed(FfiConverterString.read(buf))
+            6 -> FfiException.StreamFailed(FfiConverterString.read(buf))
+            7 -> FfiException.Cancelled(FfiConverterString.read(buf))
+            8 -> FfiException.ReconnectFailed(FfiConverterString.read(buf))
+            9 -> FfiException.HostUnavailable(FfiConverterString.read(buf))
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
         
@@ -1975,28 +1978,32 @@ public object FfiConverterTypeFfiError : FfiConverterRustBuffer<FfiException> {
                 buf.putInt(2)
                 Unit
             }
-            is FfiException.JoinFailed -> {
+            is FfiException.BuildFailed -> {
                 buf.putInt(3)
                 Unit
             }
-            is FfiException.DiscoveryFailed -> {
+            is FfiException.JoinFailed -> {
                 buf.putInt(4)
                 Unit
             }
-            is FfiException.StreamFailed -> {
+            is FfiException.DiscoveryFailed -> {
                 buf.putInt(5)
                 Unit
             }
-            is FfiException.Cancelled -> {
+            is FfiException.StreamFailed -> {
                 buf.putInt(6)
                 Unit
             }
-            is FfiException.ReconnectFailed -> {
+            is FfiException.Cancelled -> {
                 buf.putInt(7)
                 Unit
             }
-            is FfiException.HostUnavailable -> {
+            is FfiException.ReconnectFailed -> {
                 buf.putInt(8)
+                Unit
+            }
+            is FfiException.HostUnavailable -> {
+                buf.putInt(9)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }

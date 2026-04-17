@@ -65,7 +65,33 @@ class MeshClientTest {
 
         assertEquals(Event.Connecting, events[0])
         assertEquals(Event.Joined("node-abc"), events[1])
-        assertEquals(Event.TokenDelta(requestIdStr, "hello "), events[2])
-        assertEquals(Event.Completed(requestIdStr), events[3])
+        assertEquals(Event.TokenDelta(RequestId(requestIdStr), "hello "), events[2])
+        assertEquals(Event.Completed(RequestId(requestIdStr)), events[3])
+    }
+
+    @Test
+    fun chatFlowClosesOnCompletedEventWithoutCancelling() = runTest {
+        val handle = mockk<MeshClientHandleInterface>()
+        val capturedListener = slot<FfiEventListener>()
+        val requestIdStr = "req-finish-789"
+
+        every { handle.chat(any(), capture(capturedListener)) } answers {
+            capturedListener.captured.onEvent(EventDto.TokenDelta(requestIdStr, "done"))
+            capturedListener.captured.onEvent(EventDto.Completed(requestIdStr))
+            requestIdStr
+        }
+        every { handle.cancel(any()) } just runs
+
+        val client = MeshClient(handle)
+        val events = client.chatFlow(simpleRequest).toList()
+
+        assertEquals(
+            listOf(
+                Event.TokenDelta(RequestId(requestIdStr), "done"),
+                Event.Completed(RequestId(requestIdStr)),
+            ),
+            events
+        )
+        verify(exactly = 0) { handle.cancel(requestIdStr) }
     }
 }

@@ -1091,6 +1091,8 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
     
     case InvalidOwnerKeypair(message: String)
     
+    case BuildFailed(message: String)
+    
     case JoinFailed(message: String)
     
     case DiscoveryFailed(message: String)
@@ -1140,27 +1142,31 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 3: return .JoinFailed(
+        case 3: return .BuildFailed(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 4: return .DiscoveryFailed(
+        case 4: return .JoinFailed(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 5: return .StreamFailed(
+        case 5: return .DiscoveryFailed(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 6: return .Cancelled(
+        case 6: return .StreamFailed(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 7: return .ReconnectFailed(
+        case 7: return .Cancelled(
             message: try FfiConverterString.read(from: &buf)
         )
         
-        case 8: return .HostUnavailable(
+        case 8: return .ReconnectFailed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 9: return .HostUnavailable(
             message: try FfiConverterString.read(from: &buf)
         )
         
@@ -1179,18 +1185,20 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(1))
         case .InvalidOwnerKeypair(_ /* message is ignored*/):
             writeInt(&buf, Int32(2))
-        case .JoinFailed(_ /* message is ignored*/):
+        case .BuildFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(3))
-        case .DiscoveryFailed(_ /* message is ignored*/):
+        case .JoinFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(4))
-        case .StreamFailed(_ /* message is ignored*/):
+        case .DiscoveryFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(5))
-        case .Cancelled(_ /* message is ignored*/):
+        case .StreamFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(6))
-        case .ReconnectFailed(_ /* message is ignored*/):
+        case .Cancelled(_ /* message is ignored*/):
             writeInt(&buf, Int32(7))
-        case .HostUnavailable(_ /* message is ignored*/):
+        case .ReconnectFailed(_ /* message is ignored*/):
             writeInt(&buf, Int32(8))
+        case .HostUnavailable(_ /* message is ignored*/):
+            writeInt(&buf, Int32(9))
 
         
         }

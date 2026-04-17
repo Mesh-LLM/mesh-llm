@@ -25,6 +25,7 @@ fn ffi_error_all_variants_present() {
     let variants: &[FfiError] = &[
         FfiError::InvalidInviteToken,
         FfiError::InvalidOwnerKeypair,
+        FfiError::BuildFailed,
         FfiError::JoinFailed,
         FfiError::DiscoveryFailed,
         FfiError::StreamFailed,

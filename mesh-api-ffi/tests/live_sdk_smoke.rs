@@ -22,7 +22,10 @@ fn ffi_client_runs_against_live_mesh() {
     };
     let expected_model = env::var("MESH_SDK_MODEL_ID").unwrap_or_default();
 
-    let owner_keypair_hex = mesh_api::OwnerKeypair::generate().to_hex();
+    let owner_keypair_hex = env::var("MESH_SDK_OWNER_KEYPAIR_HEX")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| mesh_api::OwnerKeypair::generate().to_hex());
     let handle = create_client(owner_keypair_hex, invite_token).expect("create_client");
     handle.join().expect("join");
 

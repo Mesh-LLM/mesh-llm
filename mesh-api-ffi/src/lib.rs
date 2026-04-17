@@ -14,6 +14,8 @@ pub enum FfiError {
     InvalidInviteToken,
     #[error("invalid owner keypair")]
     InvalidOwnerKeypair,
+    #[error("client build failed")]
+    BuildFailed,
     #[error("join failed")]
     JoinFailed,
     #[error("discovery failed")]
@@ -136,7 +138,7 @@ pub fn create_client(
     let kp = OwnerKeypair::from_hex(trimmed).map_err(|_| FfiError::InvalidOwnerKeypair)?;
     let client = ClientBuilder::new(kp, token)
         .build()
-        .map_err(|_| FfiError::JoinFailed)?;
+        .map_err(|_| FfiError::BuildFailed)?;
     Ok(Arc::new(MeshClientHandle {
         inner: Mutex::new(client),
     }))
