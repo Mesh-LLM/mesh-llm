@@ -13,6 +13,13 @@
 
 # syntax=docker/dockerfile:1.7
 
+# Global ARG declared before any FROM so it is in scope for every FROM
+# directive below. Docker drops pre-FROM ARG scope once the first FROM
+# is parsed, and re-declaring ARG between stages does NOT propagate into
+# subsequent FROM lines — so this must stay at the very top, above the
+# ui-builder FROM, for the CUDA FROM lines to resolve ${CUDA_VERSION}.
+ARG CUDA_VERSION=12.6.3
+
 FROM node:24-alpine AS ui-builder
 WORKDIR /app
 COPY mesh-llm/ui/package.json mesh-llm/ui/package-lock.json ./
@@ -22,7 +29,6 @@ COPY mesh-llm/ui/ ./
 RUN npm run build
 # Output: /app/dist
 
-ARG CUDA_VERSION=12.6.3
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS rust-deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential \
@@ -68,7 +74,6 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     mkdir -p /out && \
     cp /src/target/release/mesh-llm /out/mesh-llm
 
-ARG CUDA_VERSION
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS llama-builder-cuda
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake ninja-build build-essential git ca-certificates \
@@ -103,7 +108,6 @@ RUN cd llama.cpp && \
     cp build/bin/llama-server /out/llama-server-cuda && \
     cp build/bin/llama-moe-split /out/llama-moe-split
 
-ARG CUDA_VERSION
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu22.04 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libgomp1 libdbus-1-3 \
