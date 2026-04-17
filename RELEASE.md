@@ -98,13 +98,13 @@ Run this from a clean branch. It bumps the version in source + Cargo manifests, 
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which:
 
-- builds release bundles on macOS, Linux CPU, Linux ARM64 CPU, Linux CUDA, Linux ROCm, and Linux Vulkan
+- builds release bundles on macOS, Linux CPU, Linux ARM64 CPU, Linux CUDA (primary lane, CUDA 12.6.3 toolkit, R535-compatible), Linux CUDA Blackwell (CUDA 12.8 toolkit, R550+ required), Linux ROCm, and Linux Vulkan
 - keeps the Windows publish block commented out for now, so GitHub release publishing does not currently upload Windows bundles
 - still leaves the local Windows bundle recipes available in `Justfile` for manual builds
 - uploads versioned assets such as `mesh-llm-v0.X.0-aarch64-apple-darwin.tar.gz`
 - uploads the Linux ARM64 CPU asset as `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`
 - uploads stable `latest` assets such as `mesh-llm-x86_64-unknown-linux-gnu.tar.gz`
-- uploads CUDA-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz`
+- uploads CUDA-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz` (primary lane) and `mesh-llm-x86_64-unknown-linux-gnu-cuda-blackwell.tar.gz` (Blackwell lane — see `docs/cuda-release-lanes.md`)
 - uploads ROCm-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz`
 - uploads Vulkan-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz`
 - keeps the legacy macOS `mesh-bundle.tar.gz` asset available for direct archive installs
@@ -127,7 +127,8 @@ After the workflow finishes, verify:
 - `mesh-llm-aarch64-apple-darwin.tar.gz` exists
 - `mesh-llm-aarch64-unknown-linux-gnu.tar.gz` exists
 - `mesh-llm-x86_64-unknown-linux-gnu.tar.gz` exists
-- `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz` exists
+- `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz` exists (primary R535-compatible lane)
+- `mesh-llm-x86_64-unknown-linux-gnu-cuda-blackwell.tar.gz` exists (Blackwell lane, R550+ only)
 - `mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz` exists
 - `mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz` exists
 - Windows release bundles are not expected from the current GitHub Actions workflow while the publish block stays commented out

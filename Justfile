@@ -54,11 +54,26 @@ release-build-arm64:
 release-build-windows:
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cpu
 
-# Build a Linux CUDA release artifact with an explicit architecture list.
-release-build-cuda cuda_arch="75;80;86;87;89;90;100;103;120":
+# Build a Linux CUDA release artifact (primary / R535-compatible lane).
+# Default arch list is Turing..Hopper (sm_75..sm_90); this matches the
+# CUDA 12.6.3 toolkit pinned by .github/workflows/release.yml. The
+# emitted cubins load on the R535 driver series (the install base of the
+# currently-deployed A30/A100 fleet). For Blackwell support see
+# release-build-cuda-blackwell. See docs/cuda-release-lanes.md.
+release-build-cuda cuda_arch="75;80;86;87;89;90":
     @scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
 
-release-build-cuda-windows cuda_arch="75;80;86;87;89;90;100;103;120":
+# Build a Linux CUDA release artifact (Blackwell lane).
+# Must be invoked under the CUDA 12.8 toolkit. Emitted sm_100/103/120
+# cubins require the R550+ driver series at runtime; the produced bundle
+# is NOT compatible with R535. See docs/cuda-release-lanes.md.
+release-build-cuda-blackwell cuda_arch="75;80;86;87;89;90;100;103;120":
+    @scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
+
+release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}"
+
+release-build-cuda-blackwell-windows cuda_arch="75;80;86;87;89;90;100;103;120":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}"
 
 # Build a Linux ROCm release artifact with an explicit architecture list.
@@ -285,8 +300,18 @@ release-bundle-windows version output="dist":
 release-bundle-cuda version output="dist":
     MESH_RELEASE_FLAVOR=cuda scripts/package-release.sh "{{ version }}" "{{ output }}"
 
+# Create Linux CUDA (Blackwell) release archive(s). Paired with
+# release-build-cuda-blackwell above; emits the cuda-blackwell archive
+# suffix while keeping inner binary names as -cuda (runtime looks up
+# binaries by BinaryFlavor enum, which has one cuda variant).
+release-bundle-cuda-blackwell version output="dist":
+    MESH_RELEASE_FLAVOR=cuda-blackwell scripts/package-release.sh "{{ version }}" "{{ output }}"
+
 release-bundle-cuda-windows version output="dist":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version "{{version}}" -OutputDir "{{output}}" -Flavor cuda
+
+release-bundle-cuda-blackwell-windows version output="dist":
+    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version "{{version}}" -OutputDir "{{output}}" -Flavor cuda-blackwell
 
 # Create Linux ROCm release archive(s).
 release-bundle-rocm version output="dist":
@@ -423,16 +448,21 @@ docker-build-cpu tag="mesh-llm:cpu":
 docker-build-cpu tag="mesh-llm:cpu":
     @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.cpu -t '{{ tag }}' ."
 
-# Build the CUDA full-node Docker image
+# Build the CUDA full-node Docker image.
+# Default arch list targets the CUDA 12.6.3 toolkit baked into
+# docker/Dockerfile.cuda (Turing..Hopper). For Blackwell (sm_100/103/120)
+# override cuda_arch AND cuda_version: the 12.6.3 base image's nvcc cannot
+# emit those cubins. See docs/cuda-release-lanes.md.
 [unix]
-docker-build-cuda tag="mesh-llm:cuda" cuda_arch="75;80;86;87;89;90;100;103;120":
+docker-build-cuda tag="mesh-llm:cuda" cuda_arch="75;80;86;87;89;90" cuda_version="12.6.3":
     DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.cuda \
         --build-arg CUDA_ARCH="{{ cuda_arch }}" \
+        --build-arg CUDA_VERSION="{{ cuda_version }}" \
         -t {{ tag }} .
 
 [windows]
-docker-build-cuda tag="mesh-llm:cuda" cuda_arch="75;80;86;87;89;90;100;103;120":
-    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.cuda --build-arg CUDA_ARCH='{{ cuda_arch }}' -t '{{ tag }}' ."
+docker-build-cuda tag="mesh-llm:cuda" cuda_arch="75;80;86;87;89;90" cuda_version="12.6.3":
+    @powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:DOCKER_BUILDKIT='1'; docker build -f docker/Dockerfile.cuda --build-arg CUDA_ARCH='{{ cuda_arch }}' --build-arg CUDA_VERSION='{{ cuda_version }}' -t '{{ tag }}' ."
 
 # Build the ROCm full-node Docker image
 [unix]
