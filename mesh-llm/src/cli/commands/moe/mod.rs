@@ -360,7 +360,7 @@ fn print_submit_suggestion(model_path: &Path) {
         return;
     };
     println!("📤 Contribute this ranking to mesh-llm so other users can reuse it:");
-    println!("  mesh-llm moe share '{}'", identity.canonical_ref);
+    println!("  mesh-llm moe share '{}'", identity.distribution_ref());
 }
 
 async fn run_share(model: &str, ranking_file: Option<&Path>, dataset_repo: &str) -> Result<()> {

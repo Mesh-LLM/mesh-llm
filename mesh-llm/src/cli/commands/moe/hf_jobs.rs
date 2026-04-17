@@ -24,7 +24,7 @@ pub(crate) async fn submit_full_analyze_job(
 ) -> Result<()> {
     let identity = remote_identity(model_spec).await?;
     let spec = JobSubmissionSpec {
-        model_ref: identity.canonical_ref.clone(),
+        model_ref: identity.distribution_ref(),
         analyzer: RemoteAnalyzer::Full {
             context_size,
             n_gpu_layers,
@@ -56,7 +56,7 @@ pub(crate) async fn submit_micro_analyze_job(
 ) -> Result<()> {
     let identity = remote_identity(model_spec).await?;
     let spec = JobSubmissionSpec {
-        model_ref: identity.canonical_ref.clone(),
+        model_ref: identity.distribution_ref(),
         analyzer: RemoteAnalyzer::Micro {
             prompt_count,
             token_count,
