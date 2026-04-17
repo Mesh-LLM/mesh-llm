@@ -64,7 +64,7 @@ jobs:
       - name: Expose CUDA version
         id: cuda_version
         shell: bash
-        run: echo "value=${{ vars.CUDA_VERSION || '12.8.0' }}" >> "$GITHUB_OUTPUT"
+        run: echo "value=${{ vars.CUDA_VERSION || '12.6.3' }}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve llama.cpp SHA
         id: resolve
