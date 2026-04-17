@@ -1418,6 +1418,7 @@ async fn run_auto(
     auto_join_candidates: Vec<(String, Option<String>)>,
 ) -> Result<()> {
     let resolved_plugins = resolve_plugins_from_config(&config, &cli)?;
+    let startup_floor_strategy = serve_moe_floor_strategy(&cli);
     let api_port = cli.port;
     // Export management API port for llama-server mesh hook callbacks.
     // Must be the console/management port (default 3131), NOT the proxy port
@@ -1958,7 +1959,10 @@ async fn run_auto(
     let console_state_for_primary_process = console_state.clone();
     let primary_process_model_name = model_name.clone();
     let primary_model_name_for_advertise = model_name.clone();
-    let moe_runtime_options = moe::MoeRuntimeOptions::default();
+    let moe_runtime_options = moe::MoeRuntimeOptions {
+        floor_strategy: startup_floor_strategy.clone(),
+        ..Default::default()
+    };
     let primary_mmproj = primary_startup_model
         .as_ref()
         .and_then(|model| model.mmproj_path.clone());
@@ -2114,7 +2118,10 @@ async fn run_auto(
             let extra_model_name = extra_name.clone();
             let api_port_extra = api_port;
             let extra_llama_flavor = cli.llama_flavor;
-            let extra_moe_runtime_options = moe::MoeRuntimeOptions::default();
+            let extra_moe_runtime_options = moe::MoeRuntimeOptions {
+                floor_strategy: startup_floor_strategy.clone(),
+                ..Default::default()
+            };
             let extra_console_state = console_state.clone();
             let extra_model_name_for_status = extra_model_name.clone();
             let extra_model_name_for_process = extra_model_name.clone();

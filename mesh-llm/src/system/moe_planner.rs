@@ -254,7 +254,7 @@ pub(crate) async fn plan_moe(args: MoePlanArgs) -> Result<MoePlanReport> {
         &args.floor_strategy,
         model.expert_count,
         model.used_expert_count,
-        &ranking.path,
+        Some(&ranking.path),
     )?;
     model.min_experts_per_node = floor_decision.required_experts_per_node;
     let analysis = ranking
@@ -1186,7 +1186,7 @@ pub(crate) fn fetch_remote_startup_fit(
         floor_strategy,
         analysis.model.expert_count,
         analysis.model.expert_used_count,
-        &ranking.path,
+        Some(&ranking.path),
     )?;
     let estimate = estimate_startup_fit_from_analysis(
         &ranking.path,
@@ -1387,11 +1387,23 @@ pub(crate) fn validate_floor_strategy(strategy: &MoeFloorStrategy) -> Result<()>
     Ok(())
 }
 
+pub(crate) fn resolve_required_experts_per_node(
+    strategy: &MoeFloorStrategy,
+    expert_count: u32,
+    used_expert_count: u32,
+    ranking_path: Option<&Path>,
+) -> Result<u32> {
+    Ok(
+        derive_floor_decision(strategy, expert_count, used_expert_count, ranking_path)?
+            .required_experts_per_node,
+    )
+}
+
 fn derive_floor_decision(
     strategy: &MoeFloorStrategy,
     expert_count: u32,
     used_expert_count: u32,
-    ranking_path: &Path,
+    ranking_path: Option<&Path>,
 ) -> Result<MoeFloorDecision> {
     let topk_multiplier = strategy.topk_multiplier.unwrap_or(DEFAULT_TOPK_MULTIPLIER);
     let mass_threshold = strategy.mass_threshold.unwrap_or(DEFAULT_MASS_THRESHOLD);
@@ -1399,6 +1411,12 @@ fn derive_floor_decision(
         .saturating_mul(topk_multiplier)
         .clamp(1, expert_count.max(1));
     let mass_floor = || -> Result<u32> {
+        let ranking_path = ranking_path.ok_or_else(|| {
+            anyhow::anyhow!(
+                "`{}` shared-core floor requires ranking mass data, but no runtime ranking file is available",
+                strategy.mode_label()
+            )
+        })?;
         let profile = load_analyze_mass_profile(ranking_path)?;
         let target_mass = profile.total_mass * mass_threshold;
         let mut cumulative = 0.0;
@@ -1917,7 +1935,7 @@ mod tests {
             },
             8,
             2,
-            &ranking_path,
+            Some(&ranking_path),
         )
         .unwrap();
 
@@ -1952,7 +1970,7 @@ mod tests {
             },
             8,
             2,
-            &ranking_path,
+            Some(&ranking_path),
         )
         .unwrap();
 
@@ -1989,7 +2007,7 @@ mod tests {
             },
             8,
             2,
-            &ranking_path,
+            Some(&ranking_path),
         )
         .unwrap();
 
