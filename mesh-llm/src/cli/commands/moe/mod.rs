@@ -4,16 +4,21 @@ mod formatters_json;
 mod hf_jobs;
 
 use anyhow::{bail, Context, Result};
-use hf_hub::RepoUploadFolderParams;
-use std::collections::BTreeMap;
+use hf_hub::{
+    FileProgress, FileStatus, Progress, ProgressEvent, ProgressHandler, RepoUploadFolderParams,
+    UploadEvent, UploadPhase,
+};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Write as IoWrite;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli::moe::{HfJobArgs, MoeAnalyzeCommand, MoeCommand};
-use crate::cli::terminal_progress::start_spinner;
+use crate::cli::terminal_progress::{clear_stderr_line, start_spinner, SpinnerHandle};
 use crate::cli::Cli;
 use crate::inference::moe;
 use crate::models;
@@ -37,6 +42,269 @@ struct TempRootGuard(PathBuf);
 impl Drop for TempRootGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+struct ShareUploadFileState {
+    bytes_completed: u64,
+    total_bytes: u64,
+}
+
+struct ShareUploadProgressState {
+    spinner: Option<SpinnerHandle>,
+    phase: Option<UploadPhase>,
+    total_files: usize,
+    total_bytes: u64,
+    bytes_completed: u64,
+    bytes_per_sec: Option<f64>,
+    transfer_bytes_completed: u64,
+    transfer_bytes: u64,
+    transfer_bytes_per_sec: Option<f64>,
+    completed_files: BTreeSet<String>,
+    active_files: BTreeMap<String, ShareUploadFileState>,
+    last_draw: Option<std::time::Instant>,
+}
+
+struct ShareUploadProgress {
+    state: Mutex<ShareUploadProgressState>,
+}
+
+impl ShareUploadProgress {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ShareUploadProgressState {
+                spinner: None,
+                phase: None,
+                total_files: 0,
+                total_bytes: 0,
+                bytes_completed: 0,
+                bytes_per_sec: None,
+                transfer_bytes_completed: 0,
+                transfer_bytes: 0,
+                transfer_bytes_per_sec: None,
+                completed_files: BTreeSet::new(),
+                active_files: BTreeMap::new(),
+                last_draw: None,
+            }),
+        }
+    }
+
+    fn transition_phase(state: &mut ShareUploadProgressState, phase: &UploadPhase) {
+        if state.phase.as_ref() == Some(phase) {
+            return;
+        }
+        if let Some(mut spinner) = state.spinner.take() {
+            spinner.finish();
+        }
+        state.phase = Some(phase.clone());
+        match phase {
+            UploadPhase::Preparing => {
+                state.spinner = Some(start_spinner("Preparing files for upload"));
+            }
+            UploadPhase::CheckingUploadMode => {
+                state.spinner = Some(start_spinner("Checking upload mode"));
+            }
+            UploadPhase::Uploading => {
+                let _ = clear_stderr_line();
+                eprintln!("⬆️ Uploading staged files...");
+            }
+            UploadPhase::Committing => {
+                let done = state.completed_files.len().min(state.total_files);
+                state.spinner = Some(start_spinner(&format!(
+                    "Creating contribution PR ({done}/{})",
+                    state.total_files
+                )));
+            }
+        }
+    }
+
+    fn apply_file_progress(state: &mut ShareUploadProgressState, file: &FileProgress) {
+        match file.status {
+            FileStatus::Started | FileStatus::InProgress => {
+                state.active_files.insert(
+                    file.filename.clone(),
+                    ShareUploadFileState {
+                        bytes_completed: file.bytes_completed,
+                        total_bytes: file.total_bytes,
+                    },
+                );
+            }
+            FileStatus::Complete => {
+                state.completed_files.insert(file.filename.clone());
+                state.active_files.remove(&file.filename);
+            }
+        }
+    }
+
+    fn draw(state: &mut ShareUploadProgressState, force: bool) {
+        let now = std::time::Instant::now();
+        if !force
+            && state.last_draw.is_some_and(|last| {
+                now.duration_since(last) < std::time::Duration::from_millis(700)
+            })
+        {
+            return;
+        }
+        state.last_draw = Some(now);
+
+        let done = state.completed_files.len().min(state.total_files);
+        let percent = if state.total_files == 0 {
+            0.0
+        } else {
+            (done as f64 / state.total_files as f64) * 100.0
+        };
+        let processing = if state.total_bytes > 0 {
+            format!(
+                " processed {}/{}",
+                format_share_bytes(state.bytes_completed),
+                format_share_bytes(state.total_bytes)
+            )
+        } else {
+            String::new()
+        };
+        let transfer = if state.transfer_bytes > 0 {
+            format!(
+                ", uploading {}/{}",
+                format_share_bytes(state.transfer_bytes_completed),
+                format_share_bytes(state.transfer_bytes)
+            )
+        } else {
+            String::new()
+        };
+        let speed = state
+            .transfer_bytes_per_sec
+            .or(state.bytes_per_sec)
+            .filter(|bytes_per_sec| *bytes_per_sec > 0.0)
+            .map(|bytes_per_sec| format!(" at {}/s", format_share_bytes(bytes_per_sec as u64)))
+            .unwrap_or_default();
+
+        let _ = clear_stderr_line();
+        eprintln!(
+            "⬆️ Uploading {:>5.1}% [{}/{} files]{}{}{}",
+            percent, done, state.total_files, processing, transfer, speed
+        );
+
+        let active_count = state.active_files.len();
+        for (name, file) in state.active_files.iter().take(8) {
+            let file_percent = if file.total_bytes == 0 {
+                0.0
+            } else {
+                (file.bytes_completed as f64 / file.total_bytes as f64) * 100.0
+            };
+            eprintln!(
+                "   {} {:>5.1}% ({}/{})",
+                display_upload_filename(name),
+                file_percent,
+                format_share_bytes(file.bytes_completed),
+                format_share_bytes(file.total_bytes)
+            );
+        }
+        if active_count > 8 {
+            eprintln!("   … {} more file(s) uploading", active_count - 8);
+        }
+        let _ = std::io::stderr().flush();
+    }
+}
+
+impl ProgressHandler for ShareUploadProgress {
+    fn on_progress(&self, event: &ProgressEvent) {
+        let ProgressEvent::Upload(event) = event else {
+            return;
+        };
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        match event {
+            UploadEvent::Start {
+                total_files,
+                total_bytes,
+            } => {
+                state.total_files = *total_files;
+                state.total_bytes = *total_bytes;
+            }
+            UploadEvent::Progress {
+                phase,
+                bytes_completed,
+                total_bytes,
+                bytes_per_sec,
+                transfer_bytes_completed,
+                transfer_bytes,
+                transfer_bytes_per_sec,
+                files,
+            } => {
+                Self::transition_phase(&mut state, phase);
+                state.bytes_completed = *bytes_completed;
+                if *total_bytes > 0 {
+                    state.total_bytes = *total_bytes;
+                }
+                state.bytes_per_sec = *bytes_per_sec;
+                state.transfer_bytes_completed = *transfer_bytes_completed;
+                if *transfer_bytes > 0 {
+                    state.transfer_bytes = *transfer_bytes;
+                }
+                state.transfer_bytes_per_sec = *transfer_bytes_per_sec;
+                for file in files {
+                    Self::apply_file_progress(&mut state, file);
+                }
+                if *phase == UploadPhase::Uploading {
+                    Self::draw(&mut state, false);
+                }
+            }
+            UploadEvent::FileComplete { files, phase } => {
+                Self::transition_phase(&mut state, phase);
+                for name in files {
+                    state.completed_files.insert(name.clone());
+                    state.active_files.remove(name);
+                }
+                if *phase == UploadPhase::Uploading {
+                    Self::draw(&mut state, true);
+                }
+            }
+            UploadEvent::Complete => {
+                if let Some(mut spinner) = state.spinner.take() {
+                    spinner.finish();
+                }
+                if state.total_files > 0 {
+                    let remaining: Vec<String> = state.active_files.keys().cloned().collect();
+                    state.completed_files.extend(remaining);
+                    state.active_files.clear();
+                    Self::draw(&mut state, true);
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ShareUploadProgress {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(mut spinner) = state.spinner.take() {
+                spinner.finish();
+            }
+        }
+    }
+}
+
+fn display_upload_filename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn format_share_bytes(bytes: u64) -> String {
+    const KB: f64 = 1_000.0;
+    const MB: f64 = 1_000_000.0;
+    const GB: f64 = 1_000_000_000.0;
+
+    if bytes >= 1_000_000_000 {
+        format!("{:.1}GB", bytes as f64 / GB)
+    } else if bytes >= 1_000_000 {
+        format!("{:.0}MB", bytes as f64 / MB)
+    } else if bytes >= 1_000 {
+        format!("{:.0}KB", bytes as f64 / KB)
+    } else {
+        format!("{bytes}B")
     }
 }
 
@@ -533,6 +801,7 @@ async fn run_share(
     );
 
     println!("⬆️ Opening contribution PR...");
+    let upload_progress: Progress = Some(Arc::new(ShareUploadProgress::new()));
     let commit = dataset
         .upload_folder(
             &RepoUploadFolderParams::builder()
@@ -541,6 +810,7 @@ async fn run_share(
                 .commit_message(commit_message.clone())
                 .commit_description(commit_description.clone())
                 .create_pr(true)
+                .progress(upload_progress)
                 .build(),
         )
         .await
