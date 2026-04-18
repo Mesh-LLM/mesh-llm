@@ -738,6 +738,19 @@ fn command_has_output(command: &str, args: &[&str]) -> bool {
             .any(|line| !line.trim().is_empty())
 }
 
+fn binary_supports_flag(binary: &Path, flag: &str) -> bool {
+    let Ok(output) = std::process::Command::new(binary).arg("--help").output() else {
+        return false;
+    };
+
+    let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
+    if !combined.is_empty() && !output.stderr.is_empty() {
+        combined.push('\n');
+    }
+    combined.push_str(&String::from_utf8_lossy(&output.stderr));
+    combined.contains(flag)
+}
+
 /// Start a local rpc-server and return a handle holding its PID and port.
 /// Picks an available port automatically.
 /// If `gguf_path` is provided, passes `--gguf` so the server loads weights from the local file.
@@ -1178,13 +1191,22 @@ pub async fn start_llama_server(
         "256".to_string(),
     ]);
 
-    // Mesh hooks — tell llama-server where to call back.
-    // Uses the management API port (default 3131) as the callback target.
-    if let Ok(api_port) = std::env::var("MESH_API_PORT") {
-        args.extend_from_slice(&["--mesh-port".to_string(), api_port]);
-    }
-    if std::env::var("MESH_HOOK_DEBUG").is_ok() {
-        args.push("--mesh-hook-debug".to_string());
+    // Mesh hooks — tell llama-server where to call back, but only when the
+    // selected llama-server binary actually supports our fork-specific flags.
+    let supports_mesh_hooks = binary_supports_flag(&llama_server.path, "--mesh-port");
+    if supports_mesh_hooks {
+        // Uses the management API port (default 3131) as the callback target.
+        if let Ok(api_port) = std::env::var("MESH_API_PORT") {
+            args.extend_from_slice(&["--mesh-port".to_string(), api_port]);
+        }
+        if std::env::var("MESH_HOOK_DEBUG").is_ok() {
+            args.push("--mesh-hook-debug".to_string());
+        }
+    } else if std::env::var("MESH_API_PORT").is_ok() {
+        tracing::info!(
+            "llama-server binary {} does not advertise --mesh-port; skipping mesh hook flags",
+            llama_server.path.display()
+        );
     }
 
     // KV cache quantization — asymmetric K/V strategy.
