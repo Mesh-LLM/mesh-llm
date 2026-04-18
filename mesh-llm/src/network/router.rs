@@ -538,15 +538,13 @@ fn is_single_digit_b_name(name: &str) -> bool {
     false
 }
 
-/// In-place Fisher-Yates shuffle seeded from `seed`. Uses a small LCG
-/// so we don't need an external RNG crate for a handful of candidates.
+/// In-place Fisher-Yates shuffle seeded from `seed`.
 fn shuffle_in_place<T>(items: &mut [T], seed: u64) {
     if items.len() < 2 {
         return;
     }
     let mut state = seed.wrapping_mul(0x2545_F491_4F6C_DD1D).wrapping_add(1);
     for i in (1..items.len()).rev() {
-        // xorshift64 step
         state ^= state << 13;
         state ^= state >> 7;
         state ^= state << 17;
