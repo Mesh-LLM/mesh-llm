@@ -46,6 +46,7 @@ use mesh_llm_plugin::MeshVisibility;
 pub const BLACKBOARD_PLUGIN_ID: &str = "blackboard";
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 pub const LEMONADE_PLUGIN_ID: &str = "lemonade";
+#[allow(dead_code)]
 pub const BLACKBOARD_CAPABILITY: &str = "blackboard.v1";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const CONNECT_TIMEOUT_SECS: u64 = 10;

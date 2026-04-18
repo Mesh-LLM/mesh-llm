@@ -1,0 +1,25 @@
+[package]
+name = "mesh-api-ffi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "mesh_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[features]
+default = []
+host = ["mesh-host-core"]
+
+[dependencies]
+mesh-api = { path = "../mesh-api" }
+mesh-host-core = { path = "../mesh-host-core", optional = true }
+uniffi = "=0.31.0"
+thiserror = "2"
+pollster = "0.3"
+
+[build-dependencies]
+uniffi = { version = "=0.31.0", features = ["build"] }
+
+[dev-dependencies]
+mesh-api = { path = "../mesh-api" }

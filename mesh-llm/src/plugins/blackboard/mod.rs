@@ -156,6 +156,10 @@ impl BlackboardStore {
     }
 
     #[allow(dead_code)]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[allow(dead_code)]
     pub fn set_enabled(&self, v: bool) {
         self.enabled.store(v, std::sync::atomic::Ordering::Relaxed);
     }

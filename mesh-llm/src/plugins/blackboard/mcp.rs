@@ -7,16 +7,21 @@
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router, ServerHandler,
+    service::ServiceExt,
+    tool, tool_handler, tool_router,
+    transport::io::stdio,
+    ServerHandler,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Base URL for the mesh-llm management API.
+#[allow(dead_code)]
 fn base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
+#[allow(dead_code)]
 fn http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -27,12 +32,14 @@ fn http_client() -> reqwest::Client {
 // ── Tool parameter types ────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 pub struct PostParams {
     /// The message to post to the blackboard.
     pub text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 pub struct SearchParams {
     /// Free-text search query (terms are OR'd — any match counts).
     pub query: String,
@@ -42,6 +49,7 @@ pub struct SearchParams {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 pub struct FeedParams {
     /// Only show items from the last N hours (default: 24).
     #[serde(default)]
@@ -57,11 +65,13 @@ pub struct FeedParams {
 // ── Server ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BlackboardServer {
     port: u16,
     tool_router: ToolRouter<Self>,
 }
 
+#[allow(dead_code)]
 impl BlackboardServer {
     pub fn new(port: u16) -> Self {
         Self {
@@ -222,6 +232,7 @@ impl ServerHandler for BlackboardServer {
 }
 
 /// Format blackboard items as readable text for the agent.
+#[allow(dead_code)]
 fn format_items(items: &[super::BlackboardItem]) -> String {
     let mut out = String::new();
     for item in items {
@@ -248,6 +259,14 @@ fn format_items(items: &[super::BlackboardItem]) -> String {
     out.trim_end().to_string()
 }
 
+/// Run the MCP server over stdio.
+#[allow(dead_code)]
+pub async fn run_mcp_server(port: u16) -> anyhow::Result<()> {
+    let server = BlackboardServer::new(port);
+    let transport = stdio();
+    server.serve(transport).await?.waiting().await?;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::super::BlackboardItem;

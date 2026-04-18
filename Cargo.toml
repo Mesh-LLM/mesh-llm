@@ -2,6 +2,11 @@
 members = [
     "mesh-llm",
     "mesh-llm/plugin",
+    "mesh-client",
+    "mesh-api",
+    "mesh-host-core",
+    "mesh-api-ffi",
+    "mesh-llm-test-harness",
     "tools/xtask",
 ]
 default-members = [

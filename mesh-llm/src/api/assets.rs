@@ -2,7 +2,7 @@ use super::http::{respond_bytes, respond_bytes_cached};
 use include_dir::{include_dir, Dir};
 use tokio::net::TcpStream;
 
-static CONSOLE_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/ui/dist");
+static CONSOLE_DIST: Dir<'_> = include_dir!("$MESH_LLM_CONSOLE_DIST");
 
 pub(super) async fn respond_console_index(stream: &mut TcpStream) -> anyhow::Result<bool> {
     if let Some(file) = CONSOLE_DIST.get_file("index.html") {

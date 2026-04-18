@@ -2924,6 +2924,7 @@ fn config_sync_subscribe_snapshot_encode_decode() {
     use crate::proto::node::{ConfigSnapshotResponse, NodeConfigSnapshot, NodeGpuConfig};
 
     let snapshot = ConfigSnapshotResponse {
+        owner_id: String::new(),
         gen: NODE_PROTOCOL_GENERATION,
         node_id: vec![0xAA; 32],
         revision: 7,
@@ -2978,6 +2979,7 @@ fn config_sync_push_signature_payload_deterministic() {
     use crate::proto::node::{ConfigPush, NodeConfigSnapshot};
 
     let push = ConfigPush {
+        owner_id: String::new(),
         gen: NODE_PROTOCOL_GENERATION,
         requester_id: vec![0xAA; 32],
         target_node_id: vec![0xBB; 32],
@@ -3051,6 +3053,7 @@ fn config_sync_sign_and_verify_roundtrip() {
     let vk = signing_key.verifying_key();
 
     let mut push = ConfigPush {
+        owner_id: String::new(),
         gen: NODE_PROTOCOL_GENERATION,
         requester_id: vec![0xAA; 32],
         target_node_id: vec![0xBB; 32],
@@ -3088,6 +3091,7 @@ fn config_sync_signature_payload_excludes_signature_field() {
     use crate::proto::node::{ConfigPush, NodeConfigSnapshot};
 
     let mut push = ConfigPush {
+        owner_id: String::new(),
         gen: NODE_PROTOCOL_GENERATION,
         requester_id: vec![0xAA; 32],
         target_node_id: vec![0xBB; 32],
@@ -3255,6 +3259,7 @@ fn build_signed_config_push(
     let vk = owner_keypair.signing.verifying_key();
 
     let mut push = crate::proto::node::ConfigPush {
+        owner_id: String::new(),
         gen: NODE_PROTOCOL_GENERATION,
         requester_id: requester_id.as_bytes().to_vec(),
         target_node_id: target_node_id.as_bytes().to_vec(),

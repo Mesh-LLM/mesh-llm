@@ -1,0 +1,80 @@
+namespace mesh_ffi {
+    [Throws=FfiError]
+    MeshClientHandle create_client(string owner_keypair_bytes_hex, string invite_token);
+
+    string generate_owner_keypair_hex();
+};
+
+[Error]
+enum FfiError {
+    "InvalidInviteToken",
+    "InvalidOwnerKeypair",
+    "BuildFailed",
+    "JoinFailed",
+    "DiscoveryFailed",
+    "StreamFailed",
+    "Cancelled",
+    "ReconnectFailed",
+    "HostUnavailable",
+};
+
+interface MeshClientHandle {
+    [Throws=FfiError]
+    void join();
+
+    [Throws=FfiError]
+    sequence<ModelDto> list_models();
+
+    string chat(ChatRequestDto request, EventListener listener);
+
+    string responses(ResponsesRequestDto request, EventListener listener);
+
+    void cancel(string request_id);
+
+    StatusDto status();
+
+    void disconnect();
+
+    [Throws=FfiError]
+    void reconnect();
+};
+
+callback interface EventListener {
+    void on_event(EventDto event);
+};
+
+dictionary ModelDto {
+    string id;
+    string name;
+};
+
+dictionary StatusDto {
+    boolean connected;
+    u64 peer_count;
+};
+
+dictionary ChatRequestDto {
+    string model;
+    sequence<ChatMessageDto> messages;
+};
+
+dictionary ChatMessageDto {
+    string role;
+    string content;
+};
+
+dictionary ResponsesRequestDto {
+    string model;
+    string input;
+};
+
+[Enum]
+interface EventDto {
+    Connecting();
+    Joined(string node_id);
+    ModelsUpdated(sequence<ModelDto> models);
+    TokenDelta(string request_id, string delta);
+    Completed(string request_id);
+    Failed(string request_id, string error);
+    Disconnected(string reason);
+};

@@ -99,17 +99,6 @@ pub(super) fn apply_transitive_ann(
     serving_changed
 }
 
-pub fn merge_demand(
-    ours: &mut HashMap<String, ModelDemand>,
-    theirs: &HashMap<String, ModelDemand>,
-) {
-    for (model, their_demand) in theirs {
-        let entry = ours.entry(model.clone()).or_default();
-        entry.last_active = entry.last_active.max(their_demand.last_active);
-        entry.request_count = entry.request_count.max(their_demand.request_count);
-    }
-}
-
 impl Node {
     /// Open a gossip stream on an existing connection to exchange peer info.
     pub(super) async fn initiate_gossip(&self, conn: Connection, remote: EndpointId) -> Result<()> {

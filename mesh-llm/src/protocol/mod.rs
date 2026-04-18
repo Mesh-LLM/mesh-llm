@@ -510,6 +510,7 @@ mod tests {
 
     fn make_valid_config_subscribe() -> ConfigSubscribe {
         ConfigSubscribe {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             subscriber_id: vec![0xAA; 32],
         }
@@ -587,6 +588,7 @@ mod tests {
             .expect("valid config subscribe must decode");
 
         let snapshot_response = ConfigSnapshotResponse {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: node_id.clone(),
             revision: 7,
@@ -604,6 +606,7 @@ mod tests {
         assert_eq!(decoded.hostname.as_deref(), Some("node-01"));
 
         let update = ConfigUpdateNotification {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: node_id.clone(),
             revision: 8,
@@ -617,6 +620,7 @@ mod tests {
         assert_eq!(decoded.revision, 8);
 
         let push = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x10; 32],
             target_node_id: node_id.clone(),
@@ -662,6 +666,7 @@ mod tests {
         assert!(matches!(err, ControlFrameError::InvalidEndpointId { .. }));
 
         let snapshot_response = ConfigSnapshotResponse {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: vec![0x01; 16],
             revision: 1,
@@ -676,6 +681,7 @@ mod tests {
         assert!(matches!(err, ControlFrameError::InvalidEndpointId { .. }));
 
         let snapshot_response = ConfigSnapshotResponse {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: vec![0xAA; 32],
             revision: 1,
@@ -693,6 +699,7 @@ mod tests {
         ));
 
         let update = ConfigUpdateNotification {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: vec![0xBB; 32],
             revision: 2,
@@ -709,6 +716,7 @@ mod tests {
         ));
 
         let mut push = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -751,6 +759,7 @@ mod tests {
         // Error responses from handle_config_subscribe have empty node_id / config_hash
         // and no config payload. Validation must pass so callers can surface the error.
         let error_snapshot = ConfigSnapshotResponse {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: vec![],
             revision: 0,
@@ -786,6 +795,7 @@ mod tests {
     #[test]
     fn config_push_valid_64_byte_signature_passes_validation() {
         let push_with_64_bytes = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -803,6 +813,7 @@ mod tests {
     fn config_push_wrong_length_signature_rejected() {
         // 32-byte signature must be rejected
         let push_32 = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -821,6 +832,7 @@ mod tests {
 
         // 1-byte signature must also be rejected
         let push_1 = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -1742,6 +1754,7 @@ mod tests {
         let verifying_key = signing_key.verifying_key();
 
         let push = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -1785,6 +1798,7 @@ mod tests {
         let verifying_key = signing_key.verifying_key();
 
         let push = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -1826,6 +1840,7 @@ mod tests {
     fn config_sync_push_validates_signature_length_too_short() {
         use crate::proto::node::ConfigPush;
         let push = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -1848,6 +1863,7 @@ mod tests {
     fn config_sync_push_validates_signature_length_empty() {
         use crate::proto::node::ConfigPush;
         let push = ConfigPush {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             requester_id: vec![0x01; 32],
             target_node_id: vec![0x02; 32],
@@ -1870,6 +1886,7 @@ mod tests {
     fn config_sync_snapshot_response_validates_config_present() {
         use crate::proto::node::ConfigSnapshotResponse;
         let response = ConfigSnapshotResponse {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: vec![0x01; 32],
             revision: 1,
@@ -1892,6 +1909,7 @@ mod tests {
     fn config_sync_update_notification_validates_config_present() {
         use crate::proto::node::ConfigUpdateNotification;
         let notification = ConfigUpdateNotification {
+            owner_id: String::new(),
             gen: NODE_PROTOCOL_GENERATION,
             node_id: vec![0x01; 32],
             revision: 1,

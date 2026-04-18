@@ -61,12 +61,47 @@ update_manifest_version() {
     printf '%s\n' "$after" >"$file"
 }
 
+update_mesh_client_dependency_version() {
+    local file="$1"
+    local next="$2"
+    local before
+    local after
+    before="$(cat "$file")"
+    after="$(perl -0777 -pe 's/(mesh-client\s*=\s*\{[^}]*package\s*=\s*"mesh-llm-client"[^}]*version\s*=\s*")[^"]+(")/${1}'"$next"'$2/s' "$file")"
+    if [[ "$before" == "$after" ]]; then
+        return
+    fi
+    printf '%s\n' "$after" >"$file"
+}
+
+update_gradle_project_version() {
+    local file="$1"
+    local next="$2"
+    local before
+    local after
+    before="$(cat "$file")"
+    after="$(perl -0777 -pe 's/(\nversion\s*=\s*")[^"]+(")/${1}'"$next"'$2/s' "$file")"
+    if [[ "$before" == "$after" ]]; then
+        if perl -0777 -ne 'exit((/\nversion\s*=\s*"'"$next"'"/s) ? 0 : 1)' "$file"; then
+            return
+        fi
+        echo "failed to update Gradle project version in $file" >&2
+        exit 1
+    fi
+    printf '%s\n' "$after" >"$file"
+}
+
 manifests=()
 while IFS= read -r manifest; do
     manifests+=("$manifest")
 done < <(
     cd "$REPO_ROOT"
-    git ls-files 'mesh-llm/Cargo.toml' 'mesh-llm/**/Cargo.toml' | sort -u
+    git ls-files \
+        'mesh-llm/Cargo.toml' \
+        'mesh-llm/**/Cargo.toml' \
+        'mesh-api/Cargo.toml' \
+        'mesh-client/Cargo.toml' \
+        | sort -u
 )
 
 if [[ "${#manifests[@]}" -eq 0 ]]; then
@@ -85,8 +120,14 @@ for relative_manifest in "${manifests[@]}"; do
     manifest="$REPO_ROOT/$relative_manifest"
     require_file "$manifest"
     update_manifest_version "$manifest" "$version"
+    update_mesh_client_dependency_version "$manifest" "$version"
     versioned_files+=("$manifest")
 done
+
+kotlin_build_file="$REPO_ROOT/sdk/kotlin/build.gradle.kts"
+require_file "$kotlin_build_file"
+update_gradle_project_version "$kotlin_build_file" "$version"
+versioned_files+=("$kotlin_build_file")
 
 echo "Refreshing Cargo.lock workspace package versions..."
 (cd "$REPO_ROOT" && cargo metadata --format-version 1 >/dev/null)

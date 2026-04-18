@@ -268,11 +268,13 @@ message NodePluginEntry {
 message ConfigSubscribe {
   uint32 gen = 1;                         // must equal NODE_PROTOCOL_GENERATION
   bytes subscriber_id = 2;               // 32 bytes — subscribing node's endpoint id
+  string owner_id = 3;                    // filter: only configs from nodes with this owner_id (embedded client)
 }
 
 message ConfigSnapshotResponse {
   uint32 gen = 1;                         // must equal NODE_PROTOCOL_GENERATION
   bytes node_id = 2;                      // 32 bytes — the node this config belongs to
+  string owner_id = 3;                    // owner_id of the node that issued the snapshot (embedded client)
   uint64 revision = 4;
   bytes config_hash = 5;                  // SHA-256 of canonical proto bytes (32 bytes)
   NodeConfigSnapshot config = 6;
@@ -283,6 +285,7 @@ message ConfigSnapshotResponse {
 message ConfigUpdateNotification {
   uint32 gen = 1;
   bytes node_id = 2;
+  string owner_id = 3;                    // owner_id of the node that pushed the update (embedded client)
   uint64 revision = 4;
   bytes config_hash = 5;
   NodeConfigSnapshot config = 6;
@@ -292,6 +295,7 @@ message ConfigPush {
   uint32 gen = 1;
   bytes requester_id = 2;
   bytes target_node_id = 3;
+  string owner_id = 4;                    // owner_id of the requester (embedded client)
   uint64 expected_revision = 5;
   NodeConfigSnapshot config = 6;
   bytes owner_signing_public_key = 7;

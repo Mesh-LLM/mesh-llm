@@ -215,3 +215,18 @@ If the binary is not present, `just bundle` prints a note and continues without 
 
 CUDA, HIP, and Intel binaries are **not** included in the Unix tarball bundle; they must be compiled on the target platform.
 On Windows release packaging, any `membench-fingerprint*.exe` binaries present in `mesh-llm/target/release/` are included automatically in the generated `.zip`.
+
+## Protocol Backward Compatibility
+
+Any change to `mesh-llm/src/protocol/` or `mesh-client/src/protocol/` requires backward-compatibility tests before merging.
+
+Embedded clients (iOS, macOS, Android) are permanently supported. Protocol changes that break embedded client compatibility are breaking changes.
+
+Run the protocol compatibility tests after any protocol change:
+
+```bash
+cargo test -p mesh-llm --test protocol_compat_v0_client
+cargo test -p mesh-llm --test protocol_convert_matrix
+```
+
+See [`mesh-llm/docs/EMBEDDED_CLIENT_ADR.md`](mesh-llm/docs/EMBEDDED_CLIENT_ADR.md) for the full compatibility policy and rationale.
