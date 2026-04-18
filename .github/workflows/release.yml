@@ -612,7 +612,6 @@ jobs:
     needs:
       - prepare_release
       - publish
-    if: github.repository == 'Mesh-LLM/mesh-llm'
 
     steps:
       - uses: actions/checkout@v5
@@ -658,7 +657,6 @@ jobs:
     needs:
       - prepare_release
       - publish
-    if: github.repository == 'Mesh-LLM/mesh-llm'
 
     steps:
       - uses: actions/checkout@v5
