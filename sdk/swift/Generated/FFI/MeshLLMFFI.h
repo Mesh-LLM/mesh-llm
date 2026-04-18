@@ -314,9 +314,19 @@ RustBuffer uniffi_mesh_ffi_fn_method_meshclienthandle_status(uint64_t ptr, RustC
 void uniffi_mesh_ffi_fn_init_callback_vtable_eventlistener(const UniffiVTableCallbackInterfaceEventListener* _Nonnull vtable
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_CREATE_AUTO_CLIENT
+#define UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_CREATE_AUTO_CLIENT
+uint64_t uniffi_mesh_ffi_fn_func_create_auto_client(RustBuffer owner_keypair_bytes_hex, RustBuffer query, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_CREATE_CLIENT
 #define UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_CREATE_CLIENT
 uint64_t uniffi_mesh_ffi_fn_func_create_client(RustBuffer owner_keypair_bytes_hex, RustBuffer invite_token, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_DISCOVER_PUBLIC_MESHES
+#define UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_DISCOVER_PUBLIC_MESHES
+RustBuffer uniffi_mesh_ffi_fn_func_discover_public_meshes(RustBuffer query, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_FN_FUNC_GENERATE_OWNER_KEYPAIR_HEX
@@ -585,9 +595,21 @@ void ffi_mesh_ffi_rust_future_free_void(uint64_t handle
 void ffi_mesh_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_CHECKSUM_FUNC_CREATE_AUTO_CLIENT
+#define UNIFFI_FFIDEF_UNIFFI_MESH_FFI_CHECKSUM_FUNC_CREATE_AUTO_CLIENT
+uint16_t uniffi_mesh_ffi_checksum_func_create_auto_client(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_CHECKSUM_FUNC_CREATE_CLIENT
 #define UNIFFI_FFIDEF_UNIFFI_MESH_FFI_CHECKSUM_FUNC_CREATE_CLIENT
 uint16_t uniffi_mesh_ffi_checksum_func_create_client(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_MESH_FFI_CHECKSUM_FUNC_DISCOVER_PUBLIC_MESHES
+#define UNIFFI_FFIDEF_UNIFFI_MESH_FFI_CHECKSUM_FUNC_DISCOVER_PUBLIC_MESHES
+uint16_t uniffi_mesh_ffi_checksum_func_discover_public_meshes(void
     
 );
 #endif

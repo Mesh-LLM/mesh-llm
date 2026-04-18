@@ -1,7 +1,9 @@
 use mesh_api::events::{Event, EventListener as CoreEventListener};
 use mesh_api::OwnerKeypair;
 use mesh_api::{
-    ChatMessage, ChatRequest, ClientBuilder, InviteToken, MeshClient, RequestId, ResponsesRequest,
+    create_auto_client as sdk_create_auto_client,
+    discover_public_meshes as sdk_discover_public_meshes, ChatMessage, ChatRequest, ClientBuilder,
+    InviteToken, MeshClient, PublicMeshQuery, RequestId, ResponsesRequest,
 };
 use pollster::block_on;
 use std::sync::{mpsc, Arc, Mutex};
@@ -41,6 +43,33 @@ pub struct ModelDto {
 pub struct StatusDto {
     pub connected: bool,
     pub peer_count: u64,
+}
+
+#[derive(uniffi::Record)]
+pub struct PublicMeshQueryDto {
+    pub model: Option<String>,
+    pub min_vram_gb: Option<f64>,
+    pub region: Option<String>,
+    pub target_name: Option<String>,
+    pub relays: Vec<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct PublicMeshDto {
+    pub invite_token: String,
+    pub serving: Vec<String>,
+    pub wanted: Vec<String>,
+    pub on_disk: Vec<String>,
+    pub total_vram_bytes: u64,
+    pub node_count: u64,
+    pub client_count: u64,
+    pub max_clients: u64,
+    pub name: Option<String>,
+    pub region: Option<String>,
+    pub mesh_id: Option<String>,
+    pub publisher_npub: String,
+    pub published_at: u64,
+    pub expires_at: Option<u64>,
 }
 
 #[derive(uniffi::Record)]
@@ -159,18 +188,32 @@ pub fn create_client(
     let token = invite_token
         .parse::<InviteToken>()
         .map_err(|_| FfiError::InvalidInviteToken)?;
-    // An empty keypair is rejected rather than silently generating a fresh one:
-    // a caller that forgets to pass their persisted owner keypair would otherwise
-    // get a brand-new identity every launch with no error. Callers that genuinely
-    // want a new keypair should create one explicitly before calling create_client.
-    let trimmed = owner_keypair_bytes_hex.trim();
-    if trimmed.is_empty() {
-        return Err(FfiError::InvalidOwnerKeypair);
-    }
-    let kp = OwnerKeypair::from_hex(trimmed).map_err(|_| FfiError::InvalidOwnerKeypair)?;
+    let kp = parse_owner_keypair(&owner_keypair_bytes_hex)?;
     let client = ClientBuilder::new(kp, token)
         .build()
         .map_err(|_| FfiError::BuildFailed)?;
+    Ok(spawn_client_worker(client)?)
+}
+
+#[uniffi::export]
+pub fn create_auto_client(
+    owner_keypair_bytes_hex: String,
+    query: PublicMeshQueryDto,
+) -> Result<Arc<MeshClientHandle>, FfiError> {
+    let kp = parse_owner_keypair(&owner_keypair_bytes_hex)?;
+    let client = block_on(sdk_create_auto_client(kp, query.into()))
+        .map(|result| result.client)
+        .map_err(map_mesh_api_error)?;
+    Ok(spawn_client_worker(client)?)
+}
+
+#[uniffi::export]
+pub fn discover_public_meshes(query: PublicMeshQueryDto) -> Result<Vec<PublicMeshDto>, FfiError> {
+    let meshes = block_on(sdk_discover_public_meshes(query.into())).map_err(map_mesh_api_error)?;
+    Ok(meshes.into_iter().map(PublicMeshDto::from).collect())
+}
+
+fn spawn_client_worker(client: MeshClient) -> Result<Arc<MeshClientHandle>, FfiError> {
     let (command_tx, command_rx) = mpsc::channel();
     let worker = thread::Builder::new()
         .name("mesh-ffi-client".to_string())
@@ -180,6 +223,27 @@ pub fn create_client(
         command_tx,
         worker: Mutex::new(Some(worker)),
     }))
+}
+
+fn parse_owner_keypair(owner_keypair_bytes_hex: &str) -> Result<OwnerKeypair, FfiError> {
+    // An empty keypair is rejected rather than silently generating a fresh identity:
+    // a caller that forgets to pass their persisted owner keypair would otherwise
+    // get a brand-new identity every launch with no error. Callers that genuinely
+    // want a new keypair should create one explicitly before calling create_client.
+    let trimmed = owner_keypair_bytes_hex.trim();
+    if trimmed.is_empty() {
+        return Err(FfiError::InvalidOwnerKeypair);
+    }
+    OwnerKeypair::from_hex(trimmed).map_err(|_| FfiError::InvalidOwnerKeypair)
+}
+
+fn map_mesh_api_error(error: mesh_api::MeshApiError) -> FfiError {
+    match error {
+        mesh_api::MeshApiError::Client(_) => FfiError::BuildFailed,
+        mesh_api::MeshApiError::Discovery(_) => FfiError::DiscoveryFailed,
+        mesh_api::MeshApiError::NoPublicMeshFound => FfiError::HostUnavailable,
+        mesh_api::MeshApiError::InvalidInviteToken(_) => FfiError::InvalidInviteToken,
+    }
 }
 
 #[uniffi::export]
@@ -271,6 +335,39 @@ impl Drop for MeshClientHandle {
         let _ = self.command_tx.send(ClientCommand::Shutdown);
         if let Some(worker) = self.worker.lock().unwrap().take() {
             let _ = worker.join();
+        }
+    }
+}
+
+impl From<PublicMeshQueryDto> for PublicMeshQuery {
+    fn from(value: PublicMeshQueryDto) -> Self {
+        Self {
+            model: value.model,
+            min_vram_gb: value.min_vram_gb,
+            region: value.region,
+            target_name: value.target_name,
+            relays: value.relays,
+        }
+    }
+}
+
+impl From<mesh_api::PublicMesh> for PublicMeshDto {
+    fn from(value: mesh_api::PublicMesh) -> Self {
+        Self {
+            invite_token: value.invite_token,
+            serving: value.serving,
+            wanted: value.wanted,
+            on_disk: value.on_disk,
+            total_vram_bytes: value.total_vram_bytes,
+            node_count: value.node_count as u64,
+            client_count: value.client_count as u64,
+            max_clients: value.max_clients as u64,
+            name: value.name,
+            region: value.region,
+            mesh_id: value.mesh_id,
+            publisher_npub: value.publisher_npub,
+            published_at: value.published_at,
+            expires_at: value.expires_at,
         }
     }
 }

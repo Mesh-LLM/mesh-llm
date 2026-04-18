@@ -62,6 +62,77 @@ public struct ResponsesRequest: Sendable {
     }
 }
 
+public struct PublicMeshQuery: Sendable {
+    public let model: String?
+    public let minVramGb: Double?
+    public let region: String?
+    public let targetName: String?
+    public let relays: [String]
+
+    public init(
+        model: String? = nil,
+        minVramGb: Double? = nil,
+        region: String? = nil,
+        targetName: String? = nil,
+        relays: [String] = []
+    ) {
+        self.model = model
+        self.minVramGb = minVramGb
+        self.region = region
+        self.targetName = targetName
+        self.relays = relays
+    }
+}
+
+public struct PublicMesh: Sendable {
+    public let inviteToken: InviteToken
+    public let serving: [String]
+    public let wanted: [String]
+    public let onDisk: [String]
+    public let totalVramBytes: UInt64
+    public let nodeCount: Int
+    public let clientCount: Int
+    public let maxClients: Int
+    public let name: String?
+    public let region: String?
+    public let meshId: String?
+    public let publisherNpub: String
+    public let publishedAt: UInt64
+    public let expiresAt: UInt64?
+
+    public init(
+        inviteToken: InviteToken,
+        serving: [String],
+        wanted: [String],
+        onDisk: [String],
+        totalVramBytes: UInt64,
+        nodeCount: Int,
+        clientCount: Int,
+        maxClients: Int,
+        name: String?,
+        region: String?,
+        meshId: String?,
+        publisherNpub: String,
+        publishedAt: UInt64,
+        expiresAt: UInt64?
+    ) {
+        self.inviteToken = inviteToken
+        self.serving = serving
+        self.wanted = wanted
+        self.onDisk = onDisk
+        self.totalVramBytes = totalVramBytes
+        self.nodeCount = nodeCount
+        self.clientCount = clientCount
+        self.maxClients = maxClients
+        self.name = name
+        self.region = region
+        self.meshId = meshId
+        self.publisherNpub = publisherNpub
+        self.publishedAt = publishedAt
+        self.expiresAt = expiresAt
+    }
+}
+
 #if canImport(MeshLLMFFI)
 public final class MeshClient: @unchecked Sendable {
     private let inviteToken: InviteToken
@@ -72,6 +143,42 @@ public final class MeshClient: @unchecked Sendable {
     public init(inviteToken: InviteToken, ownerKeypairBytesHex: String = "") {
         self.inviteToken = inviteToken
         self.ownerKeypairBytesHex = ownerKeypairBytesHex
+    }
+
+    private init(
+        inviteToken: InviteToken,
+        ownerKeypairBytesHex: String,
+        handle: MeshClientHandle
+    ) {
+        self.inviteToken = inviteToken
+        self.ownerKeypairBytesHex = ownerKeypairBytesHex
+        self.handle = handle
+    }
+
+    public static func discoverPublicMeshes(
+        _ query: PublicMeshQuery = PublicMeshQuery()
+    ) async throws -> [PublicMesh] {
+        let meshes = try await runBlocking {
+            try MeshLLMFFI.discoverPublicMeshes(query: mapPublicMeshQuery(query))
+        }
+        return meshes.map(mapPublicMesh)
+    }
+
+    public static func connectPublic(
+        ownerKeypairBytesHex: String,
+        query: PublicMeshQuery = PublicMeshQuery()
+    ) async throws -> MeshClient {
+        let handle = try await runBlocking {
+            try createAutoClient(
+                ownerKeypairBytesHex: ownerKeypairBytesHex,
+                query: mapPublicMeshQuery(query)
+            )
+        }
+        return MeshClient(
+            inviteToken: InviteToken("public-auto"),
+            ownerKeypairBytesHex: ownerKeypairBytesHex,
+            handle: handle
+        )
     }
 
     public func join() async throws {
@@ -183,6 +290,25 @@ public final class MeshClient: @unchecked Sendable {
         Model(id: dto.id, name: dto.name)
     }
 
+    private static func mapPublicMesh(_ dto: PublicMeshDto) -> PublicMesh {
+        PublicMesh(
+            inviteToken: InviteToken(dto.inviteToken),
+            serving: dto.serving,
+            wanted: dto.wanted,
+            onDisk: dto.onDisk,
+            totalVramBytes: dto.totalVramBytes,
+            nodeCount: Int(clamping: dto.nodeCount),
+            clientCount: Int(clamping: dto.clientCount),
+            maxClients: Int(clamping: dto.maxClients),
+            name: dto.name,
+            region: dto.region,
+            meshId: dto.meshId,
+            publisherNpub: dto.publisherNpub,
+            publishedAt: dto.publishedAt,
+            expiresAt: dto.expiresAt
+        )
+    }
+
     static func mapEvent(_ dto: EventDto) -> MeshEvent {
         switch dto {
         case .connecting:
@@ -213,6 +339,16 @@ public final class MeshClient: @unchecked Sendable {
 
     private static func mapResponsesRequest(_ request: ResponsesRequest) -> ResponsesRequestDto {
         ResponsesRequestDto(model: request.model, input: request.input)
+    }
+
+    private static func mapPublicMeshQuery(_ query: PublicMeshQuery) -> PublicMeshQueryDto {
+        PublicMeshQueryDto(
+            model: query.model,
+            minVramGb: query.minVramGb,
+            region: query.region,
+            targetName: query.targetName,
+            relays: query.relays
+        )
     }
 }
 #else
@@ -267,6 +403,19 @@ public final class MeshClient: @unchecked Sendable {
     public func reconnect() async throws {
         await disconnect()
         try await join()
+    }
+
+    public static func discoverPublicMeshes(
+        _ query: PublicMeshQuery = PublicMeshQuery()
+    ) async throws -> [PublicMesh] {
+        []
+    }
+
+    public static func connectPublic(
+        ownerKeypairBytesHex: String,
+        query: PublicMeshQuery = PublicMeshQuery()
+    ) async throws -> MeshClient {
+        MeshClient(inviteToken: InviteToken("public-auto"), ownerKeypairBytesHex: ownerKeypairBytesHex)
     }
 }
 #endif

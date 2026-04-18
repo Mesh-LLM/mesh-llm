@@ -11,6 +11,12 @@ pub const MAX_RECONNECT_ATTEMPTS: u32 = mesh_client::client::builder::MAX_RECONN
 pub enum MeshApiError {
     #[error(transparent)]
     Client(#[from] ClientError),
+    #[error("public mesh discovery failed: {0}")]
+    Discovery(String),
+    #[error("no public mesh matched the requested criteria")]
+    NoPublicMeshFound,
+    #[error("invalid invite token: {0}")]
+    InvalidInviteToken(String),
 }
 
 #[derive(Clone, Debug)]
