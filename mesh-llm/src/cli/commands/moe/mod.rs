@@ -184,8 +184,18 @@ impl ShareUploadProgress {
             percent, done, state.total_files, processing, transfer, speed
         );
 
-        let active_count = state.active_files.len();
-        for (name, file) in state.active_files.iter().take(8) {
+        let mut active_files: Vec<(&String, &ShareUploadFileState)> =
+            state.active_files.iter().collect();
+        active_files.sort_by(|(left_name, left_file), (right_name, right_file)| {
+            right_file
+                .bytes_completed
+                .cmp(&left_file.bytes_completed)
+                .then_with(|| right_file.total_bytes.cmp(&left_file.total_bytes))
+                .then_with(|| left_name.cmp(right_name))
+        });
+
+        let active_count = active_files.len();
+        for (name, file) in active_files.into_iter().take(8) {
             let file_percent = if file.total_bytes == 0 {
                 0.0
             } else {
@@ -200,7 +210,7 @@ impl ShareUploadProgress {
             );
         }
         if active_count > 8 {
-            eprintln!("   … {} more file(s) uploading", active_count - 8);
+            eprintln!("   … {} more tracked file(s)", active_count - 8);
         }
         let _ = std::io::stderr().flush();
     }
