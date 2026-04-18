@@ -1783,46 +1783,99 @@ pub async fn handle_mesh_request(
     // Demand tracking for rebalancing (done after routing so we track the actual model used)
     // We'll track below after routing resolves the effective model
 
-    // Smart routing: if no model specified (or model="auto"), classify and pick
+    // Smart routing: if no model specified (or model="auto"), classify and pick.
+    //
+    // Auto-routed requests are classified each time, so a follow-up turn
+    // whose classification shifts (e.g. "hi" then "write code") would get
+    // rerouted to a different model on a different peer with a cold KV
+    // cache — the user feels this as "second turn is slow". To avoid that,
+    // we cache the classified model choice by session key, so every turn
+    // in the same auto-routed chat reuses the first pick. Prefix affinity
+    // then has a chance to keep those turns on the same peer too.
+    let auto_session_key =
+        if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
+            request.ensure_body_json();
+            request
+                .body_json
+                .as_ref()
+                .and_then(|body| crate::network::affinity::auto_model_session_key(Some(body)))
+        } else {
+            None
+        };
     let routed_model =
         if request.model_name.is_none() || request.model_name.as_deref() == Some("auto") {
             request.ensure_body_json();
             if let Some(body_json) = request.body_json.as_ref() {
-                let cl = router::classify(&body_json);
-                let served = node.models_being_served().await;
-                let media = router::media_requirements(body_json);
-                let with_caps: Vec<(&str, f64, crate::models::ModelCapabilities)> = served
-                    .iter()
-                    .map(|name| {
-                        let caps = crate::models::installed_model_capabilities(name);
-                        (name.as_str(), 0.0, caps)
-                    })
-                    .collect();
-                let available: Vec<(&str, f64, crate::models::ModelCapabilities)> = with_caps
-                    .iter()
-                    .filter(|(_, _, caps)| {
-                        (!media.needs_vision || caps.vision_label().is_some())
-                            && (!media.needs_audio || caps.audio_label().is_some())
-                    })
-                    .cloned()
-                    .collect();
-                let available = if available.is_empty() {
-                    with_caps
-                } else {
-                    available
-                };
-                let picked = router::pick_model_classified(&cl, &available);
-                if let Some(name) = picked {
-                    tracing::info!(
-                        "router: {:?}/{:?} tools={} media={} → {name}",
-                        cl.category,
-                        cl.complexity,
-                        cl.needs_tools,
-                        cl.has_media_inputs
-                    );
-                    Some(name.to_string())
+                // Try the sticky-auto cache first. If we have a remembered
+                // model for this session AND the mesh still has a host
+                // serving it, use that pick and skip classification.
+                let cached = if let Some(key) = auto_session_key {
+                    if let Some(model) = affinity.lookup_auto_model(key) {
+                        if !node.hosts_for_model(&model).await.is_empty() {
+                            tracing::debug!(
+                                "auto: reusing cached model {model} for session {key:016x}"
+                            );
+                            Some(model)
+                        } else {
+                            // The model we picked last time is no longer
+                            // served anywhere. Drop the entry so we
+                            // reclassify and cache a fresh choice.
+                            tracing::debug!(
+                                "auto: cached model {model} no longer served, reclassifying"
+                            );
+                            affinity.forget_auto_model(key);
+                            None
+                        }
+                    } else {
+                        None
+                    }
                 } else {
                     None
+                };
+
+                if let Some(name) = cached {
+                    Some(name)
+                } else {
+                    let cl = router::classify(&body_json);
+                    let served = node.models_being_served().await;
+                    let media = router::media_requirements(body_json);
+                    let with_caps: Vec<(&str, f64, crate::models::ModelCapabilities)> = served
+                        .iter()
+                        .map(|name| {
+                            let caps = crate::models::installed_model_capabilities(name);
+                            (name.as_str(), 0.0, caps)
+                        })
+                        .collect();
+                    let available: Vec<(&str, f64, crate::models::ModelCapabilities)> = with_caps
+                        .iter()
+                        .filter(|(_, _, caps)| {
+                            (!media.needs_vision || caps.vision_label().is_some())
+                                && (!media.needs_audio || caps.audio_label().is_some())
+                        })
+                        .cloned()
+                        .collect();
+                    let available = if available.is_empty() {
+                        with_caps
+                    } else {
+                        available
+                    };
+                    let picked = router::pick_model_classified(&cl, &available);
+                    if let Some(name) = picked {
+                        tracing::info!(
+                            "router: {:?}/{:?} tools={} media={} → {name}",
+                            cl.category,
+                            cl.complexity,
+                            cl.needs_tools,
+                            cl.has_media_inputs
+                        );
+                        let chosen = name.to_string();
+                        if let Some(key) = auto_session_key {
+                            affinity.remember_auto_model(key, &chosen);
+                        }
+                        Some(chosen)
+                    } else {
+                        None
+                    }
                 }
             } else {
                 None
@@ -1955,6 +2008,18 @@ pub async fn handle_mesh_request(
                         let target = election::InferenceTarget::Remote(*target_host);
                         affinity.learn_target(name, prefix_hash, &target);
                     }
+                } else if (500..600).contains(&status_code) {
+                    // Upstream returned a server error. The model+host we
+                    // stuck to isn't healthy right now — drop the
+                    // auto-routing memo so the next turn reclassifies and
+                    // gets a chance at a different model/host instead of
+                    // repeatedly hitting the same unhappy peer.
+                    if let Some(key) = auto_session_key {
+                        tracing::debug!(
+                            "auto: upstream returned {status_code}, forgetting cached model for session {key:016x}"
+                        );
+                        affinity.forget_auto_model(key);
+                    }
                 }
                 release_request_objects(&node, &request.request_object_request_ids).await;
                 return;
@@ -2014,6 +2079,16 @@ pub async fn handle_mesh_request(
     // All hosts failed
     if last_retryable {
         tracing::warn!("All hosts failed for model {:?}", effective_model);
+        // Every host serving the cached auto-model was unreachable or
+        // returned a retryable error. The memo is worthless — drop it so
+        // the next request reclassifies against whatever the mesh looks
+        // like then.
+        if let Some(key) = auto_session_key {
+            tracing::debug!(
+                "auto: all hosts failed for cached model, forgetting session {key:016x}"
+            );
+            affinity.forget_auto_model(key);
+        }
     }
     let reason = format!(
         "all {} tunnel(s) to hosts for {:?} failed (mesh request)",

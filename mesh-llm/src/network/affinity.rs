@@ -11,6 +11,14 @@ use std::time::{Duration, Instant};
 const AFFINITY_TTL: Duration = Duration::from_secs(20 * 60);
 const AFFINITY_MAX_ENTRIES: usize = 4096;
 
+/// How long a remembered auto-routed model stays valid for a given session
+/// key. Matches the prefix affinity TTL so sticky chats and sticky routing
+/// expire in lockstep.
+const AUTO_MODEL_TTL: Duration = AFFINITY_TTL;
+/// Upper bound on the auto-model cache. Each entry is small (session hash +
+/// model name + timestamp) so this is generous.
+const AUTO_MODEL_MAX_ENTRIES: usize = 1024;
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct AffinityStatsSnapshot {
     pub prefix_enabled: bool,
@@ -60,11 +68,19 @@ struct AffinityEntry {
     last_used: Instant,
 }
 
+#[derive(Clone, Debug)]
+struct AutoModelEntry {
+    model: String,
+    last_used: Instant,
+}
+
 #[derive(Default)]
 struct AffinityState {
     entries: HashMap<AffinityKey, AffinityEntry>,
     lru: VecDeque<AffinityKey>,
     stats: AffinityStatsSnapshot,
+    auto_models: HashMap<u64, AutoModelEntry>,
+    auto_lru: VecDeque<u64>,
 }
 
 #[derive(Clone)]
@@ -212,6 +228,66 @@ impl AffinityRouter {
             state.stats.prefix_stale += 1;
         }
     }
+
+    /// Look up a previously-classified model name for an auto-routed session.
+    ///
+    /// Auto routing classifies each request and picks a model. Without
+    /// memory, a follow-up turn whose classification shifts (e.g. "hi" then
+    /// "write code") would get routed to a different model on a different
+    /// peer with a cold KV cache. Remembering the first pick keeps the
+    /// whole chat on one model, so prefix affinity actually has a chance to
+    /// keep it on one peer too.
+    pub fn lookup_auto_model(&self, session_key: u64) -> Option<String> {
+        if !self.config.sticky_enabled {
+            return None;
+        }
+        let mut state = self.inner.lock().unwrap();
+        state.prune_auto_expired();
+        let entry = state.auto_models.get(&session_key).cloned()?;
+        state.touch_auto_key(session_key);
+        if let Some(existing) = state.auto_models.get_mut(&session_key) {
+            existing.last_used = Instant::now();
+        }
+        Some(entry.model)
+    }
+
+    pub fn remember_auto_model(&self, session_key: u64, model: &str) {
+        if !self.config.sticky_enabled {
+            return;
+        }
+        let mut state = self.inner.lock().unwrap();
+        state.prune_auto_expired();
+        state.auto_models.insert(
+            session_key,
+            AutoModelEntry {
+                model: model.to_string(),
+                last_used: Instant::now(),
+            },
+        );
+        state.touch_auto_key(session_key);
+        while state.auto_models.len() > AUTO_MODEL_MAX_ENTRIES {
+            if let Some(oldest) = state.auto_lru.pop_front() {
+                state.auto_models.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+    }
+
+    pub fn forget_auto_model(&self, session_key: u64) {
+        let mut state = self.inner.lock().unwrap();
+        state.remove_auto_key(session_key);
+    }
+}
+
+/// Compute the session-level key used to cache an auto-routed model choice.
+///
+/// Prefers an explicit session hint from the request body (e.g. an
+/// OpenAI-style `user` field), then falls back to the same
+/// prefix/first-user-message hash sticky routing already uses. That way
+/// turn 2+ of a chat reliably maps to the same key.
+pub fn auto_model_session_key(parsed_body: Option<&Value>) -> Option<u64> {
+    routing_keys(parsed_body).sticky_hash
 }
 
 impl Default for AffinityRouter {
@@ -260,6 +336,39 @@ impl AffinityState {
         self.entries.remove(key);
         if let Some(pos) = self.lru.iter().position(|existing| existing == key) {
             self.lru.remove(pos);
+        }
+    }
+
+    fn prune_auto_expired(&mut self) {
+        let now = Instant::now();
+        while let Some(key) = self.auto_lru.front().copied() {
+            match self.auto_models.get(&key) {
+                Some(entry) => {
+                    if now.duration_since(entry.last_used) > AUTO_MODEL_TTL {
+                        self.auto_lru.pop_front();
+                        self.auto_models.remove(&key);
+                    } else {
+                        break;
+                    }
+                }
+                None => {
+                    self.auto_lru.pop_front();
+                }
+            }
+        }
+    }
+
+    fn touch_auto_key(&mut self, key: u64) {
+        if let Some(pos) = self.auto_lru.iter().position(|existing| *existing == key) {
+            self.auto_lru.remove(pos);
+        }
+        self.auto_lru.push_back(key);
+    }
+
+    fn remove_auto_key(&mut self, key: u64) {
+        self.auto_models.remove(&key);
+        if let Some(pos) = self.auto_lru.iter().position(|existing| *existing == key) {
+            self.auto_lru.remove(pos);
         }
     }
 }
@@ -398,6 +507,17 @@ fn scaffold_prefix_hash_from_body(body: &Value) -> Option<u64> {
                 "user" => break,
                 _ => {}
             }
+        }
+    }
+
+    // Fall back to the first user message when there is no system/developer
+    // prompt and no tools — plenty of real chats look like this, and without
+    // a fallback the prefix cache is never populated, so turn-2+ has no way
+    // to stick to the same peer and reuse its llama-server KV cache.
+    if !found {
+        if let Some(user_hash) = first_user_hash_from_body(body) {
+            hash = hash_combine(hash, user_hash);
+            found = true;
         }
     }
 
@@ -708,6 +828,116 @@ mod tests {
         assert_eq!(
             prepared.cached_target,
             Some(election::InferenceTarget::Remote(id_b))
+        );
+    }
+
+    #[test]
+    fn scaffold_prefix_hash_falls_back_to_first_user_message() {
+        // No system/developer prompt, no tools — the old behavior returned
+        // None here and the prefix cache never learned anything. Now it
+        // hashes the first user message so chats without system prompts
+        // can still stick to the same peer on turn 2+.
+        let req = parse_body(
+            r#"{"messages":[{"role":"user","content":"hello"},{"role":"assistant","content":"hi"}]}"#,
+        );
+        let hash = scaffold_prefix_hash_from_body(&req);
+        assert!(
+            hash.is_some(),
+            "expected a prefix hash for a chat with only a user message"
+        );
+    }
+
+    #[test]
+    fn scaffold_prefix_hash_stable_across_chat_turns() {
+        // Same first user message, growing conversation — the prefix hash
+        // must be identical so both turns map to the same affinity key.
+        let turn_1 = parse_body(r#"{"messages":[{"role":"user","content":"tell me a joke"}]}"#);
+        let turn_2 = parse_body(
+            r#"{"messages":[{"role":"user","content":"tell me a joke"},{"role":"assistant","content":"why did ..."},{"role":"user","content":"another one"}]}"#,
+        );
+        assert_eq!(
+            scaffold_prefix_hash_from_body(&turn_1),
+            scaffold_prefix_hash_from_body(&turn_2),
+        );
+    }
+
+    #[test]
+    fn scaffold_prefix_hash_differs_between_sessions() {
+        let a = parse_body(r#"{"messages":[{"role":"user","content":"topic a"}]}"#);
+        let b = parse_body(r#"{"messages":[{"role":"user","content":"topic b"}]}"#);
+        assert_ne!(
+            scaffold_prefix_hash_from_body(&a),
+            scaffold_prefix_hash_from_body(&b),
+        );
+    }
+
+    #[test]
+    fn auto_model_cache_round_trip() {
+        let affinity = AffinityRouter::new();
+        let key = 0xabcdef123456u64;
+        assert_eq!(affinity.lookup_auto_model(key), None);
+        affinity.remember_auto_model(key, "Qwen3.5-9B-Q4_K_M");
+        assert_eq!(
+            affinity.lookup_auto_model(key),
+            Some("Qwen3.5-9B-Q4_K_M".to_string())
+        );
+    }
+
+    #[test]
+    fn auto_model_cache_forget() {
+        let affinity = AffinityRouter::new();
+        let key = 42u64;
+        affinity.remember_auto_model(key, "some-model");
+        affinity.forget_auto_model(key);
+        assert_eq!(affinity.lookup_auto_model(key), None);
+    }
+
+    #[test]
+    fn auto_model_cache_evicts_oldest_over_capacity() {
+        let affinity = AffinityRouter::new();
+        for i in 0..(AUTO_MODEL_MAX_ENTRIES as u64 + 10) {
+            affinity.remember_auto_model(i, "model-x");
+        }
+        // The very first inserts should have been evicted.
+        assert_eq!(affinity.lookup_auto_model(0), None);
+        assert_eq!(affinity.lookup_auto_model(1), None);
+        // Recent inserts survive.
+        let recent = AUTO_MODEL_MAX_ENTRIES as u64 + 5;
+        assert_eq!(
+            affinity.lookup_auto_model(recent),
+            Some("model-x".to_string())
+        );
+    }
+
+    #[test]
+    fn auto_model_session_key_matches_sticky_hash() {
+        let body = parse_body(
+            r#"{"messages":[{"role":"system","content":"be helpful"},{"role":"user","content":"hi"}]}"#,
+        );
+        let key = auto_model_session_key(Some(&body)).expect("expected a session key");
+        let sticky = routing_keys(Some(&body)).sticky_hash.unwrap();
+        assert_eq!(key, sticky);
+    }
+
+    #[test]
+    fn auto_model_cache_disabled_when_sticky_disabled() {
+        let affinity = AffinityRouter::with_config(true, false);
+        affinity.remember_auto_model(1, "model");
+        assert_eq!(affinity.lookup_auto_model(1), None);
+    }
+
+    #[test]
+    fn auto_model_cache_survives_forget_target_calls() {
+        // forget_target operates on prefix affinity, not the auto-model
+        // memo. A transient per-host prefix miss shouldn't flush the
+        // session's model choice.
+        let affinity = AffinityRouter::new();
+        affinity.remember_auto_model(7, "chat-model");
+        let target = election::InferenceTarget::Remote(make_id(5));
+        affinity.forget_target("chat-model", 0xdead_beef, &target);
+        assert_eq!(
+            affinity.lookup_auto_model(7),
+            Some("chat-model".to_string())
         );
     }
 }
