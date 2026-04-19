@@ -43,9 +43,8 @@ fn current_time_unix_ms() -> u64 {
 }
 
 const MIN_PINNED_GPU_CONFIG_PEER_VERSION: &str = "0.59.0";
-pub(super) const PEER_CONNECT_AND_GOSSIP_TIMEOUT_SECS: u64 = 15;
 pub(super) const PEER_CONNECT_AND_GOSSIP_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(PEER_CONNECT_AND_GOSSIP_TIMEOUT_SECS);
+    std::time::Duration::from_secs(15);
 
 fn config_uses_pinned_gpu(config: &crate::plugin::MeshConfig) -> bool {
     config.gpu.assignment == crate::plugin::GpuAssignment::Pinned
@@ -3783,7 +3782,7 @@ impl Node {
                 anyhow::bail!(
                     "Timeout connecting to {} ({}s)",
                     peer_id.fmt_short(),
-                    PEER_CONNECT_AND_GOSSIP_TIMEOUT_SECS
+                    PEER_CONNECT_AND_GOSSIP_TIMEOUT.as_secs()
                 );
             }
         };

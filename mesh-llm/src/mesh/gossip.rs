@@ -120,7 +120,7 @@ impl Node {
             Err(_) => anyhow::bail!(
                 "gossip exchange with {} timed out ({}s)",
                 remote.fmt_short(),
-                PEER_CONNECT_AND_GOSSIP_TIMEOUT_SECS
+                PEER_CONNECT_AND_GOSSIP_TIMEOUT.as_secs()
             ),
         }
     }
