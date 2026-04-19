@@ -12,3 +12,5 @@ export function MeshLlmWordmark({ className }: MeshLlmWordmarkProps) {
     </span>
   );
 }
+
+MeshLlmWordmark.displayName = 'MeshLlmWordmark';
