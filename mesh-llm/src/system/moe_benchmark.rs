@@ -20,7 +20,7 @@ use crate::system::benchmark_prompts::{
 };
 use crate::system::moe_planner;
 
-const PACKAGE_BENCHMARK_VERSION: u32 = 2;
+const PACKAGE_BENCHMARK_VERSION: u32 = 3;
 const PACKAGE_BENCHMARK_MAX_TOKENS: u32 = 128;
 const PACKAGE_BENCHMARK_CONTEXT_SIZE: u32 = 4096;
 const PACKAGE_BENCHMARK_GPU_LAYERS: u32 = 99;
@@ -254,7 +254,7 @@ struct LocalServerRunner {
     child: Child,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct PackageCalibrationCandidateReport {
     min_experts_per_node: u32,
     node_count: usize,
@@ -264,7 +264,7 @@ struct PackageCalibrationCandidateReport {
     corpora: Vec<PackageCalibrationCandidateCorpusReport>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct PackageCalibrationCandidateCorpusReport {
     source: &'static str,
     dataset: &'static str,
@@ -481,198 +481,81 @@ pub(crate) async fn run_local_package_calibration_benchmark(
     eprintln!("   ranking: {}", ranking.path.display());
     eprintln!("   max tokens: {}", PACKAGE_BENCHMARK_MAX_TOKENS);
     eprintln!("   request mode: deterministic raw completions (temperature 0, seed 0)");
+    let search_floor = package_benchmark_search_floor(model);
+    let search_ceiling = package_benchmark_search_ceiling(model);
     eprintln!(
-        "   candidates: {}",
-        package_benchmark_candidates(model)
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(", ")
+        "   search: coarse halving from {} down to {}, then bisection",
+        search_ceiling, search_floor
     );
-    let candidate_min_experts = package_benchmark_candidates(model);
     let temp_root = create_package_temp_dir(&model.path, "benchmark-calibration-")?;
 
-    let mut candidates = Vec::new();
-    for (candidate_index, min_experts) in candidate_min_experts.iter().copied().enumerate() {
-        let candidate_started = Instant::now();
-        let node_count = ((model.expert_count as f64) / (min_experts as f64))
-            .ceil()
-            .max(1.0) as usize;
-        eprintln!(
-            "   candidate {}/{}: min_experts_per_node={} -> {} node(s)",
-            candidate_index + 1,
-            candidate_min_experts.len(),
+    let mut evaluated = BTreeMap::new();
+    let mut evaluation_order = Vec::new();
+    let coarse_candidates = package_benchmark_coarse_candidates(search_floor, search_ceiling);
+    let mut passing_bound = None;
+    let mut failing_bound = None;
+
+    for min_experts in coarse_candidates {
+        let report = evaluate_package_benchmark_candidate(
+            evaluated.len() + 1,
             min_experts,
-            node_count
-        );
-        let assignments =
-            moe::compute_assignments_with_overlap(&ranking_vec, node_count, min_experts, 1);
-        let assembly_concurrency = benchmark_assembly_concurrency(
+            model,
+            &ranking_vec,
+            &corpora,
+            bin_dir,
+            &server_bin,
             temp_root.path(),
-            model.total_model_bytes,
-            assignments.len(),
-        );
-        eprintln!(
-            "     assembly workers: {} for {} node shard(s)",
-            assembly_concurrency,
-            assignments.len()
-        );
-        let mut node_scores = vec![0.0; assignments.len()];
-        let mut corpus_node_scores = corpora
-            .iter()
-            .map(|_| vec![0.0; assignments.len()])
-            .collect::<Vec<_>>();
-        let mut next_index = 0usize;
-        let mut join_set = JoinSet::new();
-
-        while next_index < assignments.len() && join_set.len() < assembly_concurrency {
-            queue_candidate_shard_assembly(
-                &mut join_set,
-                bin_dir,
-                model,
-                temp_root.path(),
-                min_experts,
-                &assignments,
-                next_index,
-            );
-            next_index += 1;
+        )
+        .await?;
+        let passes = package_candidate_passes_quality_floor(&report);
+        evaluated.insert(min_experts, report);
+        if !evaluation_order.contains(&min_experts) {
+            evaluation_order.push(min_experts);
         }
-
-        while let Some(joined) = join_set.join_next().await {
-            let node_started = Instant::now();
-            let (node_index, shard_path) = joined.context("Join shard assembly task")??;
-            eprintln!(
-                "     assembled node {}/{} -> {}",
-                node_index + 1,
-                assignments.len(),
-                shard_path.display()
-            );
-
-            while next_index < assignments.len() && join_set.len() < assembly_concurrency {
-                queue_candidate_shard_assembly(
-                    &mut join_set,
-                    bin_dir,
-                    model,
-                    temp_root.path(),
-                    min_experts,
-                    &assignments,
-                    next_index,
-                );
-                next_index += 1;
-            }
-
-            let runner_label = format!(
-                "candidate min_experts={} node {}/{}",
-                min_experts,
-                node_index + 1,
-                assignments.len()
-            );
-            let request_concurrency = benchmark_request_concurrency(
-                fs::metadata(&shard_path).map(|m| m.len()).unwrap_or(0),
-            );
-            eprintln!(
-                "     request workers: {} for node {}/{}",
-                request_concurrency,
-                node_index + 1,
-                assignments.len()
-            );
-            let runner = start_local_server_runner(
-                &server_bin,
-                &shard_path,
-                PACKAGE_BENCHMARK_CONTEXT_SIZE,
-                PACKAGE_BENCHMARK_GPU_LAYERS,
-                &runner_label,
-                temp_root.path(),
-            )
-            .await?;
-            let mut all_prompt_scores = Vec::new();
-            let mut node_result = Ok(());
-            for (corpus_index, corpus) in corpora.iter().enumerate() {
-                let corpus_started = Instant::now();
-                eprintln!(
-                    "       corpus {}/{}: {} ({})",
-                    corpus_index + 1,
-                    corpora.len(),
-                    corpus.source.dataset_name(),
-                    corpus.prompts.len()
-                );
-                match evaluate_prompts_with_server(
-                    &runner,
-                    &corpus.prompts,
-                    &format!("{runner_label} [{}]", corpus.source.short_name()),
-                    request_concurrency,
-                )
-                .await
-                {
-                    Ok(candidate_outputs) => {
-                        let prompt_scores = candidate_outputs
-                            .iter()
-                            .zip(&corpus.baseline_outputs)
-                            .map(|(candidate, baseline)| token_dice_similarity(baseline, candidate))
-                            .collect::<Vec<_>>();
-                        let corpus_mean = mean_score(&prompt_scores);
-                        corpus_node_scores[corpus_index][node_index] = corpus_mean;
-                        all_prompt_scores.extend(prompt_scores);
-                        eprintln!(
-                            "       corpus result: {} mean={:.3} elapsed={:.1}s",
-                            corpus.source.short_name(),
-                            corpus_mean,
-                            corpus_started.elapsed().as_secs_f64()
-                        );
-                    }
-                    Err(err) => {
-                        node_result = Err(err);
-                        break;
-                    }
-                }
-            }
-            runner.shutdown().await;
-            node_result?;
-            node_scores[node_index] = mean_score(&all_prompt_scores);
-            eprintln!(
-                "     node result: {}/{} mean={:.3} elapsed={:.1}s",
-                node_index + 1,
-                assignments.len(),
-                node_scores[node_index],
-                node_started.elapsed().as_secs_f64()
-            );
+        if passes {
+            passing_bound = Some(min_experts);
+        } else if passing_bound.is_some() {
+            failing_bound = Some(min_experts);
+            break;
+        } else {
+            break;
         }
-
-        let candidate_mean_score = mean_score(&node_scores);
-        let worst_node_score = node_scores.iter().copied().fold(1.0_f64, f64::min);
-        let corpus_reports = corpora
-            .iter()
-            .enumerate()
-            .map(|(corpus_index, corpus)| {
-                let node_scores = corpus_node_scores[corpus_index].clone();
-                let corpus_mean_score = mean_score(&node_scores);
-                let worst_node_score = node_scores.iter().copied().fold(1.0_f64, f64::min);
-                PackageCalibrationCandidateCorpusReport {
-                    source: corpus.source.short_name(),
-                    dataset: corpus.source.dataset_name(),
-                    prompt_count: corpus.prompts.len(),
-                    mean_score: corpus_mean_score,
-                    worst_node_score,
-                    node_scores,
-                }
-            })
-            .collect::<Vec<_>>();
-        eprintln!(
-            "   result: min_experts_per_node={} mean={:.3} worst={:.3} elapsed={:.1}s",
-            min_experts,
-            candidate_mean_score,
-            worst_node_score,
-            candidate_started.elapsed().as_secs_f64()
-        );
-        candidates.push(PackageCalibrationCandidateReport {
-            min_experts_per_node: min_experts,
-            node_count,
-            mean_score: candidate_mean_score,
-            worst_node_score,
-            node_scores,
-            corpora: corpus_reports,
-        });
     }
+
+    if let (Some(mut passing), Some(mut failing)) = (passing_bound, failing_bound) {
+        while passing > failing + 1 {
+            let mid = failing + ((passing - failing) / 2);
+            if !evaluated.contains_key(&mid) {
+                let report = evaluate_package_benchmark_candidate(
+                    evaluated.len() + 1,
+                    mid,
+                    model,
+                    &ranking_vec,
+                    &corpora,
+                    bin_dir,
+                    &server_bin,
+                    temp_root.path(),
+                )
+                .await?;
+                evaluated.insert(mid, report);
+                evaluation_order.push(mid);
+            }
+            let passes = evaluated
+                .get(&mid)
+                .map(package_candidate_passes_quality_floor)
+                .unwrap_or(false);
+            if passes {
+                passing = mid;
+            } else {
+                failing = mid;
+            }
+        }
+    }
+
+    let candidates = evaluation_order
+        .iter()
+        .filter_map(|min_experts| evaluated.get(min_experts).cloned())
+        .collect::<Vec<_>>();
 
     let recommended_min_experts_per_node = candidates
         .iter()
@@ -683,19 +566,12 @@ pub(crate) async fn run_local_package_calibration_benchmark(
                 .all(|corpus| corpus.worst_node_score >= PACKAGE_BENCHMARK_QUALITY_FLOOR)
         })
         .map(|candidate| candidate.min_experts_per_node)
-        .min()
-        .or_else(|| {
-            candidates
-                .iter()
-                .max_by(|a, b| {
-                    a.worst_node_score
-                        .partial_cmp(&b.worst_node_score)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| a.min_experts_per_node.cmp(&b.min_experts_per_node))
-                })
-                .map(|candidate| candidate.min_experts_per_node)
-        })
-        .unwrap_or(model.min_experts_per_node);
+        .min();
+    let Some(recommended_min_experts_per_node) = recommended_min_experts_per_node else {
+        bail!(
+            "No benchmark candidate met the quality floor. The assembled full-expert shard did not match the full-model baseline closely enough, so the calibration result is not trustworthy."
+        );
+    };
     eprintln!(
         "🧪 Recommended min_experts_per_node: {}",
         recommended_min_experts_per_node
@@ -722,6 +598,267 @@ pub(crate) async fn run_local_package_calibration_benchmark(
         candidates,
         recommended_min_experts_per_node,
     })
+}
+
+async fn evaluate_package_benchmark_candidate(
+    candidate_index: usize,
+    min_experts: u32,
+    model: &moe_planner::MoeModelContext,
+    ranking_vec: &[u32],
+    corpora: &[LoadedCalibrationCorpus],
+    bin_dir: &Path,
+    server_bin: &Path,
+    temp_root: &Path,
+) -> Result<PackageCalibrationCandidateReport> {
+    let candidate_started = Instant::now();
+    let node_count = ((model.expert_count as f64) / (min_experts as f64))
+        .ceil()
+        .max(1.0) as usize;
+    eprintln!(
+        "   candidate {}: min_experts_per_node={} -> {} node(s)",
+        candidate_index, min_experts, node_count
+    );
+    let assignments =
+        moe::compute_assignments_with_overlap(ranking_vec, node_count, min_experts, 1);
+    let identity_candidate = assignments.len() == 1 && min_experts >= model.expert_count;
+    if identity_candidate {
+        eprintln!("     identity candidate: using original model without assembly");
+    }
+    let assembly_concurrency =
+        benchmark_assembly_concurrency(temp_root, model.total_model_bytes, assignments.len());
+    let mut node_scores = vec![0.0; assignments.len()];
+    let mut corpus_node_scores = corpora
+        .iter()
+        .map(|_| vec![0.0; assignments.len()])
+        .collect::<Vec<_>>();
+    if identity_candidate {
+        evaluate_package_benchmark_node(
+            model.path.clone(),
+            0,
+            assignments.len(),
+            min_experts,
+            corpora,
+            server_bin,
+            temp_root,
+            &mut node_scores,
+            &mut corpus_node_scores,
+        )
+        .await?;
+    } else {
+        eprintln!(
+            "     assembly workers: {} for {} node shard(s)",
+            assembly_concurrency,
+            assignments.len()
+        );
+        let mut next_index = 0usize;
+        let mut join_set = JoinSet::new();
+
+        while next_index < assignments.len() && join_set.len() < assembly_concurrency {
+            queue_candidate_shard_assembly(
+                &mut join_set,
+                bin_dir,
+                model,
+                temp_root,
+                min_experts,
+                &assignments,
+                next_index,
+            );
+            next_index += 1;
+        }
+
+        while let Some(joined) = join_set.join_next().await {
+            let (node_index, shard_path) = joined.context("Join shard assembly task")??;
+            eprintln!(
+                "     assembled node {}/{} -> {}",
+                node_index + 1,
+                assignments.len(),
+                shard_path.display()
+            );
+
+            while next_index < assignments.len() && join_set.len() < assembly_concurrency {
+                queue_candidate_shard_assembly(
+                    &mut join_set,
+                    bin_dir,
+                    model,
+                    temp_root,
+                    min_experts,
+                    &assignments,
+                    next_index,
+                );
+                next_index += 1;
+            }
+
+            evaluate_package_benchmark_node(
+                shard_path,
+                node_index,
+                assignments.len(),
+                min_experts,
+                corpora,
+                server_bin,
+                temp_root,
+                &mut node_scores,
+                &mut corpus_node_scores,
+            )
+            .await?;
+        }
+    }
+
+    let candidate_mean_score = mean_score(&node_scores);
+    let worst_node_score = node_scores.iter().copied().fold(1.0_f64, f64::min);
+    let corpus_reports = corpora
+        .iter()
+        .enumerate()
+        .map(|(corpus_index, corpus)| {
+            let node_scores = corpus_node_scores[corpus_index].clone();
+            let corpus_mean_score = mean_score(&node_scores);
+            let worst_node_score = node_scores.iter().copied().fold(1.0_f64, f64::min);
+            PackageCalibrationCandidateCorpusReport {
+                source: corpus.source.short_name(),
+                dataset: corpus.source.dataset_name(),
+                prompt_count: corpus.prompts.len(),
+                mean_score: corpus_mean_score,
+                worst_node_score,
+                node_scores,
+            }
+        })
+        .collect::<Vec<_>>();
+    eprintln!(
+        "   result: min_experts_per_node={} mean={:.3} worst={:.3} elapsed={:.1}s",
+        min_experts,
+        candidate_mean_score,
+        worst_node_score,
+        candidate_started.elapsed().as_secs_f64()
+    );
+
+    Ok(PackageCalibrationCandidateReport {
+        min_experts_per_node: min_experts,
+        node_count,
+        mean_score: candidate_mean_score,
+        worst_node_score,
+        node_scores,
+        corpora: corpus_reports,
+    })
+}
+
+async fn evaluate_package_benchmark_node(
+    shard_path: PathBuf,
+    node_index: usize,
+    node_count: usize,
+    min_experts: u32,
+    corpora: &[LoadedCalibrationCorpus],
+    server_bin: &Path,
+    temp_root: &Path,
+    node_scores: &mut [f64],
+    corpus_node_scores: &mut [Vec<f64>],
+) -> Result<()> {
+    let node_started = Instant::now();
+    let runner_label = format!(
+        "candidate min_experts={} node {}/{}",
+        min_experts,
+        node_index + 1,
+        node_count
+    );
+    let request_concurrency =
+        benchmark_request_concurrency(fs::metadata(&shard_path).map(|m| m.len()).unwrap_or(0));
+    eprintln!(
+        "     request workers: {} for node {}/{}",
+        request_concurrency,
+        node_index + 1,
+        node_count
+    );
+    let runner = start_local_server_runner(
+        server_bin,
+        &shard_path,
+        PACKAGE_BENCHMARK_CONTEXT_SIZE,
+        PACKAGE_BENCHMARK_GPU_LAYERS,
+        &runner_label,
+        temp_root,
+    )
+    .await?;
+    let mut all_prompt_scores = Vec::new();
+    let mut node_result = Ok(());
+    for (corpus_index, corpus) in corpora.iter().enumerate() {
+        let corpus_started = Instant::now();
+        eprintln!(
+            "       corpus {}/{}: {} ({})",
+            corpus_index + 1,
+            corpora.len(),
+            corpus.source.dataset_name(),
+            corpus.prompts.len()
+        );
+        match evaluate_prompts_with_server(
+            &runner,
+            &corpus.prompts,
+            &format!("{runner_label} [{}]", corpus.source.short_name()),
+            request_concurrency,
+        )
+        .await
+        {
+            Ok(candidate_outputs) => {
+                let prompt_scores = candidate_outputs
+                    .iter()
+                    .zip(&corpus.baseline_outputs)
+                    .map(|(candidate, baseline)| token_dice_similarity(baseline, candidate))
+                    .collect::<Vec<_>>();
+                let corpus_mean = mean_score(&prompt_scores);
+                corpus_node_scores[corpus_index][node_index] = corpus_mean;
+                all_prompt_scores.extend(prompt_scores);
+                eprintln!(
+                    "       corpus result: {} mean={:.3} elapsed={:.1}s",
+                    corpus.source.short_name(),
+                    corpus_mean,
+                    corpus_started.elapsed().as_secs_f64()
+                );
+            }
+            Err(err) => {
+                node_result = Err(err);
+                break;
+            }
+        }
+    }
+    runner.shutdown().await;
+    node_result?;
+    node_scores[node_index] = mean_score(&all_prompt_scores);
+    eprintln!(
+        "     node result: {}/{} mean={:.3} elapsed={:.1}s",
+        node_index + 1,
+        node_count,
+        node_scores[node_index],
+        node_started.elapsed().as_secs_f64()
+    );
+    Ok(())
+}
+
+fn package_candidate_passes_quality_floor(candidate: &PackageCalibrationCandidateReport) -> bool {
+    candidate
+        .corpora
+        .iter()
+        .all(|corpus| corpus.worst_node_score >= PACKAGE_BENCHMARK_QUALITY_FLOOR)
+}
+
+fn package_benchmark_search_floor(model: &moe_planner::MoeModelContext) -> u32 {
+    model.used_expert_count.max(1)
+}
+
+fn package_benchmark_search_ceiling(model: &moe_planner::MoeModelContext) -> u32 {
+    model
+        .expert_count
+        .max(package_benchmark_search_floor(model))
+}
+
+fn package_benchmark_coarse_candidates(floor: u32, ceiling: u32) -> Vec<u32> {
+    let mut candidates = Vec::new();
+    let mut current = ceiling.max(floor);
+    candidates.push(current);
+    while current > floor {
+        let next = (current / 2).max(floor);
+        if next == current {
+            break;
+        }
+        candidates.push(next);
+        current = next;
+    }
+    candidates
 }
 
 fn build_ranking_report(
@@ -990,15 +1127,6 @@ fn render_prompt(entry: PromptCorpusEntry) -> String {
         );
     }
     rendered.trim().to_string()
-}
-
-fn package_benchmark_candidates(model: &moe_planner::MoeModelContext) -> Vec<u32> {
-    let mut candidates = BTreeSet::from([32_u32, 40, 48, 56, 64, model.min_experts_per_node]);
-    candidates.retain(|value| *value >= model.used_expert_count && *value <= model.expert_count);
-    if candidates.is_empty() {
-        candidates.insert(model.min_experts_per_node.max(model.used_expert_count));
-    }
-    candidates.into_iter().collect()
 }
 
 fn baseline_cache_path(model_path: &Path, source: PromptImportSource) -> PathBuf {

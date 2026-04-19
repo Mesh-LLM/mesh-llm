@@ -56,7 +56,9 @@ pub(super) async fn run_analyze_micro(
         fs::create_dir_all(parent)?;
     }
     let binary = resolve_analyze_binary()?;
-    let temp_root = std::env::temp_dir().join(format!(
+    let temp_root_base = moe::package_cache_temp_root(&resolved.path);
+    fs::create_dir_all(&temp_root_base)?;
+    let temp_root = temp_root_base.join(format!(
         "mesh-llm-moe-micro-{}-{}",
         std::process::id(),
         SystemTime::now()

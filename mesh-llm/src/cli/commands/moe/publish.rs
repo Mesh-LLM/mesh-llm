@@ -133,7 +133,9 @@ pub(super) async fn run_publish(
     println!("   trust: {}", publish_target.trust);
     println!("   variant: {}", bundle.variant);
 
-    let temp_root = std::env::temp_dir().join(format!(
+    let temp_root_base = moe::package_cache_temp_root(&resolved.path);
+    fs::create_dir_all(&temp_root_base)?;
+    let temp_root = temp_root_base.join(format!(
         "mesh-llm-moe-publish-{}-{}",
         std::process::id(),
         SystemTime::now()
