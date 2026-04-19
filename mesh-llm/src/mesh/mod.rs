@@ -1547,7 +1547,7 @@ impl Node {
             owner_summary: Arc::new(Mutex::new(OwnershipSummary::default())),
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
-            enumerate_host: false,
+            enumerate_host: true,
             gpu_name: None,
             hostname: None,
             is_soc: Some(false),

@@ -1328,7 +1328,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         &cli.relay,
         cli.bind_port,
         Some(0.0),
-        cli.enumerate_host,
+        !cli.no_enumerate_host,
         Some(owner_config),
         cli.config.as_deref(),
     )
@@ -1411,7 +1411,7 @@ async fn run_auto(
         &cli.relay,
         cli.bind_port,
         max_vram,
-        cli.enumerate_host,
+        !cli.no_enumerate_host,
         Some(owner_config),
         cli.config.as_deref(),
     )
@@ -1442,6 +1442,7 @@ async fn run_auto(
         let compute_fp32_arc = node.gpu_compute_tflops_fp32.clone();
         let compute_fp16_arc = node.gpu_compute_tflops_fp16.clone();
         let bin_dir_clone = bin_dir.clone();
+        let node_bench = node.clone();
         tokio::spawn(async move {
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
@@ -1502,6 +1503,7 @@ async fn run_auto(
                 result.as_ref(),
             )
             .await;
+            node_bench.regossip().await;
         });
     } else {
         tracing::debug!("client node — skipping memory bandwidth benchmark");

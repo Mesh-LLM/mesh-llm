@@ -328,9 +328,9 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) max_vram: Option<f64>,
 
-    /// Enumerate host hardware (GPU name, hostname) at startup.
-    #[arg(long, hide = true)]
-    pub(crate) enumerate_host: bool,
+    /// Disable broadcasting GPU name, hostname, VRAM, and reserved bytes to peers. By default all nodes announce this hardware info.
+    #[arg(long = "no-enumerate-host", hide = true)]
+    pub(crate) no_enumerate_host: bool,
 
     /// Path to rpc-server, llama-server, and llama-moe-split binaries.
     #[arg(long, hide = true)]

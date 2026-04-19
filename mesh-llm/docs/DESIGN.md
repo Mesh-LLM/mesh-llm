@@ -262,12 +262,12 @@ trait Collector {
 
 GGUF-derived metadata (architecture, quantization type, tokenizer, RoPE parameters, expert counts) is transported via `CompactModelMetadata` in the `available_model_metadata` field. This lets peers learn model capabilities without downloading the file. The `ScannedModel` type in the proto schema carries the same information for catalog-level model listings. Current gossip sanitization still strips `available_models`, `available_model_metadata`, and `available_model_sizes` before sending announcements on the wire, so these schema fields remain compatibility surface rather than a second transitive model-inventory source.
 
-### `--enumerate-host` Flag
+### `--no-enumerate-host` Flag
 
-Controls whether the host-identifying inventory fields (`gpu_name`, `hostname`, `gpu_vram`, and `gpu_reserved_bytes`) appear in gossip. `is_soc` is always sent. Benchmark-derived bandwidth and compute hints remain additive optional fields when available. `gpu_reserved_bytes` stays omitted on backends such as ROCm and Intel where the tooling does not report a true reserved/unavailable memory metric. Default: `false` (privacy-preserving; peers see VRAM totals but not GPU model or hostname).
+By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserved bytes to all mesh peers. Pass `--no-enumerate-host` to suppress this hardware identification. `is_soc` is always sent. Benchmark-derived bandwidth and compute hints remain additive optional fields when available. `gpu_reserved_bytes` stays omitted on backends such as ROCm and Intel where the tooling does not report a true reserved/unavailable memory metric.
 
 ```
---enumerate-host    # opt in: peers learn your GPU name and hostname
+--no-enumerate-host    # opt out: suppress GPU name and hostname from gossip
 ```
 
 ### API Shape
@@ -283,7 +283,7 @@ Controls whether the host-identifying inventory fields (`gpu_name`, `hostname`, 
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
 
-`peers[]` entries (only when peer has `--enumerate-host`):
+`peers[]` entries (only when peer has not passed `--no-enumerate-host`):
 ```json
 {"hostname": "lemony-28", "is_soc": true, "gpus": [{"name": "Tegra AGX Orin", "vram_bytes": 0}]}
 ```

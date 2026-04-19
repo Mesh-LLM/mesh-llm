@@ -362,6 +362,7 @@ fn test_peer_payload_hw_fields() {
 
 #[test]
 fn test_enumerate_host_false_omits_hw_fields_in_announcement() {
+    // With enumerate_host: false (opt-out), hardware fields are NOT sent
     let enumerate_host = false;
     let gpu_name: Option<String> = Some("NVIDIA RTX 5090".to_string());
     let hostname: Option<String> = Some("carrack".to_string());
@@ -390,6 +391,7 @@ fn test_enumerate_host_false_omits_hw_fields_in_announcement() {
 
 #[test]
 fn test_enumerate_host_true_includes_hw_fields_in_announcement() {
+    // With enumerate_host: true (default), hardware fields ARE sent
     let enumerate_host = true;
     let gpu_name: Option<String> = Some("NVIDIA RTX 5090".to_string());
     let hostname: Option<String> = Some("carrack".to_string());
@@ -418,6 +420,7 @@ fn test_enumerate_host_true_includes_hw_fields_in_announcement() {
 
 #[test]
 fn test_is_soc_always_included_regardless_of_enumerate_host() {
+    // is_soc is always sent regardless of enumerate_host setting
     for enumerate_host in [false, true] {
         let is_soc: Option<bool> = Some(true);
         let gpu_name: Option<String> = Some("Tegra AGX Orin".to_string());
