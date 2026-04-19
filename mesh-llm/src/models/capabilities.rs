@@ -72,7 +72,7 @@ pub fn infer_remote_hf_capabilities_with_metadata(
         caps = merge_sibling_signals(caps, files.iter().map(String::as_str));
     }
     for config in metadata {
-        caps = merge_config_signals(caps, &config);
+        caps = merge_config_signals(caps, config);
     }
     caps.normalize()
 }

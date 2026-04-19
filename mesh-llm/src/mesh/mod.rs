@@ -3117,6 +3117,8 @@ impl Node {
                                         let mut state = node.state.lock().await;
                                         // Only insert if no other task raced and
                                         // established a connection while we were probing.
+                                        #[allow(clippy::map_entry)]
+                                        // manual drop(state) before async spawn
                                         if !state.connections.contains_key(&dead_id) {
                                             state.connections.insert(dead_id, new_conn.clone());
                                             drop(state);

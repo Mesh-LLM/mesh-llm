@@ -1836,7 +1836,7 @@ pub async fn handle_mesh_request(
                 if let Some(name) = cached {
                     Some(name)
                 } else {
-                    let cl = router::classify(&body_json);
+                    let cl = router::classify(body_json);
                     let served = node.models_being_served().await;
                     let media = router::media_requirements(body_json);
                     let with_caps: Vec<(&str, f64, crate::models::ModelCapabilities)> = served
@@ -2134,6 +2134,7 @@ async fn route_attempt_for_target(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn route_model_request(
     node: mesh::Node,
     tcp_stream: TcpStream,
@@ -2292,6 +2293,7 @@ pub async fn route_model_request(
     true
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn route_moe_request(
     node: mesh::Node,
     tcp_stream: TcpStream,

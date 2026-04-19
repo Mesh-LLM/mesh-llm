@@ -465,7 +465,7 @@ fn parse_json_response<T: for<'de> Deserialize<'de>>(response: &[u8]) -> Result<
 }
 
 fn host_header(base_url: &str) -> Result<String, String> {
-    Ok(socket_addr(base_url)?)
+    socket_addr(base_url)
 }
 
 fn socket_addr(base_url: &str) -> Result<String, String> {

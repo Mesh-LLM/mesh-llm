@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   TooltipProvider,
@@ -57,6 +57,7 @@ const THEME_STORAGE_KEY = "mesh-llm-theme";
 
 export function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode(THEME_STORAGE_KEY));
+  const topologyFirstSeenAtRef = useRef<Map<string, number>>(new Map());
   const { status, statusError, meshModels, modelsLoading } = useStatusStream();
   const { section, routedChatId, navigateToSection, pushChatRoute, replaceChatRoute } =
     useAppRouting();
@@ -185,8 +186,26 @@ export function App() {
   }, [themeMode]);
   const topologyNodes = useMemo<TopologyNode[]>(() => {
     if (!status) return [];
+    const now = Date.now();
+    const topologyFirstSeenAt = topologyFirstSeenAtRef.current;
+    const ensureFirstSeenAt = (nodeId: string) => {
+      const existing = topologyFirstSeenAt.get(nodeId);
+      if (existing != null) return existing;
+      topologyFirstSeenAt.set(nodeId, now);
+      return now;
+    };
+    const elapsedSecondsFrom = (startedAtUnix: number | null | undefined) => {
+      if (startedAtUnix == null || !Number.isFinite(startedAtUnix) || startedAtUnix <= 0) {
+        return null;
+      }
+      const startedAtMs = startedAtUnix > 1_000_000_000_000 ? startedAtUnix : startedAtUnix * 1000;
+      return Math.max(0, Math.floor((now - startedAtMs) / 1000));
+    };
     const nodes: TopologyNode[] = [];
     if (status.node_id) {
+      const selfFirstSeenAt = ensureFirstSeenAt(status.node_id);
+      const selfStartedAtUnix = status.local_instances?.find((instance) => instance.is_self)
+        ?.started_at_unix;
       nodes.push({
         id: status.node_id,
         vram: overviewVramGb(status.is_client, status.my_vram_gb),
@@ -205,6 +224,8 @@ export function App() {
         statusLabel:
           status.node_status ||
           (status.is_client ? "Client" : status.is_host ? "Host" : "Idle"),
+        ageSeconds:
+          elapsedSecondsFrom(selfStartedAtUnix) ?? elapsedSecondsFrom(selfFirstSeenAt),
         latencyMs: null,
         hostname: status.my_hostname,
         isSoc: status.my_is_soc,
@@ -225,11 +246,16 @@ export function App() {
         serving: peerPrimaryModel(p),
         servingModels: pModels,
         statusLabel: peerStatusLabel(p),
+        ageSeconds: elapsedSecondsFrom(ensureFirstSeenAt(p.id)),
         latencyMs: p.rtt_ms ?? null,
         hostname: p.hostname,
         isSoc: p.is_soc,
         gpus: p.gpus,
       });
+    }
+    const activeIds = new Set(nodes.map((n) => n.id));
+    for (const key of topologyFirstSeenAt.keys()) {
+      if (!activeIds.has(key)) topologyFirstSeenAt.delete(key);
     }
     return nodes;
   }, [status]);
