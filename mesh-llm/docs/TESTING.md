@@ -88,6 +88,20 @@ mesh-llm serve --model Qwen2.5-3B --console
 - Console: `host=true, peers=0`
 - llama-server has 1 RPC entry (self)
 
+### 1a. Headless mode (API-only, no embedded UI)
+
+```bash
+mesh-llm serve --model Qwen2.5-3B --headless --console 3131
+```
+
+- API on `:9337`, management API on `:3131`
+- `GET /api/status` returns 200 with normal JSON
+- `GET /` returns 404 (web console routes are disabled)
+- `GET /dashboard`, `GET /chat`, and `/assets/*` also return 404
+- The management API (`/api/*`) remains fully accessible
+
+This mode is intended for headless server deployments where the embedded web UI is not needed.
+
 ### 2. Two GPU nodes, model fits on host
 
 ```bash

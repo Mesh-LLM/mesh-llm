@@ -3,10 +3,14 @@
 #
 # Build:  DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.client -t mesh-llm:client .
 # Run:    docker run --rm -p 3131:3131 -p 9337:9337 -e APP_MODE=console mesh-llm:client
+#         docker run --rm -p 3131:3131 -p 9337:9337 -e APP_MODE=console -e MESH_HEADLESS=1 mesh-llm:client  # API-only
 #
 # Modes (via APP_MODE env):
-#   console — API on 9337 + web console on 3131 (default; UI always included)
+#   console  — API on 9337 + web console on 3131 (default; UI always included)
 #   worker  — unsupported in this image; use a full-node image (:cpu/:cuda/:rocm/:vulkan)
+#
+# Modifiers (via env):
+#   MESH_HEADLESS=1  — disable web UI routes; keep /api/* and /v1/* accessible
 
 # syntax=docker/dockerfile:1.7
 

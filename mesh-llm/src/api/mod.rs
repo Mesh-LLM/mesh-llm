@@ -221,6 +221,7 @@ impl MeshApi {
                 node,
                 plugin_manager,
                 affinity_router,
+                headless: false,
                 is_host: false,
                 is_client: false,
                 llama_ready: false,
@@ -316,6 +317,14 @@ impl MeshApi {
 
     pub async fn set_llama_port(&self, port: Option<u16>) {
         self.inner.lock().await.llama_port = port;
+    }
+
+    pub async fn set_headless(&self, headless: bool) {
+        self.inner.lock().await.headless = headless;
+    }
+
+    pub(super) async fn is_headless(&self) -> bool {
+        self.inner.lock().await.headless
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
@@ -966,13 +975,14 @@ impl MeshApi {
 
 // ── Server ──
 
-/// Start the mesh management API server.
 pub async fn start(
     port: u16,
     state: MeshApi,
     mut target_rx: watch::Receiver<election::InferenceTarget>,
     listen_all: bool,
+    headless: bool,
 ) {
+    state.set_headless(headless).await;
     // Watch election target changes
     let state2 = state.clone();
     tokio::spawn(async move {
@@ -1070,6 +1080,16 @@ pub async fn start(
 
 // ── Request dispatch ──
 
+fn is_ui_only_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/" | "/dashboard" | "/dashboard/" | "/chat" | "/chat/"
+    ) || path.starts_with("/chat/")
+        || path.starts_with("/assets/")
+        || matches!(path.rsplit('.').next(), Some("png" | "ico" | "webmanifest"))
+        || (path.ends_with(".json") && !path.starts_with("/api/"))
+}
+
 async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     let request = match tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -1086,6 +1106,11 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
     let path = request.path.as_str();
     let path_only = path.split('?').next().unwrap_or(path);
     let body = http_body_text(&request.raw);
+
+    if method == "GET" && state.is_headless().await && is_ui_only_route(path_only) {
+        respond_error(&mut stream, 404, "Not found").await?;
+        return Ok(());
+    }
 
     match (method, path_only) {
         // ── Dashboard UI ──
@@ -2629,5 +2654,103 @@ data: [DONE]
         assert_eq!(instances[0].pid, std::process::id());
         assert_eq!(instances[0].api_port, Some(3131));
         assert_eq!(instances[0].version, Some(MESH_LLM_VERSION.to_string()));
+    }
+
+    #[test]
+    fn headless_mode_disables_ui_routes_but_preserves_api() {
+        assert!(is_ui_only_route("/"));
+        assert!(is_ui_only_route("/dashboard"));
+        assert!(is_ui_only_route("/chat"));
+
+        assert!(!is_ui_only_route("/api/status"));
+        assert!(!is_ui_only_route("/api/events"));
+        assert!(!is_ui_only_route("/api/discover"));
+        assert!(!is_ui_only_route("/api/runtime"));
+        assert!(!is_ui_only_route("/api/plugins"));
+    }
+
+    #[test]
+    fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
+        assert!(is_ui_only_route("/dashboard/"));
+        assert!(is_ui_only_route("/chat/"));
+        assert!(is_ui_only_route("/chat/some-room"));
+        assert!(is_ui_only_route("/assets/main.js"));
+        assert!(is_ui_only_route("/assets/index-abc123.css"));
+        assert!(is_ui_only_route("/favicon.ico"));
+        assert!(is_ui_only_route("/logo.png"));
+        assert!(is_ui_only_route("/manifest.webmanifest"));
+        assert!(is_ui_only_route("/site.json"));
+
+        assert!(!is_ui_only_route("/api/status.json"));
+    }
+
+    #[test]
+    fn default_mode_still_serves_embedded_ui_routes() {
+        assert!(is_ui_only_route("/"));
+        assert!(is_ui_only_route("/dashboard"));
+        assert!(is_ui_only_route("/chat"));
+        assert!(is_ui_only_route("/assets/app.js"));
+
+        assert!(!is_ui_only_route("/api/status"));
+        assert!(!is_ui_only_route("/api/events"));
+    }
+
+    #[test]
+    fn headless_status_command_works_against_management_api() {
+        assert!(
+            !is_ui_only_route("/api/status"),
+            "/api/status must not be blocked in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/events"),
+            "/api/events must not be blocked in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/discover"),
+            "/api/discover must not be blocked in headless mode"
+        );
+    }
+
+    #[test]
+    fn headless_blackboard_status_still_reads_api_status() {
+        assert!(
+            !is_ui_only_route("/api/status"),
+            "/api/status must be accessible in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/runtime"),
+            "/api/runtime must be accessible in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/join"),
+            "/api/join must be accessible in headless mode"
+        );
+    }
+
+    #[test]
+    fn headless_custom_console_port_keeps_api_and_disables_ui() {
+        assert!(is_ui_only_route("/"), "/ must be blocked in headless mode");
+        assert!(is_ui_only_route("/dashboard"), "/dashboard must be blocked");
+        assert!(is_ui_only_route("/chat"), "/chat must be blocked");
+        assert!(
+            is_ui_only_route("/assets/main.js"),
+            "/assets/* must be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/api/status"),
+            "/api/status must not be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/api/events"),
+            "/api/events must not be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/v1/models"),
+            "/v1/models must not be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/v1/chat/completions"),
+            "/v1/chat/completions must not be blocked"
+        );
     }
 }

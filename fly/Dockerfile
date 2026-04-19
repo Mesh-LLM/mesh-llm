@@ -2,6 +2,7 @@
 #
 # Deploy:
 #   fly deploy --config fly/console/fly.toml --dockerfile fly/Dockerfile
+#   Set MESH_HEADLESS=1 in fly.toml [env] to run API-only (no web UI)
 
 # syntax=docker/dockerfile:1.7
 

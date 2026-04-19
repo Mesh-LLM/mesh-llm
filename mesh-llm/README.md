@@ -36,7 +36,7 @@ plugins/
 ## Runtime model
 
 - `mesh-llm` owns the user-facing OpenAI-compatible API on `:9337`. Requests are routed by model.
-- The management API and web console live on `:3131`.
+- The management API and web console live on `:3131`. Pass `--headless` to disable the embedded web UI while keeping the management API (`/api/*`) available on that port.
 - Dense models that fit run locally. Dense models that do not fit can be split with pipeline parallelism.
 - MoE models are handled through expert-aware orchestration in `inference/moe.rs`.
 - Routing and demand tracking are mesh-wide. Nodes can serve different models at the same time.

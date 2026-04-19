@@ -48,6 +48,8 @@ That command:
 - exposes an OpenAI-compatible API at `http://localhost:9337/v1`
 - starts the web console at `http://localhost:3131`
 
+Use `--headless` to disable the embedded web console while keeping the management API (`/api/*`) available on the `--console` port. This is useful for headless server deployments where the UI is not needed.
+
 Check what is available:
 
 ```bash
@@ -513,6 +515,14 @@ http://localhost:3131
 ```
 
 The console shows live topology, VRAM usage, loaded models, and built-in chat. It is backed by `/api/status` and `/api/events`.
+
+To run without the embedded UI (for example, in a headless server environment), pass `--headless`:
+
+```bash
+mesh-llm serve --model Qwen2.5-3B --headless
+```
+
+In headless mode, the web console routes (`/`, `/dashboard`, `/chat`) return 404. The management API (`/api/*`) stays fully available on the `--console` port.
 
 You can also try the hosted demo:
 

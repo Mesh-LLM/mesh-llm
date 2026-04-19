@@ -271,6 +271,10 @@ pub(crate) struct Cli {
     #[arg(long, default_value = "3131")]
     pub(crate) console: u16,
 
+    /// Disable the embedded web UI but keep the management API on the --console port.
+    #[arg(long)]
+    pub(crate) headless: bool,
+
     /// Publish this mesh for discovery by others.
     #[arg(long)]
     pub(crate) publish: bool,
@@ -711,7 +715,7 @@ fn shell_display(arg: &OsString) -> String {
 mod tests {
     use super::*;
     use crate::cli::moe::MoeAnalyzeCommand;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn normalize_runtime_surface_args_rewrites_serve_invocation() {
@@ -959,5 +963,41 @@ mod tests {
             } => {}
             other => panic!("unexpected command: {other:?}"),
         }
+    }
+
+    #[test]
+    fn cli_accepts_headless_flag_for_serve_surface() {
+        let args = vec!["mesh-llm", "serve", "--headless", "--auto"];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+        assert!(cli.headless);
+    }
+
+    #[test]
+    fn cli_accepts_headless_flag_for_client_surface() {
+        let args = vec!["mesh-llm", "client", "--headless", "--auto"];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+        assert!(cli.headless);
+    }
+
+    #[test]
+    fn legacy_no_console_remains_ignored_in_headless_tests() {
+        let args = vec!["mesh-llm", "serve", "--no-console"];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+        assert!(
+            !cli.headless,
+            "--no-console must not activate headless mode"
+        );
+    }
+
+    #[test]
+    fn help_text_mentions_headless_keeps_management_api() {
+        let help = Cli::command().render_help().to_string();
+        assert!(
+            help.contains("headless") || help.contains("management API"),
+            "help text should mention headless or management API"
+        );
     }
 }

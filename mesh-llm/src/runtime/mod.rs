@@ -1853,7 +1853,7 @@ async fn run_auto(
                     }
                 }
             });
-            api::start(cport, cs2, adapted_rx, cli.listen_all).await;
+            api::start(cport, cs2, adapted_rx, cli.listen_all, cli.headless).await;
         });
         Some(cs)
     } else {
@@ -1889,6 +1889,7 @@ async fn run_auto(
     let force_split = cli.split;
     let llama_flavor = cli.llama_flavor;
     let cb_console_port = console_port;
+    let cli_headless = cli.headless;
     let model_name_for_cb = model_name.clone();
     let model_name_for_election = model_name.clone();
     let node_for_cb = node.clone();
@@ -1951,7 +1952,7 @@ async fn run_auto(
                     let url = format!("http://localhost:{api_port}");
                     eprintln!("  API:     {url}");
                     if let Some(cp) = cb_console_port {
-                        eprintln!("  Console: http://localhost:{cp}");
+                        eprintln!("{}", format_console_ready_line(cli_headless, cp));
                     }
                     update_pi_models_json(&model_name_for_cb, api_port);
                     eprintln!();
@@ -2454,7 +2455,7 @@ async fn run_passive(
         eprintln!("💤 Standby ready:");
     }
     eprintln!("  API:     http://localhost:{local_port}");
-    eprintln!("  Console: http://localhost:{}", cli.console);
+    eprintln!("{}", format_console_ready_line(cli.headless, cli.console));
 
     // Console
     {
@@ -2481,8 +2482,9 @@ async fn run_passive(
         cs.update(false, true).await;
         let (_tx, rx) = tokio::sync::watch::channel(election::InferenceTarget::None);
         let la = cli.listen_all;
+        let headless = cli.headless;
         tokio::spawn(async move {
-            api::start(cport, cs, rx, la).await;
+            api::start(cport, cs, rx, la, headless).await;
         });
     }
 
@@ -2680,6 +2682,16 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
         all.insert(0, clean_name);
     }
     all
+}
+
+/// Returns the console-port label line for ready-state output.
+/// In headless mode, advertises the management API; otherwise the web console.
+fn format_console_ready_line(headless: bool, console_port: u16) -> String {
+    if headless {
+        format!("  Management API: http://localhost:{console_port}")
+    } else {
+        format!("  Console: http://localhost:{console_port}")
+    }
 }
 
 #[cfg(test)]
@@ -3445,5 +3457,82 @@ mod tests {
         assert_eq!(*mem_arc.lock().await, Some(vec![10.5, 20.0]));
         assert!(fp32_arc.lock().await.is_none());
         assert!(fp16_arc.lock().await.is_none());
+    }
+
+    #[test]
+    fn headless_host_logs_management_api_without_console_url() {
+        let line = format_console_ready_line(true, 3131);
+        assert!(
+            line.contains("Management API"),
+            "expected 'Management API' in headless output, got: {line}"
+        );
+        assert!(
+            !line.contains("Console:"),
+            "headless output must not contain 'Console:', got: {line}"
+        );
+    }
+
+    #[test]
+    fn default_host_mode_still_logs_console_url() {
+        let line = format_console_ready_line(false, 3131);
+        assert!(
+            line.contains("Console:"),
+            "expected 'Console:' in default output, got: {line}"
+        );
+        assert!(
+            !line.contains("Management API"),
+            "default output must not contain 'Management API', got: {line}"
+        );
+    }
+
+    #[test]
+    fn active_startup_passes_headless_to_management_server() {
+        let headless_line = format_console_ready_line(true, 9090);
+        let normal_line = format_console_ready_line(false, 9090);
+        assert_ne!(
+            headless_line, normal_line,
+            "headless and non-headless output must differ"
+        );
+        assert!(headless_line.contains("9090"));
+        assert!(normal_line.contains("9090"));
+    }
+
+    #[test]
+    fn headless_passive_mode_preserves_api_without_ui() {
+        let line = format_console_ready_line(true, 3131);
+        assert!(
+            line.contains("Management API"),
+            "passive headless output must contain 'Management API', got: {line}"
+        );
+        assert!(
+            !line.contains("Console:"),
+            "passive headless output must not contain 'Console:', got: {line}"
+        );
+    }
+
+    #[test]
+    fn passive_headless_promotion_keeps_ui_disabled() {
+        let promoted_line = format_console_ready_line(true, 3131);
+        assert!(
+            promoted_line.contains("Management API"),
+            "promoted headless node must still advertise Management API, got: {promoted_line}"
+        );
+        assert!(
+            !promoted_line.contains("Console:"),
+            "promoted headless node must not show Console: URL, got: {promoted_line}"
+        );
+    }
+
+    #[test]
+    fn default_passive_mode_still_serves_ui_when_not_headless() {
+        let line = format_console_ready_line(false, 3131);
+        assert!(
+            line.contains("Console:"),
+            "default passive output must contain 'Console:', got: {line}"
+        );
+        assert!(
+            !line.contains("Management API"),
+            "default passive output must not contain 'Management API', got: {line}"
+        );
     }
 }

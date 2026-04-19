@@ -42,6 +42,7 @@ pub(super) struct ApiInner {
     pub(super) node: mesh::Node,
     pub(super) plugin_manager: plugin::PluginManager,
     pub(super) affinity_router: affinity::AffinityRouter,
+    pub(super) headless: bool,
     pub(super) is_host: bool,
     pub(super) is_client: bool,
     pub(super) llama_ready: bool,

@@ -163,5 +163,98 @@ echo "✅ /v1/models returned $MODEL_COUNT model(s)"
 
 
 
+
+# Headless mode: API-only, no embedded UI
+echo ""
+echo "=== Headless mode subcase ==="
+HEADLESS_API_PORT=9338
+HEADLESS_CONSOLE_PORT=3132
+HEADLESS_LOG=/tmp/mesh-llm-ci-headless.log
+
+HEADLESS_ARGS=(
+    serve
+    --model "$MODEL"
+    --no-draft
+    --bin-dir "$BIN_DIR"
+    --device CPU
+    --port "$HEADLESS_API_PORT"
+    --console "$HEADLESS_CONSOLE_PORT"
+    --headless
+)
+
+if [ -n "$MMPROJ" ]; then
+    HEADLESS_ARGS+=(--mmproj "$MMPROJ")
+fi
+
+echo "Starting mesh-llm in headless mode..."
+"$MESH_LLM" "${HEADLESS_ARGS[@]}" > "$HEADLESS_LOG" 2>&1 &
+HEADLESS_PID=$!
+echo "  PID: $HEADLESS_PID"
+
+headless_cleanup() {
+    echo "Shutting down headless mesh-llm (PID $HEADLESS_PID)..."
+    kill "$HEADLESS_PID" 2>/dev/null || true
+    pkill -P "$HEADLESS_PID" 2>/dev/null || true
+    sleep 2
+    kill -9 "$HEADLESS_PID" 2>/dev/null || true
+    wait "$HEADLESS_PID" 2>/dev/null || true
+    echo "Headless cleanup done."
+}
+trap 'cleanup; headless_cleanup' EXIT
+
+echo "Waiting for headless node to be ready (up to ${MAX_WAIT}s)..."
+for i in $(seq 1 "$MAX_WAIT"); do
+    if ! kill -0 "$HEADLESS_PID" 2>/dev/null; then
+        echo "❌ headless mesh-llm exited unexpectedly"
+        echo "--- Headless log tail ---"
+        tail -50 "$HEADLESS_LOG" || true
+        exit 1
+    fi
+
+    HEADLESS_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${HEADLESS_CONSOLE_PORT}/api/status" 2>/dev/null || echo "000")
+    if [ "$HEADLESS_STATUS" = "200" ]; then
+        echo "✅ Headless node ready in ${i}s"
+        break
+    fi
+
+    if [ "$i" -eq "$MAX_WAIT" ]; then
+        echo "❌ Headless node failed to become ready within ${MAX_WAIT}s"
+        echo "--- Headless log tail ---"
+        tail -80 "$HEADLESS_LOG" || true
+        exit 1
+    fi
+
+    if [ $((i % 15)) -eq 0 ]; then
+        echo "  Still waiting... (${i}s)"
+    fi
+    sleep 1
+done
+
+# Assert /api/status returns 200 in headless mode
+echo "Testing headless /api/status returns 200..."
+HEADLESS_API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${HEADLESS_CONSOLE_PORT}/api/status" 2>/dev/null || echo "000")
+if [ "$HEADLESS_API_STATUS" != "200" ]; then
+    echo "❌ Headless /api/status returned $HEADLESS_API_STATUS (expected 200)"
+    exit 1
+fi
+echo "✅ Headless /api/status returned 200"
+
+# Assert / returns 404 in headless mode (web console disabled)
+echo "Testing headless / returns 404..."
+HEADLESS_ROOT_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${HEADLESS_CONSOLE_PORT}/" 2>/dev/null || echo "000")
+if [ "$HEADLESS_ROOT_STATUS" != "404" ]; then
+    echo "❌ Headless / returned $HEADLESS_ROOT_STATUS (expected 404)"
+    exit 1
+fi
+echo "✅ Headless / returned 404 (web console correctly disabled)"
+
+# Stop headless instance before final summary
+kill "$HEADLESS_PID" 2>/dev/null || true
+pkill -P "$HEADLESS_PID" 2>/dev/null || true
+sleep 2
+kill -9 "$HEADLESS_PID" 2>/dev/null || true
+wait "$HEADLESS_PID" 2>/dev/null || true
+trap cleanup EXIT
+
 echo ""
 echo "=== All smoke tests passed ==="

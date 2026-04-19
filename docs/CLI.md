@@ -71,6 +71,7 @@ Runtime switches:
 - `--port <PORT>`: API port (default `9337`).
 - `--client`: API-only mode (no GPU/model serving).
 - `--console <CONSOLE>`: console/API management port (default `3131`).
+- `--headless`: disable the embedded web UI; keep the management API on the `--console` port.
 - `--publish`: publish your mesh for discovery.
 - `--mesh-name <MESH_NAME>`: friendly mesh name in discovery.
 - `--region <REGION>`: region hint for discovery.

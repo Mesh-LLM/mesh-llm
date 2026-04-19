@@ -7,6 +7,9 @@
 #         docker run --rm --device=/dev/kfd --device=/dev/dri \
 #           -p 9337:9337 -v ~/.models:/root/.models \
 #           -e APP_MODE=worker mesh-llm:rocm
+#         docker run --rm --device=/dev/kfd --device=/dev/dri \
+#           -p 9337:9337 -p 3131:3131 -v ~/.models:/root/.models \
+#           -e APP_MODE=worker -e MESH_HEADLESS=1 mesh-llm:rocm  # API-only
 #
 # Binaries: /usr/local/lib/mesh-llm/bin/{rpc-server-rocm,llama-server-rocm,llama-moe-split}
 

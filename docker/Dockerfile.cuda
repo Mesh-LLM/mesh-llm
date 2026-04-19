@@ -5,6 +5,7 @@
 #         (optional) --build-arg CUDA_ARCH="75;80;86;87;89" for narrower compute list
 # Run (requires NVIDIA Container Toolkit):
 #         docker run --rm --gpus all -p 9337:9337 -v ~/.models:/root/.models -e APP_MODE=worker mesh-llm:cuda
+#         docker run --rm --gpus all -p 9337:9337 -p 3131:3131 -e APP_MODE=worker -e MESH_HEADLESS=1 mesh-llm:cuda  # API-only
 #
 # IMPORTANT: -DGGML_CUDA_FA_ALL_QUANTS=ON is mandatory for correctness.
 # See ggml-org/llama.cpp#20866. Do NOT remove until fork is rebased past the fix.
