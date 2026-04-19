@@ -286,6 +286,7 @@ fn local_hardware_info_to_proto(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn proto_gpu_info_to_legacy_fields(
     gpus: &[crate::proto::node::GpuInfo],
 ) -> (

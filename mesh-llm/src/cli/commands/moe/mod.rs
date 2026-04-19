@@ -413,7 +413,7 @@ async fn run_share_resolved(
     };
 
     let ranking = moe_planner::local_submit_ranking(resolved, ranking_file)?;
-    moe_planner::validate_ranking(&resolved, &ranking).with_context(|| {
+    moe_planner::validate_ranking(resolved, &ranking).with_context(|| {
         format!(
             "Validate ranking {} against model {}",
             ranking.path.display(),
@@ -421,7 +421,7 @@ async fn run_share_resolved(
         )
     })?;
     let log_path = log_path_for(&resolved.path, &ranking.analyzer_id);
-    let bundle = moe_planner::build_submit_bundle(&resolved, &ranking, Some(log_path.as_path()))?;
+    let bundle = moe_planner::build_submit_bundle(resolved, &ranking, Some(log_path.as_path()))?;
     let api =
         models::build_hf_tokio_api(false).context("Build Hugging Face client for MoE share")?;
     let (owner, name) = dataset_repo.split_once('/').unwrap_or(("", dataset_repo));

@@ -179,6 +179,7 @@ fn read_usage_record(path: &Path) -> Option<ModelUsageRecord> {
     serde_json::from_slice(&bytes).ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_model_usage_in_dir(
     usage_dir: &Path,
     track_root: &Path,
@@ -276,8 +277,10 @@ fn plan_model_cleanup_in_dir(
         .map(|age| Utc::now() - age);
     let mut skipped_recent = 0usize;
     let entries = plan_cleanup_entries(records, usage_dir, track_root, cutoff, &mut skipped_recent);
-    let mut plan = ModelCleanupPlan::default();
-    plan.skipped_recent = skipped_recent;
+    let mut plan = ModelCleanupPlan {
+        skipped_recent,
+        ..Default::default()
+    };
     for entry in entries {
         if entry.stale_record_only {
             plan.stale_record_only += 1;

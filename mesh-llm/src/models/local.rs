@@ -412,9 +412,7 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
 
     let split_prefix = format!("{stem}-00001-of-");
     let cache_root = huggingface_hub_cache_dir();
-    let Some(cache_info) = scan_hf_cache_info(&cache_root) else {
-        return None;
-    };
+    let cache_info = scan_hf_cache_info(&cache_root)?;
     for repo in &cache_info.repos {
         if repo.repo_type != RepoType::Model {
             continue;

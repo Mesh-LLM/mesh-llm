@@ -166,7 +166,7 @@ fn build_installed_rows() -> Vec<InstalledRow> {
                 catalog_model,
                 capabilities,
                 managed_by_mesh: usage.as_ref().is_some_and(|record| record.mesh_managed),
-                last_used_at: usage.and_then(|record| Some(record.last_used_at)),
+                last_used_at: usage.map(|record| record.last_used_at),
             }
         })
         .collect()
