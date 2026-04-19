@@ -459,7 +459,13 @@ export function App() {
             : status.model_name
                 ? [status.model_name]
                 : [],
-
+        statusLabel:
+          status.node_status ||
+          (status.is_client ? "Client" : status.is_host ? "Host" : "Idle"),
+        ageSeconds:
+          elapsedSecondsFrom(status.first_joined_mesh_ts)
+          ?? elapsedSecondsFrom(selfStartedAtUnix)
+          ?? elapsedSecondsFrom(selfFirstSeenAt),
         latencyMs: null,
         hostname: status.my_hostname,
         isSoc: status.my_is_soc,
@@ -480,7 +486,8 @@ export function App() {
         client: p.state === "client",
         serving: peerPrimaryModel(p),
         servingModels: pModels,
-
+        statusLabel: peerStatusLabel(p),
+        ageSeconds: elapsedSecondsFrom(p.first_joined_mesh_ts) ?? elapsedSecondsFrom(ensureFirstSeenAt(p.id)),
         latencyMs: p.rtt_ms ?? null,
         hostname: p.hostname,
         isSoc: p.is_soc,

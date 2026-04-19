@@ -927,6 +927,7 @@ impl MeshApi {
                     p.gpu_compute_tflops_fp32.as_deref(),
                     p.gpu_compute_tflops_fp16.as_deref(),
                 ),
+                first_joined_mesh_ts: p.first_joined_mesh_ts,
             })
             .collect();
 
@@ -1034,6 +1035,7 @@ impl MeshApi {
             },
             routing_affinity,
             routing_metrics,
+            first_joined_mesh_ts: node.first_joined_mesh_ts().await,
         }
     }
 
@@ -1984,6 +1986,7 @@ mod tests {
             },
             tunnel_port: None,
             role,
+            first_joined_mesh_ts: None,
             models: Vec::new(),
             vram_bytes: 24_000_000_000,
             rtt_ms: None,

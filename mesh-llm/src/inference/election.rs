@@ -2942,6 +2942,7 @@ mod tests {
             },
             tunnel_port: None,
             role: NodeRole::Worker,
+            first_joined_mesh_ts: None,
             models: vec![],
             vram_bytes,
             rtt_ms,
