@@ -350,9 +350,30 @@ pub(crate) async fn run() -> Result<()> {
             .as_secs();
 
         let last_mesh_id = mesh::load_last_mesh_id();
-        eprintln!("  Found {} mesh(es)", meshes.len());
         let target_name = cli.mesh_name.as_deref();
-        for m in &meshes {
+        // When the user did not target a specific mesh, `--auto` only joins the
+        // community mesh (unnamed or name == "mesh-llm"). Hide private named
+        // meshes from the listing so the output matches what auto will actually
+        // consider.
+        let listed: Vec<&nostr::DiscoveredMesh> = if target_name.is_some() {
+            meshes.iter().collect()
+        } else {
+            meshes
+                .iter()
+                .filter(|m| nostr::is_auto_eligible(m))
+                .collect()
+        };
+        let hidden = meshes.len().saturating_sub(listed.len());
+        if hidden > 0 {
+            eprintln!(
+                "  Found {} mesh(es) ({} private named mesh(es) hidden; use --mesh-name to join)",
+                listed.len(),
+                hidden
+            );
+        } else {
+            eprintln!("  Found {} mesh(es)", listed.len());
+        }
+        for m in &listed {
             let score = nostr::score_mesh(m, now, last_mesh_id.as_deref());
             eprintln!(
                 "  · {} (score: {}, {} nodes, {:.0}GB, {} clients{})",
