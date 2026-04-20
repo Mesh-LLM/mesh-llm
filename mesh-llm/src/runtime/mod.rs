@@ -797,6 +797,7 @@ fn pinned_startup_preflight_metrics() -> &'static [hardware::Metric] {
         hardware::Metric::GpuName,
         hardware::Metric::GpuFacts,
         hardware::Metric::VramBytes,
+        hardware::Metric::IsSoc,
     ]
 }
 
@@ -3088,10 +3089,11 @@ mod tests {
     fn pinned_gpu_startup_preflight_requests_per_gpu_vram_metrics() {
         let metrics = pinned_startup_preflight_metrics();
 
-        assert_eq!(metrics.len(), 3);
+        assert_eq!(metrics.len(), 4);
         assert!(metrics.contains(&hardware::Metric::GpuName));
         assert!(metrics.contains(&hardware::Metric::GpuFacts));
         assert!(metrics.contains(&hardware::Metric::VramBytes));
+        assert!(metrics.contains(&hardware::Metric::IsSoc));
     }
 
     #[test]
