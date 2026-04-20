@@ -1564,12 +1564,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B.gguf".to_string(),
                 mmproj: Some("mm.gguf".to_string()),
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".to_string()),
+                parallel: None,
             }],
             plugins: vec![PluginConfigEntry {
                 name: "blackboard".to_string(),
@@ -1612,12 +1614,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "test.gguf".to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -1631,12 +1635,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "other.gguf".to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -1653,12 +1659,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".to_string(),
                 mmproj: Some("mmproj-f16.gguf".to_string()),
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".to_string()),
+                parallel: None,
             }],
             plugins: vec![],
         };

@@ -21,6 +21,8 @@ pub struct MeshConfig {
 pub struct GpuConfig {
     #[serde(default)]
     pub assignment: GpuAssignment,
+    #[serde(default)]
+    pub parallel: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -40,6 +42,8 @@ pub struct ModelConfigEntry {
     pub ctx_size: Option<u32>,
     #[serde(default)]
     pub gpu_id: Option<String>,
+    #[serde(default)]
+    pub parallel: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -101,6 +105,11 @@ pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
             bail!("unsupported config version {version}; expected version = 1");
         }
     }
+    if let Some(parallel) = config.gpu.parallel {
+        if parallel < 1 {
+            bail!("gpu.parallel must be at least 1, got {parallel}");
+        }
+    }
     for (index, model) in config.models.iter().enumerate() {
         if model.model.trim().is_empty() {
             bail!("models[{index}].model must not be empty");
@@ -108,6 +117,11 @@ pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
         if let Some(mmproj) = &model.mmproj {
             if mmproj.trim().is_empty() {
                 bail!("models[{index}].mmproj must not be empty when set");
+            }
+        }
+        if let Some(parallel) = model.parallel {
+            if parallel < 1 {
+                bail!("models[{index}].parallel must be at least 1, got {parallel}");
             }
         }
         match config.gpu.assignment {
@@ -306,12 +320,14 @@ ctx_size = 8192
         let config = MeshConfig {
             gpu: GpuConfig {
                 assignment: GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".into(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             ..MeshConfig::default()
         };
@@ -327,12 +343,14 @@ ctx_size = 8192
         let config = MeshConfig {
             gpu: GpuConfig {
                 assignment: GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".into(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: Some("  \t  ".into()),
+                parallel: None,
             }],
             ..MeshConfig::default()
         };
@@ -348,12 +366,14 @@ ctx_size = 8192
         let config = MeshConfig {
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".into(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: Some("pci:0000:65:00.0".into()),
+                parallel: None,
             }],
             ..MeshConfig::default()
         };
@@ -374,7 +394,7 @@ assignment = "pinned"
 
 [[models]]
 model = "Qwen3-8B-Q4_K_M"
-gpu_id = "  pci:0000:65:00.0  "
+gpu_id = " pci:0000:65:00.0 "
 "#;
 
         let config: MeshConfig = toml::from_str(raw).unwrap();
@@ -382,7 +402,189 @@ gpu_id = "  pci:0000:65:00.0  "
 
         assert_eq!(
             config.models[0].gpu_id.as_deref(),
-            Some("  pci:0000:65:00.0  ")
+            Some(" pci:0000:65:00.0 ")
         );
+    }
+
+    // ── gpu.parallel validation ──
+
+    #[test]
+    fn gpu_parallel_field_deserializes_from_toml() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[gpu]
+assignment = "auto"
+parallel = 8
+
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.gpu.parallel, Some(8));
+    }
+
+    #[test]
+    fn gpu_parallel_defaults_to_none_when_omitted() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[gpu]
+assignment = "auto"
+
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.gpu.parallel, None);
+    }
+
+    #[test]
+    fn gpu_parallel_zero_rejected() {
+        let config = MeshConfig {
+            gpu: GpuConfig {
+                assignment: GpuAssignment::Auto,
+                parallel: Some(0),
+            },
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None,
+            }],
+            ..MeshConfig::default()
+        };
+
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("gpu.parallel must be at least 1, got 0"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn gpu_parallel_one_accepted() {
+        let config = MeshConfig {
+            gpu: GpuConfig {
+                assignment: GpuAssignment::Auto,
+                parallel: Some(1),
+            },
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None,
+            }],
+            ..MeshConfig::default()
+        };
+
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn gpu_parallel_none_accepted() {
+        let config = MeshConfig {
+            gpu: GpuConfig {
+                assignment: GpuAssignment::Auto,
+                parallel: None,
+            },
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None,
+            }],
+            ..MeshConfig::default()
+        };
+
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn gpu_parallel_large_value_accepted() {
+        let config = MeshConfig {
+            gpu: GpuConfig {
+                assignment: GpuAssignment::Auto,
+                parallel: Some(64),
+            },
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None,
+            }],
+            ..MeshConfig::default()
+        };
+
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn gpu_parallel_unwrap_or_default_is_4() {
+        assert_eq!(None::<usize>.unwrap_or(4), 4);
+        assert_eq!(Some(1usize).unwrap_or(4), 1);
+        assert_eq!(Some(8usize).unwrap_or(4), 8);
+        assert_eq!(Some(64usize).unwrap_or(4), 64);
+    }
+
+    #[test]
+    fn per_model_parallel_valid_value_accepted() {
+        let config = MeshConfig {
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: Some(8),
+            }],
+            ..MeshConfig::default()
+        };
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn per_model_parallel_zero_rejected() {
+        let config = MeshConfig {
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: Some(0),
+            }],
+            ..MeshConfig::default()
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("models[0].parallel must be at least 1"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn per_model_parallel_none_accepted() {
+        let config = MeshConfig {
+            models: vec![ModelConfigEntry {
+                model: "Qwen3-8B-Q4_K_M".into(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None,
+            }],
+            ..MeshConfig::default()
+        };
+        validate_config(&config).unwrap();
     }
 }

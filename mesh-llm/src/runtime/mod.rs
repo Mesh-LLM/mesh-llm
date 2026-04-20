@@ -42,6 +42,7 @@ struct StartupModelSpec {
     ctx_size: Option<u32>,
     gpu_id: Option<String>,
     config_owned: bool,
+    parallel: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,6 +61,7 @@ struct StartupModelPlan {
     ctx_size: Option<u32>,
     gpu_id: Option<String>,
     pinned_gpu: Option<StartupPinnedGpuTarget>,
+    parallel: Option<usize>,
 }
 
 fn resolve_runtime_owner_key_path(cli: &Cli) -> Result<Option<PathBuf>> {
@@ -592,6 +594,7 @@ fn build_startup_model_specs(
                 ctx_size: cli.ctx_size,
                 gpu_id: None,
                 config_owned: false,
+                parallel: None,
             });
         }
         for model in &cli.model {
@@ -601,6 +604,7 @@ fn build_startup_model_specs(
                 ctx_size: cli.ctx_size,
                 gpu_id: None,
                 config_owned: false,
+                parallel: None,
             });
         }
         if let Some(mmproj) = &cli.mmproj {
@@ -618,6 +622,7 @@ fn build_startup_model_specs(
             ctx_size: cli.ctx_size.or(model.ctx_size),
             gpu_id: model.gpu_id.clone(),
             config_owned: true,
+            parallel: model.parallel,
         });
     }
     Ok(specs)
@@ -644,6 +649,7 @@ async fn resolve_startup_models(
             ctx_size: spec.ctx_size,
             gpu_id: spec.gpu_id.clone(),
             pinned_gpu: None,
+            parallel: spec.parallel,
         });
     }
     Ok(plans)
@@ -1927,6 +1933,11 @@ async fn run_auto(
     let model2 = model.clone();
     let draft2 = cli.draft.clone();
     let draft_max = cli.draft_max;
+    let slots = primary_startup_model
+        .as_ref()
+        .and_then(|m| m.parallel)
+        .or(config.gpu.parallel)
+        .unwrap_or(4);
     let force_split = cli.split;
     let llama_flavor = cli.llama_flavor;
     let cb_console_port = console_port;
@@ -1973,6 +1984,7 @@ async fn run_auto(
                 moe_runtime_options,
                 target_tx: primary_target_tx,
                 stop_rx: primary_stop_rx,
+                slots,
             },
             move |is_host, llama_ready| {
                 let advertise_node = node_for_cb.clone();
@@ -2096,6 +2108,7 @@ async fn run_auto(
             let extra_model_name = extra_name.clone();
             let api_port_extra = api_port;
             let extra_llama_flavor = cli.llama_flavor;
+            let slots = extra_model.parallel.or(config.gpu.parallel).unwrap_or(4);
             let extra_moe_runtime_options = moe::MoeRuntimeOptions::default();
             let extra_console_state = console_state.clone();
             let extra_model_name_for_status = extra_model_name.clone();
@@ -2129,6 +2142,7 @@ async fn run_auto(
                         moe_runtime_options: extra_moe_runtime_options,
                         target_tx: extra_target_tx,
                         stop_rx: extra_stop_rx,
+                        slots,
                     },
                     move |is_host, llama_ready| {
                         let advertise_node = extra_node_for_advertise.clone();
@@ -2227,6 +2241,7 @@ async fn run_auto(
 
     // Wait for SIGINT/SIGTERM or runtime model control commands.
     let primary_model_name = model_name.clone();
+    let slots = config.gpu.parallel.unwrap_or(4);
     loop {
         tokio::select! {
             _ = wait_shutdown_signal() => {
@@ -2258,6 +2273,7 @@ async fn run_auto(
                                 &model_path,
                                 None,
                                 cli.ctx_size,
+                                slots,
                             )
                             .await?;
 
@@ -2951,6 +2967,7 @@ mod tests {
                 mmproj: Some("/tmp/ignored-mmproj.gguf".into()),
                 ctx_size: Some(8192),
                 gpu_id: None,
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -2974,12 +2991,14 @@ mod tests {
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: None,
+                    parallel: None,
                 },
                 plugin::ModelConfigEntry {
                     model: "bartowski/Qwen2.5-VL/model.gguf".into(),
                     mmproj: Some("bartowski/Qwen2.5-VL/mmproj.gguf".into()),
                     ctx_size: Some(16384),
                     gpu_id: None,
+                    parallel: None,
                 },
             ],
             ..plugin::MeshConfig::default()
@@ -3009,6 +3028,7 @@ mod tests {
                 mmproj: None,
                 ctx_size: Some(8192),
                 gpu_id: None,
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -3023,12 +3043,14 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![plugin::ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".into(),
                 mmproj: None,
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".into()),
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -3040,6 +3062,7 @@ mod tests {
             ctx_size: Some(8192),
             gpu_id: specs[0].gpu_id.clone(),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![
             synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0")),
@@ -3077,12 +3100,14 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![plugin::ModelConfigEntry {
                 model: "Ignored-Model".into(),
                 mmproj: None,
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".into()),
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -3094,6 +3119,7 @@ mod tests {
             ctx_size: None,
             gpu_id: specs[0].gpu_id.clone(),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
@@ -3111,6 +3137,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3120,6 +3147,7 @@ mod tests {
             ctx_size: None,
             gpu_id: None,
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3128,6 +3156,7 @@ mod tests {
             ctx_size: None,
             gpu_id: None,
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
@@ -3145,6 +3174,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3154,6 +3184,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3162,6 +3193,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), Some("CUDA3"))];
 
@@ -3180,6 +3212,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3189,6 +3222,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3197,6 +3231,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), None)];
 
@@ -3214,6 +3249,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3223,6 +3259,7 @@ mod tests {
             ctx_size: None,
             gpu_id: Some("pci:0000:b3:00.0".into()),
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3231,6 +3268,7 @@ mod tests {
             ctx_size: None,
             gpu_id: Some("pci:0000:b3:00.0".into()),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
@@ -3264,6 +3302,7 @@ mod tests {
                 backend_device: "CUDA0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let device =
@@ -3286,6 +3325,7 @@ mod tests {
                 backend_device: "CUDA0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let device = startup_rpc_backend_device(None, Some(&primary_startup_model)).unwrap();
@@ -3307,6 +3347,7 @@ mod tests {
                 backend_device: "CUDA0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let err =
@@ -3331,6 +3372,7 @@ mod tests {
                 backend_device: "ROCm0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let device1 =
@@ -3365,6 +3407,7 @@ mod tests {
             ctx_size: None,
             gpu_id: None,
             config_owned: false,
+            parallel: None,
         }];
 
         assert!(!should_show_serve_config_help(

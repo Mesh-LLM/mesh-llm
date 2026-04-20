@@ -229,6 +229,7 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![],
             plugins: vec![],
@@ -346,12 +347,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![crate::plugin::ModelConfigEntry {
                 model: model.to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -378,12 +381,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![crate::plugin::ModelConfigEntry {
                 model: "test.gguf".to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -417,12 +422,14 @@ mod tests {
             version: Some(1),
             gpu: crate::plugin::GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![crate::plugin::ModelConfigEntry {
                 model: "noop-test.gguf".to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };

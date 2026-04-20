@@ -740,6 +740,7 @@ pub(crate) fn proto_config_to_mesh(
             mmproj: declared_ref_or_none(m.mmproj_ref.as_ref()).or_else(|| m.mmproj.clone()),
             ctx_size: m.ctx_size,
             gpu_id: m.gpu_id.clone(),
+            parallel: None,
         })
         .collect();
     let plugins = snapshot
@@ -754,7 +755,10 @@ pub(crate) fn proto_config_to_mesh(
         .collect();
     MeshConfig {
         version: Some(snapshot.version),
-        gpu: GpuConfig { assignment },
+        gpu: GpuConfig {
+            assignment,
+            parallel: None,
+        },
         models,
         plugins,
     }

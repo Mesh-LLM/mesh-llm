@@ -3525,12 +3525,14 @@ async fn config_subscribe_rejects_pinned_snapshot_for_older_peer() -> Result<()>
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3621,12 +3623,14 @@ async fn config_subscribe_rejects_pinned_snapshot_for_malformed_peer_version() -
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3715,12 +3719,14 @@ async fn config_subscribe_allows_pinned_snapshot_for_same_release_prerelease_pee
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3888,12 +3894,14 @@ async fn config_subscribe_closes_when_revision_becomes_pinned_for_malformed_peer
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3986,12 +3994,14 @@ async fn config_subscribe_closes_when_revision_becomes_pinned_for_older_peer() -
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -4085,12 +4095,14 @@ async fn config_subscribe_keeps_stream_open_when_revision_becomes_pinned_for_sam
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -4489,12 +4501,14 @@ fn pinned_gpu_runtime_push_rejects_invalid_pushed_pinned_config_before_apply() {
     let config = crate::plugin::MeshConfig {
         gpu: crate::plugin::GpuConfig {
             assignment: crate::plugin::GpuAssignment::Pinned,
+            ..Default::default()
         },
         models: vec![crate::plugin::ModelConfigEntry {
             model: "Qwen3-8B-Q4_K_M".into(),
             mmproj: None,
             ctx_size: Some(8192),
             gpu_id: Some("pci:0000:b3:00.0".into()),
+            parallel: None,
         }],
         ..crate::plugin::MeshConfig::default()
     };
@@ -4528,12 +4542,14 @@ fn pinned_gpu_runtime_push_accepts_valid_pushed_pinned_config() {
     let config = crate::plugin::MeshConfig {
         gpu: crate::plugin::GpuConfig {
             assignment: crate::plugin::GpuAssignment::Pinned,
+            ..Default::default()
         },
         models: vec![crate::plugin::ModelConfigEntry {
             model: "Qwen3-8B-Q4_K_M".into(),
             mmproj: None,
             ctx_size: Some(8192),
             gpu_id: Some("uuid:GPU-123".into()),
+            parallel: None,
         }],
         ..crate::plugin::MeshConfig::default()
     };
@@ -4563,12 +4579,14 @@ fn pinned_gpu_runtime_push_rejects_resolved_gpu_without_backend_device() {
     let config = crate::plugin::MeshConfig {
         gpu: crate::plugin::GpuConfig {
             assignment: crate::plugin::GpuAssignment::Pinned,
+            ..Default::default()
         },
         models: vec![crate::plugin::ModelConfigEntry {
             model: "Qwen3-8B-Q4_K_M".into(),
             mmproj: None,
             ctx_size: Some(8192),
             gpu_id: Some("uuid:GPU-123".into()),
+            parallel: None,
         }],
         ..crate::plugin::MeshConfig::default()
     };

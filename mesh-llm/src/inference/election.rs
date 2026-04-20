@@ -971,6 +971,7 @@ struct MoeElectionParams {
     pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
     target_tx: Arc<watch::Sender<ModelTargets>>,
     stop_rx: watch::Receiver<bool>,
+    slots: usize,
 }
 
 struct StartLlamaParams<'a> {
@@ -988,6 +989,7 @@ struct StartLlamaParams<'a> {
     binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
     pinned_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    slots: usize,
 }
 
 pub struct ElectionLoopParams {
@@ -1009,6 +1011,7 @@ pub struct ElectionLoopParams {
     pub moe_runtime_options: moe::MoeRuntimeOptions,
     pub target_tx: Arc<watch::Sender<ModelTargets>>,
     pub stop_rx: watch::Receiver<bool>,
+    pub slots: usize,
 }
 
 fn spawn_moe_analysis_spinner(
@@ -1516,6 +1519,7 @@ pub async fn election_loop(
         moe_runtime_options,
         target_tx,
         mut stop_rx,
+        slots,
     } = params;
     let mut peer_rx = node.peer_change_rx.clone();
 
@@ -1600,6 +1604,7 @@ pub async fn election_loop(
                     pinned_gpu: pinned_gpu.clone(),
                     target_tx,
                     stop_rx,
+                    slots,
                 },
                 &mut on_change,
                 &mut on_process,
@@ -1823,6 +1828,7 @@ pub async fn election_loop(
                 binary_flavor,
                 ctx_size_override,
                 pinned_gpu: pinned_gpu.as_ref(),
+                slots,
             })
             .await
             {
@@ -1996,6 +2002,7 @@ async fn moe_election_loop(
         pinned_gpu,
         target_tx,
         mut stop_rx,
+        slots,
     } = params;
     let mut peer_rx = node.peer_change_rx.clone();
     let mut currently_running = false;
@@ -2253,6 +2260,7 @@ async fn moe_election_loop(
                     ctx_size_override,
                     total_group_vram: None,
                     selected_gpu: pinned_gpu.as_ref(),
+                    slots,
                 },
             )
             .await
@@ -2360,6 +2368,7 @@ async fn moe_election_loop(
                         ctx_size_override,
                         total_group_vram: None,
                         selected_gpu: pinned_gpu.as_ref(),
+                        slots,
                     },
                 )
                 .await
@@ -2522,6 +2531,7 @@ async fn moe_election_loop(
                     ctx_size_override,
                     total_group_vram: None,
                     selected_gpu: pinned_gpu.as_ref(),
+                    slots,
                 },
             )
             .await
@@ -2739,6 +2749,7 @@ async fn start_llama(
         binary_flavor,
         ctx_size_override,
         pinned_gpu,
+        slots,
     } = params;
     let my_vram = node.vram_bytes();
     let local_launch_vram = effective_local_launch_vram(my_vram, pinned_gpu);
@@ -2896,6 +2907,7 @@ async fn start_llama(
             ctx_size_override,
             total_group_vram: group_vram,
             selected_gpu: pinned_gpu,
+            slots,
         },
     )
     .await

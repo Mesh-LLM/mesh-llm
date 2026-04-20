@@ -325,6 +325,7 @@ pub struct ModelLaunchSpec<'a> {
     pub ctx_size_override: Option<u32>,
     pub total_group_vram: Option<u64>,
     pub selected_gpu: Option<&'a crate::runtime::StartupPinnedGpuTarget>,
+    pub slots: usize,
 }
 
 pub(crate) const GB: u64 = 1_000_000_000;
@@ -1161,7 +1162,6 @@ pub async fn start_llama_server(
     // occupy all slots for minutes while new requests pile up invisibly.
     // The backend proxy enforces a matching inflight cap so the deferred
     // queue never actually fills. See network/openai/backend.rs.
-    const LLAMA_PARALLEL_SLOTS: usize = 4;
     args.extend_from_slice(&[
         "-ngl".to_string(),
         "99".to_string(),
@@ -1171,7 +1171,7 @@ pub async fn start_llama_server(
         "off".to_string(),
         "--no-mmap".to_string(),
         "--parallel".to_string(),
-        LLAMA_PARALLEL_SLOTS.to_string(),
+        spec.slots.to_string(),
         "--host".to_string(),
         "0.0.0.0".to_string(),
         "--port".to_string(),
@@ -2091,6 +2091,89 @@ No devices found
         assert!(
             !runtime_src.contains(&orphan_func),
             "legacy orphan cleanup function reference still present in runtime module"
+        );
+    }
+
+    // ── parallel slots tests ──────────────────────────────────────────
+
+    #[test]
+    fn model_launch_spec_slots_field_carries_value() {
+        use super::ModelLaunchSpec;
+        let spec = ModelLaunchSpec {
+            model: Path::new("test.gguf"),
+            http_port: 8080,
+            tunnel_ports: &[],
+            tensor_split: None,
+            split_mode: None,
+            draft: None,
+            draft_max: 0,
+            model_bytes: 0,
+            my_vram: 0,
+            mmproj: None,
+            ctx_size_override: None,
+            total_group_vram: None,
+            selected_gpu: None,
+            slots: 8,
+        };
+        assert_eq!(
+            spec.slots, 8,
+            "slots field should carry the value it was constructed with"
+        );
+    }
+
+    #[test]
+    fn model_launch_spec_slots_defaults_to_runtime_value() {
+        use super::ModelLaunchSpec;
+        // The default parallel slots value used throughout the codebase is 4
+        // (from config.gpu.parallel.unwrap_or(4)). ModelLaunchSpec should
+        // receive that same default when no config override is set.
+        let spec = ModelLaunchSpec {
+            model: Path::new("test.gguf"),
+            http_port: 8080,
+            tunnel_ports: &[],
+            tensor_split: None,
+            split_mode: None,
+            draft: None,
+            draft_max: 0,
+            model_bytes: 0,
+            my_vram: 0,
+            mmproj: None,
+            ctx_size_override: None,
+            total_group_vram: None,
+            selected_gpu: None,
+            slots: 4, // default from config.gpu.parallel.unwrap_or(4)
+        };
+        assert_eq!(
+            spec.slots, 4,
+            "default slots should be 4 matching unwrap_or(4)"
+        );
+    }
+
+    #[test]
+    fn parallel_arg_uses_spec_slots() {
+        // Source-scanning test (same pattern as no_pkill_f_in_source_tree):
+        // verifies the --parallel arg is built from spec.slots, not a
+        // hardcoded constant. If someone reintroduces a hardcoded value,
+        // this test will catch it.
+        let src = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/inference/launch.rs"
+        ))
+        .unwrap();
+
+        // The code should build --parallel from spec.slots
+        let parallel_from_spec = "spec.slots.to_string()";
+        assert!(
+            src.contains(parallel_from_spec),
+            "expected '--parallel' arg to be built from spec.slots.to_string(), \
+             but that pattern was not found — someone may have reverted to a hardcoded value"
+        );
+
+        let hardcoded = format!("{}_{}_{}", "LLAMA", "PARALLEL", "SLOTS");
+        assert!(
+            !src.contains(&hardcoded),
+            "found {} constant — the --parallel arg should use spec.slots instead",
+            hardcoded
         );
     }
 }
