@@ -1102,9 +1102,9 @@ pub async fn start_llama_server(
         rpc_arg
     );
 
-    let llama_log = runtime.log_path("llama-server");
+let llama_log = runtime.log_path(&format!("llama-server-{}", http_port));
     eprintln!(
-        "⏳ Starting llama-server... (logs: {})",
+        "⏳ Starting llama-server on :{http_port}... (logs: {})",
         llama_log.display()
     );
     let log_file = std::fs::File::create(&llama_log).with_context(|| {
@@ -1407,7 +1407,7 @@ pub async fn start_llama_server(
                 ),
                 runtime_dir: runtime.dir().to_path_buf(),
             };
-            let pidfile_guard = runtime.write_pidfile("llama-server", &metadata)?;
+            let pidfile_guard = runtime.write_pidfile(&format!("llama-server-{}", http_port), &metadata)?;
             let expected_exit = Arc::new(AtomicBool::new(false));
             let handle = InferenceServerHandle {
                 pid,
@@ -1417,7 +1417,7 @@ pub async fn start_llama_server(
                 _pidfile_guard: Some(pidfile_guard),
             };
             let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-            let pidfile_path = runtime.pidfile_path("llama-server");
+            let pidfile_path = runtime.pidfile_path(&format!("llama-server-{}", http_port));
             tokio::spawn(async move {
                 let _ = child.wait().await;
                 let _ = std::fs::remove_file(&pidfile_path);
