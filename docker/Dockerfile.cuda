@@ -44,6 +44,7 @@ COPY mesh-llm/src/ mesh-llm/src/
 COPY mesh-llm/plugin/src/ mesh-llm/plugin/src/
 COPY tools/xtask/Cargo.toml tools/xtask/Cargo.toml
 COPY tools/xtask/src/ tools/xtask/src/
+COPY . .
 RUN mkdir -p mesh-llm/ui/dist && echo '<html></html>' > mesh-llm/ui/dist/index.html
 RUN cargo chef prepare --recipe-path recipe.json
 RUN --mount=type=cache,target=/root/.cargo/registry \
@@ -53,6 +54,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 
 FROM rust-deps AS rust-builder
 WORKDIR /src
+COPY . .
 RUN rm -rf mesh-llm/ui/dist
 COPY --from=ui-builder /app/dist mesh-llm/ui/dist
 # Restore real build scripts (cargo-chef stubs them during cook)
