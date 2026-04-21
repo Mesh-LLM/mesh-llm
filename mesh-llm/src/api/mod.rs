@@ -29,7 +29,9 @@ mod routes;
 mod state;
 mod status;
 
-pub use self::state::{MeshApi, RuntimeControlRequest, RuntimeModelPayload, RuntimeProcessPayload};
+pub use self::state::{
+    MeshApi, PublicationState, RuntimeControlRequest, RuntimeModelPayload, RuntimeProcessPayload,
+};
 pub(crate) use self::status::classify_runtime_error;
 
 use self::assets::{respond_console_asset, respond_console_index};
@@ -245,6 +247,7 @@ impl MeshApi {
                     .map(|s| s.to_string())
                     .collect(),
                 nostr_discovery: false,
+                publication_state: state::PublicationState::Private,
                 runtime_control: None,
                 local_processes: Vec::new(),
                 sse_clients: Vec::new(),
@@ -282,6 +285,10 @@ impl MeshApi {
 
     pub async fn set_nostr_discovery(&self, v: bool) {
         self.inner.lock().await.nostr_discovery = v;
+    }
+
+    pub async fn set_publication_state(&self, state: state::PublicationState) {
+        self.inner.lock().await.publication_state = state;
     }
 
     pub async fn local_instances_handle(
@@ -826,6 +833,7 @@ impl MeshApi {
             mesh_name,
             latest_version,
             nostr_discovery,
+            publication_state,
             local_processes,
             local_instances_arc,
             wakeable_inventory,
@@ -851,6 +859,7 @@ impl MeshApi {
                 inner.mesh_name.clone(),
                 inner.latest_version.clone(),
                 inner.nostr_discovery,
+                inner.publication_state,
                 inner.local_processes.clone(),
                 inner.local_instances.clone(),
                 inner.wakeable_inventory.clone(),
@@ -995,6 +1004,7 @@ impl MeshApi {
             mesh_id,
             mesh_name,
             nostr_discovery,
+            publication_state: publication_state.as_str().into(),
             my_hostname: node.hostname.clone(),
             my_is_soc: node.is_soc,
             gpus: {

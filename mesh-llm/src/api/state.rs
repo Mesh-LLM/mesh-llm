@@ -1,9 +1,39 @@
 use crate::mesh;
 use crate::network::affinity;
 use crate::plugin;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// Truthful publication state for mesh nodes (Issue #240).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PublicationState {
+    /// No --publish requested; mesh is private.
+    Private,
+    /// --publish succeeded; mesh is discoverable on Nostr.
+    Public,
+    /// --publish was requested but first publish attempt failed.
+    PublishFailed,
+}
+
+impl PublicationState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PublicationState::Private => "private",
+            PublicationState::Public => "public",
+            PublicationState::PublishFailed => "publish_failed",
+        }
+    }
+}
+
+impl Serialize for PublicationState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
 
 pub enum RuntimeControlRequest {
     Load {
@@ -56,6 +86,7 @@ pub(super) struct ApiInner {
     pub(super) latest_version: Option<String>,
     pub(super) nostr_relays: Vec<String>,
     pub(super) nostr_discovery: bool,
+    pub(super) publication_state: PublicationState,
     pub(super) runtime_control: Option<tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>>,
     pub(super) local_processes: Vec<RuntimeProcessPayload>,
     pub(super) sse_clients: Vec<tokio::sync::mpsc::UnboundedSender<String>>,

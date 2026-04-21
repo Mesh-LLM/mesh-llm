@@ -325,15 +325,21 @@ pub(crate) async fn run() -> Result<()> {
         }
     }
 
-    // Auto-enable publishing when mesh is named
+    // Publication intent is now explicit only: --publish gates Nostr discovery.
+    // --mesh-name alone never implies publication (Issue #240).
+
+    // Warn users who used to rely on --mesh-name auto-publishing
     if cli.mesh_name.is_some() && !cli.publish {
-        cli.publish = true;
+        eprintln!(
+            "ℹ️  Mesh named '{}' — private by default. Add --publish to make it publicly discoverable.",
+            cli.mesh_name.as_ref().unwrap()
+        );
     }
 
     // --- Public-to-private identity transition ---
-    // If the previous run was public (--auto / --publish / --mesh-name) but this
-    // run is private, clear the stored identity so the private mesh gets a fresh
-    // key that isn't associated with the old public listing.
+    // If the previous run was public (--auto or --publish) but this run is
+    // private, clear the stored identity so the private mesh gets a fresh key
+    // that isn't associated with the old public listing.
     let is_public = cli.auto || cli.publish;
     if is_public {
         mesh::mark_was_public();
@@ -2234,24 +2240,43 @@ async fn run_auto(
 
     // Nostr publish loop (if --publish) or watchdog (if --auto, to take over if publisher dies)
     let nostr_publisher = if cli.publish {
-        let nostr_keys = nostr::load_or_create_keys()?;
-        let relays = nostr_relays(&cli.nostr_relay);
-        let pub_node = node.clone();
-        let pub_name = cli.mesh_name.clone();
-        let pub_region = cli.region.clone();
-        let pub_max_clients = cli.max_clients;
-        Some(tokio::spawn(async move {
-            nostr::publish_loop(
-                pub_node,
-                nostr_keys,
-                relays,
-                pub_name,
-                pub_region,
-                pub_max_clients,
-                60,
-            )
-            .await;
-        }))
+        match nostr::load_or_create_keys() {
+            Ok(nostr_keys) => {
+                if let Some(ref cs) = console_state {
+                    cs.set_publication_state(api::PublicationState::Public)
+                        .await;
+                }
+                let relays = nostr_relays(&cli.nostr_relay);
+                let pub_node = node.clone();
+                let pub_name = cli.mesh_name.clone();
+                let pub_region = cli.region.clone();
+                let pub_max_clients = cli.max_clients;
+                Some(tokio::spawn(async move {
+                    nostr::publish_loop(
+                        pub_node,
+                        nostr_keys,
+                        relays,
+                        pub_name,
+                        pub_region,
+                        pub_max_clients,
+                        60,
+                    )
+                    .await;
+                }))
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Publishing to Nostr failed: {e}.\n\
+                     Mesh is running privately — add --publish after fixing the issue to make discoverable."
+                );
+                tracing::warn!("Nostr publish failed: {e}");
+                if let Some(ref cs) = console_state {
+                    cs.set_publication_state(api::PublicationState::PublishFailed)
+                        .await;
+                }
+                None
+            }
+        }
     } else if cli.auto {
         // Watchdog: if we joined via --auto, watch for the publisher to die and take over
         let relays = nostr_relays(&cli.nostr_relay);
@@ -3808,6 +3833,110 @@ mod tests {
         assert_eq!(
             slots_second, 2,
             "model-specific parallel=2 should win over global gpu.parallel=3"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Publication-state matrix (Issue #240)
+    // ---------------------------------------------------------------------------
+
+    /// Helper to build a minimal `Cli` for publication-state tests.
+    fn make_cli(args: &[&str]) -> crate::cli::Cli {
+        crate::cli::Cli::try_parse_from(args).unwrap()
+    }
+
+    #[test]
+    fn mesh_name_does_not_force_publish() {
+        let cli = make_cli(&[
+            "mesh-llm",
+            "--model",
+            "dummy-model",
+            "--mesh-name",
+            "my-mesh",
+        ]);
+        assert!(!cli.publish, "mesh_name alone must not set publish");
+        assert_eq!(cli.mesh_name.as_deref(), Some("my-mesh"));
+    }
+
+    #[test]
+    fn explicit_publish_remains_enabled() {
+        let cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
+        assert!(
+            cli.publish,
+            "explicit --publish must set publish=true even without mesh_name"
+        );
+    }
+
+    #[test]
+    fn publish_with_mesh_name_is_public_and_named() {
+        let cli = make_cli(&[
+            "mesh-llm",
+            "--model",
+            "dummy-model",
+            "--publish",
+            "--mesh-name",
+            "named-public",
+        ]);
+        assert!(cli.publish, "publish + mesh_name must keep publish=true");
+        assert_eq!(
+            cli.mesh_name.as_deref(),
+            Some("named-public"),
+            "mesh_name must be preserved alongside publish"
+        );
+    }
+
+    #[test]
+    fn auto_without_publish_stays_private() {
+        let cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--auto"]);
+        assert!(!cli.publish, "--auto alone must not imply publish");
+        assert!(cli.auto, "--auto flag should still be true");
+    }
+
+    /// Task 2: Named private mesh keeps private identity (no implicit publish).
+    #[test]
+    fn named_private_mesh_keeps_private_identity() {
+        // A named mesh without --publish must have publish=false.
+        // The is_public gate in runtime startup uses `cli.auto || cli.publish`,
+        // so a named-only mesh should NOT trigger public identity handling.
+        let cli = make_cli(&[
+            "mesh-llm",
+            "--model",
+            "dummy-model",
+            "--mesh-name",
+            "private-named",
+        ]);
+        assert!(!cli.publish);
+        assert!(!cli.auto);
+        let is_public = cli.auto || cli.publish;
+        assert!(
+            !is_public,
+            "named-only mesh must be treated as private for identity purposes"
+        );
+    }
+
+    /// Task 3: start_new_mesh helper does not auto-enable publish.
+    #[test]
+    fn start_new_mesh_does_not_auto_enable_publish() {
+        use crate::runtime::discovery::start_new_mesh;
+        let mut cli = make_cli(&["mesh-llm", "--model", "dummy-model"]);
+        assert!(!cli.publish, "precondition: publish starts false");
+        start_new_mesh(&mut cli, &["dummy-model".to_string()], 16.0, false);
+        assert!(
+            !cli.publish,
+            "start_new_mesh must NOT set publish=true when it was not requested"
+        );
+    }
+
+    /// Task 3: Explicit --publish survives start_new_mesh unchanged.
+    #[test]
+    fn start_new_mesh_preserves_explicit_publish() {
+        use crate::runtime::discovery::start_new_mesh;
+        let mut cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
+        assert!(cli.publish, "precondition: publish is true");
+        start_new_mesh(&mut cli, &["dummy-model".to_string()], 16.0, false);
+        assert!(
+            cli.publish,
+            "explicit --publish must survive start_new_mesh call"
         );
     }
 }
