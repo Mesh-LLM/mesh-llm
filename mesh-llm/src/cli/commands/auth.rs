@@ -527,7 +527,7 @@ pub(crate) const RUN_ROTATE_NODE: RunRotateNodeFn =
             save_trust_store(&trust_store_path, &trust_store)?;
         }
 
-        let new_key = SecretKey::generate(&mut rand::rng());
+        let new_key = SecretKey::generate();
         save_node_key_to_path(&node_key_path, &new_key)?;
 
         eprintln!("Node key rotated at {}", node_key_path.display());

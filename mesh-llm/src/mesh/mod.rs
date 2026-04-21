@@ -1255,7 +1255,7 @@ impl Node {
         let secret_key = if matches!(role, NodeRole::Client)
             || std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok()
         {
-            let key = SecretKey::generate(&mut rand::rng());
+            let key = SecretKey::generate();
             tracing::info!("Using ephemeral key (unique identity)");
             key
         } else {
@@ -1268,7 +1268,7 @@ impl Node {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(1024u32.into())
             .build();
-        let mut builder = Endpoint::empty_builder()
+        let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .secret_key(secret_key)
             .alpns(vec![ALPN_V1.to_vec()])
             .transport_config(transport_config);
@@ -1286,10 +1286,7 @@ impl Node {
             // Two iroh relays: US West (primary) and Asia-Pacific South (fallback).
             let configs: Vec<RelayConfig> = urls
                 .iter()
-                .map(|url| RelayConfig {
-                    url: url.parse().expect("invalid relay URL"),
-                    quic: None,
-                })
+                .map(|url| RelayConfig::new(url.parse().expect("invalid relay URL"), None))
                 .collect();
             let relay_map = RelayMap::from_iter(configs);
             tracing::info!("Relay: {:?}", urls);
@@ -1487,8 +1484,8 @@ impl Node {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(1024u32.into())
             .build();
-        let endpoint = Endpoint::empty_builder()
-            .secret_key(SecretKey::generate(&mut rand::rng()))
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(SecretKey::generate())
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(iroh::endpoint::RelayMode::Disabled)
             .transport_config(transport_config)
@@ -4116,7 +4113,7 @@ async fn load_or_create_key() -> Result<SecretKey> {
         return Ok(key);
     }
 
-    let key = SecretKey::generate(&mut rand::rng());
+    let key = SecretKey::generate();
     save_node_key_to_path(&key_path, &key)?;
     tracing::info!("Generated new key, saved to {}", key_path.display());
     Ok(key)
