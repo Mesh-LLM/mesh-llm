@@ -1102,7 +1102,7 @@ pub async fn start_llama_server(
         rpc_arg
     );
 
-let llama_log = runtime.log_path(&format!("llama-server-{}", http_port));
+    let llama_log = runtime.log_path(&format!("llama-server-{}", http_port));
     eprintln!(
         "⏳ Starting llama-server on :{http_port}... (logs: {})",
         llama_log.display()
@@ -1407,7 +1407,8 @@ let llama_log = runtime.log_path(&format!("llama-server-{}", http_port));
                 ),
                 runtime_dir: runtime.dir().to_path_buf(),
             };
-            let pidfile_guard = runtime.write_pidfile(&format!("llama-server-{}", http_port), &metadata)?;
+            let pidfile_guard =
+                runtime.write_pidfile(&format!("llama-server-{}", http_port), &metadata)?;
             let expected_exit = Arc::new(AtomicBool::new(false));
             let handle = InferenceServerHandle {
                 pid,
