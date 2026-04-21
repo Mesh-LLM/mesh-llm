@@ -3,6 +3,7 @@
 //! Endpoints:
 //!   GET  /api/status    — live mesh state plus local-only routing metrics (JSON)
 //!   GET  /api/models    — mesh model inventory plus local-only routing metrics (JSON)
+//!   GET  /api/search    — catalog or Hugging Face model search with canonical refs (JSON)
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON)
 //!   GET  /api/runtime/processes — local inference process state (JSON)
@@ -2457,6 +2458,79 @@ mod tests {
         assert!(models_body.get("mesh_models").is_some());
 
         models_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_catalog_returns_canonical_model_refs() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?q=Qwen3-Coder-Next&catalog=true&artifact=gguf&limit=5&sort=trending HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let payload = json_body(&response);
+        assert_eq!(payload["source"], json!("catalog"));
+        assert_eq!(payload["artifact"], json!("gguf"));
+        assert_eq!(payload["limit"], json!(5));
+        let results = payload["results"].as_array().cloned().unwrap_or_default();
+        assert!(
+            !results.is_empty(),
+            "expected at least one catalog result for Qwen3-Coder-Next"
+        );
+        let hit = results
+            .into_iter()
+            .find(|entry| entry["model_ref"] == json!("Qwen3-Coder-Next-Q4_K_M"))
+            .expect("canonical catalog model ref present");
+        assert_eq!(hit["repo_id"], json!("Qwen/Qwen3-Coder-Next-GGUF"));
+        assert_eq!(hit["kind"], json!("gguf"));
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_requires_q_query_parameter() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?catalog=true HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 400"));
+        let payload = json_body(&response);
+        assert_eq!(
+            payload["error"],
+            json!("Missing required 'q' query parameter")
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_rejects_invalid_sort_value() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?q=qwen&sort=random HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 400"));
+        let payload = json_body(&response);
+        assert_eq!(
+            payload["error"],
+            json!("Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, most-parameters, least-parameters")
+        );
+
+        handle.abort();
     }
 
     #[test]
