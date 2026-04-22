@@ -404,13 +404,23 @@ fn format_opencode_config_ordered(
         lines.push(indent(3) + "\"models\": {");
         for (i, (model_name, model_obj)) in model_map.iter().enumerate() {
             let comma = if i < model_map.len() - 1 { "," } else { "" };
-            let obj_lines: Vec<String> = vec![format!(
-                "{}\"{}\": {}",
-                indent(4),
-                model_name,
-                serde_json::to_string(model_obj).unwrap()
-            )];
-            lines.extend(obj_lines);
+
+            // Format each model object with name first, then limit (if present)
+            let mut model_lines = Vec::new();
+            model_lines.push(format!("{}\"{}\": {{", indent(4), model_name));
+
+            // Add fields in order: name, then limit
+            if let Some(name_val) = model_obj.get("name") {
+                let name_str = serde_json::to_string(name_val).unwrap();
+                model_lines.push(format!("{}\"name\": {},", indent(5), name_str));
+            }
+            if let Some(limit_val) = model_obj.get("limit") {
+                let limit_str = serde_json::to_string(limit_val).unwrap();
+                model_lines.push(format!("{}\"limit\": {}", indent(5), limit_str));
+            }
+
+            model_lines.push(format!("{}}}", indent(4)));
+            lines.extend(model_lines);
             if !comma.is_empty() {
                 let _ = lines.last_mut().map(|s| *s = format!("{},", s));
             }
