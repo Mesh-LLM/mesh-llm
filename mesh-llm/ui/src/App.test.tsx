@@ -1,5 +1,89 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+
+vi.mock("./components/ui/select", async () => {
+  const React = await import("react");
+
+  function MockSelectItem(_props: { value: string; children: React.ReactNode }) {
+    return null;
+  }
+
+  function collectItems(children: React.ReactNode): Array<{ value: string; label: string }> {
+    const items: Array<{ value: string; label: string }> = [];
+
+    React.Children.forEach(children, (child) => {
+      if (!React.isValidElement(child)) return;
+
+      if (child.type === MockSelectItem) {
+        items.push({
+          value: child.props.value as string,
+          label: String(child.props.children),
+        });
+        return;
+      }
+
+      if (child.props && "children" in child.props) {
+        items.push(...collectItems(child.props.children));
+      }
+    });
+
+    return items;
+  }
+
+  const SelectContext = React.createContext<{
+    value?: string;
+    onValueChange?: (value: string) => void;
+    items: Array<{ value: string; label: string }>;
+  } | null>(null);
+
+  function Select({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value?: string;
+    onValueChange?: (value: string) => void;
+    children: React.ReactNode;
+  }) {
+    const items = collectItems(children);
+
+    return (
+      <SelectContext.Provider value={{ value, onValueChange, items }}>
+        {children}
+      </SelectContext.Provider>
+    );
+  }
+
+  function SelectTrigger({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+    const context = React.useContext(SelectContext);
+
+    return (
+      <select
+        {...props}
+        className={className}
+        value={context?.value ?? ""}
+        onChange={(event) => context?.onValueChange?.(event.target.value)}
+      >
+        {context?.items.map((item) => (
+          <option key={item.value} value={item.value}>
+            {item.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return {
+    Select,
+    SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    SelectGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    SelectItem: MockSelectItem,
+    SelectLabel: () => null,
+    SelectSeparator: () => null,
+    SelectTrigger,
+    SelectValue: () => null,
+  };
+});
 
 import {
   App,
@@ -8,6 +92,7 @@ import {
   describeImageAttachmentForPrompt,
   describeRenderedPagesAsText,
 } from "./App";
+import type { StatusPayload } from "./features/app-shell/lib/status-types";
 
 function buildProps(
   overrides: Partial<Parameters<typeof ChatPage>[0]> = {},
@@ -16,7 +101,8 @@ function buildProps(
     status: {
       node_id: "node-1",
       token: "invite-token",
-      node_status: "host",
+      node_state: "serving",
+      node_status: "Serving",
       is_host: true,
       is_client: false,
       llama_ready: true,
@@ -78,12 +164,13 @@ function buildProps(
   };
 }
 
-const statusTemplate = {
+const statusTemplate: StatusPayload = {
   version: "1.0.0",
   latest_version: null,
   node_id: "node-1",
   token: "token-123",
-  node_status: "Host",
+  node_state: "serving",
+  node_status: "Serving",
   is_host: true,
   is_client: false,
   llama_ready: true,
@@ -100,8 +187,9 @@ const statusTemplate = {
   peers: [],
   inflight_requests: 0,
   nostr_discovery: false,
+  publication_state: "private" as const,
   my_hostname: "host.local",
-  gpus: [] as unknown[],
+  gpus: [],
 };
 
 let statusPayload = createStatusPayload();
@@ -115,8 +203,8 @@ function createStatusPayload() {
     models: [] as typeof statusTemplate.models,
     available_models: [] as typeof statusTemplate.available_models,
     requested_models: [] as typeof statusTemplate.requested_models,
-    serving_models: [...statusTemplate.serving_models],
-    hosted_models: [...statusTemplate.hosted_models],
+    serving_models: [...(statusTemplate.serving_models ?? [])],
+    hosted_models: [...(statusTemplate.hosted_models ?? [])],
     gpus: [] as typeof statusTemplate.gpus,
   };
 }
@@ -197,6 +285,19 @@ beforeAll(() => {
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
+  });
+
+  Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", {
+    configurable: true,
+    value: vi.fn(() => false),
+  });
+  Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+    configurable: true,
+    value: vi.fn(),
+  });
+  Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", {
+    configurable: true,
+    value: vi.fn(),
   });
 });
 
@@ -453,6 +554,43 @@ describe("App routing and status", () => {
     await screen.findByText("Mesh LLM v1.0.0");
   });
 
+  it("renders dashboard live-state labels from node_state and peer state", async () => {
+    statusPayload = {
+      ...createStatusPayload(),
+      node_state: "loading",
+      node_status: "Serving",
+      is_host: false,
+      llama_ready: false,
+      model_name: "",
+      hosted_models: [],
+      serving_models: [],
+      peers: [
+        {
+          id: "peer-standby",
+          role: "Host",
+          state: "standby",
+          models: [],
+          available_models: [],
+          requested_models: [],
+          serving_models: [],
+          hosted_models: [],
+          hosted_models_known: true,
+          vram_gb: 16,
+          rtt_ms: 18,
+          hostname: "peer-host.local",
+        },
+      ],
+    };
+
+    setPath("/dashboard");
+    render(<App />);
+
+    expect((await screen.findAllByText("Loading")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Standby")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Host")).toBeInTheDocument();
+    expect(screen.queryAllByText("Serving")).toHaveLength(0);
+  });
+
   it("keeps client chat disabled until /api/models reports a warm model", async () => {
     statusPayload = {
       ...createStatusPayload(),
@@ -476,6 +614,22 @@ describe("App routing and status", () => {
     expect(input).toHaveAttribute("placeholder", "Waiting for a warm model...");
     expect(screen.getByTestId("chat-send")).toBeDisabled();
   });
+
+
+  it("ignores the global command-bar shortcut when focus is inside the chat input", async () => {
+    statusPayload = createStatusPayload();
+    setPath("/chat");
+
+    render(<App />);
+
+    const chatInput = await screen.findByTestId("chat-input");
+    chatInput.focus();
+
+    fireEvent.keyDown(chatInput, { key: "k", metaKey: true });
+
+    expect(screen.queryByRole("dialog", { name: "Switch models" })).not.toBeInTheDocument();
+    expect(chatInput).toHaveFocus();
+  });
 });
 
 describe("describeRenderedPagesAsText", () => {
@@ -487,18 +641,21 @@ describe("describeRenderedPagesAsText", () => {
           combinedText: string;
           description: string;
           ocrText: string;
+          objects: string[];
         }>
       >()
       .mockResolvedValueOnce({
         combinedText: "First page OCR",
         description: "First page OCR",
         ocrText: "First page OCR",
+        objects: [],
       })
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce({
         combinedText: "",
         description: "",
         ocrText: "",
+        objects: [],
       });
 
     const text = await describeRenderedPagesAsText(
@@ -534,6 +691,7 @@ describe("describeImageAttachmentForPrompt", () => {
       combinedText: "A cat on a chair",
       description: "A cat on a chair",
       ocrText: "",
+      objects: [],
     });
 
     const result = await describeImageAttachmentForPrompt(

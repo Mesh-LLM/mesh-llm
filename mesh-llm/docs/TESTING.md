@@ -88,6 +88,20 @@ mesh-llm serve --model Qwen2.5-3B --console
 - Console: `host=true, peers=0`
 - llama-server has 1 RPC entry (self)
 
+### 1a. Headless mode (API-only, no embedded UI)
+
+```bash
+mesh-llm serve --model Qwen2.5-3B --headless --console 3131
+```
+
+- API on `:9337`, management API on `:3131`
+- `GET /api/status` returns 200 with normal JSON
+- `GET /` returns 404 (web console routes are disabled)
+- `GET /dashboard`, `GET /chat`, and `/assets/*` also return 404
+- The management API (`/api/*`) remains fully accessible
+
+This mode is intended for headless server deployments where the embedded web UI is not needed.
+
 ### 2. Two GPU nodes, model fits on host
 
 ```bash
@@ -162,7 +176,7 @@ mesh-llm serve --join <TOKEN>
 ```
 
 - Joiner scans the Hugging Face cache and picks an unserved model already on disk
-- Log: "Assigned to serve GLM-4.7-Flash (needed by mesh, already on disk)"
+- Log: "Selected to serve GLM-4.7-Flash (needed by mesh, already on disk)"
 
 ### 8. Lite client with multi-model
 
@@ -216,6 +230,20 @@ curl -X DELETE localhost:3131/api/runtime/models/Llama-3.2-1B-Instruct-Q4_K_M
 - Dropdown appears when >1 warm model
 - Switching models highlights the serving node in topology view
 - Chat routes to selected model via API proxy
+
+### 11. Console live-state and wakeable capacity
+
+```bash
+cd mesh-llm/ui/
+npm run test:run
+npm run typecheck
+just build
+```
+
+- Live badges show only `Client`, `Standby`, `Loading`, and `Serving`
+- Wakeable capacity renders in a separate section from topology peers and live nodes
+- Wakeable entries do not appear in the topology peer list
+- Validation uses `npm run test:run`, `npm run typecheck`, and `just build`
 
 ## Mesh Identity
 
@@ -310,11 +338,13 @@ mesh-llm serve --auto
 # After serving:
 curl localhost:3131/api/status   # JSON: node, peers, routing, mesh_id, mesh_name
 curl localhost:3131/api/events   # SSE stream
+curl 'localhost:3131/api/search?q=qwen&catalog=true&artifact=gguf&limit=5' # JSON search results
 curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 ```
 
 - `/api/status` includes `mesh_id` and `mesh_name`
 - SSE events push every 2s and on topology changes
+- `/api/search` returns 200 JSON with canonical model refs for matching results
 - Discover results can be matched to current mesh by `mesh_id`
 
 ### 24. HTTP proxy single-request connection contract

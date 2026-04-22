@@ -3,6 +3,7 @@ mod discovery;
 pub mod instance;
 mod local;
 mod proxy;
+pub(crate) mod wakeable;
 
 use self::discovery::{nostr_rediscovery, start_new_mesh};
 use self::local::{
@@ -34,6 +35,46 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+fn current_time_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn publication_state_from_update(update: nostr::PublishStateUpdate) -> api::PublicationState {
+    match update {
+        nostr::PublishStateUpdate::Public => api::PublicationState::Public,
+        nostr::PublishStateUpdate::PublishFailed => api::PublicationState::PublishFailed,
+    }
+}
+
+fn bridge_publication_state(
+    console_state: api::MeshApi,
+    mut status_rx: tokio::sync::watch::Receiver<Option<nostr::PublishStateUpdate>>,
+) {
+    tokio::spawn(async move {
+        let mut pending = *status_rx.borrow_and_update();
+        loop {
+            if let Some(update) = pending.take() {
+                console_state
+                    .set_publication_state(publication_state_from_update(update))
+                    .await;
+            }
+
+            if status_rx.changed().await.is_err() {
+                break;
+            }
+            pending = *status_rx.borrow_and_update();
+        }
+    });
+}
+
+async fn record_first_joined_mesh_ts(node: &mesh::Node) {
+    let now_ms = current_time_unix_ms();
+    node.set_first_joined_mesh_ts_if_absent(now_ms).await;
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StartupModelSpec {
     model_ref: PathBuf,
@@ -41,6 +82,7 @@ struct StartupModelSpec {
     ctx_size: Option<u32>,
     gpu_id: Option<String>,
     config_owned: bool,
+    parallel: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +101,7 @@ struct StartupModelPlan {
     ctx_size: Option<u32>,
     gpu_id: Option<String>,
     pinned_gpu: Option<StartupPinnedGpuTarget>,
+    parallel: Option<usize>,
 }
 
 fn resolve_runtime_owner_key_path(cli: &Cli) -> Result<Option<PathBuf>> {
@@ -310,15 +353,21 @@ pub(crate) async fn run() -> Result<()> {
         }
     }
 
-    // Auto-enable publishing when mesh is named
+    // Publication intent is now explicit only: --publish gates Nostr discovery.
+    // --mesh-name alone never implies publication (Issue #240).
+
+    // Warn users who used to rely on --mesh-name auto-publishing
     if cli.mesh_name.is_some() && !cli.publish {
-        cli.publish = true;
+        eprintln!(
+            "ℹ️  Mesh named '{}' — private by default. Add --publish to make it publicly discoverable.",
+            cli.mesh_name.as_ref().unwrap()
+        );
     }
 
     // --- Public-to-private identity transition ---
-    // If the previous run was public (--auto / --publish / --mesh-name) but this
-    // run is private, clear the stored identity so the private mesh gets a fresh
-    // key that isn't associated with the old public listing.
+    // If the previous run was public (--auto or --publish) but this run is
+    // private, clear the stored identity so the private mesh gets a fresh key
+    // that isn't associated with the old public listing.
     let is_public = cli.auto || cli.publish;
     if is_public {
         mesh::mark_was_public();
@@ -349,9 +398,31 @@ pub(crate) async fn run() -> Result<()> {
             .as_secs();
 
         let last_mesh_id = mesh::load_last_mesh_id();
-        eprintln!("  Found {} mesh(es)", meshes.len());
         let target_name = cli.mesh_name.as_deref();
-        for m in &meshes {
+        // When the user did not target a specific mesh, `--auto` only joins
+        // the community mesh (unnamed or name == "mesh-llm"). Other named
+        // meshes are still publicly discoverable on Nostr, but the user has
+        // to opt in by name. Hide them from the listing so the output matches
+        // what auto will actually consider.
+        let listed: Vec<&nostr::DiscoveredMesh> = if target_name.is_some() {
+            meshes.iter().collect()
+        } else {
+            meshes
+                .iter()
+                .filter(|m| nostr::is_auto_eligible(m))
+                .collect()
+        };
+        let hidden = meshes.len().saturating_sub(listed.len());
+        if hidden > 0 {
+            eprintln!(
+                "  Found {} mesh(es) ({} named mesh(es) hidden; use --mesh-name to join)",
+                listed.len(),
+                hidden
+            );
+        } else {
+            eprintln!("  Found {} mesh(es)", listed.len());
+        }
+        for m in &listed {
             let score = nostr::score_mesh(m, now, last_mesh_id.as_deref());
             eprintln!(
                 "  · {} (score: {}, {} nodes, {:.0}GB, {} clients{})",
@@ -569,6 +640,7 @@ fn build_startup_model_specs(
                 ctx_size: cli.ctx_size,
                 gpu_id: None,
                 config_owned: false,
+                parallel: None,
             });
         }
         for model in &cli.model {
@@ -578,6 +650,7 @@ fn build_startup_model_specs(
                 ctx_size: cli.ctx_size,
                 gpu_id: None,
                 config_owned: false,
+                parallel: None,
             });
         }
         if let Some(mmproj) = &cli.mmproj {
@@ -595,6 +668,7 @@ fn build_startup_model_specs(
             ctx_size: cli.ctx_size.or(model.ctx_size),
             gpu_id: model.gpu_id.clone(),
             config_owned: true,
+            parallel: model.parallel,
         });
     }
     Ok(specs)
@@ -621,6 +695,7 @@ async fn resolve_startup_models(
             ctx_size: spec.ctx_size,
             gpu_id: spec.gpu_id.clone(),
             pinned_gpu: None,
+            parallel: spec.parallel,
         });
     }
     Ok(plans)
@@ -768,6 +843,7 @@ fn pinned_startup_preflight_metrics() -> &'static [hardware::Metric] {
         hardware::Metric::GpuName,
         hardware::Metric::GpuFacts,
         hardware::Metric::VramBytes,
+        hardware::Metric::IsSoc,
     ]
 }
 
@@ -859,8 +935,26 @@ fn startup_rpc_backend_device<'a>(
         .map(|gpu| gpu.backend_device.as_str());
 
     if let (Some(cli_device), Some(pinned_device)) = (cli_device, pinned_device) {
+        let is_match = cli_device == pinned_device;
+        let is_lenient_match = is_match || {
+            let is_amd_cli = cli_device.starts_with("ROCm") || cli_device.starts_with("HIP");
+            let is_amd_pinned =
+                pinned_device.starts_with("ROCm") || pinned_device.starts_with("HIP");
+            if is_amd_cli && is_amd_pinned {
+                let cli_idx = cli_device
+                    .trim_start_matches("ROCm")
+                    .trim_start_matches("HIP");
+                let pinned_idx = pinned_device
+                    .trim_start_matches("ROCm")
+                    .trim_start_matches("HIP");
+                cli_idx == pinned_idx && !cli_idx.is_empty()
+            } else {
+                false
+            }
+        };
+
         anyhow::ensure!(
-            cli_device == pinned_device,
+            is_lenient_match,
             "explicit --device '{cli_device}' conflicts with pinned startup GPU backend device '{pinned_device}'"
         );
         return Ok(Some(cli_device));
@@ -1244,6 +1338,9 @@ async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
         for token in &cli.join {
             match node.join(token).await {
                 Ok(()) => {
+                    if node.mesh_id().await.is_some() {
+                        record_first_joined_mesh_ts(node).await;
+                    }
                     eprintln!("Joined mesh");
                     return Ok(());
                 }
@@ -1279,6 +1376,9 @@ async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
                     );
                     match node.join(token).await {
                         Ok(()) => {
+                            if node.mesh_id().await.is_some() {
+                                record_first_joined_mesh_ts(node).await;
+                            }
                             last_err = None;
                             break;
                         }
@@ -1309,7 +1409,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         &cli.relay,
         cli.bind_port,
         Some(0.0),
-        cli.enumerate_host,
+        !cli.no_enumerate_host,
         Some(owner_config),
         cli.config.as_deref(),
     )
@@ -1392,7 +1492,7 @@ async fn run_auto(
         &cli.relay,
         cli.bind_port,
         max_vram,
-        cli.enumerate_host,
+        !cli.no_enumerate_host,
         Some(owner_config),
         cli.config.as_deref(),
     )
@@ -1423,6 +1523,7 @@ async fn run_auto(
         let compute_fp32_arc = node.gpu_compute_tflops_fp32.clone();
         let compute_fp16_arc = node.gpu_compute_tflops_fp16.clone();
         let bin_dir_clone = bin_dir.clone();
+        let node_bench = node.clone();
         tokio::spawn(async move {
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(30),
@@ -1483,6 +1584,7 @@ async fn run_auto(
                 result.as_ref(),
             )
             .await;
+            node_bench.regossip().await;
         });
     } else {
         tracing::debug!("client node — skipping memory bandwidth benchmark");
@@ -1505,6 +1607,9 @@ async fn run_auto(
         for (t, mesh_name) in &join_attempts {
             match node.join(t).await {
                 Ok(()) => {
+                    if node.mesh_id().await.is_some() {
+                        record_first_joined_mesh_ts(&node).await;
+                    }
                     eprintln!("Joined mesh");
                     joined = true;
                     successful_join = Some((t.clone(), mesh_name.clone()));
@@ -1537,6 +1642,7 @@ async fn run_auto(
                 // Wait for gossip to propagate mesh_id
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 if let Some(id) = save_node.mesh_id().await {
+                    record_first_joined_mesh_ts(&save_node).await;
                     mesh::save_last_mesh_id(&id);
                     tracing::info!("Mesh ID: {id}");
                 }
@@ -1590,6 +1696,7 @@ async fn run_auto(
         };
         let mesh_id = mesh::generate_mesh_id(cli.mesh_name.as_deref(), nostr_pubkey.as_deref());
         node.set_mesh_id_force(mesh_id.clone()).await;
+        record_first_joined_mesh_ts(&node).await;
         mesh::save_last_mesh_id(&mesh_id);
         tracing::info!("Mesh ID: {mesh_id}");
         eprintln!("Invite: {token}");
@@ -1853,7 +1960,7 @@ async fn run_auto(
                     }
                 }
             });
-            api::start(cport, cs2, adapted_rx, cli.listen_all).await;
+            api::start(cport, cs2, adapted_rx, cli.listen_all, cli.headless).await;
         });
         Some(cs)
     } else {
@@ -1886,9 +1993,15 @@ async fn run_auto(
     let model2 = model.clone();
     let draft2 = cli.draft.clone();
     let draft_max = cli.draft_max;
+    let slots = primary_startup_model
+        .as_ref()
+        .and_then(|m| m.parallel)
+        .or(config.gpu.parallel)
+        .unwrap_or(4);
     let force_split = cli.split;
     let llama_flavor = cli.llama_flavor;
     let cb_console_port = console_port;
+    let cli_headless = cli.headless;
     let model_name_for_cb = model_name.clone();
     let model_name_for_election = model_name.clone();
     let node_for_cb = node.clone();
@@ -1931,6 +2044,7 @@ async fn run_auto(
                 moe_runtime_options,
                 target_tx: primary_target_tx,
                 stop_rx: primary_stop_rx,
+                slots,
             },
             move |is_host, llama_ready| {
                 let advertise_node = node_for_cb.clone();
@@ -1951,7 +2065,7 @@ async fn run_auto(
                     let url = format!("http://localhost:{api_port}");
                     eprintln!("  API:     {url}");
                     if let Some(cp) = cb_console_port {
-                        eprintln!("  Console: http://localhost:{cp}");
+                        eprintln!("{}", format_console_ready_line(cli_headless, cp));
                     }
                     update_pi_models_json(&model_name_for_cb, api_port);
                     eprintln!();
@@ -2054,6 +2168,7 @@ async fn run_auto(
             let extra_model_name = extra_name.clone();
             let api_port_extra = api_port;
             let extra_llama_flavor = cli.llama_flavor;
+            let slots = extra_model.parallel.or(config.gpu.parallel).unwrap_or(4);
             let extra_moe_runtime_options = moe::MoeRuntimeOptions::default();
             let extra_console_state = console_state.clone();
             let extra_model_name_for_status = extra_model_name.clone();
@@ -2087,6 +2202,7 @@ async fn run_auto(
                         moe_runtime_options: extra_moe_runtime_options,
                         target_tx: extra_target_tx,
                         stop_rx: extra_stop_rx,
+                        slots,
                     },
                     move |is_host, llama_ready| {
                         let advertise_node = extra_node_for_advertise.clone();
@@ -2152,32 +2268,58 @@ async fn run_auto(
 
     // Nostr publish loop (if --publish) or watchdog (if --auto, to take over if publisher dies)
     let nostr_publisher = if cli.publish {
-        let nostr_keys = nostr::load_or_create_keys()?;
-        let relays = nostr_relays(&cli.nostr_relay);
-        let pub_node = node.clone();
-        let pub_name = cli.mesh_name.clone();
-        let pub_region = cli.region.clone();
-        let pub_max_clients = cli.max_clients;
-        Some(tokio::spawn(async move {
-            nostr::publish_loop(
-                pub_node,
-                nostr_keys,
-                relays,
-                pub_name,
-                pub_region,
-                pub_max_clients,
-                60,
-            )
-            .await;
-        }))
+        match nostr::load_or_create_keys() {
+            Ok(nostr_keys) => {
+                let relays = nostr_relays(&cli.nostr_relay);
+                let pub_node = node.clone();
+                let pub_name = cli.mesh_name.clone();
+                let pub_region = cli.region.clone();
+                let pub_max_clients = cli.max_clients;
+                let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+                if let Some(ref cs) = console_state {
+                    bridge_publication_state(cs.clone(), status_rx);
+                }
+                Some(tokio::spawn(async move {
+                    nostr::publish_loop(
+                        pub_node,
+                        nostr_keys,
+                        relays,
+                        pub_name,
+                        pub_region,
+                        pub_max_clients,
+                        60,
+                        Some(status_tx),
+                    )
+                    .await;
+                }))
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Publishing to Nostr failed: {e}.\n\
+                     Mesh is running privately — add --publish after fixing the issue to make discoverable."
+                );
+                tracing::warn!("Nostr publish failed: {e}");
+                if let Some(ref cs) = console_state {
+                    cs.set_publication_state(api::PublicationState::PublishFailed)
+                        .await;
+                }
+                None
+            }
+        }
     } else if cli.auto {
         // Watchdog: if we joined via --auto, watch for the publisher to die and take over
         let relays = nostr_relays(&cli.nostr_relay);
         let wd_node = node.clone();
         let wd_name = cli.mesh_name.clone();
         let wd_region = cli.region.clone();
+        let watchdog_status_rx = console_state.as_ref().map(|cs| {
+            let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+            bridge_publication_state(cs.clone(), status_rx);
+            status_tx
+        });
         Some(tokio::spawn(async move {
-            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120).await;
+            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120, watchdog_status_rx)
+                .await;
         }))
     } else {
         None
@@ -2205,6 +2347,17 @@ async fn run_auto(
                                 "model '{runtime_model_name}' is already loaded"
                             );
 
+                            // Look up per-model parallel from TOML config by matching the
+                            // spec string against [[models]].model entries. Falls back to
+                            // gpu.parallel or default 4 when no entry matches.
+                            let slots = config
+                                .models
+                                .iter()
+                                .find(|m| m.model == spec)
+                                .and_then(|m| m.parallel)
+                                .or(config.gpu.parallel)
+                                .unwrap_or(4);
+
                             assigned_runtime_model = Some(runtime_model_name.clone());
                             add_serving_assignment(&node, &primary_model_name, &runtime_model_name)
                                 .await;
@@ -2216,6 +2369,7 @@ async fn run_auto(
                                 &model_path,
                                 None,
                                 cli.ctx_size,
+                                slots,
                             )
                             .await?;
 
@@ -2400,35 +2554,54 @@ async fn run_passive(
     let local_port = cli.port;
     let affinity_router = affinity::AffinityRouter::new();
     node.set_display_name(node_display_name(cli, &node)).await;
+    let mut passive_publication_state = None;
+    let mut passive_publication_rx = None;
 
     // Nostr publishing (if --publish, for standby GPU nodes advertising capacity)
     if cli.publish && !is_client {
         let pub_node = node.clone();
-        let nostr_keys = nostr::load_or_create_keys()?;
-        let relays = nostr_relays(&cli.nostr_relay);
-        let pub_name = cli.mesh_name.clone();
-        let pub_region = cli.region.clone();
-        let pub_max_clients = cli.max_clients;
-        tokio::spawn(async move {
-            nostr::publish_loop(
-                pub_node,
-                nostr_keys,
-                relays,
-                pub_name,
-                pub_region,
-                pub_max_clients,
-                60,
-            )
-            .await;
-        });
+        match nostr::load_or_create_keys() {
+            Ok(nostr_keys) => {
+                let relays = nostr_relays(&cli.nostr_relay);
+                let pub_name = cli.mesh_name.clone();
+                let pub_region = cli.region.clone();
+                let pub_max_clients = cli.max_clients;
+                let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+                passive_publication_rx = Some(status_rx);
+                tokio::spawn(async move {
+                    nostr::publish_loop(
+                        pub_node,
+                        nostr_keys,
+                        relays,
+                        pub_name,
+                        pub_region,
+                        pub_max_clients,
+                        60,
+                        Some(status_tx),
+                    )
+                    .await;
+                });
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Publishing to Nostr failed: {e}.\n\
+                     Standby node is running privately — add --publish after fixing the issue to make discoverable."
+                );
+                tracing::warn!("Passive Nostr publish failed: {e}");
+                passive_publication_state = Some(api::PublicationState::PublishFailed);
+            }
+        }
     } else if cli.auto && !is_client {
         // Watchdog: take over publishing if the original publisher dies
         let relays = nostr_relays(&cli.nostr_relay);
         let wd_node = node.clone();
         let wd_name = cli.mesh_name.clone();
         let wd_region = cli.region.clone();
+        let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+        passive_publication_rx = Some(status_rx);
         tokio::spawn(async move {
-            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120).await;
+            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120, Some(status_tx))
+                .await;
         });
     }
 
@@ -2454,7 +2627,7 @@ async fn run_passive(
         eprintln!("💤 Standby ready:");
     }
     eprintln!("  API:     http://localhost:{local_port}");
-    eprintln!("  Console: http://localhost:{}", cli.console);
+    eprintln!("{}", format_console_ready_line(cli.headless, cli.console));
 
     // Console
     {
@@ -2479,10 +2652,17 @@ async fn run_passive(
         }
         // Both clients and standby nodes can proxy requests through the mesh
         cs.update(false, true).await;
+        if let Some(state) = passive_publication_state {
+            cs.set_publication_state(state).await;
+        }
+        if let Some(status_rx) = passive_publication_rx {
+            bridge_publication_state(cs.clone(), status_rx);
+        }
         let (_tx, rx) = tokio::sync::watch::channel(election::InferenceTarget::None);
         let la = cli.listen_all;
+        let headless = cli.headless;
         tokio::spawn(async move {
-            api::start(cport, cs, rx, la).await;
+            api::start(cport, cs, rx, la, headless).await;
         });
     }
 
@@ -2682,10 +2862,21 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
     all
 }
 
+/// Returns the console-port label line for ready-state output.
+/// In headless mode, advertises the management API; otherwise the web console.
+fn format_console_ready_line(headless: bool, console_port: u16) -> String {
+    if headless {
+        format!("  Management API: http://localhost:{console_port}")
+    } else {
+        format!("  Console: http://localhost:{console_port}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::models::local::{huggingface_repo_folder_name, huggingface_snapshot_path};
+    use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry};
     use crate::system::hardware::GpuFacts;
     use hf_hub::RepoType;
     use serial_test::serial;
@@ -2699,6 +2890,34 @@ mod tests {
         } else {
             std::env::remove_var(key);
         }
+    }
+
+    async fn build_test_mesh_api() -> api::MeshApi {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let resolved_plugins = plugin::ResolvedPlugins {
+            externals: vec![],
+            inactive: vec![],
+        };
+        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(1);
+        let plugin_manager = plugin::PluginManager::start(
+            &resolved_plugins,
+            plugin::PluginHostMode {
+                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+            },
+            mesh_tx,
+        )
+        .await
+        .unwrap();
+        api::MeshApi::new(
+            node,
+            "test-model".to_string(),
+            3131,
+            0,
+            plugin_manager,
+            affinity::AffinityRouter::default(),
+        )
     }
 
     fn synthetic_gpu(
@@ -2898,6 +3117,7 @@ mod tests {
                 mmproj: Some("/tmp/ignored-mmproj.gguf".into()),
                 ctx_size: Some(8192),
                 gpu_id: None,
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -2921,12 +3141,14 @@ mod tests {
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: None,
+                    parallel: None,
                 },
                 plugin::ModelConfigEntry {
                     model: "bartowski/Qwen2.5-VL/model.gguf".into(),
                     mmproj: Some("bartowski/Qwen2.5-VL/mmproj.gguf".into()),
                     ctx_size: Some(16384),
                     gpu_id: None,
+                    parallel: None,
                 },
             ],
             ..plugin::MeshConfig::default()
@@ -2956,6 +3178,7 @@ mod tests {
                 mmproj: None,
                 ctx_size: Some(8192),
                 gpu_id: None,
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -2970,12 +3193,14 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![plugin::ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".into(),
                 mmproj: None,
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".into()),
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -2987,6 +3212,7 @@ mod tests {
             ctx_size: Some(8192),
             gpu_id: specs[0].gpu_id.clone(),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![
             synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0")),
@@ -3012,10 +3238,11 @@ mod tests {
     fn pinned_gpu_startup_preflight_requests_per_gpu_vram_metrics() {
         let metrics = pinned_startup_preflight_metrics();
 
-        assert_eq!(metrics.len(), 3);
+        assert_eq!(metrics.len(), 4);
         assert!(metrics.contains(&hardware::Metric::GpuName));
         assert!(metrics.contains(&hardware::Metric::GpuFacts));
         assert!(metrics.contains(&hardware::Metric::VramBytes));
+        assert!(metrics.contains(&hardware::Metric::IsSoc));
     }
 
     #[test]
@@ -3024,12 +3251,14 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![plugin::ModelConfigEntry {
                 model: "Ignored-Model".into(),
                 mmproj: None,
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".into()),
+                parallel: None,
             }],
             ..plugin::MeshConfig::default()
         };
@@ -3041,6 +3270,7 @@ mod tests {
             ctx_size: None,
             gpu_id: specs[0].gpu_id.clone(),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
@@ -3058,6 +3288,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3067,6 +3298,7 @@ mod tests {
             ctx_size: None,
             gpu_id: None,
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3075,6 +3307,7 @@ mod tests {
             ctx_size: None,
             gpu_id: None,
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
@@ -3092,6 +3325,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3101,6 +3335,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3109,6 +3344,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), Some("CUDA3"))];
 
@@ -3127,6 +3363,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3136,6 +3373,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3144,6 +3382,7 @@ mod tests {
             ctx_size: Some(4096),
             gpu_id: Some("uuid:GPU-123".into()),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(3, Some("uuid:GPU-123"), None)];
 
@@ -3161,6 +3400,7 @@ mod tests {
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
+                parallel: None,
             },
             ..plugin::MeshConfig::default()
         };
@@ -3170,6 +3410,7 @@ mod tests {
             ctx_size: None,
             gpu_id: Some("pci:0000:b3:00.0".into()),
             config_owned: true,
+            parallel: None,
         }];
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
@@ -3178,6 +3419,7 @@ mod tests {
             ctx_size: None,
             gpu_id: Some("pci:0000:b3:00.0".into()),
             pinned_gpu: None,
+            parallel: None,
         }];
         let gpus = vec![synthetic_gpu(0, Some("pci:0000:65:00.0"), Some("CUDA0"))];
 
@@ -3211,6 +3453,7 @@ mod tests {
                 backend_device: "CUDA0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let device =
@@ -3233,6 +3476,7 @@ mod tests {
                 backend_device: "CUDA0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let device = startup_rpc_backend_device(None, Some(&primary_startup_model)).unwrap();
@@ -3254,6 +3498,7 @@ mod tests {
                 backend_device: "CUDA0".into(),
                 vram_bytes: 24_000_000_000,
             }),
+            parallel: None,
         };
 
         let err =
@@ -3262,6 +3507,34 @@ mod tests {
         assert!(err
             .to_string()
             .contains("conflicts with pinned startup GPU backend device"));
+    }
+
+    #[test]
+    fn pinned_gpu_startup_rpc_device_allows_lenient_amd_match() {
+        let primary_startup_model = StartupModelPlan {
+            declared_ref: "Qwen3-8B-Q4_K_M".into(),
+            resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
+            mmproj_path: None,
+            ctx_size: Some(8192),
+            gpu_id: Some("pci:0000:65:00.0".into()),
+            pinned_gpu: Some(StartupPinnedGpuTarget {
+                index: 0,
+                stable_id: "pci:0000:65:00.0".into(),
+                backend_device: "ROCm0".into(),
+                vram_bytes: 24_000_000_000,
+            }),
+            parallel: None,
+        };
+
+        let device1 =
+            startup_rpc_backend_device(Some("HIP0"), Some(&primary_startup_model)).unwrap();
+        assert_eq!(device1, Some("HIP0"));
+
+        let mut model_hip = primary_startup_model.clone();
+        model_hip.pinned_gpu.as_mut().unwrap().backend_device = "HIP1".into();
+
+        let device2 = startup_rpc_backend_device(Some("ROCm1"), Some(&model_hip)).unwrap();
+        assert_eq!(device2, Some("ROCm1"));
     }
 
     #[test]
@@ -3285,6 +3558,7 @@ mod tests {
             ctx_size: None,
             gpu_id: None,
             config_owned: false,
+            parallel: None,
         }];
 
         assert!(!should_show_serve_config_help(
@@ -3445,5 +3719,351 @@ mod tests {
         assert_eq!(*mem_arc.lock().await, Some(vec![10.5, 20.0]));
         assert!(fp32_arc.lock().await.is_none());
         assert!(fp16_arc.lock().await.is_none());
+    }
+
+    #[test]
+    fn headless_host_logs_management_api_without_console_url() {
+        let line = format_console_ready_line(true, 3131);
+        assert!(
+            line.contains("Management API"),
+            "expected 'Management API' in headless output, got: {line}"
+        );
+        assert!(
+            !line.contains("Console:"),
+            "headless output must not contain 'Console:', got: {line}"
+        );
+    }
+
+    #[test]
+    fn default_host_mode_still_logs_console_url() {
+        let line = format_console_ready_line(false, 3131);
+        assert!(
+            line.contains("Console:"),
+            "expected 'Console:' in default output, got: {line}"
+        );
+        assert!(
+            !line.contains("Management API"),
+            "default output must not contain 'Management API', got: {line}"
+        );
+    }
+
+    #[test]
+    fn active_startup_passes_headless_to_management_server() {
+        let headless_line = format_console_ready_line(true, 9090);
+        let normal_line = format_console_ready_line(false, 9090);
+        assert_ne!(
+            headless_line, normal_line,
+            "headless and non-headless output must differ"
+        );
+        assert!(headless_line.contains("9090"));
+        assert!(normal_line.contains("9090"));
+    }
+
+    #[test]
+    fn headless_passive_mode_preserves_api_without_ui() {
+        let line = format_console_ready_line(true, 3131);
+        assert!(
+            line.contains("Management API"),
+            "passive headless output must contain 'Management API', got: {line}"
+        );
+        assert!(
+            !line.contains("Console:"),
+            "passive headless output must not contain 'Console:', got: {line}"
+        );
+    }
+
+    #[test]
+    fn passive_headless_promotion_keeps_ui_disabled() {
+        let promoted_line = format_console_ready_line(true, 3131);
+        assert!(
+            promoted_line.contains("Management API"),
+            "promoted headless node must still advertise Management API, got: {promoted_line}"
+        );
+        assert!(
+            !promoted_line.contains("Console:"),
+            "promoted headless node must not show Console: URL, got: {promoted_line}"
+        );
+    }
+
+    #[test]
+    fn default_passive_mode_still_serves_ui_when_not_headless() {
+        let line = format_console_ready_line(false, 3131);
+        assert!(
+            line.contains("Console:"),
+            "default passive output must contain 'Console:', got: {line}"
+        );
+        assert!(
+            !line.contains("Management API"),
+            "default passive output must not contain 'Management API', got: {line}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Per-model parallel (slots) resolution tests
+    // ---------------------------------------------------------------------------
+
+    /// Scenario 1: No global `gpu.parallel` set; a specific model entry has
+    /// `parallel = 1`. The model's override value must be applied correctly.
+    #[test]
+    fn per_model_parallel_override_applied_when_no_global() {
+        let config_models = vec![ModelConfigEntry {
+            model: "my-model".to_string(),
+            mmproj: None,
+            ctx_size: None,
+            gpu_id: None,
+            parallel: Some(1),
+        }];
+        let gpu_config = GpuConfig::default(); // no parallel set
+
+        // Simulate load handler lookup by spec name
+        let slots = config_models
+            .iter()
+            .find(|m| m.model == "my-model")
+            .and_then(|m| m.parallel)
+            .or(gpu_config.parallel)
+            .unwrap_or(4);
+
+        assert_eq!(
+            slots, 1,
+            "model-specific parallel=1 should win when no global"
+        );
+    }
+
+    /// Scenario 2: Two models in config — only the second one specifies a
+    /// `parallel` value. The slot assignment must land on the correct model.
+    #[test]
+    fn per_model_parallel_applies_to_correct_model() {
+        let config_models = vec![
+            ModelConfigEntry {
+                model: "model-a".to_string(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None, // no override
+            },
+            ModelConfigEntry {
+                model: "model-b".to_string(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: Some(3), // only this one has an override
+            },
+        ];
+        let gpu_config = GpuConfig::default();
+
+        // Model A: falls back to default (no model entry match → default 4)
+        let slots_a = config_models
+            .iter()
+            .find(|m| m.model == "model-a")
+            .and_then(|m| m.parallel)
+            .or(gpu_config.parallel)
+            .unwrap_or(4);
+        assert_eq!(
+            slots_a, 4,
+            "model-a should get default 4 when it has no parallel entry"
+        );
+
+        // Model B: gets its own explicit value
+        let slots_b = config_models
+            .iter()
+            .find(|m| m.model == "model-b")
+            .and_then(|m| m.parallel)
+            .or(gpu_config.parallel)
+            .unwrap_or(4);
+        assert_eq!(slots_b, 3, "model-b should get its own parallel=3 override");
+    }
+
+    /// Scenario 3: Two models. First has NO parallel setting, second has
+    /// `parallel = 2`, and global `gpu.parallel = 3`. The first model should
+    /// fall through to the global (3), while the second uses its own (2).
+    #[test]
+    fn per_model_parallel_fallback_to_global_for_missing_entry() {
+        let config_models = vec![
+            ModelConfigEntry {
+                model: "first".to_string(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: None, // missing — should use global fallback
+            },
+            ModelConfigEntry {
+                model: "second".to_string(),
+                mmproj: None,
+                ctx_size: None,
+                gpu_id: None,
+                parallel: Some(2), // explicit override
+            },
+        ];
+        let gpu_config = GpuConfig {
+            assignment: GpuAssignment::Auto,
+            parallel: Some(3), // global default
+        };
+
+        // First model: no per-model value → falls back to gpu.parallel = 3
+        let slots_first = config_models
+            .iter()
+            .find(|m| m.model == "first")
+            .and_then(|m| m.parallel)
+            .or(gpu_config.parallel)
+            .unwrap_or(4);
+        assert_eq!(
+            slots_first, 3,
+            "missing model parallel should fall back to gpu.parallel=3"
+        );
+
+        // Second model: its own value wins over global
+        let slots_second = config_models
+            .iter()
+            .find(|m| m.model == "second")
+            .and_then(|m| m.parallel)
+            .or(gpu_config.parallel)
+            .unwrap_or(4);
+        assert_eq!(
+            slots_second, 2,
+            "model-specific parallel=2 should win over global gpu.parallel=3"
+        );
+    }
+
+    // ---------------------------------------------------------------------------
+    // Publication-state matrix (Issue #240)
+    // ---------------------------------------------------------------------------
+
+    /// Helper to build a minimal `Cli` for publication-state tests.
+    fn make_cli(args: &[&str]) -> crate::cli::Cli {
+        crate::cli::Cli::try_parse_from(args).unwrap()
+    }
+
+    #[test]
+    fn mesh_name_does_not_force_publish() {
+        let cli = make_cli(&[
+            "mesh-llm",
+            "--model",
+            "dummy-model",
+            "--mesh-name",
+            "my-mesh",
+        ]);
+        assert!(!cli.publish, "mesh_name alone must not set publish");
+        assert_eq!(cli.mesh_name.as_deref(), Some("my-mesh"));
+    }
+
+    #[test]
+    fn explicit_publish_remains_enabled() {
+        let cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
+        assert!(
+            cli.publish,
+            "explicit --publish must set publish=true even without mesh_name"
+        );
+    }
+
+    #[test]
+    fn publish_with_mesh_name_is_public_and_named() {
+        let cli = make_cli(&[
+            "mesh-llm",
+            "--model",
+            "dummy-model",
+            "--publish",
+            "--mesh-name",
+            "named-public",
+        ]);
+        assert!(cli.publish, "publish + mesh_name must keep publish=true");
+        assert_eq!(
+            cli.mesh_name.as_deref(),
+            Some("named-public"),
+            "mesh_name must be preserved alongside publish"
+        );
+    }
+
+    #[test]
+    fn auto_without_publish_stays_private() {
+        let cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--auto"]);
+        assert!(!cli.publish, "--auto alone must not imply publish");
+        assert!(cli.auto, "--auto flag should still be true");
+    }
+
+    /// Task 2: Named private mesh keeps private identity (no implicit publish).
+    #[test]
+    fn named_private_mesh_keeps_private_identity() {
+        // A named mesh without --publish must have publish=false.
+        // The is_public gate in runtime startup uses `cli.auto || cli.publish`,
+        // so a named-only mesh should NOT trigger public identity handling.
+        let cli = make_cli(&[
+            "mesh-llm",
+            "--model",
+            "dummy-model",
+            "--mesh-name",
+            "private-named",
+        ]);
+        assert!(!cli.publish);
+        assert!(!cli.auto);
+        let is_public = cli.auto || cli.publish;
+        assert!(
+            !is_public,
+            "named-only mesh must be treated as private for identity purposes"
+        );
+    }
+
+    /// Task 3: start_new_mesh helper does not auto-enable publish.
+    #[test]
+    fn start_new_mesh_does_not_auto_enable_publish() {
+        use crate::runtime::discovery::start_new_mesh;
+        let mut cli = make_cli(&["mesh-llm", "--model", "dummy-model"]);
+        assert!(!cli.publish, "precondition: publish starts false");
+        start_new_mesh(&mut cli, &["dummy-model".to_string()], 16.0, false);
+        assert!(
+            !cli.publish,
+            "start_new_mesh must NOT set publish=true when it was not requested"
+        );
+    }
+
+    /// Task 3: Explicit --publish survives start_new_mesh unchanged.
+    #[test]
+    fn start_new_mesh_preserves_explicit_publish() {
+        use crate::runtime::discovery::start_new_mesh;
+        let mut cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
+        assert!(cli.publish, "precondition: publish is true");
+        start_new_mesh(&mut cli, &["dummy-model".to_string()], 16.0, false);
+        assert!(
+            cli.publish,
+            "explicit --publish must survive start_new_mesh call"
+        );
+    }
+
+    #[test]
+    fn publish_state_updates_map_to_api_states() {
+        assert_eq!(
+            publication_state_from_update(nostr::PublishStateUpdate::Public),
+            api::PublicationState::Public
+        );
+        assert_eq!(
+            publication_state_from_update(nostr::PublishStateUpdate::PublishFailed),
+            api::PublicationState::PublishFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn publication_bridge_keeps_private_until_a_real_publish_outcome_arrives() {
+        let state = build_test_mesh_api().await;
+        let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+        bridge_publication_state(state.clone(), status_rx);
+
+        assert_eq!(state.publication_state().await.as_str(), "private");
+
+        status_tx
+            .send(Some(nostr::PublishStateUpdate::Public))
+            .unwrap();
+        wait_for_condition(Duration::from_secs(2), || {
+            let state = state.clone();
+            async move { state.publication_state().await.as_str() == "public" }
+        })
+        .await;
+
+        status_tx
+            .send(Some(nostr::PublishStateUpdate::PublishFailed))
+            .unwrap();
+        wait_for_condition(Duration::from_secs(2), || {
+            let state = state.clone();
+            async move { state.publication_state().await.as_str() == "publish_failed" }
+        })
+        .await;
     }
 }

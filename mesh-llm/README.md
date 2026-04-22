@@ -2,7 +2,7 @@
 
 Rust implementation of mesh-llm: a peer-to-peer control plane for llama.cpp inference over QUIC, with distributed routing, model orchestration, plugin hosting, and a local management API.
 
-For install and end-user usage, see the [project README](../README.md). For deeper architecture and test flows, see [docs/DESIGN.md](docs/DESIGN.md), [docs/TESTING.md](docs/TESTING.md), and [docs/message_protocol.md](docs/message_protocol.md).
+For install and end-user usage, see the [project README](../README.md). For deeper architecture and test flows, see [docs/DESIGN.md](docs/DESIGN.md), [docs/METRICS.md](docs/METRICS.md), [docs/TESTING.md](docs/TESTING.md), and [docs/message_protocol.md](docs/message_protocol.md).
 
 ## Source layout
 
@@ -36,7 +36,7 @@ plugins/
 ## Runtime model
 
 - `mesh-llm` owns the user-facing OpenAI-compatible API on `:9337`. Requests are routed by model.
-- The management API and web console live on `:3131`.
+- The management API and web console live on `:3131`. Pass `--headless` to disable the embedded web UI while keeping the management API (`/api/*`) available on that port.
 - Dense models that fit run locally. Dense models that do not fit can be split with pipeline parallelism.
 - MoE models are handled through expert-aware orchestration in `inference/moe.rs`.
 - Routing and demand tracking are mesh-wide. Nodes can serve different models at the same time.
@@ -51,6 +51,7 @@ The management API exposes the state the UI uses directly:
 - `GET /api/status` for node, peer, and routing state, including enriched `gpus[]` hardware entries with per-device VRAM, optional reserved bytes when the backend reports a true reserved/unavailable metric, memory bandwidth, and compute-throughput hints
 - `GET /api/events` for live updates
 - `GET /api/models` for mesh model inventory and `GET /api/runtime*` for loaded model/process state
+- `GET /api/search` for read-only catalog or Hugging Face model search, returning the same JSON payload shape as `mesh-llm models search --json`
 - `GET /api/discover` for mesh discovery results
 - `GET /api/plugins` plus per-plugin tool endpoints
 - `GET /api/blackboard/feed`, `GET /api/blackboard/search`, `POST /api/blackboard/post`

@@ -22,6 +22,7 @@ pub fn backfill_legacy_descriptors(ann: &mut PeerAnnouncement) {
 pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
     old.addr != new.addr
         || old.role != new.role
+        || old.first_joined_mesh_ts != new.first_joined_mesh_ts
         || old.models != new.models
         || old.vram_bytes != new.vram_bytes
         || old.rtt_ms != new.rtt_ms
@@ -38,6 +39,15 @@ pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool 
         || old.gpu_reserved_bytes != new.gpu_reserved_bytes
 }
 
+fn merge_first_joined_mesh_ts(existing: &mut Option<u64>, incoming: Option<u64>) {
+    match (*existing, incoming) {
+        (None, Some(v)) => *existing = Some(v),
+        (Some(_), None) => {}
+        (Some(a), Some(b)) => *existing = Some(a.min(b)),
+        (None, None) => {}
+    }
+}
+
 pub(super) fn apply_transitive_ann(
     existing: &mut PeerInfo,
     addr: &EndpointAddr,
@@ -51,6 +61,7 @@ pub(super) fn apply_transitive_ann(
     existing.hosted_models = ann_hosted_models;
     existing.hosted_models_known = ann.hosted_models.is_some();
     existing.role = ann.role.clone();
+    merge_first_joined_mesh_ts(&mut existing.first_joined_mesh_ts, ann.first_joined_mesh_ts);
     existing.vram_bytes = ann.vram_bytes;
     // Only advance addr if the transitive announcement is at least as path-rich,
     // so a direct peer's richer address is not overwritten by a weaker transitive one.
@@ -102,7 +113,27 @@ pub(super) fn apply_transitive_ann(
 impl Node {
     /// Open a gossip stream on an existing connection to exchange peer info.
     pub(super) async fn initiate_gossip(&self, conn: Connection, remote: EndpointId) -> Result<()> {
-        self.initiate_gossip_inner(conn, remote, true).await
+        // Timeout only the gossip round-trip. A misbehaving peer may accept the
+        // QUIC connection and even the bi-stream but never send a gossip response,
+        // blocking the join path indefinitely and preventing fallback to other
+        // candidates.
+        match tokio::time::timeout(
+            PEER_CONNECT_AND_GOSSIP_TIMEOUT,
+            self.gossip_round_trip(&conn, remote),
+        )
+        .await
+        {
+            Ok(Ok((their_announcements, rtt_ms))) => {
+                self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, true)
+                    .await
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => anyhow::bail!(
+                "gossip exchange with {} timed out ({}s)",
+                remote.fmt_short(),
+                PEER_CONNECT_AND_GOSSIP_TIMEOUT.as_secs()
+            ),
+        }
     }
 
     pub(super) async fn initiate_gossip_inner(
@@ -111,6 +142,16 @@ impl Node {
         remote: EndpointId,
         discover_peers: bool,
     ) -> Result<()> {
+        let (their_announcements, rtt_ms) = self.gossip_round_trip(&conn, remote).await?;
+        self.apply_gossip_announcements(remote, rtt_ms, &their_announcements, discover_peers)
+            .await
+    }
+
+    async fn gossip_round_trip(
+        &self,
+        conn: &Connection,
+        remote: EndpointId,
+    ) -> Result<(Vec<(EndpointAddr, PeerAnnouncement)>, u32)> {
         let protocol = connection_protocol(&conn);
         let t0 = std::time::Instant::now();
         let (mut send, mut recv) = conn.open_bi().await?;
@@ -126,8 +167,17 @@ impl Node {
 
         let _ = recv.read_to_end(0).await;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        Ok((their_announcements, rtt_ms))
+    }
 
-        for (addr, ann) in &their_announcements {
+    async fn apply_gossip_announcements(
+        &self,
+        remote: EndpointId,
+        rtt_ms: u32,
+        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
+        discover_peers: bool,
+    ) -> Result<()> {
+        for (addr, ann) in their_announcements {
             let peer_id = addr.id;
             if peer_id == self.endpoint.id() {
                 continue;
@@ -175,7 +225,7 @@ impl Node {
 
         if discover_peers {
             let my_role = self.role.lock().await.clone();
-            for (addr, ann) in &their_announcements {
+            for (addr, ann) in their_announcements {
                 let peer_id = addr.id;
                 if peer_id == self.endpoint.id() {
                     continue;
@@ -387,6 +437,10 @@ impl Node {
                 existing.addr = addr;
             }
             existing.models = ann.models.clone();
+            merge_first_joined_mesh_ts(
+                &mut existing.first_joined_mesh_ts,
+                ann.first_joined_mesh_ts,
+            );
             existing.vram_bytes = ann.vram_bytes;
             if ann.model_source.is_some() {
                 existing.model_source = ann.model_source.clone();
@@ -610,6 +664,7 @@ impl Node {
                 .map(|p| PeerAnnouncement {
                     addr: p.addr.clone(),
                     role: p.role.clone(),
+                    first_joined_mesh_ts: p.first_joined_mesh_ts,
                     models: p.models.clone(),
                     vram_bytes: p.vram_bytes,
                     model_source: p.model_source.clone(),
@@ -637,9 +692,11 @@ impl Node {
                 })
                 .collect()
         };
+        let my_first_joined_mesh_ts = *self.first_joined_mesh_ts.lock().await;
         announcements.push(PeerAnnouncement {
             addr: self.endpoint.addr(),
             role: my_role,
+            first_joined_mesh_ts: my_first_joined_mesh_ts,
             models: my_models,
             vram_bytes: self.vram_bytes,
             model_source: my_source,
@@ -697,5 +754,123 @@ impl Node {
             owner_attestation: my_owner_attestation,
         });
         announcements
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::OwnershipSummary;
+    use iroh::SecretKey;
+    use std::collections::HashMap;
+
+    fn test_endpoint_id(seed: u8) -> EndpointId {
+        EndpointId::from(SecretKey::from_bytes(&[seed; 32]).public())
+    }
+
+    fn test_addr(seed: u8) -> EndpointAddr {
+        EndpointAddr {
+            id: test_endpoint_id(seed),
+            addrs: Default::default(),
+        }
+    }
+
+    fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
+        PeerAnnouncement {
+            addr: test_addr(0x11),
+            role: NodeRole::Worker,
+            first_joined_mesh_ts: ts,
+            models: vec![],
+            vram_bytes: 0,
+            model_source: None,
+            serving_models: vec![],
+            hosted_models: None,
+            available_models: vec![],
+            requested_models: vec![],
+            version: None,
+            model_demand: HashMap::new(),
+            mesh_id: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+        }
+    }
+
+    fn test_peer(ts: Option<u64>) -> PeerInfo {
+        PeerInfo::from_announcement(
+            test_endpoint_id(0x22),
+            test_addr(0x22),
+            &test_announcement(ts),
+            OwnershipSummary::default(),
+        )
+    }
+
+    #[test]
+    fn test_merge_none_to_some() {
+        let mut existing = test_peer(None);
+        let ann = test_announcement(Some(100));
+
+        apply_transitive_ann(&mut existing, &test_addr(0x33), &ann);
+
+        assert_eq!(existing.first_joined_mesh_ts, Some(100));
+    }
+
+    #[test]
+    fn test_merge_some_to_none_keeps_existing() {
+        let mut existing = test_peer(Some(100));
+        let ann = test_announcement(None);
+
+        apply_transitive_ann(&mut existing, &test_addr(0x33), &ann);
+
+        assert_eq!(existing.first_joined_mesh_ts, Some(100));
+    }
+
+    #[test]
+    fn test_merge_earlier_incoming_wins() {
+        let mut existing = test_peer(Some(200));
+        let ann = test_announcement(Some(100));
+
+        apply_transitive_ann(&mut existing, &test_addr(0x33), &ann);
+
+        assert_eq!(existing.first_joined_mesh_ts, Some(100));
+    }
+
+    #[test]
+    fn test_merge_later_incoming_loses() {
+        let mut existing = test_peer(Some(100));
+        let ann = test_announcement(Some(200));
+
+        apply_transitive_ann(&mut existing, &test_addr(0x33), &ann);
+
+        assert_eq!(existing.first_joined_mesh_ts, Some(100));
+    }
+
+    #[test]
+    fn test_merge_equal_values_unchanged() {
+        let mut existing = test_peer(Some(100));
+        let ann = test_announcement(Some(100));
+
+        apply_transitive_ann(&mut existing, &test_addr(0x33), &ann);
+
+        assert_eq!(existing.first_joined_mesh_ts, Some(100));
+    }
+
+    #[test]
+    fn test_meaningfully_changed_first_joined_mesh_ts() {
+        let old_peer = test_peer(Some(100));
+        let new_peer = test_peer(Some(200));
+
+        assert!(peer_meaningfully_changed(&old_peer, &new_peer));
     }
 }

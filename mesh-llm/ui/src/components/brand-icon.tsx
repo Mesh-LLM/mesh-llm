@@ -1,4 +1,8 @@
-export function BrandIcon({ className = 'h-4 w-4' }: { className?: string }) {
+interface BrandIconProps {
+  className?: string;
+}
+
+export function BrandIcon({ className = 'h-4 w-4' }: BrandIconProps) {
   return (
     <svg
       viewBox="0 0 64 64"
@@ -18,3 +22,5 @@ export function BrandIcon({ className = 'h-4 w-4' }: { className?: string }) {
     </svg>
   );
 }
+
+BrandIcon.displayName = 'BrandIcon';

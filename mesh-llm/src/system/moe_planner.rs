@@ -1187,7 +1187,7 @@ fn expert_bytes_json(expert_tensor_bytes: u64, expert_count: u32) -> Result<Valu
         bail!("cannot derive expert bytes for expert_count=0");
     }
     let expert_count_u64 = u64::from(expert_count);
-    if expert_tensor_bytes % expert_count_u64 == 0 {
+    if expert_tensor_bytes.is_multiple_of(expert_count_u64) {
         return Ok(json!({
             "kind": "uniform",
             "bytes_per_expert": expert_tensor_bytes / expert_count_u64,

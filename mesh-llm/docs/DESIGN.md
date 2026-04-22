@@ -11,7 +11,7 @@ just see local TCP sockets.
 src/
 ├── main.rs                  CLI args, orchestration (auto, idle, passive)
 ├── lib.rs                   Crate root re-exports
-├── api/                     Management API (:3131): status, events, discover, join
+├── api/                     Management API (:3131): status, models, search, events, discover, join
 ├── cli/                     Clap types, command parsing, command handlers
 ├── crypto/                  Key management, envelope encryption, keychain
 ├── inference/
@@ -39,7 +39,7 @@ src/
 └── system/                  Hardware detection, benchmarking, self-update
 ```
 
-## Node Roles
+## Topology Roles
 
 ```rust
 enum NodeRole {
@@ -49,7 +49,7 @@ enum NodeRole {
 }
 ```
 
-Roles are exchanged via gossip over `meshllm.node.v1` protobuf on QUIC ALPN `mesh-llm/1`. A node transitions Worker → Host when elected.
+Roles are exchanged via gossip. Live-state badges are separate and use `Client`, `Standby`, `Loading`, and `Serving`. Preferred peers use `meshllm.node.v1` protobuf on QUIC ALPN `mesh-llm/1`; legacy peers may still negotiate `mesh-llm/0` and use the older JSON gossip payloads. A node transitions Worker → Host when elected.
 
 A newly connected peer is quarantined until it sends a valid `GossipFrame` with `gen = 1` (quarantine-until-gossip admission model). Only streams 0x01 (GOSSIP) and 0x05 (ROUTE_REQUEST) are accepted before admission. All other streams are rejected until the peer is admitted.
 
@@ -202,6 +202,7 @@ and the embedded web dashboard.
 |---|---|---|
 | `/api/status` | GET | Live mesh state (JSON): node, peers, routing, targets |
 | `/api/models` | GET | Mesh model inventory for the dashboard and operators |
+| `/api/search` | GET | Search the built-in catalog or Hugging Face with the same JSON payload shape as `mesh-llm models search --json` |
 | `/api/events` | GET | SSE stream of status updates (2s interval + on change) |
 | `/api/discover` | GET | Browse Nostr-published meshes |
 | `/api/join` | POST | Join a mesh by invite token `{"token":"..."}` |
@@ -209,8 +210,10 @@ and the embedded web dashboard.
 | `/` | GET | Embedded web dashboard |
 
 The dashboard is a thin client. Live node state comes from `/api/status` and
-`/api/events`, while model inventory comes from `/api/models`. Mesh management
-works without the HTML via curl/scripts.
+`/api/events`, while model inventory comes from `/api/models`. `/api/search`
+provides the same read-only model search payload as `mesh-llm models search --json`
+to operators and future UI flows without requiring CLI output parsing. Mesh management works without the
+HTML via curl/scripts.
 
 Always enabled on port 3131 (configurable with `--console <port>`).
 
@@ -262,12 +265,12 @@ trait Collector {
 
 GGUF-derived metadata (architecture, quantization type, tokenizer, RoPE parameters, expert counts) is transported via `CompactModelMetadata` in the `available_model_metadata` field. This lets peers learn model capabilities without downloading the file. The `ScannedModel` type in the proto schema carries the same information for catalog-level model listings. Current gossip sanitization still strips `available_models`, `available_model_metadata`, and `available_model_sizes` before sending announcements on the wire, so these schema fields remain compatibility surface rather than a second transitive model-inventory source.
 
-### `--enumerate-host` Flag
+### `--no-enumerate-host` Flag
 
-Controls whether the host-identifying inventory fields (`gpu_name`, `hostname`, `gpu_vram`, and `gpu_reserved_bytes`) appear in gossip. `is_soc` is always sent. Benchmark-derived bandwidth and compute hints remain additive optional fields when available. `gpu_reserved_bytes` stays omitted on backends such as ROCm and Intel where the tooling does not report a true reserved/unavailable memory metric. Default: `false` (privacy-preserving; peers see VRAM totals but not GPU model or hostname).
+By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserved bytes to all mesh peers. Pass `--no-enumerate-host` to suppress this hardware identification. `is_soc` is always sent. Benchmark-derived bandwidth and compute hints remain additive optional fields when available. `gpu_reserved_bytes` stays omitted on backends such as ROCm and Intel where the tooling does not report a true reserved/unavailable memory metric.
 
 ```
---enumerate-host    # opt in: peers learn your GPU name and hostname
+--no-enumerate-host    # opt out: suppress GPU name and hostname from gossip
 ```
 
 ### API Shape
@@ -283,7 +286,7 @@ Controls whether the host-identifying inventory fields (`gpu_name`, `hostname`, 
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
 
-`peers[]` entries (only when peer has `--enumerate-host`):
+`peers[]` entries (only when peer has not passed `--no-enumerate-host`):
 ```json
 {"hostname": "lemony-28", "is_soc": true, "gpus": [{"name": "Tegra AGX Orin", "vram_bytes": 0}]}
 ```

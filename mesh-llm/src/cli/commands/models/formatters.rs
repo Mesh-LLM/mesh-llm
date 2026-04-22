@@ -2,6 +2,7 @@ use crate::models::{
     capabilities, catalog, huggingface_hub_cache_dir, ModelCapabilities, ModelDetails,
     SearchArtifactFilter, SearchHit, SearchSort,
 };
+use crate::models::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
 use crate::system::hardware;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -64,6 +65,8 @@ pub(crate) trait ModelsFormatter: SearchFormatter {
         draft: Option<(&str, &Path)>,
     ) -> Result<()>;
     fn render_updates_status(&self, repo: Option<&str>, all: bool, check: bool) -> Result<()>;
+    fn render_delete_preview(&self, resolved: &CliResolvedModel) -> Result<()>;
+    fn render_delete_result(&self, result: &CliDeleteResult) -> Result<()>;
 }
 
 pub(crate) struct ConsoleFormatter;
@@ -92,13 +95,6 @@ pub(crate) fn filter_label(filter: SearchArtifactFilter) -> &'static str {
     }
 }
 
-pub(crate) fn filter_name(filter: SearchArtifactFilter) -> &'static str {
-    match filter {
-        SearchArtifactFilter::Gguf => "gguf",
-        SearchArtifactFilter::Mlx => "mlx",
-    }
-}
-
 pub(crate) fn sort_label(sort: SearchSort) -> &'static str {
     match sort {
         SearchSort::Trending => "trending",
@@ -108,18 +104,6 @@ pub(crate) fn sort_label(sort: SearchSort) -> &'static str {
         SearchSort::Updated => "recently updated",
         SearchSort::ParametersDesc => "most parameters",
         SearchSort::ParametersAsc => "least parameters",
-    }
-}
-
-pub(crate) fn sort_name(sort: SearchSort) -> &'static str {
-    match sort {
-        SearchSort::Trending => "trending",
-        SearchSort::Downloads => "downloads",
-        SearchSort::Likes => "likes",
-        SearchSort::Created => "created",
-        SearchSort::Updated => "updated",
-        SearchSort::ParametersDesc => "most_parameters",
-        SearchSort::ParametersAsc => "least_parameters",
     }
 }
 

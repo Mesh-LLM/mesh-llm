@@ -201,7 +201,7 @@ pub(crate) async fn api_proxy(
 
                     let use_pipeline = classification
                         .as_ref()
-                        .map(|cl| pipeline::should_pipeline(cl))
+                        .map(pipeline::should_pipeline)
                         .unwrap_or(false)
                         && request.response_adapter == proxy::ResponseAdapter::None;
 
@@ -284,7 +284,6 @@ pub(crate) async fn api_proxy(
                                 &targets,
                                 name,
                                 &session_hint,
-                                request.body_json.as_ref(),
                                 required_tokens,
                                 &request.raw,
                             )
@@ -299,6 +298,8 @@ pub(crate) async fn api_proxy(
                                 match plugin_manager.inference_endpoint_for_model(name).await {
                                     Ok(Some(endpoint)) => {
                                         let routed = proxy::route_http_endpoint_request(
+                                            &node,
+                                            Some(name),
                                             &mut tcp_stream,
                                             &endpoint.address,
                                             &request.raw,
@@ -354,10 +355,8 @@ pub(crate) async fn api_proxy(
                                 tcp_stream,
                                 &targets,
                                 name,
-                                request.body_json.as_ref(),
+                                &request,
                                 required_tokens,
-                                &request.raw,
-                                request.response_adapter,
                                 &affinity,
                             )
                             .await;
@@ -376,6 +375,7 @@ pub(crate) async fn api_proxy(
                     let _ = proxy::route_to_target(
                         node.clone(),
                         tcp_stream,
+                        effective_model.as_deref(),
                         target,
                         &request.raw,
                         request.response_adapter,
@@ -386,7 +386,6 @@ pub(crate) async fn api_proxy(
                 }
                 Err(err) => {
                     let _ = proxy::send_400(tcp_stream, &err.to_string()).await;
-                    return;
                 }
             };
         });
@@ -451,12 +450,12 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
     let mut models: Vec<String> = targets
         .targets
         .iter()
-        .filter_map(|(name, hosts)| {
+        .filter(|(_, hosts)| {
             hosts
                 .iter()
                 .any(|target| !matches!(target, election::InferenceTarget::None))
-                .then(|| name.clone())
         })
+        .map(|(name, _)| name.clone())
         .collect();
     models.sort();
     models

@@ -114,6 +114,7 @@ export function ChatComposer({
             ref={pdfInputRef as Ref<HTMLInputElement>}
             type="file"
             accept="application/pdf"
+            multiple
             className="hidden"
             data-testid="chat-pdf-input"
             onChange={onFileSelect}
@@ -133,6 +134,7 @@ export function ChatComposer({
             ref={imageInputRef as Ref<HTMLInputElement>}
             type="file"
             accept="image/*"
+            multiple
             className="hidden"
             data-testid="chat-image-input"
             onChange={onImageSelect}
@@ -154,6 +156,7 @@ export function ChatComposer({
                 ref={audioInputRef as Ref<HTMLInputElement>}
                 type="file"
                 accept="audio/*"
+                multiple
                 className="hidden"
                 data-testid="chat-audio-input"
                 onChange={onAudioSelect}
@@ -176,6 +179,7 @@ export function ChatComposer({
               <input
                 ref={fileInputRef as Ref<HTMLInputElement>}
                 type="file"
+                multiple
                 className="hidden"
                 data-testid="chat-file-input"
                 onChange={onFileSelect}

@@ -470,14 +470,24 @@ export function ChatPage(props: {
   }
 
   function handleImageSelect(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const validationError = validateAttachmentFile(file, "image");
-    if (validationError) {
-      setComposerError(validationError);
-      e.target.value = "";
-      return;
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    const rejected: string[] = [];
+    for (const file of files) {
+      const validationError = validateAttachmentFile(file, "image");
+      if (validationError) {
+        rejected.push(`${file.name}: ${validationError}`);
+        continue;
+      }
+      processImageFile(file);
     }
+    if (rejected.length) {
+      setComposerError(rejected.join(" "));
+    }
+  }
+
+  function processImageFile(file: File) {
     const reader = new FileReader();
     reader.onload = () => {
       const src = reader.result as string;
@@ -522,18 +532,27 @@ export function ChatPage(props: {
       img.src = src;
     };
     reader.readAsDataURL(file);
-    e.target.value = "";
   }
 
   function handleAudioSelect(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const validationError = validateAttachmentFile(file, "audio");
-    if (validationError) {
-      setComposerError(validationError);
-      e.target.value = "";
-      return;
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    const rejected: string[] = [];
+    for (const file of files) {
+      const validationError = validateAttachmentFile(file, "audio");
+      if (validationError) {
+        rejected.push(`${file.name}: ${validationError}`);
+        continue;
+      }
+      processAudioFile(file);
     }
+    if (rejected.length) {
+      setComposerError(rejected.join(" "));
+    }
+  }
+
+  function processAudioFile(file: File) {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
@@ -545,19 +564,28 @@ export function ChatPage(props: {
       });
     };
     reader.readAsDataURL(file);
-    e.target.value = "";
   }
 
   function handleFileSelect(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const mimeType = file.type || "application/octet-stream";
-    const validationError = validateAttachmentFile(file, "file");
-    if (validationError) {
-      setComposerError(validationError);
-      e.target.value = "";
-      return;
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    const rejected: string[] = [];
+    for (const file of files) {
+      const validationError = validateAttachmentFile(file, "file");
+      if (validationError) {
+        rejected.push(`${file.name}: ${validationError}`);
+        continue;
+      }
+      processGenericFile(file);
     }
+    if (rejected.length) {
+      setComposerError(rejected.join(" "));
+    }
+  }
+
+  function processGenericFile(file: File) {
+    const mimeType = file.type || "application/octet-stream";
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
@@ -575,7 +603,6 @@ export function ChatPage(props: {
       }
     };
     reader.readAsDataURL(file);
-    e.target.value = "";
   }
 
   async function handlePdfAttachment(dataUrl: string, fileName: string) {

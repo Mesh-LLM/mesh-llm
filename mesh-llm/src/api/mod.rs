@@ -1,7 +1,9 @@
 //! Mesh management API — read-only dashboard on port 3131 (default).
 //!
 //! Endpoints:
-//!   GET  /api/status    — live mesh state (JSON)
+//!   GET  /api/status    — live mesh state plus local-only routing metrics (JSON)
+//!   GET  /api/models    — mesh model inventory plus local-only routing metrics (JSON)
+//!   GET  /api/search    — catalog or Hugging Face model search with the same JSON payload as `mesh-llm models search --json`
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON)
 //!   GET  /api/runtime/processes — local inference process state (JSON)
@@ -16,6 +18,10 @@
 //!
 //! The dashboard is mostly read-only — shows status, topology, and models.
 //! Local model load/unload is exposed for operator control.
+//!
+//! `routing_metrics`, `routing_metrics.local_node`, `routing_metrics.pressure`,
+//! and `/api/models` per-model `routing_metrics.targets` are measured on the
+//! current node only; not mesh-wide aggregates.
 
 mod assets;
 mod http;
@@ -23,7 +29,9 @@ mod routes;
 mod state;
 mod status;
 
-pub use self::state::{MeshApi, RuntimeControlRequest, RuntimeModelPayload, RuntimeProcessPayload};
+pub use self::state::{
+    MeshApi, PublicationState, RuntimeControlRequest, RuntimeModelPayload, RuntimeProcessPayload,
+};
 pub(crate) use self::status::classify_runtime_error;
 
 use self::assets::{respond_console_asset, respond_console_index};
@@ -32,13 +40,14 @@ use self::routes::dispatch_request;
 use self::state::ApiInner;
 use self::status::{
     build_gpus, build_ownership_payload, build_runtime_processes_payload,
-    build_runtime_status_payload, LocalInstance, MeshModelPayload, PeerPayload,
-    RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
+    build_runtime_status_payload, LocalInstance, MeshModelPayload, NodeState, PeerPayload,
+    RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload, WakeableNode, WakeableNodeState,
 };
 use crate::inference::election;
 use crate::mesh;
 use crate::network::{affinity, nostr, proxy};
 use crate::plugin;
+use crate::runtime::wakeable::{WakeableInventoryEntry, WakeableState};
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex};
@@ -221,6 +230,7 @@ impl MeshApi {
                 node,
                 plugin_manager,
                 affinity_router,
+                headless: false,
                 is_host: false,
                 is_client: false,
                 llama_ready: false,
@@ -237,12 +247,14 @@ impl MeshApi {
                     .map(|s| s.to_string())
                     .collect(),
                 nostr_discovery: false,
+                publication_state: state::PublicationState::Private,
                 runtime_control: None,
                 local_processes: Vec::new(),
                 sse_clients: Vec::new(),
                 inventory_scan_running: false,
                 inventory_scan_waiters: Vec::new(),
                 local_instances: Arc::new(Mutex::new(Vec::new())),
+                wakeable_inventory: crate::runtime::wakeable::WakeableInventory::default(),
             })),
         }
     }
@@ -273,6 +285,19 @@ impl MeshApi {
 
     pub async fn set_nostr_discovery(&self, v: bool) {
         self.inner.lock().await.nostr_discovery = v;
+    }
+
+    pub async fn set_publication_state(&self, state: state::PublicationState) {
+        {
+            let mut inner = self.inner.lock().await;
+            inner.publication_state = state;
+        }
+        self.push_status().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn publication_state(&self) -> state::PublicationState {
+        self.inner.lock().await.publication_state
     }
 
     pub async fn local_instances_handle(
@@ -316,6 +341,14 @@ impl MeshApi {
 
     pub async fn set_llama_port(&self, port: Option<u16>) {
         self.inner.lock().await.llama_port = port;
+    }
+
+    pub async fn set_headless(&self, headless: bool) {
+        self.inner.lock().await.headless = headless;
+    }
+
+    pub(super) async fn is_headless(&self) -> bool {
+        self.inner.lock().await.headless
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
@@ -405,6 +438,10 @@ impl MeshApi {
         let catalog = node.mesh_catalog_entries().await;
         let served = node.models_being_served().await;
         let active_demand = node.active_demand().await;
+        // Per-model routing metrics are current-node-only observations. They
+        // help the management API explain recent local routing behavior without
+        // claiming mesh-wide totals.
+        let routing_metrics_by_model = node.model_routing_metrics();
         let my_serving_models = node.serving_models().await;
         let local_model_names = local_scan.model_names;
         let mut metadata_by_name = local_scan.metadata_by_name;
@@ -478,6 +515,7 @@ impl MeshApi {
                     ),
                     None => (None, None),
                 };
+                let routing_metrics = routing_metrics_by_model.get(name).cloned();
                 let mut capabilities = descriptor
                     .map(|descriptor| descriptor.capabilities)
                     .unwrap_or_else(|| {
@@ -688,6 +726,7 @@ impl MeshApi {
                     draft_model,
                     request_count,
                     last_active_secs_ago,
+                    routing_metrics,
                     source_page_url,
                     source_ref,
                     source_revision,
@@ -703,29 +742,81 @@ impl MeshApi {
             .collect()
     }
 
-    fn derive_node_status(
+    fn derive_local_node_state(
         is_client: bool,
         effective_is_host: bool,
         effective_llama_ready: bool,
         has_local_worker_activity: bool,
-        has_split_workers: bool,
         display_model_name: &str,
-        peer_count: usize,
-    ) -> String {
+    ) -> NodeState {
+        let has_declared_local_serving_work = (effective_is_host || has_local_worker_activity)
+            && !display_model_name.trim().is_empty();
+
         if is_client {
-            "Client".to_string()
-        } else if effective_is_host && effective_llama_ready {
-            if has_split_workers {
-                "Serving (split)".to_string()
-            } else {
-                "Serving".to_string()
-            }
-        } else if has_local_worker_activity {
-            "Worker (split)".to_string()
-        } else if display_model_name.is_empty() && peer_count == 0 {
-            "Idle".to_string()
+            NodeState::Client
+        } else if effective_llama_ready && has_declared_local_serving_work {
+            NodeState::Serving
+        } else if has_declared_local_serving_work {
+            NodeState::Loading
         } else {
-            "Standby".to_string()
+            NodeState::Standby
+        }
+    }
+
+    fn derive_node_status(node_state: NodeState) -> String {
+        node_state.node_status_alias().to_string()
+    }
+
+    fn derive_peer_state(peer: &mesh::PeerInfo) -> NodeState {
+        fn has_nonempty_models(models: &[String]) -> bool {
+            models.iter().any(|model| !model.trim().is_empty())
+        }
+
+        match peer.role {
+            mesh::NodeRole::Client => NodeState::Client,
+            mesh::NodeRole::Host { .. } | mesh::NodeRole::Worker => {
+                let has_runtime_descriptors = peer
+                    .served_model_runtime
+                    .iter()
+                    .any(|runtime| !runtime.model_name.trim().is_empty());
+                let has_ready_runtime = peer
+                    .served_model_runtime
+                    .iter()
+                    .any(|runtime| runtime.ready && !runtime.model_name.trim().is_empty());
+                let has_assigned_model_work = has_runtime_descriptors
+                    || has_nonempty_models(&peer.serving_models)
+                    || has_nonempty_models(&peer.hosted_models);
+                let has_legacy_serving_signal = has_nonempty_models(&peer.hosted_models)
+                    || has_nonempty_models(&peer.serving_models)
+                    || peer
+                        .routable_models()
+                        .iter()
+                        .any(|model| !model.trim().is_empty());
+
+                if has_ready_runtime {
+                    NodeState::Serving
+                } else if has_runtime_descriptors && has_assigned_model_work {
+                    NodeState::Loading
+                } else if has_legacy_serving_signal {
+                    NodeState::Serving
+                } else {
+                    NodeState::Standby
+                }
+            }
+        }
+    }
+
+    fn build_wakeable_node(entry: WakeableInventoryEntry) -> WakeableNode {
+        WakeableNode {
+            logical_id: entry.logical_id,
+            models: entry.models,
+            vram_gb: entry.vram_gb,
+            provider: entry.provider,
+            state: match entry.state {
+                WakeableState::Sleeping => WakeableNodeState::Sleeping,
+                WakeableState::Waking => WakeableNodeState::Waking,
+            },
+            wake_eta_secs: entry.wake_eta_secs,
         }
     }
 
@@ -740,6 +831,7 @@ impl MeshApi {
             my_vram_gb,
             inflight_requests,
             routing_affinity,
+            routing_metrics,
             model_name,
             model_size_bytes,
             llama_ready,
@@ -750,8 +842,10 @@ impl MeshApi {
             mesh_name,
             latest_version,
             nostr_discovery,
+            publication_state,
             local_processes,
             local_instances_arc,
+            wakeable_inventory,
         ) = {
             let inner = self.inner.lock().await;
             (
@@ -761,6 +855,9 @@ impl MeshApi {
                 inner.node.vram_bytes() as f64 / 1e9,
                 inner.node.inflight_requests(),
                 inner.affinity_router.stats_snapshot(),
+                // `/api/status` exposes the current node's bounded routing
+                // outcome snapshot only; peers do not publish these counters.
+                inner.node.routing_metrics_snapshot(),
                 inner.model_name.clone(),
                 inner.model_size_bytes,
                 inner.llama_ready,
@@ -771,8 +868,10 @@ impl MeshApi {
                 inner.mesh_name.clone(),
                 inner.latest_version.clone(),
                 inner.nostr_discovery,
+                inner.publication_state,
                 inner.local_processes.clone(),
                 inner.local_instances.clone(),
+                inner.wakeable_inventory.clone(),
             )
         }; // inner lock dropped here
 
@@ -805,6 +904,13 @@ impl MeshApi {
             instances
         };
 
+        let wakeable_nodes = wakeable_inventory
+            .status_snapshot()
+            .await
+            .into_iter()
+            .map(Self::build_wakeable_node)
+            .collect();
+
         let all_peers = node.peers().await;
         let local_owner_summary = node.owner_summary().await;
         let my_models = node.models().await;
@@ -820,6 +926,7 @@ impl MeshApi {
                     mesh::NodeRole::Host { .. } => "Host".into(),
                     mesh::NodeRole::Client => "Client".into(),
                 },
+                state: Self::derive_peer_state(p),
                 models: p.models.clone(),
                 available_models: p.available_models.clone(),
                 requested_models: p.requested_models.clone(),
@@ -839,6 +946,7 @@ impl MeshApi {
                     p.gpu_compute_tflops_fp32.as_deref(),
                     p.gpu_compute_tflops_fp16.as_deref(),
                 ),
+                first_joined_mesh_ts: p.first_joined_mesh_ts,
             })
             .collect();
 
@@ -866,19 +974,14 @@ impl MeshApi {
         let mesh_id = node.mesh_id().await;
 
         let has_local_worker_activity = has_local_processes || !my_hosted_models.is_empty();
-        let has_split_workers = all_peers.iter().any(|p| {
-            matches!(p.role, mesh::NodeRole::Worker)
-                && p.is_assigned_model(display_model_name.as_str())
-        });
-        let node_status = Self::derive_node_status(
+        let node_state = Self::derive_local_node_state(
             is_client,
             effective_is_host,
             effective_llama_ready,
             has_local_worker_activity,
-            has_split_workers,
             display_model_name.as_str(),
-            all_peers.len(),
         );
+        let node_status = Self::derive_node_status(node_state);
 
         StatusPayload {
             version: MESH_LLM_VERSION.to_string(),
@@ -886,6 +989,7 @@ impl MeshApi {
             node_id,
             owner: build_ownership_payload(&local_owner_summary),
             token,
+            node_state,
             node_status,
             is_host: effective_is_host,
             is_client,
@@ -901,6 +1005,7 @@ impl MeshApi {
             my_vram_gb,
             model_size_gb: model_size_bytes as f64 / 1e9,
             peers,
+            wakeable_nodes,
             local_instances,
             launch_pi,
             launch_goose,
@@ -908,6 +1013,7 @@ impl MeshApi {
             mesh_id,
             mesh_name,
             nostr_discovery,
+            publication_state: publication_state.as_str().into(),
             my_hostname: node.hostname.clone(),
             my_is_soc: node.is_soc,
             gpus: {
@@ -948,6 +1054,8 @@ impl MeshApi {
                 )
             },
             routing_affinity,
+            routing_metrics,
+            first_joined_mesh_ts: node.first_joined_mesh_ts().await,
         }
     }
 
@@ -966,13 +1074,14 @@ impl MeshApi {
 
 // ── Server ──
 
-/// Start the mesh management API server.
 pub async fn start(
     port: u16,
     state: MeshApi,
     mut target_rx: watch::Receiver<election::InferenceTarget>,
     listen_all: bool,
+    headless: bool,
 ) {
+    state.set_headless(headless).await;
     // Watch election target changes
     let state2 = state.clone();
     tokio::spawn(async move {
@@ -1070,6 +1179,16 @@ pub async fn start(
 
 // ── Request dispatch ──
 
+fn is_ui_only_route(path: &str) -> bool {
+    matches!(
+        path,
+        "/" | "/dashboard" | "/dashboard/" | "/chat" | "/chat/"
+    ) || path.starts_with("/chat/")
+        || path.starts_with("/assets/")
+        || matches!(path.rsplit('.').next(), Some("png" | "ico" | "webmanifest"))
+        || (path.ends_with(".json") && !path.starts_with("/api/"))
+}
+
 async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Result<()> {
     let request = match tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -1086,6 +1205,11 @@ async fn handle_request(mut stream: TcpStream, state: &MeshApi) -> anyhow::Resul
     let path = request.path.as_str();
     let path_only = path.split('?').next().unwrap_or(path);
     let body = http_body_text(&request.raw);
+
+    if method == "GET" && state.is_headless().await && is_ui_only_route(path_only) {
+        respond_error(&mut stream, 404, "Not found").await?;
+        return Ok(());
+    }
 
     match (method, path_only) {
         // ── Dashboard UI ──
@@ -1150,6 +1274,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
+    use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
     use tokio::sync::{mpsc, oneshot};
@@ -1538,33 +1663,211 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_node_status_prefers_client_role() {
-        let status = MeshApi::derive_node_status(true, true, true, true, true, "Qwen", 2);
-        assert_eq!(status, "Client");
+    fn derive_local_node_state_prefers_client() {
+        let node_state = MeshApi::derive_local_node_state(true, true, true, true, "Qwen");
+
+        assert_eq!(node_state, NodeState::Client);
+        assert_eq!(MeshApi::derive_node_status(node_state), "Client");
     }
 
     #[test]
-    fn test_derive_node_status_standby_when_only_declaring_models() {
-        let status = MeshApi::derive_node_status(false, false, false, false, false, "Qwen", 1);
-        assert_eq!(status, "Standby");
+    fn derive_local_node_state_returns_standby_without_ready_runtime() {
+        let node_state = MeshApi::derive_local_node_state(false, false, false, false, "Qwen");
+
+        assert_eq!(node_state, NodeState::Standby);
+        assert_eq!(MeshApi::derive_node_status(node_state), "Standby");
     }
 
     #[test]
-    fn test_derive_node_status_worker_requires_local_runtime_activity() {
-        let status = MeshApi::derive_node_status(false, false, false, true, false, "Qwen", 1);
-        assert_eq!(status, "Worker (split)");
+    fn derive_local_node_state_returns_loading_for_declared_but_unready_work() {
+        let host_loading = MeshApi::derive_local_node_state(false, true, false, false, "Qwen");
+        let worker_loading = MeshApi::derive_local_node_state(false, false, false, true, "Qwen");
+
+        assert_eq!(host_loading, NodeState::Loading);
+        assert_eq!(worker_loading, NodeState::Loading);
+        assert_eq!(MeshApi::derive_node_status(host_loading), "Loading");
+        assert_eq!(MeshApi::derive_node_status(worker_loading), "Loading");
     }
 
     #[test]
-    fn test_derive_node_status_marks_split_host() {
-        let status = MeshApi::derive_node_status(false, true, true, true, true, "Qwen", 1);
-        assert_eq!(status, "Serving (split)");
+    fn derive_local_node_state_returns_serving_for_ready_runtime() {
+        let host_serving = MeshApi::derive_local_node_state(false, true, true, false, "Qwen");
+        let worker_serving = MeshApi::derive_local_node_state(false, false, true, true, "Qwen");
+
+        assert_eq!(host_serving, NodeState::Serving);
+        assert_eq!(worker_serving, NodeState::Serving);
+        assert_eq!(MeshApi::derive_node_status(host_serving), "Serving");
+        assert_eq!(MeshApi::derive_node_status(worker_serving), "Serving");
     }
 
     #[test]
-    fn test_derive_node_status_idle_without_model_or_peers() {
-        let status = MeshApi::derive_node_status(false, false, false, false, false, "", 0);
-        assert_eq!(status, "Idle");
+    fn derive_local_node_state_never_emits_legacy_idle_or_split_labels() {
+        let labels = [
+            MeshApi::derive_node_status(MeshApi::derive_local_node_state(
+                true, true, true, true, "Qwen",
+            )),
+            MeshApi::derive_node_status(MeshApi::derive_local_node_state(
+                false, false, false, false, "Qwen",
+            )),
+            MeshApi::derive_node_status(MeshApi::derive_local_node_state(
+                false, true, false, false, "Qwen",
+            )),
+            MeshApi::derive_node_status(MeshApi::derive_local_node_state(
+                false, false, true, true, "Qwen",
+            )),
+            MeshApi::derive_node_status(MeshApi::derive_local_node_state(
+                false, false, false, false, "",
+            )),
+        ];
+
+        for label in labels {
+            assert!(matches!(
+                label.as_str(),
+                "Client" | "Standby" | "Loading" | "Serving"
+            ));
+            assert_ne!(label, "Idle");
+            assert_ne!(label, "Serving (split)");
+            assert_ne!(label, "Worker (split)");
+        }
+    }
+
+    fn make_test_state_endpoint_id(seed: u8) -> iroh::EndpointId {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        iroh::EndpointId::from(iroh::SecretKey::from_bytes(&bytes).public())
+    }
+
+    fn make_test_state_peer(seed: u8, role: mesh::NodeRole) -> mesh::PeerInfo {
+        let id = make_test_state_endpoint_id(seed);
+        mesh::PeerInfo {
+            id,
+            addr: iroh::EndpointAddr {
+                id,
+                addrs: Default::default(),
+            },
+            tunnel_port: None,
+            role,
+            models: vec![],
+            vram_bytes: 0,
+            rtt_ms: None,
+            model_source: None,
+            serving_models: vec![],
+            hosted_models: vec![],
+            hosted_models_known: false,
+            available_models: vec![],
+            requested_models: vec![],
+            last_seen: Instant::now(),
+            last_mentioned: Instant::now(),
+            moe_recovered_at: None,
+            version: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+            first_joined_mesh_ts: None,
+        }
+    }
+
+    fn make_legacy_peer_fixture(
+        seed: u8,
+        role: mesh::NodeRole,
+        serving_models: Vec<&str>,
+    ) -> mesh::PeerInfo {
+        let mut peer = make_test_state_peer(seed, role);
+        peer.version = Some("0.54.0".into());
+        peer.serving_models = serving_models.into_iter().map(str::to_string).collect();
+        peer.hosted_models = vec![];
+        peer.hosted_models_known = false;
+        peer.served_model_runtime = vec![];
+        peer
+    }
+
+    #[test]
+    fn derive_peer_state_prefers_client_role() {
+        let mut peer = make_test_state_peer(1, mesh::NodeRole::Client);
+        peer.serving_models = vec!["Qwen".into()];
+        peer.hosted_models = vec!["Qwen".into()];
+        peer.hosted_models_known = true;
+        peer.served_model_runtime = vec![mesh::ModelRuntimeDescriptor {
+            model_name: "Qwen".into(),
+            identity_hash: None,
+            context_length: Some(8192),
+            ready: true,
+        }];
+
+        assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Client);
+    }
+
+    #[test]
+    fn derive_peer_state_returns_serving_for_ready_runtime() {
+        let mut peer = make_test_state_peer(2, mesh::NodeRole::Host { http_port: 9337 });
+        peer.serving_models = vec!["Qwen".into()];
+        peer.hosted_models = vec!["Qwen".into()];
+        peer.hosted_models_known = true;
+        peer.served_model_runtime = vec![mesh::ModelRuntimeDescriptor {
+            model_name: "Qwen".into(),
+            identity_hash: None,
+            context_length: Some(8192),
+            ready: true,
+        }];
+
+        assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Serving);
+    }
+
+    #[test]
+    fn derive_peer_state_returns_loading_for_assigned_but_unready_peer() {
+        let mut peer = make_test_state_peer(3, mesh::NodeRole::Worker);
+        peer.serving_models = vec!["Qwen".into()];
+        peer.served_model_runtime = vec![mesh::ModelRuntimeDescriptor {
+            model_name: "Qwen".into(),
+            identity_hash: None,
+            context_length: None,
+            ready: false,
+        }];
+
+        assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Loading);
+    }
+
+    #[test]
+    fn derive_peer_state_returns_standby_for_connected_idle_peer() {
+        let peer = make_test_state_peer(4, mesh::NodeRole::Worker);
+
+        assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Standby);
+    }
+
+    #[test]
+    fn derive_peer_state_falls_back_to_legacy_serving_models() {
+        let mut peer = make_test_state_peer(5, mesh::NodeRole::Worker);
+        peer.serving_models = vec!["Qwen".into()];
+
+        assert_eq!(MeshApi::derive_peer_state(&peer), NodeState::Serving);
+    }
+
+    #[test]
+    fn legacy_peer_fixture_uses_backend_state_fallback() {
+        let serving_peer =
+            make_legacy_peer_fixture(6, mesh::NodeRole::Host { http_port: 9337 }, vec!["Qwen"]);
+        let standby_peer = make_legacy_peer_fixture(7, mesh::NodeRole::Worker, vec![]);
+
+        assert_eq!(
+            MeshApi::derive_peer_state(&serving_peer),
+            NodeState::Serving
+        );
+        assert_eq!(
+            MeshApi::derive_peer_state(&standby_peer),
+            NodeState::Standby
+        );
     }
 
     #[test]
@@ -1665,6 +1968,29 @@ mod tests {
         serde_json::from_str(body).unwrap_or(serde_json::Value::Null)
     }
 
+    async fn replace_test_wakeable_inventory(
+        state: &MeshApi,
+        entries: Vec<WakeableInventoryEntry>,
+    ) {
+        let inventory = { state.inner.lock().await.wakeable_inventory.clone() };
+        inventory.replace_for_tests(entries).await;
+    }
+
+    fn make_test_wakeable_entry(
+        logical_id: &str,
+        model: &str,
+        vram_gb: f32,
+    ) -> WakeableInventoryEntry {
+        WakeableInventoryEntry {
+            logical_id: logical_id.to_string(),
+            models: vec![model.to_string()],
+            vram_gb,
+            provider: Some("test-provider".to_string()),
+            state: WakeableState::Sleeping,
+            wake_eta_secs: Some(45),
+        }
+    }
+
     fn make_test_peer(
         seed: u8,
         role: mesh::NodeRole,
@@ -1681,6 +2007,7 @@ mod tests {
             },
             tunnel_port: None,
             role,
+            first_joined_mesh_ts: None,
             models: Vec::new(),
             vram_bytes: 24_000_000_000,
             rtt_ms: None,
@@ -2129,6 +2456,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_api_events_push_publication_state_updates() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state.clone()).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(b"GET /api/events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+
+        let _initial = read_until_contains(
+            &mut stream,
+            b"\"publication_state\":\"private\"",
+            Duration::from_secs(2),
+        )
+        .await;
+
+        state
+            .set_publication_state(crate::api::PublicationState::PublishFailed)
+            .await;
+        let updated = read_until_contains(
+            &mut stream,
+            b"\"publication_state\":\"publish_failed\"",
+            Duration::from_secs(2),
+        )
+        .await;
+        let updated_text = String::from_utf8_lossy(&updated);
+        assert!(updated_text.contains("\"publication_state\":\"publish_failed\""));
+
+        drop(stream);
+        handle.abort();
+    }
+
+    #[tokio::test]
     async fn test_api_status_excludes_mesh_models_and_models_endpoint_serves_them() {
         let state = build_test_mesh_api().await;
         let (status_addr, status_handle) = spawn_management_test_server(state.clone()).await;
@@ -2154,6 +2515,107 @@ mod tests {
         assert!(models_body.get("mesh_models").is_some());
 
         models_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_catalog_returns_canonical_model_refs() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?q=Qwen3-Coder-Next&catalog=true&artifact=gguf&limit=5&sort=trending HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let payload = json_body(&response);
+        assert_eq!(payload["source"], json!("catalog"));
+        assert_eq!(payload["filter"], json!("gguf"));
+        assert_eq!(payload["sort"], json!("trending"));
+        assert!(payload.get("machine").is_some());
+        let results = payload["results"].as_array().cloned().unwrap_or_default();
+        assert!(
+            !results.is_empty(),
+            "expected at least one catalog result for Qwen3-Coder-Next"
+        );
+        let hit = results
+            .into_iter()
+            .find(|entry| entry["ref"] == json!("Qwen3-Coder-Next-Q4_K_M"))
+            .expect("canonical catalog model ref present");
+        assert_eq!(hit["repo_id"], json!("Qwen/Qwen3-Coder-Next-GGUF"));
+        assert_eq!(hit["type"], json!("gguf"));
+        assert_eq!(
+            hit["show"],
+            json!("mesh-llm models show Qwen3-Coder-Next-Q4_K_M")
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_caps_limit_and_uses_canonical_parameter_sort_name() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?q=Qwen3-Coder-Next&catalog=true&artifact=gguf&limit=999&sort=parameters-desc HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let payload = json_body(&response);
+        assert_eq!(payload["sort"], json!("parameters-desc"));
+        let results = payload["results"].as_array().cloned().unwrap_or_default();
+        assert!(
+            results.len() <= 50,
+            "expected catalog response to apply the API limit cap"
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_requires_q_query_parameter() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?catalog=true HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 400"));
+        let payload = json_body(&response);
+        assert_eq!(
+            payload["error"],
+            json!("Missing required 'q' query parameter")
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_rejects_invalid_sort_value() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?q=qwen&sort=random HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 400"));
+        let payload = json_body(&response);
+        assert_eq!(
+            payload["error"],
+            json!("Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc")
+        );
+
+        handle.abort();
     }
 
     #[test]
@@ -2182,6 +2644,142 @@ mod tests {
 
         let worker_stats = http_route_stats("worker-only-model", &peers, &[], None, 0.0);
         assert_eq!(worker_stats, HttpRouteStats::default());
+    }
+
+    #[tokio::test]
+    async fn wakeable_inventory_does_not_change_peer_count() {
+        let state = build_test_mesh_api().await;
+        replace_test_wakeable_inventory(
+            &state,
+            vec![make_test_wakeable_entry(
+                "sleeping-node-1",
+                "wakeable-only-model",
+                48.0,
+            )],
+        )
+        .await;
+
+        let status = state.status().await;
+        assert!(status.peers.is_empty());
+        assert_eq!(status.wakeable_nodes.len(), 1);
+        assert_eq!(status.wakeable_nodes[0].logical_id, "sleeping-node-1");
+    }
+
+    #[tokio::test]
+    async fn wakeable_inventory_does_not_change_mesh_vram_totals() {
+        let state = build_test_mesh_api().await;
+        replace_test_wakeable_inventory(
+            &state,
+            vec![make_test_wakeable_entry(
+                "sleeping-node-1",
+                "wakeable-only-model",
+                48.0,
+            )],
+        )
+        .await;
+
+        let status = state.status().await;
+        let peers = vec![make_test_peer(
+            0x51,
+            mesh::NodeRole::Host { http_port: 9337 },
+            vec!["wakeable-only-model"],
+            vec!["wakeable-only-model"],
+            true,
+        )];
+        let route_stats = http_route_stats("wakeable-only-model", &peers, &[], None, 0.0);
+
+        assert_eq!(status.wakeable_nodes.len(), 1);
+        assert_eq!(route_stats.node_count, 1);
+        assert!(route_stats.mesh_vram_gb > 0.0);
+    }
+
+    #[tokio::test]
+    async fn wakeable_inventory_is_not_routable_capacity() {
+        let state = build_test_mesh_api().await;
+        replace_test_wakeable_inventory(
+            &state,
+            vec![make_test_wakeable_entry(
+                "sleeping-node-1",
+                "wakeable-only-model",
+                48.0,
+            )],
+        )
+        .await;
+
+        let node = { state.inner.lock().await.node.clone() };
+        let status = state.status().await;
+        let served_models = node.models_being_served().await;
+        let hosts = node.hosts_for_model("wakeable-only-model").await;
+
+        assert_eq!(status.wakeable_nodes.len(), 1);
+        assert!(!served_models
+            .iter()
+            .any(|model| model == "wakeable-only-model"));
+        assert!(hosts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wakeable_inventory_is_excluded_from_v1_models() {
+        let state = build_test_mesh_api().await;
+        replace_test_wakeable_inventory(
+            &state,
+            vec![make_test_wakeable_entry(
+                "sleeping-node-1",
+                "wakeable-only-model",
+                48.0,
+            )],
+        )
+        .await;
+
+        let node = { state.inner.lock().await.node.clone() };
+        let served_models = node.models_being_served().await;
+
+        assert!(!served_models
+            .iter()
+            .any(|model| model == "wakeable-only-model"));
+        assert!(served_models.is_empty());
+    }
+
+    #[tokio::test]
+    async fn wakeable_inventory_is_excluded_from_host_selection() {
+        let state = build_test_mesh_api().await;
+        replace_test_wakeable_inventory(
+            &state,
+            vec![make_test_wakeable_entry(
+                "sleeping-node-1",
+                "wakeable-only-model",
+                48.0,
+            )],
+        )
+        .await;
+
+        let node = { state.inner.lock().await.node.clone() };
+        let hosts = node.hosts_for_model("wakeable-only-model").await;
+
+        assert!(hosts.is_empty());
+    }
+
+    #[test]
+    fn build_wakeable_node_preserves_typed_internal_state() {
+        let sleeping = MeshApi::build_wakeable_node(WakeableInventoryEntry {
+            logical_id: "sleeping-node".to_string(),
+            models: vec!["test-model".to_string()],
+            vram_gb: 24.0,
+            provider: Some("test-provider".to_string()),
+            state: WakeableState::Sleeping,
+            wake_eta_secs: Some(45),
+        });
+        let waking = MeshApi::build_wakeable_node(WakeableInventoryEntry {
+            logical_id: "waking-node".to_string(),
+            models: vec!["test-model".to_string()],
+            vram_gb: 24.0,
+            provider: Some("test-provider".to_string()),
+            state: WakeableState::Waking,
+            wake_eta_secs: Some(10),
+        });
+
+        assert_eq!(sleeping.state, WakeableNodeState::Sleeping);
+        assert_eq!(waking.state, WakeableNodeState::Waking);
     }
 
     #[tokio::test]
@@ -2217,6 +2815,130 @@ mod tests {
         assert_eq!(gpu["mem_bandwidth_gbps"], json!(1948.7));
         assert_eq!(gpu["compute_tflops_fp32"], json!(19.5));
         assert_eq!(gpu["compute_tflops_fp16"], json!(312.0));
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_status_includes_routing_metrics_summary() {
+        let state = build_test_mesh_api().await;
+        let node = {
+            let inner = state.inner.lock().await;
+            inner.node.clone()
+        };
+        let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+
+        node.record_inference_attempt(
+            Some("test-model"),
+            &election::InferenceTarget::Local(9338),
+            Duration::from_millis(4),
+            Duration::from_millis(16),
+            crate::network::metrics::AttemptOutcome::Timeout,
+            None,
+        );
+        node.record_inference_attempt(
+            Some("test-model"),
+            &election::InferenceTarget::Remote(peer_id),
+            Duration::from_millis(18),
+            Duration::from_millis(48),
+            crate::network::metrics::AttemptOutcome::Success,
+            Some(12),
+        );
+        node.record_routed_request(
+            Some("test-model"),
+            2,
+            crate::network::metrics::RequestOutcome::Success(
+                crate::network::metrics::RequestService::Remote,
+            ),
+        );
+
+        let (addr, handle) = spawn_management_test_server(state).await;
+        let response = send_management_request(
+            addr,
+            "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let payload = json_body(&response);
+        assert_eq!(payload["routing_metrics"]["request_count"], json!(1));
+        assert_eq!(payload["routing_metrics"]["successful_requests"], json!(1));
+        assert_eq!(payload["routing_metrics"]["retry_count"], json!(1));
+        assert_eq!(payload["routing_metrics"]["failover_count"], json!(1));
+        assert_eq!(
+            payload["routing_metrics"]["attempt_timeout_count"],
+            json!(1)
+        );
+        assert_eq!(
+            payload["routing_metrics"]["pressure"]["remotely_served_request_count"],
+            json!(1)
+        );
+        assert_eq!(
+            payload["routing_metrics"]["local_node"]["remote_attempt_count"],
+            json!(1)
+        );
+        assert_eq!(
+            payload["routing_metrics"]["local_node"]["local_attempt_count"],
+            json!(1)
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_models_include_model_routing_metrics() {
+        let state = build_test_mesh_api().await;
+        let node = {
+            let inner = state.inner.lock().await;
+            inner.node.clone()
+        };
+        let model_name = crate::models::catalog::MODEL_CATALOG[0].name.clone();
+        let peer_id = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        node.set_requested_models(vec![model_name.clone()]).await;
+
+        node.record_inference_attempt(
+            Some(&model_name),
+            &election::InferenceTarget::Remote(peer_id),
+            Duration::from_millis(6),
+            Duration::from_millis(24),
+            crate::network::metrics::AttemptOutcome::Success,
+            Some(9),
+        );
+        node.record_routed_request(
+            Some(&model_name),
+            1,
+            crate::network::metrics::RequestOutcome::Success(
+                crate::network::metrics::RequestService::Remote,
+            ),
+        );
+
+        let (addr, handle) = spawn_management_test_server(state).await;
+        let response = send_management_request(
+            addr,
+            "GET /api/models HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let payload = json_body(&response);
+        let models = payload["mesh_models"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let model = models
+            .into_iter()
+            .find(|entry| entry["name"] == model_name)
+            .expect("catalog model present");
+        assert_eq!(model["routing_metrics"]["request_count"], json!(1));
+        assert_eq!(model["routing_metrics"]["successful_requests"], json!(1));
+        assert_eq!(
+            model["routing_metrics"]["targets"][0]["kind"],
+            json!("remote")
+        );
+        assert_eq!(
+            model["routing_metrics"]["targets"][0]["success_count"],
+            json!(1)
+        );
 
         handle.abort();
     }
@@ -2629,5 +3351,103 @@ data: [DONE]
         assert_eq!(instances[0].pid, std::process::id());
         assert_eq!(instances[0].api_port, Some(3131));
         assert_eq!(instances[0].version, Some(MESH_LLM_VERSION.to_string()));
+    }
+
+    #[test]
+    fn headless_mode_disables_ui_routes_but_preserves_api() {
+        assert!(is_ui_only_route("/"));
+        assert!(is_ui_only_route("/dashboard"));
+        assert!(is_ui_only_route("/chat"));
+
+        assert!(!is_ui_only_route("/api/status"));
+        assert!(!is_ui_only_route("/api/events"));
+        assert!(!is_ui_only_route("/api/discover"));
+        assert!(!is_ui_only_route("/api/runtime"));
+        assert!(!is_ui_only_route("/api/plugins"));
+    }
+
+    #[test]
+    fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
+        assert!(is_ui_only_route("/dashboard/"));
+        assert!(is_ui_only_route("/chat/"));
+        assert!(is_ui_only_route("/chat/some-room"));
+        assert!(is_ui_only_route("/assets/main.js"));
+        assert!(is_ui_only_route("/assets/index-abc123.css"));
+        assert!(is_ui_only_route("/favicon.ico"));
+        assert!(is_ui_only_route("/logo.png"));
+        assert!(is_ui_only_route("/manifest.webmanifest"));
+        assert!(is_ui_only_route("/site.json"));
+
+        assert!(!is_ui_only_route("/api/status.json"));
+    }
+
+    #[test]
+    fn default_mode_still_serves_embedded_ui_routes() {
+        assert!(is_ui_only_route("/"));
+        assert!(is_ui_only_route("/dashboard"));
+        assert!(is_ui_only_route("/chat"));
+        assert!(is_ui_only_route("/assets/app.js"));
+
+        assert!(!is_ui_only_route("/api/status"));
+        assert!(!is_ui_only_route("/api/events"));
+    }
+
+    #[test]
+    fn headless_status_command_works_against_management_api() {
+        assert!(
+            !is_ui_only_route("/api/status"),
+            "/api/status must not be blocked in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/events"),
+            "/api/events must not be blocked in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/discover"),
+            "/api/discover must not be blocked in headless mode"
+        );
+    }
+
+    #[test]
+    fn headless_blackboard_status_still_reads_api_status() {
+        assert!(
+            !is_ui_only_route("/api/status"),
+            "/api/status must be accessible in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/runtime"),
+            "/api/runtime must be accessible in headless mode"
+        );
+        assert!(
+            !is_ui_only_route("/api/join"),
+            "/api/join must be accessible in headless mode"
+        );
+    }
+
+    #[test]
+    fn headless_custom_console_port_keeps_api_and_disables_ui() {
+        assert!(is_ui_only_route("/"), "/ must be blocked in headless mode");
+        assert!(is_ui_only_route("/dashboard"), "/dashboard must be blocked");
+        assert!(is_ui_only_route("/chat"), "/chat must be blocked");
+        assert!(
+            is_ui_only_route("/assets/main.js"),
+            "/assets/* must be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/api/status"),
+            "/api/status must not be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/api/events"),
+            "/api/events must not be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/v1/models"),
+            "/v1/models must not be blocked"
+        );
+        assert!(
+            !is_ui_only_route("/v1/chat/completions"),
+            "/v1/chat/completions must not be blocked"
+        );
     }
 }

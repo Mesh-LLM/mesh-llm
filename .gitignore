@@ -19,3 +19,4 @@ __pycache__/
 .pytest_cache/
 dist/MeshLLMFFI.xcframework.zip
 sdk/swift/Generated/MeshLLMFFI.xcframework/
+.impeccable.md

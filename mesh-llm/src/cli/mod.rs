@@ -271,11 +271,17 @@ pub(crate) struct Cli {
     #[arg(long, default_value = "3131")]
     pub(crate) console: u16,
 
-    /// Publish this mesh for discovery by others.
+    /// Disable the embedded web UI but keep the management API on the --console port.
+    #[arg(long)]
+    pub(crate) headless: bool,
+
+    /// Publish this mesh to Nostr for public discovery by other nodes.
+    /// Without this flag, your mesh is private and only joinable via invite token.
     #[arg(long)]
     pub(crate) publish: bool,
 
-    /// Name for this mesh (shown in discovery).
+    /// Human-readable name for this mesh (shown in discovery when combined with --publish).
+    /// Naming a mesh does NOT make it publicly discoverable — use --publish for that.
     #[arg(long)]
     pub(crate) mesh_name: Option<String>,
 
@@ -324,9 +330,9 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) max_vram: Option<f64>,
 
-    /// Enumerate host hardware (GPU name, hostname) at startup.
-    #[arg(long, hide = true)]
-    pub(crate) enumerate_host: bool,
+    /// Disable broadcasting GPU name, hostname, VRAM, and reserved bytes to peers. By default all nodes announce this hardware info.
+    #[arg(long = "no-enumerate-host", hide = true)]
+    pub(crate) no_enumerate_host: bool,
 
     /// Path to rpc-server, llama-server, and llama-moe-split binaries.
     #[arg(long, hide = true)]
@@ -336,7 +342,7 @@ pub(crate) struct Cli {
     #[arg(long, value_enum)]
     pub(crate) llama_flavor: Option<crate::inference::launch::BinaryFlavor>,
 
-    /// Device for rpc-server (e.g. MTL0, CUDA0, HIP0, Vulkan0, CPU).
+    /// Device for rpc-server (e.g. MTL0, CUDA0, ROCm0, Vulkan0, CPU).
     #[arg(long, hide = true)]
     pub(crate) device: Option<String>,
 
@@ -710,8 +716,9 @@ fn shell_display(arg: &OsString) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::models::{ModelSearchSort, ModelsCommand};
     use crate::cli::moe::MoeAnalyzeCommand;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     #[test]
     fn normalize_runtime_surface_args_rewrites_serve_invocation() {
@@ -956,6 +963,88 @@ mod tests {
             Command::Gpus {
                 json: false,
                 command: Some(GpuCommand::Benchmark { json: true }),
+            } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_accepts_headless_flag_for_serve_surface() {
+        let args = vec!["mesh-llm", "serve", "--headless", "--auto"];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+        assert!(cli.headless);
+    }
+
+    #[test]
+    fn cli_accepts_headless_flag_for_client_surface() {
+        let args = vec!["mesh-llm", "client", "--headless", "--auto"];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+        assert!(cli.headless);
+    }
+
+    #[test]
+    fn legacy_no_console_remains_ignored_in_headless_tests() {
+        let args = vec!["mesh-llm", "serve", "--no-console"];
+        let normalized = normalize_runtime_surface_args(args);
+        let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
+        assert!(
+            !cli.headless,
+            "--no-console must not activate headless mode"
+        );
+    }
+
+    #[test]
+    fn help_text_mentions_headless_keeps_management_api() {
+        let help = Cli::command().render_help().to_string();
+        assert!(
+            help.contains("headless") || help.contains("management API"),
+            "help text should mention headless or management API"
+        );
+    }
+
+    #[test]
+    fn models_search_accepts_canonical_parameter_sort_names() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "models",
+            "search",
+            "qwen",
+            "--sort",
+            "parameters-desc",
+        ]);
+
+        match cli.command.expect("models command expected") {
+            Command::Models {
+                command:
+                    ModelsCommand::Search {
+                        sort: ModelSearchSort::ParametersDesc,
+                        ..
+                    },
+            } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn models_search_keeps_legacy_parameter_sort_aliases_parsing() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "models",
+            "search",
+            "qwen",
+            "--sort",
+            "most-parameters",
+        ]);
+
+        match cli.command.expect("models command expected") {
+            Command::Models {
+                command:
+                    ModelsCommand::Search {
+                        sort: ModelSearchSort::ParametersDesc,
+                        ..
+                    },
             } => {}
             other => panic!("unexpected command: {other:?}"),
         }

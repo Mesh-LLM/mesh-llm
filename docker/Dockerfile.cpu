@@ -3,6 +3,7 @@
 #
 # Build:  DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.cpu -t mesh-llm:cpu .
 # Run:    docker run --rm -p 9337:9337 -v ~/.models:/root/.models -e APP_MODE=worker mesh-llm:cpu
+#         docker run --rm -p 9337:9337 -p 3131:3131 -e APP_MODE=worker -e MESH_HEADLESS=1 mesh-llm:cpu  # API-only
 #
 # Binaries at /usr/local/lib/mesh-llm/bin/:
 #   rpc-server-cpu

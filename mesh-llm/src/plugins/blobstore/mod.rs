@@ -4,7 +4,7 @@ use mesh_llm_plugin::{
     capability, json_response, json_schema_operation, parse_rpc_params, InternalRpcPluginBuilder,
     OperationRouter, PluginError, PluginMetadata, PluginResult, PluginRuntime,
 };
-use rand::Rng;
+use rand::RngExt;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

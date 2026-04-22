@@ -466,12 +466,91 @@ pub fn pick_model_classified<'a>(
         filtered
     };
 
-    // Pick randomly to spread load
+    // Bias toward larger models: names that advertise a single-digit
+    // parameter count (e.g. "2B", "9B") go to the bottom. Everything
+    // else — multi-digit billions (31B, 70B) or names that don't encode
+    // a size at all (MiniMax, Coder-Next, fine-tune tags) — stays on
+    // top. Each tier is shuffled independently so sessions organically
+    // spread across the strong-tier models over time while smalls still
+    // act as a fallback when nothing stronger is around.
+    let (mut big, mut small): (Vec<_>, Vec<_>) = candidates
+        .into_iter()
+        .partition(|(name, _, _)| !is_single_digit_b_name(name));
+
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .subsec_nanos() as usize;
-    Some(candidates[nanos % candidates.len()].0)
+        .subsec_nanos() as u64;
+    shuffle_in_place(&mut big, nanos);
+    shuffle_in_place(&mut small, nanos.wrapping_add(0x9E37_79B9_7F4A_7C15));
+
+    big.into_iter().chain(small).next().map(|&(n, _, _)| n)
+}
+
+/// Return true if `name` advertises a single-digit billion-parameter
+/// count, e.g. "Qwen3.5-2B-Q4_K_M" or "llama-3-7b-instruct".
+///
+/// Accepts: a standalone digit 1-9 immediately followed by `b` or `B`,
+/// with the digit *not* preceded by another digit or `.` (so "12B" and
+/// "2.5B" don't count) and the `B` *not* followed by another digit (so
+/// "BF16" isn't a match).
+///
+/// Names without any digit-B pattern return false — they are treated as
+/// "probably strong" because small open-weight models almost always
+/// advertise their size in the filename.
+fn is_single_digit_b_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    for i in 0..bytes.len() {
+        let c = bytes[i];
+        if !c.is_ascii_digit() {
+            continue;
+        }
+        // Must be a single digit run at a word boundary: previous char
+        // must not be another digit, a '.', or an ASCII letter. That
+        // last part rules out MoE "active-params" tags like "A3B" where
+        // the 3B is a subset of a larger total count advertised
+        // elsewhere in the name (e.g. "Qwen3.6-35B-A3B").
+        if i > 0 {
+            let prev = bytes[i - 1];
+            if prev.is_ascii_digit() || prev == b'.' || prev.is_ascii_alphabetic() {
+                continue;
+            }
+        }
+        // Digit must be 1-9 (0B would be nonsense, ignore)
+        if c == b'0' {
+            continue;
+        }
+        // Next byte must be b or B
+        let Some(&next) = bytes.get(i + 1) else {
+            continue;
+        };
+        if next != b'b' && next != b'B' {
+            continue;
+        }
+        // And the byte after that must not be another digit (avoid BF16-like continuations)
+        if let Some(&after) = bytes.get(i + 2) {
+            if after.is_ascii_digit() {
+                continue;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// In-place Fisher-Yates shuffle seeded from `seed`.
+fn shuffle_in_place<T>(items: &mut [T], seed: u64) {
+    if items.len() < 2 {
+        return;
+    }
+    let mut state = seed.wrapping_mul(0x2545_F491_4F6C_DD1D).wrapping_add(1);
+    for i in (1..items.len()).rev() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        let j = (state as usize) % (i + 1);
+        items.swap(i, j);
+    }
 }
 
 /// Legacy wrapper for tests that have category + tools but no complexity.
@@ -833,5 +912,124 @@ mod tests {
             "Hermes-2-Pro-Mistral-7B-Q4_K_M"
         );
         assert_eq!(strip_split_suffix(""), "");
+    }
+
+    #[test]
+    fn test_is_single_digit_b_name() {
+        // Single-digit sizes — match
+        assert!(is_single_digit_b_name("Qwen3.5-2B-Q4_K_M"));
+        assert!(is_single_digit_b_name("Qwen3.5-9B-Q4_K_M"));
+        assert!(is_single_digit_b_name("llama-3-7b-instruct"));
+        assert!(is_single_digit_b_name("Mistral-7B-Instruct-v0.3"));
+        assert!(is_single_digit_b_name("gemma-2-2b-it"));
+
+        // Multi-digit sizes — not small
+        assert!(!is_single_digit_b_name("gemma-4-31B-it-Q8_0"));
+        assert!(!is_single_digit_b_name("Qwen3.6-35B-A3B-BF16"));
+        assert!(!is_single_digit_b_name("llama-3.1-70B-Instruct"));
+        assert!(!is_single_digit_b_name("deepseek-v3-671B"));
+
+        // Decimal sizes — not single-digit (treat as unknown/big)
+        assert!(!is_single_digit_b_name("phi-3.5-mini-3.8B"));
+        assert!(!is_single_digit_b_name("Qwen2.5-1.5B"));
+
+        // Unknown names — no match → treated as big
+        assert!(!is_single_digit_b_name("MiniMax-M2.5-Q4_K_M"));
+        assert!(!is_single_digit_b_name("Qwen3-Coder-Next-Q4_K_M"));
+        assert!(!is_single_digit_b_name(""));
+
+        // BF16 / FP16 substrings must not trigger
+        assert!(!is_single_digit_b_name("some-model-BF16"));
+        assert!(!is_single_digit_b_name("some-model-fp16"));
+
+        // Digit-B embedded with later digits (versions) must not trigger
+        assert!(!is_single_digit_b_name("foo-2b1-bar")); // 2b followed by 1
+    }
+
+    #[test]
+    fn test_pick_prefers_multi_digit_over_single_digit() {
+        use crate::models::ModelCapabilities;
+
+        let no_caps = ModelCapabilities::default();
+        let available = vec![
+            ("Qwen3.5-2B-Q4_K_M", 0.0, no_caps),
+            ("Qwen3.5-9B-Q4_K_M", 0.0, no_caps),
+            ("gemma-4-31B-it-Q8_0", 0.0, no_caps),
+            ("Qwen3.6-35B-A3B-BF16", 0.0, no_caps),
+            ("MiniMax-M2.5-Q4_K_M", 0.0, no_caps),
+            ("Qwen3-Coder-Next-Q4_K_M", 0.0, no_caps),
+        ];
+        let cl = Classification {
+            category: Category::Chat,
+            complexity: Complexity::Moderate,
+            needs_tools: false,
+            has_media_inputs: false,
+        };
+
+        let smalls = ["Qwen3.5-2B-Q4_K_M", "Qwen3.5-9B-Q4_K_M"];
+        // Across many picks, small-tier names must never win when big-tier is non-empty.
+        for _ in 0..200 {
+            let picked = pick_model_classified(&cl, &available).expect("some pick");
+            assert!(
+                !smalls.contains(&picked),
+                "small-tier model {picked} was picked despite a non-empty big tier"
+            );
+        }
+    }
+
+    #[test]
+    fn test_pick_falls_back_to_small_when_no_big_tier() {
+        use crate::models::ModelCapabilities;
+
+        let no_caps = ModelCapabilities::default();
+        let available = vec![
+            ("Qwen3.5-2B-Q4_K_M", 0.0, no_caps),
+            ("Qwen3.5-9B-Q4_K_M", 0.0, no_caps),
+        ];
+        let cl = Classification {
+            category: Category::Chat,
+            complexity: Complexity::Moderate,
+            needs_tools: false,
+            has_media_inputs: false,
+        };
+
+        let picked = pick_model_classified(&cl, &available).expect("some pick");
+        assert!(picked == "Qwen3.5-2B-Q4_K_M" || picked == "Qwen3.5-9B-Q4_K_M");
+    }
+
+    #[test]
+    fn test_pick_spreads_across_big_tier() {
+        use crate::models::ModelCapabilities;
+        use std::collections::HashSet;
+
+        let no_caps = ModelCapabilities::default();
+        let available = vec![
+            ("gemma-4-31B-it-Q8_0", 0.0, no_caps),
+            ("Qwen3.6-35B-A3B-BF16", 0.0, no_caps),
+            ("MiniMax-M2.5-Q4_K_M", 0.0, no_caps),
+            ("Qwen3-Coder-Next-Q4_K_M", 0.0, no_caps),
+        ];
+        let cl = Classification {
+            category: Category::Chat,
+            complexity: Complexity::Moderate,
+            needs_tools: false,
+            has_media_inputs: false,
+        };
+
+        let mut seen = HashSet::new();
+        for _ in 0..500 {
+            if let Some(m) = pick_model_classified(&cl, &available) {
+                seen.insert(m);
+            }
+            // Sleep a nanosecond-scale amount so the seed changes between iterations
+            std::thread::sleep(std::time::Duration::from_nanos(1));
+        }
+        // Over 500 picks with nanosecond-seeded shuffles, we should see
+        // at least 3 of the 4 big-tier models. (Allowing 1 slop for the
+        // rare case where timing quantization biases the seed.)
+        assert!(
+            seen.len() >= 3,
+            "expected spread across big-tier models, only saw {seen:?}"
+        );
     }
 }

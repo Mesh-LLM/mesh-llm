@@ -1,7 +1,7 @@
 use super::runtime::PluginRuntime;
 use super::{proto, PluginMeshEvent, PluginRpcBridge, PluginSummary, PROTOCOL_VERSION};
 use anyhow::{anyhow, bail, Context, Result};
-use rand::Rng;
+use rand::RngExt;
 use rmcp::model::ErrorCode;
 use std::collections::HashMap;
 use std::future::Future;

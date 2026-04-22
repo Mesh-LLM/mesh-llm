@@ -286,16 +286,16 @@ fn local_hardware_info_to_proto(
     }
 }
 
-fn proto_gpu_info_to_legacy_fields(
-    gpus: &[crate::proto::node::GpuInfo],
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-) {
+struct LegacyGpuFields {
+    gpu_name: Option<String>,
+    gpu_vram: Option<String>,
+    gpu_reserved_bytes: Option<String>,
+    gpu_mem_bandwidth_gbps: Option<String>,
+    gpu_compute_tflops_fp32: Option<String>,
+    gpu_compute_tflops_fp16: Option<String>,
+}
+
+fn proto_gpu_info_to_legacy_fields(gpus: &[crate::proto::node::GpuInfo]) -> LegacyGpuFields {
     let names: Vec<String> = gpus.iter().filter_map(|gpu| gpu.name.clone()).collect();
     let gpu_name = crate::system::hardware::summarize_gpu_name(&names);
     let gpu_vram = join_optional_csv(
@@ -329,14 +329,14 @@ fn proto_gpu_info_to_legacy_fields(
             .collect::<Vec<_>>(),
     );
 
-    (
+    LegacyGpuFields {
         gpu_name,
         gpu_vram,
         gpu_reserved_bytes,
         gpu_mem_bandwidth_gbps,
         gpu_compute_tflops_fp32,
         gpu_compute_tflops_fp16,
-    )
+    }
 }
 
 /// Returns `true` when a proto descriptor carries a non-empty model name.
@@ -483,6 +483,7 @@ pub(crate) fn local_ann_to_proto_ann(
         gpu_compute_tflops_fp16: ann.gpu_compute_tflops_fp16.clone(),
         gpu_reserved_bytes: ann.gpu_reserved_bytes.clone(),
         hardware,
+        first_joined_mesh_ts: ann.first_joined_mesh_ts,
     }
 }
 
@@ -535,14 +536,7 @@ pub(crate) fn proto_ann_to_local(
         .unwrap_or(!pa.hosted_models.is_empty())
         .then(|| pa.hosted_models.clone());
     let hardware = pa.hardware.as_ref();
-    let (
-        gpu_name_from_gpus,
-        gpu_vram_from_gpus,
-        gpu_reserved_from_gpus,
-        gpu_mem_bandwidth_from_gpus,
-        gpu_fp32_from_gpus,
-        gpu_fp16_from_gpus,
-    ) = proto_gpu_info_to_legacy_fields(
+    let legacy_gpu_fields = proto_gpu_info_to_legacy_fields(
         hardware
             .map(|hardware| hardware.gpus.as_slice())
             .unwrap_or(&[]),
@@ -550,6 +544,7 @@ pub(crate) fn proto_ann_to_local(
     let mut ann = PeerAnnouncement {
         addr: addr.clone(),
         role,
+        first_joined_mesh_ts: pa.first_joined_mesh_ts,
         models: pa.catalog_models.clone(),
         vram_bytes: pa.vram_bytes,
         model_source: pa.model_source.clone(),
@@ -560,17 +555,24 @@ pub(crate) fn proto_ann_to_local(
         version: pa.version.clone(),
         model_demand,
         mesh_id: pa.mesh_id.clone(),
-        gpu_name: gpu_name_from_gpus.or_else(|| pa.gpu_name.clone()),
+        gpu_name: legacy_gpu_fields.gpu_name.or_else(|| pa.gpu_name.clone()),
         hostname: hardware
             .and_then(|hardware| hardware.hostname.clone())
             .or_else(|| pa.hostname.clone()),
         is_soc: hardware.and_then(|hardware| hardware.is_soc).or(pa.is_soc),
-        gpu_vram: gpu_vram_from_gpus.or_else(|| pa.gpu_vram.clone()),
-        gpu_reserved_bytes: gpu_reserved_from_gpus.or_else(|| pa.gpu_reserved_bytes.clone()),
-        gpu_mem_bandwidth_gbps: gpu_mem_bandwidth_from_gpus
+        gpu_vram: legacy_gpu_fields.gpu_vram.or_else(|| pa.gpu_vram.clone()),
+        gpu_reserved_bytes: legacy_gpu_fields
+            .gpu_reserved_bytes
+            .or_else(|| pa.gpu_reserved_bytes.clone()),
+        gpu_mem_bandwidth_gbps: legacy_gpu_fields
+            .gpu_mem_bandwidth_gbps
             .or_else(|| pa.gpu_mem_bandwidth_gbps.clone()),
-        gpu_compute_tflops_fp32: gpu_fp32_from_gpus.or_else(|| pa.gpu_compute_tflops_fp32.clone()),
-        gpu_compute_tflops_fp16: gpu_fp16_from_gpus.or_else(|| pa.gpu_compute_tflops_fp16.clone()),
+        gpu_compute_tflops_fp32: legacy_gpu_fields
+            .gpu_compute_tflops_fp32
+            .or_else(|| pa.gpu_compute_tflops_fp32.clone()),
+        gpu_compute_tflops_fp16: legacy_gpu_fields
+            .gpu_compute_tflops_fp16
+            .or_else(|| pa.gpu_compute_tflops_fp16.clone()),
         available_model_metadata: Vec::new(),
         experts_summary: pa.experts_summary.clone(),
         available_model_sizes: HashMap::new(),
@@ -740,6 +742,7 @@ pub(crate) fn proto_config_to_mesh(
             mmproj: declared_ref_or_none(m.mmproj_ref.as_ref()).or_else(|| m.mmproj.clone()),
             ctx_size: m.ctx_size,
             gpu_id: m.gpu_id.clone(),
+            parallel: None,
         })
         .collect();
     let plugins = snapshot
@@ -754,7 +757,10 @@ pub(crate) fn proto_config_to_mesh(
         .collect();
     MeshConfig {
         version: Some(snapshot.version),
-        gpu: GpuConfig { assignment },
+        gpu: GpuConfig {
+            assignment,
+            parallel: None,
+        },
         models,
         plugins,
     }

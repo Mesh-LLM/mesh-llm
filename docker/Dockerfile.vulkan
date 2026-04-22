@@ -4,6 +4,7 @@
 # Build:  DOCKER_BUILDKIT=1 docker build -f docker/Dockerfile.vulkan -t mesh-llm:vulkan .
 # Run (with Vulkan GPU access — requires vendor-specific ICD on host):
 #         docker run --rm --device /dev/dri -p 9337:9337 -v ~/.models:/root/.models -e APP_MODE=worker mesh-llm:vulkan
+#         docker run --rm --device /dev/dri -p 9337:9337 -p 3131:3131 -e APP_MODE=worker -e MESH_HEADLESS=1 mesh-llm:vulkan  # API-only
 #
 # Binaries: /usr/local/lib/mesh-llm/bin/{rpc-server-vulkan,llama-server-vulkan,llama-moe-split}
 

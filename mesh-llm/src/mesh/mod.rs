@@ -43,6 +43,8 @@ fn current_time_unix_ms() -> u64 {
 }
 
 const MIN_PINNED_GPU_CONFIG_PEER_VERSION: &str = "0.59.0";
+pub(super) const PEER_CONNECT_AND_GOSSIP_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(15);
 
 fn config_uses_pinned_gpu(config: &crate::plugin::MeshConfig) -> bool {
     config.gpu.assignment == crate::plugin::GpuAssignment::Pinned
@@ -653,6 +655,7 @@ pub enum NodeRole {
 pub(crate) struct PeerAnnouncement {
     pub(crate) addr: EndpointAddr,
     pub(crate) role: NodeRole,
+    pub(crate) first_joined_mesh_ts: Option<u64>,
     pub(crate) models: Vec<String>,
     pub(crate) vram_bytes: u64,
     pub(crate) model_source: Option<String>,
@@ -686,6 +689,7 @@ pub struct PeerInfo {
     pub addr: EndpointAddr,
     pub tunnel_port: Option<u16>,
     pub role: NodeRole,
+    pub first_joined_mesh_ts: Option<u64>,
     pub models: Vec<String>,
     pub vram_bytes: u64,
     pub rtt_ms: Option<u32>,
@@ -759,6 +763,7 @@ impl PeerInfo {
             addr,
             tunnel_port: None,
             role: ann.role.clone(),
+            first_joined_mesh_ts: ann.first_joined_mesh_ts,
             models: ann.models.clone(),
             vram_bytes: ann.vram_bytes,
             rtt_ms: None,
@@ -983,12 +988,14 @@ pub struct Node {
     /// This is the single source of truth for "what does the mesh want?"
     model_demand: Arc<std::sync::Mutex<HashMap<String, ModelDemand>>>,
     mesh_id: Arc<Mutex<Option<String>>>,
+    first_joined_mesh_ts: Arc<Mutex<Option<u64>>>,
     accepting: Arc<(tokio::sync::Notify, std::sync::atomic::AtomicBool)>,
     vram_bytes: u64,
     peer_change_tx: watch::Sender<usize>,
     pub peer_change_rx: watch::Receiver<usize>,
     inflight_requests: Arc<std::sync::atomic::AtomicUsize>,
     inflight_change_tx: watch::Sender<u64>,
+    routing_metrics: crate::network::metrics::RoutingMetrics,
     tunnel_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
     tunnel_http_tx:
         tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
@@ -1142,10 +1149,11 @@ impl Node {
     pub fn begin_inflight_request(&self) -> InflightRequestGuard {
         self.inflight_requests
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let _ = self.inflight_change_tx.send(
-            self.inflight_requests
-                .load(std::sync::atomic::Ordering::Relaxed) as u64,
-        );
+        let current = self
+            .inflight_requests
+            .load(std::sync::atomic::Ordering::Relaxed) as u64;
+        let _ = self.inflight_change_tx.send(current);
+        self.routing_metrics.observe_inflight(current);
         InflightRequestGuard {
             inflight_requests: self.inflight_requests.clone(),
             inflight_change_tx: self.inflight_change_tx.clone(),
@@ -1159,6 +1167,78 @@ impl Node {
 
     pub fn inflight_change_rx(&self) -> watch::Receiver<u64> {
         self.inflight_change_tx.subscribe()
+    }
+
+    pub fn record_inference_attempt(
+        &self,
+        model: Option<&str>,
+        target: &crate::inference::election::InferenceTarget,
+        queue_wait: std::time::Duration,
+        attempt_time: std::time::Duration,
+        outcome: crate::network::metrics::AttemptOutcome,
+        completion_tokens: Option<u64>,
+    ) {
+        let attempt_target = match target {
+            crate::inference::election::InferenceTarget::Local(port)
+            | crate::inference::election::InferenceTarget::MoeLocal(port) => {
+                crate::network::metrics::AttemptTarget::Local(format!("127.0.0.1:{port}"))
+            }
+            crate::inference::election::InferenceTarget::Remote(peer_id)
+            | crate::inference::election::InferenceTarget::MoeRemote(peer_id) => {
+                crate::network::metrics::AttemptTarget::Remote(peer_id.fmt_short().to_string())
+            }
+            crate::inference::election::InferenceTarget::None => return,
+        };
+        self.routing_metrics.record_attempt(
+            model,
+            attempt_target,
+            queue_wait,
+            attempt_time,
+            outcome,
+            completion_tokens,
+        );
+    }
+
+    pub fn record_endpoint_attempt(
+        &self,
+        model: Option<&str>,
+        endpoint: &str,
+        queue_wait: std::time::Duration,
+        attempt_time: std::time::Duration,
+        outcome: crate::network::metrics::AttemptOutcome,
+        completion_tokens: Option<u64>,
+    ) {
+        self.routing_metrics.record_attempt(
+            model,
+            crate::network::metrics::AttemptTarget::Endpoint(endpoint.to_string()),
+            queue_wait,
+            attempt_time,
+            outcome,
+            completion_tokens,
+        );
+    }
+
+    pub fn record_routed_request(
+        &self,
+        model: Option<&str>,
+        attempts: usize,
+        outcome: crate::network::metrics::RequestOutcome,
+    ) {
+        self.routing_metrics
+            .record_request(model, attempts, outcome);
+    }
+
+    pub fn routing_metrics_snapshot(
+        &self,
+    ) -> crate::network::metrics::RoutingMetricsStatusSnapshot {
+        self.routing_metrics
+            .status_snapshot(self.inflight_requests())
+    }
+
+    pub fn model_routing_metrics(
+        &self,
+    ) -> HashMap<String, crate::network::metrics::ModelRoutingMetricsSnapshot> {
+        self.routing_metrics.model_snapshots()
     }
 
     pub async fn owner_summary(&self) -> OwnershipSummary {
@@ -1179,7 +1259,7 @@ impl Node {
         let secret_key = if matches!(role, NodeRole::Client)
             || std::env::var("MESH_LLM_EPHEMERAL_KEY").is_ok()
         {
-            let key = SecretKey::generate(&mut rand::rng());
+            let key = SecretKey::generate();
             tracing::info!("Using ephemeral key (unique identity)");
             key
         } else {
@@ -1192,7 +1272,7 @@ impl Node {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(1024u32.into())
             .build();
-        let mut builder = Endpoint::empty_builder()
+        let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .secret_key(secret_key)
             .alpns(vec![ALPN_V1.to_vec()])
             .transport_config(transport_config);
@@ -1210,10 +1290,7 @@ impl Node {
             // Two iroh relays: US West (primary) and Asia-Pacific South (fallback).
             let configs: Vec<RelayConfig> = urls
                 .iter()
-                .map(|url| RelayConfig {
-                    url: url.parse().expect("invalid relay URL"),
-                    quic: None,
-                })
+                .map(|url| RelayConfig::new(url.parse().expect("invalid relay URL"), None))
                 .collect();
             let relay_map = RelayMap::from_iter(configs);
             tracing::info!("Relay: {:?}", urls);
@@ -1354,6 +1431,7 @@ impl Node {
             requested_models: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             mesh_id: Arc::new(Mutex::new(None)),
+            first_joined_mesh_ts: Arc::new(Mutex::new(None)),
             accepting: Arc::new((
                 tokio::sync::Notify::new(),
                 std::sync::atomic::AtomicBool::new(false),
@@ -1363,6 +1441,7 @@ impl Node {
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             inflight_change_tx,
+            routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             tunnel_tx,
             tunnel_http_tx,
             plugin_manager: Arc::new(Mutex::new(None)),
@@ -1410,8 +1489,8 @@ impl Node {
         let transport_config = QuicTransportConfig::builder()
             .max_concurrent_bidi_streams(1024u32.into())
             .build();
-        let endpoint = Endpoint::empty_builder()
-            .secret_key(SecretKey::generate(&mut rand::rng()))
+        let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(SecretKey::generate())
             .alpns(vec![ALPN.to_vec()])
             .relay_mode(iroh::endpoint::RelayMode::Disabled)
             .transport_config(transport_config)
@@ -1452,6 +1531,7 @@ impl Node {
             requested_models: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             mesh_id: Arc::new(Mutex::new(None)),
+            first_joined_mesh_ts: Arc::new(Mutex::new(None)),
             accepting: Arc::new((
                 tokio::sync::Notify::new(),
                 std::sync::atomic::AtomicBool::new(false),
@@ -1461,6 +1541,7 @@ impl Node {
             peer_change_rx,
             inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             inflight_change_tx,
+            routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             tunnel_tx,
             tunnel_http_tx,
             plugin_manager: Arc::new(Mutex::new(None)),
@@ -1469,7 +1550,7 @@ impl Node {
             owner_summary: Arc::new(Mutex::new(OwnershipSummary::default())),
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
             trust_policy: TrustPolicy::Off,
-            enumerate_host: false,
+            enumerate_host: true,
             gpu_name: None,
             hostname: None,
             is_soc: Some(false),
@@ -1964,6 +2045,20 @@ impl Node {
 
     pub async fn mesh_id(&self) -> Option<String> {
         self.mesh_id.lock().await.clone()
+    }
+
+    pub async fn first_joined_mesh_ts(&self) -> Option<u64> {
+        *self.first_joined_mesh_ts.lock().await
+    }
+
+    pub async fn set_first_joined_mesh_ts_if_absent(&self, ts: u64) -> bool {
+        let mut current = self.first_joined_mesh_ts.lock().await;
+        if current.is_none() {
+            *current = Some(ts);
+            true
+        } else {
+            false
+        }
     }
 
     /// Set the mesh identity. If None was set, adopts the given ID (from gossip).
@@ -3117,6 +3212,8 @@ impl Node {
                                         let mut state = node.state.lock().await;
                                         // Only insert if no other task raced and
                                         // established a connection while we were probing.
+                                        #[allow(clippy::map_entry)]
+                                        // manual drop(state) before async spawn
                                         if !state.connections.contains_key(&dead_id) {
                                             state.connections.insert(dead_id, new_conn.clone());
                                             drop(state);
@@ -3765,7 +3862,7 @@ impl Node {
 
         tracing::info!("Connecting to peer {}...", peer_id.fmt_short());
         let conn = match tokio::time::timeout(
-            std::time::Duration::from_secs(15),
+            PEER_CONNECT_AND_GOSSIP_TIMEOUT,
             connect_mesh(&self.endpoint, addr.clone()),
         )
         .await
@@ -3775,7 +3872,11 @@ impl Node {
                 anyhow::bail!("Failed to connect to {}: {e}", peer_id.fmt_short());
             }
             Err(_) => {
-                anyhow::bail!("Timeout connecting to {} (15s)", peer_id.fmt_short());
+                anyhow::bail!(
+                    "Timeout connecting to {} ({}s)",
+                    peer_id.fmt_short(),
+                    PEER_CONNECT_AND_GOSSIP_TIMEOUT.as_secs()
+                );
             }
         };
 
@@ -4032,7 +4133,7 @@ async fn load_or_create_key() -> Result<SecretKey> {
         return Ok(key);
     }
 
-    let key = SecretKey::generate(&mut rand::rng());
+    let key = SecretKey::generate();
     save_node_key_to_path(&key_path, &key)?;
     tracing::info!("Generated new key, saved to {}", key_path.display());
     Ok(key)

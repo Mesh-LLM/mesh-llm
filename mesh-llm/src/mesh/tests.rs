@@ -14,8 +14,8 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
     let transport_config = QuicTransportConfig::builder()
         .max_concurrent_bidi_streams(128u32.into())
         .build();
-    let endpoint = Endpoint::empty_builder()
-        .secret_key(SecretKey::generate(&mut rand::rng()))
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
         .alpns(vec![ALPN_V1.to_vec()])
         .transport_config(transport_config)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
@@ -51,6 +51,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
         requested_models: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         mesh_id: Arc::new(Mutex::new(None)),
+        first_joined_mesh_ts: Arc::new(Mutex::new(None)),
         accepting: Arc::new((
             tokio::sync::Notify::new(),
             std::sync::atomic::AtomicBool::new(false),
@@ -60,6 +61,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
         peer_change_rx,
         inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         inflight_change_tx,
+        routing_metrics: crate::network::metrics::RoutingMetrics::default(),
         tunnel_tx,
         tunnel_http_tx,
         plugin_manager: Arc::new(Mutex::new(None)),
@@ -361,6 +363,7 @@ fn test_peer_payload_hw_fields() {
 
 #[test]
 fn test_enumerate_host_false_omits_hw_fields_in_announcement() {
+    // With enumerate_host: false (opt-out), hardware fields are NOT sent
     let enumerate_host = false;
     let gpu_name: Option<String> = Some("NVIDIA RTX 5090".to_string());
     let hostname: Option<String> = Some("carrack".to_string());
@@ -389,6 +392,7 @@ fn test_enumerate_host_false_omits_hw_fields_in_announcement() {
 
 #[test]
 fn test_enumerate_host_true_includes_hw_fields_in_announcement() {
+    // With enumerate_host: true (default), hardware fields ARE sent
     let enumerate_host = true;
     let gpu_name: Option<String> = Some("NVIDIA RTX 5090".to_string());
     let hostname: Option<String> = Some("carrack".to_string());
@@ -417,6 +421,7 @@ fn test_enumerate_host_true_includes_hw_fields_in_announcement() {
 
 #[test]
 fn test_is_soc_always_included_regardless_of_enumerate_host() {
+    // is_soc is always sent regardless of enumerate_host setting
     for enumerate_host in [false, true] {
         let is_soc: Option<bool> = Some(true);
         let gpu_name: Option<String> = Some("Tegra AGX Orin".to_string());
@@ -518,6 +523,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         },
         tunnel_port: None,
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec![],
         vram_bytes: 0,
         rtt_ms: None,
@@ -1165,6 +1171,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
             addrs: Default::default(),
         },
         role: super::NodeRole::Host { http_port: 8080 },
+        first_joined_mesh_ts: None,
         models: vec!["Qwen3-8B-Q4_K_M".to_string()],
         vram_bytes: 128 * 1024 * 1024 * 1024,
         model_source: Some("bartowski/Qwen3-8B-GGUF".to_string()),
@@ -1404,6 +1411,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
     let ann = super::PeerAnnouncement {
         addr: addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["NewModel-Q4_K_M".to_string()],
         vram_bytes: 8 * 1024 * 1024 * 1024,
         model_source: Some("new-source".to_string()),
@@ -1475,6 +1483,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
     let ann = super::PeerAnnouncement {
         addr: weak_addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["SomeModel-Q4_K_M".to_string()],
         vram_bytes: 4 * 1024 * 1024 * 1024,
         model_source: None,
@@ -1525,6 +1534,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
     let ann2 = super::PeerAnnouncement {
         addr: richer_addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["SomeModel-Q4_K_M".to_string()],
         vram_bytes: 4 * 1024 * 1024 * 1024,
         model_source: None,
@@ -2069,6 +2079,7 @@ fn transitive_peer_update_refreshes_last_mentioned() {
     let ann = super::PeerAnnouncement {
         addr: addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["SomeModel-Q4_K_M".to_string()],
         vram_bytes: 8 * 1024 * 1024 * 1024,
         model_source: None,
@@ -2720,7 +2731,9 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
             id,
             addrs: Default::default(),
         },
+        tunnel_port: None,
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec![],
         vram_bytes: vram_gb * 1024 * 1024 * 1024,
         rtt_ms,
@@ -2744,7 +2757,6 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
         gpu_compute_tflops_fp16: None,
         available_model_metadata: vec![],
         experts_summary: None,
-        tunnel_port: None,
         available_model_sizes: HashMap::new(),
         served_model_descriptors: vec![],
         served_model_runtime: vec![],
@@ -2760,7 +2772,7 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
 #[tokio::test]
 async fn test_rtt_drop_triggers_reelection() -> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
-    let peer_key = SecretKey::generate(&mut rand::rng());
+    let peer_key = SecretKey::generate();
     let peer_id = EndpointId::from(peer_key.public());
 
     // Add a fake peer with high relay RTT
@@ -2796,7 +2808,7 @@ async fn test_rtt_drop_triggers_reelection() -> Result<()> {
 #[tokio::test]
 async fn test_rtt_below_threshold_no_reelection() -> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
-    let peer_key = SecretKey::generate(&mut rand::rng());
+    let peer_key = SecretKey::generate();
     let peer_id = EndpointId::from(peer_key.public());
 
     {
@@ -2823,7 +2835,7 @@ async fn test_rtt_below_threshold_no_reelection() -> Result<()> {
 #[tokio::test]
 async fn test_rtt_update_unknown_peer_no_panic() -> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
-    let peer_key = SecretKey::generate(&mut rand::rng());
+    let peer_key = SecretKey::generate();
     let peer_id = EndpointId::from(peer_key.public());
 
     let rx = node.peer_change_rx.clone();
@@ -2844,7 +2856,7 @@ async fn test_rtt_update_unknown_peer_no_panic() -> Result<()> {
 #[tokio::test]
 async fn test_rtt_cannot_regress() -> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
-    let peer_key = SecretKey::generate(&mut rand::rng());
+    let peer_key = SecretKey::generate();
     let peer_id = EndpointId::from(peer_key.public());
 
     {
@@ -2881,7 +2893,7 @@ async fn test_rtt_cannot_regress() -> Result<()> {
 #[tokio::test]
 async fn test_connect_to_peer_skips_known_peer_without_connection() -> Result<()> {
     let node = make_test_node(super::NodeRole::Client).await?;
-    let peer_key = SecretKey::generate(&mut rand::rng());
+    let peer_key = SecretKey::generate();
     let peer_id = EndpointId::from(peer_key.public());
 
     // Simulate a transitive peer: in state.peers but NOT in state.connections
@@ -3147,8 +3159,8 @@ async fn make_test_node_with_owner(
     let transport_config = QuicTransportConfig::builder()
         .max_concurrent_bidi_streams(128u32.into())
         .build();
-    let endpoint = Endpoint::empty_builder()
-        .secret_key(SecretKey::generate(&mut rand::rng()))
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
         .alpns(vec![ALPN_V1.to_vec()])
         .transport_config(transport_config)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
@@ -3200,6 +3212,7 @@ async fn make_test_node_with_owner(
         requested_models: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         mesh_id: Arc::new(Mutex::new(None)),
+        first_joined_mesh_ts: Arc::new(Mutex::new(None)),
         accepting: Arc::new((
             tokio::sync::Notify::new(),
             std::sync::atomic::AtomicBool::new(false),
@@ -3209,6 +3222,7 @@ async fn make_test_node_with_owner(
         peer_change_rx,
         inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         inflight_change_tx,
+        routing_metrics: crate::network::metrics::RoutingMetrics::default(),
         tunnel_tx,
         tunnel_http_tx,
         plugin_manager: Arc::new(Mutex::new(None)),
@@ -3523,12 +3537,14 @@ async fn config_subscribe_rejects_pinned_snapshot_for_older_peer() -> Result<()>
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3619,12 +3635,14 @@ async fn config_subscribe_rejects_pinned_snapshot_for_malformed_peer_version() -
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3713,12 +3731,14 @@ async fn config_subscribe_allows_pinned_snapshot_for_same_release_prerelease_pee
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3886,12 +3906,14 @@ async fn config_subscribe_closes_when_revision_becomes_pinned_for_malformed_peer
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -3984,12 +4006,14 @@ async fn config_subscribe_closes_when_revision_becomes_pinned_for_older_peer() -
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -4083,12 +4107,14 @@ async fn config_subscribe_keeps_stream_open_when_revision_becomes_pinned_for_sam
                 version: Some(1),
                 gpu: crate::plugin::GpuConfig {
                     assignment: crate::plugin::GpuAssignment::Pinned,
+                    ..Default::default()
                 },
                 models: vec![crate::plugin::ModelConfigEntry {
                     model: "Qwen3-8B-Q4_K_M".into(),
                     mmproj: None,
                     ctx_size: Some(8192),
                     gpu_id: Some("pci:0000:65:00.0".into()),
+                    parallel: None,
                 }],
                 plugins: vec![],
             },
@@ -4487,12 +4513,14 @@ fn pinned_gpu_runtime_push_rejects_invalid_pushed_pinned_config_before_apply() {
     let config = crate::plugin::MeshConfig {
         gpu: crate::plugin::GpuConfig {
             assignment: crate::plugin::GpuAssignment::Pinned,
+            ..Default::default()
         },
         models: vec![crate::plugin::ModelConfigEntry {
             model: "Qwen3-8B-Q4_K_M".into(),
             mmproj: None,
             ctx_size: Some(8192),
             gpu_id: Some("pci:0000:b3:00.0".into()),
+            parallel: None,
         }],
         ..crate::plugin::MeshConfig::default()
     };
@@ -4526,12 +4554,14 @@ fn pinned_gpu_runtime_push_accepts_valid_pushed_pinned_config() {
     let config = crate::plugin::MeshConfig {
         gpu: crate::plugin::GpuConfig {
             assignment: crate::plugin::GpuAssignment::Pinned,
+            ..Default::default()
         },
         models: vec![crate::plugin::ModelConfigEntry {
             model: "Qwen3-8B-Q4_K_M".into(),
             mmproj: None,
             ctx_size: Some(8192),
             gpu_id: Some("uuid:GPU-123".into()),
+            parallel: None,
         }],
         ..crate::plugin::MeshConfig::default()
     };
@@ -4561,12 +4591,14 @@ fn pinned_gpu_runtime_push_rejects_resolved_gpu_without_backend_device() {
     let config = crate::plugin::MeshConfig {
         gpu: crate::plugin::GpuConfig {
             assignment: crate::plugin::GpuAssignment::Pinned,
+            ..Default::default()
         },
         models: vec![crate::plugin::ModelConfigEntry {
             model: "Qwen3-8B-Q4_K_M".into(),
             mmproj: None,
             ctx_size: Some(8192),
             gpu_id: Some("uuid:GPU-123".into()),
+            parallel: None,
         }],
         ..crate::plugin::MeshConfig::default()
     };

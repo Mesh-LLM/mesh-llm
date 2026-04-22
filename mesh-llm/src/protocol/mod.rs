@@ -525,6 +525,7 @@ mod tests {
             },
             tunnel_port: None,
             role: crate::mesh::NodeRole::Worker,
+            first_joined_mesh_ts: None,
             models: vec![],
             vram_bytes: 0,
             rtt_ms: None,
@@ -1191,6 +1192,7 @@ mod tests {
                 addrs: Default::default(),
             },
             role: super::NodeRole::Worker,
+            first_joined_mesh_ts: None,
             models: vec![],
             vram_bytes: 0,
             model_source: None,
@@ -1257,6 +1259,7 @@ mod tests {
                 addrs: Default::default(),
             },
             role: super::NodeRole::Host { http_port: 3131 },
+            first_joined_mesh_ts: None,
             models: vec!["Qwen".to_string()],
             vram_bytes: 48_000_000_000,
             model_source: Some("Qwen.gguf".to_string()),
@@ -1564,12 +1567,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B.gguf".to_string(),
                 mmproj: Some("mm.gguf".to_string()),
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".to_string()),
+                parallel: None,
             }],
             plugins: vec![PluginConfigEntry {
                 name: "blackboard".to_string(),
@@ -1612,12 +1617,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "test.gguf".to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -1631,12 +1638,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "other.gguf".to_string(),
                 mmproj: None,
                 ctx_size: None,
                 gpu_id: None,
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -1653,12 +1662,14 @@ mod tests {
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Pinned,
+                parallel: None,
             },
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".to_string(),
                 mmproj: Some("mmproj-f16.gguf".to_string()),
                 ctx_size: Some(8192),
                 gpu_id: Some("pci:0000:65:00.0".to_string()),
+                parallel: None,
             }],
             plugins: vec![],
         };
@@ -1925,5 +1936,96 @@ mod tests {
             "expected MissingConfig, got {:?}",
             err
         );
+    }
+
+    #[test]
+    fn test_peer_announcement_first_joined_mesh_ts_roundtrip() {
+        use iroh::SecretKey;
+        use std::collections::HashMap;
+
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xEF; 32]).public());
+
+        let ann_with_timestamp = super::PeerAnnouncement {
+            addr: iroh::EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            role: super::NodeRole::Worker,
+            first_joined_mesh_ts: Some(1_700_000_000_000u64),
+            models: vec![],
+            vram_bytes: 0,
+            model_source: None,
+            serving_models: vec![],
+            hosted_models: None,
+            available_models: vec![],
+            requested_models: vec![],
+            version: None,
+            model_demand: HashMap::new(),
+            mesh_id: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+        };
+
+        let proto_pa = local_ann_to_proto_ann(&ann_with_timestamp);
+        assert_eq!(proto_pa.first_joined_mesh_ts, Some(1_700_000_000_000u64));
+
+        let (_, roundtripped) =
+            proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+        assert_eq!(
+            roundtripped.first_joined_mesh_ts,
+            Some(1_700_000_000_000u64)
+        );
+
+        let ann_without_timestamp = super::PeerAnnouncement {
+            addr: iroh::EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            role: super::NodeRole::Worker,
+            first_joined_mesh_ts: None,
+            models: vec![],
+            vram_bytes: 0,
+            model_source: None,
+            serving_models: vec![],
+            hosted_models: None,
+            available_models: vec![],
+            requested_models: vec![],
+            version: None,
+            model_demand: HashMap::new(),
+            mesh_id: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+        };
+
+        let proto_pa = local_ann_to_proto_ann(&ann_without_timestamp);
+        assert_eq!(proto_pa.first_joined_mesh_ts, None);
+
+        let (_, roundtripped) =
+            proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
+        assert_eq!(roundtripped.first_joined_mesh_ts, None);
     }
 }

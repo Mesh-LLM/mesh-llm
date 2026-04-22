@@ -7,6 +7,9 @@
 #         docker run --rm --device=/dev/kfd --device=/dev/dri \
 #           -p 9337:9337 -v ~/.models:/root/.models \
 #           -e APP_MODE=worker mesh-llm:rocm
+#         docker run --rm --device=/dev/kfd --device=/dev/dri \
+#           -p 9337:9337 -p 3131:3131 -v ~/.models:/root/.models \
+#           -e APP_MODE=worker -e MESH_HEADLESS=1 mesh-llm:rocm  # API-only
 #
 # Binaries: /usr/local/lib/mesh-llm/bin/{rpc-server-rocm,llama-server-rocm,llama-moe-split}
 
@@ -98,7 +101,7 @@ RUN cd llama.cpp && \
 
 FROM rocm/dev-ubuntu-24.04:7.0 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates libgomp1 libdbus-1-3 \
+    ca-certificates libgomp1 libdbus-1-3 hipblas rocblas rocm-smi \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=rust-builder /out/mesh-llm /usr/local/bin/mesh-llm
 COPY --from=llama-builder-rocm /out/rpc-server-rocm /usr/local/lib/mesh-llm/bin/rpc-server-rocm

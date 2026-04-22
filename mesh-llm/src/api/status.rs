@@ -1,8 +1,35 @@
 use super::{RuntimeModelPayload, RuntimeProcessPayload};
 use crate::crypto::{OwnershipStatus, OwnershipSummary};
-use crate::network::affinity;
+use crate::network::{affinity, metrics};
 use crate::system::hardware::expand_gpu_names;
 use serde::Serialize;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum NodeState {
+    Client,
+    Standby,
+    Loading,
+    Serving,
+}
+
+impl NodeState {
+    pub(super) const fn node_status_alias(self) -> &'static str {
+        match self {
+            Self::Client => "Client",
+            Self::Standby => "Standby",
+            Self::Loading => "Loading",
+            Self::Serving => "Serving",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum WakeableNodeState {
+    Sleeping,
+    Waking,
+}
 
 #[derive(Serialize)]
 pub(super) struct RuntimeStatusPayload {
@@ -112,6 +139,7 @@ pub(super) struct StatusPayload {
     pub(super) node_id: String,
     pub(super) owner: OwnershipPayload,
     pub(super) token: String,
+    pub(super) node_state: NodeState,
     pub(super) node_status: String,
     pub(super) is_host: bool,
     pub(super) is_client: bool,
@@ -127,6 +155,7 @@ pub(super) struct StatusPayload {
     pub(super) my_vram_gb: f64,
     pub(super) model_size_gb: f64,
     pub(super) peers: Vec<PeerPayload>,
+    pub(super) wakeable_nodes: Vec<WakeableNode>,
     pub(super) local_instances: Vec<LocalInstance>,
     pub(super) launch_pi: Option<String>,
     pub(super) launch_goose: Option<String>,
@@ -136,10 +165,29 @@ pub(super) struct StatusPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) mesh_name: Option<String>,
     pub(super) nostr_discovery: bool,
+    /// Best-effort publication state per Issue #240: private | public | publish_failed.
+    pub(super) publication_state: String,
     pub(super) my_hostname: Option<String>,
     pub(super) my_is_soc: Option<bool>,
     pub(super) gpus: Vec<GpuEntry>,
     pub(super) routing_affinity: affinity::AffinityStatsSnapshot,
+    /// Local-only routing outcome and current-node pressure snapshot measured on
+    /// this node only; not mesh-wide aggregates.
+    pub(super) routing_metrics: metrics::RoutingMetricsStatusSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) first_joined_mesh_ts: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(super) struct WakeableNode {
+    pub(super) logical_id: String,
+    pub(super) models: Vec<String>,
+    pub(super) vram_gb: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) provider: Option<String>,
+    pub(super) state: WakeableNodeState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) wake_eta_secs: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -147,6 +195,7 @@ pub(super) struct PeerPayload {
     pub(super) id: String,
     pub(super) owner: OwnershipPayload,
     pub(super) role: String,
+    pub(super) state: NodeState,
     pub(super) models: Vec<String>,
     pub(super) available_models: Vec<String>,
     pub(super) requested_models: Vec<String>,
@@ -159,6 +208,8 @@ pub(super) struct PeerPayload {
     pub(super) hostname: Option<String>,
     pub(super) is_soc: Option<bool>,
     pub(super) gpus: Vec<GpuEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) first_joined_mesh_ts: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -263,6 +314,10 @@ pub(super) struct MeshModelPayload {
     pub(super) request_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) last_active_secs_ago: Option<u64>,
+    /// Local-only per-model routing outcome snapshot measured on the current
+    /// node only; not mesh-wide aggregates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) routing_metrics: Option<metrics::ModelRoutingMetricsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) source_page_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -390,6 +445,7 @@ mod tests {
             id: "test-id".to_string(),
             owner: test_owner_payload(),
             role: "Worker".to_string(),
+            state: NodeState::Standby,
             models: vec![],
             available_models: vec![],
             requested_models: vec![],
@@ -402,6 +458,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpus: vec![],
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_string(&peer).expect("serialization failed");
@@ -414,6 +471,7 @@ mod tests {
             id: "test-id".to_string(),
             owner: test_owner_payload(),
             role: "Worker".to_string(),
+            state: NodeState::Standby,
             models: vec![],
             available_models: vec![],
             requested_models: vec![],
@@ -426,6 +484,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpus: vec![],
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_string(&peer).expect("serialization failed");
@@ -437,6 +496,226 @@ mod tests {
         let instances: Vec<LocalInstance> = vec![];
         let json = serde_json::to_string(&instances).expect("serialization failed");
         assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn status_payload_serializes_node_state_and_node_status_alias() {
+        let status = StatusPayload {
+            version: "0.60.2".to_string(),
+            latest_version: None,
+            node_id: "node-1".to_string(),
+            owner: test_owner_payload(),
+            token: "token-1".to_string(),
+            node_state: NodeState::Loading,
+            node_status: NodeState::Loading.node_status_alias().to_string(),
+            is_host: true,
+            is_client: false,
+            llama_ready: false,
+            model_name: "Qwen".to_string(),
+            models: vec![],
+            available_models: vec![],
+            requested_models: vec![],
+            serving_models: vec![],
+            hosted_models: vec![],
+            draft_name: None,
+            api_port: 3131,
+            my_vram_gb: 0.0,
+            model_size_gb: 0.0,
+            peers: vec![],
+            wakeable_nodes: vec![],
+            local_instances: vec![],
+            launch_pi: None,
+            launch_goose: None,
+            inflight_requests: 0,
+            mesh_id: None,
+            mesh_name: None,
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            my_hostname: None,
+            my_is_soc: None,
+            gpus: vec![],
+            routing_affinity: affinity::AffinityStatsSnapshot::default(),
+            routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
+        };
+
+        let json = serde_json::to_string(&status).expect("serialization failed");
+        assert!(json.contains("\"node_state\":\"loading\""));
+        assert!(json.contains("\"node_status\":\"Loading\""));
+    }
+
+    #[test]
+    fn status_payload_keeps_node_status_for_compatibility() {
+        let status = StatusPayload {
+            version: "0.60.2".to_string(),
+            latest_version: None,
+            node_id: "node-1".to_string(),
+            owner: test_owner_payload(),
+            token: "token-1".to_string(),
+            node_state: NodeState::Serving,
+            node_status: NodeState::Serving.node_status_alias().to_string(),
+            is_host: true,
+            is_client: false,
+            llama_ready: true,
+            model_name: "Qwen".to_string(),
+            models: vec!["Qwen".to_string()],
+            available_models: vec!["Qwen".to_string()],
+            requested_models: vec!["Qwen".to_string()],
+            serving_models: vec!["Qwen".to_string()],
+            hosted_models: vec!["Qwen".to_string()],
+            draft_name: None,
+            api_port: 3131,
+            my_vram_gb: 24.0,
+            model_size_gb: 4.0,
+            peers: vec![],
+            wakeable_nodes: vec![],
+            local_instances: vec![],
+            launch_pi: None,
+            launch_goose: None,
+            inflight_requests: 0,
+            mesh_id: None,
+            mesh_name: None,
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            my_hostname: None,
+            my_is_soc: None,
+            gpus: vec![],
+            routing_affinity: affinity::AffinityStatsSnapshot::default(),
+            routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
+        };
+
+        let json = serde_json::to_string(&status).expect("serialization failed");
+        assert!(json.contains("\"node_state\":\"serving\""));
+        assert!(json.contains("\"node_status\":\"Serving\""));
+    }
+
+    #[test]
+    fn status_payload_serializes_wakeable_nodes_separately() {
+        let status = StatusPayload {
+            version: "0.60.2".to_string(),
+            latest_version: None,
+            node_id: "node-1".to_string(),
+            owner: test_owner_payload(),
+            token: "token-1".to_string(),
+            node_state: NodeState::Standby,
+            node_status: NodeState::Standby.node_status_alias().to_string(),
+            is_host: false,
+            is_client: false,
+            llama_ready: false,
+            model_name: String::new(),
+            models: vec![],
+            available_models: vec![],
+            requested_models: vec![],
+            serving_models: vec![],
+            hosted_models: vec![],
+            draft_name: None,
+            api_port: 3131,
+            my_vram_gb: 0.0,
+            model_size_gb: 0.0,
+            peers: vec![],
+            wakeable_nodes: vec![WakeableNode {
+                logical_id: "provider-node-1".to_string(),
+                models: vec!["Qwen".to_string()],
+                vram_gb: 24.0,
+                provider: Some("fly".to_string()),
+                state: WakeableNodeState::Sleeping,
+                wake_eta_secs: Some(90),
+            }],
+            local_instances: vec![],
+            launch_pi: None,
+            launch_goose: None,
+            inflight_requests: 0,
+            mesh_id: None,
+            mesh_name: None,
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            my_hostname: None,
+            my_is_soc: None,
+            gpus: vec![],
+            routing_affinity: affinity::AffinityStatsSnapshot::default(),
+            routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
+        };
+
+        let json = serde_json::to_value(&status).expect("serialization failed");
+        assert_eq!(json["peers"], serde_json::json!([]));
+        assert_eq!(json["wakeable_nodes"].as_array().map(Vec::len), Some(1));
+        assert_eq!(json["wakeable_nodes"][0]["state"], "sleeping");
+        assert_eq!(json["wakeable_nodes"][0]["logical_id"], "provider-node-1");
+    }
+
+    #[test]
+    fn status_payload_defaults_to_empty_wakeable_inventory() {
+        let status = StatusPayload {
+            version: "0.60.2".to_string(),
+            latest_version: None,
+            node_id: "node-1".to_string(),
+            owner: test_owner_payload(),
+            token: "token-1".to_string(),
+            node_state: NodeState::Standby,
+            node_status: NodeState::Standby.node_status_alias().to_string(),
+            is_host: false,
+            is_client: false,
+            llama_ready: false,
+            model_name: String::new(),
+            models: vec![],
+            available_models: vec![],
+            requested_models: vec![],
+            serving_models: vec![],
+            hosted_models: vec![],
+            draft_name: None,
+            api_port: 3131,
+            my_vram_gb: 0.0,
+            model_size_gb: 0.0,
+            peers: vec![],
+            wakeable_nodes: vec![],
+            local_instances: vec![],
+            launch_pi: None,
+            launch_goose: None,
+            inflight_requests: 0,
+            mesh_id: None,
+            mesh_name: None,
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            my_hostname: None,
+            my_is_soc: None,
+            gpus: vec![],
+            routing_affinity: affinity::AffinityStatsSnapshot::default(),
+            routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
+        };
+
+        let json = serde_json::to_value(&status).expect("serialization failed");
+        assert_eq!(json["wakeable_nodes"], serde_json::json!([]));
+        assert_eq!(json["peers"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn peer_status_serializes_state_without_mutating_role() {
+        let peer = PeerPayload {
+            id: "test-id".to_string(),
+            owner: test_owner_payload(),
+            role: "Host".to_string(),
+            state: NodeState::Serving,
+            models: vec![],
+            available_models: vec![],
+            requested_models: vec![],
+            vram_gb: 8.0,
+            serving_models: vec!["Qwen".to_string()],
+            hosted_models: vec!["Qwen".to_string()],
+            hosted_models_known: true,
+            version: Some("0.60.2".to_string()),
+            rtt_ms: Some(12),
+            hostname: Some("peer.local".to_string()),
+            is_soc: Some(false),
+            gpus: vec![],
+            first_joined_mesh_ts: None,
+        };
+
+        let json = serde_json::to_string(&peer).expect("serialization failed");
+        assert!(json.contains("\"role\":\"Host\""));
+        assert!(json.contains("\"state\":\"serving\""));
     }
 
     #[test]

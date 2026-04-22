@@ -1,12 +1,17 @@
+import type { LiveNodeState } from "./status-types";
+
 export type TopologyNode = {
   id: string;
   vram: number;
+  state: LiveNodeState;
   self: boolean;
   host: boolean;
   client: boolean;
   serving: string;
   servingModels: string[];
-  statusLabel: string;
+  statusLabel?: string;
+  ageSeconds?: number | null;
+
   latencyMs?: number | null;
   hostname?: string;
   isSoc?: boolean;

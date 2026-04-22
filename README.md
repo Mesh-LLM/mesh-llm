@@ -48,6 +48,8 @@ That command:
 - exposes an OpenAI-compatible API at `http://localhost:9337/v1`
 - starts the web console at `http://localhost:3131`
 
+Use `--headless` to disable the embedded web console while keeping the management API (`/api/*`) available on the `--console` port. This is useful for headless server deployments where the UI is not needed.
+
 Check what is available:
 
 ```bash
@@ -169,9 +171,9 @@ mesh-llm client --join <token>             # join as API-only client (no GPU)
 
 ### Named mesh (buddy mode)
 ```bash
-mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
+mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night" --publish
 ```
-Everyone runs the same command. First person creates it, everyone else discovers "poker-night" and joins automatically. `--mesh-name` implies `--publish` — named meshes are always published to the directory.
+Everyone runs the same command. First person creates it, everyone else discovers "poker-night" and joins automatically. Use `--publish` to make your named mesh discoverable on Nostr; without it the mesh is private but still joinable via invite token.
 
 ### Auto-discover
 ```bash
@@ -315,7 +317,7 @@ sudo loginctl enable-linger "$USER"
 mesh-llm serve --model Qwen2.5-32B    # dashboard at http://localhost:3131
 ```
 
-Live topology, per-node GPU capacity, model picker, and built-in chat. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
+Live topology, per-node GPU capacity, model picker, and built-in chat. Live members show only the `Client`, `Standby`, `Loading`, and `Serving` badges. Wakeable provider-backed capacity is shown separately from topology and stays out of routing until it rejoins. Everything comes from `/api/status` (JSON) and `/api/events` (SSE).
 
 ## Multimodal Support
 
@@ -434,10 +436,10 @@ mesh-llm client --join <token>
 ### 4. Create a named mesh for a group
 
 ```bash
-mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night"
+mesh-llm serve --auto --model GLM-4.7-Flash-Q4_K_M --mesh-name "poker-night" --publish
 ```
 
-Everyone runs the same command. The first node creates the mesh, the rest discover and join it automatically.
+Everyone runs the same command. The first node creates the mesh, the rest discover and join it automatically. Use `--publish` so your named mesh appears in Nostr discovery; without it you must share the invite token manually.
 
 ### 5. Serve more than one model
 
@@ -512,7 +514,15 @@ When a node is running, open:
 http://localhost:3131
 ```
 
-The console shows live topology, VRAM usage, loaded models, and built-in chat. It is backed by `/api/status` and `/api/events`.
+The console shows live topology with only `Client`, `Standby`, `Loading`, and `Serving` badges for live members, plus separate wakeable capacity, VRAM usage, loaded models, and built-in chat. Wakeable inventory is not part of topology peers or routing until it rejoins. It is backed by `/api/status` and `/api/events`.
+
+To run without the embedded UI (for example, in a headless server environment), pass `--headless`:
+
+```bash
+mesh-llm serve --model Qwen2.5-3B --headless
+```
+
+In headless mode, the web console routes (`/`, `/dashboard`, `/chat`) return 404. The management API (`/api/*`) stays fully available on the `--console` port.
 
 You can also try the hosted demo:
 

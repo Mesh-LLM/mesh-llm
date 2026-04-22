@@ -1,10 +1,14 @@
 use super::formatters::{
-    capabilities_json, catalog_model_capabilities, catalog_model_kind_code, filter_name,
-    fit_code_for_size_label, huggingface_cache_dir, huggingface_repo_url,
+    capabilities_json, catalog_model_capabilities, catalog_model_kind_code,
+    fit_code_for_size_label, format_installed_size, huggingface_cache_dir,
     installed_model_kind_code, local_capacity_json, model_kind_code, moe_json, print_json,
-    sort_name, InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter,
+    InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter,
 };
-use crate::models::{catalog, ModelDetails, SearchArtifactFilter, SearchHit, SearchSort};
+use crate::models::{
+    catalog, search_catalog_json_payload, search_huggingface_json_payload, ModelDetails,
+    SearchArtifactFilter, SearchHit, SearchSort,
+};
+use crate::models::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
 use anyhow::Result;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -58,14 +62,7 @@ impl SearchFormatter for JsonFormatter {
         filter: SearchArtifactFilter,
         sort: SearchSort,
     ) -> Result<()> {
-        print_json(json!({
-            "query": query,
-            "filter": filter_name(filter),
-            "sort": sort_name(sort),
-            "source": "catalog",
-            "machine": local_capacity_json(),
-            "results": [],
-        }))
+        print_json(search_catalog_json_payload(query, filter, sort, &[], 0))
     }
 
     fn render_catalog_results(
@@ -76,33 +73,9 @@ impl SearchFormatter for JsonFormatter {
         limit: usize,
         sort: SearchSort,
     ) -> Result<()> {
-        let payload_results: Vec<Value> = results
-            .iter()
-            .take(limit)
-            .map(|model| {
-                json!({
-                    "name": model.name,
-                    "repo_id": model.source_repo(),
-                    "type": catalog_model_kind_code(model),
-                    "size": model.size,
-                    "description": model.description,
-                    "fit": fit_code_for_size_label(&model.size),
-                    "ref": model.name,
-                    "show": format!("mesh-llm models show {}", model.name),
-                    "download": format!("mesh-llm models download {}", model.name),
-                    "draft": model.draft,
-                    "capabilities": capabilities_json(catalog_model_capabilities(model)),
-                })
-            })
-            .collect();
-        print_json(json!({
-            "query": query,
-            "filter": filter_name(filter),
-            "sort": sort_name(sort),
-            "source": "catalog",
-            "machine": local_capacity_json(),
-            "results": payload_results,
-        }))
+        print_json(search_catalog_json_payload(
+            query, filter, sort, results, limit,
+        ))
     }
 
     fn render_hf_empty(
@@ -111,14 +84,7 @@ impl SearchFormatter for JsonFormatter {
         filter: SearchArtifactFilter,
         sort: SearchSort,
     ) -> Result<()> {
-        print_json(json!({
-            "query": query,
-            "filter": filter_name(filter),
-            "sort": sort_name(sort),
-            "source": "huggingface",
-            "machine": local_capacity_json(),
-            "results": [],
-        }))
+        print_json(search_huggingface_json_payload(query, filter, sort, &[]))
     }
 
     fn render_hf_results(
@@ -128,43 +94,9 @@ impl SearchFormatter for JsonFormatter {
         sort: SearchSort,
         results: &[SearchHit],
     ) -> Result<()> {
-        let payload_results: Vec<Value> = results
-            .iter()
-            .map(|result| {
-                json!({
-                    "repo_id": result.repo_id,
-                    "repo_url": huggingface_repo_url(&result.repo_id),
-                    "type": model_kind_code(result.kind),
-                    "variant_count": result.variant_count,
-                    "size": result.size_label,
-                    "downloads": result.downloads,
-                    "likes": result.likes,
-                    "fit": result
-                        .size_label
-                        .as_deref()
-                        .and_then(fit_code_for_size_label),
-                    "ref": result.exact_ref,
-                    "show": format!("mesh-llm models show {}", result.exact_ref),
-                    "download": format!("mesh-llm models download {}", result.exact_ref),
-                    "capabilities": capabilities_json(result.capabilities),
-                    "catalog": result.catalog.map(|model| {
-                        json!({
-                            "name": model.name,
-                            "size": model.size,
-                            "description": model.description,
-                        })
-                    }),
-                })
-            })
-            .collect();
-        print_json(json!({
-            "query": query,
-            "filter": filter_name(filter),
-            "sort": sort_name(sort),
-            "source": "huggingface",
-            "machine": local_capacity_json(),
-            "results": payload_results,
-        }))
+        print_json(search_huggingface_json_payload(
+            query, filter, sort, results,
+        ))
     }
 }
 
@@ -209,6 +141,7 @@ impl ModelsFormatter for JsonFormatter {
                     "ref": row.model_ref,
                     "show": format!("mesh-llm models show {}", row.model_ref),
                     "download": format!("mesh-llm models download {}", row.model_ref),
+                    "delete": format!("mesh-llm models delete {}", row.model_ref),
                     "path": row.path,
                     "about": row.catalog_model.map(|m| m.description.clone()),
                     "draft": row.catalog_model.and_then(|m| m.draft.clone()),
@@ -218,6 +151,9 @@ impl ModelsFormatter for JsonFormatter {
             .collect();
         print_json(json!({
             "cache_dir": huggingface_cache_dir(),
+            "delete_example": rows
+                .first()
+                .map(|row| format!("mesh-llm models delete {}", row.model_ref)),
             "results": models,
         }))
     }
@@ -260,6 +196,35 @@ impl ModelsFormatter for JsonFormatter {
                 "repo": repo,
                 "all": all,
             },
+        }))
+    }
+
+    fn render_delete_preview(&self, resolved: &CliResolvedModel) -> Result<()> {
+        let file_size = std::fs::metadata(&resolved.path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        print_json(json!({
+            "display_name": resolved.display_name,
+            "path": resolved.path,
+            "is_exact_path": resolved.is_exact_path,
+            "file_size_bytes": file_size,
+            "file_size_human": format_installed_size(file_size),
+            "matched_records": resolved.matched_records.iter().map(|r| json!({
+                "lookup_key": r.lookup_key,
+                "display_name": r.display_name,
+                "last_used_at": r.last_used_at,
+            })).collect::<Vec<_>>(),
+            "dry_run": true,
+        }))
+    }
+
+    fn render_delete_result(&self, result: &CliDeleteResult) -> Result<()> {
+        print_json(json!({
+            "deleted_paths": result.deleted_paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+            "reclaimed_bytes": result.reclaimed_bytes,
+            "reclaimed_bytes_human": format_installed_size(result.reclaimed_bytes),
+            "removed_metadata_files": result.removed_metadata_files,
+            "removed_usage_records": result.removed_usage_records,
         }))
     }
 }
