@@ -288,7 +288,16 @@ impl MeshApi {
     }
 
     pub async fn set_publication_state(&self, state: state::PublicationState) {
-        self.inner.lock().await.publication_state = state;
+        {
+            let mut inner = self.inner.lock().await;
+            inner.publication_state = state;
+        }
+        self.push_status().await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn publication_state(&self) -> state::PublicationState {
+        self.inner.lock().await.publication_state
     }
 
     pub async fn local_instances_handle(
@@ -2441,6 +2450,35 @@ mod tests {
         let updated_text = String::from_utf8_lossy(&updated);
         assert!(updated_text.contains("\"llama_ready\":true"));
         assert!(updated_text.contains("\"is_host\":true"));
+
+        drop(stream);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_events_push_publication_state_updates() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state.clone()).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(b"GET /api/events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+
+        let _initial = read_until_contains(&mut stream, b"\"publication_state\":\"private\"", Duration::from_secs(2)).await;
+
+        state
+            .set_publication_state(crate::api::PublicationState::PublishFailed)
+            .await;
+        let updated = read_until_contains(
+            &mut stream,
+            b"\"publication_state\":\"publish_failed\"",
+            Duration::from_secs(2),
+        )
+        .await;
+        let updated_text = String::from_utf8_lossy(&updated);
+        assert!(updated_text.contains("\"publication_state\":\"publish_failed\""));
 
         drop(stream);
         handle.abort();

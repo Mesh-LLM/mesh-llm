@@ -5,14 +5,14 @@ use serde::{Serialize, Serializer};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-/// Truthful publication state for mesh nodes (Issue #240).
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Best-effort publication state for mesh nodes (Issue #240).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicationState {
     /// No --publish requested; mesh is private.
     Private,
-    /// --publish succeeded; mesh is discoverable on Nostr.
+    /// The latest publish attempt succeeded.
     Public,
-    /// --publish was requested but first publish attempt failed.
+    /// The latest publish attempt failed after `--publish` was requested.
     PublishFailed,
 }
 

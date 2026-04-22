@@ -129,7 +129,7 @@ export type StatusPayload = {
   launch_pi?: string | null;
   launch_goose?: string | null;
   nostr_discovery?: boolean;
-  /** Truthful publication state per Issue #240: private | public | publish_failed */
+  /** Best-effort publication state per Issue #240: private | public | publish_failed */
   publication_state?: 'private' | 'public' | 'publish_failed';
   my_hostname?: string;
   my_is_soc?: boolean;

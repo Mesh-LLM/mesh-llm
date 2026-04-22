@@ -165,7 +165,7 @@ pub(super) struct StatusPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) mesh_name: Option<String>,
     pub(super) nostr_discovery: bool,
-    /// Truthful publication state per Issue #240: private | public | publish_failed.
+    /// Best-effort publication state per Issue #240: private | public | publish_failed.
     pub(super) publication_state: String,
     pub(super) my_hostname: Option<String>,
     pub(super) my_is_soc: Option<bool>,

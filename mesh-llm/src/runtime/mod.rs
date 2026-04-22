@@ -42,6 +42,34 @@ fn current_time_unix_ms() -> u64 {
         .as_millis() as u64
 }
 
+fn publication_state_from_update(update: nostr::PublishStateUpdate) -> api::PublicationState {
+    match update {
+        nostr::PublishStateUpdate::Public => api::PublicationState::Public,
+        nostr::PublishStateUpdate::PublishFailed => api::PublicationState::PublishFailed,
+    }
+}
+
+fn bridge_publication_state(
+    console_state: api::MeshApi,
+    mut status_rx: tokio::sync::watch::Receiver<Option<nostr::PublishStateUpdate>>,
+) {
+    tokio::spawn(async move {
+        let mut pending = *status_rx.borrow_and_update();
+        loop {
+            if let Some(update) = pending.take() {
+                console_state
+                    .set_publication_state(publication_state_from_update(update))
+                    .await;
+            }
+
+            if status_rx.changed().await.is_err() {
+                break;
+            }
+            pending = *status_rx.borrow_and_update();
+        }
+    });
+}
+
 async fn record_first_joined_mesh_ts(node: &mesh::Node) {
     let now_ms = current_time_unix_ms();
     node.set_first_joined_mesh_ts_if_absent(now_ms).await;
@@ -2242,15 +2270,15 @@ async fn run_auto(
     let nostr_publisher = if cli.publish {
         match nostr::load_or_create_keys() {
             Ok(nostr_keys) => {
-                if let Some(ref cs) = console_state {
-                    cs.set_publication_state(api::PublicationState::Public)
-                        .await;
-                }
                 let relays = nostr_relays(&cli.nostr_relay);
                 let pub_node = node.clone();
                 let pub_name = cli.mesh_name.clone();
                 let pub_region = cli.region.clone();
                 let pub_max_clients = cli.max_clients;
+                let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+                if let Some(ref cs) = console_state {
+                    bridge_publication_state(cs.clone(), status_rx);
+                }
                 Some(tokio::spawn(async move {
                     nostr::publish_loop(
                         pub_node,
@@ -2260,6 +2288,7 @@ async fn run_auto(
                         pub_region,
                         pub_max_clients,
                         60,
+                        Some(status_tx),
                     )
                     .await;
                 }))
@@ -2283,8 +2312,21 @@ async fn run_auto(
         let wd_node = node.clone();
         let wd_name = cli.mesh_name.clone();
         let wd_region = cli.region.clone();
+        let watchdog_status_rx = console_state.as_ref().map(|cs| {
+            let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+            bridge_publication_state(cs.clone(), status_rx);
+            status_tx
+        });
         Some(tokio::spawn(async move {
-            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120).await;
+            nostr::publish_watchdog(
+                wd_node,
+                relays,
+                wd_name,
+                wd_region,
+                120,
+                watchdog_status_rx,
+            )
+            .await;
         }))
     } else {
         None
@@ -2519,35 +2561,54 @@ async fn run_passive(
     let local_port = cli.port;
     let affinity_router = affinity::AffinityRouter::new();
     node.set_display_name(node_display_name(cli, &node)).await;
+    let mut passive_publication_state = None;
+    let mut passive_publication_rx = None;
 
     // Nostr publishing (if --publish, for standby GPU nodes advertising capacity)
     if cli.publish && !is_client {
         let pub_node = node.clone();
-        let nostr_keys = nostr::load_or_create_keys()?;
-        let relays = nostr_relays(&cli.nostr_relay);
-        let pub_name = cli.mesh_name.clone();
-        let pub_region = cli.region.clone();
-        let pub_max_clients = cli.max_clients;
-        tokio::spawn(async move {
-            nostr::publish_loop(
-                pub_node,
-                nostr_keys,
-                relays,
-                pub_name,
-                pub_region,
-                pub_max_clients,
-                60,
-            )
-            .await;
-        });
+        match nostr::load_or_create_keys() {
+            Ok(nostr_keys) => {
+                let relays = nostr_relays(&cli.nostr_relay);
+                let pub_name = cli.mesh_name.clone();
+                let pub_region = cli.region.clone();
+                let pub_max_clients = cli.max_clients;
+                let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+                passive_publication_rx = Some(status_rx);
+                tokio::spawn(async move {
+                    nostr::publish_loop(
+                        pub_node,
+                        nostr_keys,
+                        relays,
+                        pub_name,
+                        pub_region,
+                        pub_max_clients,
+                        60,
+                        Some(status_tx),
+                    )
+                    .await;
+                });
+            }
+            Err(e) => {
+                eprintln!(
+                    "⚠️  Publishing to Nostr failed: {e}.\n\
+                     Standby node is running privately — add --publish after fixing the issue to make discoverable."
+                );
+                tracing::warn!("Passive Nostr publish failed: {e}");
+                passive_publication_state = Some(api::PublicationState::PublishFailed);
+            }
+        }
     } else if cli.auto && !is_client {
         // Watchdog: take over publishing if the original publisher dies
         let relays = nostr_relays(&cli.nostr_relay);
         let wd_node = node.clone();
         let wd_name = cli.mesh_name.clone();
         let wd_region = cli.region.clone();
+        let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+        passive_publication_rx = Some(status_rx);
         tokio::spawn(async move {
-            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120).await;
+            nostr::publish_watchdog(wd_node, relays, wd_name, wd_region, 120, Some(status_tx))
+                .await;
         });
     }
 
@@ -2598,6 +2659,12 @@ async fn run_passive(
         }
         // Both clients and standby nodes can proxy requests through the mesh
         cs.update(false, true).await;
+        if let Some(state) = passive_publication_state {
+            cs.set_publication_state(state).await;
+        }
+        if let Some(status_rx) = passive_publication_rx {
+            bridge_publication_state(cs.clone(), status_rx);
+        }
         let (_tx, rx) = tokio::sync::watch::channel(election::InferenceTarget::None);
         let la = cli.listen_all;
         let headless = cli.headless;
@@ -2830,6 +2897,34 @@ mod tests {
         } else {
             std::env::remove_var(key);
         }
+    }
+
+    async fn build_test_mesh_api() -> api::MeshApi {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let resolved_plugins = plugin::ResolvedPlugins {
+            externals: vec![],
+            inactive: vec![],
+        };
+        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(1);
+        let plugin_manager = plugin::PluginManager::start(
+            &resolved_plugins,
+            plugin::PluginHostMode {
+                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+            },
+            mesh_tx,
+        )
+        .await
+        .unwrap();
+        api::MeshApi::new(
+            node,
+            "test-model".to_string(),
+            3131,
+            0,
+            plugin_manager,
+            affinity::AffinityRouter::default(),
+        )
     }
 
     fn synthetic_gpu(
@@ -3938,5 +4033,44 @@ mod tests {
             cli.publish,
             "explicit --publish must survive start_new_mesh call"
         );
+    }
+
+    #[test]
+    fn publish_state_updates_map_to_api_states() {
+        assert_eq!(
+            publication_state_from_update(nostr::PublishStateUpdate::Public),
+            api::PublicationState::Public
+        );
+        assert_eq!(
+            publication_state_from_update(nostr::PublishStateUpdate::PublishFailed),
+            api::PublicationState::PublishFailed
+        );
+    }
+
+    #[tokio::test]
+    async fn publication_bridge_keeps_private_until_a_real_publish_outcome_arrives() {
+        let state = build_test_mesh_api().await;
+        let (status_tx, status_rx) = tokio::sync::watch::channel(None);
+        bridge_publication_state(state.clone(), status_rx);
+
+        assert_eq!(state.publication_state().await.as_str(), "private");
+
+        status_tx
+            .send(Some(nostr::PublishStateUpdate::Public))
+            .unwrap();
+        wait_for_condition(Duration::from_secs(2), || {
+            let state = state.clone();
+            async move { state.publication_state().await.as_str() == "public" }
+        })
+        .await;
+
+        status_tx
+            .send(Some(nostr::PublishStateUpdate::PublishFailed))
+            .unwrap();
+        wait_for_condition(Duration::from_secs(2), || {
+            let state = state.clone();
+            async move { state.publication_state().await.as_str() == "publish_failed" }
+        })
+        .await;
     }
 }
