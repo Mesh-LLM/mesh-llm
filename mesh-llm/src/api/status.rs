@@ -165,6 +165,8 @@ pub(super) struct StatusPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) mesh_name: Option<String>,
     pub(super) nostr_discovery: bool,
+    /// Best-effort publication state per Issue #240: private | public | publish_failed.
+    pub(super) publication_state: String,
     pub(super) my_hostname: Option<String>,
     pub(super) my_is_soc: Option<bool>,
     pub(super) gpus: Vec<GpuEntry>,
@@ -172,6 +174,8 @@ pub(super) struct StatusPayload {
     /// Local-only routing outcome and current-node pressure snapshot measured on
     /// this node only; not mesh-wide aggregates.
     pub(super) routing_metrics: metrics::RoutingMetricsStatusSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) first_joined_mesh_ts: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -204,6 +208,8 @@ pub(super) struct PeerPayload {
     pub(super) hostname: Option<String>,
     pub(super) is_soc: Option<bool>,
     pub(super) gpus: Vec<GpuEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) first_joined_mesh_ts: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -452,6 +458,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpus: vec![],
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_string(&peer).expect("serialization failed");
@@ -477,6 +484,7 @@ mod tests {
             hostname: None,
             is_soc: None,
             gpus: vec![],
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_string(&peer).expect("serialization failed");
@@ -522,11 +530,13 @@ mod tests {
             mesh_id: None,
             mesh_name: None,
             nostr_discovery: false,
+            publication_state: "private".into(),
             my_hostname: None,
             my_is_soc: None,
             gpus: vec![],
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -566,17 +576,18 @@ mod tests {
             mesh_id: None,
             mesh_name: None,
             nostr_discovery: false,
+            publication_state: "private".into(),
             my_hostname: None,
             my_is_soc: None,
             gpus: vec![],
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
         };
 
-        let json = serde_json::to_value(&status).expect("serialization failed");
-        assert_eq!(json["node_state"], "serving");
-        assert_eq!(json["node_status"], "Serving");
-        assert!(json.get("node_status").is_some());
+        let json = serde_json::to_string(&status).expect("serialization failed");
+        assert!(json.contains("\"node_state\":\"serving\""));
+        assert!(json.contains("\"node_status\":\"Serving\""));
     }
 
     #[test]
@@ -618,11 +629,13 @@ mod tests {
             mesh_id: None,
             mesh_name: None,
             nostr_discovery: false,
+            publication_state: "private".into(),
             my_hostname: None,
             my_is_soc: None,
             gpus: vec![],
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -664,11 +677,13 @@ mod tests {
             mesh_id: None,
             mesh_name: None,
             nostr_discovery: false,
+            publication_state: "private".into(),
             my_hostname: None,
             my_is_soc: None,
             gpus: vec![],
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -695,6 +710,7 @@ mod tests {
             hostname: Some("peer.local".to_string()),
             is_soc: Some(false),
             gpus: vec![],
+            first_joined_mesh_ts: None,
         };
 
         let json = serde_json::to_string(&peer).expect("serialization failed");

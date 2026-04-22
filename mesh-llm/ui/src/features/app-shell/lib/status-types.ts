@@ -80,6 +80,7 @@ export type Peer = {
   version?: string;
   is_soc?: boolean;
   gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  first_joined_mesh_ts?: number;
 };
 
 export type LocalInstance = {
@@ -128,9 +129,12 @@ export type StatusPayload = {
   launch_pi?: string | null;
   launch_goose?: string | null;
   nostr_discovery?: boolean;
+  /** Best-effort publication state per Issue #240: private | public | publish_failed */
+  publication_state?: 'private' | 'public' | 'publish_failed';
   my_hostname?: string;
   my_is_soc?: boolean;
   gpus?: { name: string; vram_bytes: number; bandwidth_gbps?: number }[];
+  first_joined_mesh_ts?: number;
 };
 
 export type ModelServingStat = {

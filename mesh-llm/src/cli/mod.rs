@@ -275,11 +275,13 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) headless: bool,
 
-    /// Publish this mesh for discovery by others.
+    /// Publish this mesh to Nostr for public discovery by other nodes.
+    /// Without this flag, your mesh is private and only joinable via invite token.
     #[arg(long)]
     pub(crate) publish: bool,
 
-    /// Name for this mesh (shown in discovery).
+    /// Human-readable name for this mesh (shown in discovery when combined with --publish).
+    /// Naming a mesh does NOT make it publicly discoverable — use --publish for that.
     #[arg(long)]
     pub(crate) mesh_name: Option<String>,
 
@@ -328,9 +330,9 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) max_vram: Option<f64>,
 
-    /// Enumerate host hardware (GPU name, hostname) at startup.
-    #[arg(long, hide = true)]
-    pub(crate) enumerate_host: bool,
+    /// Disable broadcasting GPU name, hostname, VRAM, and reserved bytes to peers. By default all nodes announce this hardware info.
+    #[arg(long = "no-enumerate-host", hide = true)]
+    pub(crate) no_enumerate_host: bool,
 
     /// Path to rpc-server, llama-server, and llama-moe-split binaries.
     #[arg(long, hide = true)]
@@ -714,6 +716,7 @@ fn shell_display(arg: &OsString) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::models::{ModelSearchSort, ModelsCommand};
     use crate::cli::moe::MoeAnalyzeCommand;
     use clap::{CommandFactory, Parser};
 
@@ -999,5 +1002,51 @@ mod tests {
             help.contains("headless") || help.contains("management API"),
             "help text should mention headless or management API"
         );
+    }
+
+    #[test]
+    fn models_search_accepts_canonical_parameter_sort_names() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "models",
+            "search",
+            "qwen",
+            "--sort",
+            "parameters-desc",
+        ]);
+
+        match cli.command.expect("models command expected") {
+            Command::Models {
+                command:
+                    ModelsCommand::Search {
+                        sort: ModelSearchSort::ParametersDesc,
+                        ..
+                    },
+            } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn models_search_keeps_legacy_parameter_sort_aliases_parsing() {
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "models",
+            "search",
+            "qwen",
+            "--sort",
+            "most-parameters",
+        ]);
+
+        match cli.command.expect("models command expected") {
+            Command::Models {
+                command:
+                    ModelsCommand::Search {
+                        sort: ModelSearchSort::ParametersDesc,
+                        ..
+                    },
+            } => {}
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

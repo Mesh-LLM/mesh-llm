@@ -51,6 +51,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
         requested_models: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         mesh_id: Arc::new(Mutex::new(None)),
+        first_joined_mesh_ts: Arc::new(Mutex::new(None)),
         accepting: Arc::new((
             tokio::sync::Notify::new(),
             std::sync::atomic::AtomicBool::new(false),
@@ -362,6 +363,7 @@ fn test_peer_payload_hw_fields() {
 
 #[test]
 fn test_enumerate_host_false_omits_hw_fields_in_announcement() {
+    // With enumerate_host: false (opt-out), hardware fields are NOT sent
     let enumerate_host = false;
     let gpu_name: Option<String> = Some("NVIDIA RTX 5090".to_string());
     let hostname: Option<String> = Some("carrack".to_string());
@@ -390,6 +392,7 @@ fn test_enumerate_host_false_omits_hw_fields_in_announcement() {
 
 #[test]
 fn test_enumerate_host_true_includes_hw_fields_in_announcement() {
+    // With enumerate_host: true (default), hardware fields ARE sent
     let enumerate_host = true;
     let gpu_name: Option<String> = Some("NVIDIA RTX 5090".to_string());
     let hostname: Option<String> = Some("carrack".to_string());
@@ -418,6 +421,7 @@ fn test_enumerate_host_true_includes_hw_fields_in_announcement() {
 
 #[test]
 fn test_is_soc_always_included_regardless_of_enumerate_host() {
+    // is_soc is always sent regardless of enumerate_host setting
     for enumerate_host in [false, true] {
         let is_soc: Option<bool> = Some(true);
         let gpu_name: Option<String> = Some("Tegra AGX Orin".to_string());
@@ -519,6 +523,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         },
         tunnel_port: None,
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec![],
         vram_bytes: 0,
         rtt_ms: None,
@@ -1166,6 +1171,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
             addrs: Default::default(),
         },
         role: super::NodeRole::Host { http_port: 8080 },
+        first_joined_mesh_ts: None,
         models: vec!["Qwen3-8B-Q4_K_M".to_string()],
         vram_bytes: 128 * 1024 * 1024 * 1024,
         model_source: Some("bartowski/Qwen3-8B-GGUF".to_string()),
@@ -1405,6 +1411,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
     let ann = super::PeerAnnouncement {
         addr: addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["NewModel-Q4_K_M".to_string()],
         vram_bytes: 8 * 1024 * 1024 * 1024,
         model_source: Some("new-source".to_string()),
@@ -1476,6 +1483,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
     let ann = super::PeerAnnouncement {
         addr: weak_addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["SomeModel-Q4_K_M".to_string()],
         vram_bytes: 4 * 1024 * 1024 * 1024,
         model_source: None,
@@ -1526,6 +1534,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
     let ann2 = super::PeerAnnouncement {
         addr: richer_addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["SomeModel-Q4_K_M".to_string()],
         vram_bytes: 4 * 1024 * 1024 * 1024,
         model_source: None,
@@ -2070,6 +2079,7 @@ fn transitive_peer_update_refreshes_last_mentioned() {
     let ann = super::PeerAnnouncement {
         addr: addr.clone(),
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec!["SomeModel-Q4_K_M".to_string()],
         vram_bytes: 8 * 1024 * 1024 * 1024,
         model_source: None,
@@ -2721,7 +2731,9 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
             id,
             addrs: Default::default(),
         },
+        tunnel_port: None,
         role: super::NodeRole::Worker,
+        first_joined_mesh_ts: None,
         models: vec![],
         vram_bytes: vram_gb * 1024 * 1024 * 1024,
         rtt_ms,
@@ -2745,7 +2757,6 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
         gpu_compute_tflops_fp16: None,
         available_model_metadata: vec![],
         experts_summary: None,
-        tunnel_port: None,
         available_model_sizes: HashMap::new(),
         served_model_descriptors: vec![],
         served_model_runtime: vec![],
@@ -3201,6 +3212,7 @@ async fn make_test_node_with_owner(
         requested_models: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         mesh_id: Arc::new(Mutex::new(None)),
+        first_joined_mesh_ts: Arc::new(Mutex::new(None)),
         accepting: Arc::new((
             tokio::sync::Notify::new(),
             std::sync::atomic::AtomicBool::new(false),
