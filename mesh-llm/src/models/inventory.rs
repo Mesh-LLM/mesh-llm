@@ -183,7 +183,9 @@ fn compact_metadata_from_gguf(
     model_key: String,
     quantization_type: String,
 ) -> crate::proto::node::CompactModelMetadata {
-    if let Some(m) = crate::models::gguf::scan_gguf_compact_meta(path) {
+    let compact_meta: Option<crate::models::gguf::GgufCompactMeta> =
+        crate::models::gguf::scan_gguf_compact_meta(path);
+    if let Some(m) = compact_meta {
         crate::proto::node::CompactModelMetadata {
             model_key: model_key.clone(),
             context_length: m.context_length,
