@@ -1,12 +1,12 @@
 use super::super::http::{respond_error, respond_json};
 use crate::models::{
-    capabilities, catalog, search_catalog_models, search_huggingface, SearchArtifactFilter,
-    SearchHit, SearchSort,
+    catalog, search_catalog_json_payload, search_catalog_models, search_huggingface,
+    search_huggingface_json_payload, SearchArtifactFilter, SearchSort,
 };
-use serde::Serialize;
 use url::form_urlencoded;
 
 const DEFAULT_LIMIT: usize = 20;
+const MAX_LIMIT: usize = 50;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SearchRequest {
@@ -15,30 +15,6 @@ struct SearchRequest {
     catalog_only: bool,
     limit: usize,
     sort: SearchSort,
-}
-
-#[derive(Debug, Serialize)]
-struct SearchResponse {
-    query: String,
-    artifact: &'static str,
-    sort: &'static str,
-    source: &'static str,
-    limit: usize,
-    results: Vec<SearchResult>,
-}
-
-#[derive(Debug, Serialize)]
-struct SearchResult {
-    model_ref: String,
-    repo_id: Option<String>,
-    repo_url: Option<String>,
-    kind: &'static str,
-    size: Option<String>,
-    description: Option<String>,
-    variant_count: Option<usize>,
-    downloads: Option<u64>,
-    likes: Option<u64>,
-    capabilities: crate::models::ModelCapabilities,
 }
 
 pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> anyhow::Result<()> {
@@ -51,17 +27,14 @@ pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> an
         let results = search_catalog_models(&request.query)
             .into_iter()
             .filter(|model| catalog_model_matches_artifact(model, request.artifact))
-            .take(request.limit)
-            .map(catalog_result)
-            .collect();
-        let response = SearchResponse {
-            query: request.query.clone(),
-            artifact: artifact_name(request.artifact),
-            sort: sort_name(request.sort),
-            source: "catalog",
-            limit: request.limit,
-            results,
-        };
+            .collect::<Vec<_>>();
+        let response = search_catalog_json_payload(
+            &request.query,
+            request.artifact,
+            request.sort,
+            &results,
+            request.limit,
+        );
         return respond_json(stream, 200, &response).await;
     }
 
@@ -75,14 +48,12 @@ pub(super) async fn handle(stream: &mut tokio::net::TcpStream, path: &str) -> an
     .await
     {
         Ok(results) => {
-            let response = SearchResponse {
-                query: request.query.clone(),
-                artifact: artifact_name(request.artifact),
-                sort: sort_name(request.sort),
-                source: "huggingface",
-                limit: request.limit,
-                results: results.iter().map(huggingface_result).collect(),
-            };
+            let response = search_huggingface_json_payload(
+                &request.query,
+                request.artifact,
+                request.sort,
+                &results,
+            );
             respond_json(stream, 200, &response).await
         }
         Err(err) => respond_error(stream, 502, &format!("Search failed: {err}")).await,
@@ -152,7 +123,7 @@ fn parse_limit(value: &str) -> Result<usize, String> {
     if limit == 0 {
         return Err("Invalid 'limit' value '0'. Expected a positive integer".to_string());
     }
-    Ok(limit)
+    Ok(limit.min(MAX_LIMIT))
 }
 
 fn parse_sort(value: &str) -> Result<SearchSort, String> {
@@ -162,30 +133,11 @@ fn parse_sort(value: &str) -> Result<SearchSort, String> {
         "likes" => Ok(SearchSort::Likes),
         "created" => Ok(SearchSort::Created),
         "updated" => Ok(SearchSort::Updated),
-        "most-parameters" | "parameters-desc" => Ok(SearchSort::ParametersDesc),
-        "least-parameters" | "parameters-asc" => Ok(SearchSort::ParametersAsc),
+        "parameters-desc" => Ok(SearchSort::ParametersDesc),
+        "parameters-asc" => Ok(SearchSort::ParametersAsc),
         _ => Err(format!(
-            "Invalid 'sort' value '{value}'. Expected one of: trending, downloads, likes, created, updated, most-parameters, least-parameters"
+            "Invalid 'sort' value '{value}'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc"
         )),
-    }
-}
-
-fn artifact_name(filter: SearchArtifactFilter) -> &'static str {
-    match filter {
-        SearchArtifactFilter::Gguf => "gguf",
-        SearchArtifactFilter::Mlx => "mlx",
-    }
-}
-
-fn sort_name(sort: SearchSort) -> &'static str {
-    match sort {
-        SearchSort::Trending => "trending",
-        SearchSort::Downloads => "downloads",
-        SearchSort::Likes => "likes",
-        SearchSort::Created => "created",
-        SearchSort::Updated => "updated",
-        SearchSort::ParametersDesc => "most-parameters",
-        SearchSort::ParametersAsc => "least-parameters",
     }
 }
 
@@ -206,46 +158,6 @@ fn catalog_model_matches_artifact(
     }
 }
 
-fn catalog_result(model: &'static catalog::CatalogModel) -> SearchResult {
-    SearchResult {
-        model_ref: model.name.clone(),
-        repo_id: model.source_repo().map(ToOwned::to_owned),
-        repo_url: model
-            .source_repo()
-            .map(|repo_id| format!("https://huggingface.co/{repo_id}")),
-        kind: if catalog_model_matches_artifact(model, SearchArtifactFilter::Mlx) {
-            "mlx"
-        } else {
-            "gguf"
-        },
-        size: Some(model.size.clone()),
-        description: Some(model.description.clone()),
-        variant_count: None,
-        downloads: None,
-        likes: None,
-        capabilities: capabilities::infer_catalog_capabilities(model),
-    }
-}
-
-fn huggingface_result(hit: &SearchHit) -> SearchResult {
-    SearchResult {
-        model_ref: hit.exact_ref.clone(),
-        repo_id: Some(hit.repo_id.clone()),
-        repo_url: Some(format!("https://huggingface.co/{}", hit.repo_id)),
-        kind: if hit.kind.to_ascii_lowercase().contains("mlx") {
-            "mlx"
-        } else {
-            "gguf"
-        },
-        size: hit.size_label.clone(),
-        description: hit.catalog.map(|model| model.description.clone()),
-        variant_count: hit.variant_count,
-        downloads: hit.downloads,
-        likes: hit.likes,
-        capabilities: hit.capabilities,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,15 +172,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_request_accepts_cli_sort_names() {
+    fn parse_request_accepts_canonical_sort_names_and_caps_limit() {
         let request = parse_request(
-            "/api/search?q=qwen&artifact=mlx&catalog=true&limit=7&sort=most-parameters",
+            "/api/search?q=qwen&artifact=mlx&catalog=true&limit=999&sort=parameters-desc",
         )
         .unwrap();
         assert_eq!(request.query, "qwen");
         assert_eq!(request.artifact, SearchArtifactFilter::Mlx);
         assert!(request.catalog_only);
-        assert_eq!(request.limit, 7);
+        assert_eq!(request.limit, MAX_LIMIT);
         assert_eq!(request.sort, SearchSort::ParametersDesc);
     }
 
@@ -289,7 +201,13 @@ mod tests {
         let err = parse_request("/api/search?q=qwen&sort=random").unwrap_err();
         assert_eq!(
             err,
-            "Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, most-parameters, least-parameters"
+            "Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc"
+        );
+
+        let err = parse_request("/api/search?q=qwen&sort=most-parameters").unwrap_err();
+        assert_eq!(
+            err,
+            "Invalid 'sort' value 'most-parameters'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc"
         );
     }
 }

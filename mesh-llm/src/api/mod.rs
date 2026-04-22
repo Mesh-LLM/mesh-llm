@@ -3,7 +3,7 @@
 //! Endpoints:
 //!   GET  /api/status    — live mesh state plus local-only routing metrics (JSON)
 //!   GET  /api/models    — mesh model inventory plus local-only routing metrics (JSON)
-//!   GET  /api/search    — catalog or Hugging Face model search with canonical refs (JSON)
+//!   GET  /api/search    — catalog or Hugging Face model search with the same JSON payload as `mesh-llm models search --json`
 //!   GET  /api/runtime   — local model state (JSON)
 //!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON)
 //!   GET  /api/runtime/processes — local inference process state (JSON)
@@ -2474,8 +2474,9 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"));
         let payload = json_body(&response);
         assert_eq!(payload["source"], json!("catalog"));
-        assert_eq!(payload["artifact"], json!("gguf"));
-        assert_eq!(payload["limit"], json!(5));
+        assert_eq!(payload["filter"], json!("gguf"));
+        assert_eq!(payload["sort"], json!("trending"));
+        assert!(payload.get("machine").is_some());
         let results = payload["results"].as_array().cloned().unwrap_or_default();
         assert!(
             !results.is_empty(),
@@ -2483,10 +2484,37 @@ mod tests {
         );
         let hit = results
             .into_iter()
-            .find(|entry| entry["model_ref"] == json!("Qwen3-Coder-Next-Q4_K_M"))
+            .find(|entry| entry["ref"] == json!("Qwen3-Coder-Next-Q4_K_M"))
             .expect("canonical catalog model ref present");
         assert_eq!(hit["repo_id"], json!("Qwen/Qwen3-Coder-Next-GGUF"));
-        assert_eq!(hit["kind"], json!("gguf"));
+        assert_eq!(hit["type"], json!("gguf"));
+        assert_eq!(
+            hit["show"],
+            json!("mesh-llm models show Qwen3-Coder-Next-Q4_K_M")
+        );
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_api_search_caps_limit_and_uses_canonical_parameter_sort_name() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+
+        let response = send_management_request(
+            addr,
+            "GET /api/search?q=Qwen3-Coder-Next&catalog=true&artifact=gguf&limit=999&sort=parameters-desc HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+
+        assert!(response.starts_with("HTTP/1.1 200"));
+        let payload = json_body(&response);
+        assert_eq!(payload["sort"], json!("parameters-desc"));
+        let results = payload["results"].as_array().cloned().unwrap_or_default();
+        assert!(
+            results.len() <= 50,
+            "expected catalog response to apply the API limit cap"
+        );
 
         handle.abort();
     }
@@ -2527,7 +2555,7 @@ mod tests {
         let payload = json_body(&response);
         assert_eq!(
             payload["error"],
-            json!("Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, most-parameters, least-parameters")
+            json!("Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc")
         );
 
         handle.abort();
