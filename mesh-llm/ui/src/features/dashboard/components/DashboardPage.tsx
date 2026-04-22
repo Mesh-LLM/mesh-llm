@@ -24,6 +24,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
+import { ModelCard } from "./details";
 import { ScrollArea } from "../../../components/ui/scroll-area";
 import {
   Select,
@@ -338,7 +339,7 @@ export function DashboardPage({
 
   return (
     <div className="space-y-4">
-      <Alert className="border-primary/20 bg-primary/5">
+      <Alert variant="primary">
         <Network className="h-4 w-4" />
         <AlertTitle className="text-sm font-medium">
           {isPublicMesh ? "Welcome to the public mesh" : "Your private mesh"}
@@ -367,10 +368,7 @@ export function DashboardPage({
         </AlertDescription>
       </Alert>
       {distinctMeshVersions.size >= 2 && (
-        <Alert
-          data-testid="mixed-version-banner"
-          className="border-amber-500/30 bg-amber-500/5"
-        >
+        <Alert data-testid="mixed-version-banner" variant="amber">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle className="text-sm font-medium">Mesh has mixed versions</AlertTitle>
           <AlertDescription className="text-xs text-muted-foreground">
@@ -380,10 +378,7 @@ export function DashboardPage({
         </Alert>
       )}
       {(status?.local_instances?.length ?? 0) >= 2 && (
-        <Alert
-          data-testid="multi-instance-banner"
-          className="border-blue-500/30 bg-blue-500/5"
-        >
+        <Alert data-testid="multi-instance-banner" variant="blue">
           <Info className="h-4 w-4" />
           <AlertTitle className="text-sm font-medium">
             Multiple mesh-llm instances on this host
@@ -533,76 +528,18 @@ export function DashboardPage({
               <div className="h-[360px] overflow-y-auto pr-2 md:h-[420px] lg:h-[460px] xl:h-[520px]">
                 <div className="space-y-2">
                   {filteredModels.map((model) => (
-                    <button
+                    <ModelCard
                       key={model.name}
-                      type="button"
+                      name={model.name}
+                      displayName={modelDisplayName(model)}
+                      sizeGb={model.size_gb}
+                      nodeCount={model.node_count}
+                      status={model.status}
+                      vision={model.vision}
+                      reasoning={model.reasoning}
+                      moe={model.moe}
                       onClick={() => openModelDetail(model.name)}
-                      className="block w-full rounded-md border p-3 text-left transition-colors hover:border-primary/35 hover:bg-muted/30"
-                    >
-                      <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-start">
-                        <div className="flex h-7 w-7 items-center justify-center rounded-md border bg-muted/40 text-muted-foreground">
-                          <Sparkles className="h-3.5 w-3.5" />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-medium leading-5 [overflow-wrap:anywhere]">
-                              {shortName(modelDisplayName(model))}
-                            </div>
-                            <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                              {model.vision ? (
-                                <span role="img" aria-label="Vision">
-                                  👁
-                                </span>
-                              ) : null}
-                              {model.reasoning ? (
-                                <span role="img" aria-label="Reasoning">
-                                  🧠
-                                </span>
-                              ) : null}
-                              {model.moe ? (
-                                <span role="img" aria-label="Mixture of Experts">
-                                  🧩
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                          <div className="text-xs leading-4 text-muted-foreground [overflow-wrap:anywhere]">
-                            {model.name}
-                          </div>
-                        </div>
-                        <StatusPill
-                          className="self-start"
-                          label={
-                            model.status === "warm"
-                              ? "Warm"
-                              : model.status === "cold"
-                                ? "Cold"
-                                : model.status
-                          }
-                          tone={
-                            model.status === "warm"
-                              ? "warm"
-                              : model.status === "cold"
-                                ? "cold"
-                                : "neutral"
-                          }
-                          dot
-                        />
-                      </div>
-                      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                        <span>
-                          {model.node_count} node{model.node_count === 1 ? "" : "s"}
-                        </span>
-                        <span className="flex items-center gap-2">
-                          {model.vision && (
-                            <span role="img" aria-label="Vision">
-                              👁
-                            </span>
-                          )}
-                          {model.size_gb.toFixed(1)} GB
-                        </span>
-                      </div>
-                    </button>
+                    />
                   ))}
                 </div>
               </div>

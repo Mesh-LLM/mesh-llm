@@ -181,22 +181,35 @@ export function AppHeader({
           </NavigationMenuList>
         </NavigationMenu>
         <div className="ml-auto flex items-center gap-2">
+           {import.meta.env.DEV && (
+             <Button
+               variant="secondary"
+               size="sm"
+               onClick={(event) => {
+                 event.preventDefault();
+                 setSection("playground");
+               }}
+               className="h-8 text-xs"
+             >
+               Playground
+             </Button>
+           )}
            <Popover>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    aria-label="API access"
-                  >
-                    <Braces className="h-4 w-4" />
-                  </Button>
-                </PopoverTrigger>
-              </TooltipTrigger>
-              <TooltipContent>API</TooltipContent>
-            </Tooltip>
+             <Tooltip>
+               <TooltipTrigger asChild>
+                 <PopoverTrigger asChild>
+                   <Button
+                     type="button"
+                     variant="outline"
+                     size="icon"
+                     aria-label="API access"
+                   >
+                     <Braces className="h-4 w-4" />
+                   </Button>
+                 </PopoverTrigger>
+               </TooltipTrigger>
+               <TooltipContent>API</TooltipContent>
+             </Tooltip>
             <PopoverContent
               className="w-[calc(100vw-2rem)] max-w-[420px] space-y-3"
               align="end"

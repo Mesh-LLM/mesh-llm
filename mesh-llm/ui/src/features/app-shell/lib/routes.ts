@@ -1,4 +1,4 @@
-export type TopSection = "dashboard" | "chat";
+export type TopSection = "dashboard" | "chat" | "playground";
 
 export type AppRoute = {
   section: TopSection;
@@ -15,6 +15,9 @@ export function sectionFromPathname(pathname: string): TopSection | null {
     pathname.startsWith("/chat/")
   ) {
     return "chat";
+  }
+  if (pathname === "/playground" || pathname === "/playground/") {
+    return "playground";
   }
   return null;
 }
@@ -36,6 +39,9 @@ export function readRouteFromLocation(): AppRoute {
     const chatId = raw ? decodeURIComponent(raw.split("/")[0]) : null;
     return { section: "chat", chatId };
   }
+  if (pathname === "/playground" || pathname === "/playground/") {
+    return { section: "playground", chatId: null };
+  }
 
   return { section: "dashboard", chatId: null };
 }
@@ -43,6 +49,9 @@ export function readRouteFromLocation(): AppRoute {
 export function pathnameForRoute(route: AppRoute): string {
   if (route.section === "dashboard") {
     return "/dashboard";
+  }
+  if (route.section === "playground") {
+    return "/playground";
   }
   return route.chatId ? `/chat/${encodeURIComponent(route.chatId)}` : "/chat";
 }

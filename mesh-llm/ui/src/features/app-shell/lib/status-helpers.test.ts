@@ -49,20 +49,15 @@ describe("live node state helpers", () => {
     }
   });
 
-  it("rejects legacy live-state labels from formatter, tone, and tooltip paths", () => {
-    const legacyLabels = ["Idle", "Assigned", "Host", "Serving (split)", "Worker (split)"];
-
-    for (const label of legacyLabels) {
-      expect(() => formatLiveNodeState(label as LiveNodeState)).toThrow(
-        `Unsupported live node state: ${label}`,
-      );
-      expect(() => topologyStatusTone(label as LiveNodeState)).toThrow(
-        `Unsupported live node state: ${label}`,
-      );
-      expect(() => topologyStatusTooltip(label as LiveNodeState)).toThrow(
-        `Unsupported live node state: ${label}`,
-      );
-    }
+  it("handles invalid states gracefully without throwing", () => {
+    expect(formatLiveNodeState(undefined as any)).toBe("Unknown");
+    expect(formatLiveNodeState(null as any)).toBe("Unknown");
+    
+    expect(topologyStatusTone(undefined as any)).toBe("neutral");
+    expect(topologyStatusTone(null as any)).toBe("neutral");
+    
+    expect(topologyStatusTooltip(undefined as any)).toBe("Node state unavailable");
+    expect(topologyStatusTooltip(null as any)).toBe("Node state unavailable");
   });
 
   it("uses node_state as the local routable-model source of truth", () => {

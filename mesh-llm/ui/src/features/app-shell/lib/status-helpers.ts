@@ -48,15 +48,18 @@ export function overviewVramGb(isClient: boolean, vramGb?: number | null) {
   return Math.max(0, vramGb || 0);
 }
 
-function assertLiveNodeState(state: LiveNodeState): LiveNodeState {
-  if (!(state in LIVE_NODE_STATE_LABELS)) {
-    throw new Error(`Unsupported live node state: ${state}`);
+function assertLiveNodeState(state: LiveNodeState | undefined | null): LiveNodeState | null {
+  if (!state || !(state in LIVE_NODE_STATE_LABELS)) {
+    console.warn("Invalid or missing live node state:", state);
+    return null;
   }
   return state;
 }
 
-export function formatLiveNodeState(state: LiveNodeState): string {
-  return LIVE_NODE_STATE_LABELS[assertLiveNodeState(state)];
+export function formatLiveNodeState(state: LiveNodeState | undefined | null): string {
+  const validated = assertLiveNodeState(state);
+  if (!validated) return "Unknown";
+  return LIVE_NODE_STATE_LABELS[validated];
 }
 
 export function meshGpuVram(status: StatusPayload | null) {
@@ -116,9 +119,11 @@ export function formatLatency(value?: number | null) {
 }
 
 export function topologyStatusTone(
-  state: LiveNodeState,
+  state: LiveNodeState | undefined | null,
 ): "good" | "info" | "warn" | "bad" | "neutral" {
-  switch (assertLiveNodeState(state)) {
+  const validated = assertLiveNodeState(state);
+  if (!validated) return "neutral";
+  switch (validated) {
     case "serving":
       return "good";
     case "client":
@@ -130,8 +135,10 @@ export function topologyStatusTone(
   }
 }
 
-export function topologyStatusTooltip(state: LiveNodeState) {
-  switch (assertLiveNodeState(state)) {
+export function topologyStatusTooltip(state: LiveNodeState | undefined | null): string {
+  const validated = assertLiveNodeState(state);
+  if (!validated) return "Node state unavailable";
+  switch (validated) {
     case "serving":
       return "Actively serving a model.";
     case "loading":
