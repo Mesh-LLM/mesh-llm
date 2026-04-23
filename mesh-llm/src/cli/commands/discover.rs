@@ -102,8 +102,36 @@ pub(crate) fn run_stop() -> Result<()> {
         }
     };
 
+    let targets = crate::runtime::instance::collect_runtime_stop_targets(&root)?;
     let mut killed = 0u32;
-    for target in crate::runtime::instance::collect_runtime_stop_targets(&root)? {
+    let mut live_owner_runtime_dirs = std::collections::HashSet::new();
+    for target in targets.iter().filter(|target| target.is_owner) {
+        let owner_was_live = crate::runtime::instance::validate::process_liveness(target.pid)
+            != crate::runtime::instance::validate::Liveness::Dead;
+        if launch::terminate_process_blocking(
+            target.pid,
+            &target.expected_comm,
+            target.expected_start_time,
+        ) {
+            eprintln!("🧹 Stopped {}", target.label);
+            killed += 1;
+        }
+        if owner_was_live {
+            live_owner_runtime_dirs.insert(target.runtime_dir.clone());
+        }
+    }
+
+    for target in targets.into_iter().filter(|target| !target.is_owner) {
+        if live_owner_runtime_dirs.contains(&target.runtime_dir) {
+            continue;
+        }
+
+        if crate::runtime::instance::validate::process_liveness(target.pid)
+            == crate::runtime::instance::validate::Liveness::Dead
+        {
+            continue;
+        }
+
         if launch::terminate_process_blocking(
             target.pid,
             &target.expected_comm,

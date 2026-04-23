@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
@@ -214,6 +215,7 @@ struct PluginManagerInner {
     inactive: BTreeMap<String, PluginSummary>,
     endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    shutting_down: AtomicBool,
     #[cfg(test)]
     bridged_plugins: BTreeSet<String>,
     #[cfg(test)]
@@ -298,6 +300,7 @@ impl PluginManager {
                     .collect(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 rpc_bridge,
+                shutting_down: AtomicBool::new(false),
                 #[cfg(test)]
                 bridged_plugins: BTreeSet::new(),
                 #[cfg(test)]
@@ -322,6 +325,7 @@ impl PluginManager {
                 inactive: BTreeMap::new(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
+                shutting_down: AtomicBool::new(false),
                 bridged_plugins: plugin_names
                     .iter()
                     .map(|name| (*name).to_string())
@@ -367,6 +371,14 @@ impl PluginManager {
         summaries.extend(self.inner.inactive.values().cloned());
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
         summaries
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        self.inner.shutting_down.store(true, Ordering::SeqCst);
+        for plugin in self.inner.plugins.values() {
+            plugin.shutdown().await;
+        }
+        self.inner.endpoint_health.lock().await.clear();
     }
 
     pub async fn endpoints(&self) -> Result<Vec<PluginEndpointSummary>> {
@@ -1027,6 +1039,9 @@ impl PluginManager {
                 tokio::time::interval(std::time::Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS));
             loop {
                 ticker.tick().await;
+                if manager.inner.shutting_down.load(Ordering::SeqCst) {
+                    break;
+                }
                 let plugin_names = manager.inner.plugins.keys().cloned().collect::<Vec<_>>();
                 for plugin_name in plugin_names {
                     let Some(plugin) = manager.inner.plugins.get(&plugin_name) else {

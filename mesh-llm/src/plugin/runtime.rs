@@ -100,6 +100,9 @@ impl ExternalPlugin {
         if self.is_disabled().await {
             return Ok(());
         }
+        if self.is_stopping().await {
+            return Ok(());
+        }
         self.ensure_running().await?;
         let response = self
             .request(proto::envelope::Payload::HealthRequest(
@@ -354,6 +357,32 @@ impl ExternalPlugin {
             .clone()
             .map(|manifest| manifest_tool_summaries(&manifest))
             .unwrap_or_default())
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        {
+            let mut summary = self.summary.lock().await;
+            summary.status = "shutting down".into();
+            summary.error = None;
+        }
+
+        let runtime = self.runtime.lock().await.take();
+        if let Some(runtime) = runtime {
+            let mut pending = runtime.pending.lock().await;
+            for (_, response) in pending.drain() {
+                let _ = response.send(Err(anyhow::anyhow!("plugin shutting down")));
+            }
+        }
+
+        *self.server_info.lock().await = None;
+        *self.manifest.lock().await = None;
+
+        let mut summary = self.summary.lock().await;
+        summary.status = "stopped".into();
+        summary.version = None;
+        summary.capabilities.clear();
+        summary.tools.clear();
+        summary.error = None;
     }
 
     pub(crate) async fn call_tool(
@@ -612,6 +641,11 @@ impl ExternalPlugin {
 
     async fn is_disabled(&self) -> bool {
         self.disabled_reason().await.is_some()
+    }
+
+    async fn is_stopping(&self) -> bool {
+        let summary = self.summary.lock().await;
+        matches!(summary.status.as_str(), "shutting down" | "stopped")
     }
 
     async fn mark_disabled(&self, generation: u64, reason: String) {

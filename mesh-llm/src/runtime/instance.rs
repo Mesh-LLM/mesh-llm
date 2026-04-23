@@ -1217,10 +1217,12 @@ struct OwnerMetadata {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RuntimeProcessTarget {
+    pub runtime_dir: PathBuf,
     pub label: String,
     pub pid: u32,
     pub expected_comm: String,
     pub expected_start_time: Option<i64>,
+    pub is_owner: bool,
 }
 
 fn binary_process_name(binary: &str) -> Option<String> {
@@ -1278,6 +1280,7 @@ pub(crate) fn collect_runtime_stop_targets(
                 };
 
                 targets.push(RuntimeProcessTarget {
+                    runtime_dir: entry_path.clone(),
                     label: metadata.cmd_name.clone(),
                     pid: metadata.child_pid,
                     expected_comm: metadata.cmd_name,
@@ -1288,6 +1291,7 @@ pub(crate) fn collect_runtime_stop_targets(
                     } else {
                         Some(metadata.child_started_at_unix)
                     },
+                    is_owner: false,
                 });
             }
         }
@@ -1328,10 +1332,12 @@ pub(crate) fn collect_runtime_stop_targets(
             .unwrap_or_else(|| "mesh-llm".to_string());
 
         targets.push(RuntimeProcessTarget {
+            runtime_dir: entry_path,
             label: expected_comm.clone(),
             pid: owner.pid,
             expected_comm,
             expected_start_time: owner.started_at_unix,
+            is_owner: true,
         });
     }
 

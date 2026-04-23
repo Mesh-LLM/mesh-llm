@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -217,9 +217,17 @@ pub(crate) mod benchmark;
 pub(crate) mod commands;
 pub mod models;
 pub(crate) mod moe;
+pub mod output;
 pub(crate) mod pager;
 pub(crate) mod runtime;
 pub(crate) mod terminal_progress;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum LogFormat {
+    #[default]
+    Pretty,
+    Json,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -231,6 +239,10 @@ pub(crate) mod terminal_progress;
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
+
+    /// Terminal output format for app-owned runtime events.
+    #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
+    pub(crate) log_format: LogFormat,
 
     /// Show all options (including advanced/niche ones).
     #[arg(long, hide = true)]
@@ -722,7 +734,7 @@ mod tests {
     use super::*;
     use crate::cli::models::{ModelSearchSort, ModelsCommand};
     use crate::cli::moe::MoeAnalyzeCommand;
-    use clap::{CommandFactory, Parser};
+    use clap::{error::ErrorKind, CommandFactory, Parser};
 
     #[test]
     fn normalize_runtime_surface_args_rewrites_serve_invocation() {
@@ -1034,6 +1046,61 @@ mod tests {
 
         let rendered = err.to_string();
         assert!(rendered.contains("--port"));
+    }
+
+    #[test]
+    fn cli_defaults_log_format_to_pretty() {
+        let normalized = normalize_runtime_surface_args(["mesh-llm", "serve", "--auto"]);
+        let cli = Cli::parse_from(normalized.normalized);
+
+        assert_eq!(cli.log_format, LogFormat::Pretty);
+    }
+
+    #[test]
+    fn cli_accepts_json_log_format() {
+        let normalized =
+            normalize_runtime_surface_args(["mesh-llm", "serve", "--log-format", "json", "--auto"]);
+        let cli = Cli::parse_from(normalized.normalized);
+
+        assert_eq!(cli.log_format, LogFormat::Json);
+    }
+
+    #[test]
+    fn cli_rejects_invalid_log_format_values() {
+        let err = Cli::try_parse_from(["mesh-llm", "--log-format", "invalid"])
+            .expect_err("invalid log format should be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidValue);
+        let rendered = err.to_string();
+        assert!(rendered.contains("--log-format <LOG_FORMAT>"));
+        assert!(rendered.contains("pretty"));
+        assert!(rendered.contains("json"));
+    }
+
+    #[test]
+    fn cli_help_documents_log_format_flag() {
+        let mut command = Cli::command();
+        let help = command.render_long_help().to_string();
+
+        assert!(help.contains("--log-format <LOG_FORMAT>"));
+        assert!(help.contains("Terminal output format for app-owned runtime events"));
+        assert!(help.contains("[default: pretty]"));
+        assert!(help.contains("[possible values: pretty, json]"));
+    }
+
+    #[test]
+    fn cli_log_format_selection_is_independent_across_runs() {
+        let pretty = Cli::parse_from(["mesh-llm", "--log-format", "pretty"]);
+        assert_eq!(pretty.log_format, LogFormat::Pretty);
+
+        let json = Cli::parse_from(["mesh-llm", "--log-format", "json"]);
+        assert_eq!(json.log_format, LogFormat::Json);
+
+        let pretty_again = Cli::parse_from(["mesh-llm", "--log-format", "pretty"]);
+        assert_eq!(pretty_again.log_format, LogFormat::Pretty);
+
+        let json_again = Cli::parse_from(["mesh-llm", "--log-format", "json"]);
+        assert_eq!(json_again.log_format, LogFormat::Json);
     }
 
     #[test]
