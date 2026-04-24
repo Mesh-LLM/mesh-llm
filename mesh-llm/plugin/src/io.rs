@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use prost::Message;
+#[cfg(unix)]
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

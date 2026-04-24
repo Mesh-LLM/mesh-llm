@@ -5,6 +5,7 @@ use rand::RngExt;
 use rmcp::model::ErrorCode;
 use std::collections::HashMap;
 use std::future::Future;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;

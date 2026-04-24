@@ -215,6 +215,7 @@ impl ExternalMcpClient {
                 }
                 #[cfg(not(unix))]
                 {
+                    let _ = path;
                     Err(anyhow!(
                         "Unix socket MCP endpoint '{}:{}' is unsupported on this platform",
                         endpoint.plugin_name,
@@ -222,7 +223,7 @@ impl ExternalMcpClient {
                     ))
                 }
             }
-            ExternalMcpTransport::NamedPipe { name: _ } => {
+            ExternalMcpTransport::NamedPipe { name } => {
                 #[cfg(windows)]
                 {
                     let client = tokio::net::windows::named_pipe::ClientOptions::new()
@@ -237,6 +238,7 @@ impl ExternalMcpClient {
                 }
                 #[cfg(not(windows))]
                 {
+                    let _ = name;
                     Err(anyhow!(
                         "Named pipe MCP endpoint '{}:{}' is unsupported on this platform",
                         endpoint.plugin_name,
