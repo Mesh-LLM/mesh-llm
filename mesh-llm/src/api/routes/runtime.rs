@@ -1,5 +1,6 @@
 use super::super::{
     http::{respond_error, respond_json, respond_runtime_error},
+    state::YieldReason,
     status::decode_runtime_model_path,
     MeshApi, RuntimeControlRequest,
 };
@@ -23,8 +24,52 @@ pub(super) async fn handle(
         ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
             handle_unload_model(stream, state, p).await
         }
+        ("POST", "/api/yield") => handle_yield(stream, state).await,
+        ("POST", "/api/resume") => handle_resume(stream, state).await,
         ("GET", "/api/events") => handle_events(stream, state).await,
         _ => Ok(()),
+    }
+}
+
+async fn handle_yield(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
+        return respond_error(stream, 503, "Runtime control unavailable").await;
+    };
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    if control_tx
+        .send(RuntimeControlRequest::Yield {
+            reason: YieldReason::Manual,
+            resp: resp_tx,
+        })
+        .is_err()
+    {
+        return respond_error(stream, 503, "Runtime control unavailable").await;
+    }
+    match resp_rx.await {
+        Ok(Ok(())) => respond_json(stream, 200, &serde_json::json!({"yielded": "manual"})).await,
+        Ok(Err(e)) => respond_error(stream, 409, &e.to_string()).await,
+        Err(_) => respond_error(stream, 503, "Runtime control dropped response").await,
+    }
+}
+
+async fn handle_resume(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
+        return respond_error(stream, 503, "Runtime control unavailable").await;
+    };
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    if control_tx
+        .send(RuntimeControlRequest::Resume {
+            reason: YieldReason::Manual,
+            resp: resp_tx,
+        })
+        .is_err()
+    {
+        return respond_error(stream, 503, "Runtime control unavailable").await;
+    }
+    match resp_rx.await {
+        Ok(Ok(())) => respond_json(stream, 200, &serde_json::json!({"resumed": true})).await,
+        Ok(Err(e)) => respond_error(stream, 409, &e.to_string()).await,
+        Err(_) => respond_error(stream, 503, "Runtime control dropped response").await,
     }
 }
 

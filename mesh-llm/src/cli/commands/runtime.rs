@@ -11,6 +11,58 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
     }
 }
 
+pub(crate) async fn run_yield(port: u16) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let url = format!("http://127.0.0.1:{port}/api/yield");
+    let resp = client
+        .post(&url)
+        .send()
+        .await
+        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
+    if resp.status().is_success() {
+        eprintln!("⏸ Yielded — stopped local model serving.");
+        eprintln!(
+            "   If other peers host the same models they will take over; otherwise\n\
+             those models are unavailable on the mesh until you run `mesh-llm resume`."
+        );
+    } else {
+        let reason = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown error".to_string());
+        eprintln!("❌ Failed to yield: {reason}");
+    }
+    Ok(())
+}
+
+pub(crate) async fn run_resume(port: u16) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let url = format!("http://127.0.0.1:{port}/api/resume");
+    let resp = client
+        .post(&url)
+        .send()
+        .await
+        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
+    if resp.status().is_success() {
+        eprintln!("▶ Resumed — re-loading local models.");
+    } else {
+        let reason = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v["error"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "unknown error".to_string());
+        eprintln!("❌ Failed to resume: {reason}");
+    }
+    Ok(())
+}
+
 pub(crate) async fn run_drop(model_name: &str, port: u16) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

@@ -402,6 +402,26 @@ pub(crate) struct Cli {
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub(crate) nostr_discovery: bool,
+
+    /// Yield local model serving while the user is actively using this machine.
+    ///
+    /// Only effective on macOS and Windows. Stops all local model serving when
+    /// input (keyboard/mouse) has been seen within `--yield-active-grace`
+    /// seconds, and resumes when the machine has been idle for
+    /// `--yield-idle-secs`.
+    #[arg(long)]
+    pub(crate) yield_on_presence: bool,
+
+    /// Seconds of idle time before the node auto-resumes serving after a
+    /// presence-triggered yield. Default: 120.
+    #[arg(long, default_value = "120")]
+    pub(crate) yield_idle_secs: u64,
+
+    /// Seconds of sustained user input before yielding. Short enough to
+    /// protect the user from lag, long enough to ignore a mouse jiggle.
+    /// Default: 15.
+    #[arg(long, default_value = "15")]
+    pub(crate) yield_active_grace: u64,
 }
 
 #[derive(Subcommand, Debug)]
@@ -530,6 +550,22 @@ pub(crate) enum Command {
     },
     /// Stop all running mesh-llm, llama-server, and rpc-server processes.
     Stop,
+    /// Stop serving local models while keeping the node in the mesh.
+    ///
+    /// Peers route around this node until `mesh-llm resume` is run. Useful when
+    /// you want the machine's GPU/CPU/RAM back for a while without leaving the
+    /// mesh entirely.
+    Yield {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
+    /// Resume serving after a prior `mesh-llm yield` or auto-yield.
+    Resume {
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+    },
     /// Blackboard — post, search, and read messages shared across the mesh.
     ///
     /// Post a message:   mesh-llm blackboard "your message here"

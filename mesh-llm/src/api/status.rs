@@ -176,6 +176,11 @@ pub(super) struct StatusPayload {
     pub(super) routing_metrics: metrics::RoutingMetricsStatusSnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) first_joined_mesh_ts: Option<u64>,
+    /// Present when the node has yielded to local user activity (or manual
+    /// `mesh-llm yield`). Absent = serving normally. Reason is `"manual"` or
+    /// `"user_active"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) yielded: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -537,6 +542,7 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            yielded: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -583,6 +589,7 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            yielded: None,
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -636,6 +643,7 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            yielded: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -684,6 +692,7 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            yielded: None,
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");

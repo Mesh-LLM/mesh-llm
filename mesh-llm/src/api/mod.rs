@@ -34,7 +34,7 @@ mod status;
 
 pub use self::state::{
     LocalModelInterest, MeshApi, PublicationState, RuntimeControlRequest, RuntimeModelPayload,
-    RuntimeProcessPayload,
+    RuntimeProcessPayload, YieldReason,
 };
 pub(crate) use self::status::classify_runtime_error;
 
@@ -252,6 +252,7 @@ impl MeshApi {
                     .collect(),
                 nostr_discovery: false,
                 publication_state: state::PublicationState::Private,
+                yield_state: None,
                 runtime_control: None,
                 local_processes: Vec::new(),
                 sse_clients: Vec::new(),
@@ -375,6 +376,20 @@ impl MeshApi {
         tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
     ) {
         self.inner.lock().await.runtime_control = Some(tx);
+    }
+
+    /// Update the recorded yield state. `None` = serving normally.
+    pub async fn set_yield_state(&self, state: Option<YieldReason>) {
+        {
+            self.inner.lock().await.yield_state = state;
+        }
+        self.push_status().await;
+    }
+
+    /// Current yield state (for status and CLI reporting).
+    #[allow(dead_code)] // consumed by future console UI; keep as a stable accessor
+    pub async fn yield_state(&self) -> Option<YieldReason> {
+        self.inner.lock().await.yield_state
     }
 
     pub async fn upsert_local_process(&self, process: RuntimeProcessPayload) {
@@ -939,6 +954,11 @@ impl MeshApi {
             )
         }; // inner lock dropped here
 
+        let yielded = {
+            let inner = self.inner.lock().await;
+            inner.yield_state.map(|r| r.as_str())
+        };
+
         let local_instances: Vec<LocalInstance> = {
             let snapshots = local_instances_arc.lock().await;
             let mut instances: Vec<LocalInstance> = snapshots
@@ -1120,6 +1140,7 @@ impl MeshApi {
             routing_affinity,
             routing_metrics,
             first_joined_mesh_ts: node.first_joined_mesh_ts().await,
+            yielded,
         }
     }
 

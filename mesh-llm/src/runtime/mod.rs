@@ -76,6 +76,155 @@ async fn record_first_joined_mesh_ts(node: &mesh::Node) {
     node.set_first_joined_mesh_ts_if_absent(now_ms).await;
 }
 
+/// Return true if any model we are currently serving (either via election or
+/// a runtime-loaded local process) is not hosted by any other peer. Used as a
+/// safety guard against presence-driven yield stranding a model: better to
+/// stay up and serve a slightly slower local experience than to take the
+/// model offline for the whole mesh.
+async fn is_last_host_for_any_local_model(
+    node: &mesh::Node,
+    managed: &HashMap<String, ManagedModelController>,
+    runtime: &HashMap<String, LocalRuntimeModelHandle>,
+) -> bool {
+    // Collect the set of models we serve locally.
+    let mut our_models: Vec<String> = managed.keys().cloned().collect();
+    our_models.extend(runtime.keys().cloned());
+    if our_models.is_empty() {
+        return false;
+    }
+    let peers = node.peers().await;
+    last_host_for_any(&our_models, &peers)
+}
+
+/// Pure helper: given the set of models we host locally and a snapshot of
+/// peers, returns true if at least one of our local models is not covered by
+/// any peer (i.e. we would strand it by yielding). Extracted so it can be
+/// unit tested without building a live `mesh::Node`.
+fn last_host_for_any(local_models: &[String], peers: &[mesh::PeerInfo]) -> bool {
+    if local_models.is_empty() {
+        return false;
+    }
+    for model in local_models {
+        let covered = peers.iter().any(|p| {
+            p.hosted_models.iter().any(|m| m == model)
+                || p.serving_models.iter().any(|m| m == model)
+        });
+        if !covered {
+            return true;
+        }
+    }
+    false
+}
+
+/// Presence-driven yield loop. Polls the platform probe every 5s; when the
+/// user has been active for longer than `active_grace`, asks the runtime to
+/// yield. When the machine has been idle for longer than `idle_threshold`,
+/// asks the runtime to resume.
+///
+/// - `Presence::Unknown` is fail-open: we keep serving (never auto-yield).
+/// - A manual `mesh-llm yield` still takes effect, and a manual `mesh-llm
+///   resume` brings us back online even while the user is technically active
+///   (we just won't re-trigger auto-yield until they become idle + active
+///   again).
+/// - Stickiness of a manual yield is enforced by the runtime, not the probe
+///   loop: the runtime refuses a presence-triggered `Resume` when the prior
+///   yield was issued manually. The loop is free to keep sending Yield /
+///   Resume based purely on what it sees.
+async fn presence_yield_loop(
+    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    idle_threshold: std::time::Duration,
+    active_grace: std::time::Duration,
+) {
+    let probe = crate::system::presence::default_probe();
+    presence_yield_loop_with(
+        control_tx,
+        probe,
+        idle_threshold,
+        active_grace,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+}
+
+/// Inner form of the presence yield loop that accepts an injected probe and
+/// poll interval. Extracted so tests can drive the state machine with a
+/// scripted probe and `tokio::time::pause()` instead of waiting on wall
+/// clock and real OS input.
+async fn presence_yield_loop_with(
+    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    probe: Box<dyn crate::system::presence::PresenceProbe>,
+    idle_threshold: std::time::Duration,
+    active_grace: std::time::Duration,
+    poll_interval: std::time::Duration,
+) {
+    use crate::system::presence::Presence;
+
+    // Track how long the user has been continuously active. Only yield once
+    // this exceeds `active_grace` — this stops a stray mouse jiggle from
+    // thrashing the serving state.
+    let mut active_since: Option<std::time::Instant> = None;
+    // Whether we believe we are currently in a presence-yielded state. Flipped
+    // only after the runtime confirms the request — otherwise a manual yield
+    // in flight would cause us to falsely "own" the yield and later resume it.
+    let mut we_yielded = false;
+
+    loop {
+        tokio::time::sleep(poll_interval).await;
+        let presence_state = probe.sample(idle_threshold);
+        let now = std::time::Instant::now();
+        match presence_state {
+            Presence::Active => {
+                let started = *active_since.get_or_insert(now);
+                if !we_yielded && now.duration_since(started) >= active_grace {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if control_tx
+                        .send(api::RuntimeControlRequest::Yield {
+                            reason: api::YieldReason::UserActive,
+                            resp: tx,
+                        })
+                        .is_err()
+                    {
+                        // Runtime went away — exit the task.
+                        return;
+                    }
+                    // Only flip our state flag if the runtime actually
+                    // yielded. If it refused (already yielded manually, or
+                    // last-host guard tripped), leave we_yielded = false so
+                    // we don't later issue an unsolicited Resume.
+                    match rx.await {
+                        Ok(Ok(())) => we_yielded = true,
+                        Ok(Err(_)) | Err(_) => {}
+                    }
+                }
+            }
+            Presence::Away => {
+                active_since = None;
+                if we_yielded {
+                    let (tx, rx) = tokio::sync::oneshot::channel();
+                    if control_tx
+                        .send(api::RuntimeControlRequest::Resume {
+                            reason: api::YieldReason::UserActive,
+                            resp: tx,
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    // Clear regardless of response: if the runtime refused
+                    // (e.g. someone manually resumed first, or the yield was
+                    // taken over) we still want to stop claiming ownership.
+                    let _ = rx.await;
+                    we_yielded = false;
+                }
+            }
+            Presence::Unknown => {
+                // Fail-open: do not change state on broken probes.
+                active_since = None;
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StartupModelSpec {
     model_ref: PathBuf,
@@ -1888,6 +2037,16 @@ async fn run_auto(
     let mut runtime_models: HashMap<String, LocalRuntimeModelHandle> = HashMap::new();
     let mut managed_models: HashMap<String, ManagedModelController> = HashMap::new();
 
+    // When yielded, we snapshot the model names that were live so Resume can
+    // restart them via the existing Load path. `None` = not yielded.
+    //
+    // Also remember *who* initiated the yield. Manual yields are sticky: the
+    // presence loop is not allowed to resume a manually-yielded node, since
+    // that would clobber the user's intent. Only a manual `mesh-llm resume`
+    // (or API /api/resume) clears a Manual yield.
+    let mut yielded_specs: Option<Vec<String>> = None;
+    let mut yield_owner: Option<api::YieldReason> = None;
+
     // Take over listener from bootstrap proxy (if running), or bind a new one
     let existing_listener = if let Some(tx) = bootstrap_listener_tx {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
@@ -2326,6 +2485,21 @@ async fn run_auto(
         None
     };
 
+    // Presence-driven yield controller. Cheap polling task: every 5s asks the
+    // platform probe whether the user is active, and flips through control_tx
+    // to Yield/Resume. Gated behind --yield-on-presence; on unsupported
+    // platforms (Linux etc.) the probe returns Unknown and nothing yields.
+    let presence_handle = if cli.yield_on_presence && !is_client {
+        let control_tx_presence = control_tx.clone();
+        let idle_threshold = std::time::Duration::from_secs(cli.yield_idle_secs);
+        let active_grace = std::time::Duration::from_secs(cli.yield_active_grace);
+        Some(tokio::spawn(async move {
+            presence_yield_loop(control_tx_presence, idle_threshold, active_grace).await;
+        }))
+    } else {
+        None
+    };
+
     // Wait for SIGINT/SIGTERM or runtime model control commands.
     let primary_model_name = model_name.clone();
     loop {
@@ -2452,6 +2626,155 @@ async fn run_auto(
                         };
                         let _ = resp.send(result);
                     }
+                    api::RuntimeControlRequest::Yield { reason, resp } => {
+                        let result = if yielded_specs.is_some() {
+                            Err(anyhow::anyhow!("already yielded"))
+                        } else if reason == api::YieldReason::UserActive
+                            && is_last_host_for_any_local_model(
+                                &node,
+                                &managed_models,
+                                &runtime_models,
+                            )
+                            .await
+                        {
+                            // Auto-yield from presence never strands a model —
+                            // if we're the only peer hosting any of our models,
+                            // stay up. Manual `mesh-llm yield` bypasses this
+                            // guard (the user explicitly asked for the machine
+                            // back).
+                            Err(anyhow::anyhow!(
+                                "refusing auto-yield: this node is the last host for one or more models"
+                            ))
+                        } else {
+                            let mut names: Vec<String> = Vec::new();
+
+                            // Stop every managed election-backed model (the same
+                            // path Unload uses). These were spawned from startup
+                            // config, so on Resume we re-launch them as runtime
+                            // models via the Load flow.
+                            let managed_names: Vec<String> =
+                                managed_models.keys().cloned().collect();
+                            for model in managed_names {
+                                if let Some(controller) = managed_models.remove(&model) {
+                                    let _ = controller.stop_tx.send(true);
+                                    let _ = controller.task.await;
+                                    withdraw_advertised_model(&node, &model).await;
+                                    remove_serving_assignment(&node, &model).await;
+                                    if let Some(ref cs) = console_state {
+                                        cs.remove_local_process(&model).await;
+                                    }
+                                    names.push(model);
+                                }
+                            }
+
+                            // Stop every runtime-loaded local model. Same
+                            // teardown as Unload.
+                            let runtime_names: Vec<String> =
+                                runtime_models.keys().cloned().collect();
+                            for model in runtime_names {
+                                if let Some(handle) = runtime_models.remove(&model) {
+                                    let port = handle.port;
+                                    remove_runtime_local_target(&target_tx, &model, port);
+                                    withdraw_advertised_model(&node, &model).await;
+                                    tokio::time::sleep(std::time::Duration::from_millis(300))
+                                        .await;
+                                    handle.shutdown().await;
+                                    remove_serving_assignment(&node, &model).await;
+                                    if let Some(ref cs) = console_state {
+                                        cs.remove_local_process(&model).await;
+                                    }
+                                    names.push(model);
+                                }
+                            }
+
+                            yielded_specs = Some(names.clone());
+                            yield_owner = Some(reason);
+                            if let Some(ref cs) = console_state {
+                                cs.set_yield_state(Some(reason)).await;
+                            }
+                            eprintln!(
+                                "⏸ Yielded ({}) — stopped {} model(s): {}",
+                                reason.as_str(),
+                                names.len(),
+                                names.join(", ")
+                            );
+                            Ok(())
+                        };
+                        let _ = resp.send(result);
+                    }
+                    api::RuntimeControlRequest::Resume { reason, resp } => {
+                        // Stickiness: a presence-triggered resume cannot undo
+                        // a manual yield. The user explicitly took their
+                        // machine back; only a manual resume puts it back in
+                        // service.
+                        let blocked_by_manual = matches!(
+                            (reason, yield_owner),
+                            (
+                                api::YieldReason::UserActive,
+                                Some(api::YieldReason::Manual),
+                            )
+                        );
+                        let result = if blocked_by_manual {
+                            Err(anyhow::anyhow!(
+                                "manual yield is sticky; run `mesh-llm resume` to clear"
+                            ))
+                        } else {
+                            match yielded_specs.take() {
+                                None => Err(anyhow::anyhow!("not yielded")),
+                                Some(specs) => {
+                                    // Re-issue Load for each previously-yielded
+                                    // model through our own control channel. This
+                                    // reuses the exact Load path (runtime_models,
+                                    // single local llama-server per model) rather
+                                    // than re-running election / split setup.
+                                    //
+                                    // We spawn a waiter per Load that logs
+                                    // failures. We do not block Resume on the
+                                    // Load queue itself — doing so would
+                                    // deadlock, since the Loads flow back
+                                    // through this same control loop.
+                                    for spec in &specs {
+                                        let (tx, rx) = tokio::sync::oneshot::channel();
+                                        let spec_for_log = spec.clone();
+                                        if control_tx
+                                            .send(api::RuntimeControlRequest::Load {
+                                                spec: spec.clone(),
+                                                resp: tx,
+                                            })
+                                            .is_err()
+                                        {
+                                            eprintln!(
+                                                "⚠️  Resume: control channel closed before reloading '{spec_for_log}'"
+                                            );
+                                            continue;
+                                        }
+                                        tokio::spawn(async move {
+                                            match rx.await {
+                                                Ok(Ok(_)) => {}
+                                                Ok(Err(err)) => eprintln!(
+                                                    "⚠️  Resume: failed to reload '{spec_for_log}': {err}"
+                                                ),
+                                                Err(_) => eprintln!(
+                                                    "⚠️  Resume: runtime dropped response for '{spec_for_log}'"
+                                                ),
+                                            }
+                                        });
+                                    }
+                                    yield_owner = None;
+                                    if let Some(ref cs) = console_state {
+                                        cs.set_yield_state(None).await;
+                                    }
+                                    eprintln!(
+                                        "▶ Resumed — re-loading {} model(s): {}",
+                                        specs.len(),
+                                        specs.join(", ")
+                                    );
+                                    Ok(())
+                                }
+                            }
+                        };
+                        let _ = resp.send(result);
+                    }
                 }
             }
             Some(event) = runtime_event_rx.recv() => {
@@ -2493,6 +2816,9 @@ async fn run_auto(
         }
     }
     if let Some(handle) = nostr_publisher {
+        handle.abort();
+    }
+    if let Some(handle) = presence_handle {
         handle.abort();
     }
 
@@ -4068,5 +4394,247 @@ mod tests {
             async move { state.publication_state().await.as_str() == "publish_failed" }
         })
         .await;
+    }
+
+    // ---- last_host_for_any --------------------------------------------------
+
+    fn make_bare_peer(seed: u8) -> mesh::PeerInfo {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        let id = iroh::EndpointId::from(iroh::SecretKey::from_bytes(&bytes).public());
+        mesh::PeerInfo {
+            id,
+            addr: iroh::EndpointAddr {
+                id,
+                addrs: Default::default(),
+            },
+            tunnel_port: None,
+            role: mesh::NodeRole::Worker,
+            models: vec![],
+            vram_bytes: 0,
+            rtt_ms: None,
+            model_source: None,
+            serving_models: vec![],
+            hosted_models: vec![],
+            hosted_models_known: false,
+            available_models: vec![],
+            requested_models: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            moe_recovered_at: None,
+            version: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+            first_joined_mesh_ts: None,
+        }
+    }
+
+    #[test]
+    fn last_host_false_when_no_local_models() {
+        let peers = vec![make_bare_peer(1)];
+        assert!(!last_host_for_any(&[], &peers));
+    }
+
+    #[test]
+    fn last_host_false_when_peer_covers_all_models() {
+        let mut peer = make_bare_peer(1);
+        peer.hosted_models = vec!["llama".to_string(), "qwen".to_string()];
+        let local = vec!["llama".to_string(), "qwen".to_string()];
+        assert!(!last_host_for_any(&local, &[peer]));
+    }
+
+    #[test]
+    fn last_host_true_when_a_model_is_not_covered() {
+        let mut peer = make_bare_peer(1);
+        // Only covers one of our models.
+        peer.hosted_models = vec!["llama".to_string()];
+        let local = vec!["llama".to_string(), "qwen".to_string()];
+        assert!(last_host_for_any(&local, &[peer]));
+    }
+
+    #[test]
+    fn last_host_counts_serving_models_too() {
+        let mut peer = make_bare_peer(1);
+        peer.serving_models = vec!["qwen".to_string()];
+        let local = vec!["qwen".to_string()];
+        assert!(!last_host_for_any(&local, &[peer]));
+    }
+
+    // ---- presence_yield_loop_with ------------------------------------------
+
+    /// Scripted probe that returns a sequence of states, one per call, and
+    /// repeats the last state forever once the script is exhausted.
+    struct ScriptedProbe {
+        script: std::sync::Mutex<std::vec::IntoIter<crate::system::presence::Presence>>,
+        last: std::sync::Mutex<crate::system::presence::Presence>,
+    }
+
+    impl ScriptedProbe {
+        fn new(states: Vec<crate::system::presence::Presence>) -> Self {
+            let last = *states.last().expect("non-empty script");
+            Self {
+                script: std::sync::Mutex::new(states.into_iter()),
+                last: std::sync::Mutex::new(last),
+            }
+        }
+    }
+
+    impl crate::system::presence::PresenceProbe for ScriptedProbe {
+        fn sample(
+            &self,
+            _idle_threshold: std::time::Duration,
+        ) -> crate::system::presence::Presence {
+            let mut iter = self.script.lock().unwrap();
+            match iter.next() {
+                Some(s) => {
+                    *self.last.lock().unwrap() = s;
+                    s
+                }
+                None => *self.last.lock().unwrap(),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn presence_loop_yields_after_grace_then_resumes_on_away() {
+        use crate::system::presence::Presence;
+
+        // Script: 3 Active samples (exceeds active_grace=2 ticks), then Away.
+        // After that the probe returns Away forever.
+        let probe = Box::new(ScriptedProbe::new(vec![
+            Presence::Active,
+            Presence::Active,
+            Presence::Active,
+            Presence::Away,
+        ]));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Spawn a stub runtime that ACKs every request with Ok(()).
+        let stub = tokio::spawn(async move {
+            let mut seen: Vec<&'static str> = Vec::new();
+            while let Some(req) = rx.recv().await {
+                match req {
+                    api::RuntimeControlRequest::Yield { resp, .. } => {
+                        seen.push("yield");
+                        let _ = resp.send(Ok(()));
+                    }
+                    api::RuntimeControlRequest::Resume { resp, .. } => {
+                        seen.push("resume");
+                        let _ = resp.send(Ok(()));
+                    }
+                    _ => {}
+                }
+                if seen.len() >= 2 {
+                    break;
+                }
+            }
+            seen
+        });
+
+        let loop_handle = tokio::spawn(async move {
+            // poll_interval 10ms, active_grace 20ms → need ~3 consecutive
+            // Active samples before the loop yields. idle_threshold is only
+            // used by the probe itself, which is scripted here.
+            presence_yield_loop_with(
+                tx,
+                probe,
+                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(20),
+                std::time::Duration::from_millis(10),
+            )
+            .await;
+        });
+
+        let seen = tokio::time::timeout(std::time::Duration::from_secs(2), stub)
+            .await
+            .expect("stub timed out")
+            .expect("stub panicked");
+        loop_handle.abort();
+
+        assert_eq!(
+            seen,
+            vec!["yield", "resume"],
+            "presence loop should yield then resume"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn presence_loop_does_not_resume_when_yield_was_refused() {
+        use crate::system::presence::Presence;
+
+        // User appears active for long enough to trigger a yield, then goes
+        // away. If the runtime refuses the Yield, the loop must NOT later
+        // issue a Resume on its own — that was the stickiness bug.
+        let probe = Box::new(ScriptedProbe::new(vec![
+            Presence::Active,
+            Presence::Active,
+            Presence::Active,
+            Presence::Away,
+            Presence::Away,
+            Presence::Away,
+        ]));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_task = seen.clone();
+
+        let collector = tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                match req {
+                    api::RuntimeControlRequest::Yield { resp, .. } => {
+                        seen_task.lock().unwrap().push("yield");
+                        // Refuse — simulates "already yielded manually" or
+                        // the last-host guard tripping.
+                        let _ = resp.send(Err(anyhow::anyhow!("refused")));
+                    }
+                    api::RuntimeControlRequest::Resume { resp, .. } => {
+                        seen_task.lock().unwrap().push("resume");
+                        let _ = resp.send(Ok(()));
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let loop_handle = tokio::spawn(async move {
+            presence_yield_loop_with(
+                tx,
+                probe,
+                std::time::Duration::from_millis(100),
+                std::time::Duration::from_millis(20),
+                std::time::Duration::from_millis(10),
+            )
+            .await;
+        });
+
+        // Let the loop transition Active → Away with plenty of margin.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        loop_handle.abort();
+        collector.abort();
+
+        let seen = seen.lock().unwrap().clone();
+        assert!(
+            seen.contains(&"yield"),
+            "expected the loop to send at least one Yield, got {seen:?}"
+        );
+        assert!(
+            !seen.contains(&"resume"),
+            "loop must not send Resume after the Yield was refused, got {seen:?}"
+        );
     }
 }

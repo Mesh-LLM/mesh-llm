@@ -22,7 +22,9 @@ use crate::cli::commands::integrations::{run_claude, run_goose, run_opencode};
 use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::moe::dispatch_moe_command;
 use crate::cli::commands::plugin::run_plugin_command;
-use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
+use crate::cli::commands::runtime::{
+    dispatch_runtime_command, run_drop, run_load, run_resume, run_status, run_yield,
+};
 use crate::cli::commands::update::run_update;
 use crate::cli::{AuthCommand, Cli, Command};
 use crate::network::nostr;
@@ -50,6 +52,8 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,
         Command::Stop => run_stop(),
+        Command::Yield { port } => run_yield(*port).await,
+        Command::Resume { port } => run_resume(*port).await,
         Command::Discover {
             model,
             min_vram,

@@ -45,6 +45,48 @@ pub enum RuntimeControlRequest {
         model: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
     },
+    /// Stop serving all startup-configured models and release their resources.
+    /// The node stays in the mesh but advertises no hosted models, so peers
+    /// route around it naturally. Used by the presence-driven yield controller
+    /// and by the `mesh-llm yield` CLI.
+    Yield {
+        reason: YieldReason,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
+    /// Reverse a previous yield: restart the startup-configured managed models
+    /// that were torn down. No-op if the node is not yielded.
+    ///
+    /// `reason` identifies the caller: `Manual` is the CLI / API path and can
+    /// resume any prior yield; `UserActive` is the presence loop and is
+    /// refused when the current yield was issued manually (manual-yield
+    /// stickiness).
+    Resume {
+        reason: YieldReason,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
+}
+
+/// Why the node yielded. Recorded locally for `/api/status` and logs; not
+/// advertised to peers (a yielded node looks exactly like one that never had
+/// a model loaded).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum YieldReason {
+    /// User requested via `mesh-llm yield` or the console. Sticky: a
+    /// subsequent presence probe will not auto-resume until the user issues
+    /// `mesh-llm resume`.
+    Manual,
+    /// Presence probe saw user input within the active-grace window.
+    UserActive,
+}
+
+impl YieldReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            YieldReason::Manual => "manual",
+            YieldReason::UserActive => "user_active",
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -97,6 +139,10 @@ pub(super) struct ApiInner {
     pub(super) nostr_relays: Vec<String>,
     pub(super) nostr_discovery: bool,
     pub(super) publication_state: PublicationState,
+    /// Current yield state (None = serving normally). Recorded locally for
+    /// `/api/status` and CLI reporting. Peers infer yield state from the empty
+    /// `serving_models` / `hosted_models` gossip, not from this field.
+    pub(super) yield_state: Option<YieldReason>,
     pub(super) runtime_control: Option<tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>>,
     pub(super) local_processes: Vec<RuntimeProcessPayload>,
     pub(super) sse_clients: Vec<tokio::sync::mpsc::UnboundedSender<String>>,
