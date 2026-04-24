@@ -21,7 +21,11 @@ fn run() -> DynResult<()> {
         [command, scope] if command == "repo-consistency" && scope == "release-targets" => {
             check_release_targets()
         }
-        _ => Err(format!("usage: cargo run -p xtask -- repo-consistency release-targets").into()),
+        _ => Err(
+            "usage: cargo run -p xtask -- repo-consistency release-targets"
+                .to_string()
+                .into(),
+        ),
     }
 }
 

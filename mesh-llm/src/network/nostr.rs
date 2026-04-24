@@ -285,16 +285,27 @@ impl Publisher {
 ///
 /// If `max_clients` is set, delists when that many clients are connected
 /// and re-publishes when clients drop below the cap.
+pub struct PublishLoopOptions {
+    pub name: Option<String>,
+    pub region: Option<String>,
+    pub max_clients: Option<usize>,
+    pub interval_secs: u64,
+    pub status_tx: Option<tokio::sync::watch::Sender<Option<PublishStateUpdate>>>,
+}
+
 pub async fn publish_loop(
     node: crate::mesh::Node,
     keys: Keys,
     relays: Vec<String>,
-    name: Option<String>,
-    region: Option<String>,
-    max_clients: Option<usize>,
-    interval_secs: u64,
-    status_tx: Option<tokio::sync::watch::Sender<Option<PublishStateUpdate>>>,
+    options: PublishLoopOptions,
 ) {
+    let PublishLoopOptions {
+        name,
+        region,
+        max_clients,
+        interval_secs,
+        status_tx,
+    } = options;
     let mut last_reported = None;
     let publisher = match Publisher::new(keys.clone(), &relays).await {
         Ok(p) => p,
@@ -617,7 +628,19 @@ pub async fn publish_watchdog(
                         }
                     };
                     // Start publish loop (blocks forever)
-                    publish_loop(node, keys, relays, mesh_name, region, None, 60, status_tx).await;
+                    publish_loop(
+                        node,
+                        keys,
+                        relays,
+                        PublishLoopOptions {
+                            name: mesh_name,
+                            region,
+                            max_clients: None,
+                            interval_secs: 60,
+                            status_tx,
+                        },
+                    )
+                    .await;
                     return;
                 }
             }

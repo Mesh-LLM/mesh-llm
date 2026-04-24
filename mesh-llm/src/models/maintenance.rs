@@ -405,14 +405,17 @@ fn cached_repo_files(repo: &CachedRepo) -> Result<Vec<String>> {
     }
 
     let mut snapshot_entries = Vec::new();
-    for entry in
-        std::fs::read_dir(&snapshots_dir).with_context(|| format!("Read {}", snapshots_dir.display()))?
+    for entry in std::fs::read_dir(&snapshots_dir)
+        .with_context(|| format!("Read {}", snapshots_dir.display()))?
     {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        snapshot_entries.push((entry.file_name().to_string_lossy().to_string(), entry.path()));
+        snapshot_entries.push((
+            entry.file_name().to_string_lossy().to_string(),
+            entry.path(),
+        ));
     }
 
     let mut snapshot_roots = Vec::new();

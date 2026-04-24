@@ -407,8 +407,8 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
         } else {
             meta.head_count
         };
-        if effective_kv > 0 {
-            meta.value_length = meta.embedding_size / effective_kv;
+        if let Some(value_length) = meta.embedding_size.checked_div(effective_kv) {
+            meta.value_length = value_length;
         }
     }
 

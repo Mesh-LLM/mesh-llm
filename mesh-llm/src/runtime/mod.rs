@@ -358,10 +358,10 @@ pub(crate) async fn run() -> Result<()> {
     // --mesh-name alone never implies publication (Issue #240).
 
     // Warn users who used to rely on --mesh-name auto-publishing
-    if cli.mesh_name.is_some() && !cli.publish {
+    if let Some(mesh_name) = cli.mesh_name.as_ref().filter(|_| !cli.publish) {
         eprintln!(
             "ℹ️  Mesh named '{}' — private by default. Add --publish to make it publicly discoverable.",
-            cli.mesh_name.as_ref().unwrap()
+            mesh_name
         );
     }
 
@@ -2285,11 +2285,13 @@ async fn run_auto(
                         pub_node,
                         nostr_keys,
                         relays,
-                        pub_name,
-                        pub_region,
-                        pub_max_clients,
-                        60,
-                        Some(status_tx),
+                        nostr::PublishLoopOptions {
+                            name: pub_name,
+                            region: pub_region,
+                            max_clients: pub_max_clients,
+                            interval_secs: 60,
+                            status_tx: Some(status_tx),
+                        },
                     )
                     .await;
                 }))
@@ -2576,11 +2578,13 @@ async fn run_passive(
                         pub_node,
                         nostr_keys,
                         relays,
-                        pub_name,
-                        pub_region,
-                        pub_max_clients,
-                        60,
-                        Some(status_tx),
+                        nostr::PublishLoopOptions {
+                            name: pub_name,
+                            region: pub_region,
+                            max_clients: pub_max_clients,
+                            interval_secs: 60,
+                            status_tx: Some(status_tx),
+                        },
                     )
                     .await;
                 });
