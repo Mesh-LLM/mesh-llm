@@ -2008,6 +2008,7 @@ mod integration_tests {
     /// DiscoveryClient finds both listings, and fields round-trip correctly.
     /// Covers publish, discover, multi-publisher, and client reuse in one test.
     #[tokio::test]
+    #[ignore = "requires live public Nostr relays"]
     async fn publish_discover_round_trip() {
         let relays: Vec<String> = DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect();
         let mesh_name = format!("mesh-llm-test-{}", rand::random::<u32>());
