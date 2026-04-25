@@ -25,12 +25,19 @@ mkdir -p "$(dirname "$LLAMA_WORKDIR")"
 
 if [[ ! -d "$LLAMA_WORKDIR/.git" ]]; then
     rm -rf "$LLAMA_WORKDIR"
-    git clone --filter=blob:none "$LLAMA_UPSTREAM_URL" "$LLAMA_WORKDIR"
+    git clone "$LLAMA_UPSTREAM_URL" "$LLAMA_WORKDIR"
 fi
 
 git -C "$LLAMA_WORKDIR" am --abort >/dev/null 2>&1 || true
 git -C "$LLAMA_WORKDIR" remote set-url origin "$LLAMA_UPSTREAM_URL"
 git -C "$LLAMA_WORKDIR" fetch origin master --tags
+if [[ "$(git -C "$LLAMA_WORKDIR" config --bool remote.origin.promisor || true)" == "true" ]]; then
+    if git -C "$LLAMA_WORKDIR" fetch -h 2>&1 | grep -q -- "--unfilter"; then
+        git -C "$LLAMA_WORKDIR" fetch --unfilter origin
+    else
+        git -C "$LLAMA_WORKDIR" fetch --refetch --filter=blob:limit=1g origin
+    fi
+fi
 git -C "$LLAMA_WORKDIR" config user.name "${GIT_AUTHOR_NAME:-Mesh-LLM CI}"
 git -C "$LLAMA_WORKDIR" config user.email "${GIT_AUTHOR_EMAIL:-ci@mesh-llm.local}"
 
