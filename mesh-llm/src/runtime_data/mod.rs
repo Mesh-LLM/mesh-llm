@@ -728,10 +728,7 @@ pub(crate) mod test_support {
                 .map(String::as_str),
             Some("idle")
         );
-        assert!(snapshot.metrics.samples[1]
-            .labels
-            .get("unbounded")
-            .is_none());
+        assert!(!snapshot.metrics.samples[1].labels.contains_key("unbounded"));
         assert_eq!(snapshot.items.metrics.len(), 2);
     }
 
