@@ -1,31 +1,16 @@
-From 98afd603b3cf48b7d479649f101e7ed4dfe17eff Mon Sep 17 00:00:00 2001
-From: Michael Neale <michael.neale@gmail.com>
-Date: Sat, 28 Feb 2026 15:24:02 -0500
-Subject: [PATCH 06/15] Phase 2b: ranking-based expert splitting with overlap
- strategy
+From 8127cfc0a1351f6d60bba464c7cb7f1b20f9c549 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Apr 2026 08:25:17 +1000
+Subject: [PATCH 4/6] moe-split: support ranking, shards, and compatibility
+ fixes
 
-moe-analyze:
-- --export-ranking FILE: export per-expert gate mass CSV
-- --all-layers: log all MoE layers (not just first 6)
-- Custom arg parsing to avoid common_params_parse conflicts
-
-moe-split:
-- --ranking-file FILE: snake draft by actual gate mass (from moe-analyze)
-- --replicate N: replicate top-N hot experts to every group
-- Read ranking CSV, build shared core + unique shards per node
-
-Validated on Qwen3-30B-A3B (128 experts, top-8):
-- Minimum viable: ~46 experts (36%) for coherent output
-- Overlap strategy: 46 shared + 41 unique = 87/node, both nodes excellent
-- No prompt probing needed with 68% overlap
-- Top-64 by mass: excellent. Bottom-64: garbage. Expert 0: 25% of all mass
 ---
  tools/moe-analyze/moe-analyze.cpp |  59 ++-
- tools/moe-split/moe-split.cpp     | 572 ++++++++++++++++++++++--------
- 2 files changed, 487 insertions(+), 144 deletions(-)
+ tools/moe-split/moe-split.cpp     | 811 ++++++++++++++++++++++--------
+ 2 files changed, 661 insertions(+), 209 deletions(-)
 
 diff --git a/tools/moe-analyze/moe-analyze.cpp b/tools/moe-analyze/moe-analyze.cpp
-index d80b4bcbd..4428e55ce 100644
+index d80b4bcb..4428e55c 100644
 --- a/tools/moe-analyze/moe-analyze.cpp
 +++ b/tools/moe-analyze/moe-analyze.cpp
 @@ -51,6 +51,8 @@ struct callback_data {
@@ -116,7 +101,7 @@ index d80b4bcbd..4428e55ce 100644
      LOG_INF("For each group count, what fraction of the unrestricted top-%d mass\n", n_expert_used);
      LOG_INF("is captured by the best single group?\n\n");
 diff --git a/tools/moe-split/moe-split.cpp b/tools/moe-split/moe-split.cpp
-index f0ffc98b5..e6a8fa84f 100644
+index f0ffc98b..9fabef2f 100644
 --- a/tools/moe-split/moe-split.cpp
 +++ b/tools/moe-split/moe-split.cpp
 @@ -7,20 +7,19 @@
@@ -148,7 +133,13 @@ index f0ffc98b5..e6a8fa84f 100644
  
  #include "ggml.h"
  #include "gguf.h"
-@@ -33,7 +32,8 @@
+@@ -28,12 +27,14 @@
+ 
+ #include <algorithm>
+ #include <cinttypes>
++#include <climits>
+ #include <cmath>
+ #include <cstdio>
  #include <cstdlib>
  #include <cstring>
  #include <fstream>
@@ -158,7 +149,7 @@ index f0ffc98b5..e6a8fa84f 100644
  #include <sstream>
  #include <string>
  #include <vector>
-@@ -42,10 +42,14 @@ struct moe_split_params {
+@@ -42,10 +43,14 @@ struct moe_split_params {
      std::string input;
      std::string output;           // single output (with --group-id or --expert-list)
      std::string output_prefix;    // prefix for multi-output (with --groups)
@@ -174,7 +165,7 @@ index f0ffc98b5..e6a8fa84f 100644
  };
  
  static void print_usage(const char * prog) {
-@@ -58,12 +62,23 @@ static void print_usage(const char * prog) {
+@@ -58,12 +63,23 @@ static void print_usage(const char * prog) {
      printf("  -m, --model FILE          input GGUF file\n");
      printf("  -g, --groups N            number of expert groups to split into\n");
      printf("  --group-id N              produce only this group (0-indexed)\n");
@@ -198,7 +189,7 @@ index f0ffc98b5..e6a8fa84f 100644
  }
  
  static std::vector<int> parse_int_list(const std::string & s) {
-@@ -71,7 +86,54 @@ static std::vector<int> parse_int_list(const std::string & s) {
+@@ -71,7 +87,54 @@ static std::vector<int> parse_int_list(const std::string & s) {
      std::stringstream ss(s);
      std::string token;
      while (std::getline(ss, token, ',')) {
@@ -254,7 +245,7 @@ index f0ffc98b5..e6a8fa84f 100644
      }
      return result;
  }
-@@ -88,8 +150,16 @@ static void parse_args(int argc, const char ** argv, moe_split_params & params)
+@@ -88,8 +151,16 @@ static void parse_args(int argc, const char ** argv, moe_split_params & params)
              params.n_groups = std::atoi(argv[++i]);
          } else if (arg == "--group-id") {
              params.group_id = std::atoi(argv[++i]);
@@ -271,7 +262,7 @@ index f0ffc98b5..e6a8fa84f 100644
          } else if (arg == "-o" || arg == "--output") {
              params.output = argv[++i];
          } else if (arg == "--output-prefix") {
-@@ -109,19 +179,22 @@ static void parse_args(int argc, const char ** argv, moe_split_params & params)
+@@ -109,19 +180,22 @@ static void parse_args(int argc, const char ** argv, moe_split_params & params)
  
      // Validate argument combinations
      if (!params.expert_list.empty()) {
@@ -299,7 +290,7 @@ index f0ffc98b5..e6a8fa84f 100644
              exit(1);
          }
          if (params.group_id >= 0 && params.output.empty()) {
-@@ -135,14 +208,14 @@ static void parse_args(int argc, const char ** argv, moe_split_params & params)
+@@ -135,16 +209,22 @@ static void parse_args(int argc, const char ** argv, moe_split_params & params)
      }
  }
  
@@ -308,72 +299,172 @@ index f0ffc98b5..e6a8fa84f 100644
  static bool is_expert_tensor(const char * name) {
      return strstr(name, "ffn_gate_exps") != nullptr
          || strstr(name, "ffn_up_exps")   != nullptr
-         || strstr(name, "ffn_down_exps") != nullptr;
+-        || strstr(name, "ffn_down_exps") != nullptr;
++        || strstr(name, "ffn_down_exps") != nullptr
++        || strstr(name, "exp_probs_b")   != nullptr;
  }
  
 -// Check if tensor is the MoE router gate (ffn_gate_inp)
-+// Check if tensor is the MoE router gate
++// Check if tensor is a shared-expert tensor (trunk, not sliced)
++static bool is_shared_expert(const char * name) {
++    return strstr(name, "_shexp") != nullptr;
++}
++
++// Check if tensor is the MoE router gate (but not the shared-expert gate)
  static bool is_router_gate(const char * name) {
-     return strstr(name, "ffn_gate_inp") != nullptr;
+-    return strstr(name, "ffn_gate_inp") != nullptr;
++    return strstr(name, "ffn_gate_inp") != nullptr && !is_shared_expert(name);
  }
-@@ -154,8 +227,114 @@ static void zeros(std::ofstream & f, size_t n) {
+ 
+ static void zeros(std::ofstream & f, size_t n) {
+@@ -154,18 +234,211 @@ static void zeros(std::ofstream & f, size_t n) {
      }
  }
  
++struct input_shard {
++    std::string path;
++    struct gguf_context * ctx_gguf;
++    struct ggml_context * ctx_meta;
++};
++
++static std::vector<input_shard> load_input_shards(const std::string & input_path) {
++    std::vector<input_shard> shards;
++
++    auto load_one = [&shards](const std::string & path) {
++        struct ggml_context * ctx_meta = nullptr;
++        struct gguf_init_params init_params = {
++            /*.no_alloc = */ true,
++            /*.ctx      = */ &ctx_meta,
++        };
++
++        auto * ctx_gguf = gguf_init_from_file(path.c_str(), init_params);
++        if (!ctx_gguf) {
++            fprintf(stderr, "error: failed to load %s\n", path.c_str());
++            exit(1);
++        }
++
++        shards.push_back({ path, ctx_gguf, ctx_meta });
++    };
++
++    load_one(input_path);
++
++    int split_count_idx = gguf_find_key(shards[0].ctx_gguf, "split.count");
++    if (split_count_idx < 0) {
++        return shards;
++    }
++
++    int n_split = gguf_get_val_u16(shards[0].ctx_gguf, split_count_idx);
++    if (n_split <= 1) {
++        return shards;
++    }
++
++    std::vector<char> split_prefix(PATH_MAX, 0);
++    if (!llama_split_prefix(split_prefix.data(), split_prefix.size(), input_path.c_str(), 0, n_split)) {
++        fprintf(stderr, "error: unexpected split input file name: %s\n", input_path.c_str());
++        exit(1);
++    }
++
++    for (int i_split = 1; i_split < n_split; i_split++) {
++        std::vector<char> split_path(PATH_MAX, 0);
++        int ret = llama_split_path(
++            split_path.data(),
++            split_path.size(),
++            split_prefix.data(),
++            i_split,
++            n_split);
++        if (ret <= 0) {
++            fprintf(stderr, "error: failed to derive split path for shard %d/%d\n", i_split + 1, n_split);
++            exit(1);
++        }
++        load_one(split_path.data());
++    }
++
++    return shards;
++}
++
++static const input_shard * find_input_shard_for_tensor(
++        const std::vector<input_shard> & input_shards,
++        const char * name,
++        int * shard_index_out,
++        int * tensor_index_out) {
++    for (int shard_index = 0; shard_index < (int) input_shards.size(); shard_index++) {
++        int tensor_index = gguf_find_tensor(input_shards[shard_index].ctx_gguf, name);
++        if (tensor_index >= 0) {
++            if (shard_index_out) {
++                *shard_index_out = shard_index;
++            }
++            if (tensor_index_out) {
++                *tensor_index_out = tensor_index;
++            }
++            return &input_shards[shard_index];
++        }
++    }
++
++    return nullptr;
++}
++
 +// Compute per-expert average L2 norm across all router gate layers.
 +// Router gates are [n_embd, n_expert] F32 tensors — each row (column in logical
 +// layout) is an expert's routing weight vector. We compute ||w_e||_2 for each
 +// expert e, averaged across layers.
 +static std::vector<double> compute_gate_norms(
-+        struct gguf_context * ctx_in,
-+        struct ggml_context * ctx_meta,
-+        std::ifstream & f_in,
++        const std::vector<input_shard> & input_shards,
 +        int n_expert) {
-+    int n_tensors = gguf_get_n_tensors(ctx_in);
 +    std::vector<double> norm_sum(n_expert, 0.0);
 +    int n_layers = 0;
 +
-+    for (int i = 0; i < n_tensors; i++) {
-+        const char * name = gguf_get_tensor_name(ctx_in, i);
-+        if (!is_router_gate(name)) continue;
-+
-+        struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
-+
-+        // Router gate shape: [n_embd, n_expert] — ne[0]=n_embd, ne[1]=n_expert
-+        int n_embd_gate = (int)t->ne[0];
-+        int n_exp_gate  = (int)t->ne[1];
-+
-+        if (n_exp_gate != n_expert) {
-+            fprintf(stderr, "warning: gate %s has %d experts, expected %d. Skipping.\n",
-+                name, n_exp_gate, n_expert);
-+            continue;
++    for (const auto & input_shard : input_shards) {
++        std::ifstream f_in(input_shard.path, std::ios::binary);
++        if (!f_in.is_open()) {
++            fprintf(stderr, "error: cannot open %s\n", input_shard.path.c_str());
++            exit(1);
 +        }
 +
-+        // Read gate data — must be F32 for norm computation
-+        if (t->type != GGML_TYPE_F32) {
-+            fprintf(stderr, "warning: gate %s is type %d (not F32). Skipping norm analysis.\n",
-+                name, t->type);
-+            continue;
-+        }
++        int n_tensors = gguf_get_n_tensors(input_shard.ctx_gguf);
++        for (int i = 0; i < n_tensors; i++) {
++            const char * name = gguf_get_tensor_name(input_shard.ctx_gguf, i);
++            if (!is_router_gate(name)) continue;
 +
-+        size_t offset = gguf_get_data_offset(ctx_in) + gguf_get_tensor_offset(ctx_in, i);
-+        size_t n_bytes = (size_t)n_embd_gate * n_exp_gate * sizeof(float);
-+        std::vector<float> data(n_embd_gate * n_exp_gate);
-+        f_in.seekg(offset);
-+        f_in.read((char *)data.data(), n_bytes);
++            struct ggml_tensor * t = ggml_get_tensor(input_shard.ctx_meta, name);
 +
-+        // Compute L2 norm per expert
-+        // Memory layout: expert e's weights are at data[e * n_embd .. (e+1) * n_embd)
-+        // (row-major, each "row" in memory is one expert's embedding-dim vector)
-+        for (int e = 0; e < n_expert; e++) {
-+            double sum_sq = 0;
-+            for (int d = 0; d < n_embd_gate; d++) {
-+                float v = data[e * n_embd_gate + d];
-+                sum_sq += (double)v * v;
++            // Router gate shape: [n_embd, n_expert] — ne[0]=n_embd, ne[1]=n_expert
++            int n_embd_gate = (int) t->ne[0];
++            int n_exp_gate  = (int) t->ne[1];
++
++            if (n_exp_gate != n_expert) {
++                fprintf(stderr, "warning: gate %s has %d experts, expected %d. Skipping.\n",
++                    name, n_exp_gate, n_expert);
++                continue;
 +            }
-+            norm_sum[e] += std::sqrt(sum_sq);
++
++            // Read gate data — must be F32 for norm computation
++            if (t->type != GGML_TYPE_F32) {
++                fprintf(stderr, "warning: gate %s is type %d (not F32). Skipping norm analysis.\n",
++                    name, t->type);
++                continue;
++            }
++
++            size_t offset =
++                gguf_get_data_offset(input_shard.ctx_gguf) +
++                gguf_get_tensor_offset(input_shard.ctx_gguf, i);
++            size_t n_bytes = (size_t) n_embd_gate * n_exp_gate * sizeof(float);
++            std::vector<float> data(n_embd_gate * n_exp_gate);
++            f_in.seekg(offset);
++            f_in.read((char *) data.data(), n_bytes);
++
++            // Compute L2 norm per expert
++            // Memory layout: expert e's weights are at data[e * n_embd .. (e+1) * n_embd)
++            // (row-major, each "row" in memory is one expert's embedding-dim vector)
++            for (int e = 0; e < n_expert; e++) {
++                double sum_sq = 0;
++                for (int d = 0; d < n_embd_gate; d++) {
++                    float v = data[e * n_embd_gate + d];
++                    sum_sq += (double) v * v;
++                }
++                norm_sum[e] += std::sqrt(sum_sq);
++            }
++            n_layers++;
 +        }
-+        n_layers++;
 +    }
 +
 +    // Average across layers
@@ -393,7 +484,6 @@ index f0ffc98b5..e6a8fa84f 100644
 +        const std::vector<double> & scores,
 +        int n_groups) {
 +    int n = (int)scores.size();
-+    int per_group = n / n_groups;
 +
 +    // Sort expert indices by score (descending)
 +    std::vector<int> ranked(n);
@@ -431,8 +521,20 @@ index f0ffc98b5..e6a8fa84f 100644
 -// expert_ids: which original expert indices to include (renumbered 0..N-1 in output)
  static void write_group(
          const moe_split_params & params,
-         struct gguf_context * ctx_in,
-@@ -176,7 +355,7 @@ static void write_group(
+-        struct gguf_context * ctx_in,
+-        struct ggml_context * ctx_meta,
+-        std::ifstream & f_in,
++        const std::vector<input_shard> & input_shards,
+         const std::vector<int> & expert_ids,
+         const std::string & output_path,
+         int n_expert,
+-        int n_expert_tensors,
+         const char * label) {
++    auto * ctx_in = input_shards[0].ctx_gguf;
+     int experts_per_group = (int)expert_ids.size();
+ 
+     printf("\n--- %s: %d experts → %s ---\n", label, experts_per_group, output_path.c_str());
+@@ -176,7 +449,7 @@ static void write_group(
      if ((int)expert_ids.size() > 16) printf(" ... (%d more)", (int)expert_ids.size() - 16);
      printf("\n");
  
@@ -441,7 +543,7 @@ index f0ffc98b5..e6a8fa84f 100644
      bool contiguous = true;
      for (int i = 1; i < (int)expert_ids.size(); i++) {
          if (expert_ids[i] != expert_ids[i-1] + 1) {
-@@ -185,42 +364,42 @@ static void write_group(
+@@ -185,42 +458,50 @@ static void write_group(
          }
      }
      if (contiguous) {
@@ -458,9 +560,14 @@ index f0ffc98b5..e6a8fa84f 100644
 -    // Copy all KV metadata
      gguf_set_kv(ctx_out, ctx_in);
  
-     int n_tensors = gguf_get_n_tensors(ctx_in);
- 
+-    int n_tensors = gguf_get_n_tensors(ctx_in);
+-
 -    // Find the architecture
++    // MoE split outputs are standalone derived GGUFs, not members of the
++    // original upstream split set.
++    gguf_remove_key(ctx_out, "split.no");
++    gguf_remove_key(ctx_out, "split.count");
++    gguf_remove_key(ctx_out, "split.tensors.count");
 +    // Find architecture
      int arch_key = gguf_find_key(ctx_in, "general.architecture");
      std::string arch_name;
@@ -490,45 +597,92 @@ index f0ffc98b5..e6a8fa84f 100644
  
 -    // Create a separate ggml context for sliced tensors
 -    size_t ctx_size = (size_t)(n_expert_tensors + 48 + 16) * ggml_tensor_overhead() + 4096;
-+    // Create ggml context for sliced tensors
-+    size_t ctx_size = (size_t)(n_expert_tensors + 64) * ggml_tensor_overhead() + 4096;
++    // Create ggml context for ALL tensors (trunk + experts) across every input
++    // shard. The multi-shard path no longer has a single ctx_in tensor count.
++    int n_tensors_total = 0;
++    for (const auto & input_shard : input_shards) {
++        n_tensors_total += gguf_get_n_tensors(input_shard.ctx_gguf);
++    }
++    size_t ctx_size = (size_t)(n_tensors_total + 64) * ggml_tensor_overhead() + 4096;
      struct ggml_init_params ctx_params = {
          /*.mem_size   =*/ ctx_size,
          /*.mem_buffer =*/ nullptr,
-@@ -234,25 +413,21 @@ static void write_group(
-         const char * name = gguf_get_tensor_name(ctx_in, i);
-         struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
+@@ -230,78 +511,49 @@ static void write_group(
  
+     size_t total_expert_bytes_saved = 0;
+ 
+-    for (int i = 0; i < n_tensors; i++) {
+-        const char * name = gguf_get_tensor_name(ctx_in, i);
+-        struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
+-
 -        if (is_expert_tensor(name)) {
-+        if (is_expert_tensor(name) || is_router_gate(name)) {
-             int n_dims = ggml_n_dims(t);
-             int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
+-            int n_dims = ggml_n_dims(t);
+-            int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
 -            for (int d = 0; d < n_dims; d++) {
 -                ne[d] = t->ne[d];
 -            }
-+            for (int d = 0; d < n_dims; d++) ne[d] = t->ne[d];
++    for (const auto & input_shard : input_shards) {
++        int n_tensors = gguf_get_n_tensors(input_shard.ctx_gguf);
++        for (int i = 0; i < n_tensors; i++) {
++            const char * name = gguf_get_tensor_name(input_shard.ctx_gguf, i);
++            struct ggml_tensor * t = ggml_get_tensor(input_shard.ctx_meta, name);
++
++            if (is_expert_tensor(name) || is_router_gate(name)) {
++                int n_dims = ggml_n_dims(t);
++                int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
++                for (int d = 0; d < n_dims; d++) ne[d] = t->ne[d];
++
++                int expert_dim = n_dims - 1;
++                if (ne[expert_dim] != n_expert) {
++                    fprintf(stderr, "warning: tensor %s has ne[%d]=%lld, expected %d. Copying as-is.\n",
++                        name, expert_dim, (long long)ne[expert_dim], n_expert);
++                    gguf_add_tensor(ctx_out, t);
++                    continue;
++                }
  
-             int expert_dim = n_dims - 1;
-             if (ne[expert_dim] != n_expert) {
+-            int expert_dim = n_dims - 1;
+-            if (ne[expert_dim] != n_expert) {
 -                fprintf(stderr, "warning: tensor %s has ne[%d]=%lld, expected %d experts. Copying as-is.\n",
-+                fprintf(stderr, "warning: tensor %s has ne[%d]=%lld, expected %d. Copying as-is.\n",
-                     name, expert_dim, (long long)ne[expert_dim], n_expert);
+-                    name, expert_dim, (long long)ne[expert_dim], n_expert);
++                int64_t ne_new[GGML_MAX_DIMS] = {1, 1, 1, 1};
++                for (int d = 0; d < n_dims; d++) ne_new[d] = ne[d];
++                ne_new[expert_dim] = experts_per_group;
++
++                struct ggml_tensor * t_new = ggml_new_tensor(ctx_new, t->type, n_dims, ne_new);
++                ggml_set_name(t_new, name);
++                gguf_add_tensor(ctx_out, t_new);
++
++                size_t bytes_per_expert = ggml_nbytes(t) / n_expert;
++                total_expert_bytes_saved += bytes_per_expert * (n_expert - experts_per_group);
++
++                if (is_router_gate(name)) {
++                    printf("  %-40s [%lld x %lld] → [%lld x %lld]  (router gate gathered)\n",
++                        name, (long long)ne[0], (long long)ne[1],
++                        (long long)ne_new[0], (long long)ne_new[1]);
++                } else {
++                    printf("  %-40s [%lld x %lld x %lld] → [%lld x %lld x %lld]\n",
++                        name,
++                        (long long)ne[0], (long long)ne[1], (long long)ne[2],
++                        (long long)ne_new[0], (long long)ne_new[1], (long long)ne_new[2]);
++                }
++            } else {
                  gguf_add_tensor(ctx_out, t);
-                 continue;
+-                continue;
              }
- 
-             int64_t ne_new[GGML_MAX_DIMS] = {1, 1, 1, 1};
+-
+-            int64_t ne_new[GGML_MAX_DIMS] = {1, 1, 1, 1};
 -            for (int d = 0; d < n_dims; d++) {
 -                ne_new[d] = ne[d];
 -            }
-+            for (int d = 0; d < n_dims; d++) ne_new[d] = ne[d];
-             ne_new[expert_dim] = experts_per_group;
- 
-             struct ggml_tensor * t_new = ggml_new_tensor(ctx_new, t->type, n_dims, ne_new);
-@@ -262,44 +437,16 @@ static void write_group(
-             size_t bytes_per_expert = ggml_nbytes(t) / n_expert;
-             total_expert_bytes_saved += bytes_per_expert * (n_expert - experts_per_group);
- 
+-            ne_new[expert_dim] = experts_per_group;
+-
+-            struct ggml_tensor * t_new = ggml_new_tensor(ctx_new, t->type, n_dims, ne_new);
+-            ggml_set_name(t_new, name);
+-            gguf_add_tensor(ctx_out, t_new);
+-
+-            size_t bytes_per_expert = ggml_nbytes(t) / n_expert;
+-            total_expert_bytes_saved += bytes_per_expert * (n_expert - experts_per_group);
+-
 -            printf("  %-40s [%lld x %lld x %lld] → [%lld x %lld x %lld]  (%.1f MB → %.1f MB)\n",
 -                name,
 -                (long long)ne[0], (long long)ne[1], (long long)ne[2],
@@ -553,16 +707,7 @@ index f0ffc98b5..e6a8fa84f 100644
 -            int64_t ne_new[GGML_MAX_DIMS] = {1, 1, 1, 1};
 -            for (int d = 0; d < n_dims; d++) {
 -                ne_new[d] = ne[d];
-+            if (is_router_gate(name)) {
-+                printf("  %-40s [%lld x %lld] → [%lld x %lld]  (router gate gathered)\n",
-+                    name, (long long)ne[0], (long long)ne[1],
-+                    (long long)ne_new[0], (long long)ne_new[1]);
-+            } else {
-+                printf("  %-40s [%lld x %lld x %lld] → [%lld x %lld x %lld]\n",
-+                    name,
-+                    (long long)ne[0], (long long)ne[1], (long long)ne[2],
-+                    (long long)ne_new[0], (long long)ne_new[1], (long long)ne_new[2]);
-             }
+-            }
 -            ne_new[expert_dim] = experts_per_group;
 -
 -            struct ggml_tensor * t_new = ggml_new_tensor(ctx_new, t->type, n_dims, ne_new);
@@ -576,10 +721,12 @@ index f0ffc98b5..e6a8fa84f 100644
 -                name,
 -                (long long)ne[0], (long long)ne[1],
 -                (long long)ne_new[0], (long long)ne_new[1]);
-         } else {
-             gguf_add_tensor(ctx_out, t);
+-        } else {
+-            gguf_add_tensor(ctx_out, t);
          }
-@@ -314,7 +461,6 @@ static void write_group(
+     }
+ 
+@@ -314,7 +566,6 @@ static void write_group(
          return;
      }
  
@@ -587,7 +734,7 @@ index f0ffc98b5..e6a8fa84f 100644
      printf("  Writing %s ...\n", output_path.c_str());
  
      std::ofstream f_out(output_path, std::ios::binary);
-@@ -332,7 +478,7 @@ static void write_group(
+@@ -332,35 +583,48 @@ static void write_group(
      gguf_get_meta_data(ctx_out, meta_data.data());
      f_out.write((const char *)meta_data.data(), meta_size);
  
@@ -595,8 +742,40 @@ index f0ffc98b5..e6a8fa84f 100644
 +    // Write tensor data
      std::vector<uint8_t> read_buf;
      std::vector<uint8_t> gather_buf;
++    std::vector<std::ifstream> f_inputs;
++    f_inputs.reserve(input_shards.size());
++    for (const auto & input_shard : input_shards) {
++        f_inputs.emplace_back(input_shard.path, std::ios::binary);
++        if (!f_inputs.back().is_open()) {
++            fprintf(stderr, "error: cannot open %s\n", input_shard.path.c_str());
++            exit(1);
++        }
++    }
  
-@@ -353,14 +499,12 @@ static void write_group(
+     for (int i = 0; i < gguf_get_n_tensors(ctx_out); i++) {
+         const char * name = gguf_get_tensor_name(ctx_out, i);
+ 
+-        int i_in = gguf_find_tensor(ctx_in, name);
+-        if (i_in < 0) {
++        int shard_index = -1;
++        int i_in = -1;
++        const input_shard * source_shard =
++            find_input_shard_for_tensor(input_shards, name, &shard_index, &i_in);
++        if (!source_shard) {
+             fprintf(stderr, "error: tensor %s not found in input\n", name);
+             exit(1);
+         }
+ 
+-        struct ggml_tensor * t_in = ggml_get_tensor(ctx_meta, name);
+-        size_t offset_in = gguf_get_data_offset(ctx_in) + gguf_get_tensor_offset(ctx_in, i_in);
++        struct ggml_tensor * t_in = ggml_get_tensor(source_shard->ctx_meta, name);
++        size_t offset_in =
++            gguf_get_data_offset(source_shard->ctx_gguf) +
++            gguf_get_tensor_offset(source_shard->ctx_gguf, i_in);
++        std::ifstream & f_in = f_inputs[shard_index];
+ 
+         if (is_expert_tensor(name) || is_router_gate(name)) {
+             size_t bytes_per_expert = ggml_nbytes(t_in) / n_expert;
              size_t total_out_bytes  = (size_t)experts_per_group * bytes_per_expert;
  
              if (contiguous) {
@@ -611,7 +790,7 @@ index f0ffc98b5..e6a8fa84f 100644
                  gather_buf.resize(total_out_bytes);
                  read_buf.resize(bytes_per_expert);
                  for (int e = 0; e < experts_per_group; e++) {
-@@ -374,7 +518,6 @@ static void write_group(
+@@ -374,7 +638,6 @@ static void write_group(
              }
              zeros(f_out, GGML_PAD(total_out_bytes, GGUF_DEFAULT_ALIGNMENT) - total_out_bytes);
          } else {
@@ -619,19 +798,16 @@ index f0ffc98b5..e6a8fa84f 100644
              size_t n_bytes = ggml_nbytes(t_in);
              read_buf.resize(n_bytes);
              f_in.seekg(offset_in);
-@@ -392,11 +535,51 @@ static void write_group(
+@@ -392,38 +655,57 @@ static void write_group(
      ggml_free(ctx_new);
  }
  
 +// Helper: produce all groups via write_group
 +static void produce_groups(
 +        const moe_split_params & params,
-+        struct gguf_context * ctx_in,
-+        struct ggml_context * ctx_meta,
-+        std::ifstream & f_in,
++        const std::vector<input_shard> & input_shards,
 +        const std::vector<std::vector<int>> & groups,
-+        int n_expert,
-+        int n_expert_tensors) {
++        int n_expert) {
 +    int n_groups = (int)groups.size();
 +
 +    if (params.group_id >= 0) {
@@ -641,8 +817,8 @@ index f0ffc98b5..e6a8fa84f 100644
 +        }
 +        char label[128];
 +        snprintf(label, sizeof(label), "Group %d", params.group_id);
-+        write_group(params, ctx_in, ctx_meta, f_in, groups[params.group_id],
-+                    params.output, n_expert, n_expert_tensors, label);
++        write_group(params, input_shards, groups[params.group_id],
++                    params.output, n_expert, label);
 +    } else {
 +        for (int g = 0; g < n_groups; g++) {
 +            std::string path;
@@ -657,8 +833,8 @@ index f0ffc98b5..e6a8fa84f 100644
 +            }
 +            char label[128];
 +            snprintf(label, sizeof(label), "Group %d", g);
-+            write_group(params, ctx_in, ctx_meta, f_in, groups[g],
-+                        path, n_expert, n_expert_tensors, label);
++            write_group(params, input_shards, groups[g],
++                        path, n_expert, label);
 +        }
 +    }
 +}
@@ -668,11 +844,31 @@ index f0ffc98b5..e6a8fa84f 100644
      parse_args(argc, argv, params);
  
 -    // Load input GGUF metadata (no tensor data)
-+    // Load input GGUF metadata
-     struct ggml_context * ctx_meta = nullptr;
-     struct gguf_init_params init_params = {
-         /*.no_alloc = */ true,
-@@ -423,7 +606,6 @@ int main(int argc, const char ** argv) {
+-    struct ggml_context * ctx_meta = nullptr;
+-    struct gguf_init_params init_params = {
+-        /*.no_alloc = */ true,
+-        /*.ctx      = */ &ctx_meta,
+-    };
+-
+-    auto * ctx_in = gguf_init_from_file(params.input.c_str(), init_params);
+-    if (!ctx_in) {
+-        fprintf(stderr, "error: failed to load %s\n", params.input.c_str());
+-        return 1;
+-    }
+-
+-    std::ifstream f_in(params.input, std::ios::binary);
+-    if (!f_in.is_open()) {
+-        fprintf(stderr, "error: cannot open %s\n", params.input.c_str());
+-        return 1;
+-    }
++    auto input_shards = load_input_shards(params.input);
++    auto * ctx_in = input_shards[0].ctx_gguf;
+ 
+     // Read model metadata
+-    int n_tensors = gguf_get_n_tensors(ctx_in);
+     int arch_key = gguf_find_key(ctx_in, "general.architecture");
+     std::string arch_name;
+     if (arch_key >= 0) {
          arch_name = gguf_get_val_str(ctx_in, arch_key);
      }
  
@@ -680,7 +876,7 @@ index f0ffc98b5..e6a8fa84f 100644
      std::string expert_key = arch_name + ".expert_count";
      int ec_idx = gguf_find_key(ctx_in, expert_key.c_str());
      if (ec_idx < 0) {
-@@ -432,17 +614,16 @@ int main(int argc, const char ** argv) {
+@@ -432,39 +714,47 @@ int main(int argc, const char ** argv) {
      }
      int n_expert = gguf_get_val_u32(ctx_in, ec_idx);
  
@@ -689,6 +885,11 @@ index f0ffc98b5..e6a8fa84f 100644
      int eu_idx = gguf_find_key(ctx_in, eu_key.c_str());
 -    int n_expert_used = eu_idx >= 0 ? gguf_get_val_u32(ctx_in, eu_idx) : 0;
 +    int n_expert_used = eu_idx >= 0 ? (int)gguf_get_val_u32(ctx_in, eu_idx) : 0;
++
++    int n_tensors = 0;
++    for (const auto & input_shard : input_shards) {
++        n_tensors += gguf_get_n_tensors(input_shard.ctx_gguf);
++    }
  
      printf("Model: %s\n", params.input.c_str());
      printf("Architecture: %s\n", arch_name.c_str());
@@ -700,7 +901,25 @@ index f0ffc98b5..e6a8fa84f 100644
      int n_expert_tensors = 0;
      size_t expert_total_bytes = 0;
      size_t trunk_total_bytes = 0;
-@@ -457,14 +638,15 @@ int main(int argc, const char ** argv) {
+-    for (int i = 0; i < n_tensors; i++) {
+-        const char * name = gguf_get_tensor_name(ctx_in, i);
+-        struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
+-        if (is_expert_tensor(name)) {
+-            n_expert_tensors++;
+-            expert_total_bytes += ggml_nbytes(t);
+-        } else {
+-            trunk_total_bytes += ggml_nbytes(t);
++    for (const auto & input_shard : input_shards) {
++        int shard_tensors = gguf_get_n_tensors(input_shard.ctx_gguf);
++        for (int i = 0; i < shard_tensors; i++) {
++            const char * name = gguf_get_tensor_name(input_shard.ctx_gguf, i);
++            struct ggml_tensor * t = ggml_get_tensor(input_shard.ctx_meta, name);
++            if (is_expert_tensor(name)) {
++                n_expert_tensors++;
++                expert_total_bytes += ggml_nbytes(t);
++            } else {
++                trunk_total_bytes += ggml_nbytes(t);
++            }
          }
      }
  
@@ -709,11 +928,11 @@ index f0ffc98b5..e6a8fa84f 100644
 -        int experts_per_group = (int)params.expert_list.size();
 +    printf("\nTrunk tensors: %d (%.1f MB)\n", n_tensors - n_expert_tensors, trunk_total_bytes / 1e6);
 +    printf("Expert tensors: %d (%.1f MB total)\n", n_expert_tensors, expert_total_bytes / 1e6);
-+
-+    // ===== Mode dispatch =====
  
 -        printf("Mode: custom expert list\n");
 -        printf("Selected experts: %d\n", experts_per_group);
++    // ===== Mode dispatch =====
++
 +    if (!params.expert_list.empty()) {
 +        // --- Custom expert list ---
 +        printf("Mode: custom expert list (%d experts)\n", (int)params.expert_list.size());
@@ -722,7 +941,7 @@ index f0ffc98b5..e6a8fa84f 100644
          for (int eid : params.expert_list) {
              if (eid < 0 || eid >= n_expert) {
                  fprintf(stderr, "error: expert ID %d out of range [0, %d)\n", eid, n_expert);
-@@ -472,22 +654,117 @@ int main(int argc, const char ** argv) {
+@@ -472,22 +762,117 @@ int main(int argc, const char ** argv) {
              }
          }
  
@@ -730,8 +949,8 @@ index f0ffc98b5..e6a8fa84f 100644
 -            fprintf(stderr, "warning: selected %d experts < expert_used (%d). "
 -                "Routing will be forced to reuse experts within group.\n",
 -                experts_per_group, n_expert_used);
-+        write_group(params, ctx_in, ctx_meta, f_in, params.expert_list,
-+                    params.output, n_expert, n_expert_tensors, "Custom");
++        write_group(params, input_shards, params.expert_list,
++                    params.output, n_expert, "Custom");
 +
 +    } else if (!params.group_map_file.empty()) {
 +        // --- Group map file ---
@@ -758,7 +977,7 @@ index f0ffc98b5..e6a8fa84f 100644
 -        printf("Expert tensors: %d (%.1f MB total)\n", n_expert_tensors, expert_total_bytes / 1e6);
 -        printf("Expected output size: %.1f MB\n",
 -            (trunk_total_bytes + expert_total_bytes * experts_per_group / n_expert) / 1e6);
-+        produce_groups(params, ctx_in, ctx_meta, f_in, groups, n_expert, n_expert_tensors);
++        produce_groups(params, input_shards, groups, n_expert);
  
 -        write_group(params, ctx_in, ctx_meta, f_in, params.expert_list,
 -                    params.output, n_expert, n_expert_tensors, "Custom");
@@ -845,7 +1064,7 @@ index f0ffc98b5..e6a8fa84f 100644
 +        printf("Expected output size per node: %.1f MB\n",
 +            (trunk_total_bytes + expert_total_bytes * epg / n_expert) / 1e6);
 +
-+        produce_groups(params, ctx_in, ctx_meta, f_in, groups, n_expert, n_expert_tensors);
++        produce_groups(params, input_shards, groups, n_expert);
 +
 +    } else if (params.balanced) {
 +        // --- Balanced grouping via router gate norms ---
@@ -853,7 +1072,7 @@ index f0ffc98b5..e6a8fa84f 100644
          printf("Groups: %d\n", params.n_groups);
  
          if (n_expert % params.n_groups != 0) {
-@@ -496,50 +773,59 @@ int main(int argc, const char ** argv) {
+@@ -496,55 +881,65 @@ int main(int argc, const char ** argv) {
              return 1;
          }
  
@@ -861,34 +1080,34 @@ index f0ffc98b5..e6a8fa84f 100644
 -        printf("Experts per group: %d\n", experts_per_group);
 +        // Compute gate norms
 +        printf("\nAnalyzing router gate weights...\n");
-+        auto norms = compute_gate_norms(ctx_in, ctx_meta, f_in, n_expert);
-+
-+        // Print top/bottom experts by norm
-+        std::vector<int> ranked(n_expert);
-+        std::iota(ranked.begin(), ranked.end(), 0);
-+        std::sort(ranked.begin(), ranked.end(),
-+            [&](int a, int b) { return norms[a] > norms[b]; });
++        auto norms = compute_gate_norms(input_shards, n_expert);
  
 -        if (experts_per_group < n_expert_used) {
 -            fprintf(stderr, "warning: experts_per_group (%d) < expert_used (%d). "
 -                "Routing will be forced to reuse experts within group.\n",
 -                experts_per_group, n_expert_used);
++        // Print top/bottom experts by norm
++        std::vector<int> ranked(n_expert);
++        std::iota(ranked.begin(), ranked.end(), 0);
++        std::sort(ranked.begin(), ranked.end(),
++            [&](int a, int b) { return norms[a] > norms[b]; });
++
 +        printf("\n  Top 10 experts by avg gate L2 norm:\n");
 +        for (int i = 0; i < std::min(10, n_expert); i++) {
 +            printf("    Expert %3d: %.4f\n", ranked[i], norms[ranked[i]]);
-         }
++        }
 +        printf("  Bottom 5 experts:\n");
 +        for (int i = std::max(0, n_expert - 5); i < n_expert; i++) {
 +            printf("    Expert %3d: %.4f\n", ranked[i], norms[ranked[i]]);
-+        }
-+
-+        // Snake draft
-+        auto groups = snake_draft(norms, params.n_groups);
+         }
  
 -        printf("\nTrunk tensors: %d (%.1f MB)\n", n_tensors - n_expert_tensors, trunk_total_bytes / 1e6);
 -        printf("Expert tensors: %d (%.1f MB total, %.1f MB per group)\n",
 -            n_expert_tensors, expert_total_bytes / 1e6,
 -            expert_total_bytes / (double)params.n_groups / 1e6);
++        // Snake draft
++        auto groups = snake_draft(norms, params.n_groups);
++
 +        int epg = n_expert / params.n_groups;
 +        printf("\nExperts per group: %d\n", epg);
          printf("Expected output size per node: %.1f MB\n",
@@ -921,7 +1140,7 @@ index f0ffc98b5..e6a8fa84f 100644
 -                write_group(params, ctx_in, ctx_meta, f_in, ids,
 -                            path, n_expert, n_expert_tensors, label);
 -            }
-+        produce_groups(params, ctx_in, ctx_meta, f_in, groups, n_expert, n_expert_tensors);
++        produce_groups(params, input_shards, groups, n_expert);
 +
 +    } else {
 +        // --- Contiguous grouping ---
@@ -946,7 +1165,19 @@ index f0ffc98b5..e6a8fa84f 100644
 +            for (int i = 0; i < epg; i++) groups[g][i] = g * epg + i;
 +        }
 +
-+        produce_groups(params, ctx_in, ctx_meta, f_in, groups, n_expert, n_expert_tensors);
++        produce_groups(params, input_shards, groups, n_expert);
      }
  
-     f_in.close();
+-    f_in.close();
+-    gguf_free(ctx_in);
+-    ggml_free(ctx_meta);
++    for (const auto & input_shard : input_shards) {
++        gguf_free(input_shard.ctx_gguf);
++        ggml_free(input_shard.ctx_meta);
++    }
+ 
+     printf("\nDone.\n");
+     return 0;
+-- 
+2.50.1 (Apple Git-155)
+

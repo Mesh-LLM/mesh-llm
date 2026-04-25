@@ -1,25 +1,8 @@
-From e831eb7c6c2f198d66af45642e4cfa056517a59e Mon Sep 17 00:00:00 2001
-From: micn <micn@users.noreply.github.com>
-Date: Fri, 17 Apr 2026 18:31:17 +1000
-Subject: [PATCH 13/15] ci: add mesh-ci workflow for mesh-llm fork
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
+From e250c75183bfba57f8b55e5f2666ec56334ec965 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Apr 2026 08:25:17 +1000
+Subject: [PATCH 6/6] ci: add mesh llama.cpp workflow
 
-Minimal Linux CPU build check that runs on every push and PR, with no
-path filter. Builds the exact four binaries mesh-llm consumes
-(rpc-server, llama-server, llama-moe-analyze, llama-moe-split) with the
-same cmake flags mesh-llm uses.
-
-Motivation: upstream's build.yml has path filters that can skip the
-entire build matrix for small commits. A bad merge (de21992e6 → e88186e78)
-shipped a non-compiling moe-split.cpp because no build lane actually
-ran. This workflow has no path filter, so every commit gets built.
-
-To suppress upstream's ~25 workflows on this fork without touching their
-files (keeps upstream syncs clean), flip: Settings → Actions → General →
-'Allow select actions and reusable workflows', then whitelist only
-mesh-ci.yml.
 ---
  .github/workflows/mesh-ci.yml | 71 +++++++++++++++++++++++++++++++++++
  1 file changed, 71 insertions(+)
@@ -27,7 +10,7 @@ mesh-ci.yml.
 
 diff --git a/.github/workflows/mesh-ci.yml b/.github/workflows/mesh-ci.yml
 new file mode 100644
-index 000000000..2731c0996
+index 00000000..2731c099
 --- /dev/null
 +++ b/.github/workflows/mesh-ci.yml
 @@ -0,0 +1,71 @@
@@ -102,3 +85,6 @@ index 000000000..2731c0996
 +          for bin in rpc-server llama-server llama-moe-analyze llama-moe-split; do
 +            test -x "build/bin/$bin" && echo "ok: $bin"
 +          done
+-- 
+2.50.1 (Apple Git-155)
+

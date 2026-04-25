@@ -51,6 +51,14 @@ release-build:
 release-build-arm64:
     @scripts/build-release.sh
 
+# Prepare the pinned llama.cpp checkout and apply the Mesh-LLM patch queue.
+llama-prepare:
+    @scripts/prepare-llama.sh pinned
+
+# Prepare llama.cpp at upstream master and apply the Mesh-LLM patch queue.
+llama-prepare-latest:
+    @scripts/prepare-llama.sh latest
+
 release-build-windows:
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cpu
 

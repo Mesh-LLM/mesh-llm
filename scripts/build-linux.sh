@@ -136,17 +136,27 @@ locate_vulkan_toolchain() {
         fi
     fi
 
-    if pkg-config --exists vulkan 2>/dev/null; then
-        return 0
+    local has_vulkan_headers=false
+    local has_spirv_headers=false
+
+    if pkg-config --exists vulkan 2>/dev/null ||
+        [[ -f /usr/include/vulkan/vulkan.h || -f /usr/local/include/vulkan/vulkan.h ]]; then
+        has_vulkan_headers=true
     fi
 
-    if [[ -f /usr/include/vulkan/vulkan.h || -f /usr/local/include/vulkan/vulkan.h ]]; then
+    if [[ -f /usr/include/spirv/unified1/spirv.hpp ||
+        -f /usr/local/include/spirv/unified1/spirv.hpp ]]; then
+        has_spirv_headers=true
+    fi
+
+    if [[ "$has_vulkan_headers" == true && "$has_spirv_headers" == true ]]; then
         return 0
     fi
 
     if [[ -n "${VULKAN_SDK:-}" ]]; then
         export CMAKE_PREFIX_PATH="${VULKAN_SDK}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
-        if [[ -f "$VULKAN_SDK/include/vulkan/vulkan.h" ]]; then
+        if [[ -f "$VULKAN_SDK/include/vulkan/vulkan.h" &&
+            -f "$VULKAN_SDK/include/spirv/unified1/spirv.hpp" ]]; then
             return 0
         fi
     fi
@@ -220,8 +230,8 @@ case "$BACKEND" in
     vulkan)
         locate_vulkan_toolchain || {
             echo "Error: Vulkan SDK/development files not found." >&2
-            echo "  Need both the Vulkan headers/loader and 'glslc' in your PATH." >&2
-            echo "  Ubuntu/Debian: sudo apt install libvulkan-dev glslc" >&2
+            echo "  Need the Vulkan headers/loader, SPIR-V headers, and 'glslc' in your PATH." >&2
+            echo "  Ubuntu/Debian: sudo apt install libvulkan-dev glslc spirv-headers" >&2
             echo "  Arch Linux:    sudo pacman -S vulkan-headers shaderc" >&2
             exit 1
         }

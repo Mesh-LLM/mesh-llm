@@ -503,6 +503,7 @@ jobs:
             libdbus-1-dev \
             libvulkan-dev \
             glslc \
+            spirv-headers \
             python3
           sudo rm -rf /var/lib/apt/lists/*
 

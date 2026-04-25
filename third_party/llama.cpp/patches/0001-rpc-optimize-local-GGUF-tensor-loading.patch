@@ -1,38 +1,17 @@
-From 16af965b923f74c38aa2a3b2e4fe2d821491be3f Mon Sep 17 00:00:00 2001
-From: Michael Neale <michael.neale@gmail.com>
-Date: Thu, 12 Feb 2026 19:37:23 +1100
-Subject: [PATCH 01/15] rpc: zero-transfer tensor loading from local GGUF +
- skip probing for RPC backends
+From 588d82dd8482f0241a69dc9008d21e539b65722c Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Apr 2026 08:25:16 +1000
+Subject: [PATCH 1/6] rpc: optimize local GGUF tensor loading
 
-Three changes:
-
-1. New RPC command SET_TENSOR_GGUF: client sends tensor name, server looks it
-   up in its local GGUF file and loads from disk. Zero bytes transferred over
-   the network for model weights. Falls back to regular SET_TENSOR/SET_TENSOR_HASH
-   if the server doesn't have the GGUF or tensor isn't found.
-
-2. Skip probing for RPC backends: weight_buft_supported() was doing
-   ALLOC_BUFFER(0) + FREE_BUFFER round-trips for every tensor to test op
-   support. Since RPC's supports_op() always returns true, short-circuit
-   the check when buft name starts with 'RPC'.
-
-3. rpc-server --gguf flag: pass a local GGUF model file path. The server
-   lazily parses the GGUF index on first SET_TENSOR_GGUF request and caches
-   it for subsequent lookups.
-
-Results on same machine (17GB GLM-4.7-Flash-Q4_K_M):
-  Before: 111s to load model (transferring 11.8GB over localhost TCP)
-  After:  5s to load model (zero network transfer, reads from local NVMe)
-  427 tensors / 8.3GB loaded from local GGUF, 0 via wire transfer
 ---
  ggml/include/ggml-rpc.h        |   5 +
- ggml/src/ggml-rpc/ggml-rpc.cpp | 166 ++++++++++++++++++++++++++++++++-
+ ggml/src/ggml-rpc/ggml-rpc.cpp | 206 +++++++++++++++++++++++++++++++--
  src/llama-model.cpp            |   7 ++
- tools/rpc/rpc-server.cpp       |  29 ++++--
- 4 files changed, 197 insertions(+), 10 deletions(-)
+ tools/rpc/rpc-server.cpp       |  29 ++++-
+ 4 files changed, 231 insertions(+), 16 deletions(-)
 
 diff --git a/ggml/include/ggml-rpc.h b/ggml/include/ggml-rpc.h
-index 1c11495b6..0adf9a64c 100644
+index 6fcf5a43..02417ab1 100644
 --- a/ggml/include/ggml-rpc.h
 +++ b/ggml/include/ggml-rpc.h
 @@ -27,6 +27,11 @@ GGML_BACKEND_API void ggml_backend_rpc_get_device_memory(const char * endpoint,
@@ -48,18 +27,18 @@ index 1c11495b6..0adf9a64c 100644
  GGML_BACKEND_API ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint);
  
 diff --git a/ggml/src/ggml-rpc/ggml-rpc.cpp b/ggml/src/ggml-rpc/ggml-rpc.cpp
-index 61bfcc5a6..8e6e5ff19 100644
+index 2ded7397..d67c9f68 100644
 --- a/ggml/src/ggml-rpc/ggml-rpc.cpp
 +++ b/ggml/src/ggml-rpc/ggml-rpc.cpp
-@@ -2,6 +2,7 @@
- #include "ggml-impl.h"
+@@ -3,6 +3,7 @@
  #include "ggml-backend-impl.h"
  #include "ggml-cpp.h"
+ #include "transport.h"
 +#include "gguf.h"
  
+ #include <array>
  #include <cinttypes>
- #include <string>
-@@ -107,6 +108,7 @@ enum rpc_cmd {
+@@ -71,6 +72,7 @@ enum rpc_cmd {
      RPC_CMD_HELLO,
      RPC_CMD_DEVICE_COUNT,
      RPC_CMD_GRAPH_RECOMPUTE,
@@ -67,7 +46,7 @@ index 61bfcc5a6..8e6e5ff19 100644
      RPC_CMD_COUNT,
  };
  
-@@ -220,6 +222,18 @@ struct rpc_msg_graph_recompute_req {
+@@ -190,6 +192,18 @@ struct rpc_msg_graph_recompute_req {
      uint32_t device;
  };
  
@@ -86,15 +65,18 @@ index 61bfcc5a6..8e6e5ff19 100644
  #pragma pack(pop)
  
  // RPC data structures
-@@ -637,6 +651,24 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
+@@ -482,6 +496,27 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
  static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
      ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
      rpc_tensor rpc_tensor = serialize_tensor(tensor);
 +
 +    // Try SET_TENSOR_GGUF first: ask the server to load from its local GGUF file.
 +    // This avoids transferring weight data over the network entirely.
-+    // Only try for tensors with a name (model weights), not anonymous tensors (activations).
-+    if (rpc_tensor.name[0] != '\0' && offset == 0) {
++    // Only try for tensors that look like GGUF model weights — their names never contain '#'
++    // (which is used by compute graph intermediates like "RPC0[...]#leaf_8#0").
++    // Also skip tiny tensors (activations/inputs) to avoid wasted round-trips.
++    if (rpc_tensor.name[0] != '\0' && offset == 0
++            && strchr(rpc_tensor.name, '#') == nullptr && size > 1024) {
 +        rpc_msg_set_tensor_gguf_req gguf_req;
 +        gguf_req.tensor = rpc_tensor;
 +        gguf_req.offset = offset;
@@ -111,7 +93,59 @@ index 61bfcc5a6..8e6e5ff19 100644
      if (size > HASH_THRESHOLD) {
          rpc_msg_set_tensor_hash_req request;
          request.tensor = rpc_tensor;
-@@ -1004,6 +1036,7 @@ public:
+@@ -621,7 +656,6 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
+ 
+     if (rpc_get) {
+         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
+-        auto sock = get_socket(buft_ctx->endpoint);
+ 
+         rpc_msg_get_alloc_size_req request = {
+             /*.device =*/ buft_ctx->device,
+@@ -634,12 +668,38 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
+             request.srcs[i] = serialize_tensor(tensor->src[i]);
+         }
+ 
+-        // TODO: cache the alloc responses to avoid extra RPC calls?
+-        rpc_msg_get_alloc_size_rsp response;
+-        bool status = send_rpc_cmd(sock, RPC_CMD_GET_ALLOC_SIZE, &request, sizeof(request), &response, sizeof(response));
+-        RPC_STATUS_ASSERT(status);
++        // Cache alloc_size responses keyed on (type, dims, op, src types+dims) to avoid
++        // repeated RPC round-trips. The result is deterministic for a given tensor configuration.
++        {
++            static std::mutex cache_mutex;
++            static std::unordered_map<uint64_t, size_t> alloc_size_cache;
++
++            // Build a cache key from the fields that determine alloc_size
++            uint64_t key = fnv_hash((const uint8_t *)&request.tensor.type, sizeof(request.tensor.type));
++            key ^= fnv_hash((const uint8_t *)request.tensor.ne, sizeof(request.tensor.ne));
++            key ^= fnv_hash((const uint8_t *)&request.tensor.op, sizeof(request.tensor.op));
++            for (int i = 0; i < GGML_MAX_SRC; i++) {
++                if (request.srcs[i].id != 0) {
++                    key ^= fnv_hash((const uint8_t *)&request.srcs[i].type, sizeof(request.srcs[i].type));
++                    key ^= fnv_hash((const uint8_t *)request.srcs[i].ne, sizeof(request.srcs[i].ne));
++                }
++            }
++            key ^= fnv_hash((const uint8_t *)&request.device, sizeof(request.device));
++
++            std::lock_guard<std::mutex> lock(cache_mutex);
++            auto it = alloc_size_cache.find(key);
++            if (it != alloc_size_cache.end()) {
++                return it->second;
++            }
++
++            auto sock = get_socket(buft_ctx->endpoint);
++            rpc_msg_get_alloc_size_rsp response;
++            bool status = send_rpc_cmd(sock, RPC_CMD_GET_ALLOC_SIZE, &request, sizeof(request), &response, sizeof(response));
++            RPC_STATUS_ASSERT(status);
+ 
+-        return response.alloc_size;
++            alloc_size_cache[key] = response.alloc_size;
++            return response.alloc_size;
++        }
+     }
+ 
+     return ggml_nbytes(tensor);
+@@ -849,6 +909,7 @@ public:
      bool buffer_clear(const rpc_msg_buffer_clear_req & request);
      bool set_tensor(const std::vector<uint8_t> & input);
      bool set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rpc_msg_set_tensor_hash_rsp & response);
@@ -119,7 +153,7 @@ index 61bfcc5a6..8e6e5ff19 100644
      bool get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response);
      bool copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_copy_tensor_rsp & response);
      bool graph_compute(const std::vector<uint8_t> & input);
-@@ -1012,6 +1045,9 @@ public:
+@@ -857,6 +918,9 @@ public:
      bool get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_msg_get_alloc_size_rsp & response);
      bool get_device_memory(const rpc_msg_get_device_memory_req & request, rpc_msg_get_device_memory_rsp & response);
  
@@ -129,7 +163,7 @@ index 61bfcc5a6..8e6e5ff19 100644
      struct stored_graph {
          std::vector<uint8_t>   buffer;
          ggml_cgraph          * graph;
-@@ -1028,6 +1064,8 @@ private:
+@@ -873,6 +937,8 @@ private:
  
      std::vector<ggml_backend_t> backends;
      const char * cache_dir;
@@ -138,7 +172,7 @@ index 61bfcc5a6..8e6e5ff19 100644
      std::unordered_set<ggml_backend_buffer_t> buffers;
      // store the last computed graph for each backend
      std::vector<stored_graph> stored_graphs;
-@@ -1324,6 +1362,95 @@ bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rp
+@@ -1169,6 +1235,95 @@ bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rp
      return true;
  }
  
@@ -234,18 +268,18 @@ index 61bfcc5a6..8e6e5ff19 100644
  bool rpc_server::init_tensor(const rpc_msg_init_tensor_req & request) {
      struct ggml_init_params params {
          /*.mem_size   =*/ ggml_tensor_overhead(),
-@@ -1597,8 +1724,9 @@ rpc_server::~rpc_server() {
+@@ -1442,8 +1597,9 @@ rpc_server::~rpc_server() {
  }
  
  static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
--                             sockfd_t sockfd) {
-+                             sockfd_t sockfd, const char * gguf_path = nullptr) {
+-                             socket_ptr sock) {
++                             socket_ptr sock, const char * gguf_path = nullptr) {
      rpc_server server(backends, cache_dir);
 +    server.set_gguf_path(gguf_path);
      uint8_t cmd;
-     if (!recv_data(sockfd, &cmd, 1)) {
+     if (!sock->recv_data(&cmd, 1)) {
          return;
-@@ -1836,6 +1964,20 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
+@@ -1700,6 +1856,20 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                  }
                  break;
              }
@@ -266,7 +300,7 @@ index 61bfcc5a6..8e6e5ff19 100644
              default: {
                  GGML_LOG_ERROR("Unknown command: %d\n", cmd);
                  return;
-@@ -1844,8 +1986,9 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
+@@ -1708,8 +1878,9 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
      }
  }
  
@@ -278,7 +312,7 @@ index 61bfcc5a6..8e6e5ff19 100644
      if (n_devices == 0 || devices == nullptr) {
          fprintf(stderr, "Invalid arguments to ggml_backend_rpc_start_server\n");
          return;
-@@ -1857,6 +2000,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
+@@ -1721,6 +1892,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
          RPC_PROTO_PATCH_VERSION);
      printf("  endpoint       : %s\n", endpoint);
      printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
@@ -286,16 +320,16 @@ index 61bfcc5a6..8e6e5ff19 100644
      printf("Devices:\n");
      for (size_t i = 0; i < n_devices; i++) {
          auto dev = devices[i];
-@@ -1907,7 +2051,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
+@@ -1771,7 +1943,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
          }
          printf("Accepted client connection\n");
          fflush(stdout);
--        rpc_serve_client(backends, cache_dir, client_socket->fd);
-+        rpc_serve_client(backends, cache_dir, client_socket->fd, gguf_path);
+-        rpc_serve_client(backends, cache_dir, client_socket);
++        rpc_serve_client(backends, cache_dir, client_socket, gguf_path);
          printf("Client connection closed\n");
          fflush(stdout);
      }
-@@ -1919,6 +2063,17 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
+@@ -1781,6 +1953,17 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
      }
  }
  
@@ -313,7 +347,7 @@ index 61bfcc5a6..8e6e5ff19 100644
  // device interface
  
  struct ggml_backend_rpc_device_context {
-@@ -2050,6 +2205,9 @@ static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const ch
+@@ -1912,6 +2095,9 @@ static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const ch
      if (std::strcmp(name, "ggml_backend_rpc_start_server") == 0) {
          return (void *)ggml_backend_rpc_start_server;
      }
@@ -324,10 +358,10 @@ index 61bfcc5a6..8e6e5ff19 100644
  
      GGML_UNUSED(reg);
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index d2ffc1f45..ae2410a42 100644
+index 9e2a13cb..eb75384d 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -8525,6 +8525,13 @@ ggml_backend_dev_t llama_model::dev_output() const {
+@@ -8334,6 +8334,13 @@ ggml_backend_dev_t llama_model::dev_output() const {
  
  template<typename F>
  static bool buft_supported(ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev, F & fn) {
@@ -342,7 +376,7 @@ index d2ffc1f45..ae2410a42 100644
          /*.mem_size   =*/ ggml_tensor_overhead()*8,
          /*.mem_buffer =*/ NULL,
 diff --git a/tools/rpc/rpc-server.cpp b/tools/rpc/rpc-server.cpp
-index 03ab78e5f..14910caf5 100644
+index 03ab78e5..14910caf 100644
 --- a/tools/rpc/rpc-server.cpp
 +++ b/tools/rpc/rpc-server.cpp
 @@ -175,6 +175,7 @@ struct rpc_server_params {
@@ -402,3 +436,6 @@ index 03ab78e5f..14910caf5 100644
 +    }
      return 0;
  }
+-- 
+2.50.1 (Apple Git-155)
+

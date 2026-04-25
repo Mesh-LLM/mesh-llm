@@ -1,31 +1,8 @@
-From 48cd71fafc9b88bd69ab8dbcce3c17f4757c72c9 Mon Sep 17 00:00:00 2001
-From: Michael Neale <michael.neale@gmail.com>
-Date: Tue, 14 Apr 2026 12:41:42 +1000
-Subject: [PATCH 08/15] =?UTF-8?q?mesh=20hooks:=20virtual=20LLM=20engine=20?=
- =?UTF-8?q?=E2=80=94=20inter-model=20collaboration=20during=20inference?=
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
+From 2f2eb75fda5675085886b5d95b649bfc3541c446 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Apr 2026 08:25:17 +1000
+Subject: [PATCH 5/6] mesh hooks: add virtual LLM callbacks
 
-Callback hooks from llama-server into mesh-llm on localhost during
-inference. The serving model can silently consult other models in the
-mesh without the caller knowing.
-
-Three hook points, all synchronous:
-  Hook 1 (pre_inference)  — media the model can't handle (images, audio)
-  Hook 2 (post_prefill)   — first-token entropy/margin uncertainty
-  Hook 2b (mid_generation) — repetition loops, entropy spikes, surprise breaks
-
-When --mesh-port is not set, all hook code is completely inert:
-  - mesh_hook_ctx.enabled = false
-  - every runtime codepath guarded by if (slot.mesh_hook.enabled)
-  - zero impact on normal llama-server operation
-
-New files: server-mesh-hook.h (hook infrastructure, signal window)
-Modified: server-context.cpp, server-common.cpp, server-common.h,
-          server-task.h/cpp, common.h, arg.cpp
-
-See mesh-llm/docs/VIRTUAL_LLM.md for the full design.
 ---
  common/arg.cpp                  |  14 ++
  common/common.h                 |   4 +
@@ -39,10 +16,10 @@ See mesh-llm/docs/VIRTUAL_LLM.md for the full design.
  create mode 100644 tools/server/server-mesh-hook.h
 
 diff --git a/common/arg.cpp b/common/arg.cpp
-index 3d0183ed7..7dec690dc 100644
+index 85d84e5c..dc96849c 100644
 --- a/common/arg.cpp
 +++ b/common/arg.cpp
-@@ -3008,6 +3008,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
+@@ -3023,6 +3023,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
              params.endpoint_slots = value;
          }
      ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
@@ -64,10 +41,10 @@ index 3d0183ed7..7dec690dc 100644
          {"--slot-save-path"}, "PATH",
          "path to save slot kv cache (default: disabled)",
 diff --git a/common/common.h b/common/common.h
-index b4df2c859..086552f85 100644
+index f19ff608..54b65da3 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -613,6 +613,10 @@ struct common_params {
+@@ -600,6 +600,10 @@ struct common_params {
      bool webui_mcp_proxy = false;
      std::string webui_config_json;
  
@@ -79,10 +56,10 @@ index b4df2c859..086552f85 100644
      bool endpoint_slots   = true;
      bool endpoint_props   = false; // only control POST requests, not GET
 diff --git a/tools/server/server-common.cpp b/tools/server/server-common.cpp
-index ed5e306fc..4e7152cfe 100644
+index 21c843c0..dac14490 100644
 --- a/tools/server/server-common.cpp
 +++ b/tools/server/server-common.cpp
-@@ -968,6 +968,18 @@ json oaicompat_chat_params_parse(
+@@ -992,6 +992,18 @@ json oaicompat_chat_params_parse(
              std::string type      = json_value(p, "type", std::string());
              if (type == "image_url") {
                  if (!opt.allow_image) {
@@ -101,7 +78,7 @@ index ed5e306fc..4e7152cfe 100644
                      throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                  }
  
-@@ -980,6 +992,12 @@ json oaicompat_chat_params_parse(
+@@ -1004,6 +1016,12 @@ json oaicompat_chat_params_parse(
  
              } else if (type == "input_audio") {
                  if (!opt.allow_audio) {
@@ -115,10 +92,10 @@ index ed5e306fc..4e7152cfe 100644
                  }
  
 diff --git a/tools/server/server-common.h b/tools/server/server-common.h
-index 213ae52bb..5e093b548 100644
+index 4681f9c5..dd15e6b6 100644
 --- a/tools/server/server-common.h
 +++ b/tools/server/server-common.h
-@@ -196,6 +196,9 @@ public:
+@@ -201,6 +201,9 @@ public:
  
      bool empty() const { return tokens.empty(); }
  
@@ -128,7 +105,7 @@ index 213ae52bb..5e093b548 100644
      void clear() {
          map_idx_to_media.clear();
          tokens.clear();
-@@ -286,6 +289,7 @@ struct server_chat_params {
+@@ -291,6 +294,7 @@ struct server_chat_params {
      common_chat_templates_ptr tmpls;
      bool allow_image;
      bool allow_audio;
@@ -137,18 +114,18 @@ index 213ae52bb..5e093b548 100644
      int  reasoning_budget = -1;
      std::string reasoning_budget_message;
 diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
-index b31981c56..76f1e7541 100644
+index 08ff1e36..cdc2229a 100644
 --- a/tools/server/server-context.cpp
 +++ b/tools/server/server-context.cpp
-@@ -3,6 +3,7 @@
+@@ -5,6 +5,7 @@
  #include "server-http.h"
  #include "server-task.h"
  #include "server-queue.h"
 +#include "server-mesh-hook.h"
  
+ #include "build-info.h"
  #include "common.h"
- #include "llama.h"
-@@ -100,6 +101,9 @@ struct server_slot {
+@@ -129,6 +130,9 @@ struct server_slot {
      // state
      slot_state state = SLOT_STATE_IDLE;
  
@@ -158,7 +135,7 @@ index b31981c56..76f1e7541 100644
      server_prompt prompt;
  
      void prompt_save(server_prompt_cache & prompt_cache) const {
-@@ -194,6 +198,9 @@ struct server_slot {
+@@ -225,6 +229,9 @@ struct server_slot {
  
          // clear alora start
          alora_invocation_start = -1;
@@ -168,7 +145,7 @@ index b31981c56..76f1e7541 100644
      }
  
      void init_sampler() const {
-@@ -799,6 +806,14 @@ private:
+@@ -913,6 +920,14 @@ private:
  
              SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
  
@@ -183,15 +160,15 @@ index b31981c56..76f1e7541 100644
              slot.callback_on_release = [this](int id_slot) {
                  queue_tasks.pop_deferred_task(id_slot);
              };
-@@ -935,6 +950,7 @@ private:
+@@ -1050,6 +1065,7 @@ private:
                  /* tmpls                 */ std::move(chat_templates),
                  /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                  /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
 +                /* mesh_hooks            */ params_base.mesh_port > 0,
                  /* enable_thinking       */ enable_thinking,
-                 /* reasoning_budget      */ params_base.reasoning_budget,
-                 /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
-@@ -1212,6 +1228,68 @@ private:
+                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
+                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
+@@ -1327,6 +1343,68 @@ private:
              slot.smpl.reset();
          }
  
@@ -260,7 +237,7 @@ index b31981c56..76f1e7541 100644
          slot.task = std::make_unique<const server_task>(std::move(task));
  
          slot.state = slot.task->is_child()
-@@ -2853,6 +2931,109 @@ private:
+@@ -2899,6 +2977,109 @@ private:
                      // prompt evaluated for next-token prediction
                      slot.state = SLOT_STATE_GENERATING;
  
@@ -368,9 +345,9 @@ index b31981c56..76f1e7541 100644
 +                    }
 +
                      if (slot.can_speculate()) {
-                         common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                         common_speculative_begin(slot.spec.get(), slot.prompt.tokens.get_text_tokens());
                      }
-@@ -2872,6 +3053,96 @@ private:
+@@ -2918,6 +3099,96 @@ private:
  
                  common_sampler_accept(slot.smpl.get(), id, true);
  
@@ -469,7 +446,7 @@ index b31981c56..76f1e7541 100644
  
 diff --git a/tools/server/server-mesh-hook.h b/tools/server/server-mesh-hook.h
 new file mode 100644
-index 000000000..8022b8004
+index 00000000..8022b800
 --- /dev/null
 +++ b/tools/server/server-mesh-hook.h
 @@ -0,0 +1,350 @@
@@ -824,15 +801,15 @@ index 000000000..8022b8004
 +    return h;
 +}
 diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
-index 6a06171d7..af83f8761 100644
+index 4c341d7c..3b16ff97 100644
 --- a/tools/server/server-task.cpp
 +++ b/tools/server/server-task.cpp
-@@ -274,6 +274,18 @@ task_params server_task::params_from_json_cmpl(
+@@ -277,6 +277,18 @@ task_params server_task::params_from_json_cmpl(
      params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
      params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
  
-+    // mesh hooks
-+    params.mesh_hooks       = json_value(data,       "mesh_hooks",         params_base.mesh_port > 0);
++    // mesh hooks — default OFF; proxy injects mesh_hooks:true only for model=mesh
++    params.mesh_hooks       = json_value(data,       "mesh_hooks",         false);
 +    params.mesh_port        = json_value(data,       "mesh_port",          params_base.mesh_port);
 +    params.mesh_request_id  = json_value(data,       "mesh_request_id",    std::string());
 +    // store conversation messages for hook payloads
@@ -847,10 +824,10 @@ index 6a06171d7..af83f8761 100644
      params.sampling.top_p              = json_value(data, "top_p",               defaults.sampling.top_p);
      params.sampling.min_p              = json_value(data, "min_p",               defaults.sampling.min_p);
 diff --git a/tools/server/server-task.h b/tools/server/server-task.h
-index 243e47a8e..84d8714af 100644
+index 289e1fb8..b0a7657c 100644
 --- a/tools/server/server-task.h
 +++ b/tools/server/server-task.h
-@@ -83,6 +83,13 @@ struct task_params {
+@@ -84,6 +84,13 @@ struct task_params {
      // per-request parameters for chat parsing
      common_chat_parser_params chat_parser_params;
  
@@ -864,3 +841,6 @@ index 243e47a8e..84d8714af 100644
      // Embeddings
      int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
  
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,26 +1,8 @@
-From a36af408887cb0c12b1d685ba19d3af6d50043f1 Mon Sep 17 00:00:00 2001
-From: Michael Neale <michael.neale@gmail.com>
-Date: Sat, 28 Feb 2026 08:54:14 -0500
-Subject: [PATCH 04/15] MoE Phase 1: expert mask routing + analysis tool
+From a67bbf7ebd38de3a5e883690e52e341180b5b54d Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sun, 26 Apr 2026 08:25:17 +1000
+Subject: [PATCH 3/6] moe: add expert analysis and split tools
 
-Phase 1a: moe-analyze tool
-- Intercepts ffn_moe_probs via eval callback to observe router decisions
-- Computes per-expert gate mass, selection counts, concentration stats
-- Simulates group masking across different group counts (2/4/8) with replicas
-- Result: 99.3% routing mass capture even at 8 groups (16 experts/group)
-
-Phase 1b: expert masking during inference
-- llama_model_set_expert_mask() public API to set/clear expert masks at runtime
-- llm_graph_input_expert_mask input class with set_input pattern
-- Mask applied in build_moe_ffn() as -inf additive bias before argsort_top_k
-- Shared mask tensor across all MoE layers (created lazily on first layer)
-- expert_mask_enabled + fixed-size bool array in hparams (trivially copyable)
-
-Phase 1b results on Qwen3-30B-A3B (128 experts, top-8, 4 groups of 32):
-- Best group: -0.105 avg logprob delta (nearly lossless)
-- Worst group: -2.292 avg logprob delta (significant degradation)
-- Key finding: routing mass capture != quality preservation
-- Validates probe-based session placement approach
 ---
  common/common.h                   |   3 +
  include/llama.h                   |   6 +
@@ -28,20 +10,24 @@ Phase 1b results on Qwen3-30B-A3B (128 experts, top-8, 4 groups of 32):
  src/llama-graph.h                 |  15 +
  src/llama-hparams.h               |   6 +
  src/llama-model.cpp               |  16 +
- tools/CMakeLists.txt              |   1 +
+ tools/CMakeLists.txt              |   2 +
  tools/moe-analyze/CMakeLists.txt  |   5 +
  tools/moe-analyze/moe-analyze.cpp | 577 ++++++++++++++++++++++++++++++
- 9 files changed, 665 insertions(+)
+ tools/moe-split/CMakeLists.txt    |   5 +
+ tools/moe-split/moe-split.cpp     | 551 ++++++++++++++++++++++++++++
+ 11 files changed, 1222 insertions(+)
  create mode 100644 tools/moe-analyze/CMakeLists.txt
  create mode 100644 tools/moe-analyze/moe-analyze.cpp
+ create mode 100644 tools/moe-split/CMakeLists.txt
+ create mode 100644 tools/moe-split/moe-split.cpp
 
 diff --git a/common/common.h b/common/common.h
-index 020b6a721..b4df2c859 100644
+index d2d3c106..f19ff608 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -439,6 +439,9 @@ struct common_params {
-     bool    fit_params         = true; // whether to fit unset model/context parameters to free device memory
-     int32_t fit_params_min_ctx = 4096; // minimum context size to set when trying to reduce memory use
+@@ -428,6 +428,9 @@ struct common_params {
+     bool    fit_params_print   = false; // print the estimated required memory to run the model
+     int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
  
 +    // MoE expert mask: comma-separated list of allowed expert IDs (empty = all allowed)
 +    std::string expert_mask_str;
@@ -50,10 +36,10 @@ index 020b6a721..b4df2c859 100644
      std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
  
 diff --git a/include/llama.h b/include/llama.h
-index ac267b508..885b76e61 100644
+index eb869814..aa8cb98d 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -623,6 +623,12 @@ extern "C" {
+@@ -602,6 +602,12 @@ extern "C" {
      // Returns the total number of parameters in the model
      LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);
  
@@ -67,10 +53,10 @@ index ac267b508..885b76e61 100644
      LLAMA_API bool llama_model_has_encoder(const struct llama_model * model);
  
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 8e2b6ab8e..4b4b0c866 100644
+index 2ff23f87..43ab9f05 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -769,6 +769,22 @@ void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch) {
+@@ -770,6 +770,22 @@ void llm_graph_input_sampling::set_input(const llama_ubatch * ubatch) {
      }
  }
  
@@ -93,7 +79,7 @@ index 8e2b6ab8e..4b4b0c866 100644
  bool llm_graph_input_sampling::can_reuse(const llm_graph_params & params) {
      if (samplers.size() != params.samplers.size()) {
          return false;
-@@ -1370,6 +1386,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
+@@ -1449,6 +1465,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          cb(selection_probs, "ffn_moe_probs_masked", il);
      }
  
@@ -121,10 +107,10 @@ index 8e2b6ab8e..4b4b0c866 100644
      ggml_tensor * selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
      cb(selected_experts->src[0], "ffn_moe_argsort", il);
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 29e78451f..da996af2e 100644
+index 5cb1756c..4f421eb1 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -499,6 +499,18 @@ public:
+@@ -500,6 +500,18 @@ public:
      const llama_memory_hybrid_iswa_context * mctx;
  };
  
@@ -143,7 +129,7 @@ index 29e78451f..da996af2e 100644
  class llm_graph_input_sampling : public llm_graph_input_i {
  public:
      llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
-@@ -761,6 +773,9 @@ struct llm_graph_context {
+@@ -768,6 +780,9 @@ struct llm_graph_context {
      ggml_context * ctx0 = nullptr;
      ggml_cgraph  * gf   = nullptr;
  
@@ -154,7 +140,7 @@ index 29e78451f..da996af2e 100644
      virtual ~llm_graph_context() = default;
  
 diff --git a/src/llama-hparams.h b/src/llama-hparams.h
-index c2000c77c..c591186c3 100644
+index ac7f9ee8..072f9617 100644
 --- a/src/llama-hparams.h
 +++ b/src/llama-hparams.h
 @@ -92,6 +92,12 @@ struct llama_hparams {
@@ -171,10 +157,10 @@ index c2000c77c..c591186c3 100644
      float f_norm_rms_eps;
      float f_norm_group_eps;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index ae2410a42..660965167 100644
+index eb75384d..97773155 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -9637,6 +9637,22 @@ uint64_t llama_model_n_params(const llama_model * model) {
+@@ -9445,6 +9445,22 @@ uint64_t llama_model_n_params(const llama_model * model) {
      return model->n_elements();
  }
  
@@ -198,29 +184,30 @@ index ae2410a42..660965167 100644
      switch (model->arch) {
          case LLM_ARCH_T5:        return true;
 diff --git a/tools/CMakeLists.txt b/tools/CMakeLists.txt
-index b433c91d8..1da901e1f 100644
+index b433c91d..78e9d688 100644
 --- a/tools/CMakeLists.txt
 +++ b/tools/CMakeLists.txt
-@@ -39,4 +39,5 @@ else()
+@@ -39,4 +39,6 @@ else()
      endif()
      add_subdirectory(fit-params)
      add_subdirectory(results)
 +    add_subdirectory(moe-analyze)
++add_subdirectory(moe-split)
  endif()
 diff --git a/tools/moe-analyze/CMakeLists.txt b/tools/moe-analyze/CMakeLists.txt
 new file mode 100644
-index 000000000..2b9ac1804
+index 00000000..63f4a85f
 --- /dev/null
 +++ b/tools/moe-analyze/CMakeLists.txt
 @@ -0,0 +1,5 @@
 +set(TARGET llama-moe-analyze)
 +add_executable(${TARGET} moe-analyze.cpp)
 +install(TARGETS ${TARGET} RUNTIME)
-+target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
++target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 +target_compile_features(${TARGET} PRIVATE cxx_std_17)
 diff --git a/tools/moe-analyze/moe-analyze.cpp b/tools/moe-analyze/moe-analyze.cpp
 new file mode 100644
-index 000000000..d80b4bcbd
+index 00000000..d80b4bcb
 --- /dev/null
 +++ b/tools/moe-analyze/moe-analyze.cpp
 @@ -0,0 +1,577 @@
@@ -801,3 +788,574 @@ index 000000000..d80b4bcbd
 +    llama_backend_free();
 +    return 0;
 +}
+diff --git a/tools/moe-split/CMakeLists.txt b/tools/moe-split/CMakeLists.txt
+new file mode 100644
+index 00000000..b708c041
+--- /dev/null
++++ b/tools/moe-split/CMakeLists.txt
+@@ -0,0 +1,5 @@
++set(TARGET llama-moe-split)
++add_executable(${TARGET} moe-split.cpp)
++install(TARGETS ${TARGET} RUNTIME)
++target_link_libraries(${TARGET} PRIVATE llama llama-common ${CMAKE_THREAD_LIBS_INIT})
++target_compile_features(${TARGET} PRIVATE cxx_std_17)
+diff --git a/tools/moe-split/moe-split.cpp b/tools/moe-split/moe-split.cpp
+new file mode 100644
+index 00000000..f0ffc98b
+--- /dev/null
++++ b/tools/moe-split/moe-split.cpp
+@@ -0,0 +1,551 @@
++// moe-split: split a MoE GGUF into per-node GGUFs with trunk + expert group
++//
++// Each output GGUF contains:
++//   - Full trunk (embeddings, attention, norms, router gate)
++//   - Only the expert tensors for the assigned group
++//   - Updated metadata (n_expert = group_size)
++//
++// Expert selection modes:
++//   1. Contiguous: --groups N splits experts into N equal contiguous groups
++//   2. Custom:     --expert-list 4,72,80,... selects specific experts by ID
++//
++// Router gate rows are gathered to match the selected experts, so
++// expert i in the output GGUF has the correct routing weights.
++//
++// Usage:
++//   llama-moe-split --model input.gguf --groups 4 --output-prefix node
++//   → produces node-0.gguf, node-1.gguf, node-2.gguf, node-3.gguf
++//
++//   llama-moe-split --model input.gguf --groups 4 --group-id 2 --output node2.gguf
++//   → produces only group 2
++//
++//   llama-moe-split --model input.gguf --expert-list 64,65,72,80 -o custom.gguf
++//   → produces a GGUF with only those 4 experts (renumbered 0-3)
++
++#include "ggml.h"
++#include "gguf.h"
++#include "llama.h"
++
++#include <algorithm>
++#include <cinttypes>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <regex>
++#include <sstream>
++#include <string>
++#include <vector>
++
++struct moe_split_params {
++    std::string input;
++    std::string output;           // single output (with --group-id or --expert-list)
++    std::string output_prefix;    // prefix for multi-output (with --groups)
++    int n_groups   = 0;
++    int group_id   = -1;          // -1 = produce all groups
++    bool dry_run   = false;
++    std::vector<int> expert_list; // custom expert selection (empty = use contiguous groups)
++};
++
++static void print_usage(const char * prog) {
++    printf("\n");
++    printf("usage: %s [options]\n", prog);
++    printf("\n");
++    printf("Split a MoE GGUF into per-node GGUFs (trunk + expert group).\n");
++    printf("\n");
++    printf("options:\n");
++    printf("  -m, --model FILE          input GGUF file\n");
++    printf("  -g, --groups N            number of expert groups to split into\n");
++    printf("  --group-id N              produce only this group (0-indexed)\n");
++    printf("  --expert-list IDs         comma-separated expert IDs (e.g. 64,65,72,80)\n");
++    printf("  -o, --output FILE         output file (requires --group-id or --expert-list)\n");
++    printf("  --output-prefix PREFIX    output prefix (produces PREFIX-N.gguf)\n");
++    printf("  --dry-run                 show plan without writing\n");
++    printf("  -h, --help                show this help\n");
++    printf("\n");
++}
++
++static std::vector<int> parse_int_list(const std::string & s) {
++    std::vector<int> result;
++    std::stringstream ss(s);
++    std::string token;
++    while (std::getline(ss, token, ',')) {
++        result.push_back(std::atoi(token.c_str()));
++    }
++    return result;
++}
++
++static void parse_args(int argc, const char ** argv, moe_split_params & params) {
++    for (int i = 1; i < argc; i++) {
++        std::string arg = argv[i];
++        if (arg == "-h" || arg == "--help") {
++            print_usage(argv[0]);
++            exit(0);
++        } else if (arg == "-m" || arg == "--model") {
++            params.input = argv[++i];
++        } else if (arg == "-g" || arg == "--groups") {
++            params.n_groups = std::atoi(argv[++i]);
++        } else if (arg == "--group-id") {
++            params.group_id = std::atoi(argv[++i]);
++        } else if (arg == "--expert-list") {
++            params.expert_list = parse_int_list(argv[++i]);
++        } else if (arg == "-o" || arg == "--output") {
++            params.output = argv[++i];
++        } else if (arg == "--output-prefix") {
++            params.output_prefix = argv[++i];
++        } else if (arg == "--dry-run") {
++            params.dry_run = true;
++        } else {
++            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
++            exit(1);
++        }
++    }
++
++    if (params.input.empty()) {
++        fprintf(stderr, "error: --model is required\n");
++        exit(1);
++    }
++
++    // Validate argument combinations
++    if (!params.expert_list.empty()) {
++        // Custom expert list mode
++        if (params.output.empty()) {
++            fprintf(stderr, "error: --output is required with --expert-list\n");
++            exit(1);
++        }
++        if (params.n_groups > 0) {
++            fprintf(stderr, "error: --groups and --expert-list are mutually exclusive\n");
++            exit(1);
++        }
++    } else {
++        // Contiguous group mode
++        if (params.n_groups <= 0) {
++            fprintf(stderr, "error: --groups or --expert-list is required\n");
++            exit(1);
++        }
++        if (params.group_id >= 0 && params.output.empty()) {
++            fprintf(stderr, "error: --output is required when --group-id is set\n");
++            exit(1);
++        }
++        if (params.group_id < 0 && params.output_prefix.empty()) {
++            fprintf(stderr, "error: --output-prefix is required when --group-id is not set\n");
++            exit(1);
++        }
++    }
++}
++
++// Check if tensor name matches an expert-packed tensor (ffn_gate_exps, ffn_up_exps, ffn_down_exps)
++static bool is_expert_tensor(const char * name) {
++    return strstr(name, "ffn_gate_exps") != nullptr
++        || strstr(name, "ffn_up_exps")   != nullptr
++        || strstr(name, "ffn_down_exps") != nullptr;
++}
++
++// Check if tensor is the MoE router gate (ffn_gate_inp)
++static bool is_router_gate(const char * name) {
++    return strstr(name, "ffn_gate_inp") != nullptr;
++}
++
++static void zeros(std::ofstream & f, size_t n) {
++    char zero = 0;
++    for (size_t i = 0; i < n; i++) {
++        f.write(&zero, 1);
++    }
++}
++
++// Write a single group/expert-list GGUF
++// expert_ids: which original expert indices to include (renumbered 0..N-1 in output)
++static void write_group(
++        const moe_split_params & params,
++        struct gguf_context * ctx_in,
++        struct ggml_context * ctx_meta,
++        std::ifstream & f_in,
++        const std::vector<int> & expert_ids,
++        const std::string & output_path,
++        int n_expert,
++        int n_expert_tensors,
++        const char * label) {
++    int experts_per_group = (int)expert_ids.size();
++
++    printf("\n--- %s: %d experts → %s ---\n", label, experts_per_group, output_path.c_str());
++    printf("  Expert IDs:");
++    for (int i = 0; i < (int)expert_ids.size() && i < 16; i++) {
++        printf(" %d", expert_ids[i]);
++    }
++    if ((int)expert_ids.size() > 16) printf(" ... (%d more)", (int)expert_ids.size() - 16);
++    printf("\n");
++
++    // Check if expert_ids are contiguous (optimization: can use single read)
++    bool contiguous = true;
++    for (int i = 1; i < (int)expert_ids.size(); i++) {
++        if (expert_ids[i] != expert_ids[i-1] + 1) {
++            contiguous = false;
++            break;
++        }
++    }
++    if (contiguous) {
++        printf("  (contiguous range [%d, %d) — using fast path)\n",
++            expert_ids[0], expert_ids[0] + experts_per_group);
++    }
++
++    // Create output GGUF context
++    auto * ctx_out = gguf_init_empty();
++
++    // Copy all KV metadata
++    gguf_set_kv(ctx_out, ctx_in);
++
++    int n_tensors = gguf_get_n_tensors(ctx_in);
++
++    // Find the architecture
++    int arch_key = gguf_find_key(ctx_in, "general.architecture");
++    std::string arch_name;
++    if (arch_key >= 0) {
++        arch_name = gguf_get_val_str(ctx_in, arch_key);
++    }
++
++    // Update expert count metadata
++    std::string expert_count_key = arch_name + ".expert_count";
++    gguf_set_val_u32(ctx_out, expert_count_key.c_str(), experts_per_group);
++
++    // Clamp expert_used_count if needed
++    std::string eu_key_str = arch_name + ".expert_used_count";
++    int eu_idx_local = gguf_find_key(ctx_out, eu_key_str.c_str());
++    if (eu_idx_local >= 0) {
++        int eu_val = gguf_get_val_u32(ctx_out, eu_idx_local);
++        if (eu_val > experts_per_group) {
++            printf("  Clamping expert_used_count: %d → %d\n", eu_val, experts_per_group);
++            gguf_set_val_u32(ctx_out, eu_key_str.c_str(), experts_per_group);
++        }
++    }
++
++    // Create a separate ggml context for sliced tensors
++    size_t ctx_size = (size_t)(n_expert_tensors + 48 + 16) * ggml_tensor_overhead() + 4096;
++    struct ggml_init_params ctx_params = {
++        /*.mem_size   =*/ ctx_size,
++        /*.mem_buffer =*/ nullptr,
++        /*.no_alloc   =*/ true,
++    };
++    struct ggml_context * ctx_new = ggml_init(ctx_params);
++
++    size_t total_expert_bytes_saved = 0;
++
++    for (int i = 0; i < n_tensors; i++) {
++        const char * name = gguf_get_tensor_name(ctx_in, i);
++        struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
++
++        if (is_expert_tensor(name)) {
++            int n_dims = ggml_n_dims(t);
++            int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
++            for (int d = 0; d < n_dims; d++) {
++                ne[d] = t->ne[d];
++            }
++
++            int expert_dim = n_dims - 1;
++            if (ne[expert_dim] != n_expert) {
++                fprintf(stderr, "warning: tensor %s has ne[%d]=%lld, expected %d experts. Copying as-is.\n",
++                    name, expert_dim, (long long)ne[expert_dim], n_expert);
++                gguf_add_tensor(ctx_out, t);
++                continue;
++            }
++
++            int64_t ne_new[GGML_MAX_DIMS] = {1, 1, 1, 1};
++            for (int d = 0; d < n_dims; d++) {
++                ne_new[d] = ne[d];
++            }
++            ne_new[expert_dim] = experts_per_group;
++
++            struct ggml_tensor * t_new = ggml_new_tensor(ctx_new, t->type, n_dims, ne_new);
++            ggml_set_name(t_new, name);
++            gguf_add_tensor(ctx_out, t_new);
++
++            size_t bytes_per_expert = ggml_nbytes(t) / n_expert;
++            total_expert_bytes_saved += bytes_per_expert * (n_expert - experts_per_group);
++
++            printf("  %-40s [%lld x %lld x %lld] → [%lld x %lld x %lld]  (%.1f MB → %.1f MB)\n",
++                name,
++                (long long)ne[0], (long long)ne[1], (long long)ne[2],
++                (long long)ne_new[0], (long long)ne_new[1], (long long)ne_new[2],
++                ggml_nbytes(t) / 1e6,
++                ggml_nbytes(t_new) / 1e6);
++        } else if (is_router_gate(name)) {
++            int n_dims = ggml_n_dims(t);
++            int64_t ne[GGML_MAX_DIMS] = {1, 1, 1, 1};
++            for (int d = 0; d < n_dims; d++) {
++                ne[d] = t->ne[d];
++            }
++
++            int expert_dim = n_dims - 1;
++            if (ne[expert_dim] != n_expert) {
++                fprintf(stderr, "warning: router gate %s has ne[%d]=%lld, expected %d. Copying as-is.\n",
++                    name, expert_dim, (long long)ne[expert_dim], n_expert);
++                gguf_add_tensor(ctx_out, t);
++                continue;
++            }
++
++            int64_t ne_new[GGML_MAX_DIMS] = {1, 1, 1, 1};
++            for (int d = 0; d < n_dims; d++) {
++                ne_new[d] = ne[d];
++            }
++            ne_new[expert_dim] = experts_per_group;
++
++            struct ggml_tensor * t_new = ggml_new_tensor(ctx_new, t->type, n_dims, ne_new);
++            ggml_set_name(t_new, name);
++            gguf_add_tensor(ctx_out, t_new);
++
++            size_t bytes_per_expert = ggml_nbytes(t) / n_expert;
++            total_expert_bytes_saved += bytes_per_expert * (n_expert - experts_per_group);
++
++            printf("  %-40s [%lld x %lld] → [%lld x %lld]  (router gate gathered)\n",
++                name,
++                (long long)ne[0], (long long)ne[1],
++                (long long)ne_new[0], (long long)ne_new[1]);
++        } else {
++            gguf_add_tensor(ctx_out, t);
++        }
++    }
++
++    printf("  Total expert bytes saved: %.1f MB\n", total_expert_bytes_saved / 1e6);
++
++    if (params.dry_run) {
++        printf("  (dry run, not writing)\n");
++        gguf_free(ctx_out);
++        ggml_free(ctx_new);
++        return;
++    }
++
++    // Write the output file
++    printf("  Writing %s ...\n", output_path.c_str());
++
++    std::ofstream f_out(output_path, std::ios::binary);
++    if (!f_out.is_open()) {
++        fprintf(stderr, "error: cannot open output file %s\n", output_path.c_str());
++        gguf_free(ctx_out);
++        ggml_free(ctx_new);
++        return;
++    }
++    f_out.exceptions(std::ofstream::failbit);
++
++    // Write metadata header
++    size_t meta_size = gguf_get_meta_size(ctx_out);
++    std::vector<uint8_t> meta_data(meta_size);
++    gguf_get_meta_data(ctx_out, meta_data.data());
++    f_out.write((const char *)meta_data.data(), meta_size);
++
++    // Write tensor data — gather expert rows by expert_ids
++    std::vector<uint8_t> read_buf;
++    std::vector<uint8_t> gather_buf;
++
++    for (int i = 0; i < gguf_get_n_tensors(ctx_out); i++) {
++        const char * name = gguf_get_tensor_name(ctx_out, i);
++
++        int i_in = gguf_find_tensor(ctx_in, name);
++        if (i_in < 0) {
++            fprintf(stderr, "error: tensor %s not found in input\n", name);
++            exit(1);
++        }
++
++        struct ggml_tensor * t_in = ggml_get_tensor(ctx_meta, name);
++        size_t offset_in = gguf_get_data_offset(ctx_in) + gguf_get_tensor_offset(ctx_in, i_in);
++
++        if (is_expert_tensor(name) || is_router_gate(name)) {
++            size_t bytes_per_expert = ggml_nbytes(t_in) / n_expert;
++            size_t total_out_bytes  = (size_t)experts_per_group * bytes_per_expert;
++
++            if (contiguous) {
++                // Fast path: single contiguous read
++                size_t slice_offset = offset_in + (size_t)expert_ids[0] * bytes_per_expert;
++                read_buf.resize(total_out_bytes);
++                f_in.seekg(slice_offset);
++                f_in.read((char *)read_buf.data(), total_out_bytes);
++                f_out.write((const char *)read_buf.data(), total_out_bytes);
++            } else {
++                // Gather path: read each expert's slice individually
++                gather_buf.resize(total_out_bytes);
++                read_buf.resize(bytes_per_expert);
++                for (int e = 0; e < experts_per_group; e++) {
++                    size_t src_offset = offset_in + (size_t)expert_ids[e] * bytes_per_expert;
++                    f_in.seekg(src_offset);
++                    f_in.read((char *)read_buf.data(), bytes_per_expert);
++                    memcpy(gather_buf.data() + (size_t)e * bytes_per_expert,
++                           read_buf.data(), bytes_per_expert);
++                }
++                f_out.write((const char *)gather_buf.data(), total_out_bytes);
++            }
++            zeros(f_out, GGML_PAD(total_out_bytes, GGUF_DEFAULT_ALIGNMENT) - total_out_bytes);
++        } else {
++            // Copy full tensor
++            size_t n_bytes = ggml_nbytes(t_in);
++            read_buf.resize(n_bytes);
++            f_in.seekg(offset_in);
++            f_in.read((char *)read_buf.data(), n_bytes);
++            f_out.write((const char *)read_buf.data(), n_bytes);
++            zeros(f_out, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
++        }
++    }
++
++    f_out.close();
++    printf("  Done. Output size: %.1f MB\n",
++        (double)std::ifstream(output_path, std::ios::ate | std::ios::binary).tellg() / 1e6);
++
++    gguf_free(ctx_out);
++    ggml_free(ctx_new);
++}
++
++int main(int argc, const char ** argv) {
++    moe_split_params params;
++    parse_args(argc, argv, params);
++
++    // Load input GGUF metadata (no tensor data)
++    struct ggml_context * ctx_meta = nullptr;
++    struct gguf_init_params init_params = {
++        /*.no_alloc = */ true,
++        /*.ctx      = */ &ctx_meta,
++    };
++
++    auto * ctx_in = gguf_init_from_file(params.input.c_str(), init_params);
++    if (!ctx_in) {
++        fprintf(stderr, "error: failed to load %s\n", params.input.c_str());
++        return 1;
++    }
++
++    std::ifstream f_in(params.input, std::ios::binary);
++    if (!f_in.is_open()) {
++        fprintf(stderr, "error: cannot open %s\n", params.input.c_str());
++        return 1;
++    }
++
++    // Read model metadata
++    int n_tensors = gguf_get_n_tensors(ctx_in);
++    int arch_key = gguf_find_key(ctx_in, "general.architecture");
++    std::string arch_name;
++    if (arch_key >= 0) {
++        arch_name = gguf_get_val_str(ctx_in, arch_key);
++    }
++
++    // Find expert count
++    std::string expert_key = arch_name + ".expert_count";
++    int ec_idx = gguf_find_key(ctx_in, expert_key.c_str());
++    if (ec_idx < 0) {
++        fprintf(stderr, "error: no expert count found (key: %s). Is this a MoE model?\n", expert_key.c_str());
++        return 1;
++    }
++    int n_expert = gguf_get_val_u32(ctx_in, ec_idx);
++
++    // Find expert_used count
++    std::string eu_key = arch_name + ".expert_used_count";
++    int eu_idx = gguf_find_key(ctx_in, eu_key.c_str());
++    int n_expert_used = eu_idx >= 0 ? gguf_get_val_u32(ctx_in, eu_idx) : 0;
++
++    printf("Model: %s\n", params.input.c_str());
++    printf("Architecture: %s\n", arch_name.c_str());
++    printf("Experts: %d (top-%d)\n", n_expert, n_expert_used);
++    printf("Tensors: %d\n", n_tensors);
++
++    // Count expert vs trunk tensors
++    int n_expert_tensors = 0;
++    size_t expert_total_bytes = 0;
++    size_t trunk_total_bytes = 0;
++    for (int i = 0; i < n_tensors; i++) {
++        const char * name = gguf_get_tensor_name(ctx_in, i);
++        struct ggml_tensor * t = ggml_get_tensor(ctx_meta, name);
++        if (is_expert_tensor(name)) {
++            n_expert_tensors++;
++            expert_total_bytes += ggml_nbytes(t);
++        } else {
++            trunk_total_bytes += ggml_nbytes(t);
++        }
++    }
++
++    if (!params.expert_list.empty()) {
++        // ======= Custom expert list mode =======
++        int experts_per_group = (int)params.expert_list.size();
++
++        printf("Mode: custom expert list\n");
++        printf("Selected experts: %d\n", experts_per_group);
++
++        // Validate expert IDs
++        for (int eid : params.expert_list) {
++            if (eid < 0 || eid >= n_expert) {
++                fprintf(stderr, "error: expert ID %d out of range [0, %d)\n", eid, n_expert);
++                return 1;
++            }
++        }
++
++        if (experts_per_group < n_expert_used) {
++            fprintf(stderr, "warning: selected %d experts < expert_used (%d). "
++                "Routing will be forced to reuse experts within group.\n",
++                experts_per_group, n_expert_used);
++        }
++
++        printf("\nTrunk tensors: %d (%.1f MB)\n", n_tensors - n_expert_tensors, trunk_total_bytes / 1e6);
++        printf("Expert tensors: %d (%.1f MB total)\n", n_expert_tensors, expert_total_bytes / 1e6);
++        printf("Expected output size: %.1f MB\n",
++            (trunk_total_bytes + expert_total_bytes * experts_per_group / n_expert) / 1e6);
++
++        write_group(params, ctx_in, ctx_meta, f_in, params.expert_list,
++                    params.output, n_expert, n_expert_tensors, "Custom");
++    } else {
++        // ======= Contiguous group mode =======
++        printf("Mode: contiguous groups\n");
++        printf("Groups: %d\n", params.n_groups);
++
++        if (n_expert % params.n_groups != 0) {
++            fprintf(stderr, "error: n_expert (%d) must be divisible by n_groups (%d)\n",
++                n_expert, params.n_groups);
++            return 1;
++        }
++
++        int experts_per_group = n_expert / params.n_groups;
++        printf("Experts per group: %d\n", experts_per_group);
++
++        if (experts_per_group < n_expert_used) {
++            fprintf(stderr, "warning: experts_per_group (%d) < expert_used (%d). "
++                "Routing will be forced to reuse experts within group.\n",
++                experts_per_group, n_expert_used);
++        }
++
++        printf("\nTrunk tensors: %d (%.1f MB)\n", n_tensors - n_expert_tensors, trunk_total_bytes / 1e6);
++        printf("Expert tensors: %d (%.1f MB total, %.1f MB per group)\n",
++            n_expert_tensors, expert_total_bytes / 1e6,
++            expert_total_bytes / (double)params.n_groups / 1e6);
++        printf("Expected output size per node: %.1f MB\n",
++            (trunk_total_bytes + expert_total_bytes / params.n_groups) / 1e6);
++
++        if (params.group_id >= 0) {
++            // Single group
++            if (params.group_id >= params.n_groups) {
++                fprintf(stderr, "error: group_id %d >= n_groups %d\n", params.group_id, params.n_groups);
++                return 1;
++            }
++            int start = params.group_id * experts_per_group;
++            std::vector<int> ids(experts_per_group);
++            for (int i = 0; i < experts_per_group; i++) ids[i] = start + i;
++
++            char label[64];
++            snprintf(label, sizeof(label), "Group %d [%d, %d)", params.group_id, start, start + experts_per_group);
++            write_group(params, ctx_in, ctx_meta, f_in, ids,
++                        params.output, n_expert, n_expert_tensors, label);
++        } else {
++            // All groups
++            for (int g = 0; g < params.n_groups; g++) {
++                int start = g * experts_per_group;
++                std::vector<int> ids(experts_per_group);
++                for (int i = 0; i < experts_per_group; i++) ids[i] = start + i;
++
++                char path[1024], label[64];
++                snprintf(path, sizeof(path), "%s-%d.gguf", params.output_prefix.c_str(), g);
++                snprintf(label, sizeof(label), "Group %d [%d, %d)", g, start, start + experts_per_group);
++                write_group(params, ctx_in, ctx_meta, f_in, ids,
++                            path, n_expert, n_expert_tensors, label);
++            }
++        }
++    }
++
++    f_in.close();
++    gguf_free(ctx_in);
++    ggml_free(ctx_meta);
++
++    printf("\nDone.\n");
++    return 0;
++}
+-- 
+2.50.1 (Apple Git-155)
+

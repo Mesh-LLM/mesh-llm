@@ -3365,11 +3365,9 @@ mod tests {
             "socket timed out",
         ));
         let elapsed_timeout = anyhow::Error::from(
-            tokio::time::timeout(Duration::from_millis(0), async {
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            })
-            .await
-            .unwrap_err(),
+            tokio::time::timeout(Duration::from_millis(1), std::future::pending::<()>())
+                .await
+                .unwrap_err(),
         );
         let generic_timeout_text = anyhow::anyhow!("context timeout budget exceeded");
 
