@@ -7,7 +7,7 @@ use super::local::{
     huggingface_hub_cache_dir, scan_hf_cache_info,
 };
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalModelInventorySnapshot {
     pub model_names: HashSet<String>,
     pub size_by_name: HashMap<String, u64>,

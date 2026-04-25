@@ -2685,14 +2685,23 @@ async fn run_auto(
     let mut console_server_handle = None;
     let console_state = if let Some(cport) = console_port {
         let model_size_bytes = election::total_model_bytes(&model);
-        let cs = api::MeshApi::new(
-            node.clone(),
-            model_name_for_console.clone(),
+        let runtime_data_collector = node.runtime_data_collector();
+        let runtime_data_producer =
+            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
+                scope: "runtime",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
+        let cs = api::MeshApi::new(api::MeshApiConfig {
+            node: node.clone(),
+            model_name: model_name_for_console.clone(),
             api_port,
             model_size_bytes,
-            plugin_manager.clone(),
-            affinity_router.clone(),
-        );
+            plugin_manager: plugin_manager.clone(),
+            affinity_router: affinity_router.clone(),
+            runtime_data_collector,
+            runtime_data_producer,
+        });
         cs.set_primary_backend("llama".into()).await;
         cs.set_runtime_control(control_tx.clone()).await;
         cs.set_nostr_relays(nostr_relays(&cli.nostr_relay)).await;
@@ -2747,16 +2756,19 @@ async fn run_auto(
     if !is_client {
         if let Some(ref cs) = console_state {
             if let Ok(root) = crate::runtime::instance::runtime_root() {
-                let li_handle = cs.local_instances_handle().await;
+                let runtime_data_producer = cs.runtime_data_producer().await;
                 if let Ok(initial) =
                     crate::runtime::instance::scan_local_instances(&root, std::process::id()).await
                 {
-                    *li_handle.lock().await = initial;
+                    crate::runtime::instance::publish_local_instance_scan_results(
+                        &runtime_data_producer,
+                        initial,
+                    );
                 }
                 crate::runtime::instance::spawn_local_instance_scanner(
                     root,
                     std::process::id(),
-                    li_handle,
+                    runtime_data_producer,
                 );
             }
         }
@@ -3583,14 +3595,23 @@ async fn run_passive(
     } else {
         "(standby)".to_string()
     };
-    let console_state = api::MeshApi::new(
-        node.clone(),
-        label,
-        local_port,
-        0,
-        plugin_manager.clone(),
-        affinity_router.clone(),
-    );
+    let runtime_data_collector = node.runtime_data_collector();
+    let runtime_data_producer =
+        runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
+            scope: "runtime",
+            plugin_data_key: None,
+            plugin_endpoint_key: None,
+        });
+    let console_state = api::MeshApi::new(api::MeshApiConfig {
+        node: node.clone(),
+        model_name: label,
+        api_port: local_port,
+        model_size_bytes: 0,
+        plugin_manager: plugin_manager.clone(),
+        affinity_router: affinity_router.clone(),
+        runtime_data_collector,
+        runtime_data_producer,
+    });
     console_state
         .set_nostr_relays(nostr_relays(&cli.nostr_relay))
         .await;
@@ -3903,14 +3924,23 @@ mod tests {
         )
         .await
         .unwrap();
-        api::MeshApi::new(
+        let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
+        let runtime_data_producer =
+            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
+                scope: "runtime",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
+        api::MeshApi::new(api::MeshApiConfig {
             node,
-            "test-model".to_string(),
-            3131,
-            0,
+            model_name: "test-model".to_string(),
+            api_port: 3131,
+            model_size_bytes: 0,
             plugin_manager,
-            affinity::AffinityRouter::default(),
-        )
+            affinity_router: affinity::AffinityRouter::default(),
+            runtime_data_collector,
+            runtime_data_producer,
+        })
     }
 
     #[test]

@@ -1,20 +1,27 @@
+//! Public status/model payloads and serialization compatibility anchors.
+//!
+//! Keep these shapes stable; the API layer and collector tests rely on them.
+
 use super::{RuntimeModelPayload, RuntimeProcessPayload};
 use crate::crypto::{OwnershipStatus, OwnershipSummary};
 use crate::network::{affinity, metrics};
+use crate::runtime_data;
 use crate::system::hardware::expand_gpu_names;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum NodeState {
+pub(crate) enum NodeState {
     Client,
+    #[default]
     Standby,
     Loading,
     Serving,
 }
 
 impl NodeState {
-    pub(super) const fn node_status_alias(self) -> &'static str {
+    pub(crate) const fn node_status_alias(self) -> &'static str {
         match self {
             Self::Client => "Client",
             Self::Standby => "Standby",
@@ -26,33 +33,124 @@ impl NodeState {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum WakeableNodeState {
+pub(crate) enum WakeableNodeState {
     Sleeping,
     Waking,
 }
 
-#[derive(Serialize)]
-pub(super) struct RuntimeStatusPayload {
-    pub(super) models: Vec<RuntimeModelPayload>,
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeStatusPayload {
+    pub(crate) models: Vec<RuntimeModelPayload>,
 }
 
-#[derive(Serialize)]
-pub(super) struct RuntimeProcessesPayload {
-    pub(super) processes: Vec<RuntimeProcessPayload>,
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeProcessesPayload {
+    pub(crate) processes: Vec<RuntimeProcessPayload>,
 }
 
-#[derive(Serialize)]
-pub(super) struct GpuEntry {
-    pub(super) name: String,
-    pub(super) vram_bytes: u64,
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaPayload {
+    pub(crate) metrics: RuntimeLlamaMetricsPayload,
+    pub(crate) slots: RuntimeLlamaSlotsPayload,
+    pub(crate) items: RuntimeLlamaItemsPayload,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaMetricsPayload {
+    pub(crate) status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) reserved_bytes: Option<u64>,
+    pub(crate) last_attempt_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) mem_bandwidth_gbps: Option<f64>,
+    pub(crate) last_success_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) compute_tflops_fp32: Option<f64>,
+    pub(crate) error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) compute_tflops_fp16: Option<f64>,
+    pub(crate) raw_text: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) samples: Vec<RuntimeLlamaMetricSamplePayload>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaMetricSamplePayload {
+    pub(crate) name: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) value: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaSlotsPayload {
+    pub(crate) status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_attempt_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_success_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) slots: Vec<RuntimeLlamaSlotPayload>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaSlotPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id_task: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) n_ctx: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) speculative: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) is_processing: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) next_token: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) params: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    pub(crate) extra: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaItemsPayload {
+    pub(crate) metrics: Vec<RuntimeLlamaMetricItemPayload>,
+    pub(crate) slots: Vec<RuntimeLlamaSlotItemPayload>,
+    pub(crate) slots_total: usize,
+    pub(crate) slots_busy: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaMetricItemPayload {
+    pub(crate) name: String,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
+    pub(crate) labels: BTreeMap<String, String>,
+    pub(crate) value: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct RuntimeLlamaSlotItemPayload {
+    pub(crate) index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) id_task: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) n_ctx: Option<u64>,
+    pub(crate) is_processing: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct GpuEntry {
+    pub(crate) name: String,
+    pub(crate) vram_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reserved_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) mem_bandwidth_gbps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) compute_tflops_fp32: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) compute_tflops_fp16: Option<f64>,
 }
 
 fn inferred_gpu_name_count(gpu_name: Option<&str>) -> usize {
@@ -77,7 +175,7 @@ fn inferred_gpu_name_count(gpu_name: Option<&str>) -> usize {
         .sum()
 }
 
-pub(super) fn build_gpus(
+pub(crate) fn build_gpus(
     gpu_name: Option<&str>,
     gpu_vram: Option<&str>,
     gpu_reserved_bytes: Option<&str>,
@@ -132,103 +230,103 @@ pub(super) fn build_gpus(
         .collect()
 }
 
-#[derive(Serialize)]
-pub(super) struct StatusPayload {
-    pub(super) version: String,
-    pub(super) latest_version: Option<String>,
-    pub(super) node_id: String,
-    pub(super) owner: OwnershipPayload,
-    pub(super) token: String,
-    pub(super) node_state: NodeState,
-    pub(super) node_status: String,
-    pub(super) is_host: bool,
-    pub(super) is_client: bool,
-    pub(super) llama_ready: bool,
-    pub(super) model_name: String,
-    pub(super) models: Vec<String>,
-    pub(super) available_models: Vec<String>,
-    pub(super) requested_models: Vec<String>,
-    pub(super) serving_models: Vec<String>,
-    pub(super) hosted_models: Vec<String>,
-    pub(super) draft_name: Option<String>,
-    pub(super) api_port: u16,
-    pub(super) my_vram_gb: f64,
-    pub(super) model_size_gb: f64,
-    pub(super) peers: Vec<PeerPayload>,
-    pub(super) wakeable_nodes: Vec<WakeableNode>,
-    pub(super) local_instances: Vec<LocalInstance>,
-    pub(super) launch_pi: Option<String>,
-    pub(super) launch_goose: Option<String>,
-    pub(super) inflight_requests: u64,
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct StatusPayload {
+    pub(crate) version: String,
+    pub(crate) latest_version: Option<String>,
+    pub(crate) node_id: String,
+    pub(crate) owner: OwnershipPayload,
+    pub(crate) token: String,
+    pub(crate) node_state: NodeState,
+    pub(crate) node_status: String,
+    pub(crate) is_host: bool,
+    pub(crate) is_client: bool,
+    pub(crate) llama_ready: bool,
+    pub(crate) model_name: String,
+    pub(crate) models: Vec<String>,
+    pub(crate) available_models: Vec<String>,
+    pub(crate) requested_models: Vec<String>,
+    pub(crate) serving_models: Vec<String>,
+    pub(crate) hosted_models: Vec<String>,
+    pub(crate) draft_name: Option<String>,
+    pub(crate) api_port: u16,
+    pub(crate) my_vram_gb: f64,
+    pub(crate) model_size_gb: f64,
+    pub(crate) peers: Vec<PeerPayload>,
+    pub(crate) wakeable_nodes: Vec<WakeableNode>,
+    pub(crate) local_instances: Vec<LocalInstance>,
+    pub(crate) launch_pi: Option<String>,
+    pub(crate) launch_goose: Option<String>,
+    pub(crate) inflight_requests: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) mesh_id: Option<String>,
+    pub(crate) mesh_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) mesh_name: Option<String>,
-    pub(super) nostr_discovery: bool,
+    pub(crate) mesh_name: Option<String>,
+    pub(crate) nostr_discovery: bool,
     /// Best-effort publication state per Issue #240: private | public | publish_failed.
-    pub(super) publication_state: String,
-    pub(super) my_hostname: Option<String>,
-    pub(super) my_is_soc: Option<bool>,
-    pub(super) gpus: Vec<GpuEntry>,
-    pub(super) routing_affinity: affinity::AffinityStatsSnapshot,
+    pub(crate) publication_state: String,
+    pub(crate) my_hostname: Option<String>,
+    pub(crate) my_is_soc: Option<bool>,
+    pub(crate) gpus: Vec<GpuEntry>,
+    pub(crate) routing_affinity: affinity::AffinityStatsSnapshot,
     /// Local-only routing outcome and current-node pressure snapshot measured on
     /// this node only; not mesh-wide aggregates.
-    pub(super) routing_metrics: metrics::RoutingMetricsStatusSnapshot,
+    pub(crate) routing_metrics: metrics::RoutingMetricsStatusSnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) first_joined_mesh_ts: Option<u64>,
+    pub(crate) first_joined_mesh_ts: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub(super) struct WakeableNode {
-    pub(super) logical_id: String,
-    pub(super) models: Vec<String>,
-    pub(super) vram_gb: f32,
+pub(crate) struct WakeableNode {
+    pub(crate) logical_id: String,
+    pub(crate) models: Vec<String>,
+    pub(crate) vram_gb: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) provider: Option<String>,
-    pub(super) state: WakeableNodeState,
+    pub(crate) provider: Option<String>,
+    pub(crate) state: WakeableNodeState,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) wake_eta_secs: Option<u32>,
+    pub(crate) wake_eta_secs: Option<u32>,
 }
 
-#[derive(Serialize)]
-pub(super) struct PeerPayload {
-    pub(super) id: String,
-    pub(super) owner: OwnershipPayload,
-    pub(super) role: String,
-    pub(super) state: NodeState,
-    pub(super) models: Vec<String>,
-    pub(super) available_models: Vec<String>,
-    pub(super) requested_models: Vec<String>,
-    pub(super) vram_gb: f64,
-    pub(super) serving_models: Vec<String>,
-    pub(super) hosted_models: Vec<String>,
-    pub(super) hosted_models_known: bool,
-    pub(super) version: Option<String>,
-    pub(super) rtt_ms: Option<u32>,
-    pub(super) hostname: Option<String>,
-    pub(super) is_soc: Option<bool>,
-    pub(super) gpus: Vec<GpuEntry>,
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct PeerPayload {
+    pub(crate) id: String,
+    pub(crate) owner: OwnershipPayload,
+    pub(crate) role: String,
+    pub(crate) state: NodeState,
+    pub(crate) models: Vec<String>,
+    pub(crate) available_models: Vec<String>,
+    pub(crate) requested_models: Vec<String>,
+    pub(crate) vram_gb: f64,
+    pub(crate) serving_models: Vec<String>,
+    pub(crate) hosted_models: Vec<String>,
+    pub(crate) hosted_models_known: bool,
+    pub(crate) version: Option<String>,
+    pub(crate) rtt_ms: Option<u32>,
+    pub(crate) hostname: Option<String>,
+    pub(crate) is_soc: Option<bool>,
+    pub(crate) gpus: Vec<GpuEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) first_joined_mesh_ts: Option<u64>,
+    pub(crate) first_joined_mesh_ts: Option<u64>,
 }
 
-#[derive(Serialize)]
-pub(super) struct OwnershipPayload {
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct OwnershipPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) owner_id: Option<String>,
+    pub(crate) owner_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) cert_id: Option<String>,
-    pub(super) status: String,
-    pub(super) verified: bool,
+    pub(crate) cert_id: Option<String>,
+    pub(crate) status: String,
+    pub(crate) verified: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) expires_at_unix_ms: Option<u64>,
+    pub(crate) expires_at_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) node_label: Option<String>,
+    pub(crate) node_label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) hostname_hint: Option<String>,
+    pub(crate) hostname_hint: Option<String>,
 }
 
-pub(super) fn build_ownership_payload(summary: &OwnershipSummary) -> OwnershipPayload {
+pub(crate) fn build_ownership_payload(summary: &OwnershipSummary) -> OwnershipPayload {
     OwnershipPayload {
         owner_id: summary.owner_id.clone(),
         cert_id: summary.cert_id.clone(),
@@ -252,90 +350,90 @@ pub(super) fn build_ownership_payload(summary: &OwnershipSummary) -> OwnershipPa
     }
 }
 
-#[derive(Serialize)]
-pub(super) struct LocalInstance {
-    pub(super) pid: u32,
-    pub(super) api_port: Option<u16>,
-    pub(super) version: Option<String>,
-    pub(super) started_at_unix: i64,
-    pub(super) runtime_dir: String,
-    pub(super) is_self: bool,
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct LocalInstance {
+    pub(crate) pid: u32,
+    pub(crate) api_port: Option<u16>,
+    pub(crate) version: Option<String>,
+    pub(crate) started_at_unix: i64,
+    pub(crate) runtime_dir: String,
+    pub(crate) is_self: bool,
 }
 
-#[derive(Serialize)]
-pub(super) struct MeshModelPayload {
-    pub(super) name: String,
-    pub(super) display_name: String,
-    pub(super) status: String,
-    pub(super) node_count: usize,
-    pub(super) mesh_vram_gb: f64,
-    pub(super) size_gb: f64,
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct MeshModelPayload {
+    pub(crate) name: String,
+    pub(crate) display_name: String,
+    pub(crate) status: String,
+    pub(crate) node_count: usize,
+    pub(crate) mesh_vram_gb: f64,
+    pub(crate) size_gb: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) architecture: Option<String>,
+    pub(crate) architecture: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) context_length: Option<u32>,
+    pub(crate) context_length: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) quantization: Option<String>,
+    pub(crate) quantization: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) description: Option<String>,
-    pub(super) multimodal: bool,
+    pub(crate) description: Option<String>,
+    pub(crate) multimodal: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) multimodal_status: Option<&'static str>,
-    pub(super) vision: bool,
+    pub(crate) multimodal_status: Option<&'static str>,
+    pub(crate) vision: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) vision_status: Option<&'static str>,
-    pub(super) audio: bool,
+    pub(crate) vision_status: Option<&'static str>,
+    pub(crate) audio: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) audio_status: Option<&'static str>,
-    pub(super) reasoning: bool,
+    pub(crate) audio_status: Option<&'static str>,
+    pub(crate) reasoning: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) reasoning_status: Option<&'static str>,
-    pub(super) tool_use: bool,
+    pub(crate) reasoning_status: Option<&'static str>,
+    pub(crate) tool_use: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) tool_use_status: Option<&'static str>,
-    pub(super) moe: bool,
+    pub(crate) tool_use_status: Option<&'static str>,
+    pub(crate) moe: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) expert_count: Option<u32>,
+    pub(crate) expert_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) used_expert_count: Option<u32>,
+    pub(crate) used_expert_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) ranking_source: Option<String>,
+    pub(crate) ranking_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) ranking_origin: Option<String>,
+    pub(crate) ranking_origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) ranking_prompt_count: Option<u32>,
+    pub(crate) ranking_prompt_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) ranking_tokens: Option<u32>,
+    pub(crate) ranking_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) ranking_layer_scope: Option<String>,
+    pub(crate) ranking_layer_scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) draft_model: Option<String>,
+    pub(crate) draft_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) request_count: Option<u64>,
+    pub(crate) request_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) last_active_secs_ago: Option<u64>,
+    pub(crate) last_active_secs_ago: Option<u64>,
     /// Local-only per-model routing outcome snapshot measured on the current
     /// node only; not mesh-wide aggregates.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) routing_metrics: Option<metrics::ModelRoutingMetricsSnapshot>,
+    pub(crate) routing_metrics: Option<metrics::ModelRoutingMetricsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) source_page_url: Option<String>,
+    pub(crate) source_page_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) source_ref: Option<String>,
+    pub(crate) source_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) source_revision: Option<String>,
+    pub(crate) source_revision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) source_file: Option<String>,
+    pub(crate) source_file: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(super) active_nodes: Vec<String>,
-    pub(super) fit_label: String,
-    pub(super) fit_detail: String,
-    pub(super) download_command: String,
-    pub(super) run_command: String,
-    pub(super) auto_command: String,
+    pub(crate) active_nodes: Vec<String>,
+    pub(crate) fit_label: String,
+    pub(crate) fit_detail: String,
+    pub(crate) download_command: String,
+    pub(crate) run_command: String,
+    pub(crate) auto_command: String,
 }
 
-pub(super) fn build_runtime_status_payload(
+pub(crate) fn build_runtime_status_payload(
     model_name: &str,
     primary_backend: Option<String>,
     is_host: bool,
@@ -377,6 +475,85 @@ pub(super) fn build_runtime_processes_payload(
     local_processes.sort_by_key(|process| process.name.to_lowercase());
     RuntimeProcessesPayload {
         processes: local_processes,
+    }
+}
+
+pub(crate) fn build_runtime_llama_payload(
+    snapshot: runtime_data::RuntimeLlamaRuntimeSnapshot,
+) -> RuntimeLlamaPayload {
+    RuntimeLlamaPayload {
+        metrics: RuntimeLlamaMetricsPayload {
+            status: runtime_llama_endpoint_status(snapshot.metrics.status),
+            last_attempt_unix_ms: snapshot.metrics.last_attempt_unix_ms,
+            last_success_unix_ms: snapshot.metrics.last_success_unix_ms,
+            error: snapshot.metrics.error,
+            raw_text: snapshot.metrics.raw_text,
+            samples: snapshot
+                .metrics
+                .samples
+                .into_iter()
+                .map(|sample| RuntimeLlamaMetricSamplePayload {
+                    name: sample.name,
+                    labels: sample.labels,
+                    value: sample.value,
+                })
+                .collect(),
+        },
+        slots: RuntimeLlamaSlotsPayload {
+            status: runtime_llama_endpoint_status(snapshot.slots.status),
+            last_attempt_unix_ms: snapshot.slots.last_attempt_unix_ms,
+            last_success_unix_ms: snapshot.slots.last_success_unix_ms,
+            error: snapshot.slots.error,
+            slots: snapshot
+                .slots
+                .slots
+                .into_iter()
+                .map(|slot| RuntimeLlamaSlotPayload {
+                    id: slot.id,
+                    id_task: slot.id_task,
+                    n_ctx: slot.n_ctx,
+                    speculative: slot.speculative,
+                    is_processing: slot.is_processing,
+                    next_token: slot.next_token,
+                    params: slot.params,
+                    extra: slot.extra,
+                })
+                .collect(),
+        },
+        items: RuntimeLlamaItemsPayload {
+            metrics: snapshot
+                .items
+                .metrics
+                .into_iter()
+                .map(|item| RuntimeLlamaMetricItemPayload {
+                    name: item.name,
+                    labels: item.labels,
+                    value: item.value,
+                })
+                .collect(),
+            slots: snapshot
+                .items
+                .slots
+                .into_iter()
+                .map(|item| RuntimeLlamaSlotItemPayload {
+                    index: item.index,
+                    id: item.id,
+                    id_task: item.id_task,
+                    n_ctx: item.n_ctx,
+                    is_processing: item.is_processing,
+                })
+                .collect(),
+            slots_total: snapshot.items.slots_total,
+            slots_busy: snapshot.items.slots_busy,
+        },
+    }
+}
+
+fn runtime_llama_endpoint_status(status: runtime_data::RuntimeLlamaEndpointStatus) -> &'static str {
+    match status {
+        runtime_data::RuntimeLlamaEndpointStatus::Ready => "ready",
+        runtime_data::RuntimeLlamaEndpointStatus::Error => "error",
+        runtime_data::RuntimeLlamaEndpointStatus::Unavailable => "unavailable",
     }
 }
 

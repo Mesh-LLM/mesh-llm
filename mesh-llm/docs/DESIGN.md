@@ -36,6 +36,7 @@ src/
 │   └── blobstore/           Request-scoped media object storage for multimodal
 ├── protocol/                Wire protocol types, protobuf encoding/decoding
 ├── runtime/                 Top-level process orchestration, startup coordination
+├── runtime_data/            Internal collector snapshots for management API fan-in
 └── system/                  Hardware detection, benchmarking, self-update
 ```
 
@@ -221,6 +222,30 @@ demand semantics yet. Entries should use canonical refs such as
 `org/repo@rev:variant`. Mesh management works without the HTML via curl/scripts.
 
 Always enabled on port 3131 (configurable with `--console <port>`).
+
+### Runtime Data Collector
+
+Broad management API reads are assembled through the internal `runtime_data/`
+collector. Subsystems still own their source-of-truth state: `runtime/` owns
+process and local-instance observations, `models::inventory` owns GGUF scans and
+metadata, `network::metrics` plus `mesh::Node` own routing counters, and
+`plugin::PluginManager` / plugin runtime own plugin actions and lifecycle. Those
+owners publish small snapshots into the collector through subsystem-local
+producer handles instead of moving ownership into the API layer.
+
+The collector stores runtime status/process rows, local-instance and inventory
+snapshots, routing metrics, and passive plugin report snapshots. API routes keep
+their public JSON shapes stable by adapting collector views back into the
+existing `api/status.rs` payload types. `/api/events` sends an initial
+`/api/status` payload and then wakes from the collector's single versioned
+`watch` stream; producer updates mark dirty bits synchronously and never await
+collector locks on hot request paths.
+
+This refactor is intentionally internal-only. It does not add public HTTP
+fields, gossip fields, or plugin protocol messages. If a broad API read needs a
+new data source, prefer adding a subsystem-local producer publication and a
+collector snapshot/view adapter over rejoining subsystem internals directly in
+route handlers.
 
 ## No-Arg Behavior
 

@@ -1,6 +1,7 @@
 use crate::mesh;
 use crate::network::affinity;
 use crate::plugin;
+use crate::runtime_data;
 use serde::{Serialize, Serializer};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -48,7 +49,7 @@ pub enum RuntimeControlRequest {
     Shutdown,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RuntimeModelPayload {
     pub name: String,
     pub backend: String,
@@ -56,7 +57,7 @@ pub struct RuntimeModelPayload {
     pub port: Option<u16>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct RuntimeProcessPayload {
     pub name: String,
     pub backend: String,
@@ -84,6 +85,8 @@ pub(super) struct ApiInner {
     pub(super) node: mesh::Node,
     pub(super) plugin_manager: plugin::PluginManager,
     pub(super) affinity_router: affinity::AffinityRouter,
+    pub(super) runtime_data_collector: runtime_data::RuntimeDataCollector,
+    pub(super) runtime_data_producer: runtime_data::RuntimeDataProducer,
     pub(super) headless: bool,
     pub(super) is_host: bool,
     pub(super) is_client: bool,
@@ -103,9 +106,5 @@ pub(super) struct ApiInner {
     pub(super) local_processes: Vec<RuntimeProcessPayload>,
     pub(super) sse_clients: Vec<tokio::sync::mpsc::UnboundedSender<String>>,
     pub(super) model_interests: HashMap<String, LocalModelInterest>,
-    pub(super) inventory_scan_running: bool,
-    pub(super) inventory_scan_waiters:
-        Vec<tokio::sync::oneshot::Sender<crate::models::LocalModelInventorySnapshot>>,
-    pub(super) local_instances: Arc<Mutex<Vec<crate::runtime::instance::LocalInstanceSnapshot>>>,
     pub(super) wakeable_inventory: crate::runtime::wakeable::WakeableInventory,
 }

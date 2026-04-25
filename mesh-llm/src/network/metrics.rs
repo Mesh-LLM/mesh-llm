@@ -205,6 +205,12 @@ pub struct ModelRoutingMetricsSnapshot {
     pub targets: Vec<TargetRoutingMetricsSnapshot>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct RoutingCollectorSnapshot {
+    pub status: RoutingMetricsStatusSnapshot,
+    pub models: HashMap<String, ModelRoutingMetricsSnapshot>,
+}
+
 /// Local-only per-target routing outcome memory exposed on `/api/models`.
 #[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct TargetRoutingMetricsSnapshot {
@@ -394,6 +400,13 @@ impl RoutingMetrics {
             );
         }
         snapshots
+    }
+
+    pub fn collector_snapshot(&self, current_inflight_requests: u64) -> RoutingCollectorSnapshot {
+        RoutingCollectorSnapshot {
+            status: self.status_snapshot(current_inflight_requests),
+            models: self.model_snapshots(),
+        }
     }
 
     fn shard_index(&self, model: &str) -> usize {

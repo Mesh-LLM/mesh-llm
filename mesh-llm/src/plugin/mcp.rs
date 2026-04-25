@@ -482,11 +482,12 @@ impl PluginMcpServer {
     }
 
     async fn active_external_mcp_endpoints(&self) -> Result<Vec<ExternalMcpEndpoint>, ErrorData> {
-        let endpoints = self
+        let passive_endpoint_summaries = self
             .plugin_manager
             .endpoints()
             .await
-            .map_err(internal_error)?
+            .map_err(internal_error)?;
+        let endpoints = passive_endpoint_summaries
             .into_iter()
             .filter_map(ExternalMcpEndpoint::from_summary)
             .collect::<Vec<_>>();

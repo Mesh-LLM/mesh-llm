@@ -8,6 +8,8 @@
 //!   POST /api/model-interests — register local explicit interest for a canonical model ref
 //!   DELETE /api/model-interests/{model_ref} — clear local explicit interest
 //!   GET  /api/runtime   — local model state (JSON)
+//!   GET  /api/runtime/llama — local llama.cpp runtime metrics + slots snapshots (JSON)
+//!   GET  /api/runtime/events — SSE stream of llama.cpp runtime metrics + slots snapshots
 //!   GET  /api/runtime/endpoints — registered plugin endpoint state (JSON)
 //!   GET  /api/runtime/processes — local inference process state (JSON)
 //!   POST /api/runtime/models — load a local model
@@ -22,6 +24,9 @@
 //! The dashboard is mostly read-only — shows status, topology, and models.
 //! Local model load/unload is exposed for operator control.
 //!
+//! Broad runtime reads should stay behind `runtime_data` helpers so the API
+//! layer keeps using stable collector-backed views instead of fresh fan-in.
+//!
 //! `routing_metrics`, `routing_metrics.local_node`, `routing_metrics.pressure`,
 //! and `/api/models` per-model `routing_metrics.targets` are measured on the
 //! current node only; not mesh-wide aggregates.
@@ -30,7 +35,7 @@ mod assets;
 mod http;
 mod routes;
 mod state;
-mod status;
+pub(crate) mod status;
 
 pub use self::state::{
     LocalModelInterest, MeshApi, PublicationState, RuntimeControlRequest, RuntimeModelPayload,
@@ -43,74 +48,35 @@ use self::http::{http_body_text, respond_error};
 use self::routes::dispatch_request;
 use self::state::ApiInner;
 use self::status::{
-    build_gpus, build_ownership_payload, build_runtime_processes_payload,
-    build_runtime_status_payload, LocalInstance, MeshModelPayload, NodeState, PeerPayload,
-    RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload, WakeableNode, WakeableNodeState,
+    build_runtime_processes_payload, build_runtime_status_payload, MeshModelPayload,
+    RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
 };
 use crate::inference::election;
 use crate::mesh;
 use crate::network::{affinity, nostr, proxy};
 use crate::plugin;
-use crate::runtime::wakeable::{WakeableInventoryEntry, WakeableState};
+use crate::runtime_data;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex};
 
+#[cfg(test)]
+use self::status::{build_gpus, LocalInstance, NodeState, WakeableNode, WakeableNodeState};
+#[cfg(test)]
+use crate::runtime::wakeable::{WakeableInventoryEntry, WakeableState};
+
 const MESH_LLM_VERSION: &str = crate::VERSION;
 
-fn find_catalog_model(name: &str) -> Option<&'static crate::models::catalog::CatalogModel> {
-    crate::models::catalog::MODEL_CATALOG
-        .iter()
-        .find(|m| m.name == name || m.file.strip_suffix(".gguf").unwrap_or(m.file.as_str()) == name)
-}
-
-fn is_huggingface_repository_like(repository: &str) -> bool {
-    let trimmed = repository.trim();
-    !trimmed.is_empty()
-        && !trimmed.starts_with('/')
-        && !trimmed.ends_with('/')
-        && !trimmed.contains('\\')
-        && trimmed.split('/').count() == 2
-}
-
-fn huggingface_repository_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    matches!(identity.source_kind, mesh::ModelSourceKind::HuggingFace)
-        .then(|| {
-            identity
-                .repository
-                .clone()
-                .filter(|repo| is_huggingface_repository_like(repo))
-        })
-        .flatten()
-}
-
-fn source_page_url_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    huggingface_repository_from_identity(identity)
-        .map(|repository| format!("https://huggingface.co/{repository}"))
-}
-
-fn source_file_from_identity(identity: &mesh::ServedModelIdentity) -> Option<String> {
-    identity
-        .artifact
-        .clone()
-        .or_else(|| identity.local_file_name.clone())
-}
-
-fn likely_reasoning_model(name: &str, description: Option<&str>) -> bool {
-    let haystack = format!("{} {}", name, description.unwrap_or_default()).to_ascii_lowercase();
-    ["reasoning", "thinking", "deepseek-r1"]
-        .iter()
-        .any(|needle| haystack.contains(needle))
-}
-
+#[cfg(test)]
 #[derive(Debug, Default, PartialEq)]
-struct HttpRouteStats {
+pub(crate) struct HttpRouteStats {
     node_count: usize,
     active_nodes: Vec<String>,
     mesh_vram_gb: f64,
 }
 
-fn http_route_stats(
+#[cfg(test)]
+pub(crate) fn http_route_stats(
     model_name: &str,
     peers: &[mesh::PeerInfo],
     my_hosted_models: &[String],
@@ -156,84 +122,70 @@ fn http_route_stats(
     }
 }
 
-fn likely_vision_model(name: &str, description: Option<&str>) -> bool {
-    let haystack = format!("{} {}", name, description.unwrap_or_default()).to_ascii_lowercase();
-    ["vision", "-vl", "llava", "omni", "qwen2.5-vl", "mllama"]
-        .iter()
-        .any(|needle| haystack.contains(needle))
-}
-
-fn likely_audio_model(name: &str, description: Option<&str>) -> bool {
-    let haystack = format!("{} {}", name, description.unwrap_or_default()).to_ascii_lowercase();
-    [
-        "audio",
-        "speech",
-        "voice",
-        "omni",
-        "ultravox",
-        "qwen2-audio",
-    ]
-    .iter()
-    .any(|needle| haystack.contains(needle))
-}
-
-fn fit_hint_for_machine(size_gb: f64, my_vram_gb: f64) -> (String, String) {
-    if size_gb <= 0.0 || my_vram_gb <= 0.0 {
-        return (
-            "Unknown".into(),
-            "No local capacity signal is available for this machine yet.".into(),
-        );
-    }
-    if size_gb * 1.2 <= my_vram_gb {
-        return (
-            "Likely comfortable".into(),
-            format!(
-                "This machine has {:.1} GB capacity, which should handle a {:.1} GB model comfortably.",
-                my_vram_gb, size_gb
-            ),
-        );
-    }
-    if size_gb * 1.05 <= my_vram_gb {
-        return (
-            "Likely fits".into(),
-            format!(
-                "This machine has {:.1} GB capacity. A {:.1} GB model should fit, but headroom will be tight.",
-                my_vram_gb, size_gb
-            ),
-        );
-    }
-    if size_gb * 0.8 <= my_vram_gb {
-        return (
-            "Possible with tradeoffs".into(),
-            format!(
-                "This machine has {:.1} GB capacity. A {:.1} GB model may load, but expect tighter memory pressure.",
-                my_vram_gb, size_gb
-            ),
-        );
-    }
-    (
-        "Likely too large".into(),
-        format!(
-            "This machine has {:.1} GB capacity, which is likely not enough for a {:.1} GB model locally.",
-            my_vram_gb, size_gb
-        ),
-    )
+pub struct MeshApiConfig {
+    pub(crate) node: mesh::Node,
+    pub(crate) model_name: String,
+    pub(crate) api_port: u16,
+    pub(crate) model_size_bytes: u64,
+    pub(crate) plugin_manager: plugin::PluginManager,
+    pub(crate) affinity_router: affinity::AffinityRouter,
+    pub(crate) runtime_data_collector: runtime_data::RuntimeDataCollector,
+    pub(crate) runtime_data_producer: runtime_data::RuntimeDataProducer,
 }
 
 impl MeshApi {
-    pub fn new(
-        node: mesh::Node,
-        model_name: String,
-        api_port: u16,
-        model_size_bytes: u64,
-        plugin_manager: plugin::PluginManager,
-        affinity_router: affinity::AffinityRouter,
-    ) -> Self {
+    pub fn new(config: MeshApiConfig) -> Self {
+        let MeshApiConfig {
+            node,
+            model_name,
+            api_port,
+            model_size_bytes,
+            plugin_manager,
+            affinity_router,
+            runtime_data_collector,
+            runtime_data_producer,
+        } = config;
+
+        runtime_data_producer.publish_runtime_status(|runtime_status| {
+            if runtime_status.primary_model.as_deref() == Some(model_name.as_str()) {
+                return false;
+            }
+            runtime_status.primary_model = Some(model_name.clone());
+            true
+        });
+        let initial_runtime_data_views = runtime_data::collect_views(&runtime_data_collector);
+        let _ = (
+            initial_runtime_data_views
+                .runtime_status
+                .primary_model
+                .as_ref(),
+            initial_runtime_data_views
+                .runtime_status
+                .primary_backend
+                .as_ref(),
+            initial_runtime_data_views.runtime_status.is_host,
+            initial_runtime_data_views.runtime_status.is_client,
+            initial_runtime_data_views.runtime_status.llama_ready,
+            initial_runtime_data_views.runtime_status.llama_port,
+            initial_runtime_data_views
+                .runtime_status
+                .local_processes
+                .len(),
+            initial_runtime_data_views.local_instances.instances.len(),
+            initial_runtime_data_views.plugin_data.entries.len(),
+            initial_runtime_data_views.plugin_endpoints.entries.len(),
+            runtime_data_producer.scope(),
+            runtime_data_producer.has_plugin_data_key(),
+            runtime_data_producer.has_plugin_endpoint_key(),
+            runtime_data_producer.initial_process_count(),
+        );
         MeshApi {
             inner: Arc::new(Mutex::new(ApiInner {
                 node,
                 plugin_manager,
                 affinity_router,
+                runtime_data_collector,
+                runtime_data_producer,
                 headless: false,
                 is_host: false,
                 is_client: false,
@@ -256,9 +208,6 @@ impl MeshApi {
                 local_processes: Vec::new(),
                 sse_clients: Vec::new(),
                 model_interests: std::collections::HashMap::new(),
-                inventory_scan_running: false,
-                inventory_scan_waiters: Vec::new(),
-                local_instances: Arc::new(Mutex::new(Vec::new())),
                 wakeable_inventory: crate::runtime::wakeable::WakeableInventory::default(),
             })),
         }
@@ -328,7 +277,17 @@ impl MeshApi {
     }
 
     pub async fn set_primary_backend(&self, backend: String) {
-        self.inner.lock().await.primary_backend = Some(backend);
+        let mut inner = self.inner.lock().await;
+        inner.primary_backend = Some(backend.clone());
+        inner
+            .runtime_data_producer
+            .publish_runtime_status(|runtime_status| {
+                if runtime_status.primary_backend.as_deref() == Some(backend.as_str()) {
+                    return false;
+                }
+                runtime_status.primary_backend = Some(backend.clone());
+                true
+            });
     }
 
     pub async fn set_draft_name(&self, name: String) {
@@ -336,7 +295,17 @@ impl MeshApi {
     }
 
     pub async fn set_client(&self, is_client: bool) {
-        self.inner.lock().await.is_client = is_client;
+        let mut inner = self.inner.lock().await;
+        inner.is_client = is_client;
+        inner
+            .runtime_data_producer
+            .publish_runtime_status(|runtime_status| {
+                if runtime_status.is_client == is_client {
+                    return false;
+                }
+                runtime_status.is_client = is_client;
+                true
+            });
     }
 
     pub async fn set_mesh_name(&self, name: String) {
@@ -364,10 +333,8 @@ impl MeshApi {
         self.inner.lock().await.publication_state
     }
 
-    pub async fn local_instances_handle(
-        &self,
-    ) -> Arc<Mutex<Vec<crate::runtime::instance::LocalInstanceSnapshot>>> {
-        self.inner.lock().await.local_instances.clone()
+    pub(crate) async fn runtime_data_producer(&self) -> runtime_data::RuntimeDataProducer {
+        self.inner.lock().await.runtime_data_producer.clone()
     }
 
     pub async fn set_runtime_control(
@@ -395,17 +362,28 @@ impl MeshApi {
         {
             let mut inner = self.inner.lock().await;
             inner.local_processes.retain(|p| p.name != process.name);
-            inner.local_processes.push(process);
+            inner.local_processes.push(process.clone());
+            inner
+                .runtime_data_producer
+                .publish_local_processes(|local_processes| {
+                    runtime_data::upsert_runtime_process_snapshot(
+                        local_processes,
+                        runtime_data::RuntimeProcessSnapshot::from_payload(&process),
+                    )
+                });
         }
-        self.push_status().await;
     }
 
     pub async fn remove_local_process(&self, model_name: &str) {
         {
             let mut inner = self.inner.lock().await;
             inner.local_processes.retain(|p| p.name != model_name);
+            inner
+                .runtime_data_producer
+                .publish_local_processes(|local_processes| {
+                    runtime_data::remove_runtime_process_snapshot(local_processes, model_name)
+                });
         }
-        self.push_status().await;
     }
 
     pub async fn update(&self, is_host: bool, llama_ready: bool) {
@@ -413,12 +391,35 @@ impl MeshApi {
             let mut inner = self.inner.lock().await;
             inner.is_host = is_host;
             inner.llama_ready = llama_ready;
+            inner
+                .runtime_data_producer
+                .publish_runtime_status(|runtime_status| {
+                    let mut changed = false;
+                    if runtime_status.is_host != is_host {
+                        runtime_status.is_host = is_host;
+                        changed = true;
+                    }
+                    if runtime_status.llama_ready != llama_ready {
+                        runtime_status.llama_ready = llama_ready;
+                        changed = true;
+                    }
+                    changed
+                });
         }
-        self.push_status().await;
     }
 
     pub async fn set_llama_port(&self, port: Option<u16>) {
-        self.inner.lock().await.llama_port = port;
+        let mut inner = self.inner.lock().await;
+        inner.llama_port = port;
+        inner
+            .runtime_data_producer
+            .publish_runtime_status(|runtime_status| {
+                if runtime_status.llama_port == port {
+                    return false;
+                }
+                runtime_status.llama_port = port;
+                true
+            });
     }
 
     pub async fn set_headless(&self, headless: bool) {
@@ -430,396 +431,115 @@ impl MeshApi {
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let (model_name, primary_backend, is_host, llama_ready, llama_port, local_processes) = {
-            let inner = self.inner.lock().await;
-            (
-                inner.model_name.clone(),
-                inner.primary_backend.clone(),
-                inner.is_host,
-                inner.llama_ready,
-                inner.llama_port,
-                inner.local_processes.clone(),
-            )
-        };
+        let runtime_status = self
+            .inner
+            .lock()
+            .await
+            .runtime_data_collector
+            .runtime_status_snapshot();
         build_runtime_status_payload(
-            &model_name,
-            primary_backend,
-            is_host,
-            llama_ready,
-            llama_port,
-            local_processes,
+            runtime_status.primary_model.as_deref().unwrap_or_default(),
+            runtime_status.primary_backend,
+            runtime_status.is_host,
+            runtime_status.llama_ready,
+            runtime_status.llama_port,
+            runtime_data::runtime_process_payloads(&runtime_status.local_processes),
         )
     }
 
     async fn runtime_processes(&self) -> RuntimeProcessesPayload {
-        let local_processes = self.inner.lock().await.local_processes.clone();
-        build_runtime_processes_payload(local_processes)
+        let runtime_processes = self
+            .inner
+            .lock()
+            .await
+            .runtime_data_collector
+            .runtime_processes_snapshot();
+        build_runtime_processes_payload(runtime_data::runtime_process_payloads(&runtime_processes))
+    }
+
+    async fn runtime_llama(&self) -> RuntimeLlamaPayload {
+        let runtime_llama = self
+            .inner
+            .lock()
+            .await
+            .runtime_data_collector
+            .runtime_llama_snapshot();
+        status::build_runtime_llama_payload(runtime_llama)
+    }
+
+    async fn runtime_endpoints(&self) -> anyhow::Result<Vec<plugin::PluginEndpointSummary>> {
+        let plugin_manager = self.inner.lock().await.plugin_manager.clone();
+        plugin_manager.endpoints().await
+    }
+
+    async fn plugins(&self) -> Vec<plugin::PluginSummary> {
+        let plugin_manager = self.inner.lock().await.plugin_manager.clone();
+        plugin_manager.list().await
+    }
+
+    async fn plugin_capability_providers(
+        &self,
+    ) -> anyhow::Result<Vec<plugin::PluginCapabilityProvider>> {
+        let plugin_manager = self.inner.lock().await.plugin_manager.clone();
+        plugin_manager.capability_providers().await
+    }
+
+    async fn plugin_provider_for_capability(
+        &self,
+        capability: &str,
+    ) -> anyhow::Result<Option<plugin::PluginCapabilityProvider>> {
+        let plugin_manager = self.inner.lock().await.plugin_manager.clone();
+        plugin_manager.provider_for_capability(capability).await
     }
 
     async fn local_inventory_snapshot(&self) -> crate::models::LocalModelInventorySnapshot {
-        let rx = {
-            let mut inner = self.inner.lock().await;
-            if inner.inventory_scan_running {
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                inner.inventory_scan_waiters.push(tx);
-                rx
-            } else {
-                inner.inventory_scan_running = true;
-                let (tx, rx) = tokio::sync::oneshot::channel();
-                inner.inventory_scan_waiters.push(tx);
-
-                let inner_arc = self.inner.clone();
-                tokio::spawn(async move {
-                    let snapshot = match tokio::task::spawn_blocking(|| {
-                        crate::models::scan_local_inventory_snapshot_with_progress(|_| {})
-                    })
-                    .await
-                    {
-                        Ok(snapshot) => snapshot,
-                        Err(e) => {
-                            tracing::warn!("Local inventory scan failed: {e}");
-                            crate::models::LocalModelInventorySnapshot::default()
-                        }
-                    };
-
-                    let waiters = {
-                        let mut inner = inner_arc.lock().await;
-                        inner.inventory_scan_running = false;
-                        std::mem::take(&mut inner.inventory_scan_waiters)
-                    };
-                    for tx in waiters {
-                        let _ = tx.send(snapshot.clone());
-                    }
-                });
-
-                rx
-            }
-        };
-
-        rx.await.unwrap_or_default()
+        let runtime_data_collector = self.inner.lock().await.runtime_data_collector.clone();
+        runtime_data_collector
+            .coalesce_local_inventory_scan(|| {
+                crate::models::scan_local_inventory_snapshot_with_progress(|_| {})
+            })
+            .await
     }
 
     async fn mesh_models(&self) -> Vec<MeshModelPayload> {
-        let (node, my_vram_gb, model_name, model_size_bytes, _local_processes) = {
+        let (runtime_data_collector, node, my_vram_gb, fallback_model_name, model_size_bytes) = {
             let inner = self.inner.lock().await;
             (
+                inner.runtime_data_collector.clone(),
                 inner.node.clone(),
                 inner.node.vram_bytes() as f64 / 1e9,
                 inner.model_name.clone(),
                 inner.model_size_bytes,
-                inner.local_processes.clone(),
             )
         };
 
-        let local_scan = self.local_inventory_snapshot().await;
-        let all_peers = node.peers().await;
-        let catalog = node.mesh_catalog_entries().await;
-        let served = node.models_being_served().await;
-        let active_demand = node.active_demand().await;
-        // Per-model routing metrics are current-node-only observations. They
-        // help the management API explain recent local routing behavior without
-        // claiming mesh-wide totals.
-        let routing_metrics_by_model = node.model_routing_metrics();
-        let my_serving_models = node.serving_models().await;
-        let local_model_names = local_scan.model_names;
-        let mut metadata_by_name = local_scan.metadata_by_name;
-        let mut size_by_name = local_scan.size_by_name;
-        for peer in &all_peers {
-            for meta in &peer.available_model_metadata {
-                metadata_by_name
-                    .entry(meta.model_key.clone())
-                    .or_insert_with(|| meta.clone());
-            }
-            for (model_name, size) in &peer.available_model_sizes {
-                size_by_name.entry(model_name.clone()).or_insert(*size);
-            }
-        }
-        let my_hosted_models = node.hosted_models().await;
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        catalog
-            .iter()
-            .map(|entry| {
-                let name = &entry.model_name;
-                let descriptor = entry.descriptor.as_ref();
-                let identity = descriptor.map(|descriptor| &descriptor.identity);
-                let catalog_entry = find_catalog_model(name);
-                let is_warm = served.contains(name);
-                let local_known = local_model_names.contains(name)
-                    || my_hosted_models.iter().any(|s| s == name)
-                    || my_serving_models.iter().any(|s| s == name)
-                    || name == &model_name;
-                let display_name = crate::models::installed_model_display_name(name);
-                let route_stats = is_warm.then(|| {
-                    http_route_stats(
-                        name,
-                        &all_peers,
-                        &my_hosted_models,
-                        node.hostname.as_deref(),
-                        my_vram_gb,
-                    )
-                });
-                let node_count = route_stats
-                    .as_ref()
-                    .map(|stats| stats.node_count)
-                    .unwrap_or(0);
-                let active_nodes = route_stats
-                    .as_ref()
-                    .map(|stats| stats.active_nodes.clone())
-                    .unwrap_or_default();
-                let mesh_vram_gb = route_stats
-                    .as_ref()
-                    .map(|stats| stats.mesh_vram_gb)
-                    .unwrap_or(0.0);
-                let size_gb = if name == &model_name && model_size_bytes > 0 {
-                    model_size_bytes as f64 / 1e9
-                } else {
-                    size_by_name
-                        .get(name)
-                        .map(|size| *size as f64 / 1e9)
-                        .unwrap_or_else(|| {
-                            crate::models::catalog::parse_size_gb(
-                                catalog_entry.map(|m| m.size.as_str()).unwrap_or("0"),
-                            )
-                        })
-                };
-                let (request_count, last_active_secs_ago) = match active_demand.get(name) {
-                    Some(d) => (
-                        Some(d.request_count),
-                        Some(now_ts.saturating_sub(d.last_active)),
-                    ),
-                    None => (None, None),
-                };
-                let routing_metrics = routing_metrics_by_model.get(name).cloned();
-                let mut capabilities = descriptor
-                    .map(|descriptor| descriptor.capabilities)
-                    .unwrap_or_else(|| {
-                        if local_known {
-                            crate::models::installed_model_capabilities(name)
-                        } else {
-                            crate::models::ModelCapabilities::default()
-                        }
-                    });
-                if local_known
-                    && likely_reasoning_model(name, catalog_entry.map(|m| m.description.as_str()))
-                {
-                    capabilities.reasoning = capabilities
-                        .reasoning
-                        .max(crate::models::capabilities::CapabilityLevel::Likely);
-                }
-                if local_known
-                    && likely_vision_model(name, catalog_entry.map(|m| m.description.as_str()))
-                {
-                    capabilities.vision = capabilities
-                        .vision
-                        .max(crate::models::capabilities::CapabilityLevel::Likely);
-                    capabilities.multimodal = true;
-                }
-                if local_known
-                    && likely_audio_model(name, catalog_entry.map(|m| m.description.as_str()))
-                {
-                    capabilities.audio = capabilities
-                        .audio
-                        .max(crate::models::capabilities::CapabilityLevel::Likely);
-                    capabilities.multimodal = true;
-                }
-                let multimodal = capabilities.supports_multimodal_runtime();
-                let multimodal_status = if multimodal || capabilities.multimodal_label().is_some() {
-                    Some(capabilities.multimodal_status())
-                } else {
-                    None
-                };
-                let vision = capabilities.supports_vision_runtime();
-                let vision_status = if vision || capabilities.vision_label().is_some() {
-                    Some(capabilities.vision_status())
-                } else {
-                    None
-                };
-                let audio = matches!(
-                    capabilities.audio,
-                    crate::models::capabilities::CapabilityLevel::Supported
-                        | crate::models::capabilities::CapabilityLevel::Likely
-                );
-                let audio_status = if audio || capabilities.audio_label().is_some() {
-                    Some(capabilities.audio_status())
-                } else {
-                    None
-                };
-                let reasoning = matches!(
-                    capabilities.reasoning,
-                    crate::models::capabilities::CapabilityLevel::Supported
-                        | crate::models::capabilities::CapabilityLevel::Likely
-                );
-                let reasoning_status = if reasoning || capabilities.reasoning_label().is_some() {
-                    Some(capabilities.reasoning_status())
-                } else {
-                    None
-                };
-                let tool_use = capabilities.tool_use_label().is_some();
-                let tool_use_status = capabilities
-                    .tool_use_label()
-                    .map(|_| capabilities.tool_use_status());
-                let description = catalog_entry.map(|m| m.description.to_string());
-                let metadata = metadata_by_name.get(name);
-                let architecture = metadata
-                    .map(|m| m.architecture.trim())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string);
-                let context_length = metadata
-                    .map(|m| m.context_length)
-                    .filter(|value| *value > 0);
-                let quantization = metadata
-                    .map(|m| m.quantization_type.trim())
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .or_else(|| {
-                        catalog_entry.map(|m| m.file.to_string()).and_then(|file| {
-                            let quant = file
-                                .strip_suffix(".gguf")
-                                .map(crate::models::inventory::derive_quantization_type)
-                                .filter(|q| !q.is_empty())?;
-                            Some(quant)
-                        })
-                    });
-                let topology_moe = descriptor
-                    .and_then(|descriptor| descriptor.topology.as_ref())
-                    .and_then(|topology| topology.moe.as_ref());
-                let moe = capabilities.moe
-                    || topology_moe.is_some()
-                    || metadata.map(|m| m.is_moe).unwrap_or(false);
-                let expert_count = topology_moe
-                    .map(|moe| moe.expert_count)
-                    .or_else(|| metadata.map(|m| m.expert_count).filter(|count| *count > 0))
-                    .or_else(|| {
-                        catalog_entry
-                            .and_then(|m| m.moe.as_ref())
-                            .map(|m| m.n_expert)
-                    });
-                let used_expert_count = topology_moe
-                    .map(|moe| moe.used_expert_count)
-                    .or_else(|| {
-                        metadata
-                            .map(|m| m.used_expert_count)
-                            .filter(|count| *count > 0)
-                    })
-                    .or_else(|| {
-                        catalog_entry
-                            .and_then(|m| m.moe.as_ref())
-                            .map(|m| m.n_expert_used)
-                    });
-                let ranking_source = topology_moe
-                    .and_then(|moe| moe.ranking_source.as_ref())
-                    .cloned();
-                let ranking_origin = topology_moe
-                    .and_then(|moe| moe.ranking_origin.as_ref())
-                    .cloned();
-                let ranking_prompt_count = topology_moe.and_then(|moe| moe.ranking_prompt_count);
-                let ranking_tokens = topology_moe.and_then(|moe| moe.ranking_tokens);
-                let ranking_layer_scope = topology_moe
-                    .and_then(|moe| moe.ranking_layer_scope.as_ref())
-                    .cloned();
-                let draft_model = catalog_entry.and_then(|m| m.draft.clone());
-                let source_page_url =
-                    identity
-                        .and_then(source_page_url_from_identity)
-                        .or_else(|| {
-                            if local_known {
-                                catalog_entry.and_then(|m| {
-                                    crate::models::catalog::huggingface_repo_url(&m.url)
-                                })
-                            } else {
-                                None
-                            }
-                        });
-                let source_ref = identity
-                    .and_then(huggingface_repository_from_identity)
-                    .or_else(|| {
-                        source_page_url
-                            .as_deref()
-                            .map(|url| url.replace("https://huggingface.co/", ""))
-                    });
-                let source_revision = identity.and_then(|identity| identity.revision.clone());
-                let source_file = identity.and_then(source_file_from_identity).or_else(|| {
-                    if local_known {
-                        catalog_entry.map(|m| m.file.to_string())
-                    } else {
-                        None
-                    }
-                });
-                let command_ref = identity
-                    .and_then(|identity| identity.canonical_ref.clone())
-                    .or_else(|| {
-                        if local_known {
-                            catalog_entry.and_then(|m| {
-                                match (m.source_repo(), m.source_revision(), m.source_file()) {
-                                    (Some(repo), revision, Some(file)) => Some(match revision {
-                                        Some(revision) => format!("{repo}@{revision}/{file}"),
-                                        None => format!("{repo}/{file}"),
-                                    }),
-                                    _ => None,
-                                }
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| name.clone());
-                let (fit_label, fit_detail) = fit_hint_for_machine(size_gb, my_vram_gb);
-                MeshModelPayload {
-                    name: name.clone(),
-                    display_name,
-                    status: if is_warm {
-                        "warm".into()
-                    } else {
-                        "cold".into()
-                    },
-                    node_count,
-                    mesh_vram_gb,
-                    size_gb,
-                    architecture,
-                    context_length,
-                    quantization,
-                    description,
-                    multimodal,
-                    multimodal_status,
-                    vision,
-                    vision_status,
-                    audio,
-                    audio_status,
-                    reasoning,
-                    reasoning_status,
-                    tool_use,
-                    tool_use_status,
-                    moe,
-                    expert_count,
-                    used_expert_count,
-                    ranking_source,
-                    ranking_origin,
-                    ranking_prompt_count,
-                    ranking_tokens,
-                    ranking_layer_scope,
-                    draft_model,
-                    request_count,
-                    last_active_secs_ago,
-                    routing_metrics,
-                    source_page_url,
-                    source_ref,
-                    source_revision,
-                    source_file,
-                    active_nodes,
-                    fit_label,
-                    fit_detail,
-                    download_command: format!("mesh-llm models download {}", command_ref),
-                    run_command: format!("mesh-llm serve --model {}", command_ref),
-                    auto_command: format!("mesh-llm serve --auto --model {}", command_ref),
-                }
-            })
-            .collect()
+        let runtime_status = runtime_data_collector.runtime_status_snapshot();
+        let model_name = runtime_status.primary_model.unwrap_or(fallback_model_name);
+
+        runtime_data::mesh_models(runtime_data_collector.build_model_view(
+            runtime_data::ModelViewInput {
+                peers: node.peers().await,
+                catalog: node.mesh_catalog_entries().await,
+                served_models: node.models_being_served().await,
+                active_demand: node.active_demand().await,
+                my_serving_models: node.serving_models().await,
+                my_hosted_models: node.hosted_models().await,
+                local_inventory: self.local_inventory_snapshot().await,
+                node_hostname: node.hostname.clone(),
+                my_vram_gb,
+                model_name,
+                model_size_bytes,
+                now_unix_secs: now_ts,
+            },
+        ))
     }
 
+    #[cfg(test)]
     fn derive_local_node_state(
         is_client: bool,
         effective_is_host: bool,
@@ -841,10 +561,12 @@ impl MeshApi {
         }
     }
 
+    #[cfg(test)]
     fn derive_node_status(node_state: NodeState) -> String {
         node_state.node_status_alias().to_string()
     }
 
+    #[cfg(test)]
     fn derive_peer_state(peer: &mesh::PeerInfo) -> NodeState {
         fn has_nonempty_models(models: &[String]) -> bool {
             models.iter().any(|model| !model.trim().is_empty())
@@ -884,6 +606,7 @@ impl MeshApi {
         }
     }
 
+    #[cfg(test)]
     fn build_wakeable_node(entry: WakeableInventoryEntry) -> WakeableNode {
         WakeableNode {
             logical_id: entry.logical_id,
@@ -899,21 +622,15 @@ impl MeshApi {
     }
 
     async fn status(&self) -> StatusPayload {
-        // Snapshot inner fields and drop the lock before any async node queries.
-        // This prevents deadlock: if node.peers() etc. block on node.state.lock(),
-        // we don't hold inner.lock() hostage, so other handlers can still proceed.
         let (
+            runtime_data_collector,
             node,
             node_id,
             token,
             my_vram_gb,
             inflight_requests,
             routing_affinity,
-            routing_metrics,
-            model_name,
             model_size_bytes,
-            llama_ready,
-            is_host,
             is_client,
             api_port,
             draft_name,
@@ -921,25 +638,18 @@ impl MeshApi {
             latest_version,
             nostr_discovery,
             publication_state,
-            local_processes,
-            local_instances_arc,
             wakeable_inventory,
         ) = {
             let inner = self.inner.lock().await;
             (
+                inner.runtime_data_collector.clone(),
                 inner.node.clone(),
                 inner.node.id().fmt_short().to_string(),
                 inner.node.invite_token(),
                 inner.node.vram_bytes() as f64 / 1e9,
                 inner.node.inflight_requests(),
                 inner.affinity_router.stats_snapshot(),
-                // `/api/status` exposes the current node's bounded routing
-                // outcome snapshot only; peers do not publish these counters.
-                inner.node.routing_metrics_snapshot(),
-                inner.model_name.clone(),
                 inner.model_size_bytes,
-                inner.llama_ready,
-                inner.is_host,
                 inner.is_client,
                 inner.api_port,
                 inner.draft_name.clone(),
@@ -947,206 +657,93 @@ impl MeshApi {
                 inner.latest_version.clone(),
                 inner.nostr_discovery,
                 inner.publication_state,
-                inner.local_processes.clone(),
-                inner.local_instances.clone(),
                 inner.wakeable_inventory.clone(),
             )
-        }; // inner lock dropped here
-
-        let local_instances: Vec<LocalInstance> = {
-            let snapshots = local_instances_arc.lock().await;
-            let mut instances: Vec<LocalInstance> = snapshots
-                .iter()
-                .map(|s| LocalInstance {
-                    pid: s.pid,
-                    api_port: s.api_port,
-                    version: s.version.clone(),
-                    started_at_unix: s.started_at_unix,
-                    runtime_dir: s.runtime_dir.to_string_lossy().to_string(),
-                    is_self: s.is_self,
-                })
-                .collect();
-
-            // Safety net: if scanner hasn't run yet, ensure self is always present
-            if instances.is_empty() {
-                instances.push(LocalInstance {
-                    pid: std::process::id(),
-                    api_port: Some(api_port),
-                    version: Some(MESH_LLM_VERSION.to_string()),
-                    started_at_unix: 0, // best-effort; scanner will populate properly
-                    runtime_dir: String::new(),
-                    is_self: true,
-                });
-            }
-
-            instances
         };
+        let runtime_status = runtime_data_collector.runtime_status_snapshot();
+        let model_name = runtime_status.primary_model.unwrap_or_default();
+        let local_processes =
+            runtime_data::runtime_process_payloads(&runtime_status.local_processes);
 
-        let wakeable_nodes = wakeable_inventory
-            .status_snapshot()
-            .await
-            .into_iter()
-            .map(Self::build_wakeable_node)
-            .collect();
-
-        let all_peers = node.peers().await;
-        let local_owner_summary = node.owner_summary().await;
-        let my_models = node.models().await;
-        let my_available_models = node.available_models().await;
-        let my_requested_models = node.requested_models().await;
-        let peers: Vec<PeerPayload> = all_peers
-            .iter()
-            .map(|p| PeerPayload {
-                id: p.id.fmt_short().to_string(),
-                owner: build_ownership_payload(&p.owner_summary),
-                role: match p.role {
-                    mesh::NodeRole::Worker => "Worker".into(),
-                    mesh::NodeRole::Host { .. } => "Host".into(),
-                    mesh::NodeRole::Client => "Client".into(),
-                },
-                state: Self::derive_peer_state(p),
-                models: p.models.clone(),
-                available_models: p.available_models.clone(),
-                requested_models: p.requested_models.clone(),
-                vram_gb: p.vram_bytes as f64 / 1e9,
-                serving_models: p.serving_models.clone(),
-                hosted_models: p.hosted_models.clone(),
-                hosted_models_known: p.hosted_models_known,
-                version: p.version.clone(),
-                rtt_ms: p.rtt_ms,
-                hostname: p.hostname.clone(),
-                is_soc: p.is_soc,
-                gpus: build_gpus(
-                    p.gpu_name.as_deref(),
-                    p.gpu_vram.as_deref(),
-                    p.gpu_reserved_bytes.as_deref(),
-                    p.gpu_mem_bandwidth_gbps.as_deref(),
-                    p.gpu_compute_tflops_fp32.as_deref(),
-                    p.gpu_compute_tflops_fp16.as_deref(),
-                ),
-                first_joined_mesh_ts: p.first_joined_mesh_ts,
+        let wakeable_nodes = wakeable_inventory.status_snapshot().await;
+        let bw_str = {
+            let bw = node.gpu_mem_bandwidth_gbps.lock().await;
+            bw.as_ref().map(|v| {
+                v.iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             })
-            .collect();
-
-        let my_serving_models = node.serving_models().await;
-        let my_hosted_models = node.hosted_models().await;
-        let has_local_processes = !local_processes.is_empty();
-        let effective_llama_ready = llama_ready || has_local_processes;
-        let effective_is_host = is_host || has_local_processes;
-        let display_model_name = local_processes
-            .first()
-            .map(|process| process.name.clone())
-            .or_else(|| my_hosted_models.first().cloned())
-            .or_else(|| my_serving_models.first().cloned())
-            .unwrap_or_else(|| model_name.clone());
-
-        let (launch_pi, launch_goose) = if effective_llama_ready {
-            (
-                Some(format!("pi --provider mesh --model {display_model_name}")),
-                Some(format!("GOOSE_PROVIDER=openai OPENAI_HOST=http://localhost:{api_port} OPENAI_API_KEY=mesh GOOSE_MODEL={display_model_name} goose session")),
-            )
-        } else {
-            (None, None)
+        };
+        let tf32_str = {
+            let tf32 = node.gpu_compute_tflops_fp32.lock().await;
+            tf32.as_ref().map(|v| {
+                v.iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+        };
+        let tf16_str = {
+            let tf16 = node.gpu_compute_tflops_fp16.lock().await;
+            tf16.as_ref().map(|v| {
+                v.iter()
+                    .map(|f| f.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
         };
 
-        let mesh_id = node.mesh_id().await;
-
-        let has_local_worker_activity = has_local_processes || !my_hosted_models.is_empty();
-        let node_state = Self::derive_local_node_state(
-            is_client,
-            effective_is_host,
-            effective_llama_ready,
-            has_local_worker_activity,
-            display_model_name.as_str(),
-        );
-        let node_status = Self::derive_node_status(node_state);
-
-        StatusPayload {
-            version: MESH_LLM_VERSION.to_string(),
-            latest_version,
-            node_id,
-            owner: build_ownership_payload(&local_owner_summary),
-            token,
-            node_state,
-            node_status,
-            is_host: effective_is_host,
-            is_client,
-            llama_ready: effective_llama_ready,
-            model_name: display_model_name,
-            models: my_models,
-            available_models: my_available_models,
-            requested_models: my_requested_models,
-            serving_models: my_serving_models,
-            hosted_models: my_hosted_models,
-            draft_name,
-            api_port,
-            my_vram_gb,
-            model_size_gb: model_size_bytes as f64 / 1e9,
-            peers,
-            wakeable_nodes,
-            local_instances,
-            launch_pi,
-            launch_goose,
-            inflight_requests,
-            mesh_id,
-            mesh_name,
-            nostr_discovery,
-            publication_state: publication_state.as_str().into(),
-            my_hostname: node.hostname.clone(),
-            my_is_soc: node.is_soc,
-            gpus: {
-                let bw_str = {
-                    let bw = node.gpu_mem_bandwidth_gbps.lock().await;
-                    bw.as_ref().map(|v| {
-                        v.iter()
-                            .map(|f| f.to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                };
-                let tf32_str = {
-                    let tf32 = node.gpu_compute_tflops_fp32.lock().await;
-                    tf32.as_ref().map(|v| {
-                        v.iter()
-                            .map(|f| f.to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                };
-                let tf16_str = {
-                    let tf16 = node.gpu_compute_tflops_fp16.lock().await;
-                    tf16.as_ref().map(|v| {
-                        v.iter()
-                            .map(|f| f.to_string())
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                };
-                build_gpus(
-                    node.gpu_name.as_deref(),
-                    node.gpu_vram.as_deref(),
-                    node.gpu_reserved_bytes.as_deref(),
-                    bw_str.as_deref(),
-                    tf32_str.as_deref(),
-                    tf16_str.as_deref(),
-                )
+        runtime_data::status_payload(runtime_data_collector.build_status_view(
+            runtime_data::StatusViewInput {
+                version: MESH_LLM_VERSION.to_string(),
+                latest_version,
+                node_id,
+                owner: node.owner_summary().await,
+                token,
+                is_host: runtime_status.is_host,
+                is_client,
+                llama_ready: runtime_status.llama_ready,
+                model_name,
+                models: node.models().await,
+                available_models: node.available_models().await,
+                requested_models: node.requested_models().await,
+                serving_models: node.serving_models().await,
+                hosted_models: node.hosted_models().await,
+                draft_name,
+                api_port,
+                inflight_requests,
+                mesh_id: node.mesh_id().await,
+                mesh_name,
+                nostr_discovery,
+                publication_state: publication_state.as_str().into(),
+                local_processes,
+                peers: node.peers().await,
+                wakeable_nodes,
+                routing_affinity,
+                hardware: runtime_data_collector.build_hardware_view(
+                    runtime_data::HardwareViewInput {
+                        gpu_name: node.gpu_name.clone(),
+                        gpu_vram: node.gpu_vram.clone(),
+                        gpu_reserved_bytes: node.gpu_reserved_bytes.clone(),
+                        gpu_mem_bandwidth_gbps: bw_str,
+                        gpu_compute_tflops_fp32: tf32_str,
+                        gpu_compute_tflops_fp16: tf16_str,
+                        my_hostname: node.hostname.clone(),
+                        my_is_soc: node.is_soc,
+                        my_vram_gb,
+                        model_size_gb: model_size_bytes as f64 / 1e9,
+                        first_joined_mesh_ts: node.first_joined_mesh_ts().await,
+                    },
+                ),
             },
-            routing_affinity,
-            routing_metrics,
-            first_joined_mesh_ts: node.first_joined_mesh_ts().await,
-        }
+        ))
     }
 
     async fn push_status(&self) {
-        let status = self.status().await;
-        if let Ok(json) = serde_json::to_string(&status) {
-            let event = format!("data: {json}\n\n");
-            let mut inner = self.inner.lock().await;
-            inner.sse_clients.retain(|tx| !tx.is_closed());
-            for tx in &inner.sse_clients {
-                let _ = tx.send(event.clone());
-            }
-        }
+        let mut inner = self.inner.lock().await;
+        inner.runtime_data_producer.mark_status_dirty();
+        inner.sse_clients.retain(|tx| !tx.is_closed());
     }
 }
 
@@ -1184,12 +781,25 @@ pub async fn start(
                     let mut inner = state2.inner.lock().await;
                     inner.llama_ready = true;
                     inner.llama_port = None;
+                    inner
+                        .runtime_data_producer
+                        .publish_runtime_status(|runtime_status| {
+                            let mut changed = false;
+                            if !runtime_status.llama_ready {
+                                runtime_status.llama_ready = true;
+                                changed = true;
+                            }
+                            if runtime_status.llama_port.is_some() {
+                                runtime_status.llama_port = None;
+                                changed = true;
+                            }
+                            changed
+                        });
                 }
                 election::InferenceTarget::None => {
                     state2.set_llama_port(None).await;
                 }
             }
-            state2.push_status().await;
         }
     });
 
@@ -1997,14 +1607,23 @@ mod tests {
         )
         .await
         .unwrap();
-        MeshApi::new(
+        let runtime_data_collector = node.runtime_data_collector();
+        let runtime_data_producer =
+            runtime_data_collector.producer(runtime_data::RuntimeDataSource {
+                scope: "runtime",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
+        MeshApi::new(MeshApiConfig {
             node,
-            "test-model".to_string(),
+            model_name: "test-model".to_string(),
             api_port,
-            0,
+            model_size_bytes: 0,
             plugin_manager,
-            affinity::AffinityRouter::default(),
-        )
+            affinity_router: affinity::AffinityRouter::default(),
+            runtime_data_collector,
+            runtime_data_producer,
+        })
     }
 
     async fn build_test_mesh_api() -> MeshApi {
@@ -2018,14 +1637,23 @@ mod tests {
         let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
             .await
             .unwrap();
-        MeshApi::new(
+        let runtime_data_collector = node.runtime_data_collector();
+        let runtime_data_producer =
+            runtime_data_collector.producer(runtime_data::RuntimeDataSource {
+                scope: "runtime",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
+        MeshApi::new(MeshApiConfig {
             node,
-            "test-model".to_string(),
+            model_name: "test-model".to_string(),
             api_port,
-            0,
+            model_size_bytes: 0,
             plugin_manager,
-            affinity::AffinityRouter::default(),
-        )
+            affinity_router: affinity::AffinityRouter::default(),
+            runtime_data_collector,
+            runtime_data_producer,
+        })
     }
 
     async fn spawn_management_test_server(
@@ -2573,6 +2201,380 @@ mod tests {
         .await;
         let updated_text = String::from_utf8_lossy(&updated);
         assert!(updated_text.contains("\"publication_state\":\"publish_failed\""));
+
+        drop(stream);
+        handle.abort();
+    }
+
+    async fn build_collector_backed_plugin_manager() -> plugin::PluginManager {
+        struct NoopBridge;
+
+        impl plugin::PluginRpcBridge for NoopBridge {
+            fn handle_request(
+                &self,
+                _plugin_name: String,
+                _method: String,
+                _params_json: String,
+            ) -> plugin::BridgeFuture<Result<plugin::RpcResult, crate::plugin::proto::ErrorResponse>>
+            {
+                Box::pin(async {
+                    Err(crate::plugin::proto::ErrorResponse {
+                        code: rmcp::model::ErrorCode::INTERNAL_ERROR.0,
+                        message: "unexpected request".into(),
+                        data_json: String::new(),
+                    })
+                })
+            }
+
+            fn handle_notification(
+                &self,
+                _plugin_name: String,
+                _method: String,
+                _params_json: String,
+            ) -> plugin::BridgeFuture<()> {
+                Box::pin(async {})
+            }
+        }
+
+        let plugin_manager = plugin::PluginManager::for_test_bridge(
+            &["collector-plugin"],
+            std::sync::Arc::new(NoopBridge),
+        );
+        plugin_manager
+            .set_test_manifests(std::collections::BTreeMap::from([(
+                "collector-plugin".into(),
+                crate::plugin::proto::PluginManifest {
+                    capabilities: vec!["chat".into()],
+                    endpoints: vec![crate::plugin::proto::EndpointManifest {
+                        endpoint_id: "chat-http".into(),
+                        kind: crate::plugin::proto::EndpointKind::Inference as i32,
+                        transport_kind:
+                            crate::plugin::proto::EndpointTransportKind::EndpointTransportHttp
+                                as i32,
+                        protocol: Some("openai_compatible".into()),
+                        address: Some("http://127.0.0.1:4010/v1".into()),
+                        args: vec![],
+                        namespace: Some("chat".into()),
+                        supports_streaming: true,
+                        managed_by_plugin: false,
+                    }],
+                    ..Default::default()
+                },
+            )]))
+            .await;
+        plugin_manager
+            .publish_test_bridge_snapshot("collector-plugin")
+            .await
+            .expect("collector-backed plugin manager");
+        plugin_manager
+    }
+
+    pub(crate) async fn runtime_data_api_routes_remain_payload_stable() {
+        let plugin_manager = build_collector_backed_plugin_manager().await;
+        let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
+
+        {
+            let mut inner = state.inner.lock().await;
+            inner.primary_backend = Some("legacy-backend".into());
+            inner.is_host = false;
+            inner.llama_ready = false;
+            inner.llama_port = Some(9999);
+            inner.local_processes = vec![RuntimeProcessPayload {
+                name: "legacy-model".into(),
+                backend: "legacy-backend".into(),
+                status: "ready".into(),
+                port: 9999,
+                pid: 111,
+                slots: 4,
+            }];
+            inner
+                .runtime_data_producer
+                .publish_runtime_status(|runtime_status| {
+                    runtime_status.primary_model = Some("collector-model".into());
+                    runtime_status.primary_backend = Some("collector-backend".into());
+                    runtime_status.is_host = true;
+                    runtime_status.llama_ready = true;
+                    runtime_status.llama_port = Some(9337);
+                    true
+                });
+            inner
+                .runtime_data_producer
+                .publish_local_processes(|local_processes| {
+                    local_processes.clear();
+                    local_processes.push(runtime_data::RuntimeProcessSnapshot {
+                        model: "collector-model".into(),
+                        backend: "collector-backend".into(),
+                        pid: 777,
+                        port: 9337,
+                        slots: 4,
+                        command: Some("llama-server".into()),
+                        state: "ready".into(),
+                        start: Some(1_700_000_000),
+                        health: Some("ready".into()),
+                    });
+                    true
+                });
+            inner.runtime_data_producer.publish_llama_metrics_snapshot(
+                runtime_data::RuntimeLlamaMetricsSnapshot {
+                    status: runtime_data::RuntimeLlamaEndpointStatus::Ready,
+                    last_attempt_unix_ms: Some(1_700_000_001_000),
+                    last_success_unix_ms: Some(1_700_000_001_000),
+                    error: None,
+                    raw_text: Some("llama_requests_processing 2\n".into()),
+                    samples: vec![runtime_data::RuntimeLlamaMetricSample {
+                        name: "llama_requests_processing".into(),
+                        labels: std::collections::BTreeMap::new(),
+                        value: 2.0,
+                    }],
+                },
+            );
+            inner.runtime_data_producer.publish_llama_slots_snapshot(
+                runtime_data::RuntimeLlamaSlotsSnapshot {
+                    status: runtime_data::RuntimeLlamaEndpointStatus::Ready,
+                    last_attempt_unix_ms: Some(1_700_000_001_500),
+                    last_success_unix_ms: Some(1_700_000_001_500),
+                    error: None,
+                    slots: vec![runtime_data::RuntimeLlamaSlotSnapshot {
+                        id: Some(0),
+                        id_task: Some(42),
+                        n_ctx: Some(8192),
+                        speculative: Some(false),
+                        is_processing: Some(true),
+                        next_token: Some(json!({"id": 99})),
+                        params: Some(json!({"temperature": 0.2})),
+                        extra: json!({"state": "busy"}),
+                    }],
+                },
+            );
+        }
+
+        let (status_addr, status_handle) = spawn_management_test_server(state.clone()).await;
+        let status_response = send_management_request(
+            status_addr,
+            "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(status_response.starts_with("HTTP/1.1 200"));
+        let status_body = json_body(&status_response);
+        assert_eq!(status_body["model_name"], json!("collector-model"));
+        assert_eq!(status_body["llama_ready"], json!(true));
+        assert!(status_body.get("mesh_models").is_none());
+        status_handle.abort();
+
+        let (models_addr, models_handle) = spawn_management_test_server(state.clone()).await;
+        let models_response = send_management_request(
+            models_addr,
+            "GET /api/models HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(models_response.starts_with("HTTP/1.1 200"));
+        let models_body = json_body(&models_response);
+        assert!(models_body["mesh_models"].is_array());
+        models_handle.abort();
+
+        let (runtime_addr, runtime_handle) = spawn_management_test_server(state.clone()).await;
+        let runtime_response = send_management_request(
+            runtime_addr,
+            "GET /api/runtime HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(runtime_response.starts_with("HTTP/1.1 200"));
+        let runtime_body = json_body(&runtime_response);
+        assert_eq!(runtime_body["models"][0]["name"], json!("collector-model"));
+        assert_eq!(
+            runtime_body["models"][0]["backend"],
+            json!("collector-backend")
+        );
+        assert_eq!(runtime_body["models"][0]["port"], json!(9337));
+        runtime_handle.abort();
+
+        let (processes_addr, processes_handle) = spawn_management_test_server(state.clone()).await;
+        let processes_response = send_management_request(
+            processes_addr,
+            "GET /api/runtime/processes HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(processes_response.starts_with("HTTP/1.1 200"));
+        let processes_body = json_body(&processes_response);
+        assert_eq!(
+            processes_body["processes"][0]["name"],
+            json!("collector-model")
+        );
+        assert_eq!(
+            processes_body["processes"][0]["backend"],
+            json!("collector-backend")
+        );
+        assert_eq!(processes_body["processes"][0]["port"], json!(9337));
+        assert_eq!(processes_body["processes"][0]["pid"], json!(777));
+        processes_handle.abort();
+
+        let (llama_addr, llama_handle) = spawn_management_test_server(state.clone()).await;
+        let llama_response = send_management_request(
+            llama_addr,
+            "GET /api/runtime/llama HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(llama_response.starts_with("HTTP/1.1 200"));
+        let llama_body = json_body(&llama_response);
+        assert_eq!(llama_body["metrics"]["status"], json!("ready"));
+        assert_eq!(
+            llama_body["metrics"]["samples"][0]["name"],
+            json!("llama_requests_processing")
+        );
+        assert_eq!(
+            llama_body["items"]["metrics"][0]["name"],
+            json!("llama_requests_processing")
+        );
+        assert_eq!(llama_body["slots"]["status"], json!("ready"));
+        assert_eq!(llama_body["slots"]["slots"][0]["id_task"], json!(42));
+        assert_eq!(
+            llama_body["slots"]["slots"][0]["extra"]["state"],
+            json!("busy")
+        );
+        assert_eq!(llama_body["items"]["slots_total"], json!(1));
+        assert_eq!(llama_body["items"]["slots_busy"], json!(1));
+        assert_eq!(llama_body["items"]["slots"][0]["index"], json!(0));
+        assert_eq!(
+            llama_body["items"]["slots"][0]["is_processing"],
+            json!(true)
+        );
+        llama_handle.abort();
+
+        let (endpoints_addr, endpoints_handle) = spawn_management_test_server(state.clone()).await;
+        let endpoints_response = send_management_request(
+            endpoints_addr,
+            "GET /api/runtime/endpoints HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(endpoints_response.starts_with("HTTP/1.1 200"));
+        let endpoints_body = json_body(&endpoints_response);
+        assert_eq!(
+            endpoints_body["endpoints"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            endpoints_body["endpoints"][0]["plugin_name"],
+            json!("collector-plugin")
+        );
+        assert_eq!(
+            endpoints_body["endpoints"][0]["endpoint_id"],
+            json!("chat-http")
+        );
+        endpoints_handle.abort();
+
+        let (plugins_addr, plugins_handle) = spawn_management_test_server(state).await;
+        let plugins_response = send_management_request(
+            plugins_addr,
+            "GET /api/plugins HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(plugins_response.starts_with("HTTP/1.1 200"));
+        let plugins_body = json_body(&plugins_response);
+        assert_eq!(plugins_body.as_array().map(Vec::len), Some(1));
+        assert_eq!(plugins_body[0]["name"], json!("collector-plugin"));
+        assert_eq!(plugins_body[0]["status"], json!("running"));
+        assert_eq!(plugins_body[0]["capabilities"], json!(["chat"]));
+        plugins_handle.abort();
+
+        let state = build_test_mesh_api_with_plugin_manager(
+            3131,
+            build_collector_backed_plugin_manager().await,
+        )
+        .await;
+
+        let (plugin_endpoints_addr, plugin_endpoints_handle) =
+            spawn_management_test_server(state.clone()).await;
+        let plugin_endpoints_response = send_management_request(
+            plugin_endpoints_addr,
+            "GET /api/plugins/endpoints HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(plugin_endpoints_response.starts_with("HTTP/1.1 200"));
+        let plugin_endpoints_body = json_body(&plugin_endpoints_response);
+        assert_eq!(plugin_endpoints_body.as_array().map(Vec::len), Some(1));
+        assert_eq!(
+            plugin_endpoints_body[0]["plugin_name"],
+            json!("collector-plugin")
+        );
+        assert_eq!(plugin_endpoints_body[0]["endpoint_id"], json!("chat-http"));
+        plugin_endpoints_handle.abort();
+
+        let (providers_addr, providers_handle) = spawn_management_test_server(state.clone()).await;
+        let providers_response = send_management_request(
+            providers_addr,
+            "GET /api/plugins/providers HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(providers_response.starts_with("HTTP/1.1 200"));
+        let providers_body = json_body(&providers_response);
+        assert!(providers_body.as_array().is_some());
+        assert!(providers_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["capability"] == json!("chat")));
+        providers_handle.abort();
+
+        let (provider_addr, provider_handle) = spawn_management_test_server(state.clone()).await;
+        let provider_response = send_management_request(
+            provider_addr,
+            "GET /api/plugins/providers/chat HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(provider_response.starts_with("HTTP/1.1 200"));
+        let provider_body = json_body(&provider_response);
+        assert_eq!(provider_body["capability"], json!("chat"));
+        assert_eq!(provider_body["plugin_name"], json!("collector-plugin"));
+        provider_handle.abort();
+
+        let (manifest_addr, manifest_handle) = spawn_management_test_server(state).await;
+        let manifest_response = send_management_request(
+            manifest_addr,
+            "GET /api/plugins/collector-plugin/manifest HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+        )
+        .await;
+        assert!(manifest_response.starts_with("HTTP/1.1 200"));
+        let manifest_body = json_body(&manifest_response);
+        assert_eq!(manifest_body["capabilities"], json!(["chat"]));
+        assert_eq!(manifest_body["endpoints"].as_array().map(Vec::len), Some(1));
+        manifest_handle.abort();
+    }
+
+    pub(crate) async fn runtime_data_sse_bridge_delivers_initial_and_incremental_updates() {
+        let state = build_test_mesh_api().await;
+        let (addr, handle) = spawn_management_test_server(state.clone()).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(b"GET /api/events HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+
+        let initial = read_until_contains(&mut stream, b"data: {", Duration::from_secs(2)).await;
+        let initial_text = String::from_utf8_lossy(&initial);
+        assert!(initial_text.contains("HTTP/1.1 200 OK"));
+        assert!(initial_text.contains("Content-Type: text/event-stream"));
+        assert!(initial_text.contains("\"llama_ready\":false"));
+        assert!(initial_text.contains("\"publication_state\":\"private\""));
+
+        state.update(true, true).await;
+        let runtime_update =
+            read_until_contains(&mut stream, b"\"llama_ready\":true", Duration::from_secs(2)).await;
+        let runtime_update_text = String::from_utf8_lossy(&runtime_update);
+        assert!(runtime_update_text.contains("\"llama_ready\":true"));
+        assert!(runtime_update_text.contains("\"is_host\":true"));
+
+        state
+            .set_publication_state(crate::api::PublicationState::PublishFailed)
+            .await;
+        let publication_update = read_until_contains(
+            &mut stream,
+            b"\"publication_state\":\"publish_failed\"",
+            Duration::from_secs(2),
+        )
+        .await;
+        let publication_update_text = String::from_utf8_lossy(&publication_update);
+        assert!(publication_update_text.contains("\"publication_state\":\"publish_failed\""));
 
         drop(stream);
         handle.abort();
@@ -3714,5 +3716,129 @@ data: [DONE]
             !is_ui_only_route("/v1/chat/completions"),
             "/v1/chat/completions must not be blocked"
         );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::network::affinity;
+    use crate::plugin;
+    use mesh_llm_plugin::MeshVisibility;
+    use tokio::sync::mpsc;
+
+    async fn build_test_mesh_api() -> MeshApi {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let resolved_plugins = plugin::ResolvedPlugins {
+            externals: vec![],
+            inactive: vec![],
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let plugin_manager = plugin::PluginManager::start(
+            &resolved_plugins,
+            plugin::PluginHostMode {
+                mesh_visibility: MeshVisibility::Private,
+            },
+            mesh_tx,
+        )
+        .await
+        .unwrap();
+        let runtime_data_collector = runtime_data::RuntimeDataCollector::new();
+        let runtime_data_producer =
+            runtime_data_collector.producer(runtime_data::RuntimeDataSource {
+                scope: "runtime",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
+
+        MeshApi::new(MeshApiConfig {
+            node,
+            model_name: "legacy-model".to_string(),
+            api_port: 3131,
+            model_size_bytes: 0,
+            plugin_manager,
+            affinity_router: affinity::AffinityRouter::default(),
+            runtime_data_collector,
+            runtime_data_producer,
+        })
+    }
+
+    pub(crate) async fn api_runtime_reads_from_collector_snapshot() {
+        let state = build_test_mesh_api().await;
+
+        {
+            let mut inner = state.inner.lock().await;
+            inner.primary_backend = Some("legacy-backend".into());
+            inner.is_host = false;
+            inner.llama_ready = false;
+            inner.llama_port = Some(9999);
+            inner.local_processes = vec![RuntimeProcessPayload {
+                name: "legacy-model".into(),
+                backend: "legacy-backend".into(),
+                status: "ready".into(),
+                port: 9999,
+                pid: 111,
+                slots: 4,
+            }];
+
+            inner
+                .runtime_data_producer
+                .publish_runtime_status(|runtime_status| {
+                    runtime_status.primary_model = Some("collector-model".into());
+                    runtime_status.primary_backend = Some("collector-backend".into());
+                    runtime_status.is_host = true;
+                    runtime_status.llama_ready = true;
+                    runtime_status.llama_port = Some(9337);
+                    true
+                });
+            inner
+                .runtime_data_producer
+                .publish_local_processes(|local_processes| {
+                    local_processes.clear();
+                    local_processes.push(runtime_data::RuntimeProcessSnapshot {
+                        model: "collector-model".into(),
+                        backend: "collector-backend".into(),
+                        pid: 777,
+                        port: 9337,
+                        slots: 4,
+                        command: Some("llama-server".into()),
+                        state: "ready".into(),
+                        start: Some(1_700_000_000),
+                        health: Some("ready".into()),
+                    });
+                    true
+                });
+        }
+
+        let runtime_status = state.runtime_status().await;
+        assert_eq!(runtime_status.models.len(), 1);
+        assert_eq!(runtime_status.models[0].name, "collector-model");
+        assert_eq!(runtime_status.models[0].backend, "collector-backend");
+        assert_eq!(runtime_status.models[0].status, "ready");
+        assert_eq!(runtime_status.models[0].port, Some(9337));
+
+        let runtime_processes = state.runtime_processes().await;
+        assert_eq!(runtime_processes.processes.len(), 1);
+        assert_eq!(runtime_processes.processes[0].name, "collector-model");
+        assert_eq!(runtime_processes.processes[0].backend, "collector-backend");
+        assert_eq!(runtime_processes.processes[0].status, "ready");
+        assert_eq!(runtime_processes.processes[0].port, 9337);
+        assert_eq!(runtime_processes.processes[0].pid, 777);
+    }
+
+    pub(crate) async fn runtime_data_api_routes_remain_payload_stable() {
+        super::tests::runtime_data_api_routes_remain_payload_stable().await;
+    }
+
+    pub(crate) async fn runtime_data_public_payload_shapes_remain_unchanged() {
+        super::tests::runtime_data_api_routes_remain_payload_stable().await;
+        crate::runtime_data::test_support::runtime_data_status_snapshot_matches_api_payloads();
+        crate::runtime_data::test_support::runtime_data_model_snapshot_matches_api_payloads();
+    }
+
+    pub(crate) async fn runtime_data_sse_bridge_delivers_initial_and_incremental_updates() {
+        super::tests::runtime_data_sse_bridge_delivers_initial_and_incremental_updates().await;
     }
 }

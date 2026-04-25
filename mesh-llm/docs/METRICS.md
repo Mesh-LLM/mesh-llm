@@ -48,6 +48,48 @@ Storage is bounded: 1-hour TTL, maximum 128 tracked models, maximum 16 targets p
 
 All currently implemented metrics are `local-only`. None of them are new gossip or protocol fields.
 
+### `/api/runtime/llama`
+
+Layer: **Information** | Scope: **local-only**
+
+Local llama.cpp runtime diagnostics for the current node. These values are produced next to
+the llama-server process, stored in the runtime-data collector, and exposed to the local API/UI
+so an operator can see whether llama.cpp is reporting metrics and which slots are currently busy.
+They are not gossiped, not protocol fields, and not routing inputs.
+
+Producer flow:
+
+```text
+llama-server /metrics + /slots
+  -> inference runtime poller
+  -> RuntimeDataProducer
+  -> RuntimeDataCollector
+  -> GET /api/runtime/llama
+  -> local UI
+```
+
+The `/metrics` endpoint is Prometheus text owned by llama.cpp, so mesh-llm treats it as a
+local diagnostic source rather than as a stable mesh metric registry. Only explicitly permitted
+metric names and labels are retained as structured `items.metrics`; unknown series are ignored.
+The `/slots` endpoint is normalized into `items.slots` with the original slot array index preserved,
+because index order is how operators can correlate busy/idle state with llama.cpp slot position.
+Both llama.cpp responses are read with explicit byte limits. Raw slot diagnostics are capped to a
+bounded number of entries and large per-slot JSON fragments are replaced with a truncation marker.
+
+| Field(s) | Meaning |
+| --- | --- |
+| `metrics.status`, `slots.status` | Whether the local llama.cpp `/metrics` and `/slots` endpoints are ready, unavailable, or returning errors |
+| `items.metrics[]` | Bounded, permitted metric items derived from llama.cpp Prometheus samples |
+| `items.slots[]` | Slot items preserving original `/slots` array index and busy state |
+| `items.slots_total`, `items.slots_busy` | Bounded local slot activity counts for operator display |
+| `metrics.raw_text` | Truncated local diagnostic text for debugging, not a stable API for routing or peer behavior |
+| `slots.slots[]` | Bounded raw slot diagnostics retained for local debugging; consumers should prefer `items.slots[]` |
+
+Routing clarification: these diagnostics are routing-adjacent only in the sense that a human can use
+them to debug serving health. They are not consumed by routing today. If future routing logic needs
+llama.cpp health, it should consume a separate bounded runtime signal with explicit freshness and
+error semantics, not raw Prometheus samples or slot internals.
+
 ### `/api/status` `routing_metrics`
 
 Layer: **Information** | Scope: **local-only**

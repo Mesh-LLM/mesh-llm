@@ -17,6 +17,8 @@ pub(super) async fn handle(
         ("GET", "/api/status") => handle_status(stream, state).await,
         ("GET", "/api/models") => handle_models(stream, state).await,
         ("GET", "/api/runtime") => handle_runtime_status(stream, state).await,
+        ("GET", "/api/runtime/llama") => handle_runtime_llama(stream, state).await,
+        ("GET", "/api/runtime/events") => handle_runtime_events(stream, state).await,
         ("GET", "/api/runtime/endpoints") => handle_runtime_endpoints(stream, state).await,
         ("GET", "/api/runtime/processes") => handle_runtime_processes(stream, state).await,
         ("POST", "/api/runtime/models") => handle_load_model(stream, state, body).await,
@@ -66,9 +68,80 @@ async fn handle_runtime_processes(stream: &mut TcpStream, state: &MeshApi) -> an
     }
 }
 
+async fn handle_runtime_llama(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), state.runtime_llama()).await {
+        Ok(runtime_llama) => respond_json(stream, 200, &runtime_llama).await,
+        Err(_) => {
+            respond_error(
+                stream,
+                503,
+                "Runtime llama snapshot temporarily unavailable",
+            )
+            .await
+        }
+    }
+}
+
+async fn handle_runtime_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
+    let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nX-Accel-Buffering: no\r\n\r\n";
+    stream.write_all(header.as_bytes()).await?;
+
+    let mut subscription = {
+        state
+            .inner
+            .lock()
+            .await
+            .runtime_data_collector
+            .clone()
+            .subscribe()
+    };
+    let mut last_sent_json = None;
+
+    let runtime_llama = state.runtime_llama().await;
+    if let Ok(json) = serde_json::to_string(&runtime_llama) {
+        stream
+            .write_all(format!("data: {json}\n\n").as_bytes())
+            .await?;
+        last_sent_json = Some(json);
+    }
+
+    loop {
+        tokio::select! {
+            changed = subscription.changed() => {
+                match changed {
+                    Ok(()) => {
+                        let subscription_state = *subscription.borrow_and_update();
+                        if !subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::RUNTIME) {
+                            continue;
+                        }
+                        let runtime_llama = state.runtime_llama().await;
+                        let Ok(json) = serde_json::to_string(&runtime_llama) else {
+                            continue;
+                        };
+                        if last_sent_json.as_deref() == Some(json.as_str()) {
+                            continue;
+                        }
+                        if stream.write_all(format!("data: {json}\n\n").as_bytes()).await.is_err() {
+                            break;
+                        }
+                        last_sent_json = Some(json);
+                    }
+                    Err(_) => break,
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {
+                if stream.write_all(b": keepalive\n\n").await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn handle_runtime_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    match plugin_manager.endpoints().await {
+    match state.runtime_endpoints().await {
         Ok(endpoints) => {
             respond_json(stream, 200, &serde_json::json!({ "endpoints": endpoints })).await
         }
@@ -159,19 +232,40 @@ async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
             .await?;
     }
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    state.inner.lock().await.sse_clients.push(tx);
+    let mut subscription = {
+        state
+            .inner
+            .lock()
+            .await
+            .runtime_data_collector
+            .clone()
+            .subscribe()
+    };
 
     loop {
         tokio::select! {
-            event = rx.recv() => {
-                match event {
-                    Some(data) => {
-                        if stream.write_all(data.as_bytes()).await.is_err() {
+            changed = subscription.changed() => {
+                match changed {
+                    Ok(()) => {
+                        let subscription_state = *subscription.borrow_and_update();
+                        let interesting = subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::STATUS)
+                            || subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::MODELS)
+                            || subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::ROUTING)
+                            || subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::PROCESSES)
+                            || subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::INVENTORY)
+                            || subscription_state.dirty.contains(crate::runtime_data::RuntimeDataDirty::PLUGINS);
+                        if !interesting {
+                            continue;
+                        }
+                        let status = state.status().await;
+                        let Ok(json) = serde_json::to_string(&status) else {
+                            continue;
+                        };
+                        if stream.write_all(format!("data: {json}\n\n").as_bytes()).await.is_err() {
                             break;
                         }
                     }
-                    None => break,
+                    Err(_) => break,
                 }
             }
             _ = tokio::time::sleep(std::time::Duration::from_secs(15)) => {

@@ -2447,6 +2447,13 @@ async fn moe_election_loop(
                     total_group_vram: None,
                     selected_gpu: pinned_gpu.as_ref(),
                     slots,
+                    runtime_data_producer: Some(node.runtime_data_collector().producer(
+                        crate::runtime_data::RuntimeDataSource {
+                            scope: "runtime",
+                            plugin_data_key: None,
+                            plugin_endpoint_key: None,
+                        },
+                    )),
                 },
             )
             .await
@@ -2563,6 +2570,13 @@ async fn moe_election_loop(
                         total_group_vram: None,
                         selected_gpu: pinned_gpu.as_ref(),
                         slots,
+                        runtime_data_producer: Some(node.runtime_data_collector().producer(
+                            crate::runtime_data::RuntimeDataSource {
+                                scope: "runtime",
+                                plugin_data_key: None,
+                                plugin_endpoint_key: None,
+                            },
+                        )),
                     },
                 )
                 .await
@@ -2757,6 +2771,13 @@ async fn moe_election_loop(
                     total_group_vram: None,
                     selected_gpu: pinned_gpu.as_ref(),
                     slots,
+                    runtime_data_producer: Some(node.runtime_data_collector().producer(
+                        crate::runtime_data::RuntimeDataSource {
+                            scope: "runtime",
+                            plugin_data_key: None,
+                            plugin_endpoint_key: None,
+                        },
+                    )),
                 },
             )
             .await
@@ -3141,6 +3162,13 @@ async fn start_llama(
             total_group_vram: group_vram,
             selected_gpu: pinned_gpu,
             slots,
+            runtime_data_producer: Some(node.runtime_data_collector().producer(
+                crate::runtime_data::RuntimeDataSource {
+                    scope: "runtime",
+                    plugin_data_key: None,
+                    plugin_endpoint_key: None,
+                },
+            )),
         },
     )
     .await

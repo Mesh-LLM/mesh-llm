@@ -1013,6 +1013,7 @@ pub struct Node {
     inflight_change_tx: watch::Sender<u64>,
     routing_metrics: crate::network::metrics::RoutingMetrics,
     local_request_metrics: Arc<LocalRequestMetricsSampler>,
+    runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
     tunnel_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
     tunnel_http_tx:
         tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
@@ -1245,6 +1246,8 @@ pub struct InflightRequestGuard {
     inflight_change_tx: watch::Sender<u64>,
     local_request_metrics: Arc<LocalRequestMetricsSampler>,
     started_at: std::time::Instant,
+    routing_metrics: crate::network::metrics::RoutingMetrics,
+    runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
 }
 
 impl Drop for InflightRequestGuard {
@@ -1260,10 +1263,24 @@ impl Drop for InflightRequestGuard {
         );
         self.local_request_metrics
             .record_request_completed(self.started_at);
+        let current_inflight_requests =
+            self.inflight_requests
+                .load(std::sync::atomic::Ordering::Relaxed) as u64;
+        self.runtime_data_producer.publish_routing_snapshot(
+            self.routing_metrics
+                .collector_snapshot(current_inflight_requests),
+        );
     }
 }
 
 impl Node {
+    fn publish_routing_runtime_snapshot(&self) {
+        self.runtime_data_producer.publish_routing_snapshot(
+            self.routing_metrics
+                .collector_snapshot(self.inflight_requests()),
+        );
+    }
+
     pub fn begin_inflight_request(&self) -> InflightRequestGuard {
         self.local_request_metrics.record_request_accepted();
         self.inflight_requests
@@ -1273,11 +1290,14 @@ impl Node {
             .load(std::sync::atomic::Ordering::Relaxed) as u64;
         let _ = self.inflight_change_tx.send(current);
         self.routing_metrics.observe_inflight(current);
+        self.publish_routing_runtime_snapshot();
         InflightRequestGuard {
             inflight_requests: self.inflight_requests.clone(),
             inflight_change_tx: self.inflight_change_tx.clone(),
             local_request_metrics: self.local_request_metrics.clone(),
             started_at: std::time::Instant::now(),
+            routing_metrics: self.routing_metrics.clone(),
+            runtime_data_producer: self.runtime_data_producer.clone(),
         }
     }
 
@@ -1318,6 +1338,7 @@ impl Node {
             outcome,
             completion_tokens,
         );
+        self.publish_routing_runtime_snapshot();
     }
 
     pub fn record_endpoint_attempt(
@@ -1337,6 +1358,7 @@ impl Node {
             outcome,
             completion_tokens,
         );
+        self.publish_routing_runtime_snapshot();
     }
 
     pub fn record_routed_request(
@@ -1347,6 +1369,7 @@ impl Node {
     ) {
         self.routing_metrics
             .record_request(model, attempts, outcome);
+        self.publish_routing_runtime_snapshot();
     }
 
     pub fn routing_metrics_snapshot(
@@ -1364,6 +1387,10 @@ impl Node {
         &self,
     ) -> HashMap<String, crate::network::metrics::ModelRoutingMetricsSnapshot> {
         self.routing_metrics.model_snapshots()
+    }
+
+    pub(crate) fn runtime_data_collector(&self) -> crate::runtime_data::RuntimeDataCollector {
+        self.runtime_data_producer.collector()
     }
 
     pub async fn owner_summary(&self) -> OwnershipSummary {
@@ -1531,6 +1558,13 @@ impl Node {
             crate::runtime::config_state::ConfigState::load(&path)?
         };
         let config_revision_init = config_state_init.revision();
+        let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
+        let runtime_data_producer =
+            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
+                scope: "routing",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
 
         let node = Node {
             endpoint,
@@ -1568,6 +1602,7 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+            runtime_data_producer,
             tunnel_tx,
             tunnel_http_tx,
             plugin_manager: Arc::new(Mutex::new(None)),
@@ -1627,6 +1662,13 @@ impl Node {
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
+        let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
+        let runtime_data_producer =
+            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
+                scope: "routing",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
 
         let _channels = TunnelChannels {
             rpc: tunnel_rx,
@@ -1669,6 +1711,7 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
+            runtime_data_producer,
             tunnel_tx,
             tunnel_http_tx,
             plugin_manager: Arc::new(Mutex::new(None)),

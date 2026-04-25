@@ -92,6 +92,77 @@ export type LocalInstance = {
   is_self: boolean;
 };
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export type LlamaRuntimeEndpointStatus = "ready" | "error" | "unavailable" | string;
+
+export type LlamaRuntimeMetricSample = {
+  name: string;
+  labels?: Record<string, string>;
+  value: number;
+};
+
+export type LlamaRuntimeMetricsPayload = {
+  status: LlamaRuntimeEndpointStatus;
+  last_attempt_unix_ms?: number;
+  last_success_unix_ms?: number;
+  error?: string;
+  raw_text?: string;
+  samples?: LlamaRuntimeMetricSample[];
+};
+
+export type LlamaRuntimeSlotPayload = {
+  id?: number;
+  id_task?: number;
+  n_ctx?: number;
+  speculative?: boolean;
+  is_processing?: boolean;
+  next_token?: JsonValue;
+  params?: JsonValue;
+  extra?: JsonValue;
+};
+
+export type LlamaRuntimeSlotsPayload = {
+  status: LlamaRuntimeEndpointStatus;
+  last_attempt_unix_ms?: number;
+  last_success_unix_ms?: number;
+  error?: string;
+  slots?: LlamaRuntimeSlotPayload[];
+};
+
+export type LlamaRuntimeMetricItem = {
+  name: string;
+  labels?: Record<string, string>;
+  value: number;
+};
+
+export type LlamaRuntimeSlotItem = {
+  index: number;
+  id?: number;
+  id_task?: number;
+  n_ctx?: number;
+  is_processing: boolean;
+};
+
+export type LlamaRuntimeItemsPayload = {
+  metrics: LlamaRuntimeMetricItem[];
+  slots: LlamaRuntimeSlotItem[];
+  slots_total: number;
+  slots_busy: number;
+};
+
+export type LlamaRuntimePayload = {
+  metrics: LlamaRuntimeMetricsPayload;
+  slots: LlamaRuntimeSlotsPayload;
+  items?: LlamaRuntimeItemsPayload;
+};
+
 export type WakeableNode = {
   logical_id: string;
   models: string[];

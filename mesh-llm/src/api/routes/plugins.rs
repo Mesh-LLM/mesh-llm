@@ -52,21 +52,13 @@ pub(super) async fn handle(
 }
 
 async fn handle_list(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    let plugins = plugin_manager.list().await;
-    let json = serde_json::to_string(&plugins)?;
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        json.len(),
-        json
-    );
-    stream.write_all(resp.as_bytes()).await?;
+    let plugins = state.plugins().await;
+    respond_json(stream, 200, &plugins).await?;
     Ok(())
 }
 
 async fn handle_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    match plugin_manager.endpoints().await {
+    match state.runtime_endpoints().await {
         Ok(endpoints) => respond_json(stream, 200, &endpoints).await?,
         Err(err) => respond_error(stream, 500, &err.to_string()).await?,
     }
@@ -74,8 +66,7 @@ async fn handle_endpoints(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Re
 }
 
 async fn handle_providers(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    match plugin_manager.capability_providers().await {
+    match state.plugin_capability_providers().await {
         Ok(providers) => respond_json(stream, 200, &providers).await?,
         Err(err) => respond_error(stream, 500, &err.to_string()).await?,
     }
@@ -91,8 +82,7 @@ async fn handle_provider(
     let capability = urlencoding::decode(capability)
         .map(|value| value.into_owned())
         .unwrap_or_else(|_| capability.to_string());
-    let plugin_manager = state.inner.lock().await.plugin_manager.clone();
-    match plugin_manager.provider_for_capability(&capability).await {
+    match state.plugin_provider_for_capability(&capability).await {
         Ok(Some(provider)) => respond_json(stream, 200, &provider).await?,
         Ok(None) => {
             respond_error(
@@ -564,14 +554,23 @@ mod tests {
 
     async fn build_test_api_with_plugin_manager(plugin_manager: plugin::PluginManager) -> MeshApi {
         let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
-        MeshApi::new(
+        let runtime_data_collector = node.runtime_data_collector();
+        let runtime_data_producer =
+            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
+                scope: "runtime",
+                plugin_data_key: None,
+                plugin_endpoint_key: None,
+            });
+        MeshApi::new(crate::api::MeshApiConfig {
             node,
-            "test-model".into(),
-            3131,
-            0,
+            model_name: "test-model".into(),
+            api_port: 3131,
+            model_size_bytes: 0,
             plugin_manager,
-            affinity::AffinityRouter::default(),
-        )
+            affinity_router: affinity::AffinityRouter::default(),
+            runtime_data_collector,
+            runtime_data_producer,
+        })
     }
 
     #[cfg(unix)]

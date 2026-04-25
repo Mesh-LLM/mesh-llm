@@ -6,6 +6,7 @@ use super::{
     proto, PluginMeshEvent, PluginRpcBridge, PluginSummary, ToolCallResult, ToolSummary,
     CONNECT_TIMEOUT_SECS, PROTOCOL_VERSION, REQUEST_TIMEOUT_SECS,
 };
+use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{bail, Context, Result};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
 use rmcp::model::{InitializeRequestParams, ServerInfo};
@@ -26,6 +27,7 @@ pub(crate) struct ExternalPlugin {
     runtime: Arc<Mutex<Option<PluginRuntime>>>,
     mesh_tx: mpsc::Sender<super::PluginMeshEvent>,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+    runtime_data_producer: RuntimeDataProducer,
     restart_lock: Arc<Mutex<()>>,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
@@ -45,6 +47,7 @@ impl ExternalPlugin {
         host_mode: PluginHostMode,
         mesh_tx: mpsc::Sender<PluginMeshEvent>,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
+        runtime_data_producer: RuntimeDataProducer,
     ) -> Result<Self> {
         let plugin = Self {
             spec: spec.clone(),
@@ -69,6 +72,7 @@ impl ExternalPlugin {
             runtime: Arc::new(Mutex::new(None)),
             mesh_tx,
             rpc_bridge,
+            runtime_data_producer,
             restart_lock: Arc::new(Mutex::new(())),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
@@ -97,6 +101,12 @@ impl ExternalPlugin {
         summary
     }
 
+    async fn publish_summary(&self) {
+        let _ = self
+            .runtime_data_producer
+            .publish_plugin_summary(self.summary().await);
+    }
+
     pub(crate) async fn supervise(&self) -> Result<()> {
         if self.is_disabled().await {
             return Ok(());
@@ -117,6 +127,8 @@ impl ExternalPlugin {
                 let mut summary = self.summary.lock().await;
                 summary.status = "running".into();
                 summary.error = None;
+                drop(summary);
+                self.publish_summary().await;
                 Ok(())
             }
             Some(proto::envelope::Payload::HealthResponse(resp)) => {
@@ -157,6 +169,7 @@ impl ExternalPlugin {
             summary.pid = None;
             summary.error = None;
         }
+        self.publish_summary().await;
 
         let listener = bind_local_listener(&self.instance_id, &self.spec.name).await?;
         let endpoint = listener.endpoint();
@@ -317,6 +330,8 @@ impl ExternalPlugin {
         summary.capabilities = summarize_capabilities(&server_info, &declared_capabilities);
         summary.tools = tools;
         summary.error = None;
+        drop(summary);
+        self.publish_summary().await;
         Ok(())
     }
 
@@ -629,6 +644,8 @@ impl ExternalPlugin {
         summary.status = "restarting".into();
         summary.pid = None;
         summary.error = Some(reason);
+        drop(summary);
+        self.publish_summary().await;
     }
 
     async fn disabled_reason(&self) -> Option<String> {
@@ -677,6 +694,8 @@ impl ExternalPlugin {
         summary.capabilities.clear();
         summary.tools.clear();
         summary.error = Some(reason);
+        drop(summary);
+        self.publish_summary().await;
     }
 }
 

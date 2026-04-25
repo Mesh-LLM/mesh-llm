@@ -4,6 +4,8 @@
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use reqwest::StatusCode;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -423,6 +425,7 @@ pub struct ModelLaunchSpec<'a> {
     /// Number of parallel slots for llama-server (`--parallel`).
     /// Set from the `[[models]].slots` TOML config; defaults to 4 when unset.
     pub slots: usize,
+    pub runtime_data_producer: Option<crate::runtime_data::RuntimeDataProducer>,
 }
 
 pub(crate) const GB: u64 = 1_000_000_000;
@@ -1264,6 +1267,7 @@ pub async fn start_llama_server(
     let total_group_vram = spec.total_group_vram;
     let selected_gpu = spec.selected_gpu;
     let slots = spec.slots;
+    let runtime_data_producer = spec.runtime_data_producer;
     let llama_server = resolve_binary_path(bin_dir, "llama-server", binary_flavor)?;
 
     anyhow::ensure!(model.exists(), "Model not found at {}", model.display());
@@ -1356,6 +1360,7 @@ pub async fn start_llama_server(
         "0.0.0.0".to_string(),
         "--port".to_string(),
         http_port.to_string(),
+        "--metrics".to_string(),
         "-c".to_string(),
         ctx_size.to_string(),
         // Use deepseek format: thinking goes into reasoning_content field.
@@ -1602,6 +1607,14 @@ pub async fn start_llama_server(
             let (death_tx, death_rx) = tokio::sync::oneshot::channel();
             let pidfile_path = runtime.pidfile_path(&format!("llama-server-{}", http_port));
             let launched_model_label = model_label(model);
+            if let Some(runtime_data_producer) = runtime_data_producer {
+                spawn_llama_runtime_poller(
+                    pid,
+                    http_port,
+                    expected_exit.clone(),
+                    runtime_data_producer,
+                );
+            }
             tokio::spawn(async move {
                 let _ = child.wait().await;
                 let _ = std::fs::remove_file(&pidfile_path);
@@ -1775,6 +1788,545 @@ fn command_succeeds(command: &str, args: &[&str]) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+fn spawn_llama_runtime_poller(
+    pid: u32,
+    http_port: u16,
+    expected_exit: Arc<AtomicBool>,
+    runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
+) {
+    tokio::spawn(async move {
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+        {
+            Ok(client) => client,
+            Err(err) => {
+                tracing::warn!(port = http_port, error = %err, "failed to build llama runtime poll client");
+                return;
+            }
+        };
+
+        poll_llama_metrics_once(&client, http_port, &runtime_data_producer).await;
+        poll_llama_slots_once(&client, http_port, &runtime_data_producer).await;
+
+        let mut metrics_interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut slots_interval = tokio::time::interval(std::time::Duration::from_secs(2));
+        metrics_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        slots_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let _ = metrics_interval.tick().await;
+        let _ = slots_interval.tick().await;
+
+        loop {
+            if should_stop_llama_runtime_poller(pid, &expected_exit) {
+                publish_llama_runtime_unavailable(
+                    &runtime_data_producer,
+                    Some("llama-server not running".into()),
+                );
+                break;
+            }
+
+            tokio::select! {
+                _ = metrics_interval.tick() => {
+                    poll_llama_metrics_once(&client, http_port, &runtime_data_producer).await;
+                }
+                _ = slots_interval.tick() => {
+                    poll_llama_slots_once(&client, http_port, &runtime_data_producer).await;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_millis(500)) => {}
+            }
+        }
+    });
+}
+
+fn should_stop_llama_runtime_poller(pid: u32, expected_exit: &AtomicBool) -> bool {
+    expected_exit.load(Ordering::Relaxed)
+        || crate::runtime::instance::validate::process_liveness(pid)
+            == crate::runtime::instance::validate::Liveness::Dead
+}
+
+pub(crate) async fn poll_llama_metrics_once(
+    client: &reqwest::Client,
+    http_port: u16,
+    runtime_data_producer: &crate::runtime_data::RuntimeDataProducer,
+) {
+    let url = format!("http://127.0.0.1:{http_port}/metrics");
+    let attempted_at = now_unix_ms();
+    let snapshot = match client.get(&url).send().await {
+        Ok(response) => {
+            let status = response.status();
+            if !status.is_success() {
+                let current = runtime_data_producer
+                    .collector()
+                    .runtime_llama_snapshot()
+                    .metrics;
+                runtime_metrics_failure_snapshot(
+                    classify_runtime_endpoint_status(status),
+                    attempted_at,
+                    Some(format!("HTTP {}", status.as_u16())),
+                    current,
+                )
+            } else {
+                match read_limited_response_text(response, LLAMA_METRICS_RESPONSE_MAX_BYTES).await {
+                    Ok(raw_text) => crate::runtime_data::RuntimeLlamaMetricsSnapshot {
+                        status: crate::runtime_data::RuntimeLlamaEndpointStatus::Ready,
+                        last_attempt_unix_ms: Some(attempted_at),
+                        last_success_unix_ms: Some(attempted_at),
+                        error: None,
+                        raw_text: Some(permitted_llama_metrics_raw_text(&raw_text)),
+                        samples: parse_prometheus_samples(&raw_text),
+                    },
+                    Err(err) => {
+                        let current = runtime_data_producer
+                            .collector()
+                            .runtime_llama_snapshot()
+                            .metrics;
+                        runtime_metrics_failure_snapshot(
+                            crate::runtime_data::RuntimeLlamaEndpointStatus::Error,
+                            attempted_at,
+                            Some(err),
+                            current,
+                        )
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            let current = runtime_data_producer
+                .collector()
+                .runtime_llama_snapshot()
+                .metrics;
+            runtime_metrics_failure_snapshot(
+                crate::runtime_data::RuntimeLlamaEndpointStatus::Unavailable,
+                attempted_at,
+                Some(err.to_string()),
+                current,
+            )
+        }
+    };
+
+    if snapshot.status != crate::runtime_data::RuntimeLlamaEndpointStatus::Ready {
+        tracing::debug!(port = http_port, error = ?snapshot.error, "llama /metrics polling unavailable");
+    }
+    runtime_data_producer.publish_llama_metrics_snapshot(snapshot);
+}
+
+pub(crate) async fn poll_llama_slots_once(
+    client: &reqwest::Client,
+    http_port: u16,
+    runtime_data_producer: &crate::runtime_data::RuntimeDataProducer,
+) {
+    let url = format!("http://127.0.0.1:{http_port}/slots");
+    let attempted_at = now_unix_ms();
+    let snapshot = match client.get(&url).send().await {
+        Ok(response) => {
+            let status = response.status();
+            if !status.is_success() {
+                let current = runtime_data_producer
+                    .collector()
+                    .runtime_llama_snapshot()
+                    .slots;
+                runtime_slots_failure_snapshot(
+                    classify_runtime_endpoint_status(status),
+                    attempted_at,
+                    Some(format!("HTTP {}", status.as_u16())),
+                    current,
+                )
+            } else {
+                match read_limited_response_json(response, LLAMA_SLOTS_RESPONSE_MAX_BYTES).await {
+                    Ok(json) => match parse_llama_slots(&json) {
+                        Ok(slots) => crate::runtime_data::RuntimeLlamaSlotsSnapshot {
+                            status: crate::runtime_data::RuntimeLlamaEndpointStatus::Ready,
+                            last_attempt_unix_ms: Some(attempted_at),
+                            last_success_unix_ms: Some(attempted_at),
+                            error: None,
+                            slots,
+                        },
+                        Err(err) => {
+                            let current = runtime_data_producer
+                                .collector()
+                                .runtime_llama_snapshot()
+                                .slots;
+                            runtime_slots_failure_snapshot(
+                                crate::runtime_data::RuntimeLlamaEndpointStatus::Error,
+                                attempted_at,
+                                Some(err),
+                                current,
+                            )
+                        }
+                    },
+                    Err(err) => {
+                        let current = runtime_data_producer
+                            .collector()
+                            .runtime_llama_snapshot()
+                            .slots;
+                        runtime_slots_failure_snapshot(
+                            crate::runtime_data::RuntimeLlamaEndpointStatus::Error,
+                            attempted_at,
+                            Some(err.to_string()),
+                            current,
+                        )
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            let current = runtime_data_producer
+                .collector()
+                .runtime_llama_snapshot()
+                .slots;
+            runtime_slots_failure_snapshot(
+                crate::runtime_data::RuntimeLlamaEndpointStatus::Unavailable,
+                attempted_at,
+                Some(err.to_string()),
+                current,
+            )
+        }
+    };
+
+    if snapshot.status != crate::runtime_data::RuntimeLlamaEndpointStatus::Ready {
+        tracing::debug!(port = http_port, error = ?snapshot.error, "llama /slots polling unavailable");
+    }
+    runtime_data_producer.publish_llama_slots_snapshot(snapshot);
+}
+
+fn publish_llama_runtime_unavailable(
+    runtime_data_producer: &crate::runtime_data::RuntimeDataProducer,
+    error: Option<String>,
+) {
+    let now = now_unix_ms();
+    let current = runtime_data_producer.collector().runtime_llama_snapshot();
+    runtime_data_producer.publish_llama_metrics_snapshot(runtime_metrics_failure_snapshot(
+        crate::runtime_data::RuntimeLlamaEndpointStatus::Unavailable,
+        now,
+        error.clone(),
+        current.metrics,
+    ));
+    runtime_data_producer.publish_llama_slots_snapshot(runtime_slots_failure_snapshot(
+        crate::runtime_data::RuntimeLlamaEndpointStatus::Unavailable,
+        now,
+        error,
+        current.slots,
+    ));
+}
+
+fn runtime_metrics_failure_snapshot(
+    status: crate::runtime_data::RuntimeLlamaEndpointStatus,
+    attempted_at: u64,
+    error: Option<String>,
+    current: crate::runtime_data::RuntimeLlamaMetricsSnapshot,
+) -> crate::runtime_data::RuntimeLlamaMetricsSnapshot {
+    crate::runtime_data::RuntimeLlamaMetricsSnapshot {
+        status,
+        last_attempt_unix_ms: Some(attempted_at),
+        last_success_unix_ms: current.last_success_unix_ms,
+        error,
+        raw_text: current.raw_text,
+        samples: current.samples,
+    }
+}
+
+fn runtime_slots_failure_snapshot(
+    status: crate::runtime_data::RuntimeLlamaEndpointStatus,
+    attempted_at: u64,
+    error: Option<String>,
+    current: crate::runtime_data::RuntimeLlamaSlotsSnapshot,
+) -> crate::runtime_data::RuntimeLlamaSlotsSnapshot {
+    crate::runtime_data::RuntimeLlamaSlotsSnapshot {
+        status,
+        last_attempt_unix_ms: Some(attempted_at),
+        last_success_unix_ms: current.last_success_unix_ms,
+        error,
+        slots: current.slots,
+    }
+}
+
+fn classify_runtime_endpoint_status(
+    status: StatusCode,
+) -> crate::runtime_data::RuntimeLlamaEndpointStatus {
+    match status {
+        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED => {
+            crate::runtime_data::RuntimeLlamaEndpointStatus::Unavailable
+        }
+        _ => crate::runtime_data::RuntimeLlamaEndpointStatus::Error,
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+const LLAMA_METRICS_RESPONSE_MAX_BYTES: usize = 128 * 1024;
+const LLAMA_METRICS_RAW_TEXT_MAX_BYTES: usize = 64 * 1024;
+const LLAMA_METRICS_MAX_SAMPLES: usize = 32;
+const LLAMA_METRICS_MAX_LABELS: usize = 8;
+const LLAMA_METRICS_MAX_LABEL_BYTES: usize = 96;
+const LLAMA_SLOTS_RESPONSE_MAX_BYTES: usize = 128 * 1024;
+const LLAMA_SLOTS_MAX_ENTRIES: usize = 64;
+const LLAMA_SLOT_JSON_MAX_BYTES: usize = 4 * 1024;
+
+struct LlamaMetricPermit {
+    name: &'static str,
+    labels: &'static [&'static str],
+}
+
+const LLAMA_METRIC_PERMITS: &[LlamaMetricPermit] = &[
+    LlamaMetricPermit {
+        name: "llama_requests_processing",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llama_requests_deferred",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llama_prompt_tokens_total",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llama_tokens_predicted_total",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llama_prompt_tokens_seconds",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llama_tokens_predicted_seconds",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llama_slot_tokens",
+        labels: &["slot", "state"],
+    },
+    LlamaMetricPermit {
+        name: "llamacpp:requests_processing",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llamacpp:requests_deferred",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llamacpp:prompt_tokens_total",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llamacpp:tokens_predicted_total",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llamacpp:prompt_tokens_seconds",
+        labels: &[],
+    },
+    LlamaMetricPermit {
+        name: "llamacpp:tokens_predicted_seconds",
+        labels: &[],
+    },
+];
+
+fn permitted_llama_metrics_raw_text(raw_text: &str) -> String {
+    if raw_text.len() <= LLAMA_METRICS_RAW_TEXT_MAX_BYTES {
+        return raw_text.to_string();
+    }
+
+    let mut end = LLAMA_METRICS_RAW_TEXT_MAX_BYTES;
+    while !raw_text.is_char_boundary(end) {
+        end -= 1;
+    }
+    raw_text[..end].to_string()
+}
+
+async fn read_limited_response_json(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, String> {
+    let text = read_limited_response_text(response, max_bytes).await?;
+    serde_json::from_str(&text).map_err(|err| err.to_string())
+}
+
+async fn read_limited_response_text(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, String> {
+    if response
+        .content_length()
+        .is_some_and(|content_length| content_length > max_bytes as u64)
+    {
+        return Err(format!("response body exceeds {max_bytes} byte limit"));
+    }
+
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|err| err.to_string())? {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(format!("response body exceeds {max_bytes} byte limit"));
+        }
+        body.extend_from_slice(&chunk);
+    }
+
+    String::from_utf8(body).map_err(|err| err.to_string())
+}
+
+pub(crate) fn parse_prometheus_samples(
+    raw_text: &str,
+) -> Vec<crate::runtime_data::RuntimeLlamaMetricSample> {
+    raw_text
+        .lines()
+        .filter_map(parse_prometheus_sample_line)
+        .filter_map(permit_llama_metric_sample)
+        .take(LLAMA_METRICS_MAX_SAMPLES)
+        .collect()
+}
+
+fn permit_llama_metric_sample(
+    mut sample: crate::runtime_data::RuntimeLlamaMetricSample,
+) -> Option<crate::runtime_data::RuntimeLlamaMetricSample> {
+    let permit = LLAMA_METRIC_PERMITS
+        .iter()
+        .find(|permit| permit.name == sample.name)?;
+    sample.labels.retain(|key, value| {
+        permit.labels.contains(&key.as_str())
+            && key.len() <= LLAMA_METRICS_MAX_LABEL_BYTES
+            && value.len() <= LLAMA_METRICS_MAX_LABEL_BYTES
+    });
+    if sample.labels.len() > LLAMA_METRICS_MAX_LABELS {
+        sample.labels = sample
+            .labels
+            .into_iter()
+            .take(LLAMA_METRICS_MAX_LABELS)
+            .collect();
+    }
+    Some(sample)
+}
+
+fn parse_prometheus_sample_line(
+    line: &str,
+) -> Option<crate::runtime_data::RuntimeLlamaMetricSample> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let metric = parts.next()?;
+    let value_text = parts.next()?;
+    let value = parse_prometheus_value(value_text)?;
+    let (name, labels) = parse_prometheus_metric_and_labels(metric)?;
+    Some(crate::runtime_data::RuntimeLlamaMetricSample {
+        name,
+        labels,
+        value,
+    })
+}
+
+fn parse_prometheus_value(value: &str) -> Option<f64> {
+    match value {
+        "+Inf" | "Inf" => Some(f64::INFINITY),
+        "-Inf" => Some(f64::NEG_INFINITY),
+        "NaN" => Some(f64::NAN),
+        _ => value.parse::<f64>().ok(),
+    }
+}
+
+fn parse_prometheus_metric_and_labels(
+    metric: &str,
+) -> Option<(String, std::collections::BTreeMap<String, String>)> {
+    if let Some((name, rest)) = metric.split_once('{') {
+        let labels_text = rest.strip_suffix('}')?;
+        Some((name.to_string(), parse_prometheus_labels(labels_text)?))
+    } else {
+        Some((metric.to_string(), std::collections::BTreeMap::new()))
+    }
+}
+
+fn parse_prometheus_labels(labels: &str) -> Option<std::collections::BTreeMap<String, String>> {
+    let mut map = std::collections::BTreeMap::new();
+    if labels.trim().is_empty() {
+        return Some(map);
+    }
+    for pair in labels.split(',') {
+        let (key, raw_value) = pair.split_once('=')?;
+        let value = raw_value.trim().strip_prefix('"')?.strip_suffix('"')?;
+        map.insert(key.trim().to_string(), value.replace(r#"\""#, r#"""#));
+    }
+    Some(map)
+}
+
+pub(crate) fn parse_llama_slots(
+    json: &Value,
+) -> Result<Vec<crate::runtime_data::RuntimeLlamaSlotSnapshot>, String> {
+    let entries = json
+        .as_array()
+        .ok_or_else(|| "expected /slots JSON array".to_string())?;
+    entries
+        .iter()
+        .take(LLAMA_SLOTS_MAX_ENTRIES)
+        .map(parse_llama_slot_entry)
+        .collect()
+}
+
+fn parse_llama_slot_entry(
+    value: &Value,
+) -> Result<crate::runtime_data::RuntimeLlamaSlotSnapshot, String> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| "expected /slots entry object".to_string())?;
+    let mut extra = object.clone();
+    let id = parse_u64_field(&mut extra, "id");
+    let id_task = parse_u64_field(&mut extra, "id_task");
+    let n_ctx = parse_u64_field(&mut extra, "n_ctx");
+    let speculative = parse_bool_field(&mut extra, "speculative");
+    let is_processing = parse_bool_field(&mut extra, "is_processing");
+    let next_token = extra
+        .remove("next_token")
+        .map(|value| bounded_slot_json_value(value, LLAMA_SLOT_JSON_MAX_BYTES));
+    let params = extra
+        .remove("params")
+        .map(|value| bounded_slot_json_value(value, LLAMA_SLOT_JSON_MAX_BYTES));
+    let extra = bounded_slot_json_value(Value::Object(extra), LLAMA_SLOT_JSON_MAX_BYTES);
+    Ok(crate::runtime_data::RuntimeLlamaSlotSnapshot {
+        id,
+        id_task,
+        n_ctx,
+        speculative,
+        is_processing,
+        next_token,
+        params,
+        extra,
+    })
+}
+
+fn bounded_slot_json_value(value: Value, max_bytes: usize) -> Value {
+    match serde_json::to_vec(&value) {
+        Ok(encoded) if encoded.len() <= max_bytes => value,
+        _ => Value::String("[truncated]".to_string()),
+    }
+}
+
+fn parse_u64_field(map: &mut serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    map.remove(key).and_then(|value| match value {
+        Value::Number(number) => number
+            .as_u64()
+            .or_else(|| number.as_i64().and_then(|v| u64::try_from(v).ok())),
+        Value::String(text) => text.parse::<u64>().ok(),
+        _ => None,
+    })
+}
+
+fn parse_bool_field(map: &mut serde_json::Map<String, Value>, key: &str) -> Option<bool> {
+    map.remove(key).and_then(|value| match value {
+        Value::Bool(flag) => Some(flag),
+        Value::Number(number) => number.as_u64().map(|v| v != 0),
+        Value::String(text) => match text.trim() {
+            "true" | "1" => Some(true),
+            "false" | "0" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 /// Simple HTTP health check (avoid adding reqwest as a dep — just use TCP + raw HTTP)
@@ -2385,6 +2937,7 @@ No devices found
             total_group_vram: None,
             selected_gpu: None,
             slots: 8, // ← compile-time check: field must exist and be accessible
+            runtime_data_producer: None,
         };
     }
 
@@ -2412,6 +2965,7 @@ No devices found
             total_group_vram: Some(96_000_000_000u64),
             selected_gpu: None,
             slots: 16, // non-default value from TOML config
+            runtime_data_producer: None,
         };
         assert_eq!(spec.slots, 16);
     }
@@ -2440,6 +2994,7 @@ No devices found
             total_group_vram: None,
             selected_gpu: None,
             slots: 32,
+            runtime_data_producer: None,
         };
 
         // Destructure exactly as start_llama_server does it (lines ~1078-1091)
@@ -2485,6 +3040,7 @@ No devices found
             total_group_vram: None,
             selected_gpu: None,
             slots: 4, // explicit default from TOML config fallback
+            runtime_data_producer: None,
         };
         assert_eq!(good_spec.slots, 4);
     }

@@ -5,6 +5,9 @@ pub(crate) mod stapler;
 mod support;
 mod transport;
 
+use crate::runtime_data::{
+    PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
+};
 use anyhow::{anyhow, bail, Context, Result};
 pub use mesh_llm_plugin::proto;
 use rmcp::model::ServerInfo;
@@ -68,7 +71,7 @@ pub enum PluginMeshEvent {
     },
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct ToolSummary {
     pub name: String,
     pub description: String,
@@ -108,7 +111,7 @@ pub trait PluginRpcBridge: Send + Sync {
     ) -> BridgeFuture<()>;
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginSummary {
     pub name: String,
     pub kind: String,
@@ -132,7 +135,7 @@ pub struct PluginSummary {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginManifestOverview {
     pub operations: usize,
     pub resources: usize,
@@ -147,7 +150,7 @@ pub struct PluginManifestOverview {
     pub capabilities: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginEndpointSummary {
     pub plugin_name: String,
     pub plugin_status: String,
@@ -172,7 +175,7 @@ pub struct PluginEndpointSummary {
     pub models: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub struct PluginCapabilityProvider {
     pub capability: String,
     pub plugin_name: String,
@@ -216,6 +219,7 @@ struct PluginManagerInner {
     plugins: BTreeMap<String, ExternalPlugin>,
     inactive: BTreeMap<String, PluginSummary>,
     endpoint_health: Arc<Mutex<BTreeMap<String, EndpointHealthState>>>,
+    runtime_data: RuntimeDataCollector,
     rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
     shutting_down: AtomicBool,
     #[cfg(test)]
@@ -253,6 +257,7 @@ impl PluginManager {
         }
 
         let rpc_bridge = Arc::new(Mutex::new(None));
+        let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
         let mut plugins = BTreeMap::new();
         for spec in &specs.externals {
@@ -268,6 +273,14 @@ impl PluginManager {
                 host_mode,
                 mesh_tx.clone(),
                 rpc_bridge.clone(),
+                runtime_data.producer(RuntimeDataSource {
+                    scope: "plugin",
+                    plugin_data_key: Some(PluginDataKey {
+                        plugin_name: spec.name.clone(),
+                        data_key: "summary".into(),
+                    }),
+                    plugin_endpoint_key: None,
+                }),
             )
             .await
             {
@@ -301,6 +314,7 @@ impl PluginManager {
                     .map(|summary| (summary.name.clone(), summary))
                     .collect(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                runtime_data,
                 rpc_bridge,
                 shutting_down: AtomicBool::new(false),
                 #[cfg(test)]
@@ -315,6 +329,15 @@ impl PluginManager {
                 test_stream_handlers: Arc::new(Mutex::new(BTreeMap::new())),
             }),
         };
+        for summary in manager.inner.inactive.values().cloned() {
+            manager.publish_plugin_summary(&summary);
+            manager.publish_plugin_manifest(&summary.name, None);
+            manager.publish_plugin_providers(&summary.name, Vec::new());
+        }
+        let plugin_names = manager.inner.plugins.keys().cloned().collect::<Vec<_>>();
+        for plugin_name in plugin_names {
+            manager.refresh_plugin_endpoints(&plugin_name).await?;
+        }
         manager.start_supervisor();
         Ok(manager)
     }
@@ -326,6 +349,7 @@ impl PluginManager {
                 plugins: BTreeMap::new(),
                 inactive: BTreeMap::new(),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
+                runtime_data: RuntimeDataCollector::new(),
                 rpc_bridge: Arc::new(Mutex::new(Some(bridge))),
                 shutting_down: AtomicBool::new(false),
                 bridged_plugins: plugin_names
@@ -338,6 +362,56 @@ impl PluginManager {
                 test_stream_handlers: Arc::new(Mutex::new(BTreeMap::new())),
             }),
         }
+    }
+
+    fn plugin_summary_producer(
+        &self,
+        plugin_name: &str,
+    ) -> crate::runtime_data::RuntimeDataProducer {
+        self.inner.runtime_data.producer(RuntimeDataSource {
+            scope: "plugin",
+            plugin_data_key: Some(PluginDataKey {
+                plugin_name: plugin_name.to_string(),
+                data_key: "summary".into(),
+            }),
+            plugin_endpoint_key: None,
+        })
+    }
+
+    fn plugin_endpoint_producer(
+        &self,
+        plugin_name: &str,
+        endpoint_id: &str,
+    ) -> crate::runtime_data::RuntimeDataProducer {
+        self.inner.runtime_data.producer(RuntimeDataSource {
+            scope: "plugin",
+            plugin_data_key: None,
+            plugin_endpoint_key: Some(PluginEndpointKey {
+                plugin_name: plugin_name.to_string(),
+                endpoint_id: endpoint_id.to_string(),
+            }),
+        })
+    }
+
+    fn publish_plugin_summary(&self, summary: &PluginSummary) {
+        self.plugin_summary_producer(&summary.name)
+            .publish_plugin_summary(summary.clone());
+    }
+
+    fn publish_plugin_manifest(&self, plugin_name: &str, manifest: Option<PluginManifestOverview>) {
+        if let Some(manifest) = manifest {
+            self.plugin_summary_producer(plugin_name)
+                .publish_plugin_manifest(manifest);
+        }
+    }
+
+    fn publish_plugin_providers(
+        &self,
+        plugin_name: &str,
+        providers: Vec<PluginCapabilityProvider>,
+    ) {
+        self.plugin_summary_producer(plugin_name)
+            .publish_plugin_providers(providers);
     }
 
     pub async fn list(&self) -> Vec<PluginSummary> {
@@ -365,6 +439,11 @@ impl PluginManager {
                 summaries.sort_by(|a, b| a.name.cmp(&b.name));
                 return summaries;
             }
+        }
+        let mut summaries = self.inner.runtime_data.plugins_snapshot().plugins;
+        if !summaries.is_empty() {
+            summaries.sort_by(|a, b| a.name.cmp(&b.name));
+            return summaries;
         }
         let mut summaries =
             Vec::with_capacity(self.inner.plugins.len() + self.inner.inactive.len());
@@ -397,44 +476,7 @@ impl PluginManager {
                 return Ok(endpoints);
             }
         }
-        let summaries = self.list().await;
-        let endpoint_health = self.inner.endpoint_health.lock().await.clone();
-        let mut endpoints = Vec::new();
-        for summary in summaries {
-            let Ok(Some(manifest)) = self.manifest(&summary.name).await else {
-                continue;
-            };
-            for endpoint in manifest.endpoints {
-                let health = endpoint_health
-                    .get(&endpoint_key(&summary.name, &endpoint.endpoint_id))
-                    .map(|state| state.record.clone())
-                    .unwrap_or_else(|| endpoint_record_from_plugin_status(&summary));
-                endpoints.push(PluginEndpointSummary {
-                    plugin_name: summary.name.clone(),
-                    plugin_status: summary.status.clone(),
-                    endpoint_id: endpoint.endpoint_id,
-                    state: health.state,
-                    available: health.available,
-                    kind: endpoint_kind_name(endpoint.kind).to_string(),
-                    transport_kind: endpoint_transport_kind_name(endpoint.transport_kind)
-                        .to_string(),
-                    protocol: endpoint.protocol,
-                    address: endpoint.address,
-                    args: endpoint.args,
-                    namespace: endpoint.namespace,
-                    supports_streaming: endpoint.supports_streaming,
-                    managed_by_plugin: endpoint.managed_by_plugin,
-                    detail: health.detail,
-                    models: health.models,
-                });
-            }
-        }
-        endpoints.sort_by(|a, b| {
-            a.plugin_name
-                .cmp(&b.plugin_name)
-                .then_with(|| a.endpoint_id.cmp(&b.endpoint_id))
-        });
-        Ok(endpoints)
+        Ok(self.inner.runtime_data.plugins_snapshot().endpoints)
     }
 
     #[cfg(test)]
@@ -449,7 +491,92 @@ impl PluginManager {
 
     #[cfg(test)]
     pub async fn set_test_manifests(&self, manifests: BTreeMap<String, proto::PluginManifest>) {
+        let plugin_names = manifests.keys().cloned().collect::<Vec<_>>();
         *self.inner.test_manifests.lock().await = manifests;
+        for plugin_name in plugin_names {
+            let _ = self.publish_test_bridge_snapshot(&plugin_name).await;
+        }
+    }
+
+    #[cfg(test)]
+    pub async fn publish_test_bridge_snapshot(&self, plugin_name: &str) -> Result<()> {
+        let manifest = self
+            .inner
+            .test_manifests
+            .lock()
+            .await
+            .get(plugin_name)
+            .cloned()
+            .with_context(|| format!("Unknown test bridge plugin '{plugin_name}'"))?;
+
+        let summary = PluginSummary {
+            name: plugin_name.to_string(),
+            kind: "bridge".into(),
+            enabled: true,
+            status: "running".into(),
+            version: None,
+            capabilities: manifest.capabilities.clone(),
+            command: None,
+            args: Vec::new(),
+            tools: Vec::new(),
+            manifest: Some(plugin_manifest_overview(&manifest)),
+            error: None,
+        };
+        self.publish_plugin_summary(&summary);
+        self.publish_plugin_manifest(plugin_name, summary.manifest.clone());
+        let plugin_default = endpoint_record_from_plugin_status(&summary);
+
+        let endpoint_summaries = manifest
+            .endpoints
+            .iter()
+            .map(|endpoint| PluginEndpointSummary {
+                plugin_name: plugin_name.to_string(),
+                plugin_status: summary.status.clone(),
+                endpoint_id: endpoint.endpoint_id.clone(),
+                state: "configured".into(),
+                available: false,
+                kind: endpoint_kind_name(endpoint.kind).to_string(),
+                transport_kind: endpoint_transport_kind_name(endpoint.transport_kind).to_string(),
+                protocol: endpoint.protocol.clone(),
+                address: endpoint.address.clone(),
+                args: endpoint.args.clone(),
+                namespace: endpoint.namespace.clone(),
+                supports_streaming: endpoint.supports_streaming,
+                managed_by_plugin: endpoint.managed_by_plugin,
+                detail: None,
+                models: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let mut providers = manifest
+            .capabilities
+            .iter()
+            .map(|capability| PluginCapabilityProvider {
+                capability: capability.clone(),
+                plugin_name: plugin_name.to_string(),
+                plugin_status: summary.status.clone(),
+                endpoint_id: None,
+                available: plugin_default.available,
+                detail: plugin_default.detail.clone(),
+            })
+            .collect::<Vec<_>>();
+        for endpoint in &manifest.endpoints {
+            for capability in endpoint_declared_capabilities(endpoint) {
+                providers.push(PluginCapabilityProvider {
+                    capability,
+                    plugin_name: plugin_name.to_string(),
+                    plugin_status: summary.status.clone(),
+                    endpoint_id: Some(endpoint.endpoint_id.clone()),
+                    available: false,
+                    detail: None,
+                });
+            }
+        }
+        self.publish_plugin_providers(plugin_name, providers);
+        for endpoint_summary in endpoint_summaries {
+            self.plugin_endpoint_producer(plugin_name, &endpoint_summary.endpoint_id)
+                .publish_plugin_endpoint(endpoint_summary);
+        }
+        Ok(())
     }
 
     pub async fn tools(&self, name: &str) -> Result<Vec<ToolSummary>> {
@@ -550,51 +677,7 @@ impl PluginManager {
     }
 
     pub async fn capability_providers(&self) -> Result<Vec<PluginCapabilityProvider>> {
-        let summaries = self.list().await;
-        let endpoint_health = self.inner.endpoint_health.lock().await.clone();
-        let mut providers = Vec::new();
-        for summary in summaries {
-            let Ok(Some(manifest)) = self.manifest(&summary.name).await else {
-                continue;
-            };
-
-            let plugin_default = endpoint_record_from_plugin_status(&summary);
-            for capability in &manifest.capabilities {
-                providers.push(PluginCapabilityProvider {
-                    capability: capability.clone(),
-                    plugin_name: summary.name.clone(),
-                    plugin_status: summary.status.clone(),
-                    endpoint_id: None,
-                    available: plugin_default.available,
-                    detail: plugin_default.detail.clone(),
-                });
-            }
-
-            for endpoint in &manifest.endpoints {
-                let health = endpoint_health
-                    .get(&endpoint_key(&summary.name, &endpoint.endpoint_id))
-                    .map(|state| state.record.clone())
-                    .unwrap_or_else(|| endpoint_record_from_plugin_status(&summary));
-                let endpoint_capabilities = endpoint_declared_capabilities(endpoint);
-                for capability in endpoint_capabilities {
-                    providers.push(PluginCapabilityProvider {
-                        capability,
-                        plugin_name: summary.name.clone(),
-                        plugin_status: summary.status.clone(),
-                        endpoint_id: Some(endpoint.endpoint_id.clone()),
-                        available: health.available,
-                        detail: health.detail.clone(),
-                    });
-                }
-            }
-        }
-        providers.sort_by(|a, b| {
-            a.capability
-                .cmp(&b.capability)
-                .then_with(|| a.plugin_name.cmp(&b.plugin_name))
-                .then_with(|| a.endpoint_id.cmp(&b.endpoint_id))
-        });
-        Ok(providers)
+        Ok(self.inner.runtime_data.plugins_snapshot().providers)
     }
 
     pub async fn provider_for_capability(
@@ -1078,10 +1161,13 @@ impl PluginManager {
             self.clear_plugin_endpoint_health(plugin_name).await;
             return Ok(());
         };
+        self.publish_plugin_summary(&summary);
 
         let manifest = self.manifest(plugin_name).await.ok().flatten();
         let Some(manifest) = manifest else {
             self.clear_plugin_endpoint_health(plugin_name).await;
+            self.publish_plugin_summary(&summary);
+            self.publish_plugin_providers(plugin_name, Vec::new());
             return Ok(());
         };
 
@@ -1098,16 +1184,65 @@ impl PluginManager {
                     .map(|endpoint_id| (endpoint_id.to_string(), value.clone()))
             })
             .collect::<BTreeMap<_, _>>();
+        let plugin_default = endpoint_record_from_plugin_status(&summary);
+        let mut providers = manifest
+            .capabilities
+            .iter()
+            .map(|capability| PluginCapabilityProvider {
+                capability: capability.clone(),
+                plugin_name: summary.name.clone(),
+                plugin_status: summary.status.clone(),
+                endpoint_id: None,
+                available: plugin_default.available,
+                detail: plugin_default.detail.clone(),
+            })
+            .collect::<Vec<_>>();
         let mut endpoint_states = BTreeMap::new();
-        for endpoint in manifest.endpoints {
+        let mut endpoint_summaries = Vec::new();
+        for endpoint in &manifest.endpoints {
             let key = endpoint.endpoint_id.clone();
             let health =
-                endpoint_health_for_summary(&summary, &endpoint, previous.get(&key), now).await;
+                endpoint_health_for_summary(&summary, endpoint, previous.get(&key), now).await;
+            for capability in endpoint_declared_capabilities(endpoint) {
+                providers.push(PluginCapabilityProvider {
+                    capability,
+                    plugin_name: summary.name.clone(),
+                    plugin_status: summary.status.clone(),
+                    endpoint_id: Some(endpoint.endpoint_id.clone()),
+                    available: health.record.available,
+                    detail: health.record.detail.clone(),
+                });
+            }
+            endpoint_summaries.push(PluginEndpointSummary {
+                plugin_name: summary.name.clone(),
+                plugin_status: summary.status.clone(),
+                endpoint_id: endpoint.endpoint_id.clone(),
+                state: health.record.state.clone(),
+                available: health.record.available,
+                kind: endpoint_kind_name(endpoint.kind).to_string(),
+                transport_kind: endpoint_transport_kind_name(endpoint.transport_kind).to_string(),
+                protocol: endpoint.protocol.clone(),
+                address: endpoint.address.clone(),
+                args: endpoint.args.clone(),
+                namespace: endpoint.namespace.clone(),
+                supports_streaming: endpoint.supports_streaming,
+                managed_by_plugin: endpoint.managed_by_plugin,
+                detail: health.record.detail.clone(),
+                models: health.record.models.clone(),
+            });
             endpoint_states.insert(endpoint_key(plugin_name, &key), health);
         }
 
+        self.clear_plugin_endpoint_health(plugin_name).await;
+        self.publish_plugin_summary(&summary);
+        self.publish_plugin_manifest(plugin_name, Some(plugin_manifest_overview(&manifest)));
+        self.publish_plugin_providers(plugin_name, providers);
+        for endpoint_summary in endpoint_summaries {
+            self.plugin_endpoint_producer(plugin_name, &endpoint_summary.endpoint_id)
+                .publish_plugin_endpoint(endpoint_summary);
+        }
+
         let mut registry = self.inner.endpoint_health.lock().await;
-        registry.retain(|key, _| !key.starts_with(&format!("{plugin_name}:")));
         registry.extend(endpoint_states);
         Ok(())
     }
@@ -1115,6 +1250,9 @@ impl PluginManager {
     async fn clear_plugin_endpoint_health(&self, plugin_name: &str) {
         let mut registry = self.inner.endpoint_health.lock().await;
         registry.retain(|key, _| !key.starts_with(&format!("{plugin_name}:")));
+        drop(registry);
+        self.plugin_summary_producer(plugin_name)
+            .clear_plugin_reports(plugin_name);
     }
 
     async fn inference_endpoints(&self) -> Result<Vec<InferenceEndpointRoute>> {
@@ -1130,37 +1268,21 @@ impl PluginManager {
                 return Ok(endpoints);
             }
         }
-        let summaries = self.list().await;
-        let endpoint_health = self.inner.endpoint_health.lock().await.clone();
+        let endpoint_summaries = self.endpoints().await?;
         let mut endpoints = Vec::new();
-        for summary in summaries {
-            let Ok(Some(manifest)) = self.manifest(&summary.name).await else {
+        for endpoint in endpoint_summaries {
+            if endpoint.kind != "inference" || !endpoint.available {
+                continue;
+            }
+            let Some(address) = endpoint.address.clone() else {
                 continue;
             };
-            for endpoint in manifest.endpoints {
-                if proto::EndpointKind::try_from(endpoint.kind)
-                    .unwrap_or(proto::EndpointKind::Unspecified)
-                    != proto::EndpointKind::Inference
-                {
-                    continue;
-                }
-                let Some(address) = endpoint.address.clone() else {
-                    continue;
-                };
-                let health = endpoint_health
-                    .get(&endpoint_key(&summary.name, &endpoint.endpoint_id))
-                    .map(|state| state.record.clone())
-                    .unwrap_or_else(|| endpoint_record_from_plugin_status(&summary));
-                if !health.available {
-                    continue;
-                }
-                endpoints.push(InferenceEndpointRoute {
-                    plugin_name: summary.name.clone(),
-                    endpoint_id: endpoint.endpoint_id,
-                    address,
-                    models: health.models,
-                });
-            }
+            endpoints.push(InferenceEndpointRoute {
+                plugin_name: endpoint.plugin_name,
+                endpoint_id: endpoint.endpoint_id,
+                address,
+                models: endpoint.models,
+            });
         }
         Ok(endpoints)
     }

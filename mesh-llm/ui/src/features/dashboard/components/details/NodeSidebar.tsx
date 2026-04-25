@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import {
   ArrowLeft,
+  Activity,
   Cpu,
   Gauge,
   Gpu,
@@ -37,6 +38,10 @@ import {
   uniqueModels,
 } from "../../../app-shell/lib/status-helpers";
 import type {
+  LlamaRuntimePayload,
+  LlamaRuntimeEndpointStatus,
+  LlamaRuntimeMetricItem,
+  LlamaRuntimeSlotItem,
   LiveNodeState,
   MeshModel,
   Ownership,
@@ -80,11 +85,17 @@ type NodeSidebarRecord = {
 export function NodeSidebar({
   node,
   meshModelByName,
+  llamaRuntime,
+  llamaRuntimeLoading = false,
+  llamaRuntimeError = null,
   onOpenModel,
   onBack,
 }: {
   node: NodeSidebarRecord;
   meshModelByName: Record<string, MeshModel>;
+  llamaRuntime?: LlamaRuntimePayload | null;
+  llamaRuntimeLoading?: boolean;
+  llamaRuntimeError?: string | null;
   onOpenModel: (modelName: string) => void;
   onBack?: () => void;
 }) {
@@ -377,6 +388,13 @@ export function NodeSidebar({
               {node.inflightRequests != null ? (
                 <ModelMetaItem label="Inflight" value={`${node.inflightRequests}`} />
               ) : null}
+              <div className="sm:col-span-2">
+                <LlamaRuntimeSummary
+                  runtime={llamaRuntime}
+                  loading={llamaRuntimeLoading}
+                  error={llamaRuntimeError}
+                />
+              </div>
             </CardContent>
           </Card>
         ) : null}
@@ -389,6 +407,251 @@ export function NodeSidebar({
       </div>
     </div>
   );
+}
+
+function LlamaRuntimeSummary({
+  runtime,
+  loading,
+  error,
+}: {
+  runtime?: LlamaRuntimePayload | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const metricItems = runtime?.items?.metrics ?? runtime?.metrics.samples ?? [];
+  const slotItems = runtime?.items?.slots ?? legacySlotItems(runtime?.slots.slots ?? []);
+  const slotsTotal = runtime?.items?.slots_total ?? slotItems.length;
+  const slotsBusy = runtime?.items?.slots_busy ?? slotItems.filter((slot) => slot.is_processing).length;
+  const metricsError = runtime?.metrics.error ?? error;
+  const slotsError = runtime?.slots.error ?? error;
+  const metricsStale = endpointHasStalePayload(runtime?.metrics);
+  const slotsStale = endpointHasStalePayload(runtime?.slots);
+
+  return (
+    <div className="space-y-3 rounded-lg border bg-muted/20 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+          <Activity className="h-3.5 w-3.5" />
+          Llama runtime
+        </div>
+        <StatusPill
+          label={endpointStatusLabel("Metrics", runtime?.metrics.status, loading, metricsStale)}
+          tone={endpointStatusTone(runtime?.metrics.status, loading, metricsError)}
+          dot
+          tooltip={metricsError ?? "Live llama.cpp /metrics snapshot."}
+        />
+        <StatusPill
+          label={endpointStatusLabel("Slots", runtime?.slots.status, loading, slotsStale)}
+          tone={endpointStatusTone(runtime?.slots.status, loading, slotsError)}
+          dot={runtime?.slots.status === "ready"}
+          tooltip={slotsError ?? "Live llama.cpp /slots snapshot."}
+        />
+        <StatusPill
+          label={`${slotsBusy}/${slotsTotal} slots busy`}
+          tone={slotsBusy > 0 ? "warm" : "neutral"}
+          tooltip="Busy llama.cpp slots out of total reported slots."
+        />
+      </div>
+      {metricsError ? <p className="text-xs text-rose-600 dark:text-rose-300">Metrics: {metricsError}</p> : null}
+      {slotsError && slotsError !== metricsError ? (
+        <p className="text-xs text-rose-600 dark:text-rose-300">Slots: {slotsError}</p>
+      ) : null}
+      {runtime?.metrics.last_success_unix_ms ? (
+        <p className="text-xs text-muted-foreground">
+          {metricsStale ? "Last metrics update" : "Updated"} {formatRuntimeTimestamp(runtime.metrics.last_success_unix_ms)}
+        </p>
+      ) : null}
+      {metricItems.length > 0 ? (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Metric</TableHead>
+              <TableHead className="text-right">Value</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {metricItems.map((item) => (
+              <TableRow key={metricItemKey(item)}>
+                <TableCell className="max-w-[260px] truncate text-xs" title={metricItemTitle(item)}>
+                  {formatMetricName(item)}
+                </TableCell>
+                <TableCell className="text-right font-mono text-xs">
+                  {formatMetricValue(item.value)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {loading ? "Loading live llama.cpp metrics…" : "No llama.cpp metric samples reported yet."}
+        </p>
+      )}
+      {slotItems.length > 0 ? (
+        <LlamaSlotContextSegments slots={slotItems} slotsBusy={slotsBusy} slotsTotal={slotsTotal} />
+      ) : null}
+    </div>
+  );
+}
+
+function LlamaSlotContextSegments({
+  slots,
+  slotsBusy,
+  slotsTotal,
+}: {
+  slots: LlamaRuntimeSlotItem[];
+  slotsBusy: number;
+  slotsTotal: number;
+}) {
+  return (
+    <div className="space-y-2 rounded-md border bg-background/65 p-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div>
+          <div className="font-medium text-foreground">Slot context map</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-emerald-500/75 ring-1 ring-emerald-700/20 dark:bg-emerald-400/75" />
+            Available
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full bg-amber-400/90 ring-1 ring-amber-700/20 dark:bg-amber-300/85" />
+            Active
+          </span>
+          <span className="font-mono text-[11px] text-foreground">
+            {slotsBusy}/{slotsTotal}
+          </span>
+        </div>
+      </div>
+      <ul
+        aria-label={`Llama slot context map. ${slotsBusy} of ${slotsTotal} slots active.`}
+        className="flex min-h-8 list-none gap-px overflow-hidden rounded-md border bg-background/80"
+      >
+        {slots.map((slot) => {
+          const stateLabel = slot.is_processing ? "Active" : "Available";
+          const contextLabel = formatSlotContext(slot);
+          const title = `${formatSlotIndex(slot)} · ${stateLabel} · context ${contextLabel}`;
+
+          return (
+            <li
+              key={slot.id ?? slot.index}
+              className="min-w-[48px]"
+              style={{ flexBasis: 0, flexGrow: slotContextWeight(slot) }}
+            >
+              <button
+                type="button"
+                aria-label={title}
+                className={`flex h-full min-h-7 w-full items-center justify-center overflow-hidden px-2 font-mono text-[11px] font-semibold tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
+                  slot.is_processing
+                    ? "bg-amber-400/90 text-amber-950 dark:bg-amber-300/85 dark:text-amber-950"
+                    : "bg-emerald-500/80 text-white dark:bg-emerald-400/75 dark:text-emerald-950"
+                }`}
+              >
+                <span className="truncate">
+                  {formatSlotIndex(slot)} · {contextLabel}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function slotContextWeight(slot: LlamaRuntimeSlotItem) {
+  return typeof slot.n_ctx === "number" && Number.isFinite(slot.n_ctx) && slot.n_ctx > 0 ? slot.n_ctx : 1;
+}
+
+function endpointStatusLabel(
+  label: "Metrics" | "Slots",
+  status: LlamaRuntimeEndpointStatus | undefined,
+  loading: boolean,
+  stale: boolean,
+) {
+  if (loading && !status) return `${label} • Loading`;
+  if (stale) return `${label} • Stale`;
+  if (status === "ready") return `${label} • Live`;
+  if (status === "error") return `${label} • Error`;
+  if (status === "unavailable") return `${label} • Unavailable`;
+  return status ? `${label} • ${status}` : `${label} • Unknown`;
+}
+
+function endpointStatusTone(
+  status: LlamaRuntimeEndpointStatus | undefined,
+  loading: boolean,
+  error: string | null,
+): "warm" | "cold" | "good" | "info" | "warn" | "bad" | "neutral" {
+  if (error || status === "error") return "bad";
+  if (status === "ready") return "good";
+  if (status === "unavailable") return "warn";
+  if (loading) return "info";
+  return "neutral";
+}
+
+function formatRuntimeTimestamp(timestampMs: number) {
+  return new Date(timestampMs).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function endpointHasStalePayload(endpoint?: {
+  status?: LlamaRuntimeEndpointStatus;
+  last_attempt_unix_ms?: number;
+  last_success_unix_ms?: number;
+}) {
+  return (
+    endpoint?.status !== undefined &&
+    endpoint.status !== "ready" &&
+    typeof endpoint.last_attempt_unix_ms === "number" &&
+    typeof endpoint.last_success_unix_ms === "number" &&
+    endpoint.last_attempt_unix_ms > endpoint.last_success_unix_ms
+  );
+}
+
+function legacySlotItems(slots: Array<{ id?: number; id_task?: number; n_ctx?: number; is_processing?: boolean }>) {
+  return slots.map((slot, index) => ({
+    index,
+    id: slot.id,
+    id_task: slot.id_task,
+    n_ctx: slot.n_ctx,
+    is_processing: slot.is_processing ?? false,
+  }));
+}
+
+function metricItemKey(item: LlamaRuntimeMetricItem) {
+  return `${item.name}:${JSON.stringify(item.labels ?? {})}`;
+}
+
+function metricItemTitle(item: LlamaRuntimeMetricItem) {
+  const labels = Object.entries(item.labels ?? {})
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+  return labels ? `${item.name} (${labels})` : item.name;
+}
+
+function formatMetricName(item: LlamaRuntimeMetricItem) {
+  const suffix = Object.values(item.labels ?? {}).filter(Boolean).join(" · ");
+  const name = item.name.replace(/^llamacpp:/, "").replace(/^llama_/, "").replace(/_/g, " ");
+  return suffix ? `${name} · ${suffix}` : name;
+}
+
+function formatMetricValue(value: number) {
+  if (!Number.isFinite(value)) return `${value}`;
+  if (Math.abs(value) >= 100) return value.toFixed(0);
+  if (Math.abs(value) >= 10) return value.toFixed(1);
+  return value.toFixed(2);
+}
+
+function formatSlotContext(slot: LlamaRuntimeSlotItem) {
+  if (slot.n_ctx == null) return "n/a";
+  return slot.id_task != null ? `${slot.n_ctx} · task ${slot.id_task}` : `${slot.n_ctx}`;
+}
+
+function formatSlotIndex(slot: LlamaRuntimeSlotItem) {
+  return slot.id != null && slot.id !== slot.index ? `#${slot.index} · id ${slot.id}` : `#${slot.index}`;
 }
 
 function nodeRoleTone(role: string): "good" | "info" | "neutral" {

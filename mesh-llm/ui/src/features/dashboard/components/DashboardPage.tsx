@@ -86,6 +86,7 @@ import {
 } from "./details";
 import { MeshTopologyDiagram } from "./topology";
 import { useDashboardDetailStack } from "../hooks/useDashboardDetailStack";
+import { useLlamaRuntime } from "../hooks/useLlamaRuntime";
 import { WakeableCapacity } from "./WakeableCapacity";
 
 const DOCS_URL = "https://docs.anarchai.org";
@@ -314,6 +315,7 @@ export function DashboardPage({
         !topologyNode.self && !topologyNode.hostname && !(topologyNode.gpus?.length ?? 0),
     } satisfies NodeSidebarRecord;
   }, [activeDetail, status, topologyNodes, totalMeshVramGb]);
+  const llamaRuntime = useLlamaRuntime(activeDetail?.kind === "node" && activeNode?.self === true);
 
   useEffect(() => {
     const prevOverflow = document.body.style.overflow;
@@ -716,6 +718,9 @@ export function DashboardPage({
             <NodeSidebar
               node={activeNode}
               meshModelByName={meshModelByName}
+              llamaRuntime={llamaRuntime.data}
+              llamaRuntimeLoading={llamaRuntime.loading}
+              llamaRuntimeError={llamaRuntime.error}
               onOpenModel={openModelDetail}
               onBack={detailPanelStack.length > 1 ? goBackDetailPanel : undefined}
             />

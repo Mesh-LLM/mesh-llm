@@ -59,7 +59,6 @@ use std::fs::{self, File};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 /// Maximum bytes for argv snippet in pidfile metadata.
 pub const ARGV_SNIPPET_MAX_BYTES: usize = 256;
@@ -1195,7 +1194,7 @@ pub mod reap {
 }
 
 /// Snapshot of a co-located mesh-llm instance discovered via the runtime root.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LocalInstanceSnapshot {
     /// PID of the mesh-llm process that owns this runtime directory.
     pub pid: u32,
@@ -1444,15 +1443,14 @@ pub async fn scan_local_instances(
 pub fn spawn_local_instance_scanner(
     root: PathBuf,
     my_pid: u32,
-    shared: Arc<tokio::sync::Mutex<Vec<LocalInstanceSnapshot>>>,
+    runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             match scan_local_instances(&root, my_pid).await {
                 Ok(instances) => {
-                    // Short lock hold — never across an await point.
-                    *shared.lock().await = instances;
+                    publish_local_instance_scan_results(&runtime_data_producer, instances);
                 }
                 Err(e) => {
                     tracing::warn!("local instance scan failed: {e}");
@@ -1460,6 +1458,13 @@ pub fn spawn_local_instance_scanner(
             }
         }
     })
+}
+
+pub(crate) fn publish_local_instance_scan_results(
+    runtime_data_producer: &crate::runtime_data::RuntimeDataProducer,
+    instances: Vec<LocalInstanceSnapshot>,
+) -> bool {
+    runtime_data_producer.replace_local_instances_snapshot(instances)
 }
 
 #[cfg(test)]

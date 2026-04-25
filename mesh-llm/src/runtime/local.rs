@@ -212,6 +212,13 @@ pub(super) async fn start_runtime_local_model(
             total_group_vram: None,
             selected_gpu: None,
             slots: spec.slots,
+            runtime_data_producer: Some(spec.node.runtime_data_collector().producer(
+                crate::runtime_data::RuntimeDataSource {
+                    scope: "runtime",
+                    plugin_data_key: None,
+                    plugin_endpoint_key: None,
+                },
+            )),
         },
     )
     .await?;
@@ -239,12 +246,25 @@ pub(super) fn local_process_payload(
     pid: u32,
     slots: usize,
 ) -> api::RuntimeProcessPayload {
-    api::RuntimeProcessPayload {
-        name: model_name.to_string(),
+    local_process_snapshot(model_name, backend, port, pid, slots).to_payload()
+}
+
+pub(super) fn local_process_snapshot(
+    model_name: &str,
+    backend: &str,
+    port: u16,
+    pid: u32,
+    slots: usize,
+) -> crate::runtime_data::RuntimeProcessSnapshot {
+    crate::runtime_data::RuntimeProcessSnapshot {
+        model: model_name.to_string(),
         backend: backend.into(),
-        status: "ready".into(),
-        port,
         pid,
         slots,
+        port,
+        command: None,
+        state: "ready".into(),
+        start: None,
+        health: Some("ready".into()),
     }
 }
