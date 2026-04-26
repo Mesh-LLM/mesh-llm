@@ -1575,7 +1575,14 @@ pub async fn run_plugin_process(name: String) -> Result<()> {
         BLACKBOARD_PLUGIN_ID => crate::plugins::blackboard::run_plugin(name).await,
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
         LEMONADE_PLUGIN_ID => crate::plugins::lemonade::run_plugin(name).await,
-        _ => bail!("Unknown built-in plugin '{}'", name),
+        "openai-endpoint" => {
+            // Generic OpenAI-compatible endpoint — the actual plugin name
+            // comes from MESH_LLM_PLUGIN_NAME env var (set by the host).
+            let plugin_name = std::env::var("MESH_LLM_PLUGIN_NAME")
+                .unwrap_or_else(|_| "openai-endpoint".to_string());
+            crate::plugins::openai_endpoint::run_plugin(plugin_name).await
+        }
+        _ => bail!("Unknown built-in plugin '{}'\nHint: if this is an external inference endpoint, add a `url` field to its config entry", name),
     }
 }
 
@@ -1637,6 +1644,7 @@ mod tests {
                 enabled: Some(false),
                 command: None,
                 args: Vec::new(),
+                url: None,
             }],
             ..MeshConfig::default()
         };
@@ -1654,6 +1662,7 @@ mod tests {
                 enabled: Some(false),
                 command: None,
                 args: Vec::new(),
+                url: None,
             }],
             ..MeshConfig::default()
         };
@@ -1671,6 +1680,7 @@ mod tests {
                 enabled: Some(true),
                 command: None,
                 args: Vec::new(),
+                url: None,
             }],
             ..MeshConfig::default()
         };
@@ -1704,6 +1714,7 @@ mod tests {
                 enabled: Some(true),
                 command: Some("/tmp/demo".into()),
                 args: vec!["--flag".into()],
+                url: None,
             }],
             ..MeshConfig::default()
         };

@@ -55,6 +55,9 @@ pub struct PluginConfigEntry {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Base URL for built-in inference endpoint plugins (vllm, ollama, openai-endpoint).
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +71,8 @@ pub struct ExternalPluginSpec {
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
+    /// Optional base URL for built-in inference endpoint plugins.
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,6 +190,18 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             lemonade_enabled = enabled;
             continue;
         }
+        // Plugins with a `url` field and no explicit `command` are treated as
+        // OpenAI-compatible inference endpoint plugins (vLLM, TGI, Ollama, etc.).
+        if entry.url.is_some() && entry.command.is_none() {
+            if !enabled {
+                continue;
+            }
+            externals.push(openai_endpoint_plugin_spec(
+                &entry.name,
+                entry.url.as_deref(),
+            )?);
+            continue;
+        }
         if !enabled {
             continue;
         }
@@ -196,6 +213,7 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             name: entry.name.clone(),
             command,
             args: entry.args.clone(),
+            url: entry.url.clone(),
         });
     }
 
@@ -224,6 +242,7 @@ pub fn blackboard_plugin_spec() -> Result<ExternalPluginSpec> {
         name: BLACKBOARD_PLUGIN_ID.to_string(),
         command,
         args: vec!["--plugin".into(), BLACKBOARD_PLUGIN_ID.into()],
+        url: None,
     })
 }
 
@@ -236,6 +255,7 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
         name: BLOBSTORE_PLUGIN_ID.to_string(),
         command,
         args: vec!["--plugin".into(), BLOBSTORE_PLUGIN_ID.into()],
+        url: None,
     })
 }
 
@@ -248,6 +268,26 @@ pub fn lemonade_plugin_spec() -> Result<ExternalPluginSpec> {
         name: LEMONADE_PLUGIN_ID.to_string(),
         command,
         args: vec!["--plugin".into(), LEMONADE_PLUGIN_ID.into()],
+        url: None,
+    })
+}
+
+/// Build a plugin spec for a generic OpenAI-compatible inference endpoint.
+///
+/// The plugin name becomes the endpoint ID (e.g. "vllm", "ollama", "my-server").
+/// The URL is passed via the `MESH_LLM_PLUGIN_URL` env var.
+pub fn openai_endpoint_plugin_spec(name: &str, url: Option<&str>) -> Result<ExternalPluginSpec> {
+    let command = std::env::current_exe()
+        .context("Cannot determine mesh-llm executable path")?
+        .display()
+        .to_string();
+    Ok(ExternalPluginSpec {
+        name: name.to_string(),
+        command,
+        // The openai_endpoint plugin reads MESH_LLM_PLUGIN_NAME to know its identity
+        // and MESH_LLM_PLUGIN_URL for the backend address.
+        args: vec!["--plugin".into(), "openai-endpoint".into()],
+        url: url.map(String::from),
     })
 }
 
@@ -585,5 +625,63 @@ model = "Qwen3-8B-Q4_K_M"
             ..MeshConfig::default()
         };
         validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn url_plugin_creates_openai_endpoint_spec() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[[plugin]]
+name = "vllm"
+url = "http://gpu-box:8000"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.plugins.len(), 1);
+        assert_eq!(config.plugins[0].name, "vllm");
+        assert_eq!(
+            config.plugins[0].url.as_deref(),
+            Some("http://gpu-box:8000")
+        );
+        assert!(config.plugins[0].command.is_none());
+
+        let host_mode = PluginHostMode {
+            mesh_visibility: super::super::MeshVisibility::Private,
+        };
+        let resolved = resolve_plugins(&config, host_mode).unwrap();
+        // Should include blackboard + blobstore + vllm
+        let vllm = resolved.externals.iter().find(|e| e.name == "vllm");
+        assert!(vllm.is_some(), "vllm plugin should be in externals");
+        let vllm = vllm.unwrap();
+        assert!(vllm.args.contains(&"openai-endpoint".to_string()));
+        assert_eq!(vllm.url.as_deref(), Some("http://gpu-box:8000"));
+    }
+
+    #[test]
+    fn url_plugin_ollama_config() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[[plugin]]
+name = "ollama"
+url = "http://localhost:11434"
+"#,
+        )
+        .unwrap();
+
+        let host_mode = PluginHostMode {
+            mesh_visibility: super::super::MeshVisibility::Private,
+        };
+        let resolved = resolve_plugins(&config, host_mode).unwrap();
+        let ollama = resolved.externals.iter().find(|e| e.name == "ollama");
+        assert!(ollama.is_some(), "ollama plugin should be in externals");
+        assert_eq!(
+            ollama.unwrap().url.as_deref(),
+            Some("http://localhost:11434")
+        );
     }
 }
