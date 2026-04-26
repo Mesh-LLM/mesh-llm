@@ -214,14 +214,22 @@ pub fn verify_attestation(
     if !signed.attestation.sip_enabled {
         return AttestationStatus::InsecurePosture;
     }
+    if !signed.attestation.secure_boot_enabled {
+        return AttestationStatus::InsecurePosture;
+    }
+    if !signed.attestation.rdma_disabled {
+        return AttestationStatus::InsecurePosture;
+    }
 
     // 5. Timestamp freshness
     if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&signed.attestation.timestamp) {
-        let age = chrono::Utc::now()
-            .signed_duration_since(ts)
-            .num_seconds()
-            .unsigned_abs();
-        if age > max_age_secs {
+        let now = chrono::Utc::now();
+        let delta = now.signed_duration_since(ts).num_seconds();
+        // Reject future timestamps beyond 30s clock skew
+        if delta < -30 {
+            return AttestationStatus::Expired;
+        }
+        if delta >= 0 && delta as u64 > max_age_secs {
             return AttestationStatus::Expired;
         }
     } else {
@@ -297,13 +305,13 @@ pub fn secure_enclave_available() -> bool {
     }
 }
 
-/// Sign an attestation blob using a P-256 signing key.
+/// Sign an attestation blob using a **software** P-256 signing key.
 ///
-/// In production on macOS, `signing_key` would be replaced by an SE
-/// handle. For the initial implementation, this takes a software key
-/// for testing and development. The SE integration replaces this with
-/// hardware-backed signing without changing the wire format.
-pub fn sign_attestation(
+/// **Testing / development only.** In production on macOS the Secure
+/// Enclave hardware key should be used instead. This helper exists so
+/// that tests and non-macOS environments can exercise the attestation
+/// verification path without SE hardware.
+pub fn sign_attestation_with_software_key(
     attestation: &HardwareAttestation,
     signing_key: &p256::ecdsa::SigningKey,
 ) -> Result<SignedHardwareAttestation, CryptoError> {
@@ -318,10 +326,11 @@ pub fn sign_attestation(
     })
 }
 
-/// Sign a challenge nonce using a P-256 signing key.
+/// Sign a challenge nonce using a **software** P-256 signing key.
 ///
-/// Same SE-replacement note as `sign_attestation`.
-pub fn sign_challenge(
+/// **Testing / development only.** See [`sign_attestation_with_software_key`]
+/// for rationale. In production the Secure Enclave signs challenges directly.
+pub fn sign_challenge_with_software_key(
     nonce: &[u8],
     se_public_key_b64: &str,
     signing_key: &p256::ecdsa::SigningKey,
@@ -369,7 +378,7 @@ mod tests {
     fn test_sign_and_verify_attestation() {
         let sk = test_signing_key();
         let att = test_attestation(&sk);
-        let signed = sign_attestation(&att, &sk).unwrap();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         let status = verify_attestation(
             &signed,
@@ -385,7 +394,7 @@ mod tests {
     fn test_wrong_key_fails_verification() {
         let sk = test_signing_key();
         let att = test_attestation(&sk);
-        let signed = sign_attestation(&att, &sk).unwrap();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         // Tamper: change node ID
         let status = verify_attestation(
@@ -402,7 +411,7 @@ mod tests {
     fn test_tampered_attestation_fails() {
         let sk = test_signing_key();
         let att = test_attestation(&sk);
-        let mut signed = sign_attestation(&att, &sk).unwrap();
+        let mut signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         // Tamper with the attestation after signing
         signed.attestation.unified_memory_bytes = 999;
@@ -423,7 +432,7 @@ mod tests {
         let mut att = test_attestation(&sk);
         // Set timestamp to 2 hours ago
         att.timestamp = (chrono::Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
-        let signed = sign_attestation(&att, &sk).unwrap();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         let status = verify_attestation(
             &signed,
@@ -440,7 +449,7 @@ mod tests {
         let sk = test_signing_key();
         let mut att = test_attestation(&sk);
         att.sip_enabled = false;
-        let signed = sign_attestation(&att, &sk).unwrap();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         let status = verify_attestation(
             &signed,
@@ -456,7 +465,7 @@ mod tests {
     fn test_unblessed_binary_hash() {
         let sk = test_signing_key();
         let att = test_attestation(&sk);
-        let signed = sign_attestation(&att, &sk).unwrap();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         let blessed = vec!["different_hash".to_string()];
         let status = verify_attestation(
@@ -475,7 +484,7 @@ mod tests {
         let pub_b64 = public_key_base64(&sk);
         let nonce = b"random-challenge-nonce-32bytes!!";
 
-        let sig = sign_challenge(nonce, &pub_b64, &sk).unwrap();
+        let sig = sign_challenge_with_software_key(nonce, &pub_b64, &sk).unwrap();
         assert!(verify_challenge_response(nonce, &sig, &pub_b64));
     }
 
@@ -484,7 +493,7 @@ mod tests {
         let sk = test_signing_key();
         let pub_b64 = public_key_base64(&sk);
 
-        let sig = sign_challenge(b"correct-nonce", &pub_b64, &sk).unwrap();
+        let sig = sign_challenge_with_software_key(b"correct-nonce", &pub_b64, &sk).unwrap();
         assert!(!verify_challenge_response(b"wrong-nonce", &sig, &pub_b64));
     }
 
@@ -496,7 +505,7 @@ mod tests {
         let pub2 = public_key_base64(&sk2);
         let nonce = b"test-nonce";
 
-        let sig = sign_challenge(nonce, &pub1, &sk1).unwrap();
+        let sig = sign_challenge_with_software_key(nonce, &pub1, &sk1).unwrap();
         // Verify against wrong public key
         assert!(!verify_challenge_response(nonce, &sig, &pub2));
     }
@@ -505,7 +514,7 @@ mod tests {
     fn test_inference_key_mismatch() {
         let sk = test_signing_key();
         let att = test_attestation(&sk);
-        let signed = sign_attestation(&att, &sk).unwrap();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
 
         let status = verify_attestation(
             &signed,
@@ -527,5 +536,75 @@ mod tests {
     fn test_se_available_returns_bool() {
         // Just verify it doesn't panic. Result depends on platform.
         let _ = secure_enclave_available();
+    }
+
+    #[test]
+    fn test_secure_boot_disabled_fails() {
+        let sk = test_signing_key();
+        let mut att = test_attestation(&sk);
+        att.secure_boot_enabled = false;
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
+
+        let status = verify_attestation(
+            &signed,
+            "test-node-123",
+            "dGVzdC1pbmZlcmVuY2Uta2V5",
+            600,
+            None,
+        );
+        assert_eq!(status, AttestationStatus::InsecurePosture);
+    }
+
+    #[test]
+    fn test_rdma_enabled_fails() {
+        let sk = test_signing_key();
+        let mut att = test_attestation(&sk);
+        att.rdma_disabled = false;
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
+
+        let status = verify_attestation(
+            &signed,
+            "test-node-123",
+            "dGVzdC1pbmZlcmVuY2Uta2V5",
+            600,
+            None,
+        );
+        assert_eq!(status, AttestationStatus::InsecurePosture);
+    }
+
+    #[test]
+    fn test_future_timestamp_rejected() {
+        let sk = test_signing_key();
+        let mut att = test_attestation(&sk);
+        // Set timestamp 60 seconds in the future (beyond 30s clock skew tolerance)
+        att.timestamp = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
+
+        let status = verify_attestation(
+            &signed,
+            "test-node-123",
+            "dGVzdC1pbmZlcmVuY2Uta2V5",
+            600,
+            None,
+        );
+        assert_eq!(status, AttestationStatus::Expired);
+    }
+
+    #[test]
+    fn test_small_clock_skew_accepted() {
+        let sk = test_signing_key();
+        let mut att = test_attestation(&sk);
+        // Set timestamp 5 seconds in the future (within 30s clock skew tolerance)
+        att.timestamp = (chrono::Utc::now() + chrono::Duration::seconds(5)).to_rfc3339();
+        let signed = sign_attestation_with_software_key(&att, &sk).unwrap();
+
+        let status = verify_attestation(
+            &signed,
+            "test-node-123",
+            "dGVzdC1pbmZlcmVuY2Uta2V5",
+            600,
+            None,
+        );
+        assert_eq!(status, AttestationStatus::Verified);
     }
 }

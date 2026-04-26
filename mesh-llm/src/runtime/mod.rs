@@ -275,6 +275,14 @@ pub(crate) async fn run() -> Result<()> {
         return plugin::run_plugin_process(name).await;
     }
 
+    // Runtime security hardening — blocks debuggers, disables core dumps, checks SIP/RDMA.
+    if let Err(err) = crate::system::hardening::harden_runtime(false, false) {
+        tracing::warn!("Security hardening failed: {err}");
+        // Don't block startup — hardening is advisory until --require-attested-hosts is set
+    } else {
+        tracing::info!("Runtime security hardening applied");
+    }
+
     let checked_updates = autoupdate::maybe_auto_update(&cli).await?;
 
     // Finish the release check before startup continues.
