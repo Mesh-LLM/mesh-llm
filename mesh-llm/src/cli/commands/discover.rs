@@ -92,7 +92,16 @@ pub(crate) async fn run_discover(
     Ok(())
 }
 
-/// Drop a model from the mesh by sending a control request to the running instance.
+/// Returns `true` when the owner's termination outcome indicates the runtime
+/// had a chance to clean up its own children (graceful SIGTERM exit).
+///
+/// Only [`launch::TerminationOutcome::Graceful`] qualifies — a `Killed`,
+/// `NotRunning`, or `Failed` owner may leave orphan child servers.
+pub(crate) fn should_protect_children(outcome: launch::TerminationOutcome) -> bool {
+    matches!(outcome, launch::TerminationOutcome::Graceful)
+}
+
+/// Stop all mesh-llm instances and their child servers.
 pub(crate) fn run_stop() -> Result<()> {
     let root = match crate::runtime::instance::runtime_root() {
         Ok(root) => root,
@@ -106,17 +115,36 @@ pub(crate) fn run_stop() -> Result<()> {
     let mut killed = 0u32;
     let mut live_owner_runtime_dirs = std::collections::HashSet::new();
     for target in targets.iter().filter(|target| target.is_owner) {
-        let owner_was_live = crate::runtime::instance::validate::process_liveness(target.pid)
-            != crate::runtime::instance::validate::Liveness::Dead;
-        if launch::terminate_process_blocking(
+        let outcome = launch::terminate_process_blocking(
             target.pid,
             &target.expected_comm,
             target.expected_start_time,
-        ) {
-            eprintln!("🧹 Stopped {}", target.label);
+        );
+        if outcome.is_success() {
+            match outcome {
+                launch::TerminationOutcome::Graceful => {
+                    eprintln!(
+                        "🧹 Terminated owner pid={} gracefully ({})",
+                        target.pid, target.label
+                    );
+                }
+                launch::TerminationOutcome::Killed => {
+                    eprintln!(
+                        "🧹 Force-killed owner pid={}; will reap its children ({})",
+                        target.pid, target.label
+                    );
+                }
+                launch::TerminationOutcome::NotRunning => {
+                    eprintln!(
+                        "🧹 Owner pid={} was already stopped ({})",
+                        target.pid, target.label
+                    );
+                }
+                launch::TerminationOutcome::Failed => unreachable!(),
+            }
             killed += 1;
         }
-        if owner_was_live {
+        if should_protect_children(outcome) {
             live_owner_runtime_dirs.insert(target.runtime_dir.clone());
         }
     }
@@ -136,7 +164,9 @@ pub(crate) fn run_stop() -> Result<()> {
             target.pid,
             &target.expected_comm,
             target.expected_start_time,
-        ) {
+        )
+        .is_success()
+        {
             eprintln!("🧹 Stopped {}", target.label);
             killed += 1;
         }
@@ -146,4 +176,33 @@ pub(crate) fn run_stop() -> Result<()> {
         eprintln!("Nothing running.");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::inference::launch::TerminationOutcome;
+
+    #[test]
+    fn should_protect_children_only_on_graceful() {
+        assert!(
+            should_protect_children(TerminationOutcome::Graceful),
+            "Graceful shutdown lets the runtime clean up its own children"
+        );
+
+        assert!(
+            !should_protect_children(TerminationOutcome::Killed),
+            "SIGKILL bypasses the runtime's graceful shutdown path"
+        );
+
+        assert!(
+            !should_protect_children(TerminationOutcome::NotRunning),
+            "Owner was already dead — no guarantee children were cleaned up"
+        );
+
+        assert!(
+            !should_protect_children(TerminationOutcome::Failed),
+            "Could not signal the owner — no cleanup occurred"
+        );
+    }
 }

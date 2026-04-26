@@ -345,8 +345,8 @@ impl DashboardSnapshotProvider for RuntimeDashboardSnapshotProvider {
                 build_dashboard_endpoint_rows(api_port, console_port, headless);
             if let Some(plugin_manager) = plugin_manager {
                 webserver_rows.extend(plugin_dashboard_endpoint_rows(&plugin_manager).await);
-                webserver_rows.sort_by(|left, right| left.label.cmp(&right.label));
             }
+            sort_dashboard_endpoint_rows(&mut webserver_rows);
 
             DashboardSnapshot {
                 llama_process_rows: process_rows
@@ -421,6 +421,7 @@ fn build_dashboard_endpoint_rows(
         status: RuntimeStatus::Ready,
         url: format!("http://localhost:{api_port}"),
         port: api_port,
+        pid: None,
     }];
     if let Some(console_port) = console_port.filter(|_| !headless) {
         rows.push(DashboardEndpointRow {
@@ -428,10 +429,27 @@ fn build_dashboard_endpoint_rows(
             status: RuntimeStatus::Ready,
             url: format!("http://localhost:{console_port}"),
             port: console_port,
+            pid: None,
         });
     }
-    rows.sort_by(|left, right| left.label.cmp(&right.label));
+    sort_dashboard_endpoint_rows(&mut rows);
     rows
+}
+
+fn sort_dashboard_endpoint_rows(rows: &mut [DashboardEndpointRow]) {
+    rows.sort_by(|left, right| {
+        dashboard_endpoint_sort_bucket(left)
+            .cmp(&dashboard_endpoint_sort_bucket(right))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+}
+
+fn dashboard_endpoint_sort_bucket(row: &DashboardEndpointRow) -> u8 {
+    if row.label.starts_with("Plugin: ") {
+        1
+    } else {
+        0
+    }
 }
 
 #[allow(dead_code)]
@@ -449,6 +467,7 @@ async fn plugin_dashboard_endpoint_rows(
                 status: runtime_status_from_plugin_status(&summary.status),
                 url,
                 port: 0,
+                pid: summary.pid,
             }
         })
         .collect()
@@ -2629,10 +2648,9 @@ async fn run_auto(
     let mut runtime_models: HashMap<String, LocalRuntimeModelHandle> = HashMap::new();
     let mut managed_models: HashMap<String, ManagedModelController> = HashMap::new();
     let dashboard_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-    let interactive_enabled = matches!(
-        crate::cli::output::OutputManager::global().console_session_mode(),
-        Some(crate::cli::output::ConsoleSessionMode::InteractiveDashboard)
-    );
+    let input_handler_enabled = crate::cli::output::OutputManager::global()
+        .console_session_mode()
+        .is_some();
 
     // Take over listener from bootstrap proxy (if running), or bind a new one
     let existing_listener = if let Some(tx) = bootstrap_listener_tx {
@@ -2857,11 +2875,14 @@ async fn run_auto(
                         context: None,
                     });
                 }
-                if interactive_enabled
+                if input_handler_enabled
                     && llama_ready
-                    && !interactive_started.swap(true, Ordering::SeqCst)
+                    && !interactive_started.swap(true, Ordering::AcqRel)
+                    && std::io::stdin().is_terminal()
                 {
                     if let Some(cs) = interactive_console_state {
+                        // Spawn input handler for both Dashboard and line-oriented Fallback modes;
+                        // spawn_handler internally selects the variant.
                         interactive::spawn_handler(
                             interactive_control_tx,
                             cs,
@@ -3602,10 +3623,13 @@ async fn run_passive(
             headless,
         ),
     ));
-    if matches!(
-        crate::cli::output::OutputManager::global().console_session_mode(),
-        Some(crate::cli::output::ConsoleSessionMode::InteractiveDashboard)
-    ) {
+    if crate::cli::output::OutputManager::global()
+        .console_session_mode()
+        .is_some()
+        && std::io::stdin().is_terminal()
+    {
+        // Spawn input handler for both Dashboard and line-oriented Fallback modes;
+        // spawn_handler internally selects the variant.
         interactive::spawn_handler(
             control_tx.clone(),
             console_state.clone(),
@@ -3896,6 +3920,7 @@ mod tests {
             kind: "stdio".to_string(),
             enabled: true,
             status: "running".to_string(),
+            pid: Some(4242),
             version: None,
             capabilities: Vec::new(),
             command: Some("/Users/test/dev/mesh/plugins/browser-tools".to_string()),
@@ -4723,6 +4748,53 @@ mod tests {
                 ConsoleSessionMode::InteractiveDashboard
             ),
             ConsoleSessionMode::Fallback
+        );
+    }
+
+    #[test]
+    fn dashboard_endpoint_rows_keep_builtins_grouped_before_plugins() {
+        let mut rows = vec![
+            DashboardEndpointRow {
+                label: "Plugin: zebra".to_string(),
+                status: RuntimeStatus::Ready,
+                url: "zebra".to_string(),
+                port: 0,
+                pid: Some(1001),
+            },
+            DashboardEndpointRow {
+                label: "Web console".to_string(),
+                status: RuntimeStatus::Ready,
+                url: "http://localhost:3131".to_string(),
+                port: 3131,
+                pid: None,
+            },
+            DashboardEndpointRow {
+                label: "Plugin: alpha".to_string(),
+                status: RuntimeStatus::Ready,
+                url: "alpha".to_string(),
+                port: 0,
+                pid: Some(1000),
+            },
+            DashboardEndpointRow {
+                label: "OpenAI-compatible API".to_string(),
+                status: RuntimeStatus::Ready,
+                url: "http://localhost:9337".to_string(),
+                port: 9337,
+                pid: None,
+            },
+        ];
+
+        sort_dashboard_endpoint_rows(&mut rows);
+
+        let labels = rows.into_iter().map(|row| row.label).collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            vec![
+                "OpenAI-compatible API".to_string(),
+                "Web console".to_string(),
+                "Plugin: alpha".to_string(),
+                "Plugin: zebra".to_string(),
+            ]
         );
     }
 

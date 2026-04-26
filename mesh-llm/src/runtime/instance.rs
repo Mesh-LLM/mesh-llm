@@ -415,6 +415,12 @@ pub fn is_locked(lock_path: &Path) -> bool {
         return err.raw_os_error() == Some(libc::EWOULDBLOCK);
     }
 
+    // The probe acquired the lock, so release it explicitly before returning.
+    // Dropping the file would also close the fd, but an explicit unlock keeps
+    // tests and callers deterministic on platforms where close-to-unlock
+    // visibility can otherwise race with immediate follow-up probes.
+    // SAFETY: flock is safe to call with a valid fd.
+    let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
     drop(file);
     false
 }
@@ -1597,6 +1603,20 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    fn wait_until_unlocked(lock_path: &Path) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            if !is_locked(lock_path) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[test]
     #[serial]
     fn runtime_root_respects_env_override() {
@@ -1702,7 +1722,7 @@ mod tests {
         drop(rt);
 
         assert!(
-            !is_locked(&lock_path),
+            wait_until_unlocked(&lock_path),
             "lock file must be released after InstanceRuntime is dropped"
         );
     }
@@ -1750,7 +1770,7 @@ mod tests {
         drop(rt);
 
         assert!(
-            !is_locked(&lock_path),
+            wait_until_unlocked(&lock_path),
             "is_locked must return false after InstanceRuntime is dropped"
         );
     }

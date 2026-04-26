@@ -85,6 +85,7 @@ pub struct DashboardEndpointRow {
     pub status: RuntimeStatus,
     pub url: String,
     pub port: u16,
+    pub pid: Option<u32>,
 }
 
 #[allow(dead_code)]
@@ -200,6 +201,8 @@ const PRETTY_TUI_JOIN_TOKEN_HORIZONTAL_PADDING: u16 = 2;
 const PRETTY_TUI_JOIN_TOKEN_COPY_BUTTON_LABEL: &str = " Copy ";
 const PRETTY_TUI_EVENTS_COLUMN_PERCENT: u16 = 44;
 const PRETTY_TUI_REMAINING_COLUMN_WEIGHT: u16 = 1;
+const PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL: &str = "PROCESSES";
+const PRETTY_TUI_MIN_DASHBOARD_WIDTH: u16 = 60;
 const PRETTY_TUI_SPLASH_ANSI: &[u8] = include_bytes!("assets/pretty-tui-splash.ans");
 
 static PRETTY_TUI_SPLASH_TEXT: OnceLock<Option<Text<'static>>> = OnceLock::new();
@@ -3246,6 +3249,11 @@ fn render_tui_text_snapshot(state: &DashboardState, width: u16, height: u16) -> 
 fn render_tui_frame(frame: &mut Frame, state: &DashboardState) {
     frame.render_widget(RatatuiClear, frame.area());
 
+    if frame.area().width < PRETTY_TUI_MIN_DASHBOARD_WIDTH {
+        render_tui_too_narrow_message(frame, frame.area());
+        return;
+    }
+
     let areas = tui_layout(frame.area(), state);
     let _main_body = areas.main_body;
     let full_screen_loading = state.is_startup_loading();
@@ -3282,6 +3290,33 @@ fn render_tui_frame(frame: &mut Frame, state: &DashboardState) {
     );
     render_models_panel(frame, state, areas.models.0, areas.models.1);
     render_requests_panel(frame, state, areas.requests.0, areas.requests.1);
+}
+
+fn render_tui_too_narrow_message(frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let message = Line::from(vec![
+        Span::styled(
+            "mesh-llm dashboard needs ",
+            Style::default().fg(tui_theme().muted),
+        ),
+        Span::styled(
+            format!(">= {PRETTY_TUI_MIN_DASHBOARD_WIDTH} columns"),
+            Style::default().fg(tui_theme().warning),
+        ),
+        Span::styled(
+            ". Resize or use line-oriented pretty output.",
+            Style::default().fg(tui_theme().muted),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(message)
+            .alignment(Alignment::Center)
+            .block(Block::bordered().border_type(BorderType::Rounded)),
+        area,
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -4831,8 +4866,8 @@ fn render_process_table(
                 return;
             }
 
-            let [label_width, url_width, port_width, status_width] =
-                webserver_process_column_widths(inner_area.width, &state.webserver_rows);
+            let [label_width, pid_width, port_width, status_width] =
+                webserver_process_column_widths(inner_area.width);
             let available_rows = usize::from(inner_area.height.saturating_sub(1));
             let rows = state
                 .webserver_rows
@@ -4843,8 +4878,14 @@ fn render_process_table(
                 .map(|(_, row)| {
                     Row::new(vec![
                         Cell::from(truncate_with_ellipsis(&row.label, label_width)),
-                        Cell::from(truncate_with_ellipsis(&row.url, url_width)),
-                        Cell::from(truncate_with_ellipsis(&row.port.to_string(), port_width)),
+                        Cell::from(truncate_with_ellipsis(
+                            &format_dashboard_pid(row.pid),
+                            pid_width,
+                        )),
+                        Cell::from(truncate_with_ellipsis(
+                            &format_dashboard_port(row.port),
+                            port_width,
+                        )),
                         process_status_cell(row.status.as_str(), status_width),
                     ])
                 })
@@ -4857,15 +4898,15 @@ fn render_process_table(
             let table = Table::new(
                 rows,
                 [
-                    Constraint::Length(u16::try_from(label_width).unwrap_or(u16::MAX)),
                     Constraint::Fill(1),
+                    Constraint::Length(u16::try_from(pid_width).unwrap_or(u16::MAX)),
                     Constraint::Length(u16::try_from(port_width).unwrap_or(u16::MAX)),
                     Constraint::Length(u16::try_from(status_width).unwrap_or(u16::MAX)),
                 ],
             )
             .header(process_table_header_row([
-                "ENDPOINT".to_string(),
-                "URL".to_string(),
+                PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.to_string(),
+                "PID".to_string(),
                 "PORT".to_string(),
                 right_align_text("STATE", status_width),
             ]))
@@ -4960,6 +5001,19 @@ fn right_align_text(value: &str, width: usize) -> String {
     format!("{value:>width$}")
 }
 
+fn format_dashboard_pid(pid: Option<u32>) -> String {
+    pid.map(|pid| pid.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_dashboard_port(port: u16) -> String {
+    if port == 0 {
+        "-".to_string()
+    } else {
+        port.to_string()
+    }
+}
+
 fn process_status_cell(status: &str, width: usize) -> Cell<'static> {
     let theme = tui_theme();
     let style = match status {
@@ -5000,27 +5054,15 @@ fn llama_process_column_widths(body_width: u16) -> [usize; 4] {
     [model_width, pid_width, port_width, status_width]
 }
 
-fn webserver_process_column_widths(body_width: u16, rows: &[DashboardEndpointRow]) -> [usize; 4] {
+fn webserver_process_column_widths(body_width: u16) -> [usize; 4] {
+    let pid_width = 5usize;
     let port_width = 5usize;
     let status_width = 5usize;
-    let reserved_width = port_width + status_width + 3 + 2;
-    let flexible_width = usize::from(body_width)
+    let reserved_width = pid_width + port_width + status_width + 3 + 2;
+    let label_width = usize::from(body_width)
         .saturating_sub(reserved_width)
-        .max(12);
-    let minimum_label_width = "ENDPOINT".len();
-    let minimum_url_width = "URL".len().max(8);
-    let desired_label_width = rows
-        .iter()
-        .map(|row| row.label.chars().count())
-        .max()
-        .unwrap_or(minimum_label_width)
-        .max(minimum_label_width);
-    let maximum_label_width = flexible_width.saturating_sub(minimum_url_width);
-    let label_width = desired_label_width
-        .min(maximum_label_width)
-        .max(minimum_label_width.min(flexible_width));
-    let url_width = flexible_width.saturating_sub(label_width);
-    [label_width, url_width, port_width, status_width]
+        .max(PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.len());
+    [label_width, pid_width, port_width, status_width]
 }
 
 fn render_events_panel(
@@ -5889,7 +5931,7 @@ fn format_tui_panel_title(state: &DashboardState, panel: DashboardPanel) -> Stri
             events_filter_label(&state.events_filter)
         ),
         DashboardPanel::LlamaCpp => format!("{focus_marker} llama.cpp Processes"),
-        DashboardPanel::Webserver => format!("{focus_marker} Webserver Processes"),
+        DashboardPanel::Webserver => format!("{focus_marker} mesh-llm Processes"),
         DashboardPanel::Models => format!("{focus_marker} Loaded Models"),
         DashboardPanel::Requests => format!(
             "{focus_marker} Incoming Requests  {}  {}",
@@ -6262,13 +6304,20 @@ impl InteractiveDashboardFormatter {
             return Ok(());
         }
         write_tui_enter()?;
+        self.mark_terminal_escape_written();
         let backend = CrosstermBackend::new(io::stderr());
         let mut terminal = Terminal::new(backend).map_err(io::Error::other)?;
         terminal.hide_cursor().map_err(io::Error::other)?;
         self.terminal = Some(terminal);
+        Ok(())
+    }
+
+    fn mark_terminal_escape_written(&mut self) {
+        // From this point on, a later setup failure still needs normal TUI
+        // cleanup: the terminal may already be in alternate-screen/raw-input
+        // state even if ratatui terminal construction or cursor hiding fails.
         self.terminal_active = true;
         self.dirty = true;
-        Ok(())
     }
 
     fn exit_terminal(&mut self) -> io::Result<()> {
@@ -6496,7 +6545,7 @@ impl OutputManager {
                                     if let Err(err) = formatter.handle_output_event(&event) {
                                         tracing::warn!("output write failed: {err}");
                                     } else if matches!(mode, LogFormat::Pretty)
-                                        && worker_prompt_active.load(Ordering::SeqCst)
+                                        && worker_prompt_active.load(Ordering::Acquire)
                                         && formatter.writes_ready_prompt()
                                     {
                                         if let Err(err) = write_prompt() {
@@ -6505,7 +6554,7 @@ impl OutputManager {
                                     }
                                 }
                                 OutputCommand::ActivateReadyPrompt => {
-                                    worker_prompt_active.store(true, Ordering::SeqCst);
+                                    worker_prompt_active.store(true, Ordering::Release);
                                     if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt() {
                                         if let Err(err) = write_prompt() {
                                             tracing::warn!("interactive prompt write failed: {err}");
@@ -6585,7 +6634,7 @@ impl OutputManager {
     }
 
     pub fn write_ready_prompt(&self) -> io::Result<()> {
-        self.ready_prompt_active.store(true, Ordering::SeqCst);
+        self.ready_prompt_active.store(true, Ordering::Release);
         if matches!(self.mode, LogFormat::Pretty)
             && !matches!(
                 self.console_session_mode,
@@ -6599,7 +6648,7 @@ impl OutputManager {
     }
 
     pub fn ready_prompt_active(&self) -> bool {
-        self.ready_prompt_active.load(Ordering::SeqCst)
+        self.ready_prompt_active.load(Ordering::Acquire)
     }
 
     pub fn mode(&self) -> LogFormat {
@@ -6791,7 +6840,7 @@ fn write_prompt() -> io::Result<()> {
     stderr.flush()
 }
 
-fn dashboard_layout_for_terminal_size(_columns: u16, rows: u16) -> DashboardLayoutState {
+fn dashboard_layout_for_terminal_size(columns: u16, rows: u16) -> DashboardLayoutState {
     let footer_rows = 2usize;
     let join_token_rows = usize::from(PRETTY_TUI_JOIN_TOKEN_PANEL_HEIGHT);
     let requests_rows = 6usize;
@@ -6799,11 +6848,13 @@ fn dashboard_layout_for_terminal_size(_columns: u16, rows: u16) -> DashboardLayo
     // Cap the dashboard height so it stays compact (~32 rows) instead of
     // stretching to fill the entire terminal.
     let max_dashboard_rows = usize::from(rows).min(32);
+    let narrow_width_penalty = usize::from(columns < PRETTY_TUI_MIN_DASHBOARD_WIDTH);
     let main_body_rows = max_dashboard_rows
         .saturating_sub(footer_rows + join_token_rows + requests_band_rows)
+        .saturating_sub(narrow_width_penalty)
         .max(5);
     let process_body_rows = main_body_rows.saturating_sub(6).max(2);
-    let llama_rows = process_body_rows.saturating_add(1) / 2;
+    let llama_rows = ((process_body_rows.saturating_add(1)) / 3).max(1);
     let webserver_rows = process_body_rows.saturating_sub(llama_rows).max(1);
     let events_rows = main_body_rows.saturating_sub(2).max(1);
     let models_rows = main_body_rows.saturating_sub(2).max(1);
@@ -6832,6 +6883,9 @@ fn write_tui_redraw_start_to_writer<W: Write>(writer: &mut W) -> io::Result<()> 
 }
 
 pub(crate) fn force_restore_tui_terminal() -> io::Result<()> {
+    // Emergency restore path for panic/unwind and failed worker cleanup. This
+    // intentionally bypasses the OutputManager so terminal recovery still has a
+    // chance if its worker is wedged; SIGKILL cannot be recovered in-process.
     write_tui_exit()
 }
 
@@ -6983,6 +7037,7 @@ mod tests {
             status: RuntimeStatus::Ready,
             url: format!("http://127.0.0.1:{port}"),
             port,
+            pid: None,
         }
     }
 
@@ -8448,6 +8503,8 @@ mod tests {
             webserver_inner.height as usize,
             state.panel_layout.rows_for(DashboardPanel::Webserver)
         );
+        assert_eq!(state.panel_layout.rows_for(DashboardPanel::LlamaCpp), 1);
+        assert_eq!(state.panel_layout.rows_for(DashboardPanel::Webserver), 2);
         assert_eq!(
             requests_inner.height as usize,
             state.panel_layout.rows_for(DashboardPanel::Requests)
@@ -8822,7 +8879,7 @@ mod tests {
         let rendered = render_tui_frame_snapshot(&state, 120, 24);
         assert!(rendered.contains("Processes"));
         assert!(rendered.contains("llama.cpp"));
-        assert!(rendered.contains("Webserver"));
+        assert!(rendered.contains("mesh-llm"));
         assert!(rendered.contains("(no llama.cpp processes yet)"));
         assert!(rendered.contains("(no webserver processes yet)"));
     }
@@ -8853,8 +8910,11 @@ mod tests {
         assert!(process_header_line.contains("STATE"));
         assert!(!process_header_line.contains("SLOTS"));
         assert!(rendered.contains("Mistral-7B"));
-        assert!(rendered.contains("ENDPOINT"));
-        assert!(rendered.contains("URL"));
+        assert_eq!(PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL, "PROCESSES");
+        assert!(!rendered.contains("ENDPOINT"));
+        assert!(rendered.contains("PID"));
+        assert!(!rendered.contains("URL"));
+        assert!(rendered.contains("mesh-llm Processes"));
     }
 
     #[test]
@@ -8871,14 +8931,23 @@ mod tests {
             status: RuntimeStatus::Ready,
             url: "browser-tools".to_string(),
             port: 0,
+            pid: Some(4321),
         }];
-        let [label_width, url_width, web_port_width, web_status_width] =
-            webserver_process_column_widths(52, &rows);
+        let [label_width, web_pid_width, web_port_width, web_status_width] =
+            webserver_process_column_widths(52);
 
+        assert_eq!(web_pid_width, 5);
         assert_eq!(web_port_width, 5);
         assert_eq!(web_status_width, 5);
-        assert_eq!(label_width + url_width, 37);
-        assert!(label_width >= "Plugin: browser-tools".len());
+        assert_eq!(label_width, 32);
+        assert!(label_width >= rows[0].label.len());
+        assert!(label_width >= PRETTY_TUI_WEBSERVER_PROCESS_HEADER_LABEL.len());
+    }
+
+    #[test]
+    fn tui_dashboard_process_table_renders_missing_pid_as_dash() {
+        assert_eq!(format_dashboard_pid(None), "-");
+        assert_eq!(format_dashboard_pid(Some(4321)), "4321");
     }
 
     #[test]
@@ -9847,7 +9916,7 @@ mod tests {
         assert!(rendered.contains("Mesh Events"));
         assert!(rendered.contains("Processes"));
         assert!(rendered.contains("llama.cpp"));
-        assert!(rendered.contains("Webserver"));
+        assert!(rendered.contains("mesh-llm Processes"));
         assert!(rendered.contains("Loaded Models"));
         assert!(rendered.contains("Incoming Requests"));
         assert!(!rendered.contains('📋'));
@@ -9878,6 +9947,42 @@ mod tests {
                 "╮"
             );
         }
+    }
+
+    #[test]
+    fn tui_terminal_setup_marks_cleanup_required_after_enter_escape() {
+        let mut formatter = InteractiveDashboardFormatter::default();
+
+        formatter.mark_terminal_escape_written();
+
+        assert!(formatter.terminal_active);
+        assert!(formatter.dirty);
+        assert!(formatter.terminal.is_none());
+    }
+
+    #[test]
+    fn tui_narrow_terminal_renders_resize_guidance_instead_of_dashboard() {
+        let mut state = DashboardState::default();
+        state.reduce(DashboardAction::Resize(dashboard_layout_for_terminal_size(
+            PRETTY_TUI_MIN_DASHBOARD_WIDTH - 1,
+            24,
+        )));
+        state.reduce(DashboardAction::SnapshotUpdated(snapshot_fixture(2, 30)));
+        state.reduce(DashboardAction::OutputEvent(OutputEvent::RuntimeReady {
+            api_url: "http://localhost:9337".to_string(),
+            console_url: Some("http://localhost:3131".to_string()),
+            api_port: 9337,
+            console_port: Some(3131),
+            models_count: Some(2),
+            pi_command: None,
+            goose_command: None,
+        }));
+
+        let rendered = render_tui_frame_snapshot(&state, PRETTY_TUI_MIN_DASHBOARD_WIDTH - 1, 12);
+
+        assert!(rendered.contains(">= 60 columns"));
+        assert!(rendered.contains("Resize"));
+        assert!(!rendered.contains("Mesh Events"));
     }
 
     #[test]

@@ -115,6 +115,8 @@ pub struct PluginSummary {
     pub enabled: bool,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub capabilities: Vec<String>,
@@ -350,6 +352,7 @@ impl PluginManager {
                         kind: "bridge".into(),
                         enabled: true,
                         status: "running".into(),
+                        pid: None,
                         version: None,
                         capabilities: manifest.capabilities.clone(),
                         command: None,
@@ -1812,6 +1815,7 @@ mod tests {
             kind: "external".into(),
             enabled: true,
             status: "running".into(),
+            pid: None,
             version: None,
             capabilities: Vec::new(),
             command: None,

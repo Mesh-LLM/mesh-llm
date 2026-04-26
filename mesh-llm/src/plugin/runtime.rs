@@ -55,6 +55,7 @@ impl ExternalPlugin {
                 kind: "external".into(),
                 enabled: true,
                 status: "starting".into(),
+                pid: None,
                 version: None,
                 capabilities: Vec::new(),
                 command: Some(spec.command.clone()),
@@ -153,6 +154,7 @@ impl ExternalPlugin {
         {
             let mut summary = self.summary.lock().await;
             summary.status = "starting".into();
+            summary.pid = None;
             summary.error = None;
         }
 
@@ -185,6 +187,8 @@ impl ExternalPlugin {
                 self.spec.name, self.spec.command
             )
         })?;
+        let pid = child.id();
+        self.summary.lock().await.pid = pid;
 
         let stream = tokio::time::timeout(
             std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS),
@@ -379,6 +383,7 @@ impl ExternalPlugin {
 
         let mut summary = self.summary.lock().await;
         summary.status = "stopped".into();
+        summary.pid = None;
         summary.version = None;
         summary.capabilities.clear();
         summary.tools.clear();
@@ -622,6 +627,7 @@ impl ExternalPlugin {
         drop(runtime);
         let mut summary = self.summary.lock().await;
         summary.status = "restarting".into();
+        summary.pid = None;
         summary.error = Some(reason);
     }
 
@@ -666,6 +672,7 @@ impl ExternalPlugin {
         let mut summary = self.summary.lock().await;
         summary.enabled = false;
         summary.status = "disabled".into();
+        summary.pid = None;
         summary.version = None;
         summary.capabilities.clear();
         summary.tools.clear();

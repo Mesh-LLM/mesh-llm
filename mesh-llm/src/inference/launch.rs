@@ -1128,11 +1128,50 @@ fn send_signal_if_matches(
     }
 }
 
+/// Outcome of [`terminate_process_blocking`].
+///
+/// Callers can use [`TerminationOutcome::is_success`] for a coarse success/failure
+/// check equivalent to the old `bool` return, or match on individual variants when
+/// the distinction matters (e.g. deciding whether a runtime had a chance to clean up
+/// its children).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminationOutcome {
+    /// Process was already gone before we attempted to signal it.
+    NotRunning,
+    /// Process exited after SIGTERM, before kill escalation.
+    Graceful,
+    /// Process did not exit within the grace period and had to be SIGKILL'd.
+    Killed,
+    /// Signal call itself failed (e.g. identity mismatch or OS error).
+    Failed,
+}
+
+impl TerminationOutcome {
+    /// Returns `true` for any outcome where the process is no longer running.
+    ///
+    /// Equivalent to the old `bool` return from `terminate_process_blocking`:
+    /// `NotRunning | Graceful | Killed` → `true`, `Failed` → `false`.
+    pub(crate) fn is_success(self) -> bool {
+        !matches!(self, TerminationOutcome::Failed)
+    }
+}
+
+/// Attempts to terminate a process identified by `pid`, with identity validation
+/// and graceful-then-forceful signal escalation.
+///
+/// Returns a [`TerminationOutcome`] describing how the process was stopped:
+/// - [`TerminationOutcome::NotRunning`] — process was already dead.
+/// - [`TerminationOutcome::Graceful`] — process exited after SIGTERM within the grace period.
+/// - [`TerminationOutcome::Killed`] — process required SIGKILL after the grace period.
+/// - [`TerminationOutcome::Failed`] — could not signal the process (identity mismatch or OS error).
+///
+/// Sends SIGTERM first, then waits up to 5 s (20 × 250 ms). If the process is
+/// still alive, escalates to SIGKILL.
 pub(crate) fn terminate_process_blocking(
     pid: u32,
     expected_comm: &str,
     expected_start_time: Option<i64>,
-) -> bool {
+) -> TerminationOutcome {
     match send_signal_if_matches(
         pid,
         expected_comm,
@@ -1141,12 +1180,12 @@ pub(crate) fn terminate_process_blocking(
     ) {
         SignalOutcome::Sent => {}
         #[cfg(not(windows))]
-        SignalOutcome::AlreadyDead => return true,
+        SignalOutcome::AlreadyDead => return TerminationOutcome::NotRunning,
         // Identity mismatch: the PID belongs to a different process; do not
         // claim a successful stop.
         #[cfg(not(windows))]
-        SignalOutcome::Skipped => return false,
-        SignalOutcome::Failed => return false,
+        SignalOutcome::Skipped => return TerminationOutcome::Failed,
+        SignalOutcome::Failed => return TerminationOutcome::Failed,
     }
 
     for _ in 0..20 {
@@ -1154,15 +1193,15 @@ pub(crate) fn terminate_process_blocking(
         if crate::runtime::instance::validate::process_liveness(pid)
             == crate::runtime::instance::validate::Liveness::Dead
         {
-            return true;
+            return TerminationOutcome::Graceful;
         }
     }
 
     match send_signal_if_matches(pid, expected_comm, expected_start_time, ProcessSignal::Kill) {
-        SignalOutcome::Sent => true,
+        SignalOutcome::Sent => TerminationOutcome::Killed,
         #[cfg(not(windows))]
-        SignalOutcome::AlreadyDead => true,
-        _ => false,
+        SignalOutcome::AlreadyDead => TerminationOutcome::Graceful,
+        _ => TerminationOutcome::Failed,
     }
 }
 
