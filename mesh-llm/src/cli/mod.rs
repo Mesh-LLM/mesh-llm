@@ -399,6 +399,16 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) trust_owner: Vec<String>,
 
+    /// Proxy to an external OpenAI-compatible backend (e.g. vLLM, TGI, Ollama).
+    /// Skips llama.cpp entirely — mesh-llm just routes mesh traffic to this URL.
+    #[arg(long, value_name = "URL")]
+    pub(crate) external_backend: Option<String>,
+
+    /// Override the model name advertised to the mesh when using --external-backend.
+    /// If omitted, mesh-llm probes GET /v1/models on the backend to discover it.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) external_model: Option<String>,
+
     /// Internal: set when this node joined via Nostr discovery (not --join).
     #[arg(skip)]
     pub(crate) nostr_discovery: bool,

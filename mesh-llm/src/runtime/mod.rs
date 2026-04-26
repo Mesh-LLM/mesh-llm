@@ -1748,6 +1748,23 @@ async fn run_auto(
 
     let affinity_router = affinity::AffinityRouter::new();
 
+    // ── External backend fast path ──────────────────────────────────
+    // When --external-backend is set, skip everything llama.cpp related
+    // (model resolution, rpc-server, election) and go straight to Host
+    // role with a reverse proxy to the external endpoint.
+    if let Some(ref external_url_str) = cli.external_backend {
+        return run_external_backend(
+            &cli,
+            node,
+            channels,
+            external_url_str,
+            api_port,
+            affinity_router,
+            plugin_manager,
+        )
+        .await;
+    }
+
     // Start bootstrap proxy if joining an existing mesh.
     // This gives instant API access via tunnel while our GPU loads.
     let mut bootstrap_listener_tx = if !cli.join.is_empty() {
@@ -2574,6 +2591,196 @@ async fn run_auto(
 /// Run as passive node (client or standby GPU).
 /// Returns Ok(Some(model_name)) if a standby GPU should promote to serve a model.
 /// Returns Ok(None) on clean shutdown.
+
+// ── External backend mode ───────────────────────────────────────────
+
+/// Run mesh-llm as a gateway to an external OpenAI-compatible backend.
+///
+/// Skips all llama.cpp machinery (rpc-server, llama-server, election,
+/// model download, GGUF parsing). The node joins the mesh normally,
+/// gossips the model name and capabilities, and proxies inference
+/// requests to the external endpoint via a local reverse proxy.
+async fn run_external_backend(
+    cli: &Cli,
+    node: mesh::Node,
+    channels: mesh::TunnelChannels,
+    external_url_str: &str,
+    api_port: u16,
+    affinity_router: affinity::AffinityRouter,
+    plugin_manager: plugin::PluginManager,
+) -> Result<()> {
+    use crate::network::openai::backend;
+
+    let backend_url: url::Url = external_url_str
+        .parse()
+        .with_context(|| format!("invalid --external-backend URL: {external_url_str}"))?;
+
+    // Discover model name from the backend, or use the override
+    let model_name = if let Some(ref name) = cli.external_model {
+        eprintln!("🔗 External backend: {backend_url} (model override: {name})");
+        name.clone()
+    } else {
+        eprintln!("🔗 Probing external backend at {backend_url} ...");
+        let models = backend::probe_external_models(&backend_url)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to probe external backend at {backend_url} — \
+                     use --external-model to set the model name manually"
+                )
+            })?;
+        let name = models[0].clone();
+        if models.len() > 1 {
+            eprintln!(
+                "   Found {} models: {} (using first)",
+                models.len(),
+                models.join(", ")
+            );
+        } else {
+            eprintln!("   Found model: {name}");
+        }
+        name
+    };
+
+    // Start the reverse proxy to the external backend
+    let proxy_handle = backend::start_external_backend_proxy(backend_url.clone()).await?;
+    let local_proxy_port = proxy_handle.port();
+    tracing::info!(
+        "external backend proxy listening on 127.0.0.1:{local_proxy_port} → {backend_url}"
+    );
+
+    // Start tunnel manager for remote mesh peers.
+    // rpc_port=0 means inbound RPC tunnels are dropped (no rpc-server), which is correct.
+    // HTTP tunnels are handled via set_http_port below.
+    let tunnel_mgr = tunnel::Manager::start(node.clone(), 0, channels.rpc, channels.http).await?;
+    tunnel_mgr.set_http_port(local_proxy_port);
+
+    // Become Host immediately — no election needed
+    node.set_role(NodeRole::Host {
+        http_port: api_port,
+    })
+    .await;
+
+    // Advertise the model to the mesh
+    let serving_list = vec![model_name.clone()];
+    node.set_serving_models(serving_list.clone()).await;
+    node.set_hosted_models(serving_list.clone()).await;
+    node.set_models(serving_list.clone()).await;
+    node.set_model_source(model_name.clone()).await;
+    node.set_llama_ready(true).await;
+    node.regossip().await;
+
+    // Set up routing targets — just our local proxy
+    let (target_tx, target_rx) = tokio::sync::watch::channel(election::ModelTargets::default());
+    let target_tx = std::sync::Arc::new(target_tx);
+    {
+        let mut targets = election::ModelTargets::default();
+        targets.targets.insert(
+            model_name.clone(),
+            vec![election::InferenceTarget::Local(local_proxy_port)],
+        );
+        target_tx.send_replace(targets);
+    }
+
+    // Start the API proxy (port 9337)
+    let proxy_node = node.clone();
+    let proxy_rx = target_rx.clone();
+    let proxy_affinity = affinity_router.clone();
+    let proxy_listen_all = cli.listen_all;
+    let (api_control_tx, _api_control_rx) =
+        tokio::sync::mpsc::unbounded_channel::<api::RuntimeControlRequest>();
+    tokio::spawn(async move {
+        api_proxy(
+            proxy_node,
+            api_port,
+            proxy_rx,
+            api_control_tx,
+            None,
+            proxy_listen_all,
+            proxy_affinity,
+        )
+        .await;
+    });
+
+    // Start the management console
+    let console_port = Some(cli.console);
+    if let Some(cport) = console_port {
+        let cs = api::MeshApi::new(
+            node.clone(),
+            model_name.clone(),
+            api_port,
+            0, // no local model file size
+            plugin_manager.clone(),
+            affinity_router.clone(),
+        );
+        cs.set_primary_backend("external".into()).await;
+        if let Some(ref name) = cli.mesh_name {
+            cs.set_mesh_name(name.clone()).await;
+        }
+        let cs2 = cs.clone();
+        let console_listen_all = cli.listen_all;
+        let console_headless = cli.headless;
+        let console_model = model_name.clone();
+        let console_target_rx = target_rx.clone();
+        tokio::spawn(async move {
+            // Console takes old-style InferenceTarget — adapt from ModelTargets
+            let (adapted_tx, adapted_rx) =
+                tokio::sync::watch::channel(election::InferenceTarget::None);
+            tokio::spawn(async move {
+                let mut rx = console_target_rx;
+                loop {
+                    let targets = rx.borrow().clone();
+                    let target = targets.get(&console_model);
+                    adapted_tx.send_replace(target);
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            });
+            api::start(cport, cs2, adapted_rx, console_listen_all, console_headless).await;
+        });
+    }
+
+    eprintln!();
+    eprintln!("  🔗 External backend: {backend_url}");
+    eprintln!("  📡 Model: {model_name}");
+    eprintln!("  API:     http://localhost:{api_port}");
+    if let Some(cport) = console_port {
+        eprintln!("  {}", format_console_ready_line(cli.headless, cport));
+    }
+    eprintln!();
+
+    // Health check loop — periodically verify the external backend is reachable.
+    // If it goes down, withdraw the model from the mesh. When it comes back, re-advertise.
+    let health_node = node.clone();
+    let health_url = backend_url.clone();
+    let health_model = model_name.clone();
+    tokio::spawn(async move {
+        let mut was_healthy = true;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            let healthy = backend::check_external_health(&health_url).await;
+            if healthy && !was_healthy {
+                eprintln!("🔗 External backend recovered — re-advertising {health_model}");
+                tracing::info!("external backend recovered");
+                advertise_model_ready(&health_node, &health_model, &health_model).await;
+            } else if !healthy && was_healthy {
+                eprintln!("⚠️  External backend unreachable — withdrawing {health_model}");
+                tracing::warn!("external backend health check failed");
+                withdraw_advertised_model(&health_node, &health_model).await;
+            }
+            was_healthy = healthy;
+        }
+    });
+
+    // Wait for shutdown
+    wait_shutdown_signal().await;
+    node.broadcast_leaving().await;
+    proxy_handle.shutdown().await;
+    drop(plugin_manager);
+    Ok(())
+}
+
 async fn run_passive(
     cli: &Cli,
     node: mesh::Node,

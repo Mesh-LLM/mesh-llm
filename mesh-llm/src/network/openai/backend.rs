@@ -1,5 +1,5 @@
 use crate::network::openai::transport;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -117,6 +117,188 @@ pub(crate) async fn start_backend_proxy(llama_port: u16) -> Result<BackendProxyH
         stop_tx,
         task,
     })
+}
+
+// ── External backend proxy ─────────────────────────────────────────
+
+/// Start a backend proxy that forwards to an external OpenAI-compatible
+/// endpoint (e.g. vLLM, TGI, Ollama) instead of a local llama-server.
+///
+/// Returns the same `BackendProxyHandle` — the rest of the mesh doesn't
+/// know or care that the upstream is external.
+pub(crate) async fn start_external_backend_proxy(
+    backend_url: url::Url,
+) -> Result<BackendProxyHandle> {
+    let host = backend_url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("external backend URL has no host"))?
+        .to_string();
+    let port_num = backend_url.port_or_known_default().unwrap_or(80);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let local_port = listener.local_addr()?.port();
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+
+    let slots = Arc::new(Semaphore::new(BACKEND_PROXY_MAX_INFLIGHT));
+
+    let task = tokio::spawn(async move {
+        let mut connections = JoinSet::new();
+        loop {
+            tokio::select! {
+                changed = stop_rx.changed() => {
+                    if changed.is_err() || *stop_rx.borrow() {
+                        break;
+                    }
+                }
+                Some(result) = connections.join_next(), if !connections.is_empty() => {
+                    if let Err(err) = result {
+                        if !err.is_cancelled() {
+                            tracing::debug!("external backend proxy connection task failed: {err}");
+                        }
+                    }
+                }
+                accept_result = listener.accept() => match accept_result {
+                    Ok((stream, _)) => {
+                        let permit = match Arc::clone(&slots).try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(TryAcquireError::NoPermits) => {
+                                tracing::warn!(
+                                    cap = BACKEND_PROXY_MAX_INFLIGHT,
+                                    "external backend proxy at capacity; dropping connection"
+                                );
+                                drop(stream);
+                                continue;
+                            }
+                            Err(TryAcquireError::Closed) => {
+                                drop(stream);
+                                break;
+                            }
+                        };
+                        let upstream_host = host.clone();
+                        let upstream_port = port_num;
+                        connections.spawn(async move {
+                            let _permit = permit;
+                            if let Err(err) = handle_external_connection(
+                                stream,
+                                &upstream_host,
+                                upstream_port,
+                            )
+                            .await
+                            {
+                                tracing::debug!("external backend proxy request failed: {err}");
+                            }
+                        });
+                    }
+                    Err(err) => {
+                        tracing::warn!("external backend proxy accept error: {err}");
+                        sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            }
+        }
+
+        connections.abort_all();
+        while let Some(result) = connections.join_next().await {
+            if let Err(err) = result {
+                if !err.is_cancelled() {
+                    tracing::debug!("external backend proxy shutdown join failed: {err}");
+                }
+            }
+        }
+    });
+
+    Ok(BackendProxyHandle {
+        port: local_port,
+        stop_tx,
+        task,
+    })
+}
+
+async fn handle_external_connection(
+    mut stream: TcpStream,
+    upstream_host: &str,
+    upstream_port: u16,
+) -> Result<()> {
+    let _ = stream.set_nodelay(true);
+    let request = match transport::read_http_request(&mut stream).await {
+        Ok(request) => request,
+        Err(err) => {
+            let _ = transport::send_400(stream, &err.to_string()).await;
+            return Ok(());
+        }
+    };
+
+    let mut upstream = match TcpStream::connect(format!("{upstream_host}:{upstream_port}")).await {
+        Ok(stream) => stream,
+        Err(err) => {
+            tracing::warn!(
+                "failed to connect to external backend {upstream_host}:{upstream_port}: {err}"
+            );
+            let _ = transport::send_503(stream, "external backend unavailable").await;
+            return Ok(());
+        }
+    };
+    let _ = upstream.set_nodelay(true);
+
+    if let Err(err) = upstream.write_all(&request.raw).await {
+        tracing::warn!(
+            "failed to write request to external backend {upstream_host}:{upstream_port}: {err}"
+        );
+        let _ = transport::send_503(stream, "external backend unavailable").await;
+        return Ok(());
+    }
+
+    let _ = tokio::io::copy(&mut upstream, &mut stream).await;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
+/// Probe an external backend's /v1/models endpoint to discover the model name.
+/// Returns the first model ID found, or an error.
+pub(crate) async fn probe_external_models(backend_url: &url::Url) -> Result<Vec<String>> {
+    let models_url = format!(
+        "{}v1/models",
+        backend_url.as_str().trim_end_matches('/').to_string() + "/"
+    );
+    let resp = reqwest::get(&models_url)
+        .await
+        .with_context(|| format!("GET {models_url}"))?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!(
+            "external backend returned {} for GET {models_url}",
+            resp.status()
+        );
+    }
+
+    let body: serde_json::Value = resp.json().await?;
+    let models: Vec<String> = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| m.get("id").and_then(|id| id.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if models.is_empty() {
+        anyhow::bail!("no models found at {models_url}");
+    }
+
+    Ok(models)
+}
+
+/// Check if an external backend is healthy by hitting /v1/models.
+pub(crate) async fn check_external_health(backend_url: &url::Url) -> bool {
+    let models_url = format!(
+        "{}v1/models",
+        backend_url.as_str().trim_end_matches('/').to_string() + "/"
+    );
+    match reqwest::get(&models_url).await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
 }
 
 async fn handle_connection(mut stream: TcpStream, llama_port: u16) -> Result<()> {
