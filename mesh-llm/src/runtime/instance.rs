@@ -414,10 +414,9 @@ pub fn is_locked(lock_path: &Path) -> bool {
         return err.raw_os_error() == Some(libc::EWOULDBLOCK);
     }
 
-    // The probe acquired the lock, so release it explicitly before returning.
-    // Dropping the file would also close the fd, but an explicit unlock keeps
-    // tests and callers deterministic on platforms where close-to-unlock
-    // visibility can otherwise race with immediate follow-up probes.
+    // The probe acquired the lock, so release it explicitly. Dropping the file
+    // would also close the fd, but an explicit unlock keeps immediate follow-up
+    // probes deterministic in high-parallelism test runs.
     // SAFETY: flock is safe to call with a valid fd.
     let _ = unsafe { libc::flock(fd, libc::LOCK_UN) };
     drop(file);
@@ -1611,15 +1610,13 @@ mod tests {
     #[cfg(unix)]
     fn wait_until_unlocked(lock_path: &Path) -> bool {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        loop {
+        while std::time::Instant::now() < deadline {
             if !is_locked(lock_path) {
                 return true;
             }
-            if std::time::Instant::now() >= deadline {
-                return false;
-            }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        !is_locked(lock_path)
     }
 
     #[test]

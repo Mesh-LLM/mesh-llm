@@ -10,6 +10,7 @@ use tokio::sync::watch;
 pub(crate) struct RuntimeDataVersion(u64);
 
 impl RuntimeDataVersion {
+    #[cfg(test)]
     pub(crate) fn get(self) -> u64 {
         self.0
     }

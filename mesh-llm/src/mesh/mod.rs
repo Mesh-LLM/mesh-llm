@@ -1372,6 +1372,7 @@ impl Node {
         self.publish_routing_runtime_snapshot();
     }
 
+    #[cfg(test)]
     pub fn routing_metrics_snapshot(
         &self,
     ) -> crate::network::metrics::RoutingMetricsStatusSnapshot {
@@ -1381,12 +1382,6 @@ impl Node {
 
     pub fn local_request_metrics_snapshot(&self) -> LocalRequestMetricsSnapshot {
         self.local_request_metrics.snapshot()
-    }
-
-    pub fn model_routing_metrics(
-        &self,
-    ) -> HashMap<String, crate::network::metrics::ModelRoutingMetricsSnapshot> {
-        self.routing_metrics.model_snapshots()
     }
 
     pub(crate) fn runtime_data_collector(&self) -> crate::runtime_data::RuntimeDataCollector {

@@ -55,28 +55,29 @@ impl RuntimeDataProducer {
         self.collector.mark_dirty(RuntimeDataDirty::STATUS)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_models_dirty(&self) -> RuntimeDataSubscriptionState {
         self.collector.mark_dirty(RuntimeDataDirty::MODELS)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_routing_dirty(&self) -> RuntimeDataSubscriptionState {
         self.collector.mark_dirty(RuntimeDataDirty::ROUTING)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_processes_dirty(&self) -> RuntimeDataSubscriptionState {
         self.collector.mark_dirty(RuntimeDataDirty::PROCESSES)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_inventory_dirty(&self) -> RuntimeDataSubscriptionState {
         self.collector.mark_dirty(RuntimeDataDirty::INVENTORY)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_plugins_dirty(&self) -> RuntimeDataSubscriptionState {
         self.collector.mark_dirty(RuntimeDataDirty::PLUGINS)
-    }
-
-    pub(crate) fn mark_runtime_dirty(&self) -> RuntimeDataSubscriptionState {
-        self.collector.mark_dirty(RuntimeDataDirty::RUNTIME)
     }
 
     pub(crate) fn publish_runtime_status<F>(&self, update: F) -> bool
@@ -152,6 +153,7 @@ impl RuntimeDataProducer {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_plugin_payload(
         &self,
         data_key: impl Into<String>,

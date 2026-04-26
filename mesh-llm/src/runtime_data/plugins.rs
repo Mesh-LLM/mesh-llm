@@ -16,6 +16,7 @@ pub(crate) enum PluginDataValue {
     Summary(Box<PluginSummary>),
     Manifest(PluginManifestOverview),
     Providers(Vec<PluginCapabilityProvider>),
+    #[cfg(test)]
     Payload(Value),
 }
 
@@ -28,6 +29,7 @@ pub(crate) struct PluginsSnapshotView {
     pub endpoints: Vec<PluginEndpointSummary>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct PluginScopedSnapshot {
     pub plugin_name: String,
@@ -122,6 +124,7 @@ pub(crate) fn plugins_snapshot(
             PluginDataValue::Providers(providers) => {
                 snapshot.providers.extend(providers.iter().cloned());
             }
+            #[cfg(test)]
             PluginDataValue::Payload(payload) => {
                 snapshot.payloads.insert(key.clone(), payload.clone());
             }
@@ -143,6 +146,7 @@ pub(crate) fn plugins_snapshot(
     snapshot
 }
 
+#[cfg(test)]
 pub(crate) fn plugin_snapshot(
     plugin_data: &PluginDataSnapshot,
     plugin_endpoints: &PluginEndpointsSnapshot,
@@ -188,6 +192,7 @@ pub(crate) fn plugin_snapshot(
     snapshot
 }
 
+#[cfg(test)]
 pub(crate) fn plugin_endpoint_snapshot(
     plugin_endpoints: &PluginEndpointsSnapshot,
     plugin_name: &str,

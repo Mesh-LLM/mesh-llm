@@ -7,10 +7,11 @@ use super::inventory::{
     replace_local_instances_snapshot, replace_local_inventory_snapshot, InventoryScanCoordinator,
 };
 use super::plugins::{
-    clear_plugin_data, clear_plugin_endpoints, plugin_endpoint_snapshot, plugin_snapshot,
-    plugins_snapshot, upsert_plugin_data, upsert_plugin_endpoint, PluginDataValue,
-    PluginScopedSnapshot, PluginsSnapshotView,
+    clear_plugin_data, clear_plugin_endpoints, plugins_snapshot, upsert_plugin_data,
+    upsert_plugin_endpoint, PluginDataValue, PluginsSnapshotView,
 };
+#[cfg(test)]
+use super::plugins::{plugin_endpoint_snapshot, plugin_snapshot, PluginScopedSnapshot};
 use super::processes::RuntimeProcessSnapshot;
 use super::producers::{RuntimeDataProducer, RuntimeDataSource};
 use super::snapshots::{
@@ -64,6 +65,7 @@ impl RuntimeDataCollector {
         self.shared.subscriptions.subscribe()
     }
 
+    #[cfg(test)]
     pub(crate) fn subscription_state(&self) -> RuntimeDataSubscriptionState {
         self.shared.subscriptions.state()
     }
@@ -211,6 +213,7 @@ impl RuntimeDataCollector {
         plugins_snapshot(&snapshots.plugin_data, &snapshots.plugin_endpoints)
     }
 
+    #[cfg(test)]
     pub(crate) fn plugin_snapshot(&self, plugin_name: &str) -> PluginScopedSnapshot {
         let snapshots = self.snapshots();
         plugin_snapshot(
@@ -220,6 +223,7 @@ impl RuntimeDataCollector {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn plugin_endpoint_snapshot(
         &self,
         plugin_name: &str,
