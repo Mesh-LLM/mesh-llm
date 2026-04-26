@@ -100,15 +100,33 @@ struct EncryptedResponseChunk {
 
 #### Policy
 
-New flag on mesh creation:
+Three levels, most important first:
 
+**Client-local** (primary mechanism — no coordination needed):
 ```
-mesh-llm --encrypt-inference    # require E2E for all inference
-mesh-llm --encrypt-inference=prefer  # encrypt when possible, fallback to plaintext
+mesh-llm --require-attested-hosts    # only send MY prompts to attested nodes
+mesh-llm --encrypt-inference         # only send MY prompts encrypted
 ```
+This is purely local. Your node already has every peer's attestation
+and inference key from gossip. It just filters before routing. No
+mesh-wide agreement needed. Your node, your rules.
 
-Propagates in gossip as mesh policy. Host can reject unencrypted
-requests. Default: off (backward compatible).
+**Mesh-wide** (convenience — originator sets a minimum bar):
+```
+mesh-llm --mesh-policy require-hardware-attest   # all nodes must attest
+```
+Propagates in gossip. Old unattested nodes excluded from election.
+Useful when the mesh originator wants uniform guarantees.
+
+**Gateway** (for external clients):
+```
+mesh-llm --gateway --require-attested-hosts
+```
+The gateway enforces on behalf of API clients who aren't mesh peers.
+
+The client-local flag is the most important. A client shouldn't have
+to trust the mesh originator to set the right policy — they enforce
+their own standard. Default: off (backward compatible).
 
 #### MoE / pipeline notes
 
