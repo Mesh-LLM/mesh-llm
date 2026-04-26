@@ -1530,7 +1530,8 @@ async fn run_auto(
     )
     .await?;
     node.require_attested_hosts = cli.require_attested_hosts;
-    node.local_security_posture = crate::system::hardening::harden_runtime(false, false).ok();
+    node.local_security_posture =
+        crate::system::hardening::harden_runtime(false, cli.require_attested_hosts).ok();
     node.start_accepting();
     let token = node.invite_token();
     node.set_display_name(node_display_name(&cli, &node)).await;

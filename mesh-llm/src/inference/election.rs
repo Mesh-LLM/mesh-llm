@@ -102,15 +102,25 @@ pub fn should_be_host_for_model(
     my_id: iroh::EndpointId,
     my_vram: u64,
     model_peers: &[mesh::PeerInfo],
+    require_attested: bool,
 ) -> bool {
     for peer in model_peers {
         if matches!(peer.role, NodeRole::Client) {
             continue;
         }
-        if peer.vram_bytes > my_vram {
+        // Skip unattested peers when attestation is required
+        if require_attested && !peer.is_hardware_attested() {
+            continue;
+        }
+        let peer_vram = if require_attested {
+            peer.attested_memory_bytes().unwrap_or(peer.vram_bytes)
+        } else {
+            peer.vram_bytes
+        };
+        if peer_vram > my_vram {
             return false;
         }
-        if peer.vram_bytes == my_vram && peer.id > my_id {
+        if peer_vram == my_vram && peer.id > my_id {
             return false;
         }
     }
@@ -1650,7 +1660,7 @@ pub async fn election_loop(
         let i_am_host = if requires_split {
             // Distributed mode: elect one host from the model group using the
             // same advertised node capacity every peer observes through gossip.
-            should_be_host_for_model(node.id(), my_vram, &model_peers)
+            should_be_host_for_model(node.id(), my_vram, &model_peers, false)
         } else if model_peers.is_empty() {
             // No other node serving this model — we must host
             true
@@ -1899,7 +1909,7 @@ pub async fn election_loop(
                 .max_by_key(|p| (p.vram_bytes, p.id));
 
             if let Some(host) = host_peer {
-                if should_be_host_for_model(host.id, host.vram_bytes, &model_peers) {
+                if should_be_host_for_model(host.id, host.vram_bytes, &model_peers, false) {
                     update_targets(
                         &node,
                         &model_name,
@@ -3011,7 +3021,7 @@ mod tests {
             }
         );
 
-        assert!(should_be_host_for_model(id_a, 60, &peers));
+        assert!(should_be_host_for_model(id_a, 60, &peers, false));
     }
 
     #[test]
@@ -3059,12 +3069,14 @@ mod tests {
         assert!(should_be_host_for_model(
             make_id(1),
             80,
-            std::slice::from_ref(&peer)
+            std::slice::from_ref(&peer),
+            false,
         ));
         assert!(!should_be_host_for_model(
             make_id(1),
             local_launch_vram,
-            &[peer]
+            &[peer],
+            false,
         ));
     }
 

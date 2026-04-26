@@ -825,6 +825,25 @@ impl PeerInfo {
         }
     }
 
+    /// Returns true if this peer has valid hardware attestation.
+    pub fn is_hardware_attested(&self) -> bool {
+        self.hardware_attestation.is_some() && self.inference_public_key.is_some()
+    }
+
+    /// Returns attested unified memory bytes if hardware attestation exists.
+    pub fn attested_memory_bytes(&self) -> Option<u64> {
+        self.hardware_attestation
+            .as_ref()
+            .map(|a| a.attestation.unified_memory_bytes)
+    }
+
+    /// Returns true if this peer's security posture shows full hardening.
+    pub fn is_runtime_hardened(&self) -> bool {
+        self.security_posture
+            .as_ref()
+            .map_or(false, |s| s.is_fully_hardened())
+    }
+
     pub fn accepts_http_inference(&self) -> bool {
         matches!(self.role, NodeRole::Host { .. })
     }
