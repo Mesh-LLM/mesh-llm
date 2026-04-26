@@ -423,30 +423,40 @@ mesh-llm client --auto --port 9337
 curl -s http://localhost:9337/v1/models | jq '.data[].id'
 ```
 
-### External OpenAI-compatible backends (vLLM, TGI, Ollama, etc.)
+### External OpenAI-compatible backends (vLLM, TGI, Ollama, Lemonade, etc.)
 
 The `openai-endpoint` plugin routes inference to any server that speaks the OpenAI `/v1/chat/completions` API. The server does all the inference work — mesh-llm just discovers its models and routes requests to it.
 
-Enable the plugin and set the URL:
+Enable the plugin in `~/.mesh-llm/config.toml` with the URL:
 
 ```toml
-# ~/.mesh-llm/config.toml
+# vLLM
 [[plugin]]
 name = "openai-endpoint"
+url = "http://gpu-box:8000/v1"
+
+# Ollama
+[[plugin]]
+name = "openai-endpoint"
+url = "http://localhost:11434/v1"
+
+# Lemonade
+[[plugin]]
+name = "openai-endpoint"
+url = "http://localhost:8000/api/v1"
 ```
 
 ```bash
-# vLLM
-MESH_LLM_OPENAI_ENDPOINT_URL=http://gpu-box:8000/v1 mesh-llm serve
-
-# Ollama
-MESH_LLM_OPENAI_ENDPOINT_URL=http://localhost:11434/v1 mesh-llm serve
-
-# TGI
-MESH_LLM_OPENAI_ENDPOINT_URL=http://localhost:8080/v1 mesh-llm serve
+mesh-llm serve
 ```
 
-Default URL is `http://localhost:8000/v1`. The plugin health-checks the backend by probing `GET /v1/models` — models appear and disappear automatically as the backend starts and stops.
+The URL can also be set via `MESH_LLM_OPENAI_ENDPOINT_URL` env var (config takes precedence). Default: `http://localhost:8000/v1`. The plugin health-checks the backend by probing `GET /v1/models` — models appear and disappear automatically as the backend starts and stops.
+
+To use an external backend without loading any llama.cpp models:
+
+```bash
+mesh-llm client
+```
 
 If you want the mesh to be discoverable via `--auto`, publish it:
 
