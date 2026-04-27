@@ -320,9 +320,7 @@ async fn handle_inbound_stream(
     Ok(())
 }
 
-/// Magic byte prefix for E2E encrypted tunnel payloads.
-/// Must match the constant in `network::openai::transport`.
-const ENCRYPTED_TUNNEL_MAGIC: u8 = 0xE1;
+use crate::crypto::inference_encryption::ENCRYPTED_TUNNEL_MAGIC;
 
 /// Handle an inbound HTTP tunnel bi-stream: connect to the local backend proxy and relay.
 ///

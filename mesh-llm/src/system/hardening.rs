@@ -178,6 +178,12 @@ const DANGEROUS_ENV_VARS: &[&str] = &[
 ];
 
 /// Remove environment variables that could be used for code injection.
+///
+/// SAFETY: `std::env::remove_var` is not thread-safe. This must be called
+/// as early as possible in startup. On edition 2024+ it requires `unsafe`.
+/// The Tokio runtime may already have worker threads at this point —
+/// in practice the env vars we remove are never read by other threads,
+/// but this should ideally move to before `#[tokio::main]`.
 fn scrub_dangerous_env() {
     for var in DANGEROUS_ENV_VARS {
         if std::env::var_os(var).is_some() {

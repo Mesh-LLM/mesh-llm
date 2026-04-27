@@ -1593,8 +1593,7 @@ async fn route_local_attempt(
     }
 }
 
-/// Magic byte prefix for E2E encrypted tunnel payloads.
-const ENCRYPTED_TUNNEL_MAGIC: u8 = 0xE1;
+use crate::crypto::inference_encryption::ENCRYPTED_TUNNEL_MAGIC;
 
 /// Result of maybe_encrypt_for_host: the wire payload and optional session/host key
 /// needed to decrypt the encrypted response.

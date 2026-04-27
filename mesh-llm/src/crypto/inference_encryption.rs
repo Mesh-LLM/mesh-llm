@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 
 use super::error::CryptoError;
 
+/// Magic byte prefix for E2E encrypted tunnel payloads.
+/// Used by transport.rs (sender) and tunnel.rs (receiver).
+pub const ENCRYPTED_TUNNEL_MAGIC: u8 = 0xE1;
+
 // ── Inference keypair ─────────────────────────────────────────────
 
 /// X25519 keypair used for inference payload encryption.
