@@ -2535,10 +2535,10 @@ fn worker_only_legacy_models_are_excluded_from_http_routes() {
     assert!(!legacy_worker.routes_http_model("worker-only-model"));
 }
 
-/// Verifies that dead-peer cleanup prevents re-admission: after a peer is cleaned
-/// up and added to dead_peers, the map blocks any further connection attempts,
-/// and a subsequent PeerLeaving from the same peer is rejected as forged (peer_id
-/// no longer in peers set).
+/// Verifies that dead-peer cleanup prevents re-admission within the TTL window:
+/// after a peer is cleaned up and added to dead_peers, the entry blocks connection
+/// attempts until it expires (after [`DEAD_PEER_TTL`]). A subsequent PeerLeaving
+/// from the same peer is rejected as forged (peer_id no longer in peers set).
 #[test]
 fn dead_peer_cleanup_prevents_readmission() {
     use crate::proto::node::PeerLeaving;
@@ -2640,9 +2640,12 @@ fn dead_peer_ttl_expires() {
 
     let mut dead_peers: HashMap<EndpointId, std::time::Instant> = HashMap::new();
 
-    // Insert with a timestamp far enough in the past to be expired
-    let expired_at =
-        std::time::Instant::now() - super::DEAD_PEER_TTL - std::time::Duration::from_secs(1);
+    // Insert with a timestamp far enough in the past to be expired.
+    // Use checked_sub to avoid panic on very fresh monotonic clocks.
+    let expired_age = super::DEAD_PEER_TTL + std::time::Duration::from_secs(1);
+    let expired_at = std::time::Instant::now()
+        .checked_sub(expired_age)
+        .expect("monotonic clock too fresh to test TTL expiry");
     dead_peers.insert(peer_id, expired_at);
 
     // The TTL check used in connect_to_peer / update_transitive_peer should NOT block
