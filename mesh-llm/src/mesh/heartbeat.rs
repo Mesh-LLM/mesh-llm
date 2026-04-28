@@ -580,7 +580,11 @@ impl Node {
                                 // Generic peers require 2 misses so a single timeout doesn't
                                 // evict an otherwise-alive inbound-only peer. Shared MoE peers
                                 // are stricter: one missed heartbeat should trigger re-election.
-                                node.state.lock().await.dead_peers.insert(peer_id);
+                                node.state
+                                    .lock()
+                                    .await
+                                    .dead_peers
+                                    .insert(peer_id, std::time::Instant::now());
                                 super::emit_mesh_warning(format!(
                                     "💔 Heartbeat: {} unreachable ({} failure{}), removing + broadcasting death",
                                     peer_id.fmt_short(),
@@ -629,6 +633,15 @@ impl Node {
                     node.state.lock().await.connections.remove(&stale_id);
                 }
 
+                // GC expired dead_peers entries so recovered peers can be
+                // re-learned transitively through gossip.
+                {
+                    let mut state = node.state.lock().await;
+                    state
+                        .dead_peers
+                        .retain(|_, ts| ts.elapsed() < DEAD_PEER_TTL);
+                }
+
                 // GC expired demand entries to prevent unbounded map growth
                 node.gc_demand().await;
             }
@@ -647,7 +660,7 @@ impl Node {
             // gossip will arrive on the existing connection and trigger recovery
             // via handle_gossip_stream → add_peer → clear dead_peers.
             // Don't remove: state.connections.remove(&dead_id);
-            state.dead_peers.insert(dead_id);
+            state.dead_peers.insert(dead_id, std::time::Instant::now());
         }
         self.remove_peer(dead_id).await;
         self.broadcast_peer_down(dead_id).await;

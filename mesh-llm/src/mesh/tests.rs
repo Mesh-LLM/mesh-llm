@@ -41,7 +41,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
             peers: HashMap::new(),
             connections: HashMap::new(),
             remote_tunnel_maps: HashMap::new(),
-            dead_peers: HashSet::new(),
+            dead_peers: HashMap::new(),
             seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),
@@ -2536,7 +2536,7 @@ fn worker_only_legacy_models_are_excluded_from_http_routes() {
 }
 
 /// Verifies that dead-peer cleanup prevents re-admission: after a peer is cleaned
-/// up and added to dead_peers, the HashSet blocks any further connection attempts,
+/// up and added to dead_peers, the map blocks any further connection attempts,
 /// and a subsequent PeerLeaving from the same peer is rejected as forged (peer_id
 /// no longer in peers set).
 #[test]
@@ -2549,7 +2549,7 @@ fn dead_peer_cleanup_prevents_readmission() {
     // Simulate state: peer is admitted
     let mut peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
     let mut connections: HashSet<EndpointId> = HashSet::new();
-    let mut dead_peers: HashSet<EndpointId> = HashSet::new();
+    let mut dead_peers: HashMap<EndpointId, std::time::Instant> = HashMap::new();
 
     peers.insert(peer_id, make_test_peer_info(peer_id));
     connections.insert(peer_id);
@@ -2574,7 +2574,7 @@ fn dead_peer_cleanup_prevents_readmission() {
     // Clean up — as the handler does
     peers.remove(&accepted_id);
     connections.remove(&accepted_id);
-    dead_peers.insert(accepted_id);
+    dead_peers.insert(accepted_id, std::time::Instant::now());
 
     // Peer is now gone and in dead_peers
     assert!(
@@ -2586,14 +2586,16 @@ fn dead_peer_cleanup_prevents_readmission() {
         "connection must be removed after PeerLeaving"
     );
     assert!(
-        dead_peers.contains(&peer_id),
+        dead_peers.contains_key(&peer_id),
         "peer must be in dead_peers after cleanup"
     );
 
     // Verify dead_peers blocks re-admission (simulates the check in connect_to_peer)
     assert!(
-        dead_peers.contains(&peer_id),
-        "dead_peers.contains check prevents re-connection to cleaned-up peer"
+        dead_peers
+            .get(&peer_id)
+            .is_some_and(|t| t.elapsed() < super::DEAD_PEER_TTL),
+        "dead_peers TTL check prevents re-connection to recently cleaned-up peer"
     );
 
     // A new gossip attempt from the same peer should be blocked by dead_peers
@@ -2624,8 +2626,47 @@ fn dead_peer_cleanup_prevents_readmission() {
         "idempotent remove must not re-insert peer"
     );
     assert!(
-        dead_peers.contains(&peer_id),
+        dead_peers.contains_key(&peer_id),
         "dead_peers must still contain peer after idempotent removal"
+    );
+}
+
+/// Verifies that dead_peers entries expire after DEAD_PEER_TTL and no longer
+/// block transitive re-learning or outbound reconnection.
+#[test]
+fn dead_peer_ttl_expires() {
+    let peer_key = SecretKey::from_bytes(&[0xF0; 32]);
+    let peer_id = EndpointId::from(peer_key.public());
+
+    let mut dead_peers: HashMap<EndpointId, std::time::Instant> = HashMap::new();
+
+    // Insert with a timestamp far enough in the past to be expired
+    let expired_at =
+        std::time::Instant::now() - super::DEAD_PEER_TTL - std::time::Duration::from_secs(1);
+    dead_peers.insert(peer_id, expired_at);
+
+    // The TTL check used in connect_to_peer / update_transitive_peer should NOT block
+    assert!(
+        !dead_peers
+            .get(&peer_id)
+            .is_some_and(|t| t.elapsed() < super::DEAD_PEER_TTL),
+        "expired dead_peers entry must not block reconnection"
+    );
+
+    // The GC retain used in the heartbeat loop should remove it
+    dead_peers.retain(|_, ts| ts.elapsed() < super::DEAD_PEER_TTL);
+    assert!(
+        dead_peers.is_empty(),
+        "expired dead_peers entry must be removed by GC"
+    );
+
+    // A fresh entry should still block
+    dead_peers.insert(peer_id, std::time::Instant::now());
+    assert!(
+        dead_peers
+            .get(&peer_id)
+            .is_some_and(|t| t.elapsed() < super::DEAD_PEER_TTL),
+        "fresh dead_peers entry must block reconnection"
     );
 }
 
@@ -3228,7 +3269,7 @@ async fn make_test_node_with_owner(
             peers: HashMap::new(),
             connections: HashMap::new(),
             remote_tunnel_maps: HashMap::new(),
-            dead_peers: HashSet::new(),
+            dead_peers: HashMap::new(),
             seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),

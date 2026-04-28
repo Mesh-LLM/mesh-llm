@@ -262,7 +262,7 @@ impl Node {
 
         {
             let mut state = self.state.lock().await;
-            if state.dead_peers.remove(&remote) {
+            if state.dead_peers.remove(&remote).is_some() {
                 super::emit_mesh_info(format!(
                     "🔄 Dead peer {} is gossiping — clearing dead status",
                     remote.fmt_short()
@@ -409,7 +409,7 @@ impl Node {
         let now = std::time::Instant::now();
         // If this peer was previously dead, clear it — add_peer is only called
         // after a successful gossip exchange, which is proof of life.
-        let recovered = state.dead_peers.remove(&id);
+        let recovered = state.dead_peers.remove(&id).is_some();
         if recovered {
             super::emit_mesh_info(format!(
                 "🔄 Peer {} back from the dead (successful gossip)",
@@ -571,7 +571,11 @@ impl Node {
         if id == self.endpoint.id() {
             return;
         }
-        if state.dead_peers.contains(&id) {
+        if state
+            .dead_peers
+            .get(&id)
+            .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
+        {
             return;
         }
         if let Some(existing) = state.peers.get_mut(&id) {

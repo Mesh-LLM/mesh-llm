@@ -1164,7 +1164,7 @@ mod tests {
         let cli = Cli::parse_from(normalized.normalized);
 
         assert_eq!(cli.log_format, LogFormat::Json);
-        assert_eq!(cli.model, vec!["Qwen3-8B-Q4_K_M".to_string()]);
+        assert_eq!(cli.model, vec![std::path::PathBuf::from("Qwen3-8B-Q4_K_M")]);
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
     }
 

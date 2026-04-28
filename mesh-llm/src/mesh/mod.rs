@@ -862,6 +862,12 @@ impl PeerInfo {
 /// Peers not directly verified within this window are considered stale
 /// and excluded from gossip propagation. After 2x this duration they're removed entirely.
 const PEER_STALE_SECS: u64 = 180; // 3 minutes
+
+/// How long a dead-peer entry blocks transitive re-learning and outbound
+/// reconnection. After this period the entry expires silently and the peer
+/// can be re-discovered through normal gossip propagation. If the peer is
+/// genuinely gone, no bridge peer will mention it and it stays forgotten.
+const DEAD_PEER_TTL: std::time::Duration = std::time::Duration::from_secs(300); // 5 minutes
 /// Detect available VRAM. On Apple Silicon, uses ~75% of system RAM
 /// (the rest is reserved for OS/apps on unified memory).
 /// Detect available memory for model loading, capped by max_vram_gb if set.
@@ -1140,7 +1146,9 @@ struct MeshState {
     remote_tunnel_maps: HashMap<EndpointId, HashMap<EndpointId, u16>>,
     /// Peers confirmed dead — don't reconnect from gossip discovery.
     /// Cleared when the peer successfully reconnects via rejoin/join.
-    dead_peers: std::collections::HashSet<EndpointId>,
+    /// Entries expire after [`DEAD_PEER_TTL`] so that peers recovered
+    /// on other paths can be re-learned transitively through gossip.
+    dead_peers: HashMap<EndpointId, std::time::Instant>,
     seen_plugin_messages: HashMap<String, std::time::Instant>,
     seen_plugin_message_order: VecDeque<(std::time::Instant, String)>,
     /// Last policy-rejection status per peer — used to suppress duplicate log lines.
@@ -1568,7 +1576,7 @@ impl Node {
                 peers: HashMap::new(),
                 connections: HashMap::new(),
                 remote_tunnel_maps: HashMap::new(),
-                dead_peers: std::collections::HashSet::new(),
+                dead_peers: HashMap::new(),
                 seen_plugin_messages: HashMap::new(),
                 seen_plugin_message_order: VecDeque::new(),
                 policy_rejected_peers: HashMap::new(),
@@ -1677,7 +1685,7 @@ impl Node {
                 peers: HashMap::new(),
                 connections: HashMap::new(),
                 remote_tunnel_maps: HashMap::new(),
-                dead_peers: std::collections::HashSet::new(),
+                dead_peers: HashMap::new(),
                 seen_plugin_messages: HashMap::new(),
                 seen_plugin_message_order: VecDeque::new(),
                 policy_rejected_peers: HashMap::new(),
@@ -3076,7 +3084,7 @@ impl Node {
         // Don't add to peer list yet — only gossip exchange promotes to peer.
         let was_dead = {
             let mut state = self.state.lock().await;
-            let was_dead = state.dead_peers.remove(&remote);
+            let was_dead = state.dead_peers.remove(&remote).is_some();
             if was_dead {
                 emit_mesh_info(format!(
                     "🔄 Previously dead peer {} reconnected",
@@ -4022,7 +4030,11 @@ impl Node {
             if state.peers.contains_key(&peer_id) {
                 return Ok(());
             }
-            if state.dead_peers.contains(&peer_id) {
+            if state
+                .dead_peers
+                .get(&peer_id)
+                .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
+            {
                 tracing::debug!("Skipping connection to dead peer {}", peer_id.fmt_short());
                 return Ok(());
             }
