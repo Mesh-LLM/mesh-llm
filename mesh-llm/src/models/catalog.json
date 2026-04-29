@@ -258,6 +258,17 @@
     "mmproj": null
   },
   {
+    "name": "Laguna-XS.2-Q4_K_M",
+    "file": "Laguna-XS.2-Q4_K_M.gguf",
+    "url": "https://registry.ollama.ai/v2/library/laguna-xs.2/blobs/sha256:59885ff3cab3c264b315b4d3ebbd21190127c22283bd89e071932af0ddf2884e",
+    "size": "23.1GB",
+    "description": "Poolside Laguna XS.2 — 33B MoE coding model, 256 experts top-8, 131k context",
+    "draft": null,
+    "moe": null,
+    "extra_files": [],
+    "mmproj": null
+  },
+  {
     "name": "Gemma-3-27B-it-Q4_K_M",
     "file": "Gemma-3-27B-it-Q4_K_M.gguf",
     "url": "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/main/google_gemma-3-27b-it-Q4_K_M.gguf",
