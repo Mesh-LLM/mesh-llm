@@ -74,6 +74,7 @@ load_token() {
 save_token() {
 	local token="$1"
 	printf '%s\n' "$token" > "$TOKEN_FILE"
+	chmod 600 "$TOKEN_FILE"
 }
 
 run_client() {
