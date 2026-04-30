@@ -1,0 +1,35 @@
+default: build
+
+# Compile the app
+build:
+    @mkdir -p MeshLLM.app/Contents/{MacOS,Resources}
+    @cp Info.plist MeshLLM.app/Contents/Info.plist
+    swiftc -parse-as-library -O -framework SwiftUI -framework AppKit \
+        -o MeshLLM.app/Contents/MacOS/MeshLLM MeshLLM.swift
+    @echo "✅ Built MeshLLM.app"
+
+# Generate the app icon from the web UI jellyfish
+icon:
+    @mkdir -p MeshLLM.app/Contents/Resources
+    swift gen_icon.swift
+    iconutil -c icns MeshLLM.app/Contents/Resources/AppIcon.iconset \
+        -o MeshLLM.app/Contents/Resources/AppIcon.icns
+    rm -rf MeshLLM.app/Contents/Resources/AppIcon.iconset
+    @echo "🎨 Icon generated"
+
+# Build + run
+run: build
+    open MeshLLM.app
+
+# Full build with icon
+all: build icon
+    @echo "🚀 Ready — open MeshLLM.app"
+
+# Kill running instance
+kill:
+    @pkill -f MeshLLM || true
+
+# Clean
+clean:
+    rm -rf MeshLLM.app/Contents/MacOS/MeshLLM
+    rm -rf MeshLLM.app/Contents/Resources/AppIcon.icns
