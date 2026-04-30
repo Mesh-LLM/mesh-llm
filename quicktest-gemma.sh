@@ -1,0 +1,1 @@
+./target/release/mesh-llm serve --offline --model unsloth/gemma-4-31B-it-GGUF:UD-IQ2_XXS

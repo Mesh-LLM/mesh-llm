@@ -839,10 +839,14 @@ pub(crate) async fn run() -> Result<()> {
         return plugin::run_plugin_process(name).await;
     }
 
-    let checked_updates = autoupdate::maybe_auto_update(&cli).await?;
+    let checked_updates = if cli.offline {
+        false
+    } else {
+        autoupdate::maybe_auto_update(&cli).await?
+    };
 
     // Finish the release check before startup continues.
-    if !checked_updates && !matches!(cli.command, Some(Command::Update { .. })) {
+    if !cli.offline && !checked_updates && !matches!(cli.command, Some(Command::Update { .. })) {
         autoupdate::check_for_update().await;
     }
 
@@ -1123,6 +1127,33 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     // --- Validation ---
+    if cli.offline {
+        anyhow::ensure!(
+            !cli.auto,
+            "--offline cannot be used with --auto (Nostr auto-discovery requires internet)"
+        );
+        anyhow::ensure!(
+            cli.discover.is_none(),
+            "--offline cannot be used with --discover (Nostr discovery requires internet)"
+        );
+        anyhow::ensure!(
+            !cli.publish,
+            "--offline cannot be used with --publish (Nostr publication requires internet)"
+        );
+        anyhow::ensure!(
+            cli.nostr_relay.is_empty(),
+            "--offline cannot be used with --nostr-relay"
+        );
+        anyhow::ensure!(
+            cli.relay.is_empty(),
+            "--offline cannot be used with --relay"
+        );
+        anyhow::ensure!(
+            !cli.auto_update,
+            "--offline cannot be used with --auto-update"
+        );
+    }
+
     if cli.client && (!cli.model.is_empty() || !cli.gguf.is_empty()) {
         anyhow::bail!("--client and --model are mutually exclusive");
     }
@@ -2135,6 +2166,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         &cli.relay,
         cli.bind_port,
         Some(0.0),
+        cli.offline,
         !cli.no_enumerate_host,
         Some(owner_config),
         cli.config.as_deref(),
@@ -2218,6 +2250,7 @@ async fn run_auto(
         &cli.relay,
         cli.bind_port,
         max_vram,
+        cli.offline,
         !cli.no_enumerate_host,
         Some(owner_config),
         cli.config.as_deref(),
@@ -2237,6 +2270,12 @@ async fn run_auto(
     node.set_available_models(local_models.clone()).await;
     node.set_requested_models(requested_model_names.clone())
         .await;
+    crate::network::lan::start_announce_loop(
+        node.clone(),
+        cli.mesh_name.clone(),
+        cli.region.clone(),
+        cli.max_clients,
+    );
 
     // Start periodic health check to detect dead peers
     node.start_heartbeat();

@@ -1405,6 +1405,7 @@ impl Node {
         relay_urls: &[String],
         bind_port: Option<u16>,
         max_vram_gb: Option<f64>,
+        offline_mode: bool,
         enumerate_host: bool,
         owner_config: Option<OwnerRuntimeConfig>,
         config_path: Option<&std::path::Path>,
@@ -1432,7 +1433,10 @@ impl Node {
             .alpns(vec![ALPN_V1.to_vec()])
             .transport_config(transport_config);
 
-        {
+        if offline_mode {
+            tracing::info!("Offline mode enabled: relay transport disabled");
+            builder = builder.relay_mode(iroh::endpoint::RelayMode::Disabled);
+        } else {
             use iroh::{RelayConfig, RelayMap};
             let urls: Vec<String> = if relay_urls.is_empty() {
                 vec![
@@ -1456,19 +1460,26 @@ impl Node {
             builder = builder.bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], port)))?;
         }
         let endpoint = builder.bind().await?;
-        // Wait briefly for relay connection so the invite token includes the relay URL.
-        // On sinkholed networks this times out and we proceed without relay (direct UDP only).
-        match tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online()).await {
-            Ok(()) => tracing::info!("Relay connected"),
-            Err(_) => tracing::warn!("Relay connection timed out (5s) — proceeding without relay"),
-        }
+        let public_addr = if offline_mode {
+            tracing::info!("Offline mode enabled: skipping relay warmup and STUN");
+            None
+        } else {
+            // Wait briefly for relay connection so the invite token includes the relay URL.
+            // On sinkholed networks this times out and we proceed without relay (direct UDP only).
+            match tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online()).await {
+                Ok(()) => tracing::info!("Relay connected"),
+                Err(_) => {
+                    tracing::warn!("Relay connection timed out (5s) — proceeding without relay")
+                }
+            }
 
-        // Discover public IP via STUN so the invite token includes it.
-        // With --bind-port, the advertised port is the bound port (for port forwarding).
-        // Without --bind-port, we use port 0 — the IP is still useful for hole-punching.
-        // Relay STUN may not work on sinkholed networks, so we use raw STUN to Google/Cloudflare.
-        let stun_port = bind_port.unwrap_or(0);
-        let public_addr = stun_public_addr(stun_port).await;
+            // Discover public IP via STUN so the invite token includes it.
+            // With --bind-port, the advertised port is the bound port (for port forwarding).
+            // Without --bind-port, we use port 0 — the IP is still useful for hole-punching.
+            // Relay STUN may not work on sinkholed networks, so we use raw STUN to Google/Cloudflare.
+            let stun_port = bind_port.unwrap_or(0);
+            stun_public_addr(stun_port).await
+        };
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
