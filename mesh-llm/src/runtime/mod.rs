@@ -500,6 +500,7 @@ fn runtime_process_payload_with_status(
         port: handle.port,
         pid: handle.process.pid(),
         slots: handle.slots,
+        context_length: Some(handle.context_length),
     }
 }
 
@@ -2930,6 +2931,7 @@ async fn run_auto(
                                 process.port,
                                 process.pid,
                                 slots,
+                                process.context_length,
                             );
                             upsert_dashboard_process(&dashboard_processes, payload.clone()).await;
                             if let Some(cs) = console_state {
@@ -3088,6 +3090,7 @@ async fn run_auto(
                                         process.port,
                                         process.pid,
                                         slots,
+                                        process.context_length,
                                     );
                                     upsert_dashboard_process(
                                         &dashboard_processes,
@@ -3253,6 +3256,7 @@ async fn run_auto(
                                 handle.port,
                                 handle.process.pid(),
                                 slots,
+                                handle.context_length,
                             );
                             upsert_dashboard_process(&dashboard_processes, payload.clone())
                                 .await;
@@ -4007,6 +4011,7 @@ mod tests {
             port: 4001,
             pid: 1234,
             slots: 4,
+            context_length: Some(8192),
         }]));
         let inventory_model_name = model_name.clone();
         let provider = RuntimeDashboardSnapshotProvider::with_inventory_loader(
