@@ -124,6 +124,19 @@ type NodeSidebarRecord = {
   privacyLimited: boolean;
 };
 
+function dashboardVersionLabel(version?: string) {
+  if (!version) return null;
+  return version.endsWith("-marinabuild") ? version : `${version}-marinabuild`;
+}
+
+function peerFriendlyName(peer: { hostname?: string; id: string; role: string }) {
+  if (peer.hostname && peer.hostname.trim().length > 0) {
+    return peer.hostname;
+  }
+  const shortId = peer.id.slice(0, 10);
+  return /^Host/.test(peer.role) ? `host-${shortId}` : `peer-${shortId}`;
+}
+
 export function DashboardPage({
   status,
   meshModels,
@@ -209,6 +222,8 @@ export function DashboardPage({
           : null;
       return {
         ...peer,
+        friendlyName: peerFriendlyName(peer),
+        versionLabel: dashboardVersionLabel(peer.version),
         displayVramGb: peerDisplayVramGb,
         modelLabel,
         latencyLabel,
@@ -576,9 +591,10 @@ export function DashboardPage({
           {peerRows.length > 0 ? (
             <ScrollArea horizontal className="max-h-[18rem] md:max-h-[20rem]">
               <div className="pr-3">
-                <Table className="min-w-[920px]">
+                <Table className="min-w-[1040px]">
                   <TableHeader>
                     <TableRow>
+                      <TableHead>Name</TableHead>
                       <TableHead>ID</TableHead>
                       <TableHead>Role</TableHead>
                       <TableHead>Version</TableHead>
@@ -608,6 +624,9 @@ export function DashboardPage({
                           }
                         }}
                       >
+                        <TableCell className="max-w-[180px] truncate" title={peer.friendlyName}>
+                          {peer.friendlyName}
+                        </TableCell>
                         <TableCell className="font-mono text-xs">
                           <button
                             type="button"
@@ -623,7 +642,7 @@ export function DashboardPage({
                         </TableCell>
                         <TableCell>{peer.role}</TableCell>
                         <TableCell className="font-mono text-xs">
-                          {peer.version ?? (
+                          {peer.versionLabel ?? (
                             <span className="text-muted-foreground">unknown</span>
                           )}
                         </TableCell>
