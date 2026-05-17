@@ -3543,6 +3543,27 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_rejects_zero_thread_counts() {
+        let thread_config = RuntimeConfig {
+            n_threads: Some(0),
+            ..RuntimeConfig::default()
+        };
+        let batch_thread_config = RuntimeConfig {
+            n_threads_batch: Some(0),
+            ..RuntimeConfig::default()
+        };
+
+        assert_eq!(
+            thread_config.validate(),
+            Err("n_threads must be greater than zero when provided")
+        );
+        assert_eq!(
+            batch_thread_config.validate(),
+            Err("n_threads_batch must be greater than zero when provided")
+        );
+    }
+
+    #[test]
     fn parse_cache_type_accepts_legacy_mesh_kv_defaults() -> anyhow::Result<()> {
         assert_eq!(parse_cache_type("f16")?, GGML_TYPE_F16);
         assert_eq!(parse_cache_type("q8_0")?, GGML_TYPE_Q8_0);
@@ -3694,6 +3715,25 @@ mod tests {
 
         assert_eq!(raw.raw.n_batch, 2048);
         assert_eq!(raw.raw.n_ubatch, 256);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_preserves_thread_counts_and_batch_defaults() -> anyhow::Result<()> {
+        let config = RuntimeConfig {
+            n_batch: None,
+            n_ubatch: None,
+            n_threads: Some(12),
+            n_threads_batch: Some(6),
+            ..RuntimeConfig::default()
+        };
+
+        let raw = config.as_raw()?;
+
+        assert_eq!(raw.raw.n_batch, LLAMA_SERVER_DEFAULT_N_BATCH as i32);
+        assert_eq!(raw.raw.n_ubatch, LLAMA_SERVER_DEFAULT_N_UBATCH as i32);
+        assert_eq!(raw.raw.n_threads, 12);
+        assert_eq!(raw.raw.n_threads_batch, 6);
         Ok(())
     }
 

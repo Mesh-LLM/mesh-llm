@@ -1092,6 +1092,7 @@ async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
                             gpu: None,
                             models: Vec::new(),
                             plugins: Vec::new(),
+                            config_toml: None,
                         }),
                         hostname: Some("control-target".to_string()),
                     }),
