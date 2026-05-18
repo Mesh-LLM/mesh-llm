@@ -163,6 +163,7 @@ pub struct LocalModelInterest {
 #[derive(Clone)]
 pub struct MeshApi {
     pub(super) inner: Arc<Mutex<ApiInner>>,
+    pub(super) capture_node: mesh::Node,
 }
 
 pub(super) struct ApiInner {
