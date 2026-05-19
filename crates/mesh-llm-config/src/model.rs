@@ -11,6 +11,8 @@ pub struct MeshConfig {
     #[serde(default)]
     pub gpu: GpuConfig,
     #[serde(default)]
+    pub mesh_requirements: MeshRequirementsConfig,
+    #[serde(default)]
     pub owner_control: OwnerControlConfig,
     #[serde(default)]
     pub telemetry: TelemetryConfig,
@@ -46,6 +48,22 @@ pub struct GpuConfig {
 pub struct RuntimeConfig {
     #[serde(default)]
     pub reconcile_model_targets: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct MeshRequirementsConfig {
+    #[serde(default)]
+    pub min_node_version: Option<String>,
+    #[serde(default)]
+    pub max_node_version: Option<String>,
+    #[serde(default)]
+    pub min_protocol_version: Option<u32>,
+    #[serde(default)]
+    pub max_protocol_version: Option<u32>,
+    #[serde(default)]
+    pub require_release_attestation: bool,
+    #[serde(default)]
+    pub release_signer_keys: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -587,6 +605,8 @@ struct RawMeshConfig {
     #[serde(default)]
     gpu: GpuConfig,
     #[serde(default)]
+    mesh_requirements: MeshRequirementsConfig,
+    #[serde(default)]
     owner_control: OwnerControlConfig,
     #[serde(default)]
     telemetry: TelemetryConfig,
@@ -688,6 +708,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
         Ok(Self {
             version: raw.version,
             gpu: raw.gpu,
+            mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
             defaults: raw.defaults,

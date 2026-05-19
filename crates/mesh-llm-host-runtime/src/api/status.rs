@@ -4,6 +4,7 @@
 
 use super::{RuntimeModelPayload, RuntimeProcessPayload};
 use crate::crypto::{OwnershipStatus, OwnershipSummary};
+use crate::mesh::requirements::{MeshRequirementPolicySummary, MeshRequirementRejectionEvent};
 use crate::network::{affinity, metrics};
 use crate::runtime_data;
 use crate::system::hardware::expand_gpu_names;
@@ -381,6 +382,10 @@ pub(crate) struct StatusPayload {
     pub(crate) routing_metrics: metrics::RoutingMetricsStatusSnapshot,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) first_joined_mesh_ts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) mesh_requirements: Option<MeshRequirementPolicySummary>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) recent_mesh_rejections: Vec<MeshRequirementRejectionEvent>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1070,6 +1075,8 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            mesh_requirements: None,
+            recent_mesh_rejections: vec![],
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1123,6 +1130,8 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            mesh_requirements: None,
+            recent_mesh_rejections: vec![],
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1183,6 +1192,8 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            mesh_requirements: None,
+            recent_mesh_rejections: vec![],
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1238,6 +1249,8 @@ mod tests {
             routing_affinity: affinity::AffinityStatsSnapshot::default(),
             routing_metrics: metrics::RoutingMetricsStatusSnapshot::default(),
             first_joined_mesh_ts: None,
+            mesh_requirements: None,
+            recent_mesh_rejections: vec![],
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");

@@ -1,6 +1,7 @@
 use crate::model::{merge_hardware, merge_model_fit, merge_multimodal, merge_throughput};
 use crate::*;
 use anyhow::{Result, bail};
+use semver::{BuildMetadata, Version};
 
 pub fn validate_config(config: &MeshConfig) -> Result<()> {
     if let Some(version) = config.version
@@ -27,6 +28,7 @@ pub fn validate_config(config: &MeshConfig) -> Result<()> {
     {
         bail!("gpu.parallel must be at least 1, got {parallel}");
     }
+    validate_mesh_requirements_config(&config.mesh_requirements)?;
     validate_telemetry_config(&config.telemetry)?;
     let defaults_hardware = config
         .defaults
@@ -899,6 +901,89 @@ fn validate_string_list(values: &[String], path: &str) -> Result<()> {
         validate_non_empty(value, path)?;
     }
     Ok(())
+}
+
+fn validate_mesh_requirements_config(config: &MeshRequirementsConfig) -> Result<()> {
+    let min_node_version = config
+        .min_node_version
+        .as_deref()
+        .map(parse_node_version)
+        .transpose()?;
+    let max_node_version = config
+        .max_node_version
+        .as_deref()
+        .map(parse_node_version)
+        .transpose()?;
+    if let (Some(min), Some(max)) = (&min_node_version, &max_node_version)
+        && version_precedence_cmp(min, max).is_gt()
+    {
+        bail!(
+            "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version"
+        );
+    }
+
+    if let (Some(min), Some(max)) = (config.min_protocol_version, config.max_protocol_version)
+        && min > max
+    {
+        bail!(
+            "mesh_requirements.min_protocol_version must be less than or equal to mesh_requirements.max_protocol_version"
+        );
+    }
+
+    for signer_key in &config.release_signer_keys {
+        validate_release_signer_key_shape(signer_key)?;
+    }
+    if config.require_release_attestation && config.release_signer_keys.is_empty() {
+        bail!(
+            "mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty; certified-build admission is not remote runtime attestation, so trust must be anchored in at least one release signer key"
+        );
+    }
+
+    Ok(())
+}
+
+fn parse_node_version(raw: &str) -> Result<Version> {
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        bail!(
+            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)"
+        );
+    }
+    let normalized = normalized
+        .strip_prefix('v')
+        .or_else(|| normalized.strip_prefix('V'))
+        .unwrap_or(normalized);
+    Version::parse(normalized).map_err(|_| {
+        anyhow::anyhow!(
+            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)"
+        )
+    })
+}
+
+fn validate_release_signer_key_shape(raw: &str) -> Result<()> {
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        bail!("mesh_requirements.release_signer_keys entries must not be empty");
+    }
+    let Some(encoded) = normalized.strip_prefix("ed25519:") else {
+        bail!(
+            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'"
+        );
+    };
+    if encoded.len() != 64 || !encoded.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        bail!(
+            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'"
+        );
+    }
+    Ok(())
+}
+
+fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.build = BuildMetadata::EMPTY;
+    right.build = BuildMetadata::EMPTY;
+    left.cmp(&right)
 }
 
 fn validate_telemetry_config(config: &TelemetryConfig) -> Result<()> {

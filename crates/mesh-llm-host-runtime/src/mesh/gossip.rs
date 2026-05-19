@@ -121,6 +121,10 @@ struct LocalAnnouncementData {
     explicit_model_interests: Vec<String>,
     model_demand: HashMap<String, ModelDemand>,
     mesh_id: Option<String>,
+    mesh_policy_hash: Option<String>,
+    signed_genesis_policy: Option<crate::SignedMeshGenesisPolicy>,
+    release_attestation: Option<crate::ReleaseBuildAttestation>,
+    direct_admission_proof: Option<crate::DirectNodeAdmissionProof>,
     available_model_metadata: Vec<crate::proto::node::CompactModelMetadata>,
     available_model_sizes: HashMap<String, u64>,
     served_model_descriptors: Vec<ServedModelDescriptor>,
@@ -156,6 +160,9 @@ pub fn backfill_legacy_descriptors(ann: &mut PeerAnnouncement) {
 
 pub(super) fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
     old.addr != new.addr
+        || old.mesh_id != new.mesh_id
+        || old.mesh_policy_hash != new.mesh_policy_hash
+        || old.genesis_policy != new.genesis_policy
         || old.role != new.role
         || old.first_joined_mesh_ts != new.first_joined_mesh_ts
         || old.models != new.models
@@ -195,6 +202,9 @@ pub(super) fn apply_transitive_ann(
     bridge_id: EndpointId,
 ) -> bool {
     let ann_hosted_models = ann.hosted_models.clone().unwrap_or_default();
+    existing.mesh_id = ann.mesh_id.clone();
+    existing.mesh_policy_hash = ann.mesh_policy_hash.clone();
+    existing.genesis_policy = ann.genesis_policy.clone();
     let serving_changed = existing.serving_models != ann.serving_models
         || existing.hosted_models != ann_hosted_models
         || existing.hosted_models_known != ann.hosted_models.is_some();
@@ -287,23 +297,61 @@ impl Node {
         addr: &EndpointAddr,
         ann: &PeerAnnouncement,
         rtt_ms: Option<u32>,
-    ) {
+        negotiated_protocol_generation: Option<u32>,
+        direct_peer_requirements_validated: bool,
+    ) -> Result<()> {
         if peer_id == self.endpoint.id() {
-            return;
+            return Ok(());
         }
         if peer_id == remote {
             if let Some(ref their_id) = ann.mesh_id {
                 self.set_mesh_id(their_id.clone()).await;
             }
+            if !direct_peer_requirements_validated {
+                if let Err(reason) = self
+                    .validate_direct_peer_requirements(remote, ann, negotiated_protocol_generation)
+                    .await
+                {
+                    self.record_mesh_requirement_rejection(
+                        super::requirements::MeshRequirementRejectionSource::Gossip,
+                        Some(remote),
+                        reason.clone(),
+                    )
+                    .await;
+                    self.state
+                        .lock()
+                        .await
+                        .requirement_rejected_peers
+                        .insert(remote);
+                    anyhow::bail!(
+                        "peer {} rejected by mesh requirements: {}",
+                        remote.fmt_short(),
+                        reason.code()
+                    );
+                }
+            }
             self.merge_remote_demand(&ann.model_demand);
-            self.add_peer(remote, addr.clone(), ann).await;
+            self.add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
+                .await;
             if let Some(rtt_ms) = rtt_ms {
                 self.update_peer_rtt(remote, rtt_ms).await;
             }
-            return;
+            return Ok(());
+        }
+        if let Err(err) = self
+            .validate_peer_announcement_against_active_policy(peer_id, ann)
+            .await
+        {
+            tracing::debug!(
+                "ignoring transitive peer {} because its policy announcement did not match the active mesh: {}",
+                peer_id.fmt_short(),
+                err.code()
+            );
+            return Ok(());
         }
         self.update_transitive_peer(peer_id, addr, ann, remote)
             .await;
+        Ok(())
     }
 
     async fn apply_announced_peers(
@@ -311,11 +359,22 @@ impl Node {
         remote: EndpointId,
         their_announcements: &[(EndpointAddr, PeerAnnouncement)],
         rtt_ms: Option<u32>,
-    ) {
+        negotiated_protocol_generation: Option<u32>,
+        direct_peer_requirements_validated: bool,
+    ) -> Result<()> {
         for (addr, ann) in their_announcements {
-            self.apply_announced_peer(remote, addr.id, addr, ann, rtt_ms)
-                .await;
+            self.apply_announced_peer(
+                remote,
+                addr.id,
+                addr,
+                ann,
+                rtt_ms,
+                negotiated_protocol_generation,
+                direct_peer_requirements_validated,
+            )
+            .await?;
         }
+        Ok(())
     }
 
     async fn refresh_gossip_path_rtt(&self, remote: EndpointId, ceiling_rtt_ms: Option<u32>) {
@@ -450,6 +509,10 @@ impl Node {
         let serving_changed = existing.serving_models != ann.serving_models
             || existing.hosted_models != ann_hosted_models
             || existing.hosted_models_known != ann.hosted_models.is_some();
+        existing.admitted = true;
+        existing.mesh_id = ann.mesh_id.clone();
+        existing.mesh_policy_hash = ann.mesh_policy_hash.clone();
+        existing.genesis_policy = ann.genesis_policy.clone();
         if role_changed {
             tracing::info!(
                 "Peer {} role updated: {:?} → {:?}",
@@ -509,7 +572,12 @@ impl Node {
     async fn remove_disallowed_peer(&self, id: EndpointId) {
         let mut state = self.state.lock().await;
         if state.peers.remove(&id).is_some() {
-            let _ = self.peer_change_tx.send(state.peers.len());
+            let admitted_count = state
+                .peers
+                .values()
+                .filter(|peer| peer.is_admitted())
+                .count();
+            let _ = self.peer_change_tx.send(admitted_count);
         }
     }
 
@@ -550,7 +618,12 @@ impl Node {
                 .insert(id, owner_summary.status.clone());
         }
         if state.peers.remove(&id).is_some() {
-            let _ = self.peer_change_tx.send(state.peers.len());
+            let admitted_count = state
+                .peers
+                .values()
+                .filter(|peer| peer.is_admitted())
+                .count();
+            let _ = self.peer_change_tx.send(admitted_count);
         }
         true
     }
@@ -596,7 +669,11 @@ impl Node {
         };
         let (updated_peer, changed, role_changed, serving_changed) =
             Self::update_existing_direct_peer(existing, addr, ann, owner_summary, now);
-        let count = state.peers.len();
+        let count = state
+            .peers
+            .values()
+            .filter(|peer| peer.is_admitted())
+            .count();
         let should_publish_count = role_changed || serving_changed;
         drop(state);
         self.publish_direct_peer_update(updated_peer, changed, should_publish_count, count)
@@ -622,9 +699,14 @@ impl Node {
             ann.available_models,
             state.peers.len() + 1
         );
-        let peer = PeerInfo::from_announcement(id, addr, ann, owner_summary);
+        let mut peer = PeerInfo::from_announcement(id, addr, ann, owner_summary);
+        peer.admitted = true;
         state.peers.insert(id, peer.clone());
-        let count = state.peers.len();
+        let count = state
+            .peers
+            .values()
+            .filter(|peer| peer.is_admitted())
+            .count();
         drop(state);
         self.capture_peer_observation("peer_direct_add", &peer, "direct", None);
         let _ = self.peer_change_tx.send(count);
@@ -665,6 +747,10 @@ impl Node {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "local gossip snapshots intentionally gather many independent advertised fields in one atomic view"
+    )]
     async fn snapshot_local_announcement_data(&self) -> LocalAnnouncementData {
         let owner_summary = self.owner_summary.lock().await.clone();
         let plugin_models = self.plugin_inference_models().await;
@@ -677,6 +763,17 @@ impl Node {
         let advertised_model_throughput = self
             .routing_metrics
             .advertisable_model_throughput(&hosted_models);
+        let mesh_id = self.mesh_id.lock().await.clone();
+        let mesh_policy_hash = self.mesh_policy_hash.lock().await.clone();
+        let release_attestation = self.release_attestation.lock().await.clone();
+        let direct_admission_proof = match (mesh_id.as_deref(), mesh_policy_hash.as_deref()) {
+            (Some(mesh_id), Some(policy_hash)) => self.build_self_direct_admission_proof(
+                mesh_id,
+                policy_hash,
+                release_attestation.as_ref(),
+            ),
+            _ => None,
+        };
         LocalAnnouncementData {
             role: self.role.lock().await.clone(),
             first_joined_mesh_ts: *self.first_joined_mesh_ts.lock().await,
@@ -688,7 +785,11 @@ impl Node {
             requested_models: self.requested_models.lock().await.clone(),
             explicit_model_interests: self.explicit_model_interests.lock().await.clone(),
             model_demand: self.get_demand(),
-            mesh_id: self.mesh_id.lock().await.clone(),
+            mesh_id,
+            mesh_policy_hash,
+            signed_genesis_policy: self.signed_genesis_policy.lock().await.clone(),
+            release_attestation,
+            direct_admission_proof,
             available_model_metadata: Vec::new(),
             available_model_sizes: HashMap::new(),
             served_model_descriptors: self.served_model_descriptors.lock().await.clone(),
@@ -742,7 +843,8 @@ impl Node {
             explicit_model_interests: peer.explicit_model_interests.clone(),
             version: peer.version.clone(),
             model_demand: HashMap::new(),
-            mesh_id: None,
+            mesh_id: peer.mesh_id.clone(),
+            mesh_policy_hash: peer.mesh_policy_hash.clone(),
             gpu_name: peer.gpu_name.clone(),
             hostname: peer.hostname.clone(),
             is_soc: peer.is_soc,
@@ -757,6 +859,9 @@ impl Node {
             served_model_descriptors: peer.served_model_descriptors.clone(),
             served_model_runtime: peer.served_model_runtime.clone(),
             owner_attestation: peer.owner_attestation.clone(),
+            genesis_policy: peer.genesis_policy.clone(),
+            release_attestation: None,
+            direct_admission_proof: None,
             artifact_transfer_supported: peer.artifact_transfer_supported,
             stage_protocol_generation_supported: peer.stage_protocol_generation_supported,
             stage_status_list_supported: peer.stage_status_list_supported,
@@ -800,6 +905,7 @@ impl Node {
             version: Some(crate::VERSION.to_string()),
             model_demand: data.model_demand,
             mesh_id: data.mesh_id,
+            mesh_policy_hash: data.mesh_policy_hash,
             gpu_name: self.enumerate_host.then(|| self.gpu_name.clone()).flatten(),
             hostname: self.enumerate_host.then(|| self.hostname.clone()).flatten(),
             is_soc: self.is_soc,
@@ -817,6 +923,9 @@ impl Node {
             served_model_descriptors: data.served_model_descriptors,
             served_model_runtime: data.served_model_runtime,
             owner_attestation: data.owner_attestation,
+            genesis_policy: data.signed_genesis_policy,
+            release_attestation: data.release_attestation,
+            direct_admission_proof: data.direct_admission_proof,
             artifact_transfer_supported: data.artifact_transfer_supported,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
@@ -894,8 +1003,14 @@ impl Node {
         their_announcements: &[(EndpointAddr, PeerAnnouncement)],
         discover_peers: bool,
     ) -> Result<()> {
-        self.apply_announced_peers(remote, their_announcements, Some(rtt_ms))
-            .await;
+        self.apply_announced_peers(
+            remote,
+            their_announcements,
+            Some(rtt_ms),
+            Some(NODE_PROTOCOL_GENERATION),
+            false,
+        )
+        .await?;
 
         // Also check the connection's actual path info — the gossip round-trip
         // time above may reflect relay latency even if a direct path is now active.
@@ -912,6 +1027,10 @@ impl Node {
         Ok(())
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "gossip stream handling keeps protocol validation, response, and peer discovery ordered in one flow"
+    )]
     pub(super) async fn handle_gossip_stream(
         &self,
         remote: EndpointId,
@@ -956,14 +1075,60 @@ impl Node {
             &prior_state,
         );
 
+        let direct_announcement = their_announcements
+            .iter()
+            .find_map(|(addr, ann)| (addr.id == remote).then_some(ann))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "gossip payload from {} omitted its direct announcement",
+                    remote.fmt_short()
+                )
+            })?;
+
+        let negotiated_protocol_generation = match protocol {
+            ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
+        };
+
+        if let Err(reason) = self
+            .validate_direct_peer_requirements(
+                remote,
+                direct_announcement,
+                negotiated_protocol_generation,
+            )
+            .await
+        {
+            self.record_mesh_requirement_rejection(
+                super::requirements::MeshRequirementRejectionSource::Gossip,
+                Some(remote),
+                reason.clone(),
+            )
+            .await;
+            self.state
+                .lock()
+                .await
+                .requirement_rejected_peers
+                .insert(remote);
+            anyhow::bail!(
+                "peer {} rejected by mesh requirements: {}",
+                remote.fmt_short(),
+                reason.code()
+            );
+        }
+
         let our_announcements = self.collect_announcements().await;
         write_gossip_payload(&mut send, protocol, &our_announcements, self.endpoint.id()).await?;
         send.finish()?;
 
         let _ = recv.read_to_end(0).await;
 
-        self.apply_announced_peers(remote, &their_announcements, None)
-            .await;
+        self.apply_announced_peers(
+            remote,
+            &their_announcements,
+            None,
+            negotiated_protocol_generation,
+            true,
+        )
+        .await?;
         self.refresh_gossip_path_rtt(remote, None).await;
 
         let my_role = self.role.lock().await.clone();
@@ -979,6 +1144,7 @@ impl Node {
         // Always clear any rejection-tracking entry so the map stays bounded.
         state.policy_rejected_peers.remove(&id);
         let had_connection = state.connections.contains_key(&id);
+        state.requirement_rejected_peers.remove(&id);
         if let Some(peer) = state.peers.remove(&id) {
             let last_seen_age_ms = super::elapsed_ms_u64(peer.last_seen.elapsed());
             let last_mentioned_age_ms = super::elapsed_ms_u64(peer.last_mentioned.elapsed());
@@ -991,7 +1157,11 @@ impl Node {
                 id.fmt_short(),
                 state.peers.len()
             );
-            let count = state.peers.len();
+            let count = state
+                .peers
+                .values()
+                .filter(|peer| peer.is_admitted())
+                .count();
             drop(state);
             self.capture_peer_lifecycle_event(PeerLifecycleCaptureEvent {
                 event: "peer_removed",
@@ -1013,7 +1183,50 @@ impl Node {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn add_peer(
+        &self,
+        id: EndpointId,
+        addr: EndpointAddr,
+        ann: &PeerAnnouncement,
+        negotiated_protocol_generation: Option<u32>,
+    ) {
+        if let Err(reason) = self
+            .validate_direct_peer_requirements(id, ann, negotiated_protocol_generation)
+            .await
+        {
+            self.record_mesh_requirement_rejection(
+                super::requirements::MeshRequirementRejectionSource::Gossip,
+                Some(id),
+                reason.clone(),
+            )
+            .await;
+            tracing::warn!(
+                "Rejecting peer {} before promotion: {}",
+                id.fmt_short(),
+                reason.code()
+            );
+            let mut state = self.state.lock().await;
+            state.requirement_rejected_peers.insert(id);
+            if state.peers.remove(&id).is_some() {
+                let admitted_count = state
+                    .peers
+                    .values()
+                    .filter(|peer| peer.is_admitted())
+                    .count();
+                let _ = self.peer_change_tx.send(admitted_count);
+            }
+            return;
+        }
+        self.add_peer_after_direct_requirements_validated(id, addr, ann)
+            .await;
+    }
+
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "direct peer promotion coordinates owner policy and state updates in order"
+    )]
+    async fn add_peer_after_direct_requirements_validated(
         &self,
         id: EndpointId,
         addr: EndpointAddr,
@@ -1039,6 +1252,7 @@ impl Node {
         }
         let mut state = self.state.lock().await;
         state.policy_rejected_peers.remove(&id);
+        state.requirement_rejected_peers.remove(&id);
         if id == self.endpoint.id() {
             return;
         }
@@ -1085,7 +1299,12 @@ impl Node {
         if !version_allowed_for_rebroadcast(ann.version.as_deref()) {
             let mut state = self.state.lock().await;
             if state.peers.remove(&id).is_some() {
-                let _ = self.peer_change_tx.send(state.peers.len());
+                let admitted_count = state
+                    .peers
+                    .values()
+                    .filter(|peer| peer.is_admitted())
+                    .count();
+                let _ = self.peer_change_tx.send(admitted_count);
             }
             return;
         }
@@ -1103,7 +1322,12 @@ impl Node {
         if peer_is_idle_transitive_client(ann) {
             let mut state = self.state.lock().await;
             if state.peers.remove(&id).is_some() {
-                let _ = self.peer_change_tx.send(state.peers.len());
+                let admitted_count = state
+                    .peers
+                    .values()
+                    .filter(|peer| peer.is_admitted())
+                    .count();
+                let _ = self.peer_change_tx.send(admitted_count);
             }
             return;
         }
@@ -1118,7 +1342,12 @@ impl Node {
         if !policy_accepts_peer(self.trust_policy, &owner_summary) {
             let mut state = self.state.lock().await;
             if state.peers.remove(&id).is_some() {
-                let _ = self.peer_change_tx.send(state.peers.len());
+                let admitted_count = state
+                    .peers
+                    .values()
+                    .filter(|peer| peer.is_admitted())
+                    .count();
+                let _ = self.peer_change_tx.send(admitted_count);
             }
             drop(state);
             self.capture_peer_rejected(
@@ -1155,7 +1384,11 @@ impl Node {
             let updated_peer = existing.clone();
             let changed = peer_meaningfully_changed(&old_peer, &updated_peer);
             if serving_changed {
-                let count = state.peers.len();
+                let count = state
+                    .peers
+                    .values()
+                    .filter(|peer| peer.is_admitted())
+                    .count();
                 drop(state);
                 self.capture_peer_observation(
                     "peer_transitive_update",
@@ -1195,6 +1428,7 @@ impl Node {
             // last_mentioned = now keeps the peer alive for the prune window.
             let mut peer = PeerInfo::from_announcement(id, addr.clone(), ann, owner_summary);
             // Mark as never directly seen — only transitively mentioned.
+            peer.admitted = false;
             peer.last_seen =
                 std::time::Instant::now() - std::time::Duration::from_secs(PEER_STALE_SECS * 2);
             state.peers.insert(id, peer.clone());
@@ -1270,6 +1504,7 @@ mod tests {
             version: None,
             model_demand: HashMap::new(),
             mesh_id: None,
+            mesh_policy_hash: None,
             gpu_name: None,
             hostname: None,
             is_soc: None,
@@ -1284,6 +1519,9 @@ mod tests {
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
             owner_attestation: None,
+            genesis_policy: None,
+            release_attestation: None,
+            direct_admission_proof: None,
             artifact_transfer_supported: true,
             stage_protocol_generation_supported: true,
             stage_status_list_supported: true,
@@ -1499,9 +1737,9 @@ mod tests {
         let mut ann = test_announcement(Some(100));
         ann.stage_status_list_supported = false;
 
-        node.add_peer(peer_id, addr.clone(), &ann).await;
+        node.add_peer(peer_id, addr.clone(), &ann, None).await;
         ann.stage_status_list_supported = true;
-        node.add_peer(peer_id, addr, &ann).await;
+        node.add_peer(peer_id, addr, &ann, None).await;
 
         let state = node.state.lock().await;
         let peer = state.peers.get(&peer_id).expect("peer should be tracked");
@@ -1516,9 +1754,9 @@ mod tests {
         let mut ann = test_announcement(Some(100));
         ann.stage_protocol_generation_supported = false;
 
-        node.add_peer(peer_id, addr.clone(), &ann).await;
+        node.add_peer(peer_id, addr.clone(), &ann, None).await;
         ann.stage_protocol_generation_supported = true;
-        node.add_peer(peer_id, addr, &ann).await;
+        node.add_peer(peer_id, addr, &ann, None).await;
 
         let state = node.state.lock().await;
         let peer = state.peers.get(&peer_id).expect("peer should be tracked");
@@ -1537,10 +1775,10 @@ mod tests {
             throughput_samples: 2,
         }];
 
-        node.add_peer(peer_id, addr.clone(), &ann).await;
+        node.add_peer(peer_id, addr.clone(), &ann, None).await;
         ann.advertised_model_throughput[0].avg_tokens_per_second_milli = 48_000;
         ann.advertised_model_throughput[0].throughput_samples = 9;
-        node.add_peer(peer_id, addr, &ann).await;
+        node.add_peer(peer_id, addr, &ann, None).await;
 
         let state = node.state.lock().await;
         let peer = state.peers.get(&peer_id).expect("peer should be tracked");
@@ -1789,7 +2027,7 @@ mod tests {
         ann.version = Some("0.65.1".to_string());
         // No requested, no serving, no hosted — pure idle client.
 
-        node.add_peer(id, addr, &ann).await;
+        node.add_peer(id, addr, &ann, None).await;
 
         let state = node.state.lock().await;
         assert!(
@@ -1810,7 +2048,7 @@ mod tests {
         ann.role = NodeRole::Client;
         ann.version = Some("0.57.0".to_string());
 
-        node.add_peer(id, addr, &ann).await;
+        node.add_peer(id, addr, &ann, None).await;
 
         let state = node.state.lock().await;
         assert!(

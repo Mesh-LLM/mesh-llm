@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 mesh-llm-types = { path = "../mesh-llm-types" }
+semver = "1"
 serde = { workspace = true }
 skippy-protocol = { path = "../skippy-protocol" }
 toml = "0.9"

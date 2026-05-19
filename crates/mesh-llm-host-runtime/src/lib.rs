@@ -21,6 +21,15 @@ pub mod proto {
     pub use mesh_llm_protocol::proto::*;
 }
 
+pub use mesh::requirements::{
+    BootstrapStatus, DIRECT_NODE_ADMISSION_PROOF_MAX_CLOCK_SKEW_MS, DirectNodeAdmissionProof,
+    DirectPeerProofStatus, MeshGenesisPolicy, MeshRequirementDecision,
+    MeshRequirementEvaluationInput, MeshRequirementRejectReason, MeshRequirements,
+    NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,
+    ReleaseAttestationRequirement, ReleaseBuildAttestation, SignedBootstrapToken,
+    SignedMeshGenesisPolicy,
+};
+
 use anyhow::Result;
 use std::time::Duration;
 

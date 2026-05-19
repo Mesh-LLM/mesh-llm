@@ -693,6 +693,7 @@ mod tests {
             }],
             plugins: vec![],
             config_toml: None,
+            mesh_requirements: None,
         }
     }
 

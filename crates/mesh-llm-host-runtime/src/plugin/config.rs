@@ -5,15 +5,197 @@ use anyhow::{Context, Result, bail};
 pub use mesh_llm_config::{
     AdvancedConfig, AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigEditor, ConfigStore,
     FlashAttentionType, GpuAssignment, GpuConfig, HardwareConfig, IntegerOrString,
-    LocalServingNodeConfig, MeshConfig, ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry,
-    ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind, MultimodalConfig, OwnerControlConfig,
-    PluginConfigEditor, PluginConfigEntry, PrefixCacheConfig, ReasoningBudget, ReasoningEnabled,
-    RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig, SpeculativeConfig,
-    StringOrStringList, TelemetryConfig, TelemetryMetricsConfig, TensorSplitConfig,
-    ThroughputConfig, config_path, config_to_toml, load_config, parse_config_toml, validate_config,
+    LocalServingNodeConfig, MeshConfig, MeshRequirementsConfig, ModelConfigDefaults,
+    ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind,
+    MultimodalConfig, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PrefixCacheConfig,
+    ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig,
+    SpeculativeConfig, StringOrStringList, TelemetryConfig, TelemetryMetricsConfig,
+    TensorSplitConfig, ThroughputConfig, config_path, config_to_toml, load_config,
+    parse_config_toml, validate_config,
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::{
+    MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
+    ReleaseAttestationRequirement,
+};
+
+const FLASH_MOE_INSTALL_HINT: &str = "Install Flash-MoE separately and set \
+                                     `command` to its infer binary, or set \
+                                     `url` to an already-running Flash-MoE /v1 endpoint.";
+
+pub(crate) fn mesh_requirements_config_to_runtime(
+    config: &MeshRequirementsConfig,
+) -> MeshRequirements {
+    MeshRequirements {
+        node_version: NodeVersionBounds {
+            min: config.min_node_version.clone(),
+            max: config.max_node_version.clone(),
+        },
+        protocol_generation: ProtocolGenerationBounds {
+            min: config.min_protocol_version,
+            max: config.max_protocol_version,
+        },
+        release_attestation: ReleaseAttestationRequirement {
+            required: config.require_release_attestation,
+            allowed_signer_keys: config.release_signer_keys.clone(),
+        },
+    }
+}
+
+pub(crate) fn mesh_requirements_config_from_runtime(
+    requirements: &MeshRequirements,
+) -> MeshRequirementsConfig {
+    MeshRequirementsConfig {
+        min_node_version: requirements.node_version.min.clone(),
+        max_node_version: requirements.node_version.max.clone(),
+        min_protocol_version: requirements.protocol_generation.min,
+        max_protocol_version: requirements.protocol_generation.max,
+        require_release_attestation: requirements.release_attestation.required,
+        release_signer_keys: requirements.release_attestation.allowed_signer_keys.clone(),
+    }
+}
+
+pub(crate) fn mesh_requirements_validation_error(reason: MeshRequirementRejectReason) -> String {
+    match reason {
+        MeshRequirementRejectReason::NodeVersionMalformed => {
+            "mesh_requirements node version bounds must be valid semver strings (an optional leading 'v' is allowed)".into()
+        }
+        MeshRequirementRejectReason::NodeVersionBoundsInvalid => {
+            "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version".into()
+        }
+        MeshRequirementRejectReason::ProtocolGenerationBoundsInvalid => {
+            "mesh_requirements.min_protocol_version must be less than or equal to mesh_requirements.max_protocol_version".into()
+        }
+        MeshRequirementRejectReason::ReleaseSignerUntrusted => {
+            "mesh_requirements.release_signer_keys entries must not be empty".into()
+        }
+        MeshRequirementRejectReason::ReleaseSignerListEmpty => {
+            "mesh_requirements.require_release_attestation is true but mesh_requirements.release_signer_keys is empty; certified-build admission is not remote runtime attestation, so trust must be anchored in at least one release signer key".into()
+        }
+        MeshRequirementRejectReason::ReleaseSignerKeyMalformed => {
+            "mesh_requirements.release_signer_keys entries must be of the form 'ed25519:<64-character-hex-public-key>'".into()
+        }
+        other => format!("mesh_requirements are invalid: {other:?}"),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn assert_mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+version = 1
+
+[mesh_requirements]
+min_node_version = "0.65.0"
+min_protocol_version = 1
+require_release_attestation = true
+release_signer_keys = [
+    "ed25519:d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+    "ed25519:3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+]
+"#,
+    )
+    .expect("config should parse");
+    validate_config(&config).expect("min-only config should validate");
+    assert_eq!(
+        config.mesh_requirements.min_node_version.as_deref(),
+        Some("0.65.0")
+    );
+    assert_eq!(config.mesh_requirements.max_node_version, None);
+    assert_eq!(config.mesh_requirements.min_protocol_version, Some(1));
+    assert_eq!(config.mesh_requirements.max_protocol_version, None);
+    assert!(config.mesh_requirements.require_release_attestation);
+    assert_eq!(
+        config.mesh_requirements.release_signer_keys,
+        vec![
+            "ed25519:d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a".to_string(),
+            "ed25519:3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c".to_string(),
+        ]
+    );
+
+    let max_only: MeshConfig = toml::from_str(
+        r#"
+[mesh_requirements]
+max_node_version = "0.65.9"
+max_protocol_version = 3
+"#,
+    )
+    .expect("config should parse");
+    validate_config(&max_only).expect("max-only config should validate");
+    assert_eq!(max_only.mesh_requirements.min_node_version, None);
+    assert_eq!(
+        max_only.mesh_requirements.max_node_version.as_deref(),
+        Some("0.65.9")
+    );
+    assert_eq!(max_only.mesh_requirements.min_protocol_version, None);
+    assert_eq!(max_only.mesh_requirements.max_protocol_version, Some(3));
+
+    let full_range: MeshConfig = toml::from_str(
+        r#"
+[mesh_requirements]
+min_node_version = "0.65.0"
+max_node_version = "0.65.9"
+min_protocol_version = 1
+max_protocol_version = 3
+"#,
+    )
+    .expect("config should parse");
+    validate_config(&full_range).expect("full-range config should validate");
+    assert_eq!(
+        full_range.mesh_requirements.min_node_version.as_deref(),
+        Some("0.65.0")
+    );
+    assert_eq!(
+        full_range.mesh_requirements.max_node_version.as_deref(),
+        Some("0.65.9")
+    );
+    assert_eq!(full_range.mesh_requirements.min_protocol_version, Some(1));
+    assert_eq!(full_range.mesh_requirements.max_protocol_version, Some(3));
+
+    let unset = MeshConfig::default();
+    validate_config(&unset).expect("omitted mesh_requirements should validate");
+    assert_eq!(unset.mesh_requirements, MeshRequirementsConfig::default());
+}
+
+#[cfg(test)]
+pub(crate) fn assert_mesh_requirements_config_rejects_required_attestation_without_signer_keys() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[mesh_requirements]
+require_release_attestation = true
+"#,
+    )
+    .expect("config should parse");
+    let err = validate_config(&config)
+        .expect_err("require_release_attestation=true with no signer keys must be rejected");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("certified-build admission is not remote runtime attestation"),
+        "operator error must reference the certified-build / runtime-attestation distinction; got: {message}"
+    );
+}
+
+#[cfg(test)]
+pub(crate) fn assert_mesh_requirements_config_rejects_non_ed25519_signer_key() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[mesh_requirements]
+require_release_attestation = true
+release_signer_keys = ["not-an-ed25519-key"]
+"#,
+    )
+    .expect("config should parse");
+    let err = validate_config(&config)
+        .expect_err("non-ed25519 release_signer_keys entry must be rejected at policy creation");
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("ed25519:<64-character-hex-public-key>"),
+        "operator error must spell out the required ed25519:<hex> shape; got: {message}"
+    );
+}
 
 #[derive(Clone, Debug)]
 pub struct ResolvedPlugins {

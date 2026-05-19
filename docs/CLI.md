@@ -81,6 +81,10 @@ Runtime switches:
   diagnostics as JSONL. See [SWARM_CAPTURE.md](SWARM_CAPTURE.md) for the full
   debug-capture workflow.
 - `--publish`: publish your mesh for discovery.
+- `--require-release-attestation`: when creating a requirement-aware mesh,
+  require peers to present a trusted release attestation.
+- `--release-signer-key <KEY>`: allow a release signer key in the creation-time
+  attestation policy (repeatable). Use with `--require-release-attestation`.
 - `--mesh-name <MESH_NAME>`: friendly mesh name in discovery.
 - `--region <REGION>`: region hint for discovery.
 - `--name <NAME>`: display name for this node.

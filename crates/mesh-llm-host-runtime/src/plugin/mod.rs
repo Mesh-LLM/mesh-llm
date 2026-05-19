@@ -41,10 +41,20 @@ pub(crate) use self::config::{
 #[allow(unused_imports)]
 pub use self::config::{
     ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
-    ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelRuntimeKind, PluginConfigEditor,
-    PluginConfigEntry, PluginHostMode, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
-    bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
-    resolve_plugins,
+    MeshRequirementsConfig, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor,
+    ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
+    ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path,
+    config_to_toml, load_config, parse_config_toml, resolve_plugins,
+};
+#[cfg(test)]
+pub(crate) use self::config::{
+    assert_mesh_requirements_config_accepts_unset_min_only_max_only_and_full_ranges,
+    assert_mesh_requirements_config_rejects_non_ed25519_signer_key,
+    assert_mesh_requirements_config_rejects_required_attestation_without_signer_keys,
+};
+pub(crate) use self::config::{
+    mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
+    mesh_requirements_validation_error, telemetry_plugin_enabled, validate_config,
 };
 use self::runtime::ExternalPlugin;
 pub(crate) use self::support::parse_optional_json;

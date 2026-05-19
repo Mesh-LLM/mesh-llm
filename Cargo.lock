@@ -9707,8 +9707,11 @@ dependencies = [
 name = "xtask"
 version = "0.68.0"
 dependencies = [
+ "ed25519-dalek",
+ "hex",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
