@@ -26,6 +26,8 @@ pub struct MeshConfig {
     #[serde(default)]
     pub defaults: Option<ModelConfigDefaults>,
     #[serde(default)]
+    pub runtime: RuntimeConfig,
+    #[serde(default)]
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
@@ -47,6 +49,12 @@ pub struct GpuConfig {
     pub assignment: GpuAssignment,
     #[serde(default)]
     pub parallel: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RuntimeConfig {
+    #[serde(default)]
+    pub reconcile_model_targets: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -548,6 +556,8 @@ struct RawMeshConfig {
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
     #[serde(default)]
+    runtime: RuntimeConfig,
+    #[serde(default)]
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
@@ -644,6 +654,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
             defaults: raw.defaults,
+            runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
             extra: raw.extra,
@@ -2737,6 +2748,22 @@ flash_attention = "enabled"
             config.models[0].flash_attention,
             Some(FlashAttentionType::Enabled)
         );
+    }
+
+    #[test]
+    fn runtime_model_target_reconciliation_deserializes_from_toml() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[runtime]
+reconcile_model_targets = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.runtime.reconcile_model_targets);
+        validate_config(&config).unwrap();
     }
 
     #[test]

@@ -250,6 +250,7 @@ mod tests {
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![],
             plugins: vec![],
             extra: Default::default(),
@@ -563,6 +564,7 @@ reasoning_format = "qwen"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![crate::plugin::ModelConfigEntry {
                 model: model.to_string(),
                 mmproj: None,
@@ -607,6 +609,7 @@ reasoning_format = "qwen"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![crate::plugin::ModelConfigEntry {
                 model: "test.gguf".to_string(),
                 mmproj: None,
@@ -764,6 +767,7 @@ temperature = 0.2
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![crate::plugin::ModelConfigEntry {
                 model: "noop-test.gguf".to_string(),
                 mmproj: None,

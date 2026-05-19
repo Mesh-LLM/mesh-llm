@@ -570,6 +570,7 @@ mod tests {
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             extra: Default::default(),
         };
 
