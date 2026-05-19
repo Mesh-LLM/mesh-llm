@@ -1348,6 +1348,81 @@ fn message_content_to_generation_text_rejects_remote_media_urls() {
 }
 
 #[test]
+fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "auto",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "please transcribe this"},
+                {"type": "input_audio", "input_audio": {
+                    "data": "YWJj",
+                    "format": "wav"
+                }}
+            ]
+        }],
+        "mesh_hooks": true
+    }))
+    .unwrap();
+    let media = openai_frontend::first_chat_media(&request.messages).expect("media");
+
+    apply_chat_hook_outcome(
+        &mut request,
+        &ChatHookOutcome::injected_with_consumed_media("[Audio context: hello]\n\n", media),
+    );
+
+    let content = request.messages[0].content.as_ref().expect("content");
+    let mut media = Vec::new();
+    let text = message_content_to_generation_text(content, "<__media__>", &mut media)
+        .expect("generation text");
+
+    assert!(media.is_empty());
+    assert!(!text.contains("<__media__>"));
+    assert!(text.contains("[Audio context: hello]"));
+    assert!(text.contains("please transcribe this"));
+}
+
+#[test]
+fn rescued_media_leaves_unhandled_second_media_in_prompt_media() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "auto",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "compare these"},
+                {"type": "input_audio", "input_audio": {
+                    "data": "YXVkaW8=",
+                    "format": "wav"
+                }},
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/png;base64,aW1hZ2U="
+                }}
+            ]
+        }],
+        "mesh_hooks": true
+    }))
+    .unwrap();
+    let media = openai_frontend::first_chat_media(&request.messages).expect("media");
+
+    apply_chat_hook_outcome(
+        &mut request,
+        &ChatHookOutcome::injected_with_consumed_media("[Audio context: hello]\n\n", media),
+    );
+
+    let content = request.messages[0].content.as_ref().expect("content");
+    let mut media = Vec::new();
+    let text = message_content_to_generation_text(content, "<__media__>", &mut media)
+        .expect("generation text");
+
+    assert_eq!(media.len(), 1);
+    assert_eq!(media[0].bytes, b"image");
+    assert_eq!(
+        text,
+        "[Audio context: hello]\n\n\ncompare these\n<__media__>"
+    );
+}
+
+#[test]
 fn multimodal_final_prefill_message_requests_downstream_prediction() {
     let sampling = WireSamplingConfig {
         flags: 1,

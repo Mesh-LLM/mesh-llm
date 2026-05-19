@@ -30,7 +30,7 @@ use openai_frontend::{
     GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, MessageContent,
     MessageContentPart, ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind,
     OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort,
-    StreamingGuardrailMode, Usage, chat_mesh_hooks_enabled, inject_text_into_chat_messages,
+    StreamingGuardrailMode, Usage, apply_chat_hook_outcome, chat_mesh_hooks_enabled,
     normalize_reasoning_template_options,
 };
 use serde::Serialize;
@@ -1283,24 +1283,15 @@ fn strip_default_revision(id: &str) -> String {
     id.to_string()
 }
 
-fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &ChatHookOutcome) {
-    for action in &outcome.actions {
-        match action {
-            ChatHookAction::InjectText { text } => {
-                inject_text_into_chat_messages(&mut request.messages, text.clone());
-            }
-            ChatHookAction::None => {}
-        }
-    }
-}
-
 fn hook_injected_text(outcome: &ChatHookOutcome) -> Option<String> {
     let text = outcome
         .actions
         .iter()
         .filter_map(|action| match action {
             ChatHookAction::InjectText { text } if !text.is_empty() => Some(text.as_str()),
-            ChatHookAction::InjectText { .. } | ChatHookAction::None => None,
+            ChatHookAction::InjectText { .. }
+            | ChatHookAction::ConsumeMedia { .. }
+            | ChatHookAction::None => None,
         })
         .collect::<Vec<_>>()
         .join("");
