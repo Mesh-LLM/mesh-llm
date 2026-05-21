@@ -292,8 +292,19 @@ pub async fn build_moa_config(
         // (or sooner on outright failure). Cheap on the happy path, big win on
         // the cold-KV / stale-peer tail.
         hedge_delay: std::time::Duration::from_secs(5),
-        // Chat-only sole-answer grace. Tool turns ignore this.
-        first_answer_grace: std::time::Duration::from_secs(6),
+        // Chat-only grace: after this long since dispatch, if at least
+        // one qualifying answer is in hand we accept it instead of
+        // waiting for consensus. Disabled for tool turns.
+        //
+        // 3 seconds: empirically good across the public mesh. Long
+        // enough that slow-but-good workers (e.g. studio MiniMax
+        // landing at ~1s, mini Qwen3.5 at ~700ms) finish before the
+        // timer; short enough that the chat UI feels responsive
+        // instead of sitting on the 6s ceiling. Lab data: median
+        // mesh_chat dropped from ~6s to ~2s after this change with no
+        // measurable quality regression on factual, arithmetic, and
+        // short-creative prompts.
+        first_answer_grace: std::time::Duration::from_secs(3),
     })
 }
 
