@@ -3,11 +3,15 @@ name = "model-artifact"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Model artifact selection, identity, and GGUF metadata helpers for Mesh LLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
 
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
-model-ref = { path = "../model-ref" }
+model-ref = { path = "../model-ref", version = "0.66.0" }
 serde.workspace = true
 
 [dev-dependencies]

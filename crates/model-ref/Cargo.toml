@@ -3,6 +3,10 @@ name = "model-ref"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Model reference parsing and normalization helpers for Mesh LLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
 
 [dependencies]
 serde.workspace = true

@@ -68,3 +68,16 @@ Verify:
 ## Publish
 
 Push a `v*` tag to run `.github/workflows/release.yml`.
+
+On non-prerelease tags, the release workflow also publishes the Rust SDK crate
+chain to crates.io in dependency order:
+
+```bash
+scripts/publish-crates.sh --dry-run
+```
+
+Run the dry-run before cutting a GA tag after changing SDK crate manifests or
+workspace-internal SDK dependencies. On the first release that introduces a
+new internal SDK crate, the dry-run validates packages whose registry
+dependencies already exist and reports downstream packages that will be fully
+verified during the real sequential publish after their upstream crates land.
