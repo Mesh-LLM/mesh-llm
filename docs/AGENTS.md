@@ -201,6 +201,35 @@ pi --model "mesh/Qwen 3.6 27B"
 You can switch models interactively with `Ctrl+M` inside Pi. Pi also supports
 `pi --provider mesh --model <model-id>` and `pi --list-models`.
 
+## Tool-call reliability probe
+
+Use the lightweight QA probe before or after changes that affect agent routing,
+OpenAI chat-completions, tool-call translation, or MoA reducer behavior:
+
+```bash
+scripts/qa-agent-tool-call-reliability.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --models auto,mesh \
+  --attempts 3 \
+  --output target/agent-tool-call-reliability/results.jsonl
+```
+
+The probe exercises the raw OpenAI-compatible contract directly. For each model
+and attempt it forces a deterministic function call, verifies
+`finish_reason=tool_calls`, sends the matching tool result back, then checks
+that the final answer includes the tool output. Streaming mode is included by
+default and reconstructs `delta.tool_calls[*]` by index before validation.
+
+For a side-effect-free review of the planned checks:
+
+```bash
+scripts/qa-agent-tool-call-reliability.py --models auto,mesh --attempts 2 --print-plan
+```
+
+This complements the heavier Goose, OpenCode, and Pi smoke scripts. Those prove
+real agent CLI behavior; this probe isolates the API contract that those agents
+depend on.
+
 ## curl or any OpenAI client
 
 ```bash
