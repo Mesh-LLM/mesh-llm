@@ -398,6 +398,7 @@ mod tests {
             llama_ready: false,
             runtime: RuntimeStatusPayload {
                 backend: None,
+                openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
             },

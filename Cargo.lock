@@ -3734,6 +3734,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-guardrails"
+version = "0.66.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mesh-llm-host-runtime"
 version = "0.66.0"
 dependencies = [
@@ -3761,6 +3769,7 @@ dependencies = [
  "mdns-sd",
  "mesh-llm-api-server",
  "mesh-llm-client",
+ "mesh-llm-guardrails",
  "mesh-llm-identity",
  "mesh-llm-node",
  "mesh-llm-plugin",
@@ -3941,6 +3950,7 @@ name = "mesh-mixture-of-agents"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "mesh-llm-guardrails",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4875,6 +4885,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "http-body-util",
+ "mesh-llm-guardrails",
  "serde",
  "serde_json",
  "tokio",

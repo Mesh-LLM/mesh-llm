@@ -16,6 +16,7 @@ use crate::mesh::{self, NodeRole};
 use crate::models;
 use crate::network::router;
 use crate::plugin;
+use crate::runtime::survey;
 use crate::runtime_data::{
     RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot,
 };
@@ -31,6 +32,24 @@ const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
 pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
 const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
 const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
+
+pub(super) type OpenAiGuardrailPolicyHandle = openai_frontend::GuardrailPolicyHandle;
+
+pub(super) fn openai_guardrail_policy_handle(
+    mode: openai_frontend::GuardrailMode,
+) -> OpenAiGuardrailPolicyHandle {
+    OpenAiGuardrailPolicyHandle::new(openai_frontend::GuardrailPolicy {
+        mode,
+        ..openai_frontend::GuardrailPolicy::default()
+    })
+}
+
+pub(super) fn set_openai_guardrail_policy_mode(
+    handle: &OpenAiGuardrailPolicyHandle,
+    mode: openai_frontend::GuardrailMode,
+) {
+    handle.set_mode(mode);
+}
 
 pub(super) enum RuntimeEvent {
     Exited {
@@ -68,6 +87,23 @@ impl LocalRuntimeModelHandle {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
+            }
+        }
+    }
+
+    pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+        }
+    }
+
+    pub(super) fn set_openai_guardrail_mode(
+        &self,
+        mode: openai_frontend::GuardrailMode,
+    ) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => {
+                model.set_openai_guardrail_mode(mode)
             }
         }
     }
@@ -157,7 +193,9 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
+    pub(super) survey_telemetry: survey::SurveyTelemetry,
 }
 
 pub(super) enum SplitRuntimeStart {
@@ -729,9 +767,11 @@ pub(super) async fn start_runtime_split_model(
         n_batch_override: spec.n_batch_override,
         n_ubatch_override: spec.n_ubatch_override,
         flash_attention_override: spec.flash_attention_override,
+        openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
         pinned_gpu: spec.pinned_gpu,
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
+        survey_telemetry: spec.survey_telemetry.clone(),
     })
     .await?;
     let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(1);
@@ -757,9 +797,11 @@ pub(super) async fn start_runtime_split_model(
         n_batch_override: spec.n_batch_override,
         n_ubatch_override: spec.n_ubatch_override,
         flash_attention_override: spec.flash_attention_override,
+        openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
         pinned_gpu: spec.pinned_gpu.cloned(),
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
+        survey_telemetry: spec.survey_telemetry.clone(),
         event_tx: coordinator_tx,
     }));
 
@@ -1054,7 +1096,9 @@ struct SplitGenerationLoadSpec<'a> {
     n_batch_override: Option<u32>,
     n_ubatch_override: Option<u32>,
     flash_attention_override: FlashAttentionType,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
+    survey_telemetry: survey::SurveyTelemetry,
 }
 
 struct SplitGenerationLoadSettings<'a> {
@@ -1185,6 +1229,9 @@ async fn load_split_runtime_generation_inner(
     let node_for_hook = spec.node.clone();
     let model_ref = spec.model_ref.to_string();
     let skippy_telemetry = spec.skippy_telemetry.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    let openai_guardrails =
+        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_ref.clone(),
         source: None,
@@ -1195,6 +1242,7 @@ async fn load_split_runtime_generation_inner(
             settings.embedded_openai.clone(),
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
             skippy_telemetry,
+            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
         )
     })
     .await
@@ -1709,9 +1757,11 @@ struct SplitTopologyCoordinator {
     n_batch_override: Option<u32>,
     n_ubatch_override: Option<u32>,
     flash_attention_override: FlashAttentionType,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
     slots: usize,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
+    survey_telemetry: survey::SurveyTelemetry,
     event_tx: tokio::sync::mpsc::Sender<SplitCoordinatorEvent>,
 }
 
@@ -2194,9 +2244,11 @@ impl SplitTopologyCoordinator {
             n_batch_override: self.n_batch_override,
             n_ubatch_override: self.n_ubatch_override,
             flash_attention_override: self.flash_attention_override,
+            openai_guardrail_policy: self.openai_guardrail_policy.clone(),
             pinned_gpu: self.pinned_gpu.as_ref(),
             slots: self.slots,
             skippy_telemetry: self.skippy_telemetry.clone(),
+            survey_telemetry: self.survey_telemetry.clone(),
         })
         .await?;
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -3180,7 +3232,10 @@ async fn start_runtime_skippy_model(
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
-        .with_embedded_openai(embedded_openai);
+        .with_embedded_openai(embedded_openai)
+        .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
+            spec.openai_guardrail_policy.clone(),
+        ));
     if let Some(gpu) = spec.pinned_gpu {
         options = options.with_selected_device(pinned_skippy_device(gpu));
     }
@@ -3189,10 +3244,12 @@ async fn start_runtime_skippy_model(
         source: None,
     });
     let node_for_hook = spec.node.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
     let skippy_model = tokio::task::spawn_blocking(move || {
         skippy::SkippyModelHandle::load_with_hooks(
             options,
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            guardrail_telemetry,
         )
     })
     .await
@@ -3293,6 +3350,9 @@ async fn start_runtime_layer_package_model(
     let node_for_hook = spec.node.clone();
     let model_ref = model_name.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    let openai_guardrails =
+        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_ref.clone(),
         source: None,
@@ -3303,6 +3363,7 @@ async fn start_runtime_layer_package_model(
             embedded_openai,
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
             skippy_telemetry,
+            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
         )
     })
     .await
@@ -3724,7 +3785,11 @@ stop = ["END"]
             n_batch_override: None,
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
             skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
         };
         let settings =
             split_generation_load_settings(&spec).expect("split settings should resolve");
@@ -3817,7 +3882,11 @@ max_tokens = 222
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
             parallel_override: None,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
             skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
         };
 
         let resolved =
@@ -4707,7 +4776,11 @@ max_tokens = 222
             n_batch_override: None,
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
             skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
         }))
         .await
         {

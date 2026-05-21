@@ -1,6 +1,8 @@
 use clap::Subcommand;
 use std::path::PathBuf;
 
+use crate::cli::MeshGuardrailCliMode;
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum RuntimeCommand {
     /// Show local model status on a running mesh-llm instance.
@@ -76,5 +78,17 @@ pub(crate) enum RuntimeCommand {
         /// Console/API port of the running mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,
+    },
+    /// Set mesh guardrail mode on running Skippy-backed models without restart.
+    Guardrails {
+        /// Guardrail mode to apply to active Skippy-backed OpenAI surfaces.
+        #[arg(long, value_enum)]
+        mode: MeshGuardrailCliMode,
+        /// Console/API port of the running mesh-llm instance (default: 3131)
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print the raw JSON payload.
+        #[arg(long)]
+        json: bool,
     },
 }

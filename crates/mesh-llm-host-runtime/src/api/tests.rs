@@ -364,6 +364,7 @@ fn test_build_runtime_status_payload_uses_local_processes() {
     let result = build_runtime_status_payload(
         "Qwen",
         Some("llama".into()),
+        None,
         true,
         true,
         Some(9337),
@@ -401,6 +402,7 @@ fn test_build_runtime_status_payload_keeps_duplicate_model_instances() {
     let result = build_runtime_status_payload(
         "Qwen",
         Some("skippy".into()),
+        None,
         true,
         true,
         Some(9337),

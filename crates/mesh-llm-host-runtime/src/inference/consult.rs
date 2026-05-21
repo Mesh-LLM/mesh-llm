@@ -14,6 +14,7 @@
 use crate::mesh;
 use anyhow::Result;
 use iroh::EndpointId;
+use mesh_llm_guardrails::{parse_tool_call_value, strip_thinking_blocks};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -196,17 +197,24 @@ fn parse_chat_completion_response(response: &[u8]) -> Result<String> {
         )
     })?;
 
-    // Extract the assistant message content
-    let content = parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let message = &parsed["choices"][0]["message"];
+    let content = message["content"].as_str().unwrap_or("");
+    let content = strip_thinking_blocks(content);
 
     if content.is_empty() {
-        anyhow::bail!("peer returned empty response");
+        return tool_calls_as_consultation_text(message)
+            .ok_or_else(|| anyhow::anyhow!("peer returned empty response"));
     }
 
     Ok(content)
+}
+
+fn tool_calls_as_consultation_text(message: &Value) -> Option<String> {
+    let allowed_tools = Vec::new();
+    let calls = parse_tool_call_value(&message["tool_calls"], &allowed_tools).ok()?;
+    let first = calls.first()?;
+    let arguments = serde_json::to_string(&first.arguments).ok()?;
+    Some(format!("{}({arguments})", first.name))
 }
 
 // ---------------------------------------------------------------------------
@@ -415,5 +423,44 @@ mod tests {
         let content = parse_chat_completion_response(response).unwrap();
 
         assert_eq!(content, "hello");
+    }
+
+    #[test]
+    fn parse_chat_completion_response_strips_thinking_blocks() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"<think>scratch</think>hello\"}}]}";
+
+        let content = parse_chat_completion_response(response).unwrap();
+
+        assert_eq!(content, "hello");
+    }
+
+    #[test]
+    fn parse_chat_completion_response_falls_back_to_tool_calls() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+            "{\"choices\":[{\"message\":{\"content\":\"\",\"tool_calls\":[",
+            "{\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}",
+            "]}}]}"
+        )
+        .as_bytes();
+
+        let content = parse_chat_completion_response(response).unwrap();
+
+        assert_eq!(content, "read_file({\"path\":\"README.md\"})");
+    }
+
+    #[test]
+    fn parse_chat_completion_response_falls_back_to_tool_calls_after_thinking_stripping() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+            "{\"choices\":[{\"message\":{\"content\":\"<think>scratch</think>\",\"tool_calls\":[",
+            "{\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}",
+            "]}}]}"
+        )
+        .as_bytes();
+
+        let content = parse_chat_completion_response(response).unwrap();
+
+        assert_eq!(content, "read_file({\"path\":\"README.md\"})");
     }
 }

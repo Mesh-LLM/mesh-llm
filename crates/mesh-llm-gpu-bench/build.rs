@@ -139,7 +139,7 @@ fn build_cuda() {
     let nvcc = std::env::var("NVCC").unwrap_or_else(|_| "nvcc".to_string());
     run_or_panic({
         let mut command = std::process::Command::new(nvcc);
-        command.arg("-O3");
+        command.arg("-O3").arg("-std=c++17");
         add_windows_cuda_crt_flags(&mut command);
         if !cfg!(windows) {
             command.arg("-Xcompiler").arg("-fPIC");

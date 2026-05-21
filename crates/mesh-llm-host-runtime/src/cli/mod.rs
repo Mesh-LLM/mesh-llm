@@ -230,6 +230,32 @@ pub enum LogFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub(crate) enum MeshGuardrailCliMode {
+    #[default]
+    Disabled,
+    Metrics,
+    Enforce,
+}
+
+impl MeshGuardrailCliMode {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Metrics => "metrics",
+            Self::Enforce => "enforce",
+        }
+    }
+
+    pub(crate) const fn to_guardrail_mode(self) -> openai_frontend::GuardrailMode {
+        match self {
+            Self::Disabled => openai_frontend::GuardrailMode::Disabled,
+            Self::Metrics => openai_frontend::GuardrailMode::MetricsOnly,
+            Self::Enforce => openai_frontend::GuardrailMode::Enforce,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "mesh-llm",
@@ -252,6 +278,10 @@ pub(crate) struct Cli {
     /// OTLP/gRPC endpoint for embedded Skippy debug telemetry, for example http://127.0.0.1:14317.
     #[arg(long, hide = true)]
     pub(crate) skippy_metrics_otlp_grpc: Option<String>,
+
+    /// Server-side mesh guardrail mode for hosted Skippy backends.
+    #[arg(long = "mesh-guardrails", value_enum, default_value_t = MeshGuardrailCliMode::Disabled)]
+    pub(crate) mesh_guardrails: MeshGuardrailCliMode,
 
     /// Show all options (including advanced/niche ones).
     #[arg(long, hide = true)]

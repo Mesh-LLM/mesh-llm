@@ -1161,8 +1161,98 @@ impl ResponseSseState {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
+    use async_trait::async_trait;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        Router,
+    };
+    use futures_util::stream;
+    use http_body_util::BodyExt;
     use serde_json::json;
+    use tower::ServiceExt;
+
+    use crate::{
+        router_for_with_config, AssistantMessage, ChatCompletionChoice, ChatCompletionRequest,
+        ChatCompletionResponse, ChatCompletionStream, CompletionRequest, CompletionResponse,
+        CompletionStream, FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
+        ModelObject, OpenAiBackend, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult,
+        Usage,
+    };
+
+    #[derive(Default)]
+    struct GuardedResponsesBackend {
+        seen_chat_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for GuardedResponsesBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("Qwen3-8B-Q4_K_M")])
+        }
+
+        async fn chat_completion(
+            &self,
+            request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            self.seen_chat_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(ChatCompletionResponse {
+                id: "chatcmpl_guarded_structured".to_string(),
+                object: "chat.completion",
+                created: 123,
+                model: request.model,
+                choices: vec![ChatCompletionChoice {
+                    index: 0,
+                    message: AssistantMessage {
+                        role: "assistant",
+                        content: None,
+                        reasoning_content: None,
+                        tool_calls: Some(json!([{
+                            "type": "function",
+                            "function": {
+                                "name": "_mesh_emit_structured",
+                                "arguments": "{\"answer\":42}"
+                            }
+                        }])),
+                    },
+                    logprobs: None,
+                    finish_reason: Some(FinishReason::ToolCalls),
+                }],
+                usage: Usage::new(6, 3),
+            })
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            Ok(Box::pin(stream::iter(vec![Ok(
+                crate::ChatCompletionChunk::done(request.model),
+            )])))
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> OpenAiResult<CompletionResponse> {
+            unreachable!("guarded responses backend test only calls chat")
+        }
+
+        async fn completion_stream(
+            &self,
+            _request: CompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<CompletionStream> {
+            unreachable!("guarded responses backend test only calls chat")
+        }
+    }
 
     #[test]
     fn normalize_responses_rewrites_path_and_messages() {
@@ -1420,6 +1510,69 @@ mod tests {
         assert_eq!(parsed["output"][1]["arguments"], "{\"city\":\"Sydney\"}");
     }
 
+    #[tokio::test]
+    async fn guarded_structured_output_survives_responses_translation() {
+        let backend = Arc::new(GuardedResponsesBackend::default());
+        let app = guarded_responses_app(backend.clone());
+
+        let response = post_json_with_app_and_request_id(
+            app,
+            "/v1/responses",
+            json!({
+                "model": "Qwen3-8B-Q4_K_M",
+                "instructions": "reply in schema form",
+                "input": "give me json",
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "answer",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "integer"}},
+                            "required": ["answer"],
+                            "additionalProperties": false
+                        }
+                    }
+                }
+            }),
+            Some("guarded-responses-req"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-request-id"], "guarded-responses-req");
+        let body = response_body_json(response).await;
+        assert_eq!(body["object"], "response");
+        assert_eq!(body["output_text"], "{\"answer\":42}");
+        assert_eq!(body["output"][0]["type"], "message");
+        assert_eq!(body["output"][0]["content"][0]["type"], "output_text");
+        assert_eq!(body["output"][0]["content"][0]["text"], "{\"answer\":42}");
+        assert_eq!(body["usage"]["input_tokens"], 6);
+        assert_eq!(body["usage"]["output_tokens"], 3);
+        let parsed_payload: Value =
+            serde_json::from_str(body["output_text"].as_str().unwrap()).expect("json text");
+        assert_eq!(parsed_payload, json!({"answer": 42}));
+        assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
+        assert!(body["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["type"] != "function_call"));
+
+        let seen_requests = backend.seen_chat_requests.lock().unwrap();
+        assert_eq!(seen_requests.len(), 1);
+        let seen_request = &seen_requests[0];
+        assert!(seen_request.response_format.is_none());
+        let seen_tools = seen_request
+            .tools
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("guarded backend should receive tools");
+        assert_eq!(seen_tools.len(), 1);
+        assert_eq!(seen_tools[0]["function"]["name"], "_mesh_emit_structured");
+    }
+
     #[test]
     fn stream_usage_to_responses_usage_maps_missing_fields_to_null() {
         let usage: StreamUsage = serde_json::from_value(json!({
@@ -1544,5 +1697,43 @@ mod tests {
         let item_done = responses_stream_output_item_done_event("msg_123", "hello", 7);
         assert_eq!(item_done["type"], "response.output_item.done");
         assert_eq!(item_done["item"]["content"][0]["text"], "hello");
+    }
+
+    fn guarded_responses_app(backend: Arc<GuardedResponsesBackend>) -> Router {
+        let guarded = Arc::new(GuardedOpenAiBackend::new(
+            backend,
+            GuardrailPolicy {
+                mode: GuardrailMode::Enforce,
+                apply_to_all_models: true,
+                ..GuardrailPolicy::default()
+            },
+        ));
+        router_for_with_config(
+            guarded,
+            OpenAiFrontendConfig::default().without_backend_timeout(),
+        )
+    }
+
+    async fn post_json_with_app_and_request_id(
+        app: Router,
+        path: &str,
+        value: Value,
+        request_id: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json");
+        if let Some(request_id) = request_id {
+            builder = builder.header("x-request-id", request_id);
+        }
+        app.oneshot(builder.body(Body::from(value.to_string())).unwrap())
+            .await
+            .unwrap()
+    }
+
+    async fn response_body_json(response: axum::response::Response) -> Value {
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        serde_json::from_slice(&body).unwrap()
     }
 }

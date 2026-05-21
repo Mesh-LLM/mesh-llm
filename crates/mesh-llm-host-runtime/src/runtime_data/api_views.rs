@@ -36,6 +36,7 @@ pub(crate) fn status_payload(snapshot: StatusViewSnapshot) -> StatusPayload {
         llama_ready: snapshot.llama_ready,
         runtime: RuntimeStatusPayload {
             backend: None,
+            openai_guardrails: None,
             models: vec![],
             stages: vec![],
         },
@@ -156,6 +157,7 @@ mod tests {
             llama_ready: false,
             runtime: RuntimeStatusPayload {
                 backend: None,
+                openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
             },

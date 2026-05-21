@@ -1,0 +1,13 @@
+[package]
+name = "mesh-llm-guardrails"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Reusable guardrail and compaction primitives for mesh-llm OpenAI-compatible paths"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

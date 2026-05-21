@@ -7,7 +7,7 @@ mod interactive;
 mod local;
 mod proxy;
 mod split_planning;
-mod survey;
+pub(crate) mod survey;
 pub(crate) mod wakeable;
 
 pub(crate) use self::capacity::runtime_model_required_bytes;
@@ -19,13 +19,14 @@ use self::discovery::{nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
     add_runtime_local_target, add_serving_assignment, advertise_model_ready, local_process_payload,
-    remove_runtime_local_target, remove_serving_assignment, resolved_model_name,
-    runtime_model_planning_bytes, set_advertised_model_context,
-    set_runtime_verified_served_model_capabilities, start_runtime_local_model,
-    start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
-    withdraw_advertised_model, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
-    ManagedModelController, RuntimeEvent, SplitCoordinatorAck, SplitCoordinatorEvent,
-    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan,
+    openai_guardrail_policy_handle, remove_runtime_local_target, remove_serving_assignment,
+    resolved_model_name, runtime_model_planning_bytes, set_advertised_model_context,
+    set_openai_guardrail_policy_mode, set_runtime_verified_served_model_capabilities,
+    start_runtime_local_model, start_runtime_split_model, startup_runtime_plan,
+    stop_split_generation_cleanup, withdraw_advertised_model, LocalRuntimeModelHandle,
+    LocalRuntimeModelStartSpec, ManagedModelController, OpenAiGuardrailPolicyHandle, RuntimeEvent,
+    SplitCoordinatorAck, SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart,
+    StartupRuntimePlan,
 };
 use self::proxy::{api_proxy, bootstrap_proxy};
 use crate::api;
@@ -1134,6 +1135,7 @@ struct StartupLocalModelTask {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     split: bool,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
     survey_telemetry: survey::SurveyTelemetry,
@@ -1212,6 +1214,7 @@ struct StartupLoopContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
     launch_kind: survey::SurveyLaunchKind,
@@ -1283,6 +1286,7 @@ struct StartupLaunchRuntimeContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
     console_state: Option<&'a api::MeshApi>,
@@ -1748,7 +1752,9 @@ async fn startup_handle_local_fallback_event(
             n_ubatch_override: ctx.n_ubatch,
             flash_attention_override: ctx.flash_attention,
             parallel_override: ctx.parallel_override,
+            openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: ctx.skippy_telemetry.clone(),
+            survey_telemetry: ctx.survey_telemetry.clone(),
         },
         ctx.model_ref,
     )
@@ -2068,6 +2074,7 @@ async fn startup_launch_runtime(
         n_ubatch,
         flash_attention,
         parallel_override,
+        openai_guardrail_policy,
         skippy_telemetry,
         survey_telemetry,
         console_state,
@@ -2094,7 +2101,9 @@ async fn startup_launch_runtime(
         n_ubatch_override: n_ubatch,
         flash_attention_override: flash_attention,
         parallel_override,
+        openai_guardrail_policy: openai_guardrail_policy.clone(),
         skippy_telemetry: skippy_telemetry.clone(),
+        survey_telemetry: survey_telemetry.clone(),
     };
     let make_launch_failure_spec = || survey::SurveyModelSpec {
         model: model_name,
@@ -2202,6 +2211,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        openai_guardrail_policy,
         split,
         skippy_telemetry,
         survey_telemetry,
@@ -2260,6 +2270,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
             n_ubatch,
             flash_attention,
             parallel_override,
+            openai_guardrail_policy: openai_guardrail_policy.clone(),
             skippy_telemetry: &skippy_telemetry,
             survey_telemetry: &survey_telemetry,
             console_state: console_state.as_ref(),
@@ -2313,6 +2324,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        openai_guardrail_policy,
         skippy_telemetry: &skippy_telemetry,
         survey_telemetry: &survey_telemetry,
         launch_kind,
@@ -5709,6 +5721,7 @@ struct RunAutoAdditionalModelsContext<'a> {
     control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     survey_telemetry: &'a survey::SurveyTelemetry,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
+    openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
 }
 
 struct RunAutoServingSurfaceContext<'a> {
@@ -5755,6 +5768,7 @@ struct RunAutoRuntimeLoopContext<'a> {
     runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
     survey_telemetry: &'a survey::SurveyTelemetry,
     startup_ready_reporter: &'a StartupReadyReporter,
+    openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
 }
 
 struct RunAutoRuntimeState {
@@ -5767,6 +5781,7 @@ struct RunAutoRuntimeState {
     dashboard_processes: Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
     dashboard_context_usage: DashboardContextUsage,
     input_handler_enabled: bool,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
 }
 
 struct RunAutoStartupTasksContext<'a> {
@@ -5792,7 +5807,7 @@ struct RunAutoStartupTasksContext<'a> {
     interactive_started: Arc<AtomicBool>,
 }
 
-fn initialize_run_auto_runtime_state() -> RunAutoRuntimeState {
+fn initialize_run_auto_runtime_state(cli: &Cli) -> RunAutoRuntimeState {
     RunAutoRuntimeState {
         runtime_models: HashMap::new(),
         runtime_survey_models: HashMap::new(),
@@ -5805,6 +5820,9 @@ fn initialize_run_auto_runtime_state() -> RunAutoRuntimeState {
         input_handler_enabled: crate::cli::output::OutputManager::global()
             .console_session_mode()
             .is_some(),
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            cli.mesh_guardrails.to_guardrail_mode(),
+        ),
     }
 }
 
@@ -5888,6 +5906,7 @@ async fn spawn_run_auto_startup_model_tasks(
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
         split: cli.split,
         skippy_telemetry: skippy_telemetry.clone(),
         survey_telemetry: survey_telemetry.clone(),
@@ -5934,6 +5953,7 @@ async fn spawn_run_auto_startup_model_tasks(
         control_tx,
         survey_telemetry,
         skippy_telemetry,
+        openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
     })
     .await;
 
@@ -5980,6 +6000,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         runtime_event_tx,
         survey_telemetry,
         startup_ready_reporter,
+        openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
     };
     run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx).await;
 
@@ -6180,7 +6201,9 @@ async fn run_auto_load_runtime_model(
                 .and_then(|m| m.flash_attention)
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
+            openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.cli),
+            survey_telemetry: ctx.survey_telemetry.clone(),
         },
         &runtime_model_name,
     )
@@ -6240,6 +6263,12 @@ async fn run_auto_load_runtime_model(
     );
     upsert_dashboard_process(ctx.dashboard_processes, payload.clone()).await;
     if let Some(cs) = ctx.console_state {
+        cs.set_openai_guardrails(
+            handle
+                .openai_guardrails()
+                .map(crate::api::status::OpenAiGuardrailsPayload::from),
+        )
+        .await;
         cs.upsert_local_process(payload).await;
     }
 
@@ -6530,6 +6559,11 @@ async fn run_auto_handle_control_request(
             let _ = resp.send(result);
             false
         }
+        api::RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp } => {
+            let result = run_auto_set_openai_guardrail_mode(ctx, mode).await;
+            let _ = resp.send(result);
+            false
+        }
         api::RuntimeControlRequest::Shutdown => {
             let _ = emit_event(OutputEvent::ShutdownRequested { signal: "api" });
             ctx.startup_ready_reporter.mark_shutdown_requested();
@@ -6538,6 +6572,54 @@ async fn run_auto_handle_control_request(
             true
         }
     }
+}
+
+async fn run_auto_set_openai_guardrail_mode(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    mode: openai_frontend::GuardrailMode,
+) -> Result<api::OpenAiGuardrailModeUpdateResponse> {
+    set_openai_guardrail_policy_mode(ctx.openai_guardrail_policy, mode);
+    let mut updated_models = 0_usize;
+    let mut latest_status = None;
+    for entry in ctx.runtime_models.values() {
+        if let Some(status) = entry.handle.set_openai_guardrail_mode(mode) {
+            updated_models += 1;
+            latest_status = Some(status);
+        }
+    }
+
+    let status_payload = Some(
+        latest_status
+            .map(api::status::OpenAiGuardrailsPayload::from)
+            .unwrap_or_else(|| openai_guardrails_payload_from_policy(ctx.openai_guardrail_policy)),
+    );
+    if let Some(console_state) = ctx.console_state {
+        console_state
+            .set_openai_guardrails(status_payload.clone())
+            .await;
+    }
+
+    Ok(api::OpenAiGuardrailModeUpdateResponse {
+        mode: guardrail_mode_status_label(mode),
+        updated_models,
+        status: status_payload,
+    })
+}
+
+fn guardrail_mode_status_label(mode: openai_frontend::GuardrailMode) -> &'static str {
+    match mode {
+        openai_frontend::GuardrailMode::Disabled => "disabled",
+        openai_frontend::GuardrailMode::MetricsOnly => "metrics",
+        openai_frontend::GuardrailMode::Enforce => "enforce",
+    }
+}
+
+fn openai_guardrails_payload_from_policy(
+    policy: &OpenAiGuardrailPolicyHandle,
+) -> api::status::OpenAiGuardrailsPayload {
+    api::status::OpenAiGuardrailsPayload::from(
+        skippy::skippy_openai_guardrails_for_policy_handle(policy.clone()).status(),
+    )
 }
 
 async fn run_auto_runtime_event_loop(
@@ -6830,6 +6912,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
             n_ubatch: extra_model.n_ubatch,
             flash_attention: extra_model.flash_attention,
             parallel_override: extra_model.parallel.or(ctx.config.gpu.parallel),
+            openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             split: ctx.cli.split,
             skippy_telemetry: ctx.skippy_telemetry.clone(),
             survey_telemetry: ctx.survey_telemetry.clone(),
@@ -7135,7 +7218,7 @@ async fn run_auto(
         tokio::sync::mpsc::unbounded_channel::<api::RuntimeControlRequest>();
     let (runtime_event_tx, mut runtime_event_rx) =
         tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
-    let mut runtime_state = initialize_run_auto_runtime_state();
+    let mut runtime_state = initialize_run_auto_runtime_state(&cli);
 
     let model_name_for_console = model_name.clone();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&cli)?;
@@ -7152,6 +7235,13 @@ async fn run_auto(
         owner_key_path: &runtime_owner_key_path,
     })
     .await?;
+    if let Some(console_state) = console_state.as_ref() {
+        console_state
+            .set_openai_guardrails(Some(openai_guardrails_payload_from_policy(
+                &runtime_state.openai_guardrail_policy,
+            )))
+            .await;
+    }
 
     crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
         RuntimeDashboardSnapshotProvider::new(

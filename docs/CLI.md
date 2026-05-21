@@ -93,6 +93,10 @@ Runtime switches:
 - `--node-label <NODE_LABEL>`: attach a human label to this runtime node certificate.
 - `--trust-policy <TRUST_POLICY>`: override peer ownership trust policy.
 - `--trust-owner <TRUST_OWNER>`: add trusted owner IDs on top of the local trust store.
+- `--mesh-guardrails <MODE>`: server-side mesh guardrail mode for hosted
+  Skippy backends (`disabled`, `metrics`, or `enforce`; default `disabled`).
+  This controls `GuardrailPolicy.mode`; request-level `mesh_guardrails` flags
+  cannot upgrade a disabled server.
 
 Config file semantics:
 
@@ -358,6 +362,40 @@ Use this to inspect model status from a running local runtime.
 Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
+
+### `runtime guardrails`
+
+Use this to switch mesh guardrail mode on a running local runtime without
+restarting it. The command updates the server-side shared guardrail policy used
+by hosted Skippy backends and future runtime-loaded/replacement models.
+
+Usage:
+
+```bash
+mesh-llm runtime guardrails --mode metrics --port 3131
+mesh-llm runtime guardrails --mode enforce --port 3131 --json
+```
+
+Switches:
+
+- `--mode <MODE>`: `disabled`, `metrics`, or `enforce`.
+- `--port <PORT>`: target management/API port (default `3131`).
+- `--json`: machine-readable response with `mode`, `updated_models`, and the
+  current `status` payload.
+
+Equivalent REST call:
+
+```bash
+curl -s -X POST localhost:3131/api/runtime/mesh-guardrails \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"metrics"}' | jq .
+```
+
+Verify the active posture through `/api/status`:
+
+```bash
+curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
+```
 
 ### `discover`
 

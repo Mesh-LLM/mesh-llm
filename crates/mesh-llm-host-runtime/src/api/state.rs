@@ -1,9 +1,11 @@
+use super::status::OpenAiGuardrailsPayload;
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::discovery::MeshDiscoveryMode;
 use crate::plugin;
 use crate::runtime_data;
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+use openai_frontend::GuardrailMode;
 use serde::{Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -50,6 +52,10 @@ pub enum RuntimeControlRequest {
         options: UnloadOptions,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeUnloadResponse>>,
     },
+    SetOpenAiGuardrailMode {
+        mode: GuardrailMode,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
+    },
     Shutdown,
 }
 
@@ -69,6 +75,14 @@ pub struct RuntimeUnloadResponse {
     pub model: String,
     pub instance_id: String,
     pub unloaded: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OpenAiGuardrailModeUpdateResponse {
+    pub mode: &'static str,
+    pub updated_models: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<OpenAiGuardrailsPayload>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -178,6 +192,7 @@ pub(super) struct ApiInner {
     pub(super) llama_port: Option<u16>,
     pub(super) model_name: String,
     pub(super) primary_backend: Option<String>,
+    pub(super) openai_guardrails: Option<OpenAiGuardrailsPayload>,
     pub(super) draft_name: Option<String>,
     pub(super) api_port: u16,
     pub(super) model_size_bytes: u64,

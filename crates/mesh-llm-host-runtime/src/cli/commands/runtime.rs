@@ -3,6 +3,7 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::cli::runtime::RuntimeCommand;
+use crate::cli::MeshGuardrailCliMode;
 use crate::plugin::MeshConfig;
 
 pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -> Result<()> {
@@ -28,8 +29,25 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
         }) => run_control_apply_config(endpoint, *expected_revision, config, *port, *json).await,
         Some(RuntimeCommand::Load { name, port }) => run_load(name, *port).await,
         Some(RuntimeCommand::Unload { name, port }) => run_drop(name, *port).await,
+        Some(RuntimeCommand::Guardrails { mode, port, json }) => {
+            run_set_mesh_guardrails(*mode, *port, *json).await
+        }
         None => run_status(3131).await,
     }
+}
+
+pub(crate) async fn run_set_mesh_guardrails(
+    mode: MeshGuardrailCliMode,
+    port: u16,
+    json_output: bool,
+) -> Result<()> {
+    let body = post_runtime_payload(
+        port,
+        "/api/runtime/mesh-guardrails",
+        &build_guardrail_mode_request(mode),
+    )
+    .await?;
+    print_control_response("Mesh guardrails", &body, json_output)
 }
 
 pub(crate) async fn run_control_get_config(
@@ -310,6 +328,10 @@ fn build_control_endpoint_request(endpoint: &str) -> serde_json::Value {
     json!({ "endpoint": endpoint })
 }
 
+fn build_guardrail_mode_request(mode: MeshGuardrailCliMode) -> serde_json::Value {
+    json!({ "mode": mode.as_str() })
+}
+
 fn build_apply_config_request(
     endpoint: &str,
     expected_revision: u64,
@@ -430,9 +452,10 @@ fn find_pid(processes: &[serde_json::Value], model: &serde_json::Value) -> Optio
 #[cfg(test)]
 mod tests {
     use super::{
-        build_apply_config_request, build_control_endpoint_request, control_bootstrap_lines,
-        runtime_success_lines, yes_no,
+        build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
+        control_bootstrap_lines, runtime_success_lines, yes_no,
     };
+    use crate::cli::MeshGuardrailCliMode;
     use crate::plugin::{GpuAssignment, GpuConfig, MeshConfig};
     use serde_json::json;
 
@@ -557,6 +580,14 @@ mod tests {
                 "expected_revision": 7,
                 "config": config,
             })
+        );
+    }
+
+    #[test]
+    fn runtime_guardrails_cli_builds_mode_request_body() {
+        assert_eq!(
+            build_guardrail_mode_request(MeshGuardrailCliMode::Enforce),
+            json!({ "mode": "enforce" })
         );
     }
 }

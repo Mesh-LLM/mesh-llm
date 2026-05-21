@@ -256,6 +256,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 downstream_wire_condition,
                 telemetry: openai_telemetry,
                 hook_policy: None,
+                openai_guardrails: Some(frontend::OpenAiGuardrailsConfig::disabled_for_skippy()),
             })
             .await
             {

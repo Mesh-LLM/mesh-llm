@@ -51,8 +51,9 @@ pub(crate) use self::server::start_with_listener;
 #[cfg(test)]
 pub(crate) use self::server::{handle_request, is_ui_only_route};
 pub use self::state::{
-    ControlBootstrapPayload, LocalModelInterest, MeshApi, PublicationState, RuntimeControlRequest,
-    RuntimeLoadResponse, RuntimeModelPayload, RuntimeProcessPayload, RuntimeUnloadResponse,
+    ControlBootstrapPayload, LocalModelInterest, MeshApi, OpenAiGuardrailModeUpdateResponse,
+    PublicationState, RuntimeControlRequest, RuntimeLoadResponse, RuntimeModelPayload,
+    RuntimeProcessPayload, RuntimeUnloadResponse,
 };
 pub(crate) use self::status::classify_runtime_error;
 
@@ -60,7 +61,8 @@ use self::state::ApiInner;
 use self::status::{
     build_runtime_processes_payload, build_runtime_stage_payloads, build_runtime_status_payload,
     runtime_stage_state_label, runtime_stage_wire_dtype_label, MeshModelPayload,
-    RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload, StatusPayload,
+    OpenAiGuardrailsPayload, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
+    StatusPayload,
 };
 use crate::mesh;
 use crate::network::{affinity, nostr};
@@ -215,6 +217,7 @@ impl MeshApi {
                 llama_port: None,
                 model_name,
                 primary_backend: None,
+                openai_guardrails: None,
                 draft_name: None,
                 api_port,
                 model_size_bytes,
@@ -331,6 +334,10 @@ impl MeshApi {
                 runtime_status.primary_backend = Some(backend.clone());
                 true
             });
+    }
+
+    pub async fn set_openai_guardrails(&self, openai_guardrails: Option<OpenAiGuardrailsPayload>) {
+        self.inner.lock().await.openai_guardrails = openai_guardrails;
     }
 
     pub async fn set_draft_name(&self, name: String) {
@@ -510,15 +517,17 @@ impl MeshApi {
     }
 
     async fn runtime_status(&self) -> RuntimeStatusPayload {
-        let runtime_status = self
-            .inner
-            .lock()
-            .await
-            .runtime_data_collector
-            .runtime_status_snapshot();
+        let (runtime_status, openai_guardrails) = {
+            let inner = self.inner.lock().await;
+            (
+                inner.runtime_data_collector.runtime_status_snapshot(),
+                inner.openai_guardrails.clone(),
+            )
+        };
         build_runtime_status_payload(
             runtime_status.primary_model.as_deref().unwrap_or_default(),
             runtime_status.primary_backend,
+            openai_guardrails,
             runtime_status.is_host,
             runtime_status.llama_ready,
             runtime_status.llama_port,
@@ -814,6 +823,7 @@ impl MeshApi {
             nostr_discovery,
             publication_state,
             wakeable_inventory,
+            openai_guardrails,
         ) = {
             let inner = self.inner.lock().await;
             (
@@ -833,6 +843,7 @@ impl MeshApi {
                 inner.nostr_discovery,
                 inner.publication_state,
                 inner.wakeable_inventory.clone(),
+                inner.openai_guardrails.clone(),
             )
         };
         let runtime_status = runtime_data_collector.runtime_status_snapshot();
@@ -842,6 +853,7 @@ impl MeshApi {
         let mut runtime = build_runtime_status_payload(
             &model_name,
             runtime_status.primary_backend.clone(),
+            openai_guardrails,
             runtime_status.is_host,
             runtime_status.llama_ready,
             runtime_status.llama_port,

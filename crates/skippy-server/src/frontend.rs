@@ -26,11 +26,14 @@ use futures_util::{stream, StreamExt};
 use openai_frontend::{
     chat_mesh_hooks_enabled, inject_text_into_chat_messages, normalize_reasoning_template_options,
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
-    ChatHookAction, ChatHookOutcome, CompletionChunk, CompletionRequest, CompletionResponse,
-    CompletionStream, FinishReason, GenerationHookSignals, MessageContent, MessageContentPart,
-    ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind, OpenAiHookPolicy,
-    OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort, Usage,
+    ChatHookAction, ChatHookOutcome, CompactingOpenAiBackend, CompactionConfig, CompletionChunk,
+    CompletionRequest, CompletionResponse, CompletionStream, FinishReason, GenerationHookSignals,
+    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, MessageContent,
+    MessageContentPart, ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind,
+    OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, PrefillHookSignals,
+    ReasoningEffort, StreamingGuardrailMode, Usage,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use skippy_metrics::attr as attr_key;
@@ -231,6 +234,132 @@ pub struct EmbeddedOpenAiArgs {
     pub downstream_wire_condition: WireCondition,
     pub telemetry: Telemetry,
     pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenAiGuardrailsTarget {
+    Skippy,
+}
+
+impl OpenAiGuardrailsTarget {
+    const fn as_status_label(self) -> &'static str {
+        match self {
+            Self::Skippy => "skippy",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenAiGuardrailsConfig {
+    pub target: OpenAiGuardrailsTarget,
+    pub policy: GuardrailPolicyHandle,
+    pub compaction: Option<CompactionConfig>,
+}
+
+impl OpenAiGuardrailsConfig {
+    pub fn disabled_for_skippy() -> Self {
+        Self {
+            target: OpenAiGuardrailsTarget::Skippy,
+            policy: GuardrailPolicyHandle::default(),
+            compaction: None,
+        }
+    }
+
+    pub fn status(&self) -> OpenAiGuardrailsStatus {
+        let policy = self.policy.snapshot();
+        OpenAiGuardrailsStatus {
+            mode: guardrail_mode_label(policy.mode),
+            target: self.target.as_status_label(),
+            streaming: streaming_mode_label(policy.streaming_mode),
+            retry_exhaustion: retry_exhaustion_label(&policy),
+            small_model_policy: small_model_policy_label(&policy),
+            small_param_threshold_b: policy.small_param_threshold_b,
+            max_tool_retries: policy.max_tool_retries,
+            max_structured_retries: policy.max_structured_retries,
+        }
+    }
+
+    fn should_wrap_guardrail_backend(&self) -> bool {
+        matches!(self.target, OpenAiGuardrailsTarget::Skippy)
+    }
+
+    #[cfg(test)]
+    fn wrap_backend(&self, backend: Arc<dyn OpenAiBackend>) -> Arc<dyn OpenAiBackend> {
+        self.wrap_backend_with_context_limit(backend, None)
+    }
+
+    fn wrap_backend_with_context_limit(
+        &self,
+        backend: Arc<dyn OpenAiBackend>,
+        context_limit_tokens: Option<usize>,
+    ) -> Arc<dyn OpenAiBackend> {
+        let backend = self.wrap_compacting_backend(backend, context_limit_tokens);
+        if self.should_wrap_guardrail_backend() {
+            Arc::new(GuardedOpenAiBackend::with_policy_handle(
+                backend,
+                self.policy.clone(),
+            ))
+        } else {
+            backend
+        }
+    }
+
+    fn wrap_compacting_backend(
+        &self,
+        backend: Arc<dyn OpenAiBackend>,
+        context_limit_tokens: Option<usize>,
+    ) -> Arc<dyn OpenAiBackend> {
+        let Some(mut compaction) = self.compaction else {
+            return backend;
+        };
+        if compaction.context_limit_tokens.is_none() {
+            compaction.context_limit_tokens = context_limit_tokens;
+        }
+        Arc::new(CompactingOpenAiBackend::new(backend, compaction))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct OpenAiGuardrailsStatus {
+    pub mode: &'static str,
+    pub target: &'static str,
+    pub streaming: &'static str,
+    pub retry_exhaustion: &'static str,
+    pub small_model_policy: &'static str,
+    pub small_param_threshold_b: f32,
+    pub max_tool_retries: u8,
+    pub max_structured_retries: u8,
+}
+
+fn guardrail_mode_label(mode: GuardrailMode) -> &'static str {
+    match mode {
+        GuardrailMode::Disabled => "disabled",
+        GuardrailMode::MetricsOnly => "metrics",
+        GuardrailMode::Enforce => "enforce",
+    }
+}
+
+fn streaming_mode_label(mode: StreamingGuardrailMode) -> &'static str {
+    match mode {
+        StreamingGuardrailMode::PassThrough => "pass_through",
+    }
+}
+
+fn retry_exhaustion_label(policy: &GuardrailPolicy) -> &'static str {
+    match format!("{:?}", policy.retry_exhaustion_mode).as_str() {
+        "Error" => "error",
+        "PassLastText" => "pass_last_text",
+        _ => "unknown",
+    }
+}
+
+fn small_model_policy_label(policy: &GuardrailPolicy) -> &'static str {
+    if policy.apply_to_all_models {
+        "all"
+    } else {
+        "small_models_only"
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -308,6 +437,7 @@ pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub model_id: String,
     pub generation_concurrency: usize,
+    pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
@@ -390,7 +520,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     .context("prewarm embedded OpenAI runtime sessions")?;
     let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
-    let backend = Arc::new(StageOpenAiBackend {
+    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
@@ -408,11 +538,22 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         hook_policy: args.hook_policy,
         kv,
     });
+    let openai_guardrails = args
+        .openai_guardrails
+        .as_ref()
+        .map(OpenAiGuardrailsConfig::status);
+    let backend = args
+        .openai_guardrails
+        .as_ref()
+        .map_or(backend.clone(), |guardrails| {
+            guardrails.wrap_backend_with_context_limit(backend, Some(ctx_size))
+        });
 
     Ok(EmbeddedOpenAiBackend {
         backend,
         model_id,
         generation_concurrency: args.generation_concurrency,
+        openai_guardrails,
     })
 }
 
