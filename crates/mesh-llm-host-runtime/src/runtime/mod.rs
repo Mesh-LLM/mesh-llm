@@ -1116,6 +1116,7 @@ fn dashboard_context_usage_source(handle: &LocalRuntimeModelHandle) -> Dashboard
 
 struct StartupLocalModelTask {
     node: mesh::Node,
+    config: plugin::MeshConfig,
     tunnel_mgr: tunnel::Manager,
     target_tx: Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     model_path: PathBuf,
@@ -1194,6 +1195,7 @@ where
 
 struct StartupLoopContext<'a> {
     node: &'a mesh::Node,
+    config: &'a plugin::MeshConfig,
     tunnel_mgr: &'a tunnel::Manager,
     target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     model_path: &'a PathBuf,
@@ -1265,6 +1267,7 @@ struct StartupPrepareLaunchContext<'a> {
 
 struct StartupLaunchRuntimeContext<'a> {
     node: &'a mesh::Node,
+    config: &'a plugin::MeshConfig,
     target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     model_path: &'a PathBuf,
     model_ref: &'a str,
@@ -1731,6 +1734,8 @@ async fn startup_handle_local_fallback_event(
     let start_result = start_runtime_local_model(
         LocalRuntimeModelStartSpec {
             node: ctx.node,
+            mesh_config: ctx.config,
+            config_model_id: Some(ctx.model_ref),
             model_path: ctx.model_path,
             model_bytes,
             mmproj_override: ctx.mmproj_path.map(PathBuf::as_path),
@@ -2047,6 +2052,7 @@ async fn startup_launch_runtime(
 ) -> Option<(StartupLaunchHandles, Instant)> {
     let StartupLaunchRuntimeContext {
         node,
+        config,
         target_tx,
         model_path,
         model_ref,
@@ -2074,6 +2080,8 @@ async fn startup_launch_runtime(
     } = ctx;
     let make_start_spec = || LocalRuntimeModelStartSpec {
         node,
+        mesh_config: config,
+        config_model_id: Some(model_ref),
         model_path,
         model_bytes,
         mmproj_override: mmproj_path.map(PathBuf::as_path),
@@ -2176,6 +2184,7 @@ async fn runtime_data_producer_for_console(
 async fn startup_local_model_loop(params: StartupLocalModelTask) {
     let StartupLocalModelTask {
         node,
+        config,
         tunnel_mgr,
         target_tx,
         model_path,
@@ -2235,6 +2244,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
     let Some((launch_handles, launch_started)) =
         startup_launch_runtime(StartupLaunchRuntimeContext {
             node: &node,
+            config: &config,
             target_tx: &target_tx,
             model_path: &model_path,
             model_ref: &model_ref,
@@ -2286,6 +2296,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
 
     let ctx = StartupLoopContext {
         node: &node,
+        config: &config,
         tunnel_mgr: &tunnel_mgr,
         target_tx: &target_tx,
         model_path: &model_path,
@@ -5849,6 +5860,7 @@ async fn spawn_run_auto_startup_model_tasks(
         next_runtime_instance_id(&mut runtime_state.next_runtime_instance_sequence);
     let primary_task = tokio::spawn(Box::pin(startup_local_model_loop(StartupLocalModelTask {
         node: node.clone(),
+        config: config.clone(),
         tunnel_mgr: tunnel_mgr.clone(),
         target_tx: target_tx.clone(),
         model_path: model_path.to_path_buf(),
@@ -6142,6 +6154,8 @@ async fn run_auto_load_runtime_model(
     let (loaded_name, handle, death_rx) = match start_runtime_local_model(
         LocalRuntimeModelStartSpec {
             node: ctx.node,
+            mesh_config: ctx.config,
+            config_model_id: Some(&spec),
             model_path: &model_path,
             model_bytes,
             mmproj_override: None,
@@ -6792,6 +6806,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
         let extra_instance_id = next_runtime_instance_id(ctx.next_runtime_instance_sequence);
         let extra_task = tokio::spawn(Box::pin(startup_local_model_loop(StartupLocalModelTask {
             node: ctx.node.clone(),
+            config: ctx.config.clone(),
             tunnel_mgr: ctx.tunnel_mgr.clone(),
             target_tx: ctx.target_tx.clone(),
             model_path: extra_model.resolved_path.clone(),
