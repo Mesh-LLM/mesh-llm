@@ -44,15 +44,22 @@ pub(crate) async fn gather_workers_incremental(
     let dispatched_at = Instant::now();
     let grace_enabled = !has_tools && !first_answer_grace.is_zero();
 
+    // Grace eligibility: we have one or more Answer-kind outputs that
+    // meet the confidence floor. Previously we only armed grace on
+    // exactly 1 answer; on the public mesh we saw a real failure where
+    // multiple fast workers all answered short text in <1s but didn't
+    // textually agree, so the arbiter's consensus rule didn't fire and
+    // MoA waited for the slow tail worker (~40s on Qwen3-8B). With the
+    // relaxed eligibility, grace catches that case too — once the
+    // grace window has elapsed and ≥1 qualifying answer is in hand,
+    // we pick the highest-confidence one and ship it.
     let grace_eligible = |outs: &[WorkerOutput]| -> bool {
         if !grace_enabled {
             return false;
         }
-        let answers: Vec<&WorkerOutput> = outs
-            .iter()
-            .filter(|o| o.kind == normalize::OutputKind::Answer)
-            .collect();
-        answers.len() == 1 && answers[0].confidence >= GRACE_MIN_CONFIDENCE
+        outs.iter().any(|o| {
+            o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
+        })
     };
 
     loop {
@@ -67,20 +74,35 @@ pub(crate) async fn gather_workers_incremental(
             biased;
             join = join_set.join_next() => join,
             _ = tokio::time::sleep(grace_remaining), if armed => {
+                // Pick the highest-confidence Answer. If there's only
+                // one (the old grace condition), this trivially returns
+                // that one. With multiple answers we prefer the most
+                // confident worker rather than waiting longer to see
+                // whether they textually converge.
+                let answer = outputs
+                    .iter()
+                    .filter(|o| o.kind == normalize::OutputKind::Answer)
+                    .max_by(|a, b| {
+                        a.confidence
+                            .partial_cmp(&b.confidence)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .expect("grace_eligible guaranteed at least one Answer")
+                    .payload
+                    .clone();
+                let answer_count = outputs
+                    .iter()
+                    .filter(|o| o.kind == normalize::OutputKind::Answer)
+                    .count();
                 tracing::info!(
-                    "moa: grace early-exit — sole answer after {}ms (grace={}ms), {} pending",
+                    "moa: grace early-exit — {} answer(s) after {}ms (grace={}ms), {} pending",
+                    answer_count,
                     dispatched_at.elapsed().as_millis(),
                     first_answer_grace.as_millis(),
                     total_workers.saturating_sub(total_finished),
                 );
                 drain_after_early_exit(join_set, &mut summaries).await;
                 reconcile_dispatched(dispatched, &mut summaries);
-                let answer = outputs
-                    .iter()
-                    .find(|o| o.kind == normalize::OutputKind::Answer)
-                    .expect("grace_eligible guaranteed exactly one Answer")
-                    .payload
-                    .clone();
                 return (outputs, summaries, Some(arbiter::Decision::Answer(answer)));
             }
         };
@@ -439,5 +461,113 @@ mod tests {
             "low-confidence sole answer must not grace-exit; got {elapsed:?}"
         );
         assert!(outputs.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn grace_fires_with_multiple_diverse_answers() {
+        // Real lab scenario: many fast workers all return short answers
+        // in <1s but textually DON'T agree (Hello / Yes / Ready / Okay).
+        // Arbiter consensus rule requires textual agreement so it
+        // doesn't fire. Without diverse-answer grace, MoA waits for the
+        // slow tail worker. With it, grace catches this case too —
+        // grace window elapses, we pick the highest-confidence answer.
+        let mut js = tokio::task::JoinSet::new();
+        let dispatched = vec![
+            spawn_worker(
+                &mut js,
+                "fast1",
+                WorkerRole::Fast,
+                10,
+                Ok(answer_text("Hello", 0.6)),
+            ),
+            spawn_worker(
+                &mut js,
+                "fast2",
+                WorkerRole::Specialist,
+                20,
+                Ok(answer_text("Yes", 0.7)),
+            ),
+            spawn_worker(
+                &mut js,
+                "slow_strong",
+                WorkerRole::Strong,
+                5_000,
+                Ok(answer_text("Ready", 0.5)),
+            ),
+        ];
+
+        let started = std::time::Instant::now();
+        let (outputs, _summaries, decision) =
+            gather_workers_incremental(&mut js, &dispatched, false, &[], Duration::from_millis(50))
+                .await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "grace should fire well under 1s once multiple fast answers are in; got {elapsed:?}"
+        );
+        let decision = decision.expect("grace must yield a Decision");
+        match decision {
+            arbiter::Decision::Answer(text) => {
+                // Should pick the highest-confidence one (fast2, 0.7).
+                assert!(
+                    text.contains("Yes"),
+                    "expected highest-confidence answer 'Yes' (conf=0.7); got {text:?}"
+                );
+            }
+            other => panic!("expected Decision::Answer, got {other:?}"),
+        }
+        // We had at least 2 answers when grace fired.
+        assert!(outputs.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn grace_picks_highest_confidence_when_multiple_qualify() {
+        // Three workers, different confidences. Two return fast, the
+        // third stays slow so grace gets a chance to fire on the two
+        // diverse fast answers. Grace must pick the most confident.
+        let mut js = tokio::task::JoinSet::new();
+        let dispatched = vec![
+            spawn_worker(
+                &mut js,
+                "w_low",
+                WorkerRole::Fast,
+                10,
+                Ok(answer_text("low", 0.5)),
+            ),
+            spawn_worker(
+                &mut js,
+                "w_high",
+                WorkerRole::Specialist,
+                20,
+                Ok(answer_text("best", 0.9)),
+            ),
+            spawn_worker(
+                &mut js,
+                "w_slow",
+                WorkerRole::Strong,
+                5_000,
+                Ok(answer_text("slow_low", 0.4)),
+            ),
+        ];
+
+        let (_outputs, _summaries, decision) = gather_workers_incremental(
+            &mut js,
+            &dispatched,
+            false,
+            &[],
+            Duration::from_millis(100),
+        )
+        .await;
+        let decision = decision.expect("grace must yield a Decision");
+        match decision {
+            arbiter::Decision::Answer(text) => {
+                assert!(
+                    text.contains("best"),
+                    "expected highest-confidence answer 'best' (conf=0.9); got {text:?}"
+                );
+            }
+            other => panic!("expected Decision::Answer, got {other:?}"),
+        }
     }
 }
