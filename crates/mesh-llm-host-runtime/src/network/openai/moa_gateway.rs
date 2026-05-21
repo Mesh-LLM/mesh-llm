@@ -48,12 +48,7 @@ pub async fn try_handle_moa(
         return None;
     };
 
-    // Pull the caller's reasoning preference off the JSON body before we
-    // hand it to MoA. The body itself gets forwarded to workers minus the
-    // `stream` flag, but we need this knob at the gateway level so it
-    // reaches every worker AND the reducer (workers and the reducer pick
-    // up via `GatewayConfig::enable_thinking`).
-    let enable_thinking = extract_enable_thinking_override(&body_json);
+    let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
     let Some(mut config) = build_moa_config(node, targets).await else {
         let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
@@ -80,6 +75,20 @@ pub async fn try_handle_moa(
 ///
 /// Returns `None` when the caller hasn't expressed a preference, leaving
 /// each worker's default behavior alone.
+/// MoA's opinionated default: workers do not think unless the caller
+/// explicitly asks for it. Workers are short-budget internal slots, not
+/// user-facing reasoning steps. The fast worker's 256-token budget is
+/// far too small to fit `<think>…</think>` + answer, and the reducer
+/// doesn't want reasoning prose as candidate input.
+///
+/// The caller can still explicitly enable thinking (e.g. for
+/// experimentation) via any of the recognised knobs — see
+/// [`extract_enable_thinking_override`]. When no preference is
+/// expressed, MoA picks for them: off.
+fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
+    extract_enable_thinking_override(body).or(Some(false))
+}
+
 fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
     let obj = body.as_object()?;
     let mut result: Option<bool> = None;
@@ -1397,5 +1406,54 @@ mod tests {
             "chat_template_kwargs": {"enable_thinking": false},         // disable
         });
         assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    // ── MoA opinionated default ────────────────────────────────────────────────────
+    //
+    // For `model: "mesh"`, MoA does NOT let reasoning models think on
+    // worker slots. The fast worker has a 256-token budget that doesn't
+    // fit `<think>...</think>` + answer, and the reducer doesn't want
+    // reasoning prose as candidate input. Callers can explicitly turn
+    // reasoning back on, but the default is off.
+
+    #[test]
+    fn effective_default_is_no_thinking_when_caller_silent() {
+        // No knobs in the body → MoA's opinion applies.
+        let body = serde_json::json!({"model": "mesh", "messages": []});
+        assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
+    }
+
+    #[test]
+    fn effective_respects_explicit_disable_from_caller() {
+        let body = serde_json::json!({
+            "reasoning_effort": "none",
+            "model": "mesh",
+        });
+        assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
+    }
+
+    #[test]
+    fn effective_lets_caller_explicitly_enable_thinking() {
+        // Escape hatch: a caller who really wants reasoning on MoA can
+        // ask for it via any of the recognised knobs.
+        let body = serde_json::json!({
+            "reasoning_effort": "low",
+            "model": "mesh",
+        });
+        assert_eq!(effective_enable_thinking_for_moa(&body), Some(true));
+    }
+
+    #[test]
+    fn effective_default_for_tool_calling_request_still_no_thinking() {
+        // Agentic / tool turns get the same opinionated default.
+        // The grace-bypass / consensus path in MoA already runs
+        // differently for tool turns, but thinking is independent of
+        // that and should still be off unless the caller insists.
+        let body = serde_json::json!({
+            "model": "mesh",
+            "messages": [],
+            "tools": [{"type": "function", "function": {"name": "x"}}],
+        });
+        assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
     }
 }
