@@ -3693,9 +3693,6 @@ stop = ["END"]
         .expect("test mesh config should parse");
         let mut package = package(40);
         package.package_ref = "hf://Mesh-LLM/test-split-package".to_string();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let model_path = temp_dir.path().join("qwen.gguf");
-        write_fake_gguf_model(&model_path);
         let local_id = node.id();
         let generation = SplitTopologyGeneration::new(
             "resolver-topology".into(),
