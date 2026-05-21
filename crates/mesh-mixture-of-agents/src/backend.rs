@@ -15,10 +15,18 @@ use std::time::Duration;
 
 /// Sampling hyperparameters sent to backend models.
 /// Workers get higher temperature for diversity; reducer gets lower for precision.
+///
+/// `enable_thinking` propagates the caller's reasoning toggle
+/// (`reasoning_effort: "none"`, `enable_thinking: false`, etc.) down to
+/// each worker so reasoning models can skip their `<think>` phase when
+/// MoA is mediating the call. `None` means "don't override the model's
+/// default" — callers who haven't specified a preference get the same
+/// behavior as before this field existed.
 #[derive(Debug, Clone, Copy)]
 pub struct SamplingParams {
     pub temperature: f32,
     pub top_p: f32,
+    pub enable_thinking: Option<bool>,
 }
 
 impl SamplingParams {
@@ -28,6 +36,7 @@ impl SamplingParams {
         Self {
             temperature: 0.8,
             top_p: 0.95,
+            enable_thinking: None,
         }
     }
 
@@ -36,7 +45,16 @@ impl SamplingParams {
         Self {
             temperature: 0.3,
             top_p: 0.9,
+            enable_thinking: None,
         }
+    }
+
+    /// Returns a copy with `enable_thinking` set. Convenience for the
+    /// MoA gateway, which propagates the caller's `reasoning_effort` /
+    /// `enable_thinking` knob to every worker (and the reducer).
+    pub fn with_thinking(mut self, enable: Option<bool>) -> Self {
+        self.enable_thinking = enable;
+        self
     }
 }
 
@@ -106,6 +124,7 @@ impl ModelBackend for HttpBackend {
                 .unwrap()
                 .insert("tools".to_string(), tools.clone());
         }
+        apply_enable_thinking(&mut body, sampling.enable_thinking);
 
         let resp = self
             .http
@@ -173,6 +192,42 @@ pub(crate) async fn call_backend(
             extract_text_from_response(&resp)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Inject `chat_template_kwargs.enable_thinking` and (for OpenAI-compat
+/// servers) `reasoning_effort` into a chat-completion request body when
+/// the caller has asked us to override the model's default thinking
+/// behavior. Canonical form recognised by Qwen3 / DeepSeek-R1-Distill /
+/// GLM chat templates inside llama.cpp.
+///
+/// `None` means "don't touch" — leaves the body unchanged so direct
+/// callers (non-MoA paths) and tests don't see spurious fields.
+pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
+    let Some(enable) = enable else {
+        return;
+    };
+    let Some(obj) = body.as_object_mut() else {
+        return;
+    };
+
+    // chat_template_kwargs.enable_thinking is the canonical knob the
+    // llama.cpp templates read. Merge into any existing object instead
+    // of clobbering.
+    let kwargs = obj
+        .entry("chat_template_kwargs".to_string())
+        .or_insert_with(|| json!({}));
+    if let Some(kwargs_obj) = kwargs.as_object_mut() {
+        kwargs_obj.insert("enable_thinking".to_string(), json!(enable));
+    }
+
+    // reasoning_effort is the OpenAI-surface analogue. If the caller
+    // wants thinking off, declare it both ways so backends that consume
+    // either knob honour the request. If thinking is being explicitly
+    // turned ON, leave reasoning_effort alone — we don't want to pick a
+    // specific effort level on the caller's behalf.
+    if !enable {
+        obj.insert("reasoning_effort".to_string(), json!("none"));
     }
 }
 
@@ -321,5 +376,84 @@ mod tests {
         let r = SamplingParams::reducer();
         assert!((d.temperature - r.temperature).abs() < f32::EPSILON);
         assert!((d.top_p - r.top_p).abs() < f32::EPSILON);
+    }
+
+    // ── enable_thinking propagation ────────────────────────────────────────────
+    //
+    // MoA mediates between the user's request and N worker models. When
+    // the caller asks for no reasoning (`reasoning_effort: "none"`,
+    // `enable_thinking: false`, etc.), MoA needs to forward that to every
+    // worker (and the reducer) so reasoning models skip their `<think>`
+    // phase. This is the wire-shape contract.
+
+    #[test]
+    fn sampling_default_thinking_is_none() {
+        // Default (no override) keeps `enable_thinking = None` so callers
+        // without a preference don't get any spurious `chat_template_kwargs`
+        // baked into outbound requests.
+        assert_eq!(SamplingParams::worker().enable_thinking, None);
+        assert_eq!(SamplingParams::reducer().enable_thinking, None);
+    }
+
+    #[test]
+    fn sampling_with_thinking_overrides_only_that_field() {
+        let s = SamplingParams::worker().with_thinking(Some(false));
+        assert_eq!(s.enable_thinking, Some(false));
+        assert!((s.temperature - 0.8).abs() < f32::EPSILON);
+        assert!((s.top_p - 0.95).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn apply_enable_thinking_none_leaves_body_untouched() {
+        let mut body = json!({"model": "qwen", "messages": []});
+        let before = body.clone();
+        apply_enable_thinking(&mut body, None);
+        assert_eq!(body, before, "None override must not modify body");
+    }
+
+    #[test]
+    fn apply_enable_thinking_false_injects_kwargs_and_effort() {
+        let mut body = json!({"model": "qwen", "messages": []});
+        apply_enable_thinking(&mut body, Some(false));
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"],
+            json!(false)
+        );
+        assert_eq!(body["reasoning_effort"], json!("none"));
+    }
+
+    #[test]
+    fn apply_enable_thinking_true_injects_kwargs_only() {
+        let mut body = json!({"model": "qwen", "messages": []});
+        apply_enable_thinking(&mut body, Some(true));
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], json!(true));
+        // We don't pick a specific reasoning_effort on behalf of an
+        // "on" caller — they should set their own.
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn apply_enable_thinking_merges_existing_kwargs() {
+        // The caller may have already set chat_template_kwargs.foo — we
+        // must merge, not clobber.
+        let mut body = json!({
+            "model": "qwen",
+            "chat_template_kwargs": {"foo": "bar"}
+        });
+        apply_enable_thinking(&mut body, Some(false));
+        assert_eq!(body["chat_template_kwargs"]["foo"], json!("bar"));
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn apply_enable_thinking_no_op_on_non_object_body() {
+        // Defensive: if someone hands us a non-object Value, we shouldn't
+        // panic. Real bodies are always objects so this is a paranoia test.
+        let mut body = json!(42);
+        apply_enable_thinking(&mut body, Some(false));
+        assert_eq!(body, json!(42));
     }
 }

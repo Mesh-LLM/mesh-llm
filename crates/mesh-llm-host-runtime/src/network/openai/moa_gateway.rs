@@ -48,13 +48,83 @@ pub async fn try_handle_moa(
         return None;
     };
 
-    let Some(config) = build_moa_config(node, targets).await else {
+    // Pull the caller's reasoning preference off the JSON body before we
+    // hand it to MoA. The body itself gets forwarded to workers minus the
+    // `stream` flag, but we need this knob at the gateway level so it
+    // reaches every worker AND the reducer (workers and the reducer pick
+    // up via `GatewayConfig::enable_thinking`).
+    let enable_thinking = extract_enable_thinking_override(&body_json);
+
+    let Some(mut config) = build_moa_config(node, targets).await else {
         let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
         return None;
     };
+    config.enable_thinking = enable_thinking;
 
     run_moa_turn(tcp_stream, body_json, &config, request.response_adapter).await;
     None
+}
+
+/// Pull the caller's "disable / enable thinking" preference out of an
+/// inbound chat-completion or responses JSON body. Mirrors the same
+/// shapes that `openai_frontend::common::normalize_reasoning_template_options`
+/// recognises so MoA users get the same surface as direct callers.
+///
+/// Recognised inputs (any one is enough):
+/// * `reasoning_effort: "none"` (off) or any non-`"none"` value (on)
+/// * `reasoning: { enabled: false }` (off) / `{ enabled: true }` (on)
+/// * `reasoning: { effort: "none" }` / `{ max_tokens: 0 }` (off)
+/// * Any of `THINKING_BOOLEAN_ALIASES` as a top-level field with bool
+/// * `thinking_budget: 0` (off)
+/// * `chat_template_kwargs.enable_thinking` (or any alias) as bool
+///
+/// Returns `None` when the caller hasn't expressed a preference, leaving
+/// each worker's default behavior alone.
+fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
+    let obj = body.as_object()?;
+    let mut result: Option<bool> = None;
+
+    // reasoning: { enabled, effort, max_tokens }
+    if let Some(r) = obj.get("reasoning").and_then(|v| v.as_object()) {
+        if r.get("enabled") == Some(&serde_json::Value::Bool(false))
+            || r.get("effort").and_then(|v| v.as_str()) == Some("none")
+            || r.get("max_tokens").and_then(|v| v.as_u64()) == Some(0)
+        {
+            result = Some(false);
+        } else if r.get("enabled") == Some(&serde_json::Value::Bool(true))
+            || r.get("effort").is_some()
+            || r.get("max_tokens").is_some()
+        {
+            result = Some(true);
+        }
+    }
+
+    // reasoning_effort: "none" / "low" / etc.
+    if let Some(effort) = obj.get("reasoning_effort").and_then(|v| v.as_str()) {
+        result = Some(effort != "none");
+    }
+
+    // Top-level boolean aliases (enable_thinking, enable_reasoning, etc.).
+    for alias in openai_frontend::common::THINKING_BOOLEAN_ALIASES {
+        if let Some(b) = obj.get(*alias).and_then(|v| v.as_bool()) {
+            result = Some(b);
+        }
+    }
+
+    if obj.get("thinking_budget").and_then(|v| v.as_u64()) == Some(0) {
+        result = Some(false);
+    }
+
+    // chat_template_kwargs.{enable_thinking, ...}
+    if let Some(kwargs) = obj.get("chat_template_kwargs").and_then(|v| v.as_object()) {
+        for alias in openai_frontend::common::THINKING_BOOLEAN_ALIASES {
+            if let Some(b) = kwargs.get(*alias).and_then(|v| v.as_bool()) {
+                result = Some(b);
+            }
+        }
+    }
+
+    result
 }
 
 /// Run a turn through the gateway and write the response with x-moa-* headers.
@@ -294,6 +364,11 @@ pub async fn build_moa_config(
         hedge_delay: std::time::Duration::from_secs(5),
         // Chat-only sole-answer grace. Tool turns ignore this.
         first_answer_grace: std::time::Duration::from_secs(6),
+        // Defaults to leaving each model's thinking behavior alone.
+        // `try_handle_moa` overrides this from the inbound request body
+        // when the caller has expressed a preference
+        // (`reasoning_effort: "none"`, `enable_thinking: false`, etc.).
+        enable_thinking: None,
     })
 }
 
@@ -501,6 +576,7 @@ impl moa::ModelBackend for LocalModelBackend {
                 .unwrap()
                 .insert("tools".to_string(), tools.clone());
         }
+        moa::apply_enable_thinking(&mut body, sampling.enable_thinking);
         let resp = self
             .http
             .post(&url)
@@ -554,6 +630,7 @@ impl moa::ModelBackend for RemoteModelBackend {
                 .unwrap()
                 .insert("tools".to_string(), tools.clone());
         }
+        moa::apply_enable_thinking(&mut body, sampling.enable_thinking);
         let body_bytes = serde_json::to_vec(&body).map_err(|e| format!("serialize: {e}"))?;
         let http_request = format!(
             "POST /v1/chat/completions HTTP/1.1\r\n\
@@ -1245,5 +1322,80 @@ mod tests {
             !raw.contains("\"completion_tokens\":"),
             "chat-shape completion_tokens must NOT leak into Responses-API SSE; got: {raw}"
         );
+    }
+
+    // ── extract_enable_thinking_override ────────────────────────────────
+    //
+    // Mirrors the shapes that `openai_frontend::common::normalize_reasoning_template_options`
+    // accepts, so MoA users get the same surface as direct callers. If we
+    // forget a shape, the model never gets told to stop thinking and the
+    // fast worker burns its budget inside `<think>`.
+
+    #[test]
+    fn extract_no_knobs_returns_none() {
+        let body = serde_json::json!({"model": "mesh", "messages": []});
+        assert_eq!(extract_enable_thinking_override(&body), None);
+    }
+
+    #[test]
+    fn extract_reasoning_effort_none_disables() {
+        let body = serde_json::json!({"reasoning_effort": "none"});
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_reasoning_effort_low_enables() {
+        let body = serde_json::json!({"reasoning_effort": "low"});
+        assert_eq!(extract_enable_thinking_override(&body), Some(true));
+    }
+
+    #[test]
+    fn extract_reasoning_enabled_false_disables() {
+        let body = serde_json::json!({"reasoning": {"enabled": false}});
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_reasoning_max_tokens_zero_disables() {
+        let body = serde_json::json!({"reasoning": {"max_tokens": 0}});
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_top_level_enable_thinking_false() {
+        let body = serde_json::json!({"enable_thinking": false});
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_top_level_enable_thinking_alias() {
+        // `use_thinking` is one of THINKING_BOOLEAN_ALIASES.
+        let body = serde_json::json!({"use_thinking": false});
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_thinking_budget_zero_disables() {
+        let body = serde_json::json!({"thinking_budget": 0});
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_chat_template_kwargs_passes_through() {
+        let body = serde_json::json!({
+            "chat_template_kwargs": {"enable_thinking": false}
+        });
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
+    }
+
+    #[test]
+    fn extract_latest_wins_when_multiple_set() {
+        // chat_template_kwargs is read last and so wins. Whatever ordering
+        // we choose, picking ONE consistently is the contract.
+        let body = serde_json::json!({
+            "reasoning_effort": "low",                                  // enable
+            "chat_template_kwargs": {"enable_thinking": false},         // disable
+        });
+        assert_eq!(extract_enable_thinking_override(&body), Some(false));
     }
 }

@@ -88,6 +88,7 @@ pub(crate) async fn hedged_reducer_call(
     tools: Option<Value>,
     timeout: Duration,
     hedge_delay: Duration,
+    enable_thinking: Option<bool>,
 ) -> Result<HedgedReducerOk, HedgedReducerErr> {
     use tokio::task::JoinSet;
 
@@ -103,16 +104,16 @@ pub(crate) async fn hedged_reducer_call(
     let mut last_err: Option<String> = None;
     let mut attempts: u32 = 0;
 
-    // Spawn a single candidate.
-    fn spawn(
-        join_set: &mut JoinSet<(String, Result<String, String>)>,
-        backends: &[Arc<dyn ModelBackend>],
-        name: String,
-        backend_idx: usize,
-        messages: Vec<Value>,
-        tools: Option<Value>,
-        timeout: Duration,
-    ) {
+    // Spawn a single candidate. Captures `enable_thinking` from the
+    // outer scope so each candidate honours the caller's reasoning
+    // override consistently.
+    let spawn = |join_set: &mut JoinSet<(String, Result<String, String>)>,
+                 backends: &[Arc<dyn ModelBackend>],
+                 name: String,
+                 backend_idx: usize,
+                 messages: Vec<Value>,
+                 tools: Option<Value>,
+                 timeout: Duration| {
         let backend = backends[backend_idx].clone();
         tracing::info!("moa: reducer hedge → {name}");
         join_set.spawn(async move {
@@ -123,12 +124,12 @@ pub(crate) async fn hedged_reducer_call(
                 tools.as_ref(),
                 2048,
                 timeout,
-                SamplingParams::reducer(),
+                SamplingParams::reducer().with_thinking(enable_thinking),
             )
             .await;
             (name, result)
         });
-    }
+    };
 
     // Start candidate 0.
     if let Some((name, idx)) = remaining.next() {
@@ -333,6 +334,7 @@ mod tests {
             None,
             Duration::from_secs(15),
             Duration::from_secs(5),
+            None,
         )
         .await;
 
@@ -365,6 +367,7 @@ mod tests {
             None,
             Duration::from_secs(15),
             Duration::from_millis(100),
+            None,
         )
         .await;
 
@@ -402,6 +405,7 @@ mod tests {
             Duration::from_secs(15),
             // Large hedge_delay — the fast-fail path must not wait for it.
             Duration::from_secs(60),
+            None,
         )
         .await;
 
@@ -442,6 +446,7 @@ mod tests {
             None,
             Duration::from_secs(15),
             Duration::from_millis(200),
+            None,
         )
         .await;
 

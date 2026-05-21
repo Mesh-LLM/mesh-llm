@@ -45,7 +45,7 @@ pub mod session;
 mod tool_guard;
 pub mod worker;
 
-pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams};
+pub use backend::{apply_enable_thinking, HttpBackend, ModelBackend, ModelEntry, SamplingParams};
 
 use backend::call_backend;
 use fanout::gather_workers_incremental;
@@ -83,6 +83,15 @@ pub struct GatewayConfig {
     /// (conf >= 0.5) is in, accept it instead of waiting for consensus.
     /// Disabled for tool turns. Zero disables entirely.
     pub first_answer_grace: Duration,
+    /// Override for whether reasoning workers should think. Propagated to
+    /// every worker and the reducer as `chat_template_kwargs.enable_thinking`
+    /// (and `reasoning_effort: "none"` when disabled).
+    ///
+    /// `None` (the default) leaves each model's default behavior alone —
+    /// existing callers see no behavior change. The MoA HTTP gateway
+    /// populates this from the caller's `reasoning_effort` / `enable_thinking`
+    /// / `reasoning.enabled` knobs so MoA users get a single switch.
+    pub enable_thinking: Option<bool>,
 }
 
 // ─── Turn result ─────────────────────────────────────────────────────
@@ -209,6 +218,7 @@ async fn handle_query(
     let mut join_set = tokio::task::JoinSet::new();
     let mut dispatched: Vec<fanout::DispatchedWorker> = Vec::with_capacity(assignments.len());
 
+    let enable_thinking = config.enable_thinking;
     for assignment in &assignments {
         let packed = context::pack_for_worker(session, assignment.role, has_tools);
         let model_name = assignment.model_name.clone();
@@ -230,7 +240,7 @@ async fn handle_query(
                 packed.tools.as_ref(),
                 packed.max_tokens,
                 timeout,
-                SamplingParams::worker(),
+                SamplingParams::worker().with_thinking(enable_thinking),
             )
             .await;
             let elapsed = t0.elapsed().as_millis() as u64;
@@ -317,6 +327,7 @@ async fn handle_tool_result(
         tools,
         config.reducer_timeout,
         config.hedge_delay,
+        config.enable_thinking,
     )
     .await;
 
@@ -424,6 +435,7 @@ async fn resolve_decision(
                 tools,
                 config.reducer_timeout,
                 config.hedge_delay,
+                config.enable_thinking,
             )
             .await;
 
