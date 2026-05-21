@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use hf_hub::types::cache::{CachedFileInfo, CachedRevisionInfo, HFCacheInfo};
+use hf_hub::cache::{CachedFileInfo, CachedRevisionInfo, HFCacheInfo};
+use hf_hub::{RepoType, RepoTypeModel};
 
 use crate::models::local::{
     gguf_metadata_cache_path, huggingface_hub_cache_dir, huggingface_identity_for_path,
@@ -61,8 +62,7 @@ async fn resolve_cached_hf_ref(
     };
 
     for repo in &cache_info.repos {
-        use hf_hub::RepoType;
-        if repo.repo_type != RepoType::Model || repo.repo_id != repo_id {
+        if repo.repo_type != RepoTypeModel.singular() || repo.repo_id != repo_id {
             continue;
         }
         for cached_revision in &repo.revisions {
@@ -158,8 +158,7 @@ fn find_related_hf_cache_paths(cache_info: &HFCacheInfo, path: &Path) -> Vec<Pat
     let expected = normalized_gguf_stem(file_name);
 
     for repo in &cache_info.repos {
-        use hf_hub::RepoType;
-        if repo.repo_type != RepoType::Model || repo.repo_id != identity.repo_id {
+        if repo.repo_type != RepoTypeModel.singular() || repo.repo_id != identity.repo_id {
             continue;
         }
         for revision in &repo.revisions {

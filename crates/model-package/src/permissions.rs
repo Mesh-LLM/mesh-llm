@@ -21,6 +21,7 @@ pub struct PermissionCheck {
 pub async fn check_permissions(client: &HFClient) -> Result<PermissionCheck> {
     let user = client
         .whoami()
+        .send()
         .await
         .context("HF whoami failed — is your token valid?")?;
 

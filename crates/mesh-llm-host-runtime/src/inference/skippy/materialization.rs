@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use hf_hub::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
+use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use skippy_protocol::{LoadMode, StageConfig};
@@ -750,7 +750,7 @@ fn layer_package_progress_label(repo: &str, revision: &str) -> String {
 }
 
 fn download_layer_package_file(
-    model_api: &hf_hub::HFRepositorySync,
+    model_api: &hf_hub::HFRepositorySync<hf_hub::RepoTypeModel>,
     revision: &str,
     label: &str,
     file_name: &str,
@@ -766,15 +766,13 @@ fn download_layer_package_file(
         completed_before,
     ));
     progress.emit_ensuring();
-    let progress_handler: Progress = Some(progress.clone());
+    let progress_handler: Option<Progress> = Some(progress.clone().into());
     let path = model_api
-        .download_file(
-            &hf_hub::RepoDownloadFileParams::builder()
-                .filename(file_name.to_string())
-                .revision(revision.to_string())
-                .progress(progress_handler)
-                .build(),
-        )
+        .download_file()
+        .filename(file_name.to_string())
+        .revision(revision.to_string())
+        .maybe_progress(progress_handler)
+        .send()
         .with_context(|| format!("download layer package file: {file_name}"))?;
     progress.emit_ready(&path);
     Ok(path)

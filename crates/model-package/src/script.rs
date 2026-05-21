@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use hf_hub::{BucketTreeEntry, HFClient};
+use hf_hub::{
+    buckets::{BucketDownload, BucketTreeEntry, BucketUpload},
+    HFClient,
+};
 use sha2::{Digest, Sha256};
 
 /// The embedded canonical job script.
@@ -29,7 +32,9 @@ pub async fn check_bucket_script(client: &HFClient) -> Result<ScriptFreshness> {
     let paths = vec!["split-model-job.sh".to_string()];
 
     let entries = bucket
-        .get_paths_info(&paths)
+        .get_paths_info()
+        .paths(paths)
+        .send()
         .await
         .context("check bucket script metadata")?;
 
@@ -57,12 +62,13 @@ pub async fn check_bucket_script(client: &HFClient) -> Result<ScriptFreshness> {
     let tmp_dir = tempfile::tempdir().context("create bucket script check temp dir")?;
     let tmp_path = tmp_dir.path().join("split-model-job.sh");
 
-    let download_params = hf_hub::BucketDownloadFilesParams {
-        files: vec![("split-model-job.sh".to_string(), tmp_path.clone())],
-    };
-
     bucket
-        .download_files(&download_params, &Default::default())
+        .download_files()
+        .files(vec![BucketDownload::new(
+            "split-model-job.sh",
+            tmp_path.clone(),
+        )])
+        .send()
         .await
         .context("download bucket script for hash verification")?;
 
@@ -96,9 +102,13 @@ pub async fn update_bucket_script(client: &HFClient) -> Result<()> {
     let tmp_path = tmp_dir.path().join("split-model-job.sh");
     std::fs::write(&tmp_path, EMBEDDED_SCRIPT)?;
 
-    let files = vec![(tmp_path.clone(), "split-model-job.sh".to_string())];
     bucket
-        .upload_files(&files, &Default::default())
+        .upload_files()
+        .files(vec![BucketUpload::new(
+            tmp_path.clone(),
+            "split-model-job.sh",
+        )])
+        .send()
         .await
         .context("upload script to meshllm/layer-split-output bucket")?;
 

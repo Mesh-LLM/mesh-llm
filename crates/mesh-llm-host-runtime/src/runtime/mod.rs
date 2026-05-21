@@ -7773,7 +7773,7 @@ mod tests {
     use crate::models::local::{huggingface_repo_folder_name, huggingface_snapshot_path};
     use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry};
     use crate::system::hardware::GpuFacts;
-    use hf_hub::RepoType;
+    use hf_hub::RepoTypeModel;
     use serial_test::serial;
     use std::path::Path;
     use std::path::PathBuf;
@@ -8525,10 +8525,10 @@ mod tests {
         std::env::remove_var("XDG_CACHE_HOME");
 
         let repo_id = "bartowski/Llama-3.2-1B-Instruct-GGUF";
-        let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoType::Model));
+        let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
         std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
         std::fs::write(repo_dir.join("refs").join("main"), "test-commit").unwrap();
-        let model_path = huggingface_snapshot_path(repo_id, RepoType::Model, "test-commit")
+        let model_path = huggingface_snapshot_path(repo_id, RepoTypeModel, "test-commit")
             .join("Llama-3.2-1B-Instruct-Q4_K_M.gguf");
         std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
         std::fs::write(&model_path, b"gguf").unwrap();
@@ -8564,10 +8564,10 @@ mod tests {
         std::env::remove_var("XDG_CACHE_HOME");
 
         let repo_id = "someone/Custom-GGUF";
-        let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoType::Model));
+        let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
         std::fs::create_dir_all(repo_dir.join("refs")).unwrap();
         std::fs::write(repo_dir.join("refs").join("main"), "test-commit").unwrap();
-        let model_path = huggingface_snapshot_path(repo_id, RepoType::Model, "test-commit")
+        let model_path = huggingface_snapshot_path(repo_id, RepoTypeModel, "test-commit")
             .join("Custom-Model-Q4_K_M.gguf");
         std::fs::create_dir_all(model_path.parent().unwrap()).unwrap();
         std::fs::write(&model_path, b"gguf").unwrap();

@@ -4,13 +4,10 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use hf_hub::error::HFError;
-use hf_hub::types::commit::AddSource;
-use hf_hub::types::{
-    CreateRepoParams, ListModelsParams, RepoDownloadFileToBytesParams, RepoInfo, RepoInfoParams,
-    RepoType, RepoUploadFileParams,
+use hf_hub::{
+    repository::{AddSource, ModelInfo},
+    HFClient, HFError, HFRepository, RepoTypeModel,
 };
-use hf_hub::{HFClient, HFRepository};
 use model_package::jobs::{CpuJobPlan, HfJobsClient, JobInfo, JobSpec, JobStage, JobVolume};
 use model_package::prepare::{self, DiscoveredQuant};
 use model_package::script;
@@ -541,15 +538,14 @@ async fn list_ranked_models(
     sort: &str,
     limit: usize,
 ) -> Result<Vec<RankedModel>> {
-    let params = ListModelsParams::builder()
+    let stream = client
+        .list_models()
         .author(author.to_string())
         .search(search.to_string())
         .sort(sort.to_string())
         .full(false)
         .limit(limit)
-        .build();
-    let stream = client
-        .list_models(&params)
+        .send()
         .with_context(|| format!("list {author} models sorted by {sort}"))?;
     tokio::pin!(stream);
 
@@ -735,24 +731,13 @@ async fn candidate_status(
     Ok(QueueStatus::Missing)
 }
 
-async fn model_repo_info(
-    client: &HFClient,
-    repo_id: &str,
-) -> Result<Option<hf_hub::types::repo::ModelInfo>> {
+async fn model_repo_info(client: &HFClient, repo_id: &str) -> Result<Option<ModelInfo>> {
     let (owner, name) = parse_repo(repo_id)?;
     let repo = client.model(owner, name);
-    match repo
-        .info(
-            &RepoInfoParams::builder()
-                .revision("main".to_string())
-                .build(),
-        )
-        .await
-    {
-        Ok(RepoInfo::Model(info)) => Ok(Some(info)),
-        Ok(_) => bail!("{repo_id} is not a model repo"),
+    match repo.info().revision("main".to_string()).send().await {
+        Ok(info) => Ok(Some(info)),
         Err(HFError::RepoNotFound { .. }) | Err(HFError::RevisionNotFound { .. }) => Ok(None),
-        Err(HFError::Http { status, .. }) if status.as_u16() == 404 => Ok(None),
+        Err(HFError::Http { context }) if context.status.as_u16() == 404 => Ok(None),
         Err(err) => Err(err).with_context(|| format!("fetch target repo info for {repo_id}")),
     }
 }
@@ -761,19 +746,17 @@ async fn catalog_has_package(client: &HFClient, candidate: &Candidate) -> Result
     let entry_path = catalog_entry_path(&candidate.model.repo_id)?;
     let dataset = client.dataset("meshllm", "catalog");
     let bytes = match dataset
-        .download_file_to_bytes(
-            &RepoDownloadFileToBytesParams::builder()
-                .filename(entry_path.clone())
-                .revision("main".to_string())
-                .build(),
-        )
+        .download_file_to_bytes()
+        .filename(entry_path.clone())
+        .revision("main".to_string())
+        .send()
         .await
     {
         Ok(bytes) => bytes,
         Err(HFError::EntryNotFound { .. }) | Err(HFError::RepoNotFound { .. }) => {
             return Ok(false);
         }
-        Err(HFError::Http { status, .. }) if status.as_u16() == 404 => return Ok(false),
+        Err(HFError::Http { context }) if context.status.as_u16() == 404 => return Ok(false),
         Err(err) => {
             return Err(err).with_context(|| format!("download catalog entry {entry_path}"))
         }
@@ -806,13 +789,11 @@ fn json_contains_package_repo(value: &Value, target_repo: &str) -> bool {
 
 async fn write_queue_marker(client: &HFClient, candidate: &Candidate, args: &Args) -> Result<()> {
     client
-        .create_repo(
-            &CreateRepoParams::builder()
-                .repo_id(candidate.target_repo.clone())
-                .repo_type(RepoType::Model)
-                .exist_ok(true)
-                .build(),
-        )
+        .create_repository()
+        .repo_id(candidate.target_repo.clone())
+        .repo_type(RepoTypeModel)
+        .exist_ok(true)
+        .send()
         .await
         .with_context(|| format!("create target repo {}", candidate.target_repo))?;
 
@@ -831,15 +812,13 @@ async fn write_queue_marker(client: &HFClient, candidate: &Candidate, args: &Arg
     };
     let bytes = serde_json::to_vec_pretty(&marker)?;
     let repo = model_repo(client, &candidate.target_repo)?;
-    repo.upload_file(
-        &RepoUploadFileParams::builder()
-            .source(AddSource::Bytes(bytes))
-            .path_in_repo("automation/queue.json")
-            .commit_message(format!("Queue layer package for {}", candidate.model_id))
-            .build(),
-    )
-    .await
-    .with_context(|| format!("upload queue marker to {}", candidate.target_repo))?;
+    repo.upload_file()
+        .source(AddSource::bytes(bytes))
+        .path_in_repo("automation/queue.json")
+        .commit_message(format!("Queue layer package for {}", candidate.model_id))
+        .send()
+        .await
+        .with_context(|| format!("upload queue marker to {}", candidate.target_repo))?;
     Ok(())
 }
 
@@ -935,7 +914,7 @@ fn parse_repo(repo_id: &str) -> Result<(&str, &str)> {
         .with_context(|| format!("invalid Hugging Face repo id: {repo_id}"))
 }
 
-fn model_repo(client: &HFClient, repo_id: &str) -> Result<HFRepository> {
+fn model_repo(client: &HFClient, repo_id: &str) -> Result<HFRepository<RepoTypeModel>> {
     let (owner, name) = parse_repo(repo_id)?;
     Ok(client.model(owner, name))
 }

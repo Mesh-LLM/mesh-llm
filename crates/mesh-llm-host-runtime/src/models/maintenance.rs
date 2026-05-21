@@ -1,7 +1,7 @@
 use super::{build_hf_api, huggingface_hub_cache_dir, run_hf_sync, short_revision};
 use crate::cli::terminal_progress::{clear_stderr_line, DeterminateProgressLine};
 use anyhow::{Context, Result};
-use hf_hub::{RepoDownloadFileParams, RepoInfo, RepoInfoParams, RepoType};
+use hf_hub::{repository::ModelInfo, RepoTypeModel};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -310,23 +310,21 @@ fn collect_ref_files(root: &Path, dir: &Path, refs: &mut Vec<(String, String)>) 
     Ok(())
 }
 
-fn remote_repo_info(api: &hf_hub::HFClientSync, repo_id: &str, ref_name: &str) -> Result<RepoInfo> {
+fn remote_repo_info(
+    api: &hf_hub::HFClientSync,
+    repo_id: &str,
+    ref_name: &str,
+) -> Result<ModelInfo> {
     let (owner, name) = repo_id.split_once('/').unwrap_or(("", repo_id));
     api.model(owner, name)
-        .info(
-            &RepoInfoParams::builder()
-                .revision(ref_name.to_string())
-                .build(),
-        )
+        .info()
+        .revision(ref_name.to_string())
+        .send()
         .with_context(|| format!("Fetch repo info for {repo_id}@{ref_name}"))
 }
 
-fn repo_info_sha(info: &RepoInfo) -> String {
-    match info {
-        RepoInfo::Model(info) => info.sha.clone().unwrap_or_default(),
-        RepoInfo::Dataset(info) => info.sha.clone().unwrap_or_default(),
-        RepoInfo::Space(info) => info.sha.clone().unwrap_or_default(),
-    }
+fn repo_info_sha(info: &ModelInfo) -> String {
+    info.sha.clone().unwrap_or_default()
 }
 
 fn check_repo_update(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<Option<String>> {
@@ -366,12 +364,12 @@ fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<U
         }
         position += 1;
         eprintln!("   ↻ [{}/{}] {}", position, total_files, file);
-        match api_repo.download_file(
-            &RepoDownloadFileParams::builder()
-                .filename(file.clone())
-                .revision(repo.ref_name.clone())
-                .build(),
-        ) {
+        match api_repo
+            .download_file()
+            .filename(file.clone())
+            .revision(repo.ref_name.clone())
+            .send()
+        {
             Ok(path) => {
                 eprintln!("   ✅ {}", path.display());
                 counts.refreshed += 1;
@@ -402,7 +400,7 @@ fn cached_repo_files(repo: &CachedRepo) -> Result<Vec<String>> {
     let snapshots_dir = huggingface_hub_cache_dir()
         .join(super::local::huggingface_repo_folder_name(
             &repo.repo_id,
-            RepoType::Model,
+            RepoTypeModel,
         ))
         .join("snapshots");
     if !snapshots_dir.is_dir() {

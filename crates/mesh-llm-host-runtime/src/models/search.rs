@@ -8,7 +8,7 @@ use super::ModelCapabilities;
 use super::{build_hf_tokio_api, capabilities, catalog, remote_catalog};
 use crate::system::hardware;
 use anyhow::{Context, Result};
-use hf_hub::{ListModelsParams, ModelInfo};
+use hf_hub::repository::ModelInfo;
 use regex_lite::Regex;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -189,26 +189,38 @@ where
     };
     progress(SearchProgress::SearchingHub);
     let api = build_hf_tokio_api(false)?;
-    let base_builder = ListModelsParams::builder()
-        .search(query.to_string())
-        .filter(
-            match filter {
-                SearchArtifactFilter::Gguf => "gguf",
-                SearchArtifactFilter::Mlx => "mlx",
-            }
-            .to_string(),
-        )
-        .full(true)
-        .limit(repo_limit);
-    let params = match api_sort_key(sort) {
-        Some(api_sort) => base_builder.sort(api_sort.to_string()).build(),
-        None => base_builder.build(),
-    };
-    let stream = api.list_models(&params).context("Search Hugging Face")?;
-    tokio::pin!(stream);
     let mut repos = Vec::new();
-    while let Some(repo) = stream.next().await {
-        repos.push(repo.context("Search Hugging Face repo summary")?);
+    let artifact_filter = match filter {
+        SearchArtifactFilter::Gguf => "gguf",
+        SearchArtifactFilter::Mlx => "mlx",
+    };
+    if let Some(api_sort) = api_sort_key(sort) {
+        let stream = api
+            .list_models()
+            .search(query.to_string())
+            .filter(artifact_filter.to_string())
+            .sort(api_sort.to_string())
+            .full(true)
+            .limit(repo_limit)
+            .send()
+            .context("Search Hugging Face")?;
+        tokio::pin!(stream);
+        while let Some(repo) = stream.next().await {
+            repos.push(repo.context("Search Hugging Face repo summary")?);
+        }
+    } else {
+        let stream = api
+            .list_models()
+            .search(query.to_string())
+            .filter(artifact_filter.to_string())
+            .full(true)
+            .limit(repo_limit)
+            .send()
+            .context("Search Hugging Face")?;
+        tokio::pin!(stream);
+        while let Some(repo) = stream.next().await {
+            repos.push(repo.context("Search Hugging Face repo summary")?);
+        }
     }
 
     let total = repos.len();
@@ -262,7 +274,7 @@ async fn build_search_hit(
     let repo_downloads = repo.downloads;
     let repo_likes = repo.likes;
     let detail = repo;
-    let repo_id = detail.model_id.clone().unwrap_or(detail.id.clone());
+    let repo_id = detail.id.clone();
     let siblings = detail.siblings.clone().unwrap_or_default();
     let sibling_names: Vec<String> = siblings
         .iter()

@@ -60,7 +60,7 @@ pub(crate) fn build_hf_api(_progress: bool) -> Result<HFClientSync> {
     if let Some(token) = hf_token_override() {
         builder = builder.token(token);
     }
-    HFClientSync::from_api(builder.build().context("Build Hugging Face API client")?)
+    HFClientSync::from_inner(builder.build().context("Build Hugging Face API client")?)
         .context("Build Hugging Face sync API client")
 }
 

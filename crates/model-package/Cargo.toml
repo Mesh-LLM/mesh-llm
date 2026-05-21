@@ -11,7 +11,7 @@ sha2.workspace = true
 anyhow.workspace = true
 bytes = "1"
 chrono = "0.4"
-hf_hub = { package = "huggingface-hub", git = "https://github.com/huggingface/huggingface_hub_rust.git", rev = "c9749ef76a294d5e97acae6b644071e39854aeb8", default-features = false, features = ["blocking", "xet", "buckets"] }
+hf_hub = { package = "hf-hub", git = "https://github.com/huggingface/hf-hub.git", branch = "main", default-features = false, features = ["blocking"] }
 model-hf = { path = "../model-hf" }
 model-ref = { path = "../model-ref" }
 reqwest = { version = "0.12", features = ["json", "stream"] }

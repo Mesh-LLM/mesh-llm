@@ -116,7 +116,7 @@ fn local_gguf_paths() -> Vec<PathBuf> {
             let cache = huggingface_hub_cache();
             if let Some(cache_info) = scan_hf_cache_info(&cache) {
                 for repo in &cache_info.repos {
-                    if repo.repo_type != hf_hub::RepoType::Model {
+                    if repo.repo_type != "model" {
                         continue;
                     }
                     for revision in &repo.revisions {

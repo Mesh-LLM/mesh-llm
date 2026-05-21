@@ -4,7 +4,9 @@ use super::track_managed_model_usage;
 use crate::cli::output::{emit_event, interactive_tui_active, ModelProgressStatus, OutputEvent};
 use crate::cli::terminal_progress::{start_spinner, SpinnerHandle};
 use anyhow::{Context, Result};
-use hf_hub::{DownloadEvent, Progress, ProgressEvent, ProgressHandler, RepoDownloadFileParams};
+use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
+#[cfg(test)]
+use hf_hub::progress::{FileProgress, FileStatus};
 #[cfg(test)]
 use std::collections::HashMap;
 use std::io::Write;
@@ -148,12 +150,10 @@ fn parse_safetensors_index_shards(index: &serde_json::Value) -> Result<Vec<Strin
 fn ensure_cached_hf_asset(api: &hf_hub::HFClientSync, asset: &HfAsset) -> Result<PathBuf> {
     let (owner, name) = asset.repo_parts();
     api.model(owner, name)
-        .download_file(
-            &RepoDownloadFileParams::builder()
-                .filename(asset.file.clone())
-                .revision(asset.revision.clone())
-                .build(),
-        )
+        .download_file()
+        .filename(asset.file.clone())
+        .revision(asset.revision.clone())
+        .send()
         .with_context(|| {
             format!(
                 "Cache Hugging Face asset {}/{}@{}",
@@ -564,18 +564,18 @@ fn download_hf_assets_sync(
         } else {
             None
         };
-        let progress_handler: Progress = if let Some(tracker) = &progress_tracker {
-            Some(tracker.clone())
+        let progress_handler: Option<Progress> = if let Some(tracker) = &progress_tracker {
+            Some(tracker.clone().into())
         } else {
             None
         };
-        let path = match api_repo.download_file(
-            &RepoDownloadFileParams::builder()
-                .filename(asset.file.clone())
-                .revision(asset.revision.clone())
-                .progress(progress_handler)
-                .build(),
-        ) {
+        let path = match api_repo
+            .download_file()
+            .filename(asset.file.clone())
+            .revision(asset.revision.clone())
+            .maybe_progress(progress_handler)
+            .send()
+        {
             Ok(path) => {
                 if progress {
                     if required {
@@ -972,22 +972,22 @@ mod tests {
         MeshDownloadProgress::apply_download_event(
             &mut state,
             &DownloadEvent::Progress {
-                files: vec![hf_hub::FileProgress {
+                files: vec![FileProgress {
                     filename: "model.gguf".to_string(),
                     bytes_completed: 250,
                     total_bytes: 1_000,
-                    status: hf_hub::FileStatus::InProgress,
+                    status: FileStatus::InProgress,
                 }],
             },
         );
         MeshDownloadProgress::apply_download_event(
             &mut state,
             &DownloadEvent::Progress {
-                files: vec![hf_hub::FileProgress {
+                files: vec![FileProgress {
                     filename: "model.gguf".to_string(),
                     bytes_completed: 700,
                     total_bytes: 1_000,
-                    status: hf_hub::FileStatus::InProgress,
+                    status: FileStatus::InProgress,
                 }],
             },
         );
@@ -1019,11 +1019,11 @@ mod tests {
         MeshDownloadProgress::apply_download_event(
             &mut state,
             &DownloadEvent::Progress {
-                files: vec![hf_hub::FileProgress {
+                files: vec![FileProgress {
                     filename: "gemma-4-31B-it-Q4_0.gguf".to_string(),
                     bytes_completed: 4_000_000,
                     total_bytes: 17_300_000_000,
-                    status: hf_hub::FileStatus::InProgress,
+                    status: FileStatus::InProgress,
                 }],
             },
         );

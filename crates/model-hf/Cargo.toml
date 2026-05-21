@@ -7,7 +7,7 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
-hf_hub = { package = "huggingface-hub", git = "https://github.com/huggingface/huggingface_hub_rust.git", rev = "c9749ef76a294d5e97acae6b644071e39854aeb8", default-features = false, features = ["blocking", "xet"] }
+hf_hub = { package = "hf-hub", git = "https://github.com/huggingface/hf-hub.git", branch = "main", default-features = false, features = ["blocking"] }
 model-artifact = { path = "../model-artifact" }
 model-ref = { path = "../model-ref" }
 serde.workspace = true

@@ -3,13 +3,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hf_hub::{
-    cache::scan_cache_dir,
-    types::cache::{CachedRepoInfo, HFCacheInfo},
-    types::repo::ModelInfo,
-    HFClient, HFClientBuilder, RepoDownloadFileParams, RepoInfo, RepoInfoParams, RepoType,
+    cache::{CachedRepoInfo, HFCacheInfo},
+    repository::ModelInfo,
+    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
 };
 use model_artifact::{ModelArtifactFile, ModelIdentity, ModelRepository, ResolvedModelArtifact};
 use model_ref::{
@@ -40,13 +39,11 @@ impl HfModelRepository {
     pub async fn download_file(&self, repo: &str, revision: &str, file: &str) -> Result<PathBuf> {
         let (owner, name) = repo_parts(repo);
         self.api
-            .repo(RepoType::Model, owner, name)
-            .download_file(
-                &RepoDownloadFileParams::builder()
-                    .filename(file.to_string())
-                    .revision(revision.to_string())
-                    .build(),
-            )
+            .model(owner, name)
+            .download_file()
+            .filename(file.to_string())
+            .revision(revision.to_string())
+            .send()
             .await
             .with_context(|| format!("download Hugging Face model file {repo}@{revision}/{file}"))
     }
@@ -144,20 +141,13 @@ impl ModelRepository for HfModelRepository {
 impl HfModelRepository {
     async fn repo_info(&self, repo: &str, revision: &str) -> Result<ModelInfo> {
         let (owner, name) = repo_parts(repo);
-        let detail = self
-            .api
+        self.api
             .model(owner, name)
-            .info(
-                &RepoInfoParams::builder()
-                    .revision(revision.to_string())
-                    .build(),
-            )
+            .info()
+            .revision(revision.to_string())
+            .send()
             .await
-            .with_context(|| format!("fetch Hugging Face model repo {repo}@{revision}"))?;
-        let RepoInfo::Model(detail) = detail else {
-            bail!("expected Hugging Face model repo info for {repo}@{revision}");
-        };
-        Ok(detail)
+            .with_context(|| format!("fetch Hugging Face model repo {repo}@{revision}"))
     }
 }
 
@@ -225,15 +215,19 @@ pub fn hf_token_override() -> Option<String> {
     None
 }
 
-pub fn huggingface_repo_folder_name(repo_id: &str, repo_type: RepoType) -> String {
-    let type_plural = format!("{}s", repo_type);
-    std::iter::once(type_plural.as_str())
+pub fn huggingface_repo_folder_name(repo_id: &str, repo_type: impl RepoType) -> String {
+    let type_plural = repo_type.plural();
+    std::iter::once(type_plural)
         .chain(repo_id.split('/'))
         .collect::<Vec<_>>()
         .join("--")
 }
 
-pub fn huggingface_snapshot_path(repo_id: &str, repo_type: RepoType, revision: &str) -> PathBuf {
+pub fn huggingface_snapshot_path(
+    repo_id: &str,
+    repo_type: impl RepoType,
+    revision: &str,
+) -> PathBuf {
     huggingface_hub_cache_dir()
         .join(huggingface_repo_folder_name(repo_id, repo_type))
         .join("snapshots")
@@ -371,7 +365,16 @@ fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
             .enable_all()
             .build()
             .ok()?;
-        runtime.block_on(scan_cache_dir(&cache_root)).ok()
+        runtime
+            .block_on(
+                HFClientBuilder::new()
+                    .cache_dir(cache_root)
+                    .build()
+                    .ok()?
+                    .scan_cache()
+                    .send(),
+            )
+            .ok()
     };
 
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -398,7 +401,7 @@ fn identity_from_parts(repo_id: String, revision: String, file: String) -> HfMod
 }
 
 fn cache_repo_id(repo: &CachedRepoInfo) -> Option<&str> {
-    (repo.repo_type == RepoType::Model).then_some(repo.repo_id.as_str())
+    (repo.repo_type == RepoTypeModel.singular()).then_some(repo.repo_id.as_str())
 }
 
 fn parse_model_repo_folder_name(folder: &str) -> Option<String> {
@@ -487,7 +490,7 @@ mod tests {
     #[test]
     fn repo_folder_name_matches_huggingface_cache_layout() {
         assert_eq!(
-            huggingface_repo_folder_name("org/repo", RepoType::Model),
+            huggingface_repo_folder_name("org/repo", RepoTypeModel),
             "models--org--repo"
         );
     }

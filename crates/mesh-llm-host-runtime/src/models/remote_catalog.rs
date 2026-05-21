@@ -18,8 +18,6 @@ use std::sync::{
     Arc, LazyLock,
 };
 
-use hf_hub::{RepoDownloadFileParams, RepoInfo, RepoInfoParams};
-
 use anyhow::{bail, Context, Result};
 use model_resolver::{
     CatalogProvider, CatalogSidecarAsset, CatalogSidecarRef,
@@ -153,17 +151,12 @@ fn refresh_catalog_sync() -> Result<()> {
 
     // List all files in the dataset repo
     let info = dataset
-        .info(
-            &RepoInfoParams::builder()
-                .revision("main".to_string())
-                .build(),
-        )
+        .info()
+        .revision("main".to_string())
+        .send()
         .context("fetch meshllm/catalog dataset info")?;
 
-    let siblings = match info {
-        RepoInfo::Dataset(ref d) => d.siblings.as_ref(),
-        _ => None,
-    };
+    let siblings = info.siblings.as_ref();
     let Some(siblings) = siblings else {
         bail!("meshllm/catalog dataset info has no file listing");
     };
@@ -190,12 +183,10 @@ fn refresh_catalog_sync() -> Result<()> {
     // Download each entry file
     for entry_file in &entry_files {
         let downloaded = dataset
-            .download_file(
-                &RepoDownloadFileParams::builder()
-                    .filename(entry_file.clone())
-                    .revision("main".to_string())
-                    .build(),
-            )
+            .download_file()
+            .filename(entry_file.clone())
+            .revision("main".to_string())
+            .send()
             .with_context(|| format!("download catalog entry {entry_file}"))?;
 
         // Copy to our cache dir structure if needed
@@ -372,12 +363,11 @@ fn hf_model_repo_has_file(repo: &str, revision: &str, file: &str) -> Result<bool
         let (owner, name) = repo.split_once('/').unwrap_or(("", repo.as_str()));
         let info = api
             .model(owner, name)
-            .info(&RepoInfoParams::builder().revision(revision.clone()).build())
+            .info()
+            .revision(revision.clone())
+            .send()
             .with_context(|| format!("fetch Hugging Face model repo {repo}@{revision}"))?;
-        let RepoInfo::Model(detail) = info else {
-            bail!("expected Hugging Face model repo info for {repo}@{revision}");
-        };
-        Ok(detail
+        Ok(info
             .siblings
             .unwrap_or_default()
             .iter()

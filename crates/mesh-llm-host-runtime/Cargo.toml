@@ -83,7 +83,7 @@ schemars = "1"
 prost = "0.14"
 toml = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-hf_hub = { package = "huggingface-hub", git = "https://github.com/huggingface/huggingface_hub_rust.git", rev = "c9749ef76a294d5e97acae6b644071e39854aeb8", default-features = false, features = ["blocking", "xet"] }
+hf_hub = { package = "hf-hub", git = "https://github.com/huggingface/hf-hub.git", branch = "main", default-features = false, features = ["blocking"] }
 tabwriter = "1"
 
 [dev-dependencies]

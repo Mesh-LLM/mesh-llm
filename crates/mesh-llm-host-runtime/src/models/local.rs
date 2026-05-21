@@ -1,6 +1,5 @@
-use hf_hub::cache::scan_cache_dir;
-use hf_hub::types::cache::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
-use hf_hub::RepoType;
+use hf_hub::cache::{CachedFileInfo, CachedRepoInfo, CachedRevisionInfo, HFCacheInfo};
+use hf_hub::{HFClientBuilder, RepoType, RepoTypeModel};
 use model_ref::{format_model_ref, gguf_matches_quant_selector, normalize_gguf_distribution_id};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -126,9 +125,9 @@ pub fn huggingface_hub_cache_dir() -> PathBuf {
     huggingface_hub_cache()
 }
 
-pub(crate) fn huggingface_repo_folder_name(repo_id: &str, repo_type: RepoType) -> String {
-    let type_plural = format!("{}s", repo_type);
-    std::iter::once(type_plural.as_str())
+pub(crate) fn huggingface_repo_folder_name(repo_id: &str, repo_type: impl RepoType) -> String {
+    let type_plural = repo_type.plural();
+    std::iter::once(type_plural)
         .chain(repo_id.split('/'))
         .collect::<Vec<_>>()
         .join("--")
@@ -137,7 +136,7 @@ pub(crate) fn huggingface_repo_folder_name(repo_id: &str, repo_type: RepoType) -
 #[cfg(test)]
 pub(crate) fn huggingface_snapshot_path(
     repo_id: &str,
-    repo_type: RepoType,
+    repo_type: impl RepoType,
     revision: &str,
 ) -> PathBuf {
     huggingface_hub_cache_dir()
@@ -153,7 +152,16 @@ pub(crate) fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
             .enable_all()
             .build()
             .ok()?;
-        runtime.block_on(scan_cache_dir(&cache_root)).ok()
+        runtime
+            .block_on(
+                HFClientBuilder::new()
+                    .cache_dir(cache_root)
+                    .build()
+                    .ok()?
+                    .scan_cache()
+                    .send(),
+            )
+            .ok()
     };
 
     if tokio::runtime::Handle::try_current().is_ok() {
@@ -164,7 +172,7 @@ pub(crate) fn scan_hf_cache_info(cache_root: &Path) -> Option<HFCacheInfo> {
 }
 
 fn cache_repo_id(repo: &CachedRepoInfo) -> Option<&str> {
-    (repo.repo_type == RepoType::Model).then_some(repo.repo_id.as_str())
+    (repo.repo_type == RepoTypeModel.singular()).then_some(repo.repo_id.as_str())
 }
 
 pub fn mesh_llm_cache_dir() -> PathBuf {
@@ -404,8 +412,12 @@ fn cache_scanned_file_path(
         .file_path
         .strip_prefix(&revision.snapshot_path)
         .unwrap_or(file.file_path.as_path());
-    cache_root
-        .join(huggingface_repo_folder_name(&repo.repo_id, repo.repo_type))
+    repo.repo_path
+        .strip_prefix(cache_root)
+        .map_or_else(
+            |_| repo.repo_path.clone(),
+            |relative| cache_root.join(relative),
+        )
         .join("snapshots")
         .join(&revision.commit_hash)
         .join(relative)
@@ -486,7 +498,7 @@ fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min
             return;
         };
         for repo in &cache_info.repos {
-            if repo.repo_type != RepoType::Model {
+            if repo.repo_type != RepoTypeModel.singular() {
                 continue;
             }
             for revision in &repo.revisions {
@@ -702,7 +714,7 @@ fn find_hf_cache_model_ref_path(root: &Path, model: &model_ref::ModelRef) -> Opt
     let cache_info = scan_hf_cache_info(root)?;
     let mut candidates = Vec::new();
     for repo in &cache_info.repos {
-        if repo.repo_type != RepoType::Model || repo.repo_id != model.repo {
+        if repo.repo_type != RepoTypeModel.singular() || repo.repo_id != model.repo {
             continue;
         }
         for revision in &repo.revisions {
@@ -739,7 +751,7 @@ fn find_synthetic_local_gguf_path(root: &Path, model: &model_ref::ModelRef) -> O
     let cache_info = scan_hf_cache_info(root);
     if let Some(cache_info) = cache_info {
         for repo in &cache_info.repos {
-            if repo.repo_type != RepoType::Model {
+            if repo.repo_type != RepoTypeModel.singular() {
                 continue;
             }
             for revision in &repo.revisions {
@@ -768,7 +780,7 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
     let cache_root = huggingface_hub_cache_dir();
     let cache_info = scan_hf_cache_info(&cache_root)?;
     for repo in &cache_info.repos {
-        if repo.repo_type != RepoType::Model {
+        if repo.repo_type != RepoTypeModel.singular() {
             continue;
         }
         for revision in &repo.revisions {

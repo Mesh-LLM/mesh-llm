@@ -390,7 +390,7 @@ fn parse_hf_package_ref(package_ref: &str) -> Result<HfPackageRef> {
 
 fn hf_repo_cache_root(repo: &str) -> PathBuf {
     crate::models::huggingface_hub_cache_dir().join(
-        crate::models::local::huggingface_repo_folder_name(repo, hf_hub::RepoType::Model),
+        crate::models::local::huggingface_repo_folder_name(repo, hf_hub::RepoTypeModel),
     )
 }
 

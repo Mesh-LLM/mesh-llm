@@ -5,7 +5,6 @@ pub use mesh_llm_types::models::capabilities::{
 
 use super::build_hf_tokio_api;
 use super::remote_catalog;
-use hf_hub::{RepoDownloadFileParams, RepoType};
 use serde_json::Value;
 use std::path::Path;
 
@@ -159,13 +158,11 @@ async fn fetch_remote_json_with_api(
 ) -> Option<Value> {
     let (owner, name) = repo.split_once('/').unwrap_or(("", repo.as_str()));
     let path = api
-        .repo(RepoType::Model, owner, name)
-        .download_file(
-            &RepoDownloadFileParams::builder()
-                .filename(file.to_string())
-                .revision(revision)
-                .build(),
-        )
+        .model(owner, name)
+        .download_file()
+        .filename(file.to_string())
+        .revision(revision)
+        .send()
         .await
         .ok()?;
     let text = tokio::fs::read_to_string(path).await.ok()?;
