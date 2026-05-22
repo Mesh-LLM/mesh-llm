@@ -1,7 +1,7 @@
-From 9b6746585096adcc9f1c080204e193d978c219ed Mon Sep 17 00:00:00 2001
+From 293413ee63672d42ca6220a8f60d03104475dcd7 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 11:23:13 +1000
-Subject: [PATCH 57/80] Support RWKV7 activation sideband
+Subject: [PATCH 57/81] Support RWKV7 activation sideband
 
 ---
  include/skippy.h      |   2 +
@@ -55,7 +55,7 @@ index d03f681d..df95602f 100644
      // returns the result of ggml_backend_sched_graph_compute_async execution
      ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 34988b77..06488a2d 100644
+index 846c5abf..5b434f58 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -20,6 +20,7 @@
@@ -105,7 +105,7 @@ index 34988b77..06488a2d 100644
  void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
-@@ -859,6 +885,7 @@ void llm_graph_result::reset() {
+@@ -872,6 +898,7 @@ void llm_graph_result::reset() {
      t_logits      = nullptr;
      t_embd        = nullptr;
      t_embd_pooled = nullptr;
@@ -113,7 +113,7 @@ index 34988b77..06488a2d 100644
      t_sampled.clear();
      t_sampled_probs.clear();
      t_sampled_logits.clear();
-@@ -900,6 +927,9 @@ void llm_graph_result::set_outputs() {
+@@ -913,6 +940,9 @@ void llm_graph_result::set_outputs() {
      if (t_h_pre_norm != nullptr) {
          ggml_set_output(t_h_pre_norm);
      }

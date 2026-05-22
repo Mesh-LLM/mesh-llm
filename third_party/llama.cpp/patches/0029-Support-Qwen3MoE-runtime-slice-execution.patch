@@ -1,7 +1,7 @@
-From 178dac750aa3ed57d85d6c8548e2e4a9a12d1834 Mon Sep 17 00:00:00 2001
+From 52c00f51a79a60be2f70799c60c0f98a4aa583a3 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Thu, 30 Apr 2026 18:55:00 +1000
-Subject: [PATCH 29/80] Support Qwen3MoE runtime-slice execution
+Subject: [PATCH 29/81] Support Qwen3MoE runtime-slice execution
 
 Add LLM_ARCH_QWEN3MOE to the supported architecture list in the stage
 filter gate and add stage filter hooks to the qwen3moe.cpp graph builder
@@ -12,7 +12,7 @@ so that runtime-slice execution works for Qwen3MoE models.
  2 files changed, 16 insertions(+), 3 deletions(-)
 
 diff --git a/src/models/qwen3moe.cpp b/src/models/qwen3moe.cpp
-index 4440b83a..69135dfc 100644
+index a4f8e137..6ed0f060 100644
 --- a/src/models/qwen3moe.cpp
 +++ b/src/models/qwen3moe.cpp
 @@ -68,16 +68,21 @@ llama_model_qwen3moe::graph::graph(const llama_model & model, const llm_graph_pa

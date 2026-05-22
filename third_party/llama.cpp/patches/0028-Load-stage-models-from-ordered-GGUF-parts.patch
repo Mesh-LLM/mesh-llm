@@ -1,7 +1,7 @@
-From bd284f5e74a76e5662638092db1ada38c3a5c096 Mon Sep 17 00:00:00 2001
+From caa81624eedcb7950e3fbaae7f5417472bc98bb2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 29 Apr 2026 11:45:50 +1000
-Subject: [PATCH 28/80] Load stage models from ordered GGUF parts
+Subject: [PATCH 28/81] Load stage models from ordered GGUF parts
 
 ---
  include/llama.h            |   7 ++
@@ -14,10 +14,10 @@ Subject: [PATCH 28/80] Load stage models from ordered GGUF parts
  7 files changed, 186 insertions(+), 50 deletions(-)
 
 diff --git a/include/llama.h b/include/llama.h
-index 2ea22672..111f569e 100644
+index 75095b22..a8ee860c 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -490,6 +490,13 @@ extern "C" {
+@@ -497,6 +497,13 @@ extern "C" {
                                   size_t    n_paths,
                struct llama_model_params    params);
  
@@ -67,7 +67,7 @@ index 69293d6d..4dd985da 100644
          struct skippy_model * model,
          struct skippy_error ** out_error);
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index d15de1c4..5c00d487 100644
+index 4928506a..c8713d4f 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
 @@ -523,6 +523,7 @@ llama_model_loader::llama_model_loader(
@@ -131,7 +131,7 @@ index d15de1c4..5c00d487 100644
              uint16_t idx = 0;
              const std::string kv_split_no = llm_kv(LLM_KV_SPLIT_NO);
 diff --git a/src/llama-model-loader.h b/src/llama-model-loader.h
-index be15e32b..b7b054d1 100644
+index 3fb84fdd..d889c99d 100644
 --- a/src/llama-model-loader.h
 +++ b/src/llama-model-loader.h
 @@ -136,6 +136,7 @@ struct llama_model_loader {

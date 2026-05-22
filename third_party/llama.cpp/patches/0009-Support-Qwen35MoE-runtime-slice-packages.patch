@@ -1,7 +1,7 @@
-From 29a96c50c72939b50bc4d7d44cb4c745bbfe6fbc Mon Sep 17 00:00:00 2001
+From 9b344420cd88c13d4a8a439c85e10264a174d350 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 15:29:59 +1000
-Subject: [PATCH 09/80] Support Qwen35MoE runtime slice packages
+Subject: [PATCH 09/81] Support Qwen35MoE runtime slice packages
 
 ---
  src/llama-model-loader.cpp | 34 ++++++++++++++++++----------------
@@ -68,7 +68,7 @@ index 7782c250..8a4992a0 100644
          if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
              const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 4f63c410..7c2a85d2 100644
+index e4512116..5aa6242d 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
 @@ -171,18 +171,24 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p

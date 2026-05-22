@@ -1,7 +1,7 @@
-From e280676463678fb39fb23c8d8850fb7b0a65f30f Mon Sep 17 00:00:00 2001
+From 9ebca2cf952918f3114fc9b332febc84660f9f73 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 10:28:54 +1000
-Subject: [PATCH 02/80] Implement skippy model info ABI
+Subject: [PATCH 02/81] Implement skippy model info ABI
 
 ---
  CMakeLists.txt     |   1 +
@@ -11,10 +11,10 @@ Subject: [PATCH 02/80] Implement skippy model info ABI
  create mode 100644 src/skippy.cpp
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 310a3dcf..d56e2f9a 100644
+index 4f7f4eca..a08a32fb 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -241,6 +241,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
+@@ -258,6 +258,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h

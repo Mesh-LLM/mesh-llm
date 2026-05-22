@@ -1,7 +1,7 @@
-From bafce583559344e513bca5355d56b2e4ba91e30c Mon Sep 17 00:00:00 2001
+From 571f3c1a2dc051ee8ff4a3eb6ef6ba5681ef392f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 20:10:14 +1000
-Subject: [PATCH 64/80] Support Qwen35 and Hunyuan-VL runtime slices
+Subject: [PATCH 64/81] Support Qwen35 and Hunyuan-VL runtime slices
 
 ---
  src/models/qwen35.cpp | 32 ++++++++++++++++++++++++++------
@@ -9,7 +9,7 @@ Subject: [PATCH 64/80] Support Qwen35 and Hunyuan-VL runtime slices
  2 files changed, 28 insertions(+), 6 deletions(-)
 
 diff --git a/src/models/qwen35.cpp b/src/models/qwen35.cpp
-index 35a0158e..97ae07d3 100644
+index adeb0c26..1772612d 100644
 --- a/src/models/qwen35.cpp
 +++ b/src/models/qwen35.cpp
 @@ -148,18 +148,31 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para

@@ -1,14 +1,14 @@
-From 7be2cbd7ce0c257c12ef59723ae9a8b0494761df Mon Sep 17 00:00:00 2001
+From cde42a69fd27899c34da66683dd9a849a96acfb2 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 07:07:08 +1000
-Subject: [PATCH 67/80] Fix StarCoder positional embeddings in runtime slices
+Subject: [PATCH 67/81] Fix StarCoder positional embeddings in runtime slices
 
 ---
  src/models/starcoder.cpp | 16 +++++++++-------
  1 file changed, 9 insertions(+), 7 deletions(-)
 
 diff --git a/src/models/starcoder.cpp b/src/models/starcoder.cpp
-index 7d5c32e7..22483964 100644
+index a382a6fa..467dfc1b 100644
 --- a/src/models/starcoder.cpp
 +++ b/src/models/starcoder.cpp
 @@ -71,16 +71,18 @@ llama_model_starcoder::graph::graph(const llama_model & model, const llm_graph_p

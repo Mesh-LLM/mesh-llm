@@ -1,7 +1,7 @@
-From 63035d5f6cc8217d022f72c4a8afcda9b05b3bcf Mon Sep 17 00:00:00 2001
+From 06158f0b2fe9739c72360fd0b0c352568b70b9a6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 08:58:17 +1000
-Subject: [PATCH 50/80] Support more decoder runtime-slice families
+Subject: [PATCH 50/81] Support more decoder runtime-slice families
 
 ---
  src/models/gpt2.cpp    | 33 +++++++++++++++++++++++----------
@@ -14,7 +14,7 @@ Subject: [PATCH 50/80] Support more decoder runtime-slice families
  7 files changed, 111 insertions(+), 32 deletions(-)
 
 diff --git a/src/models/gpt2.cpp b/src/models/gpt2.cpp
-index ba49c31b..d548a3bd 100644
+index e2dcc8b1..5f66cf4d 100644
 --- a/src/models/gpt2.cpp
 +++ b/src/models/gpt2.cpp
 @@ -63,22 +63,28 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
@@ -79,7 +79,7 @@ index ba49c31b..d548a3bd 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/mpt.cpp b/src/models/mpt.cpp
-index cfc60e8d..8eafb75a 100644
+index 0229d20e..45b4ec19 100644
 --- a/src/models/mpt.cpp
 +++ b/src/models/mpt.cpp
 @@ -73,11 +73,16 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
@@ -137,7 +137,7 @@ index cfc60e8d..8eafb75a 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
-index 9633f269..6bf6d09a 100644
+index 7cc262f5..8fc8fa0a 100644
 --- a/src/models/olmo2.cpp
 +++ b/src/models/olmo2.cpp
 @@ -71,7 +71,12 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
@@ -190,7 +190,7 @@ index 9633f269..6bf6d09a 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/olmoe.cpp b/src/models/olmoe.cpp
-index 4bb90130..45459569 100644
+index 7976ae44..32d56a60 100644
 --- a/src/models/olmoe.cpp
 +++ b/src/models/olmoe.cpp
 @@ -58,16 +58,21 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
@@ -242,7 +242,7 @@ index 4bb90130..45459569 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen2vl.cpp b/src/models/qwen2vl.cpp
-index 1a40fa89..815a664c 100644
+index d79db682..d5f8ba3a 100644
 --- a/src/models/qwen2vl.cpp
 +++ b/src/models/qwen2vl.cpp
 @@ -48,7 +48,12 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
@@ -295,7 +295,7 @@ index 1a40fa89..815a664c 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen3vl.cpp b/src/models/qwen3vl.cpp
-index 7871f8f7..5e2fc616 100644
+index 5defd893..030861a5 100644
 --- a/src/models/qwen3vl.cpp
 +++ b/src/models/qwen3vl.cpp
 @@ -62,7 +62,12 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
@@ -357,7 +357,7 @@ index 7871f8f7..5e2fc616 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 9b564cc6..6d9e2fcc 100644
+index eeacbfa6..3b97c709 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1468,13 +1468,19 @@ static enum skippy_status skippy_finish_model_open(

@@ -1,7 +1,7 @@
-From 9e3d4ad6b4894df20216ac1d3540ecfd84f586eb Mon Sep 17 00:00:00 2001
+From 7e0af683cfee7d983f61039c77dd159c34c807ab Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 10:14:02 +1000
-Subject: [PATCH 55/80] Support Qwen2MoE runtime-slice execution
+Subject: [PATCH 55/81] Support Qwen2MoE runtime-slice execution
 
 ---
  src/models/qwen2moe.cpp | 25 ++++++++++++++++++++-----
@@ -9,7 +9,7 @@ Subject: [PATCH 55/80] Support Qwen2MoE runtime-slice execution
  2 files changed, 21 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
-index 7587c802..705abb47 100644
+index 7cb03859..193cf37e 100644
 --- a/src/models/qwen2moe.cpp
 +++ b/src/models/qwen2moe.cpp
 @@ -19,7 +19,10 @@ void llama_model_qwen2moe::load_arch_tensors(llama_model_loader &) {
@@ -73,7 +73,7 @@ index 7587c802..705abb47 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5b914a78..9190dd8c 100644
+index 3670218b..65b57e37 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1485,6 +1485,7 @@ static enum skippy_status skippy_finish_model_open(

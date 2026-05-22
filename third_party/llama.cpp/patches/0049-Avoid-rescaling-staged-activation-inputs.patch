@@ -1,17 +1,17 @@
-From 31638cc7e2b3e0dc52da810ebc0c3f8889e7cb53 Mon Sep 17 00:00:00 2001
+From dfbc8a4eb62f8064ae6e775abc576ca5e21bf321 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 08:42:26 +1000
-Subject: [PATCH 49/80] Avoid rescaling staged activation inputs
+Subject: [PATCH 49/81] Avoid rescaling staged activation inputs
 
 ---
  src/llama-graph.cpp | 8 ++++++--
  1 file changed, 6 insertions(+), 2 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 784e0726..f8b224a6 100644
+index d339ffce..846c5abf 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -1827,8 +1827,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -1843,8 +1843,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
  
      res->t_inp_embd = cur;
  
