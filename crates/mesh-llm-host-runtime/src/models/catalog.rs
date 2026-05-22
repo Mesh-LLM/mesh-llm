@@ -564,11 +564,9 @@ fn download_hf_assets_sync(
         } else {
             None
         };
-        let progress_handler: Option<Progress> = if let Some(tracker) = &progress_tracker {
-            Some(tracker.clone().into())
-        } else {
-            None
-        };
+        let progress_handler: Option<Progress> = progress_tracker
+            .as_ref()
+            .map(|tracker| tracker.clone().into());
         let path = match api_repo
             .download_file()
             .filename(asset.file.clone())
