@@ -1074,6 +1074,19 @@ fn reasoning_effort_none_turns_off_chat_template_thinking() {
 }
 
 #[test]
+fn top_level_reasoning_effort_none_turns_off_chat_template_thinking() {
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning_effort": "none"
+    }))
+    .unwrap();
+
+    let options = chat_template_options(&request).unwrap();
+    assert_eq!(options.enable_thinking, Some(false));
+}
+
+#[test]
 fn provider_enable_thinking_overrides_canonical_reasoning() {
     let request: ChatCompletionRequest = serde_json::from_value(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",

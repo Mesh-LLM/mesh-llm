@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
-    common::Usage,
+    common::{Usage, THINKING_BOOLEAN_ALIASES},
     errors::OpenAiError,
 };
 
@@ -111,6 +111,149 @@ fn alias_max_tokens(object: &mut Map<String, Value>) -> bool {
         object.entry("max_tokens".to_string()).or_insert(value);
     }
     changed
+}
+
+fn normalize_chat_reasoning_template_options(
+    object: &mut Map<String, Value>,
+) -> Result<bool, OpenAiError> {
+    let mut enable_thinking = reasoning_object_override(object.get("reasoning"))?;
+
+    if let Some(effort) = optional_string_field(object, "reasoning_effort")? {
+        enable_thinking = Some(match effort {
+            "none" => false,
+            "minimal" | "low" | "medium" | "high" | "xhigh" => true,
+            _ => {
+                return Err(OpenAiError::invalid_request(
+                    "reasoning_effort must be one of none, minimal, low, medium, high, xhigh",
+                ));
+            }
+        });
+    }
+
+    for field in THINKING_BOOLEAN_ALIASES {
+        if let Some(enabled) = optional_bool_field(object, field)? {
+            enable_thinking = Some(enabled);
+        }
+    }
+    if optional_u32_field(object, "thinking_budget")? == Some(0) {
+        enable_thinking = Some(false);
+    }
+
+    if chat_template_kwargs_override(object)? {
+        return Ok(false);
+    }
+
+    let Some(enabled) = enable_thinking else {
+        return Ok(false);
+    };
+    let kwargs = ensure_chat_template_kwargs_object(object)?;
+    kwargs.insert("enable_thinking".to_string(), Value::Bool(enabled));
+    Ok(true)
+}
+
+fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, OpenAiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .ok_or_else(|| OpenAiError::invalid_request("reasoning must be an object"))?;
+    let mut enabled = optional_bool_field(object, "enabled")?;
+    if let Some(effort) = optional_string_field(object, "effort")? {
+        enabled = Some(match effort {
+            "none" => false,
+            "minimal" | "low" | "medium" | "high" | "xhigh" => true,
+            _ => {
+                return Err(OpenAiError::invalid_request(
+                    "reasoning.effort must be one of none, minimal, low, medium, high, xhigh",
+                ));
+            }
+        });
+    }
+    if optional_u32_field(object, "max_tokens")? == Some(0) {
+        enabled = Some(false);
+    }
+    Ok(enabled)
+}
+
+fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, OpenAiError> {
+    let Some(value) = object.get("chat_template_kwargs") else {
+        return Ok(false);
+    };
+    if value.is_null() {
+        return Ok(false);
+    }
+    let kwargs = value
+        .as_object()
+        .ok_or_else(|| OpenAiError::invalid_request("chat_template_kwargs must be an object"))?;
+    for field in THINKING_BOOLEAN_ALIASES {
+        if optional_bool_field(kwargs, field)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ensure_chat_template_kwargs_object(
+    object: &mut Map<String, Value>,
+) -> Result<&mut Map<String, Value>, OpenAiError> {
+    if !object.contains_key("chat_template_kwargs") {
+        object.insert(
+            "chat_template_kwargs".to_string(),
+            Value::Object(Map::new()),
+        );
+    }
+    object
+        .get_mut("chat_template_kwargs")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| OpenAiError::invalid_request("chat_template_kwargs must be an object"))
+}
+
+fn optional_bool_field(
+    object: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<bool>, OpenAiError> {
+    object
+        .get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a boolean")))
+        })
+        .transpose()
+}
+
+fn optional_string_field<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+) -> Result<Option<&'a str>, OpenAiError> {
+    object
+        .get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| OpenAiError::invalid_request(format!("{field} must be a string")))
+        })
+        .transpose()
+}
+
+fn optional_u32_field(
+    object: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<u32>, OpenAiError> {
+    object
+        .get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            serde_json::from_value::<u32>(value.clone())
+                .map_err(|_| OpenAiError::invalid_request(format!("{field} must be an integer")))
+        })
+        .transpose()
 }
 
 fn map_response_role(role: &str) -> String {
@@ -406,7 +549,8 @@ pub fn normalize_openai_compat_request(
     let mut rewritten_path = None;
     let mut response_adapter = ResponseAdapterMode::None;
 
-    if path_only(path) == "/v1/responses" {
+    let path_only = path_only(path);
+    if path_only == "/v1/responses" {
         let is_stream = object
             .get("stream")
             .and_then(Value::as_bool)
@@ -418,6 +562,9 @@ pub fn normalize_openai_compat_request(
         } else {
             ResponseAdapterMode::OpenAiResponsesJson
         };
+    }
+    if matches!(path_only, "/v1/chat/completions" | "/v1/responses") {
+        changed |= normalize_chat_reasoning_template_options(object)?;
     }
 
     Ok(NormalizationOutcome {
@@ -1057,6 +1204,44 @@ mod tests {
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["logprobs"], true);
         assert_eq!(body["top_logprobs"], 3);
+    }
+
+    #[test]
+    fn normalize_chat_reasoning_effort_none_injects_template_kwargs() {
+        let mut body = json!({
+            "model": "direct-model",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "reasoning_effort": "none"
+        });
+
+        let normalized = normalize_openai_compat_request("/v1/chat/completions", &mut body)
+            .expect("chat request should normalize");
+
+        assert!(normalized.changed);
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"],
+            json!(false)
+        );
+        assert_eq!(body["reasoning_effort"], json!("none"));
+    }
+
+    #[test]
+    fn normalize_chat_template_kwargs_wins_over_reasoning_effort() {
+        let mut body = json!({
+            "model": "direct-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "reasoning_effort": "low",
+            "chat_template_kwargs": {"enable_thinking": false, "custom": "kept"}
+        });
+
+        let normalized = normalize_openai_compat_request("/v1/chat/completions", &mut body)
+            .expect("chat request should normalize");
+
+        assert!(!normalized.changed);
+        assert_eq!(
+            body["chat_template_kwargs"],
+            json!({"enable_thinking": false, "custom": "kept"})
+        );
     }
 
     #[test]

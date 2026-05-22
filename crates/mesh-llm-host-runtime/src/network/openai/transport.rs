@@ -677,12 +677,23 @@ fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_prese
 
     body_text.contains("\"max_completion_tokens\"")
         || body_text.contains("\"max_output_tokens\"")
+        || body_text_contains_chat_reasoning_template_options(body_text)
         || (plugin_manager_present
             && (body_text.contains("mesh://blob/")
                 || body_text.contains("\"blob_token\"")
                 || body_text.contains("\"mesh_token\"")
                 || body_text.contains("\"input_audio\"")
                 || body_text.contains("\"input_image\"")))
+}
+
+fn body_text_contains_chat_reasoning_template_options(body_text: &str) -> bool {
+    body_text.contains("\"reasoning\"")
+        || body_text.contains("\"reasoning_effort\"")
+        || body_text.contains("\"thinking_budget\"")
+        || body_text.contains("\"chat_template_kwargs\"")
+        || openai_frontend::THINKING_BOOLEAN_ALIASES
+            .iter()
+            .any(|field| body_text.contains(&format!("\"{field}\"")))
 }
 
 fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json::Value> {
@@ -5357,6 +5368,60 @@ mod tests {
         );
 
         assert!(request.body_json.is_none());
+    }
+
+    #[tokio::test]
+    async fn chat_reasoning_effort_none_is_canonicalized_before_forwarding() {
+        let body = serde_json::json!({
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "none"
+        })
+        .to_string();
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let request = read_request_from_parts(vec![raw.into_bytes()]).await;
+        let forwarded = parse_json_body_from_http_request(&request.raw).unwrap();
+
+        assert_eq!(
+            forwarded["chat_template_kwargs"]["enable_thinking"],
+            serde_json::json!(false)
+        );
+        assert_eq!(request.body_json, Some(forwarded));
+    }
+
+    #[tokio::test]
+    async fn chat_existing_template_kwargs_survive_forwarding_rewrite() {
+        let body = serde_json::json!({
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_completion_tokens": 32,
+            "reasoning_effort": "low",
+            "chat_template_kwargs": {
+                "enable_thinking": false,
+                "custom": "kept"
+            }
+        })
+        .to_string();
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let request = read_request_from_parts(vec![raw.into_bytes()]).await;
+        let forwarded = parse_json_body_from_http_request(&request.raw).unwrap();
+
+        assert_eq!(forwarded["max_tokens"], serde_json::json!(32));
+        assert!(forwarded.get("max_completion_tokens").is_none());
+        assert_eq!(
+            forwarded["chat_template_kwargs"],
+            serde_json::json!({"enable_thinking": false, "custom": "kept"})
+        );
     }
 
     #[tokio::test]
