@@ -1743,11 +1743,19 @@ async fn relay_normalized_chat_completion_json<R: AsyncRead + Unpin>(
         return relay_error_response(tcp_stream, reader, probe).await;
     }
     let mut buffered = probe.buffered;
-    reader.read_to_end(&mut buffered).await?;
-
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let body = &buffered[parsed.header_end..];
+    let body_end = if let Some(content_length) = parsed.content_length {
+        let body_end = parsed.header_end + content_length;
+        while buffered.len() < body_end {
+            read_response_chunk(reader, &mut buffered).await?;
+        }
+        body_end
+    } else {
+        reader.read_to_end(&mut buffered).await?;
+        buffered.len()
+    };
+    let body = &buffered[parsed.header_end..body_end];
     let normalized_body =
         normalize_chat_completion_json_body(body).unwrap_or_else(|| body.to_vec());
     let completion_tokens = parse_completion_tokens_from_json_body(&normalized_body);
@@ -5498,10 +5506,13 @@ mod tests {
         });
 
         upstream_writer.write_all(body).await.unwrap();
-        upstream_writer.shutdown().await.unwrap();
         let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
         let mut output = Vec::new();
-        client.read_to_end(&mut output).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay should not wait for upstream keep-alive close")
+            .unwrap();
+        drop(upstream_writer);
         let route_result = server_task.await.expect("server task");
         let body_start = output
             .windows(4)
