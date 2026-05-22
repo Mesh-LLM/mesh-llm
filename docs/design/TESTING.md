@@ -101,6 +101,28 @@ For terminal restoration QA:
 - Press `q` and `Ctrl+C`; the cursor should be visible and the shell prompt should not remain in raw mode.
 - A `SIGKILL` (`kill -9`) cannot run in-process cleanup. If a terminal is left corrupted after a hard kill, recover with `reset` or by closing the terminal pane.
 
+### 0d. Agent tool-call reliability
+
+Run the direct tool-call probe when changing OpenAI chat-completions routing,
+agent integrations, MoA reducer behavior, or anything that may affect
+`tools` / `tool_calls` / tool-result continuation:
+
+```bash
+scripts/qa-agent-tool-call-reliability.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --models auto,mesh \
+  --attempts 3 \
+  --output target/agent-tool-call-reliability/results.jsonl
+```
+
+- `tool_call` and `stream_tool_call` require real OpenAI-style function calls,
+  not prose that says a tool would be used
+- `tool_result` and `stream_tool_result` verify that the assistant can continue
+  after a matching tool result and include the deterministic fixture value
+- `--print-plan` is side-effect-free and emits machine-readable JSON
+- use `--skip-streaming` only when intentionally narrowing a local diagnosis to
+  non-streaming chat-completions
+
 ## Single-model permutations
 
 ### 1. Solo (single node)
