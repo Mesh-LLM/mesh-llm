@@ -5203,8 +5203,10 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         cli.relay_auth.iter().cloned().collect();
     let (node, _channels) = mesh::Node::start(
         NodeRole::Client,
-        &cli.relay,
-        &relay_auths,
+        mesh::RelayConfig {
+            urls: &cli.relay,
+            auths: &relay_auths,
+        },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
             port: cli.bind_port,
@@ -5378,8 +5380,10 @@ async fn start_run_auto_node_and_plugins(
         cli.relay_auth.iter().cloned().collect();
     let (node, channels) = mesh::Node::start(
         role,
-        &cli.relay,
-        &relay_auths,
+        mesh::RelayConfig {
+            urls: &cli.relay,
+            auths: &relay_auths,
+        },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
             port: cli.bind_port,

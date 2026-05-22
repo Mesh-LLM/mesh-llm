@@ -255,6 +255,17 @@ pub struct QuicBindSelection {
     pub port: Option<u16>,
 }
 
+/// Relay map plus per-relay bearer tokens for gated iroh-relays.
+///
+/// `urls` is the relay map; `auths` is a sparse map of relay URL -> bearer
+/// token used when registering with relays running `AccessConfig::Restricted`.
+/// Public relays in the same map continue to register without auth.
+#[derive(Clone, Copy, Debug)]
+pub struct RelayConfig<'a> {
+    pub urls: &'a [String],
+    pub auths: &'a std::collections::HashMap<String, String>,
+}
+
 fn quic_bind_addr(bind: QuicBindSelection) -> Option<SocketAddr> {
     if let Some(ip) = bind.ip {
         return Some(SocketAddr::new(
@@ -3078,14 +3089,15 @@ impl Node {
 
     pub async fn start(
         role: NodeRole,
-        relay_urls: &[String],
-        relay_auths: &std::collections::HashMap<String, String>,
+        relay: RelayConfig<'_>,
         quic_bind: QuicBindSelection,
         max_vram_gb: Option<f64>,
         enumerate_host: bool,
         owner_config: Option<OwnerRuntimeConfig>,
         config_path: Option<&std::path::Path>,
     ) -> Result<(Self, TunnelChannels)> {
+        let relay_urls = relay.urls;
+        let relay_auths = relay.auths;
         let secret_key = startup_secret_key(&role).await?;
         let endpoint =
             bind_mesh_endpoint(secret_key.clone(), relay_urls, relay_auths, quic_bind).await?;
