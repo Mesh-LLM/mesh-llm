@@ -17,6 +17,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-identity"
   "mesh-llm-protocol"
   "mesh-llm-routing"
+  "mesh-llm-guardrails"
   "mesh-llm-system"
   "mesh-llm-types"
   "mesh-llm-ui"

@@ -6622,6 +6622,18 @@ fn openai_guardrails_payload_from_policy(
     )
 }
 
+async fn publish_initial_openai_guardrails_status(
+    console_state: Option<&api::MeshApi>,
+    policy: &OpenAiGuardrailPolicyHandle,
+) {
+    let Some(console_state) = console_state else {
+        return;
+    };
+    console_state
+        .set_openai_guardrails(Some(openai_guardrails_payload_from_policy(policy)))
+        .await;
+}
+
 async fn run_auto_runtime_event_loop(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     control_rx: &mut tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
@@ -7235,13 +7247,11 @@ async fn run_auto(
         owner_key_path: &runtime_owner_key_path,
     })
     .await?;
-    if let Some(console_state) = console_state.as_ref() {
-        console_state
-            .set_openai_guardrails(Some(openai_guardrails_payload_from_policy(
-                &runtime_state.openai_guardrail_policy,
-            )))
-            .await;
-    }
+    publish_initial_openai_guardrails_status(
+        console_state.as_ref(),
+        &runtime_state.openai_guardrail_policy,
+    )
+    .await;
 
     crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
         RuntimeDashboardSnapshotProvider::new(

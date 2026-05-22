@@ -24,36 +24,64 @@ pub(super) async fn handle(
     path_only: &str,
     body: &str,
 ) -> anyhow::Result<()> {
-    match (method, path_only) {
-        ("GET", "/api/status") => handle_status(stream, state).await,
-        ("GET", "/api/models") => handle_models(stream, state).await,
-        ("GET", "/api/runtime") => handle_runtime_status(stream, state).await,
-        ("GET", "/api/runtime/llama") => handle_runtime_llama(stream, state).await,
-        ("GET", "/api/runtime/events") => handle_runtime_events(stream, state).await,
-        ("GET", "/api/runtime/endpoints") => handle_runtime_endpoints(stream, state).await,
-        ("GET", "/api/runtime/processes") => handle_runtime_processes(stream, state).await,
-        ("GET", "/api/runtime/stages") => handle_runtime_stages(stream, state).await,
-        ("GET", "/api/runtime/control-bootstrap") => handle_control_bootstrap(stream, state).await,
-        ("POST", "/api/runtime/control/get-config") => {
-            handle_control_get_config(stream, state, body).await
-        }
-        ("POST", "/api/runtime/control/refresh-inventory") => {
+    match method {
+        "GET" => handle_get(stream, state, path_only).await,
+        "POST" => handle_post(stream, state, path_only, body).await,
+        "DELETE" => handle_delete(stream, state, path_only).await,
+        _ => Ok(()),
+    }
+}
+
+async fn handle_get(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path_only: &str,
+) -> anyhow::Result<()> {
+    match path_only {
+        "/api/status" => handle_status(stream, state).await,
+        "/api/models" => handle_models(stream, state).await,
+        "/api/runtime" => handle_runtime_status(stream, state).await,
+        "/api/runtime/llama" => handle_runtime_llama(stream, state).await,
+        "/api/runtime/events" => handle_runtime_events(stream, state).await,
+        "/api/runtime/endpoints" => handle_runtime_endpoints(stream, state).await,
+        "/api/runtime/processes" => handle_runtime_processes(stream, state).await,
+        "/api/runtime/stages" => handle_runtime_stages(stream, state).await,
+        "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
+        "/api/events" => handle_events(stream, state).await,
+        _ => Ok(()),
+    }
+}
+
+async fn handle_post(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path_only: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    match path_only {
+        "/api/runtime/control/get-config" => handle_control_get_config(stream, state, body).await,
+        "/api/runtime/control/refresh-inventory" => {
             handle_control_refresh_inventory(stream, state, body).await
         }
-        ("POST", "/api/runtime/control/apply-config") => {
+        "/api/runtime/control/apply-config" => {
             handle_control_apply_config(stream, state, body).await
         }
-        ("POST", "/api/runtime/mesh-guardrails") => {
-            handle_set_mesh_guardrails(stream, state, body).await
-        }
-        ("POST", "/api/runtime/models") => handle_load_model(stream, state, body).await,
-        ("DELETE", p) if p.starts_with("/api/runtime/instances/") => {
+        "/api/runtime/mesh-guardrails" => handle_set_mesh_guardrails(stream, state, body).await,
+        "/api/runtime/models" => handle_load_model(stream, state, body).await,
+        _ => Ok(()),
+    }
+}
+
+async fn handle_delete(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path_only: &str,
+) -> anyhow::Result<()> {
+    match path_only {
+        p if p.starts_with("/api/runtime/instances/") => {
             handle_unload_instance(stream, state, p).await
         }
-        ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
-            handle_unload_model(stream, state, p).await
-        }
-        ("GET", "/api/events") => handle_events(stream, state).await,
+        p if p.starts_with("/api/runtime/models/") => handle_unload_model(stream, state, p).await,
         _ => Ok(()),
     }
 }
@@ -618,34 +646,6 @@ fn parse_guardrail_mode(mode: &str) -> Option<GuardrailMode> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{parse_guardrail_mode, GuardrailMode};
-
-    #[test]
-    fn parse_guardrail_mode_accepts_operator_labels() {
-        assert_eq!(
-            parse_guardrail_mode("disabled"),
-            Some(GuardrailMode::Disabled)
-        );
-        assert_eq!(parse_guardrail_mode("off"), Some(GuardrailMode::Disabled));
-        assert_eq!(
-            parse_guardrail_mode("metrics-only"),
-            Some(GuardrailMode::MetricsOnly)
-        );
-        assert_eq!(
-            parse_guardrail_mode("enforce"),
-            Some(GuardrailMode::Enforce)
-        );
-    }
-
-    #[test]
-    fn parse_guardrail_mode_rejects_unknown_labels() {
-        assert_eq!(parse_guardrail_mode(""), None);
-        assert_eq!(parse_guardrail_mode("strict"), None);
-    }
-}
-
 async fn handle_load_model(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -837,4 +837,32 @@ async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_guardrail_mode, GuardrailMode};
+
+    #[test]
+    fn parse_guardrail_mode_accepts_operator_labels() {
+        assert_eq!(
+            parse_guardrail_mode("disabled"),
+            Some(GuardrailMode::Disabled)
+        );
+        assert_eq!(parse_guardrail_mode("off"), Some(GuardrailMode::Disabled));
+        assert_eq!(
+            parse_guardrail_mode("metrics-only"),
+            Some(GuardrailMode::MetricsOnly)
+        );
+        assert_eq!(
+            parse_guardrail_mode("enforce"),
+            Some(GuardrailMode::Enforce)
+        );
+    }
+
+    #[test]
+    fn parse_guardrail_mode_rejects_unknown_labels() {
+        assert_eq!(parse_guardrail_mode(""), None);
+        assert_eq!(parse_guardrail_mode("strict"), None);
+    }
 }

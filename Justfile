@@ -350,7 +350,7 @@ ui-test:
 
 # ── Full Validation Gate ───────────────────────────────────────
 
-# Run all checks: Rust tests, fmt, clippy, ESLint, Prettier, E2E smoke.
+# Run all checks: repo consistency, Rust tests, fmt, clippy, ESLint, Prettier, E2E smoke.
 test-all:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -376,13 +376,16 @@ test-all:
     echo ""
 
     # Each UI step runs in a subshell so cd doesn't leak between steps.
-    echo "=== 1/7 Rust format check ==="
+    echo "=== 1/8 Repo consistency ==="
+    just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
+    echo ""
+    echo "=== 2/8 Rust format check ==="
     just with-lld cargo fmt --all -- --check
     echo ""
-    echo "=== 2/7 Clippy ==="
+    echo "=== 3/8 Clippy ==="
     just with-lld cargo clippy -p mesh-llm -- -D warnings
     echo ""
-    echo "=== 3/7 Rust tests ==="
+    echo "=== 4/8 Rust tests ==="
     echo "--- mesh-llm-host-runtime lib ---"
     just with-lld cargo test -p mesh-llm-host-runtime --lib
     echo "--- mesh-llm ---"
@@ -394,16 +397,16 @@ test-all:
     echo "--- skippy-runtime lib ---"
     just with-lld cargo test -p skippy-runtime --lib
     echo ""
-    echo "=== 4/7 ESLint + Prettier ==="
+    echo "=== 5/8 ESLint + Prettier ==="
     (cd "{{ ui_dir }}" && pnpm run lint)
     echo ""
-    echo "=== 5/7 UI type check (tsc) ==="
+    echo "=== 6/8 UI type check (tsc) ==="
     (cd "{{ ui_dir }}" && pnpm run typecheck)
     echo ""
-    echo "=== 6/7 UI unit tests (vitest) ==="
+    echo "=== 7/8 UI unit tests (vitest) ==="
     (cd "{{ ui_dir }}" && pnpm test)
     echo ""
-    echo "=== 7/7 E2E smoke tests (Playwright) ==="
+    echo "=== 8/8 E2E smoke tests (Playwright) ==="
     if curl -sf http://127.0.0.1:3131/health >/dev/null 2>&1; then
         (cd "{{ ui_dir }}" && pnpm run test:e2e)
     else
