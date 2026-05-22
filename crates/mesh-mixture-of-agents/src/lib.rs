@@ -743,13 +743,7 @@ mod response_builder_tests {
         assert_eq!(args_str, "{}");
     }
 
-    // ─── Effective usage estimation ─────────────────────────────────
-    //
-    // MoA aggregates output from multiple workers and the reducer, so
-    // reporting one worker's measured `completion_tokens` would mislead
-    // chat clients. Instead we emit a `chars / 4` estimate of the user-
-    // visible content; the UI divides by client-side wall time to get a
-    // wall-clock effective tok/s for the response stats bar.
+    // Regression for #637.
 
     #[test]
     fn estimate_completion_tokens_returns_zero_for_empty_content() {
@@ -758,33 +752,23 @@ mod response_builder_tests {
 
     #[test]
     fn estimate_completion_tokens_returns_at_least_one_for_non_empty() {
-        // A single character should not round down to zero — chat clients
-        // dividing by completion_tokens would lose tok/s information.
         assert_eq!(estimate_completion_tokens("a"), 1);
     }
 
     #[test]
     fn estimate_completion_tokens_is_roughly_chars_over_four() {
-        // 16 chars → 4 tokens at the OpenAI rule-of-thumb. div_ceil keeps
-        // small inputs honest while not over-estimating long ones.
         assert_eq!(estimate_completion_tokens("sixteen chars!!!"), 4);
         assert_eq!(estimate_completion_tokens(&"x".repeat(40)), 10);
     }
 
     #[test]
     fn chat_response_reports_non_zero_completion_tokens() {
-        // Regression for issue #637: MoA's `mesh` virtual model used to
-        // hardcode `usage: {0, 0, 0}`, which made the chat UI's response
-        // stats bar always show "0.0 tok/s". A crude `chars / 4` estimate
-        // gives an honest effective-throughput number when divided by the
-        // UI's client-side wall-time decode interval.
         let resp = chat_response("Hi there! How can I help you today?");
         let tokens = resp
             .pointer("/usage/completion_tokens")
             .and_then(serde_json::Value::as_u64)
             .expect("completion_tokens is u64");
         assert!(tokens > 0);
-        // Same estimate must be mirrored into total_tokens (prompt is 0).
         assert_eq!(
             resp.pointer("/usage/total_tokens").and_then(|v| v.as_u64()),
             Some(tokens),
