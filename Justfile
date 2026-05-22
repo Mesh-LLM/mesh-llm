@@ -383,6 +383,8 @@ test-all:
     just with-lld cargo clippy -p mesh-llm -- -D warnings
     echo ""
     echo "=== 3/7 Rust tests ==="
+    echo "--- mesh-llm-host-runtime lib ---"
+    just with-lld cargo test -p mesh-llm-host-runtime --lib
     echo "--- mesh-llm ---"
     just with-lld cargo test -p mesh-llm
     echo "--- mesh-llm-protocol ---"
