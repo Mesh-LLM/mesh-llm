@@ -545,21 +545,8 @@ fn error_response(message: &str, code: &str) -> Value {
     })
 }
 
-/// Best-effort token-count estimate for MoA response bodies.
-///
-/// MoA aggregates output from multiple workers and the reducer, so reporting
-/// any single worker's `completion_tokens` is misleading. The honest number
-/// for a chat client is "how many tokens did the user actually receive?",
-/// which the UI then divides by wall time to surface effective tok/s.
-///
-/// Use a crude `chars / 4` heuristic — stable for English text and the same
-/// rule-of-thumb the OpenAI tokenizer documentation suggests. The client-side
-/// `decode_time_ms` (from first delta to completion) gives an honest tok/s
-/// estimate of the total user-visible throughput, which is what callers want
-/// for the chat UI's response stats bar.
-///
-/// Returns at least 1 token for any non-empty content so consumers that
-/// divide-by-completion_tokens never see zero.
+/// Estimate `completion_tokens` from output chars (OpenAI's ~chars/4 rule).
+/// Returns at least 1 for non-empty so UI tok/s never divides by zero.
 fn estimate_completion_tokens(content: &str) -> u64 {
     if content.is_empty() {
         return 0;
