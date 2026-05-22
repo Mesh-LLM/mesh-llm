@@ -6,6 +6,7 @@ use super::local::{
     direct_hf_cache_root_gguf_paths, gguf_metadata_cache_path, huggingface_hub_cache,
     huggingface_hub_cache_dir, scan_hf_cache_fast, scan_hf_cache_info,
 };
+use hf_hub::{RepoType, RepoTypeModel};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct LocalModelInventorySnapshot {
@@ -116,7 +117,7 @@ fn local_gguf_paths() -> Vec<PathBuf> {
             let cache = huggingface_hub_cache();
             if let Some(cache_info) = scan_hf_cache_info(&cache) {
                 for repo in &cache_info.repos {
-                    if repo.repo_type != "model" {
+                    if repo.repo_type != RepoTypeModel.singular() {
                         continue;
                     }
                     for revision in &repo.revisions {
