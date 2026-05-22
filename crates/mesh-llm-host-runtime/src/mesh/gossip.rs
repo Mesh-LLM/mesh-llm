@@ -22,6 +22,14 @@ use crate::models::append_external_inference_models;
 const MIN_REBROADCAST_VERSION_MAJOR: u64 = 0;
 const MIN_REBROADCAST_VERSION_MINOR: u64 = 60;
 
+#[derive(Clone, Copy)]
+struct AnnouncedPeerContext {
+    remote: EndpointId,
+    rtt_ms: Option<u32>,
+    negotiated_protocol_generation: Option<u32>,
+    direct_peer_requirements_validated: bool,
+}
+
 /// Returns `true` if `version` is recent enough to include in outbound
 /// gossip. `None` (no advertised version) returns `true` for back-compat.
 /// Build metadata after `+` is stripped before parsing.
@@ -292,14 +300,12 @@ pub(super) fn apply_transitive_ann(
 impl Node {
     async fn apply_announced_peer(
         &self,
-        remote: EndpointId,
         peer_id: EndpointId,
         addr: &EndpointAddr,
         ann: &PeerAnnouncement,
-        rtt_ms: Option<u32>,
-        negotiated_protocol_generation: Option<u32>,
-        direct_peer_requirements_validated: bool,
+        context: AnnouncedPeerContext,
     ) -> Result<()> {
+        let remote = context.remote;
         if peer_id == self.endpoint.id() {
             return Ok(());
         }
@@ -307,9 +313,13 @@ impl Node {
             if let Some(ref their_id) = ann.mesh_id {
                 self.set_mesh_id(their_id.clone()).await;
             }
-            if !direct_peer_requirements_validated {
+            if !context.direct_peer_requirements_validated {
                 if let Err(reason) = self
-                    .validate_direct_peer_requirements(remote, ann, negotiated_protocol_generation)
+                    .validate_direct_peer_requirements(
+                        remote,
+                        ann,
+                        context.negotiated_protocol_generation,
+                    )
                     .await
                 {
                     self.record_mesh_requirement_rejection(
@@ -333,7 +343,7 @@ impl Node {
             self.merge_remote_demand(&ann.model_demand);
             self.add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)
                 .await;
-            if let Some(rtt_ms) = rtt_ms {
+            if let Some(rtt_ms) = context.rtt_ms {
                 self.update_peer_rtt(remote, rtt_ms).await;
             }
             return Ok(());
@@ -362,17 +372,15 @@ impl Node {
         negotiated_protocol_generation: Option<u32>,
         direct_peer_requirements_validated: bool,
     ) -> Result<()> {
+        let context = AnnouncedPeerContext {
+            remote,
+            rtt_ms,
+            negotiated_protocol_generation,
+            direct_peer_requirements_validated,
+        };
         for (addr, ann) in their_announcements {
-            self.apply_announced_peer(
-                remote,
-                addr.id,
-                addr,
-                ann,
-                rtt_ms,
-                negotiated_protocol_generation,
-                direct_peer_requirements_validated,
-            )
-            .await?;
+            self.apply_announced_peer(addr.id, addr, ann, context)
+                .await?;
         }
         Ok(())
     }
@@ -1222,10 +1230,6 @@ impl Node {
             .await;
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "direct peer promotion coordinates owner policy and state updates in order"
-    )]
     async fn add_peer_after_direct_requirements_validated(
         &self,
         id: EndpointId,
