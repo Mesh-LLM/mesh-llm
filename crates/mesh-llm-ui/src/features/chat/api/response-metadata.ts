@@ -30,18 +30,26 @@ function formatMilliseconds(value: number | undefined): string | undefined {
   return `${Math.max(0, Math.round(value))}ms`
 }
 
-function formatTokPerSec(tokens: number | undefined, decodeTimeMs: number | undefined): string | undefined {
-  if (
-    typeof tokens !== 'number' ||
-    !Number.isFinite(tokens) ||
-    typeof decodeTimeMs !== 'number' ||
-    !Number.isFinite(decodeTimeMs) ||
-    decodeTimeMs <= 0
-  ) {
-    return undefined
-  }
+// Below ~50ms there is effectively no streaming gap (e.g. MoA dumps the full
+// answer at once after the worker wins). Dividing by that produces absurdly
+// high tok/s numbers; the wall clock from request start is the honest figure.
+const MIN_DECODE_INTERVAL_MS = 50
 
-  return `${(tokens / (decodeTimeMs / 1000)).toFixed(1)} tok/s`
+function formatTokPerSec(
+  tokens: number | undefined,
+  decodeTimeMs: number | undefined,
+  totalTimeMs: number | undefined
+): string | undefined {
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens)) return undefined
+
+  const decodeOk =
+    typeof decodeTimeMs === 'number' && Number.isFinite(decodeTimeMs) && decodeTimeMs >= MIN_DECODE_INTERVAL_MS
+  const totalOk = typeof totalTimeMs === 'number' && Number.isFinite(totalTimeMs) && totalTimeMs > 0
+
+  const denomMs = decodeOk ? decodeTimeMs : totalOk ? totalTimeMs : undefined
+  if (denomMs === undefined || denomMs <= 0) return undefined
+
+  return `${(tokens / (denomMs / 1000)).toFixed(1)} tok/s`
 }
 
 export function responseMetadataToThreadMessage(metadata: ChatResponseMetadata): ThreadMessageMetadata {
@@ -53,7 +61,7 @@ export function responseMetadataToThreadMessage(metadata: ChatResponseMetadata):
     route: servedBy,
     routeNode: servedBy,
     tokens: formatTokenCount(outputTokens),
-    tokPerSec: formatTokPerSec(outputTokens, metadata.timings?.decode_time_ms),
+    tokPerSec: formatTokPerSec(outputTokens, metadata.timings?.decode_time_ms, metadata.timings?.total_time_ms),
     ttft: formatMilliseconds(metadata.timings?.ttft_ms)
   }
 }

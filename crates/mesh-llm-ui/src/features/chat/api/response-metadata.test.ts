@@ -25,6 +25,21 @@ describe('responseMetadataToThreadMessage', () => {
       ttft: '1117ms'
     })
   })
+
+  // MoA blocks until a worker wins, then emits the full reduced answer in a
+  // single SSE event. decode_time_ms is ~0 in that case; divide by total
+  // wall time instead so tok/s reflects the user's actual wait.
+  it('falls back to total_time_ms when decode interval is too small to be real', () => {
+    expect(
+      responseMetadataToThreadMessage({
+        messageId: 'moa-1',
+        model: 'mesh',
+        usage: { input_tokens: 0, output_tokens: 9, total_tokens: 9 },
+        timings: { decode_time_ms: 0.04, ttft_ms: 1389, total_time_ms: 1390 },
+        servedBy: 'reducer'
+      }).tokPerSec
+    ).toBe('6.5 tok/s')
+  })
 })
 
 describe('mergeThreadMessageMetadata', () => {
