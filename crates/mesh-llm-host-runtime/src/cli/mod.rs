@@ -8,6 +8,58 @@ use crate::cli::runtime::RuntimeCommand;
 use crate::crypto::TrustPolicy;
 use crate::network::discovery::MeshDiscoveryMode;
 
+/// Parse a `URL=TOKEN` pair for `--relay-auth`. Splits on the first `=` only,
+/// so tokens may contain `=` (base64 padding, JWTs).
+fn parse_relay_auth_pair(s: &str) -> Result<(String, String), String> {
+    let Some((url, token)) = s.split_once('=') else {
+        return Err(format!(
+            "expected URL=TOKEN, got {s:?} (no '=' separator found)"
+        ));
+    };
+    if url.is_empty() {
+        return Err(format!("expected URL=TOKEN, got empty URL in {s:?}"));
+    }
+    if token.is_empty() {
+        return Err(format!("expected URL=TOKEN, got empty token in {s:?}"));
+    }
+    Ok((url.to_string(), token.to_string()))
+}
+
+#[cfg(test)]
+mod relay_auth_parser_tests {
+    use super::parse_relay_auth_pair;
+
+    #[test]
+    fn parses_simple_pair() {
+        let (url, token) = parse_relay_auth_pair("https://r.example/=abc123").unwrap();
+        assert_eq!(url, "https://r.example/");
+        assert_eq!(token, "abc123");
+    }
+
+    #[test]
+    fn preserves_equals_in_token() {
+        // Base64-padded tokens and NIP-98-style payloads often contain `=`.
+        let (_, token) = parse_relay_auth_pair("https://r/=eyJhbGciOiJFZERTQSJ9.payload==")
+            .expect("token with '=' must parse");
+        assert_eq!(token, "eyJhbGciOiJFZERTQSJ9.payload==");
+    }
+
+    #[test]
+    fn rejects_missing_separator() {
+        assert!(parse_relay_auth_pair("no-separator").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_url() {
+        assert!(parse_relay_auth_pair("=token").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_token() {
+        assert!(parse_relay_auth_pair("https://r/=").is_err());
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum TrustCommand {
     /// Add an owner to the local trust store allowlist.
@@ -413,6 +465,17 @@ pub(crate) struct Cli {
     /// Override iroh relay URLs.
     #[arg(long, hide = true)]
     pub(crate) relay: Vec<String>,
+
+    /// Per-relay bearer token for gated iroh relays, formatted as
+    /// `URL=TOKEN`. Repeatable. The token is sent as
+    /// `Authorization: Bearer <TOKEN>` on the WebSocket upgrade to the
+    /// matching `--relay` URL. Relays not listed here register without
+    /// authentication (the correct behavior for public relays).
+    ///
+    /// Splits on the first `=` only, so tokens may contain `=` (base64
+    /// padding, JWTs, etc.).
+    #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
+    pub(crate) relay_auth: Vec<(String, String)>,
 
     /// Bind QUIC to a fixed UDP port (for NAT port forwarding).
     #[arg(long, hide = true)]

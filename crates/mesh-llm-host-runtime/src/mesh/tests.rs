@@ -1122,8 +1122,14 @@ async fn control_plane_listener_starts_with_owner() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
 
-    node.maybe_start_control_listener(secret_key, None, None, None)
-        .await?;
+    node.maybe_start_control_listener(
+        secret_key,
+        None,
+        None,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
 
     let endpoint = node
         .control_endpoint()
@@ -1147,8 +1153,14 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
     let advertised_addr = std::net::SocketAddr::from(([203, 0, 113, 10], 18443));
 
-    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr), None)
-        .await?;
+    node.maybe_start_control_listener(
+        secret_key,
+        None,
+        Some(advertised_addr),
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
 
     let endpoint = node
         .control_endpoint()
@@ -1174,6 +1186,7 @@ async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
         Some("127.0.0.1:7447".parse().unwrap()),
         None,
         None,
+        &std::collections::HashMap::new(),
     )
     .await?;
 
@@ -1185,8 +1198,14 @@ async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
 async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
-        .await?;
+    node.maybe_start_control_listener(
+        secret_key,
+        None,
+        None,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
     let endpoint = Node::decode_invite_token(
         &node
             .control_endpoint()
@@ -1215,8 +1234,14 @@ async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()
 async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
-        .await?;
+    node.maybe_start_control_listener(
+        secret_key,
+        None,
+        None,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
     let control_endpoint = node
         .control_endpoint()
         .await
@@ -1249,8 +1274,14 @@ async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> 
 async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
-        .await?;
+    node.maybe_start_control_listener(
+        secret_key,
+        None,
+        None,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
     let endpoint = Node::decode_invite_token(
         &node
             .control_endpoint()
@@ -5351,8 +5382,14 @@ async fn start_owner_control_test_server(
     *node.owner_attestation.lock().await = Some(ownership);
     *node.owner_summary.lock().await = owner_summary;
     *node.trust_store.lock().await = trust_store;
-    node.maybe_start_control_listener(secret_key.clone(), None, None, None)
-        .await?;
+    node.maybe_start_control_listener(
+        secret_key.clone(),
+        None,
+        None,
+        None,
+        &std::collections::HashMap::new(),
+    )
+    .await?;
     Ok((node, secret_key, config_path))
 }
 

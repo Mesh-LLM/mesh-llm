@@ -409,11 +409,104 @@ fn effective_relay_urls(relay_urls: &[String]) -> Vec<String> {
     }
 }
 
-fn relay_map_from_urls(urls: &[String]) -> iroh::RelayMap {
-    let configs = urls
-        .iter()
-        .map(|url| iroh::RelayConfig::new(url.parse().expect("invalid relay URL"), None));
+/// Build a [`RelayMap`] from URLs, attaching per-relay auth tokens where
+/// configured.
+///
+/// `auths` maps relay URLs (as they appear in `urls`) to bearer tokens. Tokens
+/// are passed to [`iroh::RelayConfig::with_auth_token`] which sends them as
+/// `Authorization: Bearer <token>` on the WebSocket upgrade. Relays not present
+/// in the map register unauthenticated, which is the correct behavior for
+/// public (`AccessConfig::Everyone`) relays.
+///
+/// This is the wire-up that lets a gated iroh-relay (e.g. one running
+/// `AccessConfig::Restricted` with NIP-98 admission) admit this node while
+/// public relays in the same map continue to work normally.
+fn relay_map_from_urls(
+    urls: &[String],
+    auths: &std::collections::HashMap<String, String>,
+) -> iroh::RelayMap {
+    let configs = urls.iter().map(|url| {
+        let parsed = url.parse().expect("invalid relay URL");
+        let cfg = iroh::RelayConfig::new(parsed, None);
+        match auths.get(url) {
+            Some(token) => cfg.with_auth_token(token.clone()),
+            None => cfg,
+        }
+    });
     iroh::RelayMap::from_iter(configs)
+}
+
+#[cfg(test)]
+mod relay_map_tests {
+    use super::relay_map_from_urls;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn configs(map: &iroh::RelayMap) -> Vec<Arc<iroh::RelayConfig>> {
+        map.relays::<Vec<_>>()
+    }
+
+    #[test]
+    fn builds_map_without_auth_when_empty() {
+        let urls = vec!["https://r1.example/".to_string()];
+        let map = relay_map_from_urls(&urls, &HashMap::new());
+        let cfgs = configs(&map);
+        assert_eq!(cfgs.len(), 1);
+        assert!(
+            cfgs[0].auth_token.is_none(),
+            "no auth supplied → no auth_token set"
+        );
+    }
+
+    #[test]
+    fn attaches_auth_token_for_matching_url() {
+        let urls = vec!["https://gated.example/".to_string()];
+        let mut auths = HashMap::new();
+        auths.insert("https://gated.example/".to_string(), "nip98-bearer".into());
+        let map = relay_map_from_urls(&urls, &auths);
+        let cfgs = configs(&map);
+        assert_eq!(cfgs.len(), 1);
+        assert_eq!(cfgs[0].auth_token.as_deref(), Some("nip98-bearer"));
+    }
+
+    #[test]
+    fn leaves_other_relays_unauthenticated_in_mixed_map() {
+        // The whole point: gated relay gets a token, public relays don't.
+        let urls = vec![
+            "https://gated.example/".to_string(),
+            "https://public.iroh/".to_string(),
+        ];
+        let mut auths = HashMap::new();
+        auths.insert("https://gated.example/".to_string(), "bearer-xyz".into());
+
+        let map = relay_map_from_urls(&urls, &auths);
+        let by_url: HashMap<String, Option<String>> = configs(&map)
+            .into_iter()
+            .map(|cfg| (cfg.url.to_string(), cfg.auth_token.clone()))
+            .collect();
+
+        // Find the entries by matching on host substring, since iroh-relay may
+        // canonicalise the URL form (e.g. trailing dot on the host).
+        let gated = by_url
+            .iter()
+            .find(|(u, _)| u.contains("gated.example"))
+            .expect("gated relay should be in the map");
+        let public = by_url
+            .iter()
+            .find(|(u, _)| u.contains("public.iroh"))
+            .expect("public relay should be in the map");
+
+        assert_eq!(
+            gated.1.as_deref(),
+            Some("bearer-xyz"),
+            "gated relay must carry its token"
+        );
+        assert!(
+            public.1.is_none(),
+            "public relay must register without a token, got {:?}",
+            public.1
+        );
+    }
 }
 
 fn encode_endpoint_addr_token(addr: &EndpointAddr) -> String {
@@ -1499,6 +1592,7 @@ fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig {
 async fn bind_mesh_endpoint(
     secret_key: SecretKey,
     relay_urls: &[String],
+    relay_auths: &std::collections::HashMap<String, String>,
     quic_bind: QuicBindSelection,
 ) -> Result<Endpoint> {
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
@@ -1513,6 +1607,7 @@ async fn bind_mesh_endpoint(
     tracing::info!("Relay: {:?}", urls);
     builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
         &urls,
+        relay_auths,
     )));
 
     if let Some(addr) = quic_bind_addr(quic_bind) {
@@ -1648,12 +1743,14 @@ fn init_owner_runtime(
 fn configure_control_relay(
     mut builder: iroh::endpoint::Builder,
     relay_urls: Option<&[String]>,
+    relay_auths: &std::collections::HashMap<String, String>,
 ) -> iroh::endpoint::Builder {
     if let Some(relay_urls) = relay_urls {
         let urls = effective_relay_urls(relay_urls);
         tracing::info!("Owner-control relay: {:?}", urls);
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
             &urls,
+            relay_auths,
         )));
     } else {
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Disabled);
@@ -2982,6 +3079,7 @@ impl Node {
     pub async fn start(
         role: NodeRole,
         relay_urls: &[String],
+        relay_auths: &std::collections::HashMap<String, String>,
         quic_bind: QuicBindSelection,
         max_vram_gb: Option<f64>,
         enumerate_host: bool,
@@ -2989,7 +3087,8 @@ impl Node {
         config_path: Option<&std::path::Path>,
     ) -> Result<(Self, TunnelChannels)> {
         let secret_key = startup_secret_key(&role).await?;
-        let endpoint = bind_mesh_endpoint(secret_key.clone(), relay_urls, quic_bind).await?;
+        let endpoint =
+            bind_mesh_endpoint(secret_key.clone(), relay_urls, relay_auths, quic_bind).await?;
         // Wait briefly for relay connection so the invite token includes the relay URL.
         // On sinkholed networks this times out and we proceed without relay (direct UDP only).
         wait_for_endpoint_online(
@@ -3119,6 +3218,7 @@ impl Node {
                 .as_ref()
                 .and_then(|config| config.control_advertise_addr),
             Some(relay_urls),
+            relay_auths,
         )
         .await?;
 
@@ -3263,6 +3363,7 @@ impl Node {
         bind_addr: Option<std::net::SocketAddr>,
         advertise_addr: Option<std::net::SocketAddr>,
         relay_urls: Option<&[String]>,
+        relay_auths: &std::collections::HashMap<String, String>,
     ) -> Result<()> {
         if self.local_verified_owner_id().await.is_none() {
             return Ok(());
@@ -3272,7 +3373,7 @@ impl Node {
             .secret_key(secret_key)
             .alpns(vec![ALPN_CONTROL_V1.to_vec()])
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?;
-        builder = configure_control_relay(builder, relay_urls);
+        builder = configure_control_relay(builder, relay_urls, relay_auths);
         let endpoint = builder.bind().await?;
         if relay_urls.is_some() {
             wait_for_endpoint_online(
