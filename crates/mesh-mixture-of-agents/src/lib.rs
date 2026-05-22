@@ -541,7 +541,39 @@ fn error_response(message: &str, code: &str) -> Value {
             "message": { "role": "assistant", "content": message },
             "finish_reason": "error"
         }],
-        "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+        "usage": usage_for_content(message)
+    })
+}
+
+/// Best-effort token-count estimate for MoA response bodies.
+///
+/// MoA aggregates output from multiple workers and the reducer, so reporting
+/// any single worker's `completion_tokens` is misleading. The honest number
+/// for a chat client is "how many tokens did the user actually receive?",
+/// which the UI then divides by wall time to surface effective tok/s.
+///
+/// Use a crude `chars / 4` heuristic — stable for English text and the same
+/// rule-of-thumb the OpenAI tokenizer documentation suggests. The client-side
+/// `decode_time_ms` (from first delta to completion) gives an honest tok/s
+/// estimate of the total user-visible throughput, which is what callers want
+/// for the chat UI's response stats bar.
+///
+/// Returns at least 1 token for any non-empty content so consumers that
+/// divide-by-completion_tokens never see zero.
+fn estimate_completion_tokens(content: &str) -> u64 {
+    if content.is_empty() {
+        return 0;
+    }
+    let chars = content.chars().count() as u64;
+    chars.div_ceil(4).max(1)
+}
+
+fn usage_for_content(content: &str) -> Value {
+    let completion = estimate_completion_tokens(content);
+    json!({
+        "prompt_tokens": 0,
+        "completion_tokens": completion,
+        "total_tokens": completion,
     })
 }
 
@@ -561,7 +593,7 @@ fn chat_response(content: &str) -> Value {
             "message": { "role": "assistant", "content": content },
             "finish_reason": "stop"
         }],
-        "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+        "usage": usage_for_content(content)
     })
 }
 
@@ -595,6 +627,9 @@ fn tool_call_response(name: &str, arguments: &Value) -> Value {
         _ => "{}".to_string(),
     };
 
+    // For tool-call responses, the user-visible output is the
+    // arguments JSON, not free-form text. Use it as the basis of the
+    // token estimate so callers still see a non-zero count.
     json!({
         "id": format!("chatcmpl-moa-{}", short_id()),
         "object": "chat.completion",
@@ -612,7 +647,7 @@ fn tool_call_response(name: &str, arguments: &Value) -> Value {
             },
             "finish_reason": "tool_calls"
         }],
-        "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+        "usage": usage_for_content(&args_str)
     })
 }
 
@@ -706,5 +741,73 @@ mod response_builder_tests {
             .and_then(|v| v.as_str())
             .expect("arguments is string");
         assert_eq!(args_str, "{}");
+    }
+
+    // ─── Effective usage estimation ─────────────────────────────────
+    //
+    // MoA aggregates output from multiple workers and the reducer, so
+    // reporting one worker's measured `completion_tokens` would mislead
+    // chat clients. Instead we emit a `chars / 4` estimate of the user-
+    // visible content; the UI divides by client-side wall time to get a
+    // wall-clock effective tok/s for the response stats bar.
+
+    #[test]
+    fn estimate_completion_tokens_returns_zero_for_empty_content() {
+        assert_eq!(estimate_completion_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_completion_tokens_returns_at_least_one_for_non_empty() {
+        // A single character should not round down to zero — chat clients
+        // dividing by completion_tokens would lose tok/s information.
+        assert_eq!(estimate_completion_tokens("a"), 1);
+    }
+
+    #[test]
+    fn estimate_completion_tokens_is_roughly_chars_over_four() {
+        // 16 chars → 4 tokens at the OpenAI rule-of-thumb. div_ceil keeps
+        // small inputs honest while not over-estimating long ones.
+        assert_eq!(estimate_completion_tokens("sixteen chars!!!"), 4);
+        assert_eq!(estimate_completion_tokens(&"x".repeat(40)), 10);
+    }
+
+    #[test]
+    fn chat_response_reports_non_zero_completion_tokens() {
+        // Regression for issue #637: MoA's `mesh` virtual model used to
+        // hardcode `usage: {0, 0, 0}`, which made the chat UI's response
+        // stats bar always show "0.0 tok/s". A crude `chars / 4` estimate
+        // gives an honest effective-throughput number when divided by the
+        // UI's client-side wall-time decode interval.
+        let resp = chat_response("Hi there! How can I help you today?");
+        let tokens = resp
+            .pointer("/usage/completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .expect("completion_tokens is u64");
+        assert!(tokens > 0);
+        // Same estimate must be mirrored into total_tokens (prompt is 0).
+        assert_eq!(
+            resp.pointer("/usage/total_tokens").and_then(|v| v.as_u64()),
+            Some(tokens),
+        );
+    }
+
+    #[test]
+    fn tool_call_response_reports_non_zero_completion_tokens() {
+        let resp = tool_call_response("read_file", &serde_json::json!({"path": "/etc/hostname"}));
+        let tokens = resp
+            .pointer("/usage/completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .expect("completion_tokens is u64");
+        assert!(tokens > 0);
+    }
+
+    #[test]
+    fn error_response_reports_message_based_completion_tokens() {
+        let resp = error_response("All MoA workers failed", MOA_ERR_ALL_WORKERS_FAILED);
+        let tokens = resp
+            .pointer("/usage/completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .expect("completion_tokens is u64");
+        assert!(tokens > 0);
     }
 }
