@@ -123,6 +123,47 @@ scripts/qa-agent-tool-call-reliability.py \
 - use `--skip-streaming` only when intentionally narrowing a local diagnosis to
   non-streaming chat-completions
 
+### 0e. Nightly stability harness
+
+Use the repeatable stability harness when you want black-box evidence that a
+live mesh endpoint stays usable across repeated chat, streaming, tool-call, and
+optional agent-client checks:
+
+```bash
+scripts/qa-nightly-stability.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --models auto,mesh \
+  --attempts 5 \
+  --agent-smokes opencode,pi,goose \
+  --output-dir target/nightly-stability/local
+```
+
+- the harness attaches to an existing OpenAI-compatible `/v1` endpoint; it does
+  not start nodes, load models, publish to the public mesh, or change routing
+  policy
+- direct OpenAI surface probes write `results.jsonl` with `/v1/models`,
+  non-streaming chat, streaming chat, HTTP status, elapsed time, and TTFT where
+  applicable
+- the merged tool-call probe remains the canonical tool-call validator; this
+  harness invokes it and records its command/log path instead of reimplementing
+  tool-call parsing
+- optional OpenCode, Pi, and Goose smokes reuse the existing CI agent fixtures;
+  missing optional CLIs are recorded as `PREREQ` rather than a stability failure
+- every run writes `manifest.json`, `commands.jsonl`, `results.jsonl`,
+  `summary.json`, `summary.md`, and `logs/`
+- `--print-plan` is side-effect-free and shows the exact checks/artifacts that
+  would run
+
+The scheduled GitHub workflow is opt-in through
+`MESH_NIGHTLY_STABILITY_ENABLED=1` and a configured
+`MESH_NIGHTLY_STABILITY_BASE_URL` (or the existing agent endpoint variables).
+The scheduled/manual wrapper calls the reusable `nightly-stability-run.yml`
+workflow so maintainers can reuse the same harness execution from other
+workflows or lab jobs. The job summary includes the timing snapshot from
+`summary.md`, so day-over-day drift can be checked without opening JSONL
+artifacts. It is intentionally evidence-producing and non-required: failed
+nightlies should guide stabilization work, not block unrelated pull requests.
+
 ## Single-model permutations
 
 ### 1. Solo (single node)

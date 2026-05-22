@@ -24,6 +24,10 @@ This is the best way to show what mesh-llm does: zero setup, zero config, just s
 
 Relay connections degrade over hours on some nodes (Studio pattern: fresh=250ms, 10h=isolated). Need relay health monitoring, periodic reconnect, and better understanding of iroh's relay lifecycle. See [crates/mesh-llm/TODO.md](crates/mesh-llm/TODO.md) for investigation notes.
 
+Short-term stabilization should be evidence-led: use the opt-in nightly
+stability harness to trend `/v1/models`, chat, streaming, tool-call, and agent
+smoke behavior across repeated runs before promoting fixes as release-quality.
+
 ## Production relay infrastructure
 
 mesh-llm uses managed iroh relays via [services.iroh.computer](https://services.iroh.computer) as the default:

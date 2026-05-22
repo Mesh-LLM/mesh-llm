@@ -1,0 +1,156 @@
+name: Reusable Nightly Stability Run
+
+on:
+  workflow_call:
+    inputs:
+      base_url:
+        required: false
+        default: ""
+        type: string
+      models:
+        required: false
+        default: "auto,mesh"
+        type: string
+      attempts:
+        required: false
+        default: "5"
+        type: string
+      agent_smokes:
+        required: false
+        default: ""
+        type: string
+      skip_streaming:
+        required: false
+        default: false
+        type: boolean
+      timeout:
+        required: false
+        default: "180"
+        type: string
+      runs_on:
+        required: false
+        default: '"self-hosted"'
+        type: string
+      output_dir:
+        required: false
+        default: nightly-artifacts/stability/latest
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  stability:
+    name: Run stability harness
+    runs-on: ${{ fromJson(inputs.runs_on) }}
+    timeout-minutes: 120
+    env:
+      MESH_STABILITY_BASE_URL: ${{ inputs.base_url }}
+      MESH_STABILITY_MODELS: ${{ inputs.models }}
+      MESH_STABILITY_ATTEMPTS: ${{ inputs.attempts }}
+      MESH_STABILITY_AGENT_SMOKES: ${{ inputs.agent_smokes }}
+      MESH_STABILITY_TIMEOUT: ${{ inputs.timeout }}
+      MESH_STABILITY_OUTPUT_DIR: ${{ inputs.output_dir }}
+      MESH_STABILITY_SKIP_STREAMING: ${{ inputs.skip_streaming && 'true' || 'false' }}
+      OPENCODE_DISABLE_AUTOUPDATE: "true"
+      OPENCODE_DISABLE_PRUNE: "true"
+      OPENCODE_DISABLE_LSP_DOWNLOAD: "true"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Preflight configuration
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${MESH_STABILITY_BASE_URL:-}" ]]; then
+            {
+              echo "## Nightly stability"
+              echo
+              echo "No mesh endpoint configured. Set MESH_NIGHTLY_STABILITY_BASE_URL, MESH_AGENT_BASE_URL, or pass base_url manually."
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+              exit 1
+            fi
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "run=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v5
+        if: ${{ steps.preflight.outputs.run == 'true' && inputs.agent_smokes != '' }}
+        with:
+          node-version: 24
+
+      - name: Install requested agent CLIs
+        if: ${{ steps.preflight.outputs.run == 'true' && inputs.agent_smokes != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@10 --activate
+          export PNPM_HOME="$HOME/.local/share/pnpm"
+          mkdir -p "$PNPM_HOME"
+          echo "PNPM_HOME=$PNPM_HOME" >> "$GITHUB_ENV"
+          echo "$PNPM_HOME" >> "$GITHUB_PATH"
+
+          if [[ ",${MESH_STABILITY_AGENT_SMOKES}," == *",opencode,"* ]]; then
+            pnpm add --global opencode-ai@latest
+            opencode --version
+          fi
+
+          if [[ ",${MESH_STABILITY_AGENT_SMOKES}," == *",pi,"* ]]; then
+            pnpm add --global @earendil-works/pi-coding-agent@latest
+            pi --version
+          fi
+
+          if [[ ",${MESH_STABILITY_AGENT_SMOKES}," == *",goose,"* ]]; then
+            curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            "$HOME/.local/bin/goose" --version
+          fi
+
+      - name: Run stability harness
+        if: ${{ steps.preflight.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --base-url "$MESH_STABILITY_BASE_URL"
+            --models "$MESH_STABILITY_MODELS"
+            --attempts "$MESH_STABILITY_ATTEMPTS"
+            --timeout "$MESH_STABILITY_TIMEOUT"
+            --agent-smokes "$MESH_STABILITY_AGENT_SMOKES"
+            --output-dir "$MESH_STABILITY_OUTPUT_DIR"
+          )
+          if [[ "$MESH_STABILITY_SKIP_STREAMING" == "true" ]]; then
+            args+=(--skip-streaming)
+          fi
+          scripts/qa-nightly-stability.py "${args[@]}"
+
+      - name: Publish run summary
+        if: ${{ always() && steps.preflight.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "$MESH_STABILITY_OUTPUT_DIR/summary.md" ]]; then
+            cat "$MESH_STABILITY_OUTPUT_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Nightly stability"
+              echo
+              echo "No summary.md was produced by the stability harness."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload stability evidence
+        if: ${{ always() && steps.preflight.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: nightly-stability-${{ github.run_number }}-${{ github.sha }}
+          path: ${{ inputs.output_dir }}/
+          if-no-files-found: warn
+          retention-days: 30

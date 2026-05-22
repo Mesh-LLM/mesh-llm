@@ -1,0 +1,60 @@
+name: Nightly Stability
+
+on:
+  schedule:
+    - cron: "37 9 * * *"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "OpenAI-compatible mesh /v1 endpoint. Falls back to repo vars."
+        required: false
+      models:
+        description: "Comma-separated model IDs to probe."
+        required: false
+        default: "auto,mesh"
+      attempts:
+        description: "Attempts per model."
+        required: false
+        default: "5"
+      agent_smokes:
+        description: "Optional agent CLI smokes: opencode,pi,goose."
+        required: false
+        default: ""
+      skip_streaming:
+        description: "Skip streaming chat/tool-call phases."
+        required: false
+        type: boolean
+        default: false
+      timeout:
+        description: "Request timeout in seconds for each probe."
+        required: false
+        default: "180"
+      runs_on:
+        description: "JSON runner label string/array for the reusable workflow."
+        required: false
+        default: '"self-hosted"'
+      output_dir:
+        description: "Evidence output directory. Defaults to nightly-artifacts/stability/<run_id>."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-stability
+  cancel-in-progress: false
+
+jobs:
+  stability:
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_STABILITY_ENABLED == '1' }}
+    uses: ./.github/workflows/nightly-stability-run.yml
+    with:
+      base_url: ${{ github.event.inputs.base_url || vars.MESH_NIGHTLY_STABILITY_BASE_URL || vars.MESH_AGENT_BASE_URL || vars.MESH_OPENCODE_BASE_URL }}
+      models: ${{ github.event.inputs.models || vars.MESH_NIGHTLY_STABILITY_MODELS || 'auto,mesh' }}
+      attempts: ${{ github.event.inputs.attempts || vars.MESH_NIGHTLY_STABILITY_ATTEMPTS || '5' }}
+      agent_smokes: ${{ github.event.inputs.agent_smokes || vars.MESH_NIGHTLY_STABILITY_AGENT_SMOKES || '' }}
+      skip_streaming: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_streaming || false }}
+      timeout: ${{ github.event.inputs.timeout || vars.MESH_NIGHTLY_STABILITY_TIMEOUT || '180' }}
+      runs_on: ${{ github.event.inputs.runs_on || vars.MESH_NIGHTLY_STABILITY_RUNS_ON || '"self-hosted"' }}
+      output_dir: ${{ github.event.inputs.output_dir || format('nightly-artifacts/stability/{0}', github.run_id) }}

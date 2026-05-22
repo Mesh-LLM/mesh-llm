@@ -230,6 +230,33 @@ This complements the heavier Goose, OpenCode, and Pi smoke scripts. Those prove
 real agent CLI behavior; this probe isolates the API contract that those agents
 depend on.
 
+## Nightly stability harness
+
+Use the repeatable stability harness when a branch needs broader live-mesh
+evidence without changing the mesh under test:
+
+```bash
+scripts/qa-nightly-stability.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --models auto,mesh \
+  --attempts 5 \
+  --agent-smokes opencode,pi,goose \
+  --output-dir target/nightly-stability/local
+```
+
+The harness attaches to an existing `/v1` endpoint, probes `/v1/models`, normal
+chat, streaming chat, the direct tool-call reliability probe, and optionally the
+OpenCode/Pi/Goose agent smokes. It writes `manifest.json`, `commands.jsonl`,
+`results.jsonl`, `summary.json`, `summary.md`, and logs under the output
+directory. Use `--print-plan` before long runs to inspect the exact check list
+without touching the endpoint or creating artifacts.
+
+Scheduled GitHub runs are opt-in via `MESH_NIGHTLY_STABILITY_ENABLED=1` plus a
+configured endpoint. The scheduled/manual wrapper delegates execution to the
+reusable `nightly-stability-run.yml` workflow, which owns the harness run,
+artifact upload, and timing summary. Treat this as a trend/evidence harness,
+not a required PR gate.
+
 ## curl or any OpenAI client
 
 ```bash
