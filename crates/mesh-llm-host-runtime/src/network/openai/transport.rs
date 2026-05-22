@@ -62,6 +62,7 @@ pub struct BufferedHttpRequest {
     pub raw: Vec<u8>,
     pub method: String,
     pub path: String,
+    pub client_path: String,
     pub body_json: Option<serde_json::Value>,
     body_json_attempted: bool,
     body_bytes: Option<Vec<u8>>,
@@ -335,6 +336,7 @@ async fn read_http_request_with_limits(
     Ok(BufferedHttpRequest {
         raw,
         method: parsed.method,
+        client_path: parsed.path,
         path: rewrite.request_path,
         body_json: rewrite.body_json,
         body_json_attempted: requires_json_transform,
@@ -2737,6 +2739,10 @@ pub(crate) fn capabilities_for_model(
         .unwrap_or_else(|| crate::models::installed_model_capabilities(model))
 }
 
+fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
+    &request.client_path
+}
+
 // ── Model-aware tunnel routing ──
 
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
@@ -2768,7 +2774,7 @@ pub async fn handle_mesh_request(
             event: "openai_ingress_http_request",
             source_addr,
             method: &request.method,
-            path: &request.path,
+            path: capture_path_for_request(&request),
             body_len_bytes: request.body_len_bytes,
             model_name: request.model_name.as_deref(),
             completion_tokens: request.completion_tokens,
@@ -4785,6 +4791,7 @@ mod tests {
             raw,
             method: "POST".to_string(),
             path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
             body_json: Some(body),
             body_json_attempted: true,
             body_bytes: Some(body_bytes),
@@ -5465,6 +5472,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_http_request_preserves_client_path_for_responses_capture() {
+        let body = br#"{"model":"qwen","stream":true,"input":"hello"}"#;
+        let request = format!(
+            "POST /v1/responses?foo=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        );
+
+        let request = read_request_from_parts(vec![request.into_bytes()]).await;
+
+        assert_eq!(request.path, "/v1/chat/completions?foo=1");
+        assert_eq!(request.client_path, "/v1/responses?foo=1");
+    }
+
+    #[test]
+    fn test_capture_path_for_request_uses_client_path() {
+        let request = BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".to_string(),
+            path: "/v1/chat/completions?foo=1".to_string(),
+            client_path: "/v1/responses?foo=1".to_string(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some("qwen".to_string()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::OpenAiResponsesStream,
+        };
+
+        assert_eq!(capture_path_for_request(&request), "/v1/responses?foo=1");
+    }
+
+    #[tokio::test]
     async fn test_read_http_request_large_body_over_32k() {
         let large = "x".repeat(40_000);
         let body = serde_json::json!({
@@ -5759,6 +5802,7 @@ mod tests {
             raw: b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 45\r\n\r\n{\"model\":\"auto\",\"messages\":[],\"mesh_hooks\":true}".to_vec(),
             method: "POST".to_string(),
             path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
             body_json: None,
             body_json_attempted: false,
             body_bytes: None,

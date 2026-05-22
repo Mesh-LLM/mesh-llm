@@ -5004,6 +5004,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     let resolved_plugins = load_resolved_plugins(cli)?;
     let config = plugin::load_config(cli.config.as_deref())?;
     let owner_config = owner_runtime_config(cli, &config)?;
+    let swarm_capture = configure_plugin_mcp_swarm_capture(cli)?;
     let (node, _channels) = mesh::Node::start(
         NodeRole::Client,
         &cli.relay,
@@ -5017,6 +5018,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         cli.config.as_deref(),
     )
     .await?;
+    node.set_swarm_capture_recorder(swarm_capture);
     node.start_accepting();
     node.set_display_name(node_display_name(cli, &node)).await;
     node.start_heartbeat();
@@ -7077,6 +7079,12 @@ fn configure_swarm_capture(cli: &Cli) -> Result<Option<crate::capture::SwarmCapt
         );
     }
     Ok(recorder)
+}
+
+fn configure_plugin_mcp_swarm_capture(
+    cli: &Cli,
+) -> Result<Option<crate::capture::SwarmCaptureRecorder>> {
+    configure_swarm_capture(cli)
 }
 
 struct RunAutoModelSelectionContext<'a> {
@@ -9876,6 +9884,32 @@ mod tests {
 
         assert!(swarm_capture_observer_requested(&cli));
         restore_env(key, old);
+    }
+
+    #[test]
+    fn plugin_mcp_swarm_capture_cli_creates_recorder() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let capture_dir = temp.path().join("capture");
+        let cli = make_runtime_cli(&[
+            "mesh-llm",
+            "client",
+            "--auto",
+            "--swarm-capture",
+            capture_dir.to_str().expect("utf8 temp path"),
+            "blackboard",
+            "--mcp",
+        ]);
+
+        let recorder = configure_plugin_mcp_swarm_capture(&cli)
+            .expect("configure plugin MCP capture")
+            .expect("recorder should be configured");
+
+        assert_eq!(
+            recorder.path(),
+            capture_dir
+                .join(crate::capture::SWARM_CAPTURE_FILE)
+                .as_path()
+        );
     }
 
     #[test]
