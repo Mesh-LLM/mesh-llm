@@ -60,6 +60,20 @@ pub async fn try_handle_moa(
     None
 }
 
+/// MoA's opinionated default: workers do not think unless the caller
+/// explicitly asks for it. Workers are short-budget internal slots, not
+/// user-facing reasoning steps. The fast worker's 256-token budget is
+/// far too small to fit `<think>…</think>` + answer, and the reducer
+/// doesn't want reasoning prose as candidate input.
+///
+/// The caller can still explicitly enable thinking (e.g. for
+/// experimentation) via any of the recognised knobs — see
+/// [`extract_enable_thinking_override`]. When no preference is
+/// expressed, MoA picks for them: off (always `Some(false)`).
+fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
+    extract_enable_thinking_override(body).or(Some(false))
+}
+
 /// Pull the caller's "disable / enable thinking" preference out of an
 /// inbound chat-completion or responses JSON body. Mirrors the same
 /// shapes that `openai_frontend::common::normalize_reasoning_template_options`
@@ -73,22 +87,9 @@ pub async fn try_handle_moa(
 /// * `thinking_budget: 0` (off)
 /// * `chat_template_kwargs.enable_thinking` (or any alias) as bool
 ///
-/// Returns `None` when the caller hasn't expressed a preference, leaving
-/// each worker's default behavior alone.
-/// MoA's opinionated default: workers do not think unless the caller
-/// explicitly asks for it. Workers are short-budget internal slots, not
-/// user-facing reasoning steps. The fast worker's 256-token budget is
-/// far too small to fit `<think>…</think>` + answer, and the reducer
-/// doesn't want reasoning prose as candidate input.
-///
-/// The caller can still explicitly enable thinking (e.g. for
-/// experimentation) via any of the recognised knobs — see
-/// [`extract_enable_thinking_override`]. When no preference is
-/// expressed, MoA picks for them: off.
-fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
-    extract_enable_thinking_override(body).or(Some(false))
-}
-
+/// Returns `None` when the caller hasn't expressed a preference. The
+/// MoA-specific policy layer in [`effective_enable_thinking_for_moa`]
+/// turns that `None` into `Some(false)` so MoA workers default off.
 fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
     let obj = body.as_object()?;
     let mut result: Option<bool> = None;

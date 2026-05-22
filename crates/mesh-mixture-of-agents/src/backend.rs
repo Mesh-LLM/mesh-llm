@@ -212,11 +212,17 @@ pub fn apply_enable_thinking(body: &mut Value, enable: Option<bool>) {
     };
 
     // chat_template_kwargs.enable_thinking is the canonical knob the
-    // llama.cpp templates read. Merge into any existing object instead
-    // of clobbering.
+    // llama.cpp templates read. Merge into any existing object. If a
+    // caller passed a non-object for chat_template_kwargs (string,
+    // array, etc.), normalize it to {} so the override still applies —
+    // silently dropping the flag because the field was malformed is
+    // worse than overwriting a bogus shape.
     let kwargs = obj
         .entry("chat_template_kwargs".to_string())
         .or_insert_with(|| json!({}));
+    if !kwargs.is_object() {
+        *kwargs = json!({});
+    }
     if let Some(kwargs_obj) = kwargs.as_object_mut() {
         kwargs_obj.insert("enable_thinking".to_string(), json!(enable));
     }
@@ -446,6 +452,32 @@ mod tests {
             body["chat_template_kwargs"]["enable_thinking"],
             json!(false)
         );
+    }
+
+    #[test]
+    fn apply_enable_thinking_normalizes_non_object_kwargs() {
+        // If the caller passed a non-object for chat_template_kwargs
+        // (here: a string), the override must still apply rather than
+        // being silently dropped. We normalize the bogus shape to an
+        // empty object before injecting `enable_thinking`.
+        for bogus in [
+            json!("some-string"),
+            json!(123),
+            json!([1, 2, 3]),
+            json!(null),
+        ] {
+            let mut body = json!({
+                "model": "qwen",
+                "chat_template_kwargs": bogus.clone(),
+            });
+            apply_enable_thinking(&mut body, Some(false));
+            assert_eq!(
+                body["chat_template_kwargs"]["enable_thinking"],
+                json!(false),
+                "enable_thinking must be injected even when input kwargs was {bogus:?}",
+            );
+            assert_eq!(body["reasoning_effort"], json!("none"));
+        }
     }
 
     #[test]
