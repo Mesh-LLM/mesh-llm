@@ -36,17 +36,6 @@ pub(super) fn resolve_speculative_config(
             "skippy speculative Hugging Face draft sources are not supported by the embedded runtime"
         );
     }
-    if pick_string(
-        model_config.and_then(|config| config.draft_selection_policy.as_deref()),
-        global_config.and_then(|config| config.draft_selection_policy.as_deref()),
-        None,
-    )
-    .eq_ignore_ascii_case("auto")
-    {
-        bail!(
-            "skippy speculative.draft_selection_policy = \"auto\" is not supported by the embedded runtime"
-        );
-    }
     if pick_owned(
         model_config.and_then(|config| config.draft_device.clone()),
         global_config.and_then(|config| config.draft_device.clone()),

@@ -554,6 +554,32 @@ draft_max_tokens = 8
 }
 
 #[test]
+fn speculative_auto_selection_policy_without_draft_source_resolves_disabled() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.speculative]
+mode = "auto"
+draft_selection_policy = "auto"
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+    })
+    .expect("auto draft selection policy should not force draft resolution");
+
+    assert_eq!(resolved.speculative.mode, "disabled");
+    assert!(resolved.speculative.draft_model_path.is_none());
+    assert!(!resolved.speculative.explicit);
+}
+
+#[test]
 fn staged_only_controls_fail_closed_for_single_stage_loads() {
     let mesh_config = parse_config(
         r#"
