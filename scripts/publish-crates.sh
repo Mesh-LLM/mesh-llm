@@ -117,6 +117,10 @@ unpublished_registry_deps() {
                 mesh-llm-routing \
                 mesh-llm-types
             ;;
+        mesh-llm-api-client)
+            printf '%s\n' \
+                mesh-llm-client
+            ;;
         mesh-llm-node)
             printf '%s\n' \
                 mesh-llm-types \
@@ -126,7 +130,7 @@ unpublished_registry_deps() {
             ;;
         mesh-llm-api)
             printf '%s\n' \
-                mesh-llm-client \
+                mesh-llm-api-client \
                 mesh-llm-node
             ;;
     esac
@@ -154,6 +158,7 @@ publish_crates=(
     model-artifact
     model-hf
     mesh-llm-client
+    mesh-llm-api-client
     mesh-llm-node
     mesh-llm-api
 )

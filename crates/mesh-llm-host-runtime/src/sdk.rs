@@ -110,7 +110,14 @@ impl EmbeddedServingController {
             .await
             .models
             .values()
-            .map(|model| (model.served.model_id.clone(), model.served.model_id.clone()))
+            .fold(BTreeMap::new(), |mut models, model| {
+                models.insert(
+                    model.served.model_id.clone(),
+                    model.served.model_ref.clone(),
+                );
+                models
+            })
+            .into_iter()
             .collect()
     }
 
@@ -138,6 +145,7 @@ impl ServingController for EmbeddedServingController {
                     .with_context(|| format!("resolve model {}", request.model_ref))?;
             let model_id = models::model_ref_for_path(&model_path);
             let device_policy = self.effective_device_policy(&request.device_policy).await;
+            reject_obvious_vram_overcommit(&model_path, &device_policy)?;
             let options = apply_device_policy(
                 SkippyModelLoadOptions::for_direct_gguf(&model_id, &model_path),
                 &device_policy,
@@ -240,6 +248,27 @@ impl EmbeddedServingController {
             explicit => explicit.clone(),
         }
     }
+}
+
+fn reject_obvious_vram_overcommit(model_path: &Path, policy: &DevicePolicy) -> Result<()> {
+    if matches!(policy, DevicePolicy::Cpu) {
+        return Ok(());
+    }
+    let survey = hardware::query(&[Metric::GpuFacts]);
+    let total_vram_bytes = survey.gpus.iter().map(|gpu| gpu.vram_bytes).sum::<u64>();
+    if total_vram_bytes == 0 {
+        return Ok(());
+    }
+    let model_size_bytes = std::fs::metadata(model_path)
+        .with_context(|| format!("read model metadata {}", model_path.display()))?
+        .len();
+    anyhow::ensure!(
+        model_size_bytes <= total_vram_bytes,
+        "model file is larger than detected total GPU VRAM: model={} bytes, vram={} bytes",
+        model_size_bytes,
+        total_vram_bytes
+    );
+    Ok(())
 }
 
 fn apply_device_policy(

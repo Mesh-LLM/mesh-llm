@@ -45,8 +45,7 @@ Task {
             inviteToken: InviteToken(token),
             ownerKeypairBytesHex: ownerKeypairHex,
             cacheDir: cacheDir,
-            runtimeDir: runtimeDir,
-            servingEnabled: localModelRef != nil
+            runtimeDir: runtimeDir
         )
         let recommended = try await node.models.recommended()
         let serving = try await node.serving.status()

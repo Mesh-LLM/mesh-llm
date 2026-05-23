@@ -1,19 +1,17 @@
 #![forbid(unsafe_code)]
 
-mod client;
 mod discover;
-pub mod events;
 mod node;
 
-pub use client::{
-    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, MeshApiError, MeshClient, Model,
-    RequestId, ResponsesRequest, Status, MAX_RECONNECT_ATTEMPTS,
-};
 pub use discover::{
-    create_auto_client, create_auto_node, discover_public_meshes, AutoConnectResult,
-    AutoNodeResult, PublicMesh, PublicMeshQuery,
+    create_auto_client, create_auto_node, discover_public_meshes, AutoConnectResult, AutoNodeResult,
 };
-pub use identity::OwnerKeypair;
+pub use mesh_llm_api_client::events;
+pub use mesh_llm_api_client::{
+    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, InviteToken, MeshApiError, MeshClient,
+    Model, OwnerKeypair, PublicMesh, PublicMeshQuery, RequestId, ResponsesRequest, Status,
+    MAX_RECONNECT_ATTEMPTS,
+};
 pub use mesh_llm_node::serving::ServingController;
 pub use node::{
     CapabilityLevel, CleanupPolicy, CleanupResult, DeleteModelOptions, DeleteModelResult,
@@ -23,7 +21,3 @@ pub use node::{
     ModelSource, ModelSummary, PrunePolicy, PruneResult, ServedModel, ServingModelState,
     ServingStatus, UnloadModelOptions, UnloadTarget,
 };
-pub use token::InviteToken;
-
-mod identity;
-mod token;

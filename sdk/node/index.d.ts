@@ -1,4 +1,15 @@
-export type CapabilityLevel = 'None' | 'Likely' | 'Supported'
+export type CapabilityLevel =
+  | { type: 'None' }
+  | { type: 'Likely' }
+  | { type: 'Supported' }
+
+export type ServingModelState =
+  | { type: 'Loading' }
+  | { type: 'Ready' }
+  | { type: 'Failed' }
+  | { type: 'Unloading' }
+  | { type: 'Stopped' }
+  | { type: 'Unknown'; value: string }
 
 export type ModelCapabilities = {
   multimodal: boolean
@@ -72,7 +83,7 @@ export type ServedModel = {
   modelRef: string
   modelId: string
   instanceId?: string | null
-  state: string
+  state: ServingModelState
   backend?: string | null
   capabilities: ModelCapabilities
   contextLength?: number | null
@@ -103,6 +114,25 @@ export type NodeOptions = {
   cacheDir?: string
   runtimeDir?: string
   servingEnabled?: boolean
+}
+
+export type ClientOptions = {
+  ownerKeypairHex: string
+  inviteToken: string
+}
+
+export declare class Client {
+  static create(options: ClientOptions): Client
+  readonly inference: {
+    listModels(): Promise<Model[]>
+    chat(request: ChatRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
+    responses(request: ResponsesRequest, options?: { timeoutMs?: number }): Promise<InferenceResult>
+    cancel(requestId: string): Promise<void>
+  }
+  start(): Promise<void>
+  stop(): Promise<void>
+  reconnect(): Promise<void>
+  status(): Promise<{ connected: boolean; peerCount: number }>
 }
 
 export declare class Node {

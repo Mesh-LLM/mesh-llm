@@ -3688,9 +3688,17 @@ name = "mesh-llm-api"
 version = "0.66.0"
 dependencies = [
  "anyhow",
+ "mesh-llm-api-client",
+ "mesh-llm-node",
+ "tokio",
+]
+
+[[package]]
+name = "mesh-llm-api-client"
+version = "0.66.0"
+dependencies = [
  "hex",
  "mesh-llm-client",
- "mesh-llm-node",
  "thiserror 2.0.18",
  "tokio",
 ]

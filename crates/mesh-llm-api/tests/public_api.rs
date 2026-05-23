@@ -68,8 +68,11 @@ fn public_mesh_builds_node_and_client_builders() {
         expires_at: None,
     };
 
-    let node_builder = mesh.node_builder(OwnerKeypair::generate());
-    assert!(node_builder.is_ok());
+    let node = MeshNode::builder()
+        .identity(OwnerKeypair::generate())
+        .join(mesh.invite_token.parse().expect("valid token"))
+        .build();
+    assert!(node.is_ok());
 
     let client_builder = mesh.client_builder(OwnerKeypair::generate());
     assert!(client_builder.is_ok());

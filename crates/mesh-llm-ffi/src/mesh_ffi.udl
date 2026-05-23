@@ -1,5 +1,11 @@
 namespace mesh_ffi {
     [Throws=FfiError]
+    MeshClientHandle create_client(
+        string owner_keypair_bytes_hex,
+        string invite_token
+    );
+
+    [Throws=FfiError]
     MeshNodeHandle create_node(
         string owner_keypair_bytes_hex,
         string invite_token,
@@ -7,6 +13,9 @@ namespace mesh_ffi {
         string? runtime_dir,
         boolean serving_enabled
     );
+
+    [Throws=FfiError]
+    MeshClientHandle create_auto_client(string owner_keypair_bytes_hex, PublicMeshQuery query);
 
     [Throws=FfiError]
     MeshNodeHandle create_auto_node(string owner_keypair_bytes_hex, PublicMeshQuery query);
@@ -31,6 +40,29 @@ enum FfiError {
     "ModelManagementFailed",
     "ServingFailed",
     "ServingUnsupported",
+};
+
+interface MeshClientHandle {
+    [Throws=FfiError]
+    void start();
+
+    void stop();
+
+    [Throws=FfiError]
+    void reconnect();
+
+    ClientStatus status();
+
+    [Throws=FfiError]
+    sequence<ModelNative> inference_list_models();
+
+    [Throws=FfiError]
+    string chat(ChatRequestNative request, EventListener listener);
+
+    [Throws=FfiError]
+    string responses(ResponsesRequestNative request, EventListener listener);
+
+    void cancel(string request_id);
 };
 
 interface MeshNodeHandle {

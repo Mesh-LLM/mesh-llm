@@ -593,7 +593,7 @@ fn served_model_json(model: mesh_llm_api::ServedModel) -> Value {
         "modelRef": model.model_ref,
         "modelId": model.model_id,
         "instanceId": model.instance_id,
-        "state": format!("{:?}", model.state),
+        "state": serving_model_state_json(model.state),
         "backend": model.backend,
         "capabilities": capabilities_json(model.capabilities),
         "contextLength": model.context_length,
@@ -604,12 +604,33 @@ fn served_model_json(model: mesh_llm_api::ServedModel) -> Value {
 fn capabilities_json(value: mesh_llm_api::ModelCapabilities) -> Value {
     json!({
         "multimodal": value.multimodal,
-        "vision": format!("{:?}", value.vision),
-        "audio": format!("{:?}", value.audio),
-        "reasoning": format!("{:?}", value.reasoning),
-        "toolUse": format!("{:?}", value.tool_use),
+        "vision": capability_level_json(value.vision),
+        "audio": capability_level_json(value.audio),
+        "reasoning": capability_level_json(value.reasoning),
+        "toolUse": capability_level_json(value.tool_use),
         "moe": value.moe,
     })
+}
+
+fn serving_model_state_json(value: mesh_llm_api::ServingModelState) -> Value {
+    match value {
+        mesh_llm_api::ServingModelState::Loading => json!({ "type": "Loading" }),
+        mesh_llm_api::ServingModelState::Ready => json!({ "type": "Ready" }),
+        mesh_llm_api::ServingModelState::Failed => json!({ "type": "Failed" }),
+        mesh_llm_api::ServingModelState::Unloading => json!({ "type": "Unloading" }),
+        mesh_llm_api::ServingModelState::Stopped => json!({ "type": "Stopped" }),
+        mesh_llm_api::ServingModelState::Unknown(value) => {
+            json!({ "type": "Unknown", "value": value })
+        }
+    }
+}
+
+fn capability_level_json(value: mesh_llm_api::CapabilityLevel) -> Value {
+    match value {
+        mesh_llm_api::CapabilityLevel::None => json!({ "type": "None" }),
+        mesh_llm_api::CapabilityLevel::Likely => json!({ "type": "Likely" }),
+        mesh_llm_api::CapabilityLevel::Supported => json!({ "type": "Supported" }),
+    }
 }
 
 fn to_napi_error(error: MeshApiError) -> Error {

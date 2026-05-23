@@ -1,9 +1,8 @@
 # mesh-llm-api
 
-`mesh-llm-api` is currently the public Rust SDK crate for embedding Mesh in
-applications. It is being reworked from a client-first surface into the
-node-oriented SDK described in
-`docs/design/EMBEDDED_CLIENT_ADR.md`.
+`mesh-llm-api` is the public Rust SDK crate for applications that embed a Mesh
+node with model management and local serving. Client-only applications should
+use `mesh-llm-api-client`.
 
 The target public concept is `MeshNode`: one embedded node that can:
 
@@ -12,10 +11,12 @@ The target public concept is `MeshNode`: one embedded node that can:
 - load and unload local models for serving
 - observe connection, model, serving, and request lifecycle events
 
-Layering:
+SDK layering:
 
 - `crates/mesh-client/` implements the low-level client behavior
-- `crates/mesh-llm-api/` exposes the Rust SDK surface
+- `crates/mesh-llm-api-client/` exposes the client-only Rust SDK surface
+- `crates/mesh-llm-api/` exposes the node Rust SDK surface and re-exports the
+  client types for compatibility
 - `crates/mesh-llm-node/` owns embeddable model management and serving
   orchestration as it is extracted from the host runtime. Serving is an
   in-process SDK boundary; REST management remains an external-daemon adapter.
@@ -29,9 +30,6 @@ Serving APIs use model refs for load, explicit model-or-instance unload
 targets, drain/force unload options, rich served-model status, and typed
 high-level serving errors.
 
-The current `MeshClient` API remains an extraction artifact until it is replaced
-or wrapped by `MeshNode` and the `node.inference()`, `node.models()`, and
-`node.serving()` namespaces.
-
-If an API is meant for app integration, it should live here rather than in
-`crates/mesh-client/`.
+If an API is meant for client-only app integration, it belongs in
+`mesh-llm-api-client`. If it requires model management or local serving, it
+belongs in `mesh-llm-api`.

@@ -10,10 +10,13 @@ import uniffi.mesh_ffi.ChatRequestNative
 import uniffi.mesh_ffi.ClientEvent
 import uniffi.mesh_ffi.ClientStatus
 import uniffi.mesh_ffi.EventListener as FfiEventListener
+import uniffi.mesh_ffi.MeshClientHandleInterface
 import uniffi.mesh_ffi.MeshNodeHandleInterface
 import uniffi.mesh_ffi.ModelNative
 import uniffi.mesh_ffi.ResponsesRequestNative
+import uniffi.mesh_ffi.createAutoClient as ffiCreateAutoClient
 import uniffi.mesh_ffi.createAutoNode as ffiCreateAutoNode
+import uniffi.mesh_ffi.createClient as ffiCreateClient
 import uniffi.mesh_ffi.createNode as ffiCreateNode
 import uniffi.mesh_ffi.discoverPublicMeshes as ffiDiscoverPublicMeshes
 
@@ -74,6 +77,107 @@ fun interface EventListener {
     fun onEvent(event: Event)
 }
 
+class Client(private val handle: MeshClientHandleInterface) {
+    val inference = Inference(handle)
+
+    constructor(
+        inviteToken: InviteToken,
+        ownerKeypairBytesHex: String,
+    ) : this(ffiCreateClient(ownerKeypairBytesHex, inviteToken.value))
+
+    suspend fun start(): Unit = withContext(Dispatchers.IO) { handle.start() }
+
+    suspend fun stop(): Unit = withContext(Dispatchers.IO) { handle.stop() }
+
+    suspend fun reconnect(): Unit = withContext(Dispatchers.IO) { handle.reconnect() }
+
+    suspend fun status(): Status = withContext(Dispatchers.IO) { handle.status().toStatus() }
+
+    class Inference(private val handle: MeshClientHandleInterface) {
+        suspend fun listModels(): List<Model> =
+            withContext(Dispatchers.IO) { handle.inferenceListModels().map { it.toModel() } }
+
+        fun chat(request: ChatRequest, listener: EventListener): RequestId {
+            val bridge = object : FfiEventListener {
+                override fun onEvent(event: ClientEvent) = listener.onEvent(event.toEvent())
+            }
+            return RequestId(handle.chat(request.toNative(), bridge))
+        }
+
+        fun responses(request: ResponsesRequest, listener: EventListener): RequestId {
+            val bridge = object : FfiEventListener {
+                override fun onEvent(event: ClientEvent) = listener.onEvent(event.toEvent())
+            }
+            return RequestId(handle.responses(request.toNative(), bridge))
+        }
+
+        fun cancel(requestId: RequestId) = handle.cancel(requestId.value)
+
+        fun chatFlow(request: ChatRequest): Flow<Event> = callbackFlow {
+            var requestId: RequestId? = null
+            var terminalRequestId: RequestId? = null
+            requestId = chat(request) { event ->
+                trySend(event)
+                val currentRequestId = requestId
+                if (currentRequestId != null && event.isTerminalFor(currentRequestId)) {
+                    terminalRequestId = currentRequestId
+                    close()
+                } else if (currentRequestId == null) {
+                    terminalRequestId = event.terminalRequestId()
+                }
+            }
+            if (requestId == terminalRequestId) {
+                close()
+            }
+            awaitClose {
+                val currentRequestId = requestId ?: return@awaitClose
+                if (terminalRequestId != currentRequestId) {
+                    cancel(currentRequestId)
+                }
+            }
+        }
+
+        fun responsesFlow(request: ResponsesRequest): Flow<Event> = callbackFlow {
+            var requestId: RequestId? = null
+            var terminalRequestId: RequestId? = null
+            requestId = responses(request) { event ->
+                trySend(event)
+                val currentRequestId = requestId
+                if (currentRequestId != null && event.isTerminalFor(currentRequestId)) {
+                    terminalRequestId = currentRequestId
+                    close()
+                } else if (currentRequestId == null) {
+                    terminalRequestId = event.terminalRequestId()
+                }
+            }
+            if (requestId == terminalRequestId) {
+                close()
+            }
+            awaitClose {
+                val currentRequestId = requestId ?: return@awaitClose
+                if (terminalRequestId != currentRequestId) {
+                    cancel(currentRequestId)
+                }
+            }
+        }
+    }
+
+    companion object {
+        suspend fun connectPublic(
+            ownerKeypairBytesHex: String,
+            query: PublicMeshQuery = PublicMeshQuery(
+                model = null,
+                minVramGb = null,
+                region = null,
+                targetName = null,
+                relays = emptyList(),
+            ),
+        ): Client = withContext(Dispatchers.IO) {
+            Client(ffiCreateAutoClient(ownerKeypairBytesHex, query))
+        }
+    }
+}
+
 class Node(private val handle: MeshNodeHandleInterface) {
     val inference = Inference(handle)
     val models = Models(handle)
@@ -84,8 +188,7 @@ class Node(private val handle: MeshNodeHandleInterface) {
         ownerKeypairBytesHex: String,
         cacheDir: String? = null,
         runtimeDir: String? = null,
-        servingEnabled: Boolean = false,
-    ) : this(ffiCreateNode(ownerKeypairBytesHex, inviteToken.value, cacheDir, runtimeDir, servingEnabled))
+    ) : this(ffiCreateNode(ownerKeypairBytesHex, inviteToken.value, cacheDir, runtimeDir, true))
 
     suspend fun start(): Unit = withContext(Dispatchers.IO) { handle.start() }
 

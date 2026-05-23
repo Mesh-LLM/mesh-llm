@@ -657,13 +657,11 @@ impl From<mesh_llm_node::serving::ServingStatus> for ServingStatus {
 fn serving_error(error: anyhow::Error) -> MeshApiError {
     if let Some(error) = error.downcast_ref::<mesh_llm_node::serving::ServingError>() {
         return MeshApiError::Serving {
-            error: error.clone(),
+            message: error.to_string(),
         };
     }
     MeshApiError::Serving {
-        error: mesh_llm_node::serving::ServingError::RuntimeUnavailable {
-            message: error.to_string(),
-        },
+        message: error.to_string(),
     }
 }
 

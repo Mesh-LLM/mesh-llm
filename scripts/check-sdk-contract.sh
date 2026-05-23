@@ -31,6 +31,7 @@ required_doc_terms=(
     "Node Lifecycle"
     "Native Runtime Artifacts"
     "Node"
+    "Client"
     "list mesh models"
     "download the model"
     "load the model through serving"
@@ -44,6 +45,7 @@ done
 
 swift_patterns=(
     "public typealias MeshError = FfiError"
+    "public final class Client"
     "public func start()"
     "public func stop()"
     "public func reconnect()"
@@ -77,6 +79,7 @@ require "$SWIFT_STREAM" "func responsesStream(_ request: ResponsesRequest)" "swi
 
 kotlin_patterns=(
     "typealias MeshException = uniffi.mesh_ffi.FfiException"
+    "class Client"
     "suspend fun start()"
     "suspend fun stop()"
     "suspend fun reconnect()"
@@ -109,6 +112,7 @@ for pattern in "${kotlin_patterns[@]}"; do
 done
 
 node_patterns=(
+    "class Client"
     "class Node"
     "static create(options)"
     "listModels()"
@@ -130,6 +134,7 @@ for pattern in "${node_patterns[@]}"; do
 done
 
 node_type_patterns=(
+    "export declare class Client"
     "export declare class Node"
     "type NativeRuntimeArtifact"
     "servingEnabled?: boolean"

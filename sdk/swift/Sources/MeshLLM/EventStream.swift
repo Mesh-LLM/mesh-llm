@@ -10,6 +10,16 @@ public extension Node.Inference {
     }
 }
 
+public extension Client.Inference {
+    func chatStream(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
+        chat(request)
+    }
+
+    func responsesStream(_ request: ResponsesRequest) -> AsyncThrowingStream<Event, Error> {
+        responses(request)
+    }
+}
+
 #if canImport(MeshLLMFFI)
 import MeshLLMFFI
 

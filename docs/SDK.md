@@ -1,13 +1,16 @@
 # MeshLLM SDK Usage Guide
 
-MeshLLM exposes the same embedded node concept through Rust, Swift, and Kotlin:
-create a node, join a mesh, manage models, optionally load a local model for
-serving, run inference, then unload and stop.
+MeshLLM exposes two SDK roles across Rust, Swift, Kotlin, and Node.js:
+
+- `Client` connects to an existing mesh and runs inference.
+- `Node` includes the client role and adds local model management plus serving
+  load/unload.
 
 The SDK is split into two parts:
 
-- **Language SDKs** provide the public API: Rust `mesh-llm-api`, Swift
-  `MeshLLM`, Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
+- **Language SDKs** provide the public API: Rust `mesh-llm-api-client` for
+  client-only apps, Rust `mesh-llm-api` for node/serving apps, Swift `MeshLLM`,
+  Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
 - **Native runtime artifacts** provide local serving for a specific
   platform/backend, such as macOS Metal or Linux CUDA.
 
@@ -22,10 +25,12 @@ Add the Rust SDK crate:
 
 ```toml
 [dependencies]
+mesh-llm-api-client = "0.66.0" # connect to an existing mesh
 mesh-llm-api = "0.66.0"
 ```
 
-For client-only mesh inference and model catalog/cache APIs, this is enough.
+For client-only mesh inference, depend on `mesh-llm-api-client`. For model
+management and serving, depend on `mesh-llm-api`.
 
 For local serving in a Rust app, the node must be built with a
 `ServingController`. The plain `mesh-llm-api` crate intentionally does not pick
@@ -102,21 +107,13 @@ cd sdk/node
 npm run build:native
 ```
 
-Then depend on the SDK:
-
-```kotlin
-dependencies {
-    implementation("ai.meshllm:meshllm-android:0.66.0")
-}
-```
-
 ## Node Lifecycle
 
 Client-only use:
 
 ```text
 create or load an owner keypair
-create Node with an invite token
+create Client with an invite token
 start
 list mesh models
 chat or responses
@@ -140,32 +137,44 @@ stop
 
 ## Rust Usage
 
-Create a node and join a mesh:
+Create a client and join a mesh:
 
 ```rust
-use mesh_llm_api::{InviteToken, MeshNode, OwnerKeypair};
+use mesh_llm_api_client::{ClientBuilder, InviteToken, OwnerKeypair};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let owner = OwnerKeypair::generate();
     let invite = "your-invite-token".parse::<InviteToken>()?;
 
-    let node = MeshNode::builder()
-        .identity(owner)
-        .join(invite)
+    let mut client = ClientBuilder::new(owner, invite)
         .build()?;
 
-    node.start().await?;
+    client.join().await?;
 
-    let models = node.inference().list_models().await?;
+    let models = client.list_models().await?;
     println!("models: {models:#?}");
 
-    node.stop().await?;
+    client.disconnect().await;
     Ok(())
 }
 ```
 
-Model management APIs are available without local serving:
+Create a node when the app also needs model management or local serving:
+
+```rust
+use mesh_llm_api::{InviteToken, MeshNode, OwnerKeypair};
+
+let owner = OwnerKeypair::generate();
+let invite = "your-invite-token".parse::<InviteToken>()?;
+
+let node = MeshNode::builder()
+    .identity(owner)
+    .join(invite)
+    .build()?;
+```
+
+Model management APIs are available on `MeshNode` without local serving:
 
 ```rust
 use mesh_llm_api::{DownloadOptions, ModelSearchQuery};
@@ -177,7 +186,7 @@ let matches = node.models().search(ModelSearchQuery {
 
 let details = node.models().show("Qwen2.5-3B-Instruct-Q4_K_M").await?;
 let downloaded = node.models()
-    .download(&details.model_ref, DownloadOptions::default())
+    .download(&details.model_ref, DownloadOptions)
     .await?;
 ```
 
@@ -225,36 +234,41 @@ let runtime = try NativeRuntime.prepare()
 print("using \(runtime.artifactId) from \(runtime.artifactDirectory.path)")
 ```
 
-Create a node and run inference:
+Create a client and run inference:
 
 ```swift
 import MeshLLM
 
 let ownerKeypair = generateOwnerKeypairHex()
-let node = try Node(
+let client = try Client(
     inviteToken: InviteToken("your-invite-token"),
     ownerKeypairBytesHex: ownerKeypair
 )
 
-try await node.start()
+try await client.start()
 
-let models = try await node.inference.listModels()
+let models = try await client.inference.listModels()
 let request = ChatRequest(model: models[0].id, messages: [
     ChatMessage(role: "user", content: "Hello!")
 ])
 
-for try await event in node.inference.chatStream(request) {
+for try await event in client.inference.chat(request) {
     if case .tokenDelta(_, let delta) = event {
         print(delta, terminator: "")
     }
 }
 
-try await node.stop()
+await client.stop()
 ```
 
 Load and unload a local model:
 
 ```swift
+let node = try Node(
+    inviteToken: InviteToken("your-invite-token"),
+    ownerKeypairBytesHex: ownerKeypair
+)
+
 let served = try await node.serving.load(
     "Qwen2.5-3B-Instruct-Q4_K_M",
     options: LoadModelOptions(devicePolicy: .auto)
@@ -284,18 +298,18 @@ val runtime = NativeRuntime.configure()
 println("using ${runtime.artifactId} from ${runtime.artifactDir}")
 ```
 
-Create a node:
+Create a client:
 
 ```kotlin
+import ai.meshllm.Client
 import ai.meshllm.InviteToken
-import ai.meshllm.Node
 import uniffi.mesh_ffi.generateOwnerKeypairHex
 
 val ownerKeypair = generateOwnerKeypairHex()
-val node = Node(InviteToken("your-invite-token"), ownerKeypair)
+val client = Client(InviteToken("your-invite-token"), ownerKeypair)
 
-node.start()
-val models = node.inference.listModels()
+client.start()
+val models = client.inference.listModels()
 ```
 
 Load, infer, and unload:
@@ -324,19 +338,19 @@ try {
 
 ## Node.js Usage
 
-Create a node:
+Create a client:
 
 ```js
-const { Node, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const { Client, generateOwnerKeypairHex } = require('@meshllm/sdk')
 
-const node = Node.create({
+const client = Client.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
   inviteToken: 'your-invite-token'
 })
 
-await node.start()
-const models = await node.inference.listModels()
-await node.stop()
+await client.start()
+const models = await client.inference.listModels()
+await client.stop()
 ```
 
 Use local serving by enabling serving and packaging a matching native runtime

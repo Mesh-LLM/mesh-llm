@@ -26,16 +26,16 @@ packaged Node addon is renamed to `mesh_llm_nodejs.node`.
 ## Client Mode
 
 ```js
-const { Node, generateOwnerKeypairHex } = require('@meshllm/sdk')
+const { Client, generateOwnerKeypairHex } = require('@meshllm/sdk')
 
-const node = Node.create({
+const client = Client.create({
   ownerKeypairHex: generateOwnerKeypairHex(),
   inviteToken: 'your-invite-token'
 })
 
-await node.start()
-const models = await node.inference.listModels()
-await node.stop()
+await client.start()
+const models = await client.inference.listModels()
+await client.stop()
 ```
 
 ## Local Serving Mode
@@ -47,6 +47,19 @@ for the target machine:
 MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-sdk/meshllm-native-linux-x86_64-cuda \
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 node sdk/node/example/local-inference.js
+```
+
+Use `Node` instead of `Client` when the app needs local model management or
+serving:
+
+```js
+const { Node, generateOwnerKeypairHex } = require('@meshllm/sdk')
+
+const node = Node.create({
+  ownerKeypairHex: generateOwnerKeypairHex(),
+  inviteToken: 'local-electron-app',
+  servingEnabled: true
+})
 ```
 
 In an Electron app, package both:

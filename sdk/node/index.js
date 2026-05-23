@@ -2,6 +2,7 @@
 
 const path = require('node:path')
 const { resolveNativeRuntime, validateNativeRuntime } = require('./native-runtime')
+const nativeModuleCache = new Map()
 
 function loadNativeAddon() {
   const explicit = process.env.MESHLLM_NODE_NATIVE_PATH
@@ -33,8 +34,14 @@ function loadNativeAddon() {
 
 function loadNativeFile(file) {
   const resolved = path.resolve(file)
+  const cached = nativeModuleCache.get(resolved)
+  if (cached) return cached
   const mod = { exports: {} }
+  // process.dlopen lets development builds load the platform library directly
+  // from target/{debug,release}; cache the exports so repeated SDK imports do
+  // not initialize the native addon more than once for the same resolved path.
   process.dlopen(mod, resolved)
+  nativeModuleCache.set(resolved, mod.exports)
   return mod.exports
 }
 
@@ -45,6 +52,40 @@ function nativeAddonName() {
 }
 
 const native = loadNativeAddon()
+
+class Client {
+  constructor(handle) {
+    this._handle = handle
+    this.inference = new Inference(handle)
+  }
+
+  static create(options) {
+    const handle = native.Node.create(
+      options.ownerKeypairHex,
+      options.inviteToken,
+      null,
+      null,
+      false
+    )
+    return new Client(handle)
+  }
+
+  start() {
+    return this._handle.start()
+  }
+
+  stop() {
+    return this._handle.stop()
+  }
+
+  reconnect() {
+    return this._handle.reconnect()
+  }
+
+  async status() {
+    return parse(await this._handle.statusJson())
+  }
+}
 
 class Node {
   constructor(handle) {
@@ -161,6 +202,7 @@ function parse(json) {
 }
 
 module.exports = {
+  Client,
   Node,
   generateOwnerKeypairHex: native.generateOwnerKeypairHex,
   resolveNativeRuntime,

@@ -65,6 +65,127 @@ public struct ResponsesRequest: Sendable {
 #if canImport(MeshLLMFFI)
 public typealias MeshError = FfiError
 
+public final class Client: @unchecked Sendable {
+    private let handle: MeshClientHandle
+
+    public let inference: Inference
+
+    public init(
+        inviteToken: InviteToken,
+        ownerKeypairBytesHex: String
+    ) throws {
+        let handle = try createClient(
+            ownerKeypairBytesHex: ownerKeypairBytesHex,
+            inviteToken: inviteToken.value
+        )
+        self.handle = handle
+        self.inference = Inference(handle: handle)
+    }
+
+    public init(handle: MeshClientHandle) {
+        self.handle = handle
+        self.inference = Inference(handle: handle)
+    }
+
+    public static func connectPublic(
+        ownerKeypairBytesHex: String,
+        query: PublicMeshQuery = PublicMeshQuery(
+            model: nil,
+            minVramGb: nil,
+            region: nil,
+            targetName: nil,
+            relays: []
+        )
+    ) async throws -> Client {
+        let handle = try await runBlocking {
+            try createAutoClient(ownerKeypairBytesHex: ownerKeypairBytesHex, query: query)
+        }
+        return Client(handle: handle)
+    }
+
+    public func start() async throws {
+        let handle = self.handle
+        try await runBlocking {
+            try handle.start()
+        }
+    }
+
+    public func stop() async {
+        let handle = self.handle
+        await runNonThrowing {
+            handle.stop()
+        }
+    }
+
+    public func reconnect() async throws {
+        let handle = self.handle
+        try await runBlocking {
+            try handle.reconnect()
+        }
+    }
+
+    public func status() async -> Status {
+        let handle = self.handle
+        let status = await runBlocking {
+            handle.status()
+        }
+        return Status(connected: status.connected, peerCount: Int(clamping: status.peerCount))
+    }
+
+    public final class Inference: @unchecked Sendable {
+        private let handle: MeshClientHandle
+
+        fileprivate init(handle: MeshClientHandle) {
+            self.handle = handle
+        }
+
+        public func listModels() async throws -> [Model] {
+            let handle = self.handle
+            let models = try await runBlocking {
+                try handle.inferenceListModels()
+            }
+            return models.map(Node.mapModel)
+        }
+
+        public func chat(_ request: ChatRequest) -> AsyncThrowingStream<Event, Error> {
+            let native = Node.mapChatRequest(request)
+            return AsyncThrowingStream { continuation in
+                do {
+                    let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
+                        handle.cancel(requestId: requestId)
+                    }
+                    let requestId = try handle.chat(request: native, listener: bridge)
+                    bridge.activate(requestId: requestId)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+
+        public func responses(_ request: ResponsesRequest) -> AsyncThrowingStream<Event, Error> {
+            let native = Node.mapResponsesRequest(request)
+            return AsyncThrowingStream { continuation in
+                do {
+                    let bridge = EventStreamBridge(continuation: continuation) { [handle] requestId in
+                        handle.cancel(requestId: requestId)
+                    }
+                    let requestId = try handle.responses(request: native, listener: bridge)
+                    bridge.activate(requestId: requestId)
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+
+        public func cancel(_ requestId: RequestId) async {
+            let handle = self.handle
+            await runNonThrowing {
+                handle.cancel(requestId: requestId.value)
+            }
+        }
+    }
+}
+
 public final class Node: @unchecked Sendable {
     private let handle: MeshNodeHandle
 
@@ -76,15 +197,14 @@ public final class Node: @unchecked Sendable {
         inviteToken: InviteToken,
         ownerKeypairBytesHex: String,
         cacheDir: String? = nil,
-        runtimeDir: String? = nil,
-        servingEnabled: Bool = false
+        runtimeDir: String? = nil
     ) throws {
         let handle = try createNode(
             ownerKeypairBytesHex: ownerKeypairBytesHex,
             inviteToken: inviteToken.value,
             cacheDir: cacheDir,
             runtimeDir: runtimeDir,
-            servingEnabled: servingEnabled
+            servingEnabled: true
         )
         self.handle = handle
         self.inference = Inference(handle: handle)
@@ -330,7 +450,7 @@ public final class Node: @unchecked Sendable {
         }
     }
 
-    private static func mapChatRequest(_ request: ChatRequest) -> ChatRequestNative {
+    fileprivate static func mapChatRequest(_ request: ChatRequest) -> ChatRequestNative {
         ChatRequestNative(
             model: request.model,
             messages: request.messages.map {
@@ -339,7 +459,7 @@ public final class Node: @unchecked Sendable {
         )
     }
 
-    private static func mapResponsesRequest(_ request: ResponsesRequest) -> ResponsesRequestNative {
+    fileprivate static func mapResponsesRequest(_ request: ResponsesRequest) -> ResponsesRequestNative {
         ResponsesRequestNative(model: request.model, input: request.input)
     }
 }
@@ -355,6 +475,14 @@ private func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T 
             } catch {
                 continuation.resume(throwing: error)
             }
+        }
+    }
+}
+
+private func runNonThrowing<T>(_ work: @escaping () -> T) async -> T {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global(qos: .userInitiated).async {
+            continuation.resume(returning: work())
         }
     }
 }

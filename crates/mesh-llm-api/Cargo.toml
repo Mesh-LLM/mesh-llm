@@ -11,14 +11,12 @@ keywords = ["llm", "mesh", "sdk", "api", "node"]
 categories = ["api-bindings", "network-programming"]
 
 [features]
-host-io = ["mesh-client/host-io"]
+host-io = ["mesh-llm-api-client/host-io"]
 
 [dependencies]
 anyhow.workspace = true
-mesh-client = { package = "mesh-llm-client", version = "0.66.0", path = "../mesh-client" }
+mesh-llm-api-client = { path = "../mesh-llm-api-client", version = "0.66.0" }
 mesh-llm-node = { path = "../mesh-llm-node", version = "0.66.0" }
-hex = "0.4"
-thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]

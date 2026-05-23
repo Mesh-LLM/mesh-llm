@@ -33,7 +33,6 @@ fun main(args: Array<String>) = runBlocking {
         ownerKeypairHex,
         cacheDir = System.getenv("MESH_SDK_CACHE_DIR"),
         runtimeDir = System.getenv("MESH_SDK_RUNTIME_DIR"),
-        servingEnabled = modelRef != null,
     )
     val recommended = node.models.recommended()
     val serving = node.serving.status()

@@ -940,6 +940,11 @@ impl ServingController for MeshApi {
     fn load<'a>(&'a self, request: LoadModelRequest) -> ServingFuture<'a, ServedModel> {
         Box::pin(async move {
             let model_ref = request.model_ref;
+            if !matches!(request.device_policy, NodeDevicePolicy::Auto) {
+                return Err(anyhow::anyhow!(ServingError::UnsupportedDevicePolicy {
+                    policy: request.device_policy,
+                }));
+            }
             let control_tx = self
                 .inner
                 .lock()

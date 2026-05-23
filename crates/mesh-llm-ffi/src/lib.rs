@@ -1,8 +1,9 @@
 use mesh_llm_api::events::{Event, EventListener as CoreEventListener};
 use mesh_llm_api::OwnerKeypair;
 use mesh_llm_api::{
-    create_auto_node as sdk_create_auto_node, discover_public_meshes as sdk_discover_public_meshes,
-    ChatMessage, ChatRequest, DevicePolicy as ApiDevicePolicy, InviteToken, MeshApiError, MeshNode,
+    create_auto_client as sdk_create_auto_client, create_auto_node as sdk_create_auto_node,
+    discover_public_meshes as sdk_discover_public_meshes, ChatMessage, ChatRequest, ClientBuilder,
+    DevicePolicy as ApiDevicePolicy, InviteToken, MeshApiError, MeshClient, MeshNode,
     ModelKind as ApiModelKind, ModelSource as ApiModelSource,
     PublicMeshQuery as ApiPublicMeshQuery, RequestId, ResponsesRequest,
     ServingModelState as ApiServingModelState, UnloadModelOptions as ApiUnloadModelOptions,
@@ -337,6 +338,11 @@ impl CoreEventListener for EventListenerBridge {
 }
 
 #[derive(uniffi::Object)]
+pub struct MeshClientHandle {
+    client: tokio::sync::Mutex<MeshClient>,
+}
+
+#[derive(uniffi::Object)]
 pub struct MeshNodeHandle {
     node: MeshNode,
     #[cfg(feature = "embedded-runtime")]
@@ -362,6 +368,21 @@ pub fn discover_public_meshes(query: PublicMeshQuery) -> Result<Vec<PublicMesh>,
 }
 
 #[uniffi::export]
+pub fn create_auto_client(
+    owner_keypair_bytes_hex: String,
+    query: PublicMeshQuery,
+) -> Result<Arc<MeshClientHandle>, FfiError> {
+    let kp = parse_owner_keypair(&owner_keypair_bytes_hex)?;
+    block_on(sdk_create_auto_client(kp, query.into()))
+        .map(|result| {
+            Arc::new(MeshClientHandle {
+                client: tokio::sync::Mutex::new(result.client),
+            })
+        })
+        .map_err(map_mesh_api_error)
+}
+
+#[uniffi::export]
 pub fn create_auto_node(
     owner_keypair_bytes_hex: String,
     query: PublicMeshQuery,
@@ -376,6 +397,23 @@ pub fn create_auto_node(
             })
         })
         .map_err(map_mesh_api_error)
+}
+
+#[uniffi::export]
+pub fn create_client(
+    owner_keypair_bytes_hex: String,
+    invite_token: String,
+) -> Result<Arc<MeshClientHandle>, FfiError> {
+    let token = invite_token
+        .parse::<InviteToken>()
+        .map_err(FfiError::InvalidInviteToken)?;
+    let kp = parse_owner_keypair(&owner_keypair_bytes_hex)?;
+    let client = ClientBuilder::new(kp, token)
+        .build()
+        .map_err(|error| FfiError::BuildFailed(error.to_string()))?;
+    Ok(Arc::new(MeshClientHandle {
+        client: tokio::sync::Mutex::new(client),
+    }))
 }
 
 #[uniffi::export]
@@ -424,6 +462,80 @@ pub fn create_node(
         #[cfg(feature = "embedded-runtime")]
         local_serving,
     }))
+}
+
+#[uniffi::export]
+impl MeshClientHandle {
+    pub fn start(&self) -> Result<(), FfiError> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            client.join().await
+        })
+        .map_err(|error| FfiError::JoinFailed(error.to_string()))
+    }
+
+    pub fn stop(&self) {
+        block_on(async {
+            self.client.lock().await.disconnect().await;
+        });
+    }
+
+    pub fn reconnect(&self) -> Result<(), FfiError> {
+        block_on(async {
+            let mut client = self.client.lock().await;
+            client.reconnect().await
+        })
+        .map_err(|error| FfiError::ReconnectFailed(error.to_string()))
+    }
+
+    pub fn status(&self) -> ClientStatus {
+        let status = block_on(async { self.client.lock().await.status().await });
+        ClientStatus {
+            connected: status.connected,
+            peer_count: status.peer_count as u64,
+        }
+    }
+
+    pub fn inference_list_models(&self) -> Result<Vec<ModelNative>, FfiError> {
+        block_on(async { self.client.lock().await.list_models().await })
+            .map(|models| {
+                models
+                    .into_iter()
+                    .map(|m| ModelNative {
+                        id: m.id,
+                        name: m.name,
+                    })
+                    .collect()
+            })
+            .map_err(|error| FfiError::DiscoveryFailed(error.to_string()))
+    }
+
+    pub fn chat(
+        &self,
+        request: ChatRequestNative,
+        listener: Box<dyn EventListener>,
+    ) -> Result<String, FfiError> {
+        let bridge = Arc::new(EventListenerBridge { inner: listener });
+        let request_id = block_on(async { self.client.lock().await.chat(request.into(), bridge) });
+        Ok(request_id.0)
+    }
+
+    pub fn responses(
+        &self,
+        request: ResponsesRequestNative,
+        listener: Box<dyn EventListener>,
+    ) -> Result<String, FfiError> {
+        let bridge = Arc::new(EventListenerBridge { inner: listener });
+        let request_id =
+            block_on(async { self.client.lock().await.responses(request.into(), bridge) });
+        Ok(request_id.0)
+    }
+
+    pub fn cancel(&self, request_id: String) {
+        block_on(async {
+            self.client.lock().await.cancel(RequestId(request_id));
+        });
+    }
 }
 
 #[uniffi::export]
@@ -730,7 +842,7 @@ fn map_mesh_api_error(error: MeshApiError) -> FfiError {
         MeshApiError::InvalidInviteToken { message } => FfiError::InvalidInviteToken(message),
         MeshApiError::InvalidConfig { message } => FfiError::BuildFailed(message.to_string()),
         MeshApiError::ModelManagement { message } => FfiError::ModelManagementFailed(message),
-        MeshApiError::Serving { error } => FfiError::ServingFailed(error.to_string()),
+        MeshApiError::Serving { message } => FfiError::ServingFailed(message),
         MeshApiError::Unsupported { feature } => FfiError::HostUnavailable(feature.to_string()),
     }
 }
@@ -745,7 +857,7 @@ fn map_model_error(error: MeshApiError) -> FfiError {
 fn map_serving_error(error: MeshApiError) -> FfiError {
     match error {
         MeshApiError::Unsupported { feature } => FfiError::ServingUnsupported(feature.to_string()),
-        MeshApiError::Serving { error } => FfiError::ServingFailed(error.to_string()),
+        MeshApiError::Serving { message } => FfiError::ServingFailed(message),
         other => FfiError::ServingFailed(other.to_string()),
     }
 }
