@@ -3,6 +3,7 @@
 mod api;
 mod cli;
 pub mod crypto;
+pub mod embed;
 mod inference;
 mod mesh;
 mod models;
