@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-LLAMA_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-.deps/llama-build/build-stage-abi-static}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+resolve_llama_build_dir() {
+  if [[ -n "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
+    printf '%s\n' "$LLAMA_STAGE_BUILD_DIR"
+  elif [[ -n "${SKIPPY_LLAMA_BUILD_DIR:-}" ]]; then
+    printf '%s\n' "$SKIPPY_LLAMA_BUILD_DIR"
+  else
+    "$ROOT/scripts/build-llama.sh" --print-build-dir
+  fi
+}
+
+LLAMA_BUILD_DIR="$(resolve_llama_build_dir)"
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/skippy-ci-smoke}"
 REPORT_DIR="${WORK_DIR}/reports"
 MODEL_DIR="${WORK_DIR}/models"
