@@ -95,6 +95,19 @@ Current request:
 - Known risk: the candidate GGUF model card marks support as experimental and
   points at a custom llama.cpp branch for `cohere2-moe-support`.
 
+Current certification status:
+
+| Gate | Command A+ candidate status |
+| --- | --- |
+| Pinned mesh-llm llama.cpp inspect/load | Not run |
+| Package write and `validate-package` | Not run |
+| `/v1/models` runtime smoke | Not run |
+| `/v1/chat/completions` runtime smoke | Not run |
+| `/v1/responses` runtime smoke | Not run |
+| Text split evidence | Not run |
+| Vision/projector/media sideband evidence | Not run |
+| MoE and cache-policy review | Not run |
+
 Treat this as a candidate, not support. Do not add Command A+ to
 `FAMILY_STATUS.md`, `reviewed-family-capabilities.json`, or the catalog until:
 
