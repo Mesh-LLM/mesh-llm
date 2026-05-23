@@ -594,7 +594,7 @@ impl MeshNodeHandle {
         listener: Box<dyn EventListener>,
     ) -> Result<String, FfiError> {
         #[cfg(feature = "embedded-runtime")]
-        if let Some(controller) = &self.local_serving {
+        if let Some(controller) = self.local_controller_for_model(&request.model) {
             let request_id = new_request_id();
             let model = request.model.clone();
             let messages = request
@@ -628,7 +628,7 @@ impl MeshNodeHandle {
         listener: Box<dyn EventListener>,
     ) -> Result<String, FfiError> {
         #[cfg(feature = "embedded-runtime")]
-        if let Some(controller) = &self.local_serving {
+        if let Some(controller) = self.local_controller_for_model(&request.model) {
             let request_id = new_request_id();
             let content = block_on(controller.chat_completion_text(
                 &request.model,
@@ -803,6 +803,17 @@ impl MeshNodeHandle {
 
     pub fn set_device_policy(&self, policy: DevicePolicy) -> Result<(), FfiError> {
         block_on(self.node.serving().set_device_policy(policy.into())).map_err(map_serving_error)
+    }
+}
+
+#[cfg(feature = "embedded-runtime")]
+impl MeshNodeHandle {
+    fn local_controller_for_model(&self, model: &str) -> Option<&Arc<EmbeddedServingController>> {
+        let controller = self.local_serving.as_ref()?;
+        let is_loaded = block_on(controller.model_list())
+            .into_iter()
+            .any(|(model_id, model_ref)| model_id == model || model_ref == model);
+        is_loaded.then_some(controller)
     }
 }
 
