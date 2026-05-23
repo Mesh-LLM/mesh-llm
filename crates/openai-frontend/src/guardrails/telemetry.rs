@@ -27,6 +27,7 @@ pub(crate) enum GuardrailTelemetryBypassReason {
     UnsupportedSurface,
     ReservedCollision,
     MixedToolsStructured,
+    AfterToolResult,
 }
 
 impl GuardrailTelemetryBypassReason {
@@ -38,6 +39,7 @@ impl GuardrailTelemetryBypassReason {
             Self::UnsupportedSurface => "unsupported_surface",
             Self::ReservedCollision => "reserved_collision",
             Self::MixedToolsStructured => "mixed_tools_structured",
+            Self::AfterToolResult => "after_tool_result",
         }
     }
 }

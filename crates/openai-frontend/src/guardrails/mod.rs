@@ -265,7 +265,10 @@ fn telemetry_decision(outcome: &state::GuardrailRequestOutcome) -> GuardrailTele
         state::GuardrailRequestOutcome::PassThrough { reason } => match reason {
             GuardrailTelemetryBypassReason::Disabled
             | GuardrailTelemetryBypassReason::Streaming
-            | GuardrailTelemetryBypassReason::NoContract => GuardrailTelemetryDecision::Bypassed,
+            | GuardrailTelemetryBypassReason::NoContract
+            | GuardrailTelemetryBypassReason::AfterToolResult => {
+                GuardrailTelemetryDecision::Bypassed
+            }
             GuardrailTelemetryBypassReason::UnsupportedSurface
             | GuardrailTelemetryBypassReason::ReservedCollision
             | GuardrailTelemetryBypassReason::MixedToolsStructured => {

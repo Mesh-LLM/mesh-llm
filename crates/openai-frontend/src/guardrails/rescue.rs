@@ -732,6 +732,7 @@ fn request_expects_guarded_contract(prepared: &PreparedGuardrailRequest) -> bool
     matches!(prepared.outcome, GuardrailRequestOutcome::Guarded { .. })
         && (prepared.state.request_contract.has_real_tools()
             || prepared.state.request_contract.requests_structured_output())
+        && !prepared.state.last_message_is_tool_result
 }
 
 fn normalized_visible_content(content: &str) -> Option<String> {

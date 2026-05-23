@@ -73,6 +73,13 @@ impl GuardrailEngine {
             && !state.request_contract.has_supported_structured_output()
         {
             self.reject_or_record_only(GuardrailErrorKind::UnsupportedSchemaFeature)
+        } else if state.last_message_is_tool_result {
+            // Tool result as last message means the model should respond with
+            // natural language, not a tool call. Skip Guarded mode to avoid
+            // injecting synthetic tools and misclassifying text as Malformed.
+            GuardrailRequestOutcome::PassThrough {
+                reason: GuardrailTelemetryBypassReason::AfterToolResult,
+            }
         } else {
             let mut backend_request = request.clone();
             if state.request_contract.has_real_tools()

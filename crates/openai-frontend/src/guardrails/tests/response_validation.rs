@@ -466,6 +466,104 @@ fn empty_output_is_classified() {
     assert_eq!(classified.category, GuardrailResponseCategory::EmptyOutput);
 }
 
+#[test]
+fn text_after_tool_result_is_valid_not_malformed() {
+    let engine = GuardrailEngine::new(enforce_policy());
+    let prepared = prepared_tool_request(
+        &engine,
+        json!({
+            "model": "Qwen3-8B-Q4_K_M",
+            "messages": [
+                {"role": "user", "content": "What's 5+5?"},
+                {"role": "assistant", "content": null, "tool_calls": [{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"a\":5,\"b\":5,\"op\":\"add\"}"}}]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "10"}
+            ],
+            "tools": [{"type": "function", "function": {"name": "calculator"}}],
+            "tool_choice": "auto"
+        }),
+    );
+    let response = response_with_content("Qwen3-8B-Q4_K_M", "The answer is 10!");
+
+    let classified = engine.classify_response(&prepared, &response);
+
+    assert_eq!(classified.category, GuardrailResponseCategory::ValidText);
+    assert_eq!(
+        classified.visible_content.as_deref(),
+        Some("The answer is 10!")
+    );
+}
+
+#[test]
+fn tool_result_request_bypasses_guarded_mode() {
+    let engine = GuardrailEngine::new(enforce_policy());
+    let prepared = prepared_tool_request(
+        &engine,
+        json!({
+            "model": "Qwen3-8B-Q4_K_M",
+            "messages": [
+                {"role": "user", "content": "What's 5+5?"},
+                {"role": "assistant", "content": null, "tool_calls": [{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"a\":5,\"b\":5,\"op\":\"add\"}"}}]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "10"}
+            ],
+            "tools": [{"type": "function", "function": {"name": "calculator"}}],
+            "tool_choice": "auto"
+        }),
+    );
+
+    assert!(
+        matches!(
+            prepared.outcome,
+            super::state::GuardrailRequestOutcome::PassThrough {
+                reason: super::telemetry::GuardrailTelemetryBypassReason::AfterToolResult
+            }
+        ),
+        "expected PassThrough with AfterToolResult reason, got {:?}",
+        prepared.outcome
+    );
+    assert!(prepared.state.last_message_is_tool_result);
+}
+
+#[tokio::test]
+async fn tool_result_enforce_mode_returns_text_successfully() {
+    let backend = Arc::new(SequencedBackend::new(vec![Ok(response_with_content(
+        "Qwen3-8B-Q4_K_M",
+        "The answer is 10!",
+    ))]));
+    let guarded = GuardedOpenAiBackend::new(
+        backend.clone(),
+        GuardrailPolicy {
+            mode: GuardrailMode::Enforce,
+            apply_to_all_models: true,
+            ..GuardrailPolicy::default()
+        },
+    );
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "Qwen3-8B-Q4_K_M",
+        "messages": [
+            {"role": "user", "content": "What's 5+5?"},
+            {"role": "assistant", "content": null, "tool_calls": [{"id":"call_1","type":"function","function":{"name":"calculator","arguments":"{\"a\":5,\"b\":5,\"op\":\"add\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "10"}
+        ],
+        "tools": [{"type": "function", "function": {"name": "calculator"}}],
+        "tool_choice": "auto"
+    }))
+    .unwrap();
+
+    let response = guarded.chat_completion(request).await.unwrap();
+
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("The answer is 10!")
+    );
+    assert!(response.choices[0].message.tool_calls.is_none());
+    assert_eq!(
+        response.choices[0].finish_reason,
+        Some(crate::common::FinishReason::Stop)
+    );
+    // Verify original request passed through without retries
+    assert_eq!(backend.chat_requests.lock().unwrap().len(), 1);
+}
+
 #[tokio::test]
 async fn malformed_tool_arguments_retry_once_then_succeed() {
     let backend = Arc::new(SequencedBackend::new(vec![

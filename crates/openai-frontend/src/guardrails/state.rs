@@ -15,6 +15,7 @@ pub struct GuardrailRequestState {
     pub requested_stream: bool,
     pub request_contract: GuardrailRequestContract,
     pub mesh_guardrails_override: MeshGuardrailsOverride,
+    pub last_message_is_tool_result: bool,
 }
 
 impl GuardrailRequestState {
@@ -24,6 +25,10 @@ impl GuardrailRequestState {
         streaming_mode: StreamingGuardrailMode,
         request_contract: GuardrailRequestContract,
     ) -> Self {
+        let last_message_is_tool_result = request
+            .messages
+            .last()
+            .is_some_and(|msg| msg.role == "tool");
         Self {
             model: request.model.clone(),
             mode,
@@ -31,6 +36,7 @@ impl GuardrailRequestState {
             requested_stream: request.stream,
             mesh_guardrails_override: request_contract.mesh_guardrails,
             request_contract,
+            last_message_is_tool_result,
         }
     }
 }
