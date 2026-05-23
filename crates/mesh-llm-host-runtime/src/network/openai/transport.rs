@@ -9,13 +9,15 @@ use crate::network::affinity::{
     prepare_remote_targets_for_request, AffinityRouter, PreparedTargets, TargetSelection,
 };
 use crate::network::openai::response_adapter;
+use crate::network::openai::tool_call_ids::{
+    normalize_chat_completion_json_body, ChatStreamNormalizationState,
+};
 use crate::network::router;
 use crate::network::target_health::TargetHealthOutcome;
 use crate::plugin;
 use anyhow::{anyhow, bail, Context, Result};
 // moa imports relocated into moa_gateway.rs (sole user after merge)
 use serde::Deserialize;
-use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -86,6 +88,7 @@ impl BufferedHttpRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseAdapter {
     None,
+    OpenAiChatCompletionsJson,
     OpenAiChatCompletionsStream,
     OpenAiResponsesJson,
     OpenAiResponsesStream,
@@ -303,9 +306,12 @@ async fn read_http_request_with_limits(
     let mut response_adapter = rewrite.response_adapter;
     if response_adapter == ResponseAdapter::None
         && parsed.path.split('?').next().unwrap_or(&parsed.path) == "/v1/chat/completions"
-        && metadata.as_ref().and_then(|value| value.stream) == Some(true)
     {
-        response_adapter = ResponseAdapter::OpenAiChatCompletionsStream;
+        response_adapter = if metadata.as_ref().and_then(|value| value.stream) == Some(true) {
+            ResponseAdapter::OpenAiChatCompletionsStream
+        } else {
+            ResponseAdapter::OpenAiChatCompletionsJson
+        };
     }
     let model_name = metadata.as_ref().and_then(|value| value.model.clone());
     let completion_tokens = metadata.as_ref().and_then(|value| {
@@ -1235,95 +1241,6 @@ fn response_is_event_stream(headers: &ParsedResponseHeaders) -> bool {
         .unwrap_or(false)
 }
 
-fn synthetic_id_seed() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
-}
-
-#[derive(Debug, Default)]
-struct ChatStreamNormalizationState {
-    completion_id: Option<String>,
-    tool_call_ids: HashMap<u64, String>,
-    synthetic_seed: Option<u128>,
-}
-
-impl ChatStreamNormalizationState {
-    fn seed(&mut self) -> u128 {
-        *self.synthetic_seed.get_or_insert_with(synthetic_id_seed)
-    }
-
-    fn completion_id(&mut self, object: &Map<String, Value>) -> String {
-        if let Some(existing) = self.completion_id.clone() {
-            return existing;
-        }
-        let id = object
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| format!("chatcmpl-mesh-{}", self.seed()));
-        self.completion_id = Some(id.clone());
-        id
-    }
-
-    fn tool_call_id(&mut self, index: u64, tool_call: &Map<String, Value>) -> String {
-        if let Some(existing) = self.tool_call_ids.get(&index) {
-            return existing.clone();
-        }
-        let id = tool_call
-            .get("id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-            .unwrap_or_else(|| format!("call_mesh_{}_{}", self.seed(), index));
-        self.tool_call_ids.insert(index, id.clone());
-        id
-    }
-
-    fn normalize_data(&mut self, data: &str) -> String {
-        let Ok(mut value) = serde_json::from_str::<Value>(data) else {
-            return data.to_string();
-        };
-        let Some(object) = value.as_object_mut() else {
-            return data.to_string();
-        };
-
-        let completion_id = self.completion_id(object);
-        object.insert("id".into(), Value::String(completion_id));
-
-        let Some(choices) = object.get_mut("choices").and_then(Value::as_array_mut) else {
-            return serde_json::to_string(&value).unwrap_or_else(|_| data.to_string());
-        };
-        for choice in choices {
-            let Some(tool_calls) = choice
-                .get_mut("delta")
-                .and_then(Value::as_object_mut)
-                .and_then(|delta| delta.get_mut("tool_calls"))
-                .and_then(Value::as_array_mut)
-            else {
-                continue;
-            };
-            for (position, tool_call) in tool_calls.iter_mut().enumerate() {
-                let Some(tool_call_object) = tool_call.as_object_mut() else {
-                    continue;
-                };
-                let index = tool_call_object
-                    .get("index")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(position as u64);
-                let id = self.tool_call_id(index, tool_call_object);
-                tool_call_object.insert("id".into(), Value::String(id));
-            }
-        }
-
-        serde_json::to_string(&value).unwrap_or_else(|_| data.to_string())
-    }
-}
-
 async fn relay_normalized_chat_completion_stream<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
@@ -1404,6 +1321,49 @@ async fn relay_normalized_chat_completion_stream<R: AsyncRead + Unpin>(
     Ok(RouteAttemptResult::Delivered {
         status_code: probe.status_code,
         completion_tokens: observed_completion_tokens,
+    })
+}
+
+async fn relay_normalized_chat_completion_json<R: AsyncRead + Unpin>(
+    tcp_stream: &mut TcpStream,
+    reader: &mut R,
+    probe: ResponseProbe,
+    retry_context_overflow: bool,
+) -> Result<RouteAttemptResult> {
+    if retry_context_overflow && probe.retryable_context_overflow {
+        return Ok(RouteAttemptResult::RetryableContextOverflow);
+    }
+
+    if !(200..300).contains(&probe.status_code) {
+        return relay_error_response(tcp_stream, reader, probe).await;
+    }
+    let mut buffered = probe.buffered;
+    let parsed = try_parse_response_headers(&buffered)?
+        .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
+    let body_end = if let Some(content_length) = parsed.content_length {
+        let body_end = parsed.header_end + content_length;
+        while buffered.len() < body_end {
+            read_response_chunk(reader, &mut buffered).await?;
+        }
+        body_end
+    } else {
+        reader.read_to_end(&mut buffered).await?;
+        buffered.len()
+    };
+    let body = &buffered[parsed.header_end..body_end];
+    let normalized_body =
+        normalize_chat_completion_json_body(body).unwrap_or_else(|| body.to_vec());
+    let completion_tokens = parse_completion_tokens_from_json_body(&normalized_body);
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        normalized_body.len()
+    );
+    tcp_stream.write_all(header.as_bytes()).await?;
+    tcp_stream.write_all(&normalized_body).await?;
+    let _ = tcp_stream.shutdown().await;
+    Ok(RouteAttemptResult::Delivered {
+        status_code: probe.status_code,
+        completion_tokens,
     })
 }
 
@@ -2220,6 +2180,15 @@ async fn relay_adapted_response<R: AsyncRead + Unpin>(
     response_adapter: ResponseAdapter,
 ) -> Result<Option<RouteAttemptResult>> {
     match response_adapter {
+        ResponseAdapter::OpenAiChatCompletionsJson => Ok(Some(
+            relay_normalized_chat_completion_json(
+                tcp_stream,
+                reader,
+                probe,
+                retry_context_overflow,
+            )
+            .await?,
+        )),
         ResponseAdapter::OpenAiChatCompletionsStream => Ok(Some(
             relay_normalized_chat_completion_stream(
                 tcp_stream,
@@ -5003,57 +4972,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn chat_stream_normalizer_adds_missing_tool_call_id() {
-        let mut state = ChatStreamNormalizationState {
-            synthetic_seed: Some(42),
-            ..Default::default()
-        };
-        let normalized = state.normalize_data(
-            r#"{"id":"chatcmpl-a","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"name":"read_file","arguments":"{\"path\":\"AGENTS.md\"}"}}]},"finish_reason":null}]}"#,
-        );
-        let parsed: serde_json::Value = serde_json::from_str(&normalized).unwrap();
-
-        assert_eq!(parsed["id"], "chatcmpl-a");
-        assert_eq!(
-            parsed["choices"][0]["delta"]["tool_calls"][0]["id"],
-            "call_mesh_42_0"
-        );
-    }
-
-    #[test]
-    fn chat_stream_normalizer_keeps_completion_and_tool_ids_stable() {
-        let mut state = ChatStreamNormalizationState {
-            synthetic_seed: Some(7),
-            ..Default::default()
-        };
-
-        let first = state.normalize_data(
-            r#"{"id":"chatcmpl-first","object":"chat.completion.chunk","created":1,"model":"test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#,
-        );
-        let second = state.normalize_data(
-            r#"{"id":"chatcmpl-second","object":"chat.completion.chunk","created":2,"model":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":"{}"}}]},"finish_reason":null}]}"#,
-        );
-        let third = state.normalize_data(
-            r#"{"id":"chatcmpl-third","object":"chat.completion.chunk","created":3,"model":"test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"type":"function","function":{"arguments":" more"}}]},"finish_reason":null}]}"#,
-        );
-        let first: serde_json::Value = serde_json::from_str(&first).unwrap();
-        let second: serde_json::Value = serde_json::from_str(&second).unwrap();
-        let third: serde_json::Value = serde_json::from_str(&third).unwrap();
-
-        assert_eq!(first["id"], "chatcmpl-first");
-        assert_eq!(second["id"], "chatcmpl-first");
-        assert_eq!(third["id"], "chatcmpl-first");
-        assert_eq!(
-            second["choices"][0]["delta"]["tool_calls"][0]["id"],
-            "call_mesh_7_0"
-        );
-        assert_eq!(
-            third["choices"][0]["delta"]["tool_calls"][0]["id"],
-            "call_mesh_7_0"
-        );
-    }
-
     #[tokio::test]
     async fn test_is_timeout_error_accepts_concrete_timeout_types_only() {
         let io_timeout = anyhow::Error::from(std::io::Error::new(
@@ -5550,6 +5468,70 @@ mod tests {
         let raw = String::from_utf8(request.raw).unwrap();
         assert!(!raw.contains("Expect: 100-continue"));
         assert!(raw.contains("Connection: close"));
+    }
+
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_json_adds_missing_tool_call_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"","tool_calls":[{"type":"function","function":{"name":"lookup_fixture_fact","arguments":"{\"key\":\"codeword\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":4}}"#;
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let header_end = header.len();
+        let server_task = tokio::spawn(async move {
+            let (mut client_socket, _) = listener.accept().await.unwrap();
+            let probe = ResponseProbe {
+                buffered: header.into_bytes(),
+                header_end,
+                status_code: 200,
+                retryable_context_overflow: false,
+            };
+            relay_normalized_chat_completion_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                false,
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay should not wait for upstream keep-alive close")
+            .unwrap();
+        drop(upstream_writer);
+        let route_result = server_task.await.expect("server task");
+        let body_start = output
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| index + 4)
+            .unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&output[body_start..]).unwrap();
+
+        assert_eq!(
+            route_result,
+            RouteAttemptResult::Delivered {
+                status_code: 200,
+                completion_tokens: Some(4),
+            }
+        );
+        assert_eq!(
+            parsed["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_mesh_chatcmpl_a_0_0"
+        );
+        assert_eq!(
+            parsed["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "lookup_fixture_fact"
+        );
     }
 
     #[tokio::test]
