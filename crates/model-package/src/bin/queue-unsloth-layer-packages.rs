@@ -410,7 +410,9 @@ where
 fn print_help() {
     println!(
         "queue-unsloth-layer-packages\n\n\
-         Options:\n\
+           Options:\n\
+           --author HF_AUTHOR_OR_ORG\n\
+           --search QUERY\n\
            --max-jobs N\n\
            --max-per-family N\n\
            --confirm\n\

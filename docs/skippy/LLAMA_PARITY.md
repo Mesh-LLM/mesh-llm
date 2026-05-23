@@ -9,6 +9,11 @@ that family is certified. It means the family has at least one reviewed artifact
 that proves the stage ABI, activation handoff, topology policy, and cache policy
 work together.
 
+For new large-model requests that do not already have a cheap representative,
+start with [NEW_MODEL_ONBOARDING.md](NEW_MODEL_ONBOARDING.md). Keep those models
+as onboarding candidates until package, runtime, and family evidence is strong
+enough to promote.
+
 ## Workflow
 
 1. Join the pinned llama.cpp inventory with the candidate manifest:

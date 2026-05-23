@@ -4,7 +4,11 @@ Use this runbook to certify a model family for the stage-split runtime. Keep it
 operator-facing; the customer-facing support matrix lives elsewhere.
 
 Current supported families, recommended artifacts, and shipping settings live in
-`docs/FAMILY_STATUS.md`.
+`docs/skippy/FAMILY_STATUS.md`.
+
+For a new model that is not already in the support matrix, start with
+`docs/skippy/NEW_MODEL_ONBOARDING.md` before adding reviewed family policy or a
+customer-facing support row.
 
 ## What Certified Means
 
@@ -70,8 +74,9 @@ just family-certify FAMILY /path/to/target.gguf \
 
 Before promoting neural draft support, run a target/draft preflight with the
 `spec-bench` workflow to prove tokenizer compatibility and useful acceptance.
-Do not list neural draft as a shipping feature in `docs/FAMILY_STATUS.md` until
-that preflight and staged prompt/spec lane pass.
+Do not list neural draft as a shipping feature in
+`docs/skippy/FAMILY_STATUS.md` until that preflight and staged prompt/spec lane
+pass.
 
 ## Large Model Lifecycle
 
@@ -92,8 +97,8 @@ shortcut.
 
 After a meaningful run:
 
-1. Update `docs/FAMILY_STATUS.md` first. This is the source of truth for what a
-   customer can run and with which settings.
+1. Update `docs/skippy/FAMILY_STATUS.md` first. This is the source of truth for
+   what a customer can run and with which settings.
 2. Promote the reviewed capability record in
    `crates/skippy-topology/capabilities/reviewed-family-capabilities.json`
    when the run should drive planner policy.

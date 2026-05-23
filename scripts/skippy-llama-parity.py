@@ -26,6 +26,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = ROOT / "docs/skippy/llama-parity-candidates.json"
 DEFAULT_UPSTREAM_PIN = ROOT / "third_party/llama.cpp/upstream.txt"
+SHARDED_GGUF_RE = re.compile(r"-0*(\d+)-of-0*\d+\.gguf$", re.IGNORECASE)
 
 
 def repo_cache_dir(repo: str) -> Path:
@@ -137,6 +138,16 @@ def filter_priority(
     return [row for row in rows if str(row.get("priority", "p2")).lower() in requested]
 
 
+def candidate_file_rank(path: Path) -> int:
+    name = path.name.lower()
+    if "mmproj" in name:
+        return 3
+    shard = SHARDED_GGUF_RE.search(name)
+    if shard:
+        return 0 if int(shard.group(1)) == 1 else 2
+    return 1
+
+
 def resolve_candidate_file(candidate: dict[str, Any]) -> Path | None:
     repo = candidate.get("repo")
     include = candidate.get("include", "*.gguf")
@@ -152,7 +163,7 @@ def resolve_candidate_file(candidate: dict[str, Any]) -> Path | None:
         return None
     matches.sort(
         key=lambda path: (
-            "mmproj" in path.name.lower(),
+            candidate_file_rank(path),
             path.stat().st_size,
             str(path),
         )

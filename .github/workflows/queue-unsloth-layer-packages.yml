@@ -5,10 +5,22 @@ on:
     - cron: "23 17 * * *"
   workflow_dispatch:
     inputs:
+      author:
+        description: "Hugging Face author or organization to scan"
+        required: false
+        default: "unsloth"
+      search:
+        description: "Hugging Face model search query"
+        required: false
+        default: "GGUF"
       max_jobs:
         description: "Maximum HF Jobs to submit"
         required: false
         default: "5"
+      max_per_family:
+        description: "Maximum queued model(s) per inferred family"
+        required: false
+        default: "1"
       confirm:
         description: "Actually submit HF Jobs and wait for completion"
         required: false
@@ -22,6 +34,10 @@ on:
         description: "Comma-separated 4-bit quant preference"
         required: false
         default: "UD-Q4_K_XL,UD-Q4_K_M,Q4_K_XL,Q4_K_M"
+      split_candidate_vram_gib:
+        description: "Minimum selected-quant size in GiB for split-job candidates"
+        required: false
+        default: "8"
 
 permissions:
   contents: read
@@ -37,10 +53,14 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      AUTHOR: ${{ github.event.inputs.author || 'unsloth' }}
+      SEARCH: ${{ github.event.inputs.search || 'GGUF' }}
       MAX_JOBS: ${{ github.event.inputs.max_jobs || '5' }}
+      MAX_PER_FAMILY: ${{ github.event.inputs.max_per_family || '1' }}
       CONFIRM: ${{ github.event.inputs.confirm || 'false' }}
       MESH_LLM_REF: ${{ github.event.inputs.mesh_llm_ref || 'main' }}
       QUANT_PREFERENCE: ${{ github.event.inputs.quant_preference || 'UD-Q4_K_XL,UD-Q4_K_M,Q4_K_XL,Q4_K_M' }}
+      SPLIT_CANDIDATE_VRAM_GIB: ${{ github.event.inputs.split_candidate_vram_gib || '8' }}
 
     steps:
       - uses: actions/checkout@v5
@@ -57,9 +77,13 @@ jobs:
           set -euo pipefail
 
           args=(
+            --author "$AUTHOR"
+            --search "$SEARCH"
             --max-jobs "$MAX_JOBS"
+            --max-per-family "$MAX_PER_FAMILY"
             --mesh-llm-ref "$MESH_LLM_REF"
             --quant-preference "$QUANT_PREFERENCE"
+            --split-candidate-vram-gib "$SPLIT_CANDIDATE_VRAM_GIB"
           )
 
           if [[ "$CONFIRM" == "true" ]]; then

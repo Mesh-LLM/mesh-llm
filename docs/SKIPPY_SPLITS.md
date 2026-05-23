@@ -90,6 +90,10 @@ eligible derived cache entries.
 
 ## Verify a package before rollout
 
+For a brand-new model family or a large sharded GGUF candidate, start with the
+[new model onboarding checklist](skippy/NEW_MODEL_ONBOARDING.md) before adding a
+support-matrix entry.
+
 Package-only verification checks resolution, artifact integrity, and local stage
 materialization:
 
