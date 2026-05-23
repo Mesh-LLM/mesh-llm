@@ -337,6 +337,11 @@ pub(crate) fn servable_artifact_from_request(
         metadata.len() == declared.artifact_bytes,
         "cached artifact size mismatch"
     );
+    let actual_sha = file_sha256_hex(&path)?;
+    anyhow::ensure!(
+        actual_sha.eq_ignore_ascii_case(&declared.sha256),
+        "cached artifact sha256 mismatch"
+    );
     Ok(ServableArtifact {
         path,
         size: declared.artifact_bytes,
@@ -370,22 +375,30 @@ fn parse_hf_package_ref(package_ref: &str) -> Result<HfPackageRef> {
     let rest = package_ref
         .strip_prefix("hf://")
         .context("artifact transfer only supports hf:// package refs")?;
-    let (repo, revision) = if let Some((repo, revision)) = rest.split_once('@') {
-        (repo, revision)
-    } else if let Some(index) = rest.rfind(':') {
-        (&rest[..index], &rest[index + 1..])
-    } else {
-        (rest, "main")
-    };
+    let (repo, revision) = rest
+        .split_once('@')
+        .context("artifact transfer requires an explicit immutable hf://namespace/repo@revision")?;
     anyhow::ensure!(
         repo.split('/').count() == 2 && !repo.contains(':') && !repo.contains('@'),
         "HF package repo id must look like namespace/repo"
     );
-    anyhow::ensure!(!revision.trim().is_empty(), "HF package revision is empty");
+    let revision = revision.trim();
+    anyhow::ensure!(!revision.is_empty(), "HF package revision is empty");
+    anyhow::ensure!(
+        is_immutable_revision_hint(revision),
+        "artifact transfer requires an immutable HF package revision"
+    );
     Ok(HfPackageRef {
         repo: repo.to_string(),
         revision: revision.to_string(),
     })
+}
+
+fn is_immutable_revision_hint(revision: &str) -> bool {
+    !matches!(
+        revision.trim().to_ascii_lowercase().as_str(),
+        "main" | "master" | "latest" | "dev" | "develop" | "development"
+    )
 }
 
 fn hf_repo_cache_root(repo: &str) -> PathBuf {
@@ -797,6 +810,58 @@ mod tests {
         assert!(servable_artifact_from_request(&undeclared).is_err());
 
         restore_env("HF_HUB_CACHE", prev);
+    }
+
+    #[test]
+    #[serial]
+    fn servable_artifact_rejects_same_size_corrupt_cached_bytes() {
+        let prev = std::env::var_os("HF_HUB_CACHE");
+        let temp = tempfile::tempdir().unwrap();
+        std::env::set_var("HF_HUB_CACHE", temp.path());
+        let (package_dir, package_ref, manifest_sha) = write_package_fixture(temp.path());
+        fs::write(package_dir.join("layers/layer-000.gguf"), b"corrupt!").unwrap();
+
+        let request = skippy_protocol::proto::stage::StageArtifactTransferRequest {
+            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            requester_id: vec![1; 32],
+            topology_id: "topology-a".to_string(),
+            run_id: "run-a".to_string(),
+            stage_id: "stage-0".to_string(),
+            package_ref,
+            manifest_sha256: manifest_sha,
+            relative_path: "layers/layer-000.gguf".to_string(),
+            offset: 0,
+            expected_size: Some(8),
+            expected_sha256: Some(sha256_hex(b"layer000")),
+        };
+
+        let error = servable_artifact_from_request(&request).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cached artifact sha256 mismatch"),
+            "unexpected error: {error}"
+        );
+
+        restore_env("HF_HUB_CACHE", prev);
+    }
+
+    #[test]
+    fn peer_artifact_transfer_requires_explicit_non_mutable_revision() {
+        for package_ref in [
+            "hf://meshllm/demo-layers",
+            "hf://meshllm/demo-layers:abc123",
+            "hf://meshllm/demo-layers@main",
+            "hf://meshllm/demo-layers@master",
+            "hf://meshllm/demo-layers@latest",
+        ] {
+            assert!(
+                package_cache_dir_for_ref(package_ref).is_err(),
+                "{package_ref} must not be eligible for peer transfer"
+            );
+        }
+
+        assert!(package_cache_dir_for_ref("hf://meshllm/demo-layers@abc123").is_ok());
     }
 
     #[test]

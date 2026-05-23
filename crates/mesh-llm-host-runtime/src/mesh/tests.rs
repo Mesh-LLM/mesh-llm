@@ -2189,6 +2189,31 @@ async fn artifact_transfer_stream_serves_authorized_stage_artifact() -> Result<(
     recv.read_exact(&mut bytes).await?;
     assert_eq!(bytes, b"layer000");
 
+    let mut resume_request = request.clone();
+    resume_request.offset = 5;
+    let (mut resume_send, mut resume_recv) = client
+        .open_skippy_stage_mesh_stream(server_id, skippy_protocol::STAGE_STREAM_ARTIFACT_TRANSFER)
+        .await?;
+    write_len_prefixed(&mut resume_send, &resume_request.encode_to_vec()).await?;
+    resume_send.finish()?;
+    let resume_response_buf = read_len_prefixed(&mut resume_recv).await?;
+    let resume_response =
+        skippy_stage_proto::StageArtifactTransferResponse::decode(resume_response_buf.as_slice())?;
+    assert!(
+        resume_response.accepted,
+        "resume artifact response: {:?}",
+        resume_response.error
+    );
+    assert_eq!(resume_response.total_size, 8);
+    assert_eq!(
+        resume_response.sha256.as_deref(),
+        Some(expected_sha.as_str())
+    );
+    let mut resumed_bytes =
+        vec![0u8; (resume_response.total_size - resume_request.offset) as usize];
+    resume_recv.read_exact(&mut resumed_bytes).await?;
+    assert_eq!(resumed_bytes, b"000");
+
     let conn = client.stage_connection_to_peer(server_id).await?;
     let (mut legacy_send, mut legacy_recv) = conn.open_bi().await?;
     legacy_send
@@ -2213,6 +2238,85 @@ async fn artifact_transfer_stream_serves_authorized_stage_artifact() -> Result<(
     legacy_recv.read_exact(&mut legacy_bytes).await?;
     assert_eq!(legacy_bytes, b"layer000");
     assert!(package_dir.join("model-package.json").is_file());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn artifact_transfer_stream_rejects_corrupt_same_size_cached_artifact() -> Result<()> {
+    use crate::protocol::{read_len_prefixed, write_len_prefixed};
+    use base64::Engine as _;
+    use prost::Message as _;
+
+    let cache = tempfile::tempdir().unwrap();
+    let _cache_guard = EnvVarGuard::set("HF_HUB_CACHE", cache.path());
+    let _transfer_guard = EnvVarGuard::set_str("MESH_LLM_ARTIFACT_TRANSFER", "1");
+    let (package_dir, package_ref, manifest_sha256) =
+        write_hf_artifact_stream_package(cache.path());
+    std::fs::write(package_dir.join("layers/layer-000.gguf"), b"corrupt!").unwrap();
+    let server = make_test_node(super::NodeRole::Host { http_port: 9337 }).await?;
+    let client = make_test_node(super::NodeRole::Worker).await?;
+    server
+        .set_mesh_id("artifact-transfer-corrupt-mesh".to_string())
+        .await;
+    client
+        .set_mesh_id("artifact-transfer-corrupt-mesh".to_string())
+        .await;
+    server.start_accepting();
+    client.start_accepting();
+
+    let server_id = server.id();
+    let client_id = client.id();
+    let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&server.endpoint.addr())?);
+    client.join(&invite).await?;
+    wait_for_peer(&client, server_id).await;
+    wait_for_peer(&server, client_id).await;
+    server
+        .record_stage_topology(StageTopologyInstance {
+            topology_id: "topology-artifact-corrupt".to_string(),
+            run_id: "run-artifact-corrupt".to_string(),
+            model_id: "model-artifact".to_string(),
+            package_ref: package_ref.clone(),
+            manifest_sha256: manifest_sha256.clone(),
+            stages: vec![StageAssignment {
+                stage_id: "stage-0".to_string(),
+                stage_index: 0,
+                node_id: client_id,
+                layer_start: 0,
+                layer_end: 1,
+                endpoint: StageEndpoint {
+                    bind_addr: String::new(),
+                },
+            }],
+        })
+        .await;
+
+    let request = skippy_stage_proto::StageArtifactTransferRequest {
+        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        requester_id: client_id.as_bytes().to_vec(),
+        topology_id: "topology-artifact-corrupt".to_string(),
+        run_id: "run-artifact-corrupt".to_string(),
+        stage_id: "stage-0".to_string(),
+        package_ref,
+        manifest_sha256,
+        relative_path: "layers/layer-000.gguf".to_string(),
+        offset: 0,
+        expected_size: Some(8),
+        expected_sha256: Some(sha256_hex(b"layer000")),
+    };
+
+    let (mut send, mut recv) = client
+        .open_skippy_stage_mesh_stream(server_id, skippy_protocol::STAGE_STREAM_ARTIFACT_TRANSFER)
+        .await?;
+    write_len_prefixed(&mut send, &request.encode_to_vec()).await?;
+    send.finish()?;
+    let response_buf = read_len_prefixed(&mut recv).await?;
+    let response =
+        skippy_stage_proto::StageArtifactTransferResponse::decode(response_buf.as_slice())?;
+    assert!(!response.accepted);
+    assert_eq!(response.error.as_deref(), Some("artifact unavailable"));
 
     Ok(())
 }
@@ -2314,6 +2418,44 @@ async fn artifact_transfer_body_read_has_idle_timeout() {
     assert!(error
         .to_string()
         .contains("artifact transfer body read idle timeout"));
+}
+
+#[test]
+fn artifact_transfer_invalid_resume_offset_removes_preserved_partial() {
+    let temp = tempfile::tempdir().unwrap();
+    let partial = temp.path().join(".model-package.json.stale.part");
+    std::fs::write(&partial, b"stale manifest bytes").unwrap();
+    let mut guard = PartialArtifactGuard::preserve_on_error(partial.clone());
+    let response = skippy_stage_proto::StageArtifactTransferResponse {
+        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        accepted: false,
+        total_size: 8,
+        sha256: Some(sha256_hex(b"manifest")),
+        error: Some(ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR.to_string()),
+    };
+
+    Node::remove_invalid_resume_partial(&mut guard, 128, &response);
+
+    assert!(!partial.exists());
+}
+
+#[test]
+fn artifact_transfer_smaller_resume_response_removes_preserved_partial() {
+    let temp = tempfile::tempdir().unwrap();
+    let partial = temp.path().join(".model-package.json.oversized.part");
+    std::fs::write(&partial, b"stale manifest bytes").unwrap();
+    let mut guard = PartialArtifactGuard::preserve_on_error(partial.clone());
+    let response = skippy_stage_proto::StageArtifactTransferResponse {
+        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        accepted: true,
+        total_size: 8,
+        sha256: Some(sha256_hex(b"manifest")),
+        error: None,
+    };
+
+    Node::remove_invalid_resume_partial(&mut guard, 128, &response);
+
+    assert!(!partial.exists());
 }
 
 #[test]

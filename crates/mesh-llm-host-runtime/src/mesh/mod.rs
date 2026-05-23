@@ -30,6 +30,13 @@ use crate::crypto::{
 };
 use crate::protocol::*;
 
+use self::artifact_transfer_io::{
+    append_artifact_transfer_body, select_partial_artifact, PartialArtifactGuard,
+};
+
+#[cfg(test)]
+use self::artifact_transfer_io::read_artifact_transfer_chunk;
+
 use skippy_protocol::proto::stage as skippy_stage_proto;
 
 const PRETTY_LOCAL_REQUEST_WINDOW_SECS: u64 = 24 * 60 * 60;
@@ -68,6 +75,7 @@ pub(super) const PEER_CONNECT_AND_GOSSIP_TIMEOUT: std::time::Duration =
 const ARTIFACT_TRANSFER_OPEN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const ARTIFACT_TRANSFER_BUFFER_BYTES: usize = 1024 * 1024;
+const ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR: &str = "invalid transfer offset";
 
 type MeshBiStream = (iroh::endpoint::SendStream, iroh::endpoint::RecvStream);
 
@@ -293,66 +301,6 @@ fn control_endpoint_addr(
         addr.addrs.insert(TransportAddr::Ip(advertise_addr));
     }
     addr
-}
-
-fn partial_artifact_path(destination: &std::path::Path) -> std::path::PathBuf {
-    let file_name = destination
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("artifact");
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    destination.with_file_name(format!(
-        ".{file_name}.{}.{}.part",
-        std::process::id(),
-        unique
-    ))
-}
-
-struct PartialArtifactGuard {
-    path: std::path::PathBuf,
-    armed: bool,
-}
-
-impl PartialArtifactGuard {
-    fn new(path: std::path::PathBuf) -> Self {
-        Self { path, armed: true }
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for PartialArtifactGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
-async fn read_artifact_transfer_chunk<R>(
-    reader: &mut R,
-    buffer: &mut [u8],
-    idle_timeout: std::time::Duration,
-) -> Result<usize>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let read = tokio::time::timeout(idle_timeout, tokio::io::AsyncReadExt::read(reader, buffer))
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!("artifact transfer body read idle timeout after {idle_timeout:?}")
-        })?
-        .context("read artifact transfer bytes")?;
-    anyhow::ensure!(
-        read > 0,
-        "artifact transfer ended before expected byte count"
-    );
-    Ok(read)
 }
 
 async fn write_artifact_transfer_response(
@@ -5734,8 +5682,6 @@ impl Node {
         artifact: &crate::models::artifact_transfer::PackageArtifactRequest,
         destination: &std::path::Path,
     ) -> Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         if let Some(parent) = destination.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -5745,9 +5691,11 @@ impl Node {
             &artifact.package_ref,
             destination,
         )?;
-        let temp_path = partial_artifact_path(destination);
-        let mut partial_guard = PartialArtifactGuard::new(temp_path.clone());
-        let offset = 0;
+        let resume_limit = Self::artifact_transfer_resume_limit(artifact)?;
+        let partial = select_partial_artifact(destination, resume_limit)?;
+        let temp_path = partial.path;
+        let offset = partial.offset;
+        let mut partial_guard = PartialArtifactGuard::preserve_on_error(temp_path.clone());
 
         let frame = skippy_stage_proto::StageArtifactTransferRequest {
             gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
@@ -5788,6 +5736,7 @@ impl Node {
         .await
         .map_err(|_| anyhow::anyhow!("timeout opening artifact transfer stream"))??;
         let (mut recv, response) = response;
+        Self::remove_invalid_resume_partial(&mut partial_guard, offset, &response);
         if !response.accepted {
             anyhow::bail!(
                 "peer artifact transfer rejected: {}",
@@ -5826,29 +5775,15 @@ impl Node {
         );
 
         let transfer_result = async {
-            let mut file = tokio::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temp_path)
-                .await
-                .context("open partial artifact")?;
-            let mut remaining = response.total_size.saturating_sub(offset);
-            let mut buffer = vec![0u8; ARTIFACT_TRANSFER_BUFFER_BYTES];
-            while remaining > 0 {
-                let limit = buffer.len().min(remaining as usize);
-                let read = read_artifact_transfer_chunk(
-                    &mut recv,
-                    &mut buffer[..limit],
-                    ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
-                )
-                .await?;
-                file.write_all(&buffer[..read])
-                    .await
-                    .context("write partial artifact")?;
-                remaining -= read as u64;
-            }
-            file.flush().await.context("flush partial artifact")?;
-            drop(file);
+            append_artifact_transfer_body(
+                &mut recv,
+                &temp_path,
+                offset,
+                response.total_size,
+                ARTIFACT_TRANSFER_BUFFER_BYTES,
+                ARTIFACT_TRANSFER_READ_IDLE_TIMEOUT,
+            )
+            .await?;
 
             let actual_size = tokio::fs::metadata(&temp_path)
                 .await
@@ -5883,11 +5818,53 @@ impl Node {
         }
         .await;
         if let Err(error) = transfer_result {
-            let _ = tokio::fs::remove_file(&temp_path).await;
+            let error_message = error.to_string();
+            if error_message.contains("transferred artifact sha256 mismatch")
+                || error_message.contains("partial artifact size mismatch after transfer")
+            {
+                partial_guard.remove_now();
+            }
             return Err(error);
         }
         partial_guard.disarm();
         Ok(())
+    }
+
+    fn remove_invalid_resume_partial(
+        partial_guard: &mut PartialArtifactGuard,
+        offset: u64,
+        response: &skippy_stage_proto::StageArtifactTransferResponse,
+    ) {
+        if Self::artifact_transfer_response_invalidates_resume_offset(offset, response) {
+            partial_guard.remove_now();
+        }
+    }
+
+    fn artifact_transfer_response_invalidates_resume_offset(
+        offset: u64,
+        response: &skippy_stage_proto::StageArtifactTransferResponse,
+    ) -> bool {
+        if offset == 0 {
+            return false;
+        }
+        if response.accepted {
+            return offset > response.total_size;
+        }
+        response.error.as_deref() == Some(ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR)
+    }
+
+    fn artifact_transfer_resume_limit(
+        artifact: &crate::models::artifact_transfer::PackageArtifactRequest,
+    ) -> Result<u64> {
+        if let Some(expected_size) = artifact.expected_size {
+            return Ok(expected_size);
+        }
+        if artifact.relative_path.as_path()
+            == std::path::Path::new(crate::models::artifact_transfer::PACKAGE_MANIFEST_FILE)
+        {
+            return Ok(crate::models::artifact_transfer::MAX_PACKAGE_MANIFEST_BYTES);
+        }
+        anyhow::bail!("artifact transfer resume requires an expected artifact size")
     }
 
     async fn artifact_transfer_rejected(
@@ -5993,25 +5970,32 @@ impl Node {
         send: &mut iroh::endpoint::SendStream,
         request: &skippy_stage_proto::StageArtifactTransferRequest,
     ) -> anyhow::Result<Option<crate::models::artifact_transfer::ServableArtifact>> {
-        let artifact =
-            match crate::models::artifact_transfer::servable_artifact_from_request(request) {
-                Ok(artifact) => artifact,
-                Err(error) => {
-                    tracing::debug!(
-                        peer = %remote.fmt_short(),
-                        path = %request.relative_path,
-                        "artifact transfer request cannot be served: {error}"
-                    );
-                    Self::artifact_transfer_rejected(send, 0, None, "artifact unavailable").await?;
-                    return Ok(None);
-                }
-            };
+        let request_for_resolution = request.clone();
+        let artifact = match tokio::task::spawn_blocking(move || {
+            crate::models::artifact_transfer::servable_artifact_from_request(
+                &request_for_resolution,
+            )
+        })
+        .await
+        .context("join artifact transfer resolution task")?
+        {
+            Ok(artifact) => artifact,
+            Err(error) => {
+                tracing::debug!(
+                    peer = %remote.fmt_short(),
+                    path = %request.relative_path,
+                    "artifact transfer request cannot be served: {error}"
+                );
+                Self::artifact_transfer_rejected(send, 0, None, "artifact unavailable").await?;
+                return Ok(None);
+            }
+        };
         if request.offset > artifact.size {
             Self::artifact_transfer_rejected(
                 send,
                 artifact.size,
                 Some(&artifact.sha256),
-                "invalid transfer offset",
+                ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR,
             )
             .await?;
             return Ok(None);
@@ -8323,6 +8307,7 @@ fn ensure_private_node_key_file(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+mod artifact_transfer_io;
 mod gossip;
 mod heartbeat;
 pub use gossip::backfill_legacy_descriptors;
