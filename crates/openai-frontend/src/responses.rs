@@ -161,22 +161,26 @@ fn reasoning_object_override(value: Option<&Value>) -> Result<Option<bool>, Open
     let object = value
         .as_object()
         .ok_or_else(|| OpenAiError::invalid_request("reasoning must be an object"))?;
-    let mut enabled = optional_bool_field(object, "enabled")?;
-    if let Some(effort) = optional_string_field(object, "effort")? {
-        enabled = Some(match effort {
-            "none" => false,
-            "minimal" | "low" | "medium" | "high" | "xhigh" => true,
-            _ => {
-                return Err(OpenAiError::invalid_request(
-                    "reasoning.effort must be one of none, minimal, low, medium, high, xhigh",
-                ));
-            }
-        });
+    let enabled = optional_bool_field(object, "enabled")?;
+    let effort = optional_string_field(object, "effort")?;
+    let effort_is_valid = match effort {
+        Some("none" | "minimal" | "low" | "medium" | "high" | "xhigh") | None => true,
+        Some(_) => false,
+    };
+    if !effort_is_valid {
+        return Err(OpenAiError::invalid_request(
+            "reasoning.effort must be one of none, minimal, low, medium, high, xhigh",
+        ));
     }
-    if optional_u32_field(object, "max_tokens")? == Some(0) {
-        enabled = Some(false);
+    let max_tokens = optional_u32_field(object, "max_tokens")?;
+
+    if enabled == Some(false) || effort == Some("none") || max_tokens == Some(0) {
+        Ok(Some(false))
+    } else if enabled == Some(true) || effort.is_some() || max_tokens.is_some() {
+        Ok(Some(true))
+    } else {
+        Ok(None)
     }
-    Ok(enabled)
 }
 
 fn chat_template_kwargs_override(object: &Map<String, Value>) -> Result<bool, OpenAiError> {
@@ -1241,6 +1245,24 @@ mod tests {
         assert_eq!(
             body["chat_template_kwargs"],
             json!({"enable_thinking": false, "custom": "kept"})
+        );
+    }
+
+    #[test]
+    fn normalize_chat_reasoning_enabled_false_wins_over_nested_effort() {
+        let mut body = json!({
+            "model": "direct-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "reasoning": {"enabled": false, "effort": "low"}
+        });
+
+        let normalized = normalize_openai_compat_request("/v1/chat/completions", &mut body)
+            .expect("chat request should normalize");
+
+        assert!(normalized.changed);
+        assert_eq!(
+            body["chat_template_kwargs"]["enable_thinking"],
+            json!(false)
         );
     }
 

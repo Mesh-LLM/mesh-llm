@@ -5425,6 +5425,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_reasoning_enabled_false_wins_over_nested_effort_before_forwarding() {
+        let body = serde_json::json!({
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning": {"enabled": false, "effort": "low"}
+        })
+        .to_string();
+        let raw = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let request = read_request_from_parts(vec![raw.into_bytes()]).await;
+        let forwarded = parse_json_body_from_http_request(&request.raw).unwrap();
+
+        assert_eq!(
+            forwarded["chat_template_kwargs"]["enable_thinking"],
+            serde_json::json!(false)
+        );
+        assert_eq!(request.body_json, Some(forwarded));
+    }
+
+    #[tokio::test]
     async fn test_read_http_request_large_body_over_32k() {
         let large = "x".repeat(40_000);
         let body = serde_json::json!({
