@@ -142,6 +142,30 @@ impl KvStageIntegration {
         Ok(None)
     }
 
+    /// Evict one LRU resident prefix entry. This is the **proactive
+    /// eviction** path: it runs outside the normal
+    /// `allocate_for_record` flow so the decode loop can free KV cells
+    /// before grammar-triggered retries need them.
+    ///
+    /// Returns whether an entry was actually evicted. Errors from the
+    /// C-side drop callback are propagated.
+    pub fn evict_one_resident_prefix(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+    ) -> Result<bool> {
+        if self.payload != StagePrefixCachePayload::ResidentKv {
+            return Ok(false);
+        }
+        let mut cache = self
+            .resident
+            .lock()
+            .expect("resident prefix cache lock poisoned");
+        let mut drop_fn = |seq_id: i32| runtime.drop_resident_prefix_sequence(session_id, seq_id);
+        let evicted = cache.evict_one_lru_entry(&mut drop_fn)?;
+        Ok(evicted.is_some())
+    }
+
     pub fn release_resident_prefix(&self, page_id: &str) {
         self.resident
             .lock()

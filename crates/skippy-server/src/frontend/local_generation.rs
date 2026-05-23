@@ -285,6 +285,12 @@ impl StageOpenAiBackend {
                         }
                     }
                 }
+                // Proactive eviction: after prefill recording, evict one
+                // LRU resident prefix entry to free KV cells for
+                // grammar-triggered retries during the decode loop.
+                if let Some(kv) = self.kv.as_ref() {
+                    let _ = kv.evict_one_resident_prefix(&mut runtime, &session_id);
+                }
                 let runtime_sessions_after = runtime.session_stats();
                 let runtime_lock_hold_ms = runtime_lock_hold_timer.elapsed_ms();
                 let mut attrs = self.openai_attrs(request.ids);

@@ -287,6 +287,14 @@ impl StageOpenAiBackend {
         };
         let max_tokens = max_tokens.resolve(prefill.position as usize, self.ctx_size)?;
 
+        // Proactive eviction: free one resident prefix KV slot for
+        // grammar-triggered retries during the coming decode loop.
+        if let Some(kv) = self.kv.as_ref() {
+            if let Ok(mut runtime) = self.runtime.lock() {
+                let _ = kv.evict_one_resident_prefix(&mut runtime, &session_id);
+            }
+        }
+
         let mut collector =
             TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk);
         let result = (|| {
