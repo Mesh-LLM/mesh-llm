@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
-use mesh_llm_api::events::{Event, EventListener};
-use mesh_llm_api::{
+use mesh_llm_api_server::events::{Event, EventListener};
+use mesh_llm_api_server::{
     ChatMessage, ChatRequest, DevicePolicy, DownloadOptions, InviteToken, LoadModelOptions,
     MeshApiError, MeshNode, OwnerKeypair, ResponsesRequest, UnloadModelOptions, UnloadTarget,
 };
@@ -237,7 +237,7 @@ impl Node {
     pub async fn cancel(&self, request_id: String) -> Result<()> {
         self.node
             .inference()
-            .cancel(mesh_llm_api::RequestId(request_id))
+            .cancel(mesh_llm_api_server::RequestId(request_id))
             .await
             .map_err(to_napi_error)
     }
@@ -258,7 +258,7 @@ impl Node {
         let models = self
             .node
             .models()
-            .search(mesh_llm_api::ModelSearchQuery {
+            .search(mesh_llm_api_server::ModelSearchQuery {
                 query,
                 limit: limit.map(|value| value as usize),
             })
@@ -578,7 +578,7 @@ fn parse_device_policy(value: &Value) -> Result<DevicePolicy> {
     }
 }
 
-fn model_summary_json(model: mesh_llm_api::ModelSummary) -> Value {
+fn model_summary_json(model: mesh_llm_api_server::ModelSummary) -> Value {
     json!({
         "id": model.id,
         "name": model.name,
@@ -588,7 +588,7 @@ fn model_summary_json(model: mesh_llm_api::ModelSummary) -> Value {
     })
 }
 
-fn served_model_json(model: mesh_llm_api::ServedModel) -> Value {
+fn served_model_json(model: mesh_llm_api_server::ServedModel) -> Value {
     json!({
         "modelRef": model.model_ref,
         "modelId": model.model_id,
@@ -601,7 +601,7 @@ fn served_model_json(model: mesh_llm_api::ServedModel) -> Value {
     })
 }
 
-fn capabilities_json(value: mesh_llm_api::ModelCapabilities) -> Value {
+fn capabilities_json(value: mesh_llm_api_server::ModelCapabilities) -> Value {
     json!({
         "multimodal": value.multimodal,
         "vision": capability_level_json(value.vision),
@@ -612,24 +612,24 @@ fn capabilities_json(value: mesh_llm_api::ModelCapabilities) -> Value {
     })
 }
 
-fn serving_model_state_json(value: mesh_llm_api::ServingModelState) -> Value {
+fn serving_model_state_json(value: mesh_llm_api_server::ServingModelState) -> Value {
     match value {
-        mesh_llm_api::ServingModelState::Loading => json!({ "type": "Loading" }),
-        mesh_llm_api::ServingModelState::Ready => json!({ "type": "Ready" }),
-        mesh_llm_api::ServingModelState::Failed => json!({ "type": "Failed" }),
-        mesh_llm_api::ServingModelState::Unloading => json!({ "type": "Unloading" }),
-        mesh_llm_api::ServingModelState::Stopped => json!({ "type": "Stopped" }),
-        mesh_llm_api::ServingModelState::Unknown(value) => {
+        mesh_llm_api_server::ServingModelState::Loading => json!({ "type": "Loading" }),
+        mesh_llm_api_server::ServingModelState::Ready => json!({ "type": "Ready" }),
+        mesh_llm_api_server::ServingModelState::Failed => json!({ "type": "Failed" }),
+        mesh_llm_api_server::ServingModelState::Unloading => json!({ "type": "Unloading" }),
+        mesh_llm_api_server::ServingModelState::Stopped => json!({ "type": "Stopped" }),
+        mesh_llm_api_server::ServingModelState::Unknown(value) => {
             json!({ "type": "Unknown", "value": value })
         }
     }
 }
 
-fn capability_level_json(value: mesh_llm_api::CapabilityLevel) -> Value {
+fn capability_level_json(value: mesh_llm_api_server::CapabilityLevel) -> Value {
     match value {
-        mesh_llm_api::CapabilityLevel::None => json!({ "type": "None" }),
-        mesh_llm_api::CapabilityLevel::Likely => json!({ "type": "Likely" }),
-        mesh_llm_api::CapabilityLevel::Supported => json!({ "type": "Supported" }),
+        mesh_llm_api_server::CapabilityLevel::None => json!({ "type": "None" }),
+        mesh_llm_api_server::CapabilityLevel::Likely => json!({ "type": "Likely" }),
+        mesh_llm_api_server::CapabilityLevel::Supported => json!({ "type": "Supported" }),
     }
 }
 

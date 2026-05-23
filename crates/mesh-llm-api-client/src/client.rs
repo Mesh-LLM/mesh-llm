@@ -45,7 +45,7 @@ impl ClientBuilder {
             config: ClientConfig {
                 owner_keypair,
                 invite_token,
-                user_agent: format!("mesh-llm-api/{}", env!("CARGO_PKG_VERSION")),
+                user_agent: format!("mesh-llm-api-client/{}", env!("CARGO_PKG_VERSION")),
                 connect_timeout: Duration::from_secs(30),
             },
         }

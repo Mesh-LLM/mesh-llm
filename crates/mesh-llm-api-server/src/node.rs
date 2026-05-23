@@ -276,7 +276,7 @@ impl Default for MeshNodeBuilder {
         Self {
             owner_keypair: None,
             invite_token: None,
-            user_agent: format!("mesh-llm-api/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("mesh-llm-api-server/{}", env!("CARGO_PKG_VERSION")),
             connect_timeout: Duration::from_secs(30),
             cache_dir: None,
             runtime_dir: None,

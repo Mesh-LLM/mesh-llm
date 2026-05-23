@@ -29,7 +29,7 @@ The current tree already has pieces of this split across the CLI, host runtime,
 client SDK crates, and management API:
 
 - `mesh-client` contains low-level client transport and routing behavior
-- `mesh-llm-api` exposes a client-oriented Rust SDK
+- `mesh-llm-api-server` exposes a client-oriented Rust SDK
 - `mesh-llm-ffi` wraps the SDK for Swift and Kotlin
 - `mesh-llm-node` exists as the intended embeddable node boundary
 - `mesh-llm-host-runtime` owns CLI, management API, model acquisition, model
@@ -372,7 +372,7 @@ pub enum MeshEvent {
 
 Target ownership:
 
-- `mesh-sdk` or the reworked `mesh-llm-api`
+- `mesh-sdk` or the reworked `mesh-llm-api-server`
   - public Rust SDK: `MeshNode`, namespaced APIs, public SDK types
 - `mesh-client`
   - low-level client transport, routing, request forwarding, protocol handling
@@ -386,7 +386,7 @@ Target ownership:
 - `sdk/kotlin`
   - thin generated Kotlin/JVM/Android package and wrapper ergonomics
 
-The existing `mesh-llm-api` crate may be renamed to `mesh-sdk` or reworked in place.
+The existing `mesh-llm-api-server` crate may be renamed to `mesh-sdk` or reworked in place.
 Because there are no known external users, keeping the old `MeshClient` naming
 is not required.
 
@@ -403,7 +403,7 @@ phases.
 
 | Responsibility | Current home | Target owner |
 |---|---|---|
-| Client join, model list, chat, responses, cancel, reconnect | `mesh-client`, `mesh-llm-api` | `MeshNode::inference()` backed by `mesh-client` |
+| Client join, model list, chat, responses, cancel, reconnect | `mesh-client`, `mesh-llm-api-server` | `MeshNode::inference()` backed by `mesh-client` |
 | Model search, show, recommended, download | CLI/model modules in `mesh-llm-host-runtime` | `MeshNode::models()` backed by model-management library code |
 | Installed model scanning and cache status | `models/local.rs` and related host modules | `MeshNode::models()` |
 | Model delete, cleanup, derived-cache prune | CLI/model modules in `mesh-llm-host-runtime` | `MeshNode::models()` |
@@ -501,7 +501,7 @@ Extraction and SDK changes should keep the existing TDD discipline:
 
 Minimum gates by change type:
 
-- client/inference SDK changes: `cargo test -p mesh-client -p mesh-llm-api`
+- client/inference SDK changes: `cargo test -p mesh-client -p mesh-llm-api-server`
 - FFI changes: `cargo test -p mesh-llm-ffi` plus Swift/Kotlin smoke where touched
 - model-management changes: model search/show/download/installed/delete tests
 - serving changes: runtime load/unload/status tests plus mixed-version protocol

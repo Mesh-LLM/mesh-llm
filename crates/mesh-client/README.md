@@ -9,15 +9,15 @@ integration boundary.
 
 Most consumers should depend on:
 
-- `crates/mesh-llm-api/` for the public Rust client SDK
+- `crates/mesh-llm-api-server/` for the public Rust client SDK
 
 Language bindings should generally reach this crate through:
 
-- `crates/mesh-llm-api/`
+- `crates/mesh-llm-api-server/`
 - `crates/mesh-llm-ffi/`
 
 Keep this crate implementation-focused. Public, app-facing ergonomics should be
-added in `crates/mesh-llm-api/`, not here.
+added in `crates/mesh-llm-api-server/`, not here.
 
 Shared protocol-facing model/type definitions are owned by
 `crates/mesh-llm-types/` and re-exported here where existing client call sites

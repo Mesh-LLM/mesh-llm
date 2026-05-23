@@ -3684,22 +3684,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "mesh-llm-api"
-version = "0.66.0"
-dependencies = [
- "anyhow",
- "mesh-llm-api-client",
- "mesh-llm-node",
- "tokio",
-]
-
-[[package]]
 name = "mesh-llm-api-client"
 version = "0.66.0"
 dependencies = [
  "hex",
  "mesh-llm-client",
  "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "mesh-llm-api-server"
+version = "0.66.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-api-client",
+ "mesh-llm-node",
  "tokio",
 ]
 
@@ -3738,7 +3738,7 @@ dependencies = [
 name = "mesh-llm-ffi"
 version = "0.66.0"
 dependencies = [
- "mesh-llm-api",
+ "mesh-llm-api-server",
  "mesh-llm-host-runtime",
  "mesh-llm-node",
  "thiserror 2.0.18",
@@ -3784,7 +3784,7 @@ dependencies = [
  "keyring",
  "libc",
  "mdns-sd",
- "mesh-llm-api",
+ "mesh-llm-api-server",
  "mesh-llm-client",
  "mesh-llm-identity",
  "mesh-llm-node",
@@ -3869,7 +3869,7 @@ dependencies = [
 name = "mesh-llm-nodejs"
 version = "0.66.0"
 dependencies = [
- "mesh-llm-api",
+ "mesh-llm-api-server",
  "mesh-llm-host-runtime",
  "napi",
  "napi-build",

@@ -128,7 +128,7 @@ unpublished_registry_deps() {
                 model-hf \
                 model-ref
             ;;
-        mesh-llm-api)
+        mesh-llm-api-server)
             printf '%s\n' \
                 mesh-llm-api-client \
                 mesh-llm-node
@@ -160,7 +160,7 @@ publish_crates=(
     mesh-llm-client
     mesh-llm-api-client
     mesh-llm-node
-    mesh-llm-api
+    mesh-llm-api-server
 )
 
 for index in "${!publish_crates[@]}"; do

@@ -1433,7 +1433,10 @@ impl plugin::PluginRpcBridge for BlackboardApiTestBridge {
 }
 
 fn temp_blobstore_root(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("mesh-llm-api-{name}-{}", rand::random::<u64>()))
+    std::env::temp_dir().join(format!(
+        "mesh-llm-api-server-{name}-{}",
+        rand::random::<u64>()
+    ))
 }
 
 async fn build_blobstore_api_plugin_manager() -> (plugin::PluginManager, std::path::PathBuf) {

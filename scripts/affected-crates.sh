@@ -21,7 +21,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-client"
   "mesh-mixture-of-agents"
   "mesh-llm-api-client"
-  "mesh-llm-api"
+  "mesh-llm-api-server"
   "mesh-llm-node"
   "mesh-llm-ffi"
   "mesh-llm-nodejs"

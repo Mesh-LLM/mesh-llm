@@ -14,7 +14,7 @@ SDK crates:
 
 - `crates/mesh-client/` for the low-level client implementation
 - `crates/mesh-llm-api-client/` for the public Rust client-only SDK API
-- `crates/mesh-llm-api/` for the public Rust node SDK API
+- `crates/mesh-llm-api-server/` for the public Rust node SDK API
 - `crates/mesh-llm-node/` for embeddable model management and serving
   orchestration. Serving SDK calls should bind to in-process node
   controllers, not the local REST management API.

@@ -70,7 +70,7 @@ jobs:
             crates/mesh-llm-plugin/ \
             crates/mesh-client/ \
             crates/mesh-llm-api-client/ \
-            crates/mesh-llm-api/ \
+            crates/mesh-llm-api-server/ \
             crates/mesh-llm-node/ \
             crates/mesh-llm-ffi/ \
             crates/mesh-llm-test-harness/ \

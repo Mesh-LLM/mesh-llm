@@ -23,7 +23,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-plugin"
   "mesh-llm-client"
   "mesh-llm-api-client"
-  "mesh-llm-api"
+  "mesh-llm-api-server"
   "mesh-llm-node"
   "mesh-llm-ffi"
   "mesh-llm-nodejs"
@@ -129,7 +129,7 @@ weights = {
     "model-hf": 4,
     "model-resolver": 3,
     "mesh-llm-api-client": 1,
-    "mesh-llm-api": 3,
+    "mesh-llm-api-server": 3,
     "mesh-llm-gpu-bench": 3,
     "llama-spec-bench": 3,
     "skippy-prompt": 3,

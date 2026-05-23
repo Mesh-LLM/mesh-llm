@@ -1,5 +1,5 @@
 [package]
-name = "mesh-llm-api"
+name = "mesh-llm-api-server"
 version.workspace = true
 edition = "2021"
 description = "Public Rust SDK for embedding Mesh LLM nodes in applications"

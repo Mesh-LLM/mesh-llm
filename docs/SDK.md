@@ -9,7 +9,7 @@ MeshLLM exposes two SDK roles across Rust, Swift, Kotlin, and Node.js:
 The SDK is split into two parts:
 
 - **Language SDKs** provide the public API: Rust `mesh-llm-api-client` for
-  client-only apps, Rust `mesh-llm-api` for node/serving apps, Swift `MeshLLM`,
+  client-only apps, Rust `mesh-llm-api-server` for node/serving apps, Swift `MeshLLM`,
   Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
 - **Native runtime artifacts** provide local serving for a specific
   platform/backend, such as macOS Metal or Linux CUDA.
@@ -26,14 +26,14 @@ Add the Rust SDK crate:
 ```toml
 [dependencies]
 mesh-llm-api-client = "0.66.0" # connect to an existing mesh
-mesh-llm-api = "0.66.0"
+mesh-llm-api-server = "0.66.0"
 ```
 
 For client-only mesh inference, depend on `mesh-llm-api-client`. For model
-management and serving, depend on `mesh-llm-api`.
+management and serving, depend on `mesh-llm-api-server`.
 
 For local serving in a Rust app, the node must be built with a
-`ServingController`. The plain `mesh-llm-api` crate intentionally does not pick
+`ServingController`. The plain `mesh-llm-api-server` crate intentionally does not pick
 a Metal, CUDA, ROCm, Vulkan, or CPU runtime for you.
 
 ### Swift
@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
 Create a node when the app also needs model management or local serving:
 
 ```rust
-use mesh_llm_api::{InviteToken, MeshNode, OwnerKeypair};
+use mesh_llm_api_server::{InviteToken, MeshNode, OwnerKeypair};
 
 let owner = OwnerKeypair::generate();
 let invite = "your-invite-token".parse::<InviteToken>()?;
@@ -177,7 +177,7 @@ let node = MeshNode::builder()
 Model management APIs are available on `MeshNode` without local serving:
 
 ```rust
-use mesh_llm_api::{DownloadOptions, ModelSearchQuery};
+use mesh_llm_api_server::{DownloadOptions, ModelSearchQuery};
 
 let matches = node.models().search(ModelSearchQuery {
     query: "Qwen2.5 3B instruct GGUF".to_string(),
@@ -193,10 +193,10 @@ let downloaded = node.models()
 To serve from Rust, attach a real controller:
 
 ```rust
-use mesh_llm_api::{DevicePolicy, LoadModelOptions, MeshNode, UnloadModelOptions};
+use mesh_llm_api_server::{DevicePolicy, LoadModelOptions, MeshNode, UnloadModelOptions};
 use std::sync::Arc;
 
-let controller: Arc<dyn mesh_llm_api::ServingController> = build_controller();
+let controller: Arc<dyn mesh_llm_api_server::ServingController> = build_controller();
 
 let node = MeshNode::builder()
     .identity(owner)
@@ -220,7 +220,7 @@ node.serving()
 ```
 
 If no controller is attached, `serving.load()` returns an unsupported error.
-This is intentional: `mesh-llm-api` is platform-neutral and does not silently
+This is intentional: `mesh-llm-api-server` is platform-neutral and does not silently
 choose a native backend.
 
 ## Swift Usage

@@ -87,7 +87,7 @@ The chain currently publishes:
 7. `model-hf`
 8. `mesh-llm-client`
 9. `mesh-llm-node`
-10. `mesh-llm-api`
+10. `mesh-llm-api-server`
 
 Run the dry-run before cutting a GA tag after changing SDK crate manifests or
 workspace-internal SDK dependencies. On the first release that introduces a

@@ -1,6 +1,6 @@
-use mesh_llm_api::events::{Event, EventListener as CoreEventListener};
-use mesh_llm_api::OwnerKeypair;
-use mesh_llm_api::{
+use mesh_llm_api_server::events::{Event, EventListener as CoreEventListener};
+use mesh_llm_api_server::OwnerKeypair;
+use mesh_llm_api_server::{
     create_auto_client as sdk_create_auto_client, create_auto_node as sdk_create_auto_node,
     discover_public_meshes as sdk_discover_public_meshes, ChatMessage, ChatRequest, ClientBuilder,
     DevicePolicy as ApiDevicePolicy, InviteToken, MeshApiError, MeshClient, MeshNode,
@@ -554,7 +554,7 @@ impl MeshNodeHandle {
     }
 
     pub fn status(&self) -> ClientStatus {
-        let status = block_on(self.node.status().node()).unwrap_or(mesh_llm_api::Status {
+        let status = block_on(self.node.status().node()).unwrap_or(mesh_llm_api_server::Status {
             connected: false,
             peer_count: 0,
         });
@@ -664,10 +664,14 @@ impl MeshNodeHandle {
     }
 
     pub fn search_models(&self, query: ModelSearchQuery) -> Result<Vec<ModelSummary>, FfiError> {
-        block_on(self.node.models().search(mesh_llm_api::ModelSearchQuery {
-            query: query.query,
-            limit: query.limit.map(|limit| limit as usize),
-        }))
+        block_on(
+            self.node
+                .models()
+                .search(mesh_llm_api_server::ModelSearchQuery {
+                    query: query.query,
+                    limit: query.limit.map(|limit| limit as usize),
+                }),
+        )
         .map(|models| models.into_iter().map(ModelSummary::from).collect())
         .map_err(map_model_error)
     }
@@ -694,7 +698,7 @@ impl MeshNodeHandle {
         block_on(
             self.node
                 .models()
-                .download(model_ref, mesh_llm_api::DownloadOptions),
+                .download(model_ref, mesh_llm_api_server::DownloadOptions),
         )
         .map(DownloadedModel::from)
         .map_err(map_model_error)
@@ -707,7 +711,7 @@ impl MeshNodeHandle {
     ) -> Result<DeleteModelResult, FfiError> {
         block_on(self.node.models().delete(
             model_ref,
-            mesh_llm_api::DeleteModelOptions {
+            mesh_llm_api_server::DeleteModelOptions {
                 force: options.force,
             },
         ))
@@ -716,9 +720,13 @@ impl MeshNodeHandle {
     }
 
     pub fn cleanup_models(&self, policy: CleanupPolicy) -> Result<CleanupResult, FfiError> {
-        block_on(self.node.models().cleanup(mesh_llm_api::CleanupPolicy {
-            remove_all: policy.remove_all,
-        }))
+        block_on(
+            self.node
+                .models()
+                .cleanup(mesh_llm_api_server::CleanupPolicy {
+                    remove_all: policy.remove_all,
+                }),
+        )
         .map(CleanupResult::from)
         .map_err(map_model_error)
     }
@@ -727,7 +735,7 @@ impl MeshNodeHandle {
         block_on(
             self.node
                 .models()
-                .prune_derived_cache(mesh_llm_api::PrunePolicy {
+                .prune_derived_cache(mesh_llm_api_server::PrunePolicy {
                     remove_all: policy.remove_all,
                 }),
         )
@@ -742,7 +750,7 @@ impl MeshNodeHandle {
     ) -> Result<ServedModel, FfiError> {
         block_on(self.node.serving().load(
             model_ref,
-            mesh_llm_api::LoadModelOptions {
+            mesh_llm_api_server::LoadModelOptions {
                 device_policy: options.device_policy.into(),
             },
         ))
@@ -908,8 +916,8 @@ impl From<PublicMeshQuery> for ApiPublicMeshQuery {
     }
 }
 
-impl From<mesh_llm_api::PublicMesh> for PublicMesh {
-    fn from(value: mesh_llm_api::PublicMesh) -> Self {
+impl From<mesh_llm_api_server::PublicMesh> for PublicMesh {
+    fn from(value: mesh_llm_api_server::PublicMesh) -> Self {
         Self {
             invite_token: value.invite_token,
             serving: value.serving,
@@ -929,18 +937,18 @@ impl From<mesh_llm_api::PublicMesh> for PublicMesh {
     }
 }
 
-impl From<mesh_llm_api::CapabilityLevel> for CapabilityLevel {
-    fn from(value: mesh_llm_api::CapabilityLevel) -> Self {
+impl From<mesh_llm_api_server::CapabilityLevel> for CapabilityLevel {
+    fn from(value: mesh_llm_api_server::CapabilityLevel) -> Self {
         match value {
-            mesh_llm_api::CapabilityLevel::None => Self::None,
-            mesh_llm_api::CapabilityLevel::Likely => Self::Likely,
-            mesh_llm_api::CapabilityLevel::Supported => Self::Supported,
+            mesh_llm_api_server::CapabilityLevel::None => Self::None,
+            mesh_llm_api_server::CapabilityLevel::Likely => Self::Likely,
+            mesh_llm_api_server::CapabilityLevel::Supported => Self::Supported,
         }
     }
 }
 
-impl From<mesh_llm_api::ModelCapabilities> for ModelCapabilities {
-    fn from(value: mesh_llm_api::ModelCapabilities) -> Self {
+impl From<mesh_llm_api_server::ModelCapabilities> for ModelCapabilities {
+    fn from(value: mesh_llm_api_server::ModelCapabilities) -> Self {
         Self {
             multimodal: value.multimodal,
             vision: value.vision.into(),
@@ -952,8 +960,8 @@ impl From<mesh_llm_api::ModelCapabilities> for ModelCapabilities {
     }
 }
 
-impl From<mesh_llm_api::ModelSummary> for ModelSummary {
-    fn from(value: mesh_llm_api::ModelSummary) -> Self {
+impl From<mesh_llm_api_server::ModelSummary> for ModelSummary {
+    fn from(value: mesh_llm_api_server::ModelSummary) -> Self {
         Self {
             id: value.id,
             name: value.name,
@@ -985,8 +993,8 @@ impl From<ApiModelKind> for ModelKind {
     }
 }
 
-impl From<mesh_llm_api::ModelDetails> for ModelDetails {
-    fn from(value: mesh_llm_api::ModelDetails) -> Self {
+impl From<mesh_llm_api_server::ModelDetails> for ModelDetails {
+    fn from(value: mesh_llm_api_server::ModelDetails) -> Self {
         Self {
             id: value.id,
             name: value.name,
@@ -1005,8 +1013,8 @@ impl From<mesh_llm_api::ModelDetails> for ModelDetails {
     }
 }
 
-impl From<mesh_llm_api::InstalledModel> for InstalledModel {
-    fn from(value: mesh_llm_api::InstalledModel) -> Self {
+impl From<mesh_llm_api_server::InstalledModel> for InstalledModel {
+    fn from(value: mesh_llm_api_server::InstalledModel) -> Self {
         Self {
             model_ref: value.model_ref,
             path: path_to_string(value.path),
@@ -1016,16 +1024,16 @@ impl From<mesh_llm_api::InstalledModel> for InstalledModel {
     }
 }
 
-impl From<mesh_llm_api::ModelCacheStatus> for ModelCacheStatus {
-    fn from(value: mesh_llm_api::ModelCacheStatus) -> Self {
+impl From<mesh_llm_api_server::ModelCacheStatus> for ModelCacheStatus {
+    fn from(value: mesh_llm_api_server::ModelCacheStatus) -> Self {
         Self {
             cache_dir: value.cache_dir.map(path_to_string),
         }
     }
 }
 
-impl From<mesh_llm_api::DownloadedModel> for DownloadedModel {
-    fn from(value: mesh_llm_api::DownloadedModel) -> Self {
+impl From<mesh_llm_api_server::DownloadedModel> for DownloadedModel {
+    fn from(value: mesh_llm_api_server::DownloadedModel) -> Self {
         Self {
             model_ref: value.model_ref,
             paths: value.paths.into_iter().map(path_to_string).collect(),
@@ -1035,8 +1043,8 @@ impl From<mesh_llm_api::DownloadedModel> for DownloadedModel {
     }
 }
 
-impl From<mesh_llm_api::DeleteModelResult> for DeleteModelResult {
-    fn from(value: mesh_llm_api::DeleteModelResult) -> Self {
+impl From<mesh_llm_api_server::DeleteModelResult> for DeleteModelResult {
+    fn from(value: mesh_llm_api_server::DeleteModelResult) -> Self {
         Self {
             deleted_paths: value
                 .deleted_paths
@@ -1048,8 +1056,8 @@ impl From<mesh_llm_api::DeleteModelResult> for DeleteModelResult {
     }
 }
 
-impl From<mesh_llm_api::CleanupResult> for CleanupResult {
-    fn from(value: mesh_llm_api::CleanupResult) -> Self {
+impl From<mesh_llm_api_server::CleanupResult> for CleanupResult {
+    fn from(value: mesh_llm_api_server::CleanupResult) -> Self {
         Self {
             deleted_paths: value
                 .deleted_paths
@@ -1066,8 +1074,8 @@ impl From<mesh_llm_api::CleanupResult> for CleanupResult {
     }
 }
 
-impl From<mesh_llm_api::PruneResult> for PruneResult {
-    fn from(value: mesh_llm_api::PruneResult) -> Self {
+impl From<mesh_llm_api_server::PruneResult> for PruneResult {
+    fn from(value: mesh_llm_api_server::PruneResult) -> Self {
         Self {
             deleted_paths: value
                 .deleted_paths
@@ -1102,8 +1110,8 @@ impl From<ApiServingModelState> for ServingModelState {
     }
 }
 
-impl From<mesh_llm_api::ServedModel> for ServedModel {
-    fn from(value: mesh_llm_api::ServedModel) -> Self {
+impl From<mesh_llm_api_server::ServedModel> for ServedModel {
+    fn from(value: mesh_llm_api_server::ServedModel) -> Self {
         Self {
             model_ref: value.model_ref,
             model_id: value.model_id,
@@ -1117,8 +1125,8 @@ impl From<mesh_llm_api::ServedModel> for ServedModel {
     }
 }
 
-impl From<mesh_llm_api::ServingStatus> for ServingStatus {
-    fn from(value: mesh_llm_api::ServingStatus) -> Self {
+impl From<mesh_llm_api_server::ServingStatus> for ServingStatus {
+    fn from(value: mesh_llm_api_server::ServingStatus) -> Self {
         Self {
             enabled: value.enabled,
             models: value.models.into_iter().map(ServedModel::from).collect(),

@@ -84,7 +84,7 @@ flowchart TD
     types["mesh-llm-types"]
     identity["mesh-llm-identity"]
     protocol["mesh-llm-protocol"]
-    client["mesh-client / mesh-llm-api"]
+    client["mesh-client / mesh-llm-api-server"]
     control_plane["mesh-llm-control-plane"]
     routing["mesh-llm-routing"]
     system["mesh-llm-system"]
@@ -162,7 +162,7 @@ The split should pay off in both engineering velocity and operational safety:
 - Clearer reviews: PRs can be reviewed by subsystem ownership, such as protocol compatibility, routing behavior, plugin host behavior, UI packaging, or model resolution, instead of asking reviewers to reason about the entire binary crate.
 - Cleaner dependency hygiene: CLI, TUI, keychain, Hugging Face, OpenAI frontend, Skippy, and platform hardware dependencies can stay attached to the crates that need them instead of leaking through `mesh-llm`.
 - Safer protocol evolution: protobuf generation, frame validation, ALPN/stream IDs, and compatibility tests can live in `mesh-llm-protocol`, making mixed-version compatibility easier to audit.
-- Better embedded-client reuse: shared protocol, identity, routing, and type crates give `mesh-client` and `mesh-llm-api` stable dependencies without depending on host-only runtime code.
+- Better embedded-client reuse: shared protocol, identity, routing, and type crates give `mesh-client` and `mesh-llm-api-server` stable dependencies without depending on host-only runtime code.
 - More predictable documentation ownership: each crate README can explain the subsystem boundary, while top-level docs and Mermaid diagrams describe composition instead of implementation detail.
 - Easier incremental extraction: once the dependency graph points inward toward shared crates and outward toward app assembly, later moves become mechanical instead of architectural surgery.
 
@@ -181,7 +181,7 @@ The main blocker is dependency direction. Before extracting crates, reduce direc
 The crate split should include the documentation migration as part of the same scope, not as follow-up cleanup:
 
 - Add a `README.md` for every new crate that explains ownership, public API boundaries, dependency expectations, and how the crate fits into the host runtime.
-- Update existing crate READMEs when code moves into or out of those crates, especially `mesh-client`, `mesh-llm-api`, `mesh-llm-plugin`, `openai-frontend`, `model-*`, and `skippy-*`.
+- Update existing crate READMEs when code moves into or out of those crates, especially `mesh-client`, `mesh-llm-api-server`, `mesh-llm-plugin`, `openai-frontend`, `model-*`, and `skippy-*`.
 - Update top-level docs that describe repository structure, architecture, runtime composition, plugin ownership, model resolution, OpenAI routing, and console/API packaging.
 - Update Mermaid diagrams anywhere they describe the crate graph, runtime architecture, protocol/control-plane flow, API/UI packaging, or plugin/data ownership.
 - Keep the root `README.md`, `docs/README.md`, and `crates/mesh-llm/README.md` aligned so new contributors can find the owning crate for a subsystem without reading implementation details first.

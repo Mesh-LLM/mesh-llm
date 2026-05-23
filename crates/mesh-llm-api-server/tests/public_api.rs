@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use mesh_llm_api::{
+use mesh_llm_api_server::{
     CapabilityLevel, CleanupPolicy, ClientBuilder, DeleteModelOptions, DownloadOptions,
     InviteToken, LoadModelOptions, MeshClient, MeshNode, Model, ModelKind, ModelSearchQuery,
     ModelSource, OwnerKeypair, PrunePolicy, PublicMesh, ServingController, ServingModelState,
@@ -82,7 +82,7 @@ fn public_mesh_builds_node_and_client_builders() {
 async fn mesh_node_exposes_config_backed_statuses() {
     let kp = OwnerKeypair::generate();
     let token = InviteToken::from_str("mesh-test:abc123").expect("valid token");
-    let cache_dir = std::env::temp_dir().join("mesh-llm-api-node-public-api-test");
+    let cache_dir = std::env::temp_dir().join("mesh-llm-api-server-node-public-api-test");
     let node = MeshNode::builder()
         .identity(kp)
         .join(token)
@@ -169,7 +169,7 @@ async fn mesh_node_serving_forwards_unload_options() {
 async fn mesh_node_models_installed_scans_configured_cache() {
     let kp = OwnerKeypair::generate();
     let token = InviteToken::from_str("mesh-test:abc123").expect("valid token");
-    let cache_dir = unique_temp_dir("mesh-llm-api-installed-cache");
+    let cache_dir = unique_temp_dir("mesh-llm-api-server-installed-cache");
     let model = cache_dir
         .join("models--org--repo-GGUF")
         .join("snapshots")
@@ -239,7 +239,7 @@ async fn mesh_node_models_recommended_and_show_include_capabilities() {
 async fn mesh_node_models_download_returns_installed_model_without_network() {
     let kp = OwnerKeypair::generate();
     let token = InviteToken::from_str("mesh-test:abc123").expect("valid token");
-    let cache_dir = unique_temp_dir("mesh-llm-api-download-installed");
+    let cache_dir = unique_temp_dir("mesh-llm-api-server-download-installed");
     let model = cache_dir
         .join("models--org--repo-GGUF")
         .join("snapshots")
@@ -274,8 +274,8 @@ async fn mesh_node_models_download_returns_installed_model_without_network() {
 async fn mesh_node_models_delete_cleanup_and_prune_work_on_configured_roots() {
     let kp = OwnerKeypair::generate();
     let token = InviteToken::from_str("mesh-test:abc123").expect("valid token");
-    let cache_dir = unique_temp_dir("mesh-llm-api-delete-cleanup");
-    let runtime_dir = unique_temp_dir("mesh-llm-api-prune-derived");
+    let cache_dir = unique_temp_dir("mesh-llm-api-server-delete-cleanup");
+    let runtime_dir = unique_temp_dir("mesh-llm-api-server-prune-derived");
     let model = cache_dir
         .join("models--org--repo-GGUF")
         .join("snapshots")

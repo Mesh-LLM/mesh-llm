@@ -4,7 +4,7 @@ Status: client-only integration note. The current SDK direction is the
 node-oriented `MeshNode` API in `EMBEDDED_CLIENT_ADR.md`; this document only
 describes the earlier Jan client integration shape.
 
-Use this initial integration contract when embedding `mesh-llm-api` inside Jan as a
+Use this initial integration contract when embedding `mesh-llm-api-server` inside Jan as a
 Tauri-native client SDK.
 
 Scope:
@@ -33,14 +33,14 @@ Jan does not need in this phase:
 
 - `mesh-client`
   - internal implementation crate
-- `mesh-llm-api`
+- `mesh-llm-api-server`
   - public Rust SDK in the earlier client-only shape
-- `tauri-plugin-mesh-llm-api` in Jan
+- `tauri-plugin-mesh-llm-api-server` in Jan
   - Jan-native bridge
-- `@janhq/tauri-plugin-mesh-llm-api`
+- `@janhq/tauri-plugin-mesh-llm-api-server`
   - guest JS/TypeScript API consumed by Jan frontend
 
-The Jan plugin must depend on `mesh-llm-api`, not `mesh-client`.
+The Jan plugin must depend on `mesh-llm-api-server`, not `mesh-client`.
 
 ## 1. Jan Plugin Surface
 
@@ -48,11 +48,11 @@ The plugin should own all live client instances in Rust.
 
 Recommended plugin name:
 
-- `mesh-llm-api`
+- `mesh-llm-api-server`
 
 Recommended Tauri command namespace:
 
-- `plugin:mesh-llm-api|...`
+- `plugin:mesh-llm-api-server|...`
 
 ### Commands
 
@@ -73,7 +73,7 @@ Returns:
 Behavior:
 
 - load persisted owner keypair from Jan storage, or generate and persist one if absent
-- construct `mesh_llm_api::ClientBuilder`
+- construct `mesh_llm_api_server::ClientBuilder`
 - store the resulting client in plugin state
 
 #### `dispose_client`
@@ -213,7 +213,7 @@ This matches Jan’s current native integration pattern better than callback-hea
 
 Use one event topic:
 
-- `mesh-llm-api://event`
+- `mesh-llm-api-server://event`
 
 Each event payload should include:
 
@@ -247,7 +247,7 @@ One topic is preferable to per-request topics because:
 The plugin should:
 
 - create an `EventListener` adapter for each `chat` / `responses` request
-- emit every `mesh_llm_api::events::Event` through `app_handle.emit(...)`
+- emit every `mesh_llm_api_server::events::Event` through `app_handle.emit(...)`
 - include `clientId` on every payload
 
 ### Frontend API expectations
@@ -277,7 +277,7 @@ Persist the owner keypair in Jan storage on the native side.
 
 Recommended storage key:
 
-- `mesh_llm_api.owner_keypair.v1`
+- `mesh_llm_api_server.owner_keypair.v1`
 
 Recommended serialized payload:
 
@@ -303,8 +303,8 @@ Reason:
 
 On `create_client`:
 
-1. read `mesh_llm_api.owner_keypair.v1`
-2. if present, reconstruct `mesh_llm_api::OwnerKeypair`
+1. read `mesh_llm_api_server.owner_keypair.v1`
+2. if present, reconstruct `mesh_llm_api_server::OwnerKeypair`
 3. if absent, generate a new keypair
 4. persist it immediately
 5. build the client with the persisted identity
@@ -313,7 +313,7 @@ On `create_client`:
 
 If Jan later supports multiple mesh profiles, extend the key to:
 
-- `mesh_llm_api.owner_keypair.v1.<profile>`
+- `mesh_llm_api_server.owner_keypair.v1.<profile>`
 
 Do not introduce profile selection in the first pass unless the Jan UI already needs it.
 
@@ -338,7 +338,7 @@ That is acceptable for the first implementation, but it should be treated as a l
 
 ## Recommended First Implementation Order
 
-1. Add `mesh-llm-api` methods the plugin needs without exposing `mesh-client` internals.
+1. Add `mesh-llm-api-server` methods the plugin needs without exposing `mesh-client` internals.
 2. Implement persisted keypair helpers in the Jan Tauri plugin.
 3. Implement client handle state in plugin Rust.
 4. Implement command APIs.
