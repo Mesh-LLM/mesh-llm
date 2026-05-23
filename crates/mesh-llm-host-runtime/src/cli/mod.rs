@@ -885,6 +885,7 @@ where
         "--draft",
         "--bin-dir",
         "--relay",
+        "--relay-auth",
         "--nostr-relay",
         "--config",
         "--owner-key",
@@ -1143,6 +1144,72 @@ mod tests {
                 .into_iter()
                 .map(OsString::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_treats_relay_auth_as_value_taking_before_serve() {
+        // Regression: --relay-auth carries a `URL=TOKEN` value, so the
+        // pseudo-subcommand scanner must skip the value and still discover
+        // `serve` (or `client`) as the runtime surface. If --relay-auth is not
+        // in the value-taking list the scanner stops at the token and Clap
+        // sees a malformed command.
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--relay-auth",
+            "https://gated.example/=token",
+            "serve",
+            "--relay",
+            "https://gated.example/",
+            "--auto",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                "mesh-llm",
+                "--relay-auth",
+                "https://gated.example/=token",
+                "--relay",
+                "https://gated.example/",
+                "--auto",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
+
+        // And the resulting argv must actually parse cleanly through Clap so
+        // the relay-auth value reaches `Cli::relay_auth`.
+        let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
+        assert_eq!(
+            cli.relay_auth,
+            vec![("https://gated.example/".to_string(), "token".to_string())],
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_relay_auth_before_client_invocation() {
+        // Same regression but for the `client` surface, including a token
+        // containing `=` (NIP-98-style base64 padding).
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--relay-auth",
+            "https://gated.example/=eyJhbGciOiJFZERTQSJ9.payload==",
+            "client",
+            "--auto",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
+        let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
+        assert!(cli.client, "client surface flag should be set");
+        assert_eq!(
+            cli.relay_auth,
+            vec![(
+                "https://gated.example/".to_string(),
+                "eyJhbGciOiJFZERTQSJ9.payload==".to_string()
+            )],
         );
     }
 

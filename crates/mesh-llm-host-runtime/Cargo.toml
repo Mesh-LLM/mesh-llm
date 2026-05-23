@@ -94,3 +94,10 @@ axum = "0.8"
 serial_test = "3"
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client" }
 tempfile = "3"
+# Used by the gated-relay regression test to spawn an in-process iroh-relay
+# with AccessConfig::Restricted, then build a real iroh::Endpoint from our
+# relay_map_from_urls output and verify --relay-auth tokens reach the relay
+# on the WebSocket upgrade (and that the wrong token is rejected).
+iroh = { version = "1.0.0-rc.0", features = ["test-utils"] }
+iroh-relay = { version = "1.0.0-rc.0", features = ["server", "test-utils"] }
+futures-util = "0.3"
