@@ -50,6 +50,8 @@ class ProbeResult(NamedTuple):
     elapsed_ms: int
     status_code: int | None = None
     ttft_ms: int | None = None
+    actual_model: str | None = None
+    tok_per_sec: float | None = None
 
 
 def repo_root() -> Path:
@@ -332,7 +334,15 @@ def run_chat_probe(base_url: str, model: str, attempt: int, timeout: float) -> P
             timeout,
         )
         validate_sentinel(first_message_content(response), "STABILITY_OK")
-        return _probe_result(model, attempt, "chat", True, "matched STABILITY_OK", started, status_code)
+        actual_model = response.get("model")
+        usage = response.get("usage") or {}
+        completion_tokens = usage.get("completion_tokens") or 0
+        elapsed_s = max(time.monotonic() - started, 0.001)
+        tok_per_sec = completion_tokens / elapsed_s if completion_tokens else None
+        return _probe_result(
+            model, attempt, "chat", True, "matched STABILITY_OK", started,
+            status_code, actual_model=actual_model, tok_per_sec=tok_per_sec,
+        )
     except Exception as exc:
         return _probe_result(model, attempt, "chat", False, str(exc), started)
 
@@ -347,6 +357,17 @@ def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: floa
             timeout,
         )
         validate_sentinel(stream_content(chunks), "STREAM_OK")
+        # Extract model name and usage from stream chunks
+        actual_model = None
+        completion_tokens = 0
+        for chunk in chunks:
+            if not actual_model and chunk.get("model"):
+                actual_model = chunk.get("model")
+            usage = chunk.get("usage")
+            if isinstance(usage, dict):
+                completion_tokens = usage.get("completion_tokens") or 0
+        elapsed_s = max(time.monotonic() - started, 0.001)
+        tok_per_sec = completion_tokens / elapsed_s if completion_tokens else None
         return _probe_result(
             model,
             attempt,
@@ -356,6 +377,8 @@ def run_stream_chat_probe(base_url: str, model: str, attempt: int, timeout: floa
             started,
             status_code,
             ttft_ms,
+            actual_model=actual_model,
+            tok_per_sec=tok_per_sec,
         )
     except Exception as exc:
         return _probe_result(model, attempt, "stream_chat", False, str(exc), started)
@@ -533,6 +556,8 @@ def _probe_result(
     started: float,
     status_code: int | None = None,
     ttft_ms: int | None = None,
+    actual_model: str | None = None,
+    tok_per_sec: float | None = None,
 ) -> ProbeResult:
     return ProbeResult(
         model=model,
@@ -543,6 +568,8 @@ def _probe_result(
         elapsed_ms=int((time.monotonic() - started) * 1000),
         status_code=status_code,
         ttft_ms=ttft_ms,
+        actual_model=actual_model,
+        tok_per_sec=tok_per_sec,
     )
 
 
@@ -641,14 +668,16 @@ def render_summary_markdown(
         "",
         "## OpenAI Surface Probes",
         "",
-        "| Phase | Model | Attempt | Status | HTTP | TTFT ms | Elapsed ms | Detail |",
-        "|---|---|---:|---:|---:|---:|---:|---|",
+        "| Phase | Requested Model | Attempt | Status | HTTP | TTFT ms | Elapsed ms | Actual Model | tok/s | Detail |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---:|---|",
     ]
     for result in probe_results:
+        tok_str = f"{result.tok_per_sec:.1f}" if result.tok_per_sec is not None else ""
         lines.append(
             f"| `{result.phase}` | `{result.model or ''}` | {result.attempt or ''} | "
             f"{'PASS' if result.ok else 'FAIL'} | {result.status_code or ''} | "
-            f"{result.ttft_ms or ''} | {result.elapsed_ms} | {result.detail} |"
+            f"{result.ttft_ms or ''} | {result.elapsed_ms} | "
+            f"`{result.actual_model or ''}` | {tok_str} | {result.detail} |"
         )
     lines.extend([
         "",
@@ -768,9 +797,12 @@ def print_human_summary(
     print(f"results: {output_dir}")
     for result in probe_results:
         status = "PASS" if result.ok else "FAIL"
+        tok_str = f" tok/s={result.tok_per_sec:.1f}" if result.tok_per_sec is not None else ""
+        actual = f" actual={result.actual_model}" if result.actual_model else ""
         print(
-            f"{status} {result.phase} model={result.model or '-'} "
-            f"attempt={result.attempt or '-'} elapsed_ms={result.elapsed_ms}: {result.detail}"
+            f"{status} {result.phase} model={result.model or '-'}"
+            f"{actual} attempt={result.attempt or '-'}"
+            f" elapsed_ms={result.elapsed_ms}{tok_str}: {result.detail}"
         )
     for result in results:
         print(
