@@ -388,6 +388,14 @@ Before committing, run the local checks most likely to fail in CI for the files 
 - Do not report a build or test step as complete until the command has actually exited with code `0`.
 - Run Rust validation serially. Do not run multiple `cargo` commands at the same time.
 
+### CI, workflow, and crate-list changes
+
+- If you touch `.github/workflows/`, `.github/actions/`, release packaging, Docker packaging, workspace members, crate names, publish scripts, clippy batch planning, or SDK smoke/test crate lists, run the matching repo-consistency check before committing:
+  - `cargo run -p xtask -- repo-consistency release-targets`
+  - `cargo run -p xtask -- repo-consistency ci-crate-lists`
+- When adding, removing, renaming, or splitting workspace crates, update the workflow filters, Docker copy lists, `scripts/affected-crates.sh`, `scripts/plan-clippy-batches.sh`, `scripts/publish-crates.sh`, and the xtask repo-consistency expectations in the same commit.
+- If an SDK/API crate list changes, verify that both the workflow loop and `tools/xtask/src/main.rs` agree before committing; CI intentionally fails when those drift.
+
 ### UI changes
 
 - Use the repo's supported workflow and run `just build`.
