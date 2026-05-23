@@ -927,6 +927,49 @@ async fn status_payload_control_plane_compat() {
 }
 
 #[tokio::test]
+async fn mesh_guardrails_runtime_mode_accepts_loopback_callers() {
+    let state = build_test_mesh_api().await;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    state.set_runtime_control(control_tx).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let control_handle = tokio::spawn(async move {
+        match control_rx.recv().await {
+            Some(RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp }) => {
+                assert_eq!(mode, openai_frontend::GuardrailMode::Enforce);
+                let _ = resp.send(Ok(OpenAiGuardrailModeUpdateResponse {
+                    mode: "enforce",
+                    updated_models: 1,
+                    status: None,
+                }));
+            }
+            _ => panic!("expected SetOpenAiGuardrailMode request"),
+        }
+    });
+    let body = r#"{"mode":"enforce"}"#;
+
+    let response = send_management_request(
+        addr,
+        format!(
+            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "response was {response:?}"
+    );
+    assert_eq!(
+        json_body(&response)["mode"],
+        serde_json::Value::String("enforce".to_string())
+    );
+    handle.await.unwrap().unwrap();
+    control_handle.await.unwrap();
+}
+
+#[tokio::test]
 async fn config_apply_does_not_emit_peer_churn() {
     let state = build_test_mesh_api().await;
     let (addr, handle) = spawn_management_test_server(state.clone()).await;
@@ -1535,7 +1578,17 @@ async fn spawn_management_test_server(
     std::net::SocketAddr,
     tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    spawn_management_test_server_on(std::net::SocketAddr::from(([127, 0, 0, 1], 0)), state).await
+}
+
+async fn spawn_management_test_server_on(
+    bind_addr: std::net::SocketAddr,
+    state: MeshApi,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    let listener = TcpListener::bind(bind_addr).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();

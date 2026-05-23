@@ -1,4 +1,7 @@
-use crate::chat::ChatCompletionRequest;
+use crate::{
+    chat::ChatCompletionRequest,
+    common::{ReasoningConfig, ReasoningEffort, THINKING_BOOLEAN_ALIASES},
+};
 
 use super::{
     errors::GuardrailErrorKind,
@@ -92,6 +95,7 @@ impl GuardrailEngine {
                 );
                 backend_request.response_format = None;
             }
+            suppress_implicit_thinking(request, &mut backend_request);
             GuardrailRequestOutcome::Guarded {
                 backend_request: Box::new(backend_request),
             }
@@ -150,4 +154,40 @@ impl GuardrailEngine {
             super::policy::GuardrailMode::Enforce => GuardrailRequestOutcome::Reject { kind },
         }
     }
+}
+
+fn suppress_implicit_thinking(
+    original_request: &ChatCompletionRequest,
+    backend_request: &mut ChatCompletionRequest,
+) {
+    if has_explicit_thinking_control(original_request) {
+        return;
+    }
+
+    backend_request.reasoning = Some(ReasoningConfig {
+        enabled: Some(false),
+        effort: None,
+        max_tokens: None,
+        exclude: None,
+        extra: Default::default(),
+    });
+    backend_request.reasoning_effort = Some(ReasoningEffort::None);
+}
+
+fn has_explicit_thinking_control(request: &ChatCompletionRequest) -> bool {
+    request.reasoning.is_some()
+        || request.reasoning_effort.is_some()
+        || request.extra.contains_key("thinking_budget")
+        || THINKING_BOOLEAN_ALIASES
+            .iter()
+            .any(|field| request.extra.contains_key(*field))
+        || request
+            .extra
+            .get("chat_template_kwargs")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|kwargs| {
+                THINKING_BOOLEAN_ALIASES
+                    .iter()
+                    .any(|field| kwargs.contains_key(*field))
+            })
 }

@@ -13,6 +13,8 @@ use mesh_client::{
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 use openai_frontend::GuardrailMode;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use zeroize::Zeroizing;
@@ -296,7 +298,7 @@ pub(crate) async fn ensure_loopback_control_caller_for_peer_addr(
     peer_addr: std::io::Result<std::net::SocketAddr>,
 ) -> anyhow::Result<bool> {
     match peer_addr {
-        Ok(addr) if addr.ip().is_loopback() => Ok(true),
+        Ok(addr) if is_loopback_control_caller(addr) => Ok(true),
         Ok(addr) => {
             tracing::warn!("runtime control: rejected non-loopback caller {addr}");
             respond_json(
@@ -318,6 +320,10 @@ pub(crate) async fn ensure_loopback_control_caller_for_peer_addr(
             Ok(false)
         }
     }
+}
+
+fn is_loopback_control_caller(addr: SocketAddr) -> bool {
+    addr.ip().is_loopback()
 }
 
 fn local_control_snapshot_payload(
@@ -613,6 +619,10 @@ async fn handle_set_mesh_guardrails(
     state: &MeshApi,
     body: &str,
 ) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+
     let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
         return respond_error(stream, 503, "Runtime control unavailable").await;
     };
@@ -841,7 +851,21 @@ async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_guardrail_mode, GuardrailMode};
+    use super::{is_loopback_control_caller, parse_guardrail_mode, GuardrailMode};
+
+    #[test]
+    fn loopback_control_caller_accepts_localhost_only() {
+        assert!(is_loopback_control_caller(
+            "127.0.0.1:3131".parse().unwrap()
+        ));
+        assert!(is_loopback_control_caller("[::1]:3131".parse().unwrap()));
+        assert!(!is_loopback_control_caller(
+            "192.0.2.10:3131".parse().unwrap()
+        ));
+        assert!(!is_loopback_control_caller(
+            "[2001:db8::1]:3131".parse().unwrap()
+        ));
+    }
 
     #[test]
     fn parse_guardrail_mode_accepts_operator_labels() {
