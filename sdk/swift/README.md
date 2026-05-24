@@ -37,6 +37,10 @@ Swift package picks up automatically for the real UniFFI-backed implementation.
 The macOS framework slice must already use the versioned `Versions/A` bundle
 layout before it is passed to `xcodebuild -create-xcframework`; `xcodebuild`
 wraps the input framework but does not fix a flat macOS bundle.
+Release tags must contain a `Package.swift` whose remote XCFramework URL and
+checksum have already been prepared with
+`scripts/prepare-swift-package-release.sh`; SwiftPM reads the manifest from the
+tag and cannot use values generated later by release CI.
 
 Normal SDK builds and tests require the UniFFI-backed XCFramework. The package
 does not ship a pure Swift fallback because the SDK must exercise the native
