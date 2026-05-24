@@ -10,17 +10,22 @@ use crate::network::discovery::MeshDiscoveryMode;
 
 /// Parse a `URL=TOKEN` pair for `--relay-auth`. Splits on the first `=` only,
 /// so tokens may contain `=` (base64 padding, JWTs).
+///
+/// Error messages must never include the token portion of the input —
+/// `--relay-auth` carries bearer credentials, and a parse failure could
+/// otherwise leak them into terminal output, logs, and bug reports. The URL
+/// is safe to echo back (it's the public identity of the relay).
 fn parse_relay_auth_pair(s: &str) -> Result<(String, String), String> {
     let Some((url, token)) = s.split_once('=') else {
-        return Err(format!(
-            "expected URL=TOKEN, got {s:?} (no '=' separator found)"
-        ));
+        return Err("expected URL=TOKEN, no '=' separator found (token redacted)".to_string());
     };
     if url.is_empty() {
-        return Err(format!("expected URL=TOKEN, got empty URL in {s:?}"));
+        return Err("expected URL=TOKEN, got empty URL (token redacted)".to_string());
     }
     if token.is_empty() {
-        return Err(format!("expected URL=TOKEN, got empty token in {s:?}"));
+        return Err(format!(
+            "expected URL=TOKEN, got empty token for URL {url:?}"
+        ));
     }
     Ok((url.to_string(), token.to_string()))
 }
@@ -57,6 +62,40 @@ mod relay_auth_parser_tests {
     #[test]
     fn rejects_empty_token() {
         assert!(parse_relay_auth_pair("https://r/=").is_err());
+    }
+
+    #[test]
+    fn parser_errors_never_leak_token_portion() {
+        // --relay-auth carries bearer credentials; if parsing fails, the
+        // token portion of the input must never appear in the error
+        // message (which lands in terminal output, logs, and bug reports).
+        // The URL is safe to echo back — it's the public identity of the
+        // relay — but everything after the first `=` is secret.
+        let secret_token = "super-secret-bearer-token-xyz-12345";
+
+        // Case 1: no `=` separator. Whole input is treated as a malformed
+        // URL-or-token blob; we cannot tell which it is, so redact both.
+        let err = parse_relay_auth_pair(secret_token).expect_err("should fail");
+        assert!(
+            !err.contains(secret_token),
+            "missing-separator error must not echo the input: {err}"
+        );
+
+        // Case 2: empty URL (`=token`). URL is empty, the token portion is
+        // the secret — must not appear.
+        let err = parse_relay_auth_pair(&format!("={secret_token}")).expect_err("should fail");
+        assert!(
+            !err.contains(secret_token),
+            "empty-URL error must not echo the token: {err}"
+        );
+
+        // Case 3: empty token (`URL=`). Token is empty, no secret to leak;
+        // the URL is fine to include and helps the user diagnose.
+        let err = parse_relay_auth_pair("https://r.example/=").expect_err("should fail");
+        assert!(
+            err.contains("https://r.example/"),
+            "empty-token error should name the URL: {err}"
+        );
     }
 }
 
