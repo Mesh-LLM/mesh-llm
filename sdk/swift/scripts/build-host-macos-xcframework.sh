@@ -21,13 +21,9 @@ HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in
   arm64|aarch64)
     RUST_TARGET="aarch64-apple-darwin"
-    XCFRAMEWORK_ID="macos-arm64"
-    SUPPORTED_ARCH="arm64"
     ;;
   x86_64)
     RUST_TARGET="x86_64-apple-darwin"
-    XCFRAMEWORK_ID="macos-x86_64"
-    SUPPORTED_ARCH="x86_64"
     ;;
   *)
     echo "Unsupported macOS host architecture: $HOST_ARCH" >&2
@@ -143,36 +139,15 @@ ln -sfh "Versions/Current/Resources"       "$FRAMEWORK_DIR/Resources"
 echo "Creating host macOS XCFramework..."
 XCFW_OUT="$XCFRAMEWORK_DIR/$FRAMEWORK_NAME.xcframework"
 rm -rf "$XCFW_OUT"
-mkdir -p "$XCFW_OUT/$XCFRAMEWORK_ID/$FRAMEWORK_NAME.framework"
-cp -RP "$FRAMEWORK_DIR/" "$XCFW_OUT/$XCFRAMEWORK_ID/$FRAMEWORK_NAME.framework/"
 
-cat > "$XCFW_OUT/Info.plist" << XCINFO
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>AvailableLibraries</key>
-    <array>
-        <dict>
-            <key>BinaryPath</key>
-            <string>MeshLLMFFI.framework/MeshLLMFFI</string>
-            <key>LibraryIdentifier</key>
-            <string>$XCFRAMEWORK_ID</string>
-            <key>LibraryPath</key>
-            <string>MeshLLMFFI.framework</string>
-            <key>SupportedArchitectures</key>
-            <array><string>$SUPPORTED_ARCH</string></array>
-            <key>SupportedPlatform</key>
-            <string>macos</string>
-        </dict>
-    </array>
-    <key>CFBundlePackageType</key>
-    <string>XFWK</string>
-    <key>XCFrameworkFormatVersion</key>
-    <string>1.0</string>
-</dict>
-</plist>
-XCINFO
+if ! command -v xcodebuild >/dev/null 2>&1; then
+  echo "ERROR: xcodebuild is required to create the Swift SDK XCFramework." >&2
+  exit 1
+fi
+
+xcodebuild -create-xcframework \
+  -framework "$FRAMEWORK_DIR" \
+  -output "$XCFW_OUT"
 
 echo "XCFramework created at: $XCFW_OUT"
 

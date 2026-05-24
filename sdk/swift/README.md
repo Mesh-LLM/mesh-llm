@@ -160,7 +160,8 @@ If your app qualifies for an exemption (e.g., uses only standard encryption), yo
 
 ### Privacy Manifest
 
-The MeshLLM XCFramework includes a `PrivacyInfo.xcprivacy` manifest declaring:
+The MeshLLM FFI XCFramework includes a `PrivacyInfo.xcprivacy` manifest in each
+framework slice declaring:
 - `NSPrivacyTracking = false` (no tracking)
 - No data collection
 - No required-reason API usage
@@ -176,7 +177,7 @@ For iOS, network access is allowed by default. No special entitlements needed.
 ### App Store Submission Checklist
 
 - [ ] Set `ITSAppUsesNonExemptEncryption` in `Info.plist`
-- [ ] Verify `PrivacyInfo.xcprivacy` is embedded in XCFramework (run `find MeshLLM.xcframework -name PrivacyInfo.xcprivacy`)
+- [ ] Verify `PrivacyInfo.xcprivacy` is embedded in XCFramework (run `find MeshLLMFFI.xcframework -name PrivacyInfo.xcprivacy`)
 - [ ] No subprocess spawning (mesh-llm SDK never calls `Process()`)
 - [ ] No filesystem access for credentials (pass keys via constructor)
 - [ ] Implement `reconnect()` in `UIApplication.willEnterForegroundNotification` observer

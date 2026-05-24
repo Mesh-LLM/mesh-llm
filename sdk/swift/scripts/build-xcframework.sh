@@ -276,93 +276,17 @@ mkdir -p "$XCFRAMEWORK_DIR"
 
 XCFW_OUT="$XCFRAMEWORK_DIR/$FRAMEWORK_NAME.xcframework"
 
+if ! command -v xcodebuild >/dev/null 2>&1; then
+  echo "ERROR: xcodebuild is required to create the Swift SDK XCFramework." >&2
+  exit 1
+fi
+
 xcodebuild -create-xcframework \
   -framework "$TARGET_DIR/frameworks/ios/$FRAMEWORK_NAME.framework" \
   -framework "$TARGET_DIR/frameworks/ios-sim/$FRAMEWORK_NAME.framework" \
   -framework "$TARGET_DIR/frameworks/ios-macabi/$FRAMEWORK_NAME.framework" \
   -framework "$TARGET_DIR/frameworks/macos/$FRAMEWORK_NAME.framework" \
-  -output "$XCFW_OUT" 2>/dev/null || true
-
-if [ ! -d "$XCFW_OUT" ]; then
-  echo "xcodebuild unavailable or failed; assembling XCFramework manually..."
-  mkdir -p "$XCFW_OUT/ios-arm64/$FRAMEWORK_NAME.framework"
-  mkdir -p "$XCFW_OUT/ios-arm64_x86_64-simulator/$FRAMEWORK_NAME.framework"
-  mkdir -p "$XCFW_OUT/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework"
-  mkdir -p "$XCFW_OUT/macos-arm64_x86_64/$FRAMEWORK_NAME.framework"
-
-  cp -R  "$TARGET_DIR/frameworks/ios/$FRAMEWORK_NAME.framework/"        "$XCFW_OUT/ios-arm64/$FRAMEWORK_NAME.framework/"
-  cp -R  "$TARGET_DIR/frameworks/ios-sim/$FRAMEWORK_NAME.framework/"    "$XCFW_OUT/ios-arm64_x86_64-simulator/$FRAMEWORK_NAME.framework/"
-  cp -R  "$TARGET_DIR/frameworks/ios-macabi/$FRAMEWORK_NAME.framework/" "$XCFW_OUT/ios-arm64_x86_64-maccatalyst/$FRAMEWORK_NAME.framework/"
-  cp -RP "$TARGET_DIR/frameworks/macos/$FRAMEWORK_NAME.framework/"      "$XCFW_OUT/macos-arm64_x86_64/$FRAMEWORK_NAME.framework/"
-
-  cat > "$XCFW_OUT/Info.plist" << 'XCINFO'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>AvailableLibraries</key>
-    <array>
-        <dict>
-            <key>BinaryPath</key>
-            <string>MeshLLMFFI.framework/MeshLLMFFI</string>
-            <key>LibraryIdentifier</key>
-            <string>ios-arm64</string>
-            <key>LibraryPath</key>
-            <string>MeshLLMFFI.framework</string>
-            <key>SupportedArchitectures</key>
-            <array><string>arm64</string></array>
-            <key>SupportedPlatform</key>
-            <string>ios</string>
-        </dict>
-        <dict>
-            <key>BinaryPath</key>
-            <string>MeshLLMFFI.framework/MeshLLMFFI</string>
-            <key>LibraryIdentifier</key>
-            <string>ios-arm64_x86_64-simulator</string>
-            <key>LibraryPath</key>
-            <string>MeshLLMFFI.framework</string>
-            <key>SupportedArchitectures</key>
-            <array><string>arm64</string><string>x86_64</string></array>
-            <key>SupportedPlatform</key>
-            <string>ios</string>
-            <key>SupportedPlatformVariant</key>
-            <string>simulator</string>
-        </dict>
-        <dict>
-            <key>BinaryPath</key>
-            <string>MeshLLMFFI.framework/MeshLLMFFI</string>
-            <key>LibraryIdentifier</key>
-            <string>ios-arm64_x86_64-maccatalyst</string>
-            <key>LibraryPath</key>
-            <string>MeshLLMFFI.framework</string>
-            <key>SupportedArchitectures</key>
-            <array><string>arm64</string><string>x86_64</string></array>
-            <key>SupportedPlatform</key>
-            <string>ios</string>
-            <key>SupportedPlatformVariant</key>
-            <string>maccatalyst</string>
-        </dict>
-        <dict>
-            <key>BinaryPath</key>
-            <string>MeshLLMFFI.framework/MeshLLMFFI</string>
-            <key>LibraryIdentifier</key>
-            <string>macos-arm64_x86_64</string>
-            <key>LibraryPath</key>
-            <string>MeshLLMFFI.framework</string>
-            <key>SupportedArchitectures</key>
-            <array><string>arm64</string><string>x86_64</string></array>
-            <key>SupportedPlatform</key>
-            <string>macos</string>
-        </dict>
-    </array>
-    <key>CFBundlePackageType</key>
-    <string>XFWK</string>
-    <key>XCFrameworkFormatVersion</key>
-    <string>1.0</string>
-</dict>
-</plist>
-XCINFO
-fi
+  -output "$XCFW_OUT"
 
 echo ""
 echo "XCFramework created at: $XCFW_OUT"

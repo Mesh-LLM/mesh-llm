@@ -14,6 +14,17 @@ The `PrivacyInfo.xcprivacy` file is an Apple property list (plist) in XML format
 
 **CRITICAL**: The `PrivacyInfo.xcprivacy` file MUST be embedded **inside each `.framework` bundle** within the XCFramework, not just placed in the host application.
 
+Apple's preferred path for SDKs that need resources is an Xcode-built static
+framework target archived with `xcodebuild archive`, then assembled with
+`xcodebuild -create-xcframework`. MeshLLM's FFI binary starts as a Rust static
+library, so the current scripts wrap that archive in a static framework bundle
+before handing the framework to `xcodebuild -create-xcframework`.
+
+Do not switch this package to `xcodebuild -create-xcframework -library
+-headers` unless the privacy manifest is carried by another App Store-visible
+SDK target. Plain static-library XCFramework slices do not have a framework
+resource bundle for `PrivacyInfo.xcprivacy`.
+
 The directory structure must be:
 ```
 MeshLLM.xcframework/
@@ -34,14 +45,18 @@ MeshLLM.xcframework/
         └── PrivacyInfo.xcprivacy  ← MUST be here
 ```
 
-The Wave 5D build script (`sdk/swift/build-xcframework.sh`) is responsible for copying this template into each `.framework` bundle during XCFramework construction.
+The Swift SDK build scripts are responsible for copying this template into each
+`.framework` bundle before XCFramework construction:
+
+- `sdk/swift/scripts/build-xcframework.sh`
+- `sdk/swift/scripts/build-host-macos-xcframework.sh`
 
 ### Verification
 
 To verify that `PrivacyInfo.xcprivacy` files are correctly embedded in the built XCFramework:
 
 ```bash
-find target/xcframework/MeshLLM.xcframework -name PrivacyInfo.xcprivacy | wc -l
+find sdk/swift/Generated/MeshLLMFFI.xcframework -name PrivacyInfo.xcprivacy | wc -l
 ```
 
 This command should return a count ≥ 1 (ideally 3 or more, one per platform slice).
