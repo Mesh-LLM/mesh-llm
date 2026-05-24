@@ -88,7 +88,7 @@ function getSettingValue(setting: ConfigurationDefaultsSetting, values: Configur
 }
 
 function tomlValue(value: string) {
-  return /^\d+(\.\d+)?$/.test(value) ? value : JSON.stringify(value)
+  return /^-?\d+(\.\d+)?$/.test(value) ? value : JSON.stringify(value)
 }
 
 function isBooleanToggleChoice(setting: ConfigurationDefaultsSetting) {
@@ -110,6 +110,7 @@ type DefaultsPreviewLine =
   | { kind: 'pair'; id: string; keyName: string; value: string }
 
 function formatRangeValue(setting: ConfigurationDefaultsSetting, value: string) {
+  if (setting.id === 'gpu-layers' && value === '-1') return 'auto/all'
   if (setting.id === 'memory-margin') return Number(value).toFixed(1)
   if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty')
     return Number(value).toFixed(2)
@@ -117,6 +118,7 @@ function formatRangeValue(setting: ConfigurationDefaultsSetting, value: string) 
 }
 
 function rangeUnit(setting: ConfigurationDefaultsSetting, value: string) {
+  if (setting.id === 'gpu-layers' && value === '-1') return undefined
   if (setting.id === 'parallel-slots') return `slot${value === '1' ? '' : 's'}`
   if (setting.id === 'memory-margin') return 'GB'
   if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty') return undefined
@@ -154,6 +156,7 @@ function choiceControlClassName(setting: ConfigurationDefaultsSetting) {
 
 function tomlPreviewValue(setting: ConfigurationDefaultsSetting, value: string) {
   if (isBooleanToggleChoice(setting)) return toggleTomlValue(value)
+  if (setting.control.kind === 'text') return JSON.stringify(value)
   if (setting.id === 'memory-margin') return Number(value).toFixed(1)
   if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty')
     return Number(value).toFixed(2)

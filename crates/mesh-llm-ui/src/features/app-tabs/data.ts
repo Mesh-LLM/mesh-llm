@@ -636,6 +636,28 @@ export const CONFIGURATION_DEFAULTS = {
       }
     },
     {
+      id: 'hardware-device',
+      categoryId: 'runtime',
+      tomlSection: 'defaults.hardware',
+      tomlKey: 'device',
+      icon: 'cpu',
+      label: 'Default GPU device',
+      description: 'Optional fallback device for pinned GPU assignment when a model does not set its own device.',
+      inheritedLabel: 'Used only by placements without a model-specific hardware.device',
+      control: { kind: 'text', name: 'device', value: '', placeholder: 'cuda:0 or CUDA0' }
+    },
+    {
+      id: 'gpu-layers',
+      categoryId: 'runtime',
+      tomlSection: 'defaults.hardware',
+      tomlKey: 'gpu_layers',
+      icon: 'layers',
+      label: 'GPU layers',
+      description: 'Set the default llama.cpp GPU layer count; -1 keeps the runtime in auto/all-layers mode.',
+      inheritedLabel: 'Applies when a placement does not override hardware.gpu_layers',
+      control: { kind: 'range', name: 'gpu_layers', value: '-1', min: -1, max: 256, step: 1, unit: 'layers' }
+    },
+    {
       id: 'kv-cache',
       categoryId: 'memory',
       tomlSection: 'defaults.model_fit',

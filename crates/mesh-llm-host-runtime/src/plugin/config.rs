@@ -949,6 +949,10 @@ pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
         }
     }
     validate_telemetry_config(&config.telemetry)?;
+    let defaults_hardware = config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.hardware.as_ref());
     if let Some(defaults) = &config.defaults {
         validate_model_defaults(defaults, "defaults", config.gpu.assignment)?;
     }
@@ -956,7 +960,12 @@ pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
         if model.model.trim().is_empty() {
             bail!("models[{index}].model must not be empty");
         }
-        validate_model_entry(model, &format!("models[{index}]"), config.gpu.assignment)?;
+        validate_model_entry(
+            model,
+            &format!("models[{index}]"),
+            config.gpu.assignment,
+            defaults_hardware,
+        )?;
     }
     Ok(())
 }
@@ -969,16 +978,8 @@ fn validate_model_defaults(
     if let Some(model_fit) = &defaults.model_fit {
         validate_model_fit(model_fit, &format!("{base_path}.model_fit"))?;
     }
-    match defaults.hardware.as_ref() {
-        Some(hardware) => {
-            validate_hardware(hardware, &format!("{base_path}.hardware"), gpu_assignment)?
-        }
-        None if matches!(gpu_assignment, GpuAssignment::Pinned) => validate_hardware(
-            &HardwareConfig::default(),
-            &format!("{base_path}.hardware"),
-            gpu_assignment,
-        )?,
-        None => {}
+    if let Some(hardware) = &defaults.hardware {
+        validate_hardware(hardware, &format!("{base_path}.hardware"), gpu_assignment)?;
     }
     if let Some(throughput) = &defaults.throughput {
         validate_throughput(throughput, &format!("{base_path}.throughput"))?;
@@ -1004,12 +1005,6 @@ fn validate_model_defaults(
     if let Some(advanced) = &defaults.advanced {
         validate_advanced(advanced, &format!("{base_path}.advanced"))?;
     }
-    validate_gpu_assignment_constraints(
-        defaults.hardware.as_ref(),
-        None,
-        &format!("{base_path}.hardware.device"),
-        gpu_assignment,
-    )?;
     Ok(())
 }
 
@@ -1017,6 +1012,7 @@ fn validate_model_entry(
     model: &ModelConfigEntry,
     base_path: &str,
     gpu_assignment: GpuAssignment,
+    defaults_hardware: Option<&HardwareConfig>,
 ) -> Result<()> {
     let model_fit = merge_model_fit(
         model.model_fit.clone(),
@@ -1044,16 +1040,8 @@ fn validate_model_entry(
     if let Some(model_fit) = &model_fit {
         validate_model_fit(model_fit, &format!("{base_path}.model_fit"))?;
     }
-    match hardware.as_ref() {
-        Some(hardware) => {
-            validate_hardware(hardware, &format!("{base_path}.hardware"), gpu_assignment)?
-        }
-        None if matches!(gpu_assignment, GpuAssignment::Pinned) => validate_hardware(
-            &HardwareConfig::default(),
-            &format!("{base_path}.hardware"),
-            gpu_assignment,
-        )?,
-        None => {}
+    if let Some(hardware) = hardware.as_ref() {
+        validate_hardware(hardware, &format!("{base_path}.hardware"), gpu_assignment)?;
     }
     if let Some(throughput) = &throughput {
         validate_throughput(throughput, &format!("{base_path}.throughput"))?;
@@ -1081,6 +1069,7 @@ fn validate_model_entry(
     }
     validate_gpu_assignment_constraints(
         hardware.as_ref(),
+        defaults_hardware.and_then(|hardware| hardware.device.as_deref()),
         model
             .gpu_id_from_legacy_shim
             .then_some(model.gpu_id.as_deref())
@@ -1093,6 +1082,7 @@ fn validate_model_entry(
 
 fn validate_gpu_assignment_constraints(
     hardware: Option<&HardwareConfig>,
+    inherited_device: Option<&str>,
     legacy_gpu_id: Option<&str>,
     device_path: &str,
     gpu_assignment: GpuAssignment,
@@ -1101,7 +1091,10 @@ fn validate_gpu_assignment_constraints(
         bail!("{device_path} must not be set when gpu.assignment = \"auto\"");
     }
     if matches!(gpu_assignment, GpuAssignment::Pinned) {
-        match hardware.and_then(|config| config.device.as_deref()) {
+        match hardware
+            .and_then(|config| config.device.as_deref())
+            .or(inherited_device)
+        {
             Some(device) if !device.trim().is_empty() && !device.eq_ignore_ascii_case("auto") => {}
             _ => {
                 bail!(
@@ -1225,7 +1218,10 @@ fn validate_hardware(
     }
     if let Some(gpu_layers) = &config.gpu_layers {
         match gpu_layers {
-            IntegerOrString::Integer(value) if *value >= -1 => {}
+            IntegerOrString::Integer(value) if *value >= -1 && *value <= i64::from(i32::MAX) => {}
+            IntegerOrString::Integer(value) if *value > i64::from(i32::MAX) => {
+                bail!("{base_path}.gpu_layers must be at most {}", i32::MAX)
+            }
             IntegerOrString::Integer(_) => bail!("{base_path}.gpu_layers must be at least -1"),
             IntegerOrString::String(value) => {
                 validate_allowed(value, &["auto"], &format!("{base_path}.gpu_layers"))?
@@ -2428,6 +2424,53 @@ ctx_size = 8192
     }
 
     #[test]
+    fn pinned_gpu_config_accepts_defaults_hardware_device_for_models() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[gpu]
+assignment = "pinned"
+
+[defaults.hardware]
+device = "CUDA0"
+
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+"#,
+        )
+        .unwrap();
+
+        validate_config(&config).unwrap();
+        assert!(config.models[0].hardware.is_none());
+    }
+
+    #[test]
+    fn pinned_gpu_config_allows_defaults_hardware_without_device_when_models_pin_devices() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[gpu]
+assignment = "pinned"
+
+[defaults.hardware]
+gpu_layers = "auto"
+
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+
+[models.hardware]
+device = "CUDA1"
+"#,
+        )
+        .unwrap();
+
+        validate_config(&config).unwrap();
+        assert_eq!(config.models[0].gpu_id.as_deref(), Some("CUDA1"));
+    }
+
+    #[test]
     fn pinned_gpu_config_empty_gpu_id_rejected() {
         let config = MeshConfig {
             gpu: GpuConfig {
@@ -2446,6 +2489,26 @@ ctx_size = 8192
         assert!(err
             .to_string()
             .contains("models[0].hardware.device must not be empty when set"));
+    }
+
+    #[test]
+    fn hardware_gpu_layers_rejects_i32_overflow() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+
+[models.hardware]
+gpu_layers = 2147483648
+"#,
+        )
+        .unwrap();
+
+        let err = validate_config(&config).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "models[0].hardware.gpu_layers must be at most 2147483647"
+        );
     }
 
     #[test]
@@ -3244,7 +3307,7 @@ mmproj = "multimodal.gguf"
         let pinned_error = validate_config(&repaired).unwrap_err().to_string();
         assert_eq!(
             pinned_error,
-            "defaults.hardware.device must be set to a non-empty value when gpu.assignment = \"pinned\""
+            "models[0].hardware.device must be set to a non-empty value when gpu.assignment = \"pinned\""
         );
     }
 }

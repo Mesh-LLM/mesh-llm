@@ -253,12 +253,26 @@ pub(super) fn resolve_wire_dtype(
 pub(super) fn parse_gpu_layers(
     model_value: Option<&IntegerOrString>,
     global_value: Option<&IntegerOrString>,
-) -> Option<i32> {
-    model_value.or(global_value).and_then(|value| match value {
-        IntegerOrString::Integer(value) => Some(*value as i32),
-        IntegerOrString::String(value) if value.eq_ignore_ascii_case("auto") => Some(-1),
-        IntegerOrString::String(value) => value.parse::<i32>().ok(),
-    })
+) -> Result<Option<i32>> {
+    let Some(value) = model_value.or(global_value) else {
+        return Ok(None);
+    };
+
+    let gpu_layers = match value {
+        IntegerOrString::Integer(value) => i32::try_from(*value).map(Some).map_err(|_| {
+            anyhow::anyhow!("hardware.gpu_layers must fit in a 32-bit signed integer")
+        }),
+        IntegerOrString::String(value) if value.eq_ignore_ascii_case("auto") => Ok(Some(-1)),
+        IntegerOrString::String(value) => value
+            .parse::<i32>()
+            .map(Some)
+            .map_err(|_| anyhow::anyhow!("hardware.gpu_layers must be an integer or \"auto\"")),
+    }?;
+
+    match gpu_layers {
+        Some(value) if value < -1 => bail!("hardware.gpu_layers must be at least -1"),
+        _ => Ok(gpu_layers),
+    }
 }
 
 pub(super) fn bool_or_auto_value(value: &BoolOrAuto) -> String {

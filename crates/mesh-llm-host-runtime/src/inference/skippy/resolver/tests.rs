@@ -874,6 +874,33 @@ fn integrated_full_surface_fixture_resolves_defaults_overrides_staged_and_runtim
 }
 
 #[test]
+fn resolver_rejects_gpu_layers_i32_overflow() {
+    let mesh_config = parse_config(
+        r#"
+[defaults.hardware]
+gpu_layers = 2147483648
+
+[[models]]
+model = "Qwen/Qwen3-0.6B:Q4_K_M"
+"#,
+    );
+    let model_file = temp_model_file();
+
+    let error = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-0.6B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 2 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+    })
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("hardware.gpu_layers must fit in a 32-bit signed integer"));
+}
+
+#[test]
 fn resolver_rejects_unsupported_hardware_controls_that_cannot_reach_launch() {
     let mesh_config = parse_config(
         r#"

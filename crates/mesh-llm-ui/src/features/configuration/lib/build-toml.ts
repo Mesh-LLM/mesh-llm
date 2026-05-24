@@ -38,7 +38,7 @@ function tomlString(value: string): string {
 }
 
 function tomlScalar(value: string): string {
-  return /^\d+(\.\d+)?$/.test(value) ? value : tomlString(value)
+  return /^-?\d+(\.\d+)?$/.test(value) ? value : tomlString(value)
 }
 
 function isBooleanToggleChoice(setting: ConfigurationDefaultsSetting): boolean {
@@ -52,6 +52,7 @@ function isBooleanToggleChoice(setting: ConfigurationDefaultsSetting): boolean {
 
 function defaultTomlScalar(setting: ConfigurationDefaultsSetting, value: string): string {
   if (isBooleanToggleChoice(setting)) return value === 'on' ? 'true' : 'false'
+  if (setting.control.kind === 'text') return tomlString(value)
   if (setting.id === 'memory-margin') return Number(value).toFixed(1)
   if (setting.id === 'temperature' || setting.id === 'top-p' || setting.id === 'repeat-penalty')
     return Number(value).toFixed(2)

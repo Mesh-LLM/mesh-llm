@@ -6470,7 +6470,23 @@ impl Node {
                 .await;
         };
 
-        let mesh_config = crate::protocol::convert::proto_config_to_mesh(&config_snapshot);
+        let mesh_config =
+            match crate::protocol::convert::proto_config_to_mesh_strict(&config_snapshot) {
+                Ok(config) => config,
+                Err(error) => {
+                    return self
+                        .send_owner_control_envelope(
+                            send,
+                            owner_control_error_envelope(
+                                crate::proto::node::OwnerControlErrorCode::BadRequest,
+                                Some(request_id),
+                                None,
+                                error.to_string(),
+                            ),
+                        )
+                        .await;
+                }
+            };
         let config_state = Arc::clone(&self.config_state);
         let expected_revision = apply.expected_revision;
         let apply_result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {

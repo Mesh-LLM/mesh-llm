@@ -197,6 +197,8 @@ describe('ConfigurationPage', () => {
     expect(screen.getByRole('heading', { name: 'Speculative Decoding' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Request Defaults' })).toBeInTheDocument()
     expect(screen.getByText('Model Runtime')).toBeInTheDocument()
+    expect(screen.getByText('Default GPU device')).toBeInTheDocument()
+    expect(screen.getByText('GPU layers')).toBeInTheDocument()
     expect(screen.getByText('KV cache policy')).toBeInTheDocument()
     expect(screen.getByText('Memory / safety margin')).toBeInTheDocument()
     expect(screen.getByText('Reasoning format')).toBeInTheDocument()

@@ -1813,6 +1813,79 @@ async fn control_plane_apply_rejects_stale_revision() -> Result<()> {
 }
 
 #[tokio::test]
+async fn control_plane_apply_rejects_malformed_full_config_toml() -> Result<()> {
+    use crate::proto::node::{
+        NodeConfigSnapshot, NodeGpuConfig, OwnerControlErrorCode, OwnerControlRequest,
+    };
+
+    let owner_keypair = test_owner_keypair(0x97, 0x98);
+    let tmp = std::env::temp_dir().join(format!(
+        "mesh-llm-control-invalid-config-{}",
+        rand::random::<u64>()
+    ));
+    std::fs::create_dir_all(&tmp).ok();
+    let (server, _secret_key, _config_path) =
+        start_owner_control_test_server(&owner_keypair, &tmp).await?;
+
+    let initial_revision = { server.config_state.lock().await.revision() };
+    let initial_hash = { *server.config_state.lock().await.config_hash() };
+
+    let (_apply_endpoint, mut apply_send, mut apply_recv, apply_requester_id) =
+        open_owner_control_stream(&server, &owner_keypair).await?;
+    write_len_prefixed(
+        &mut apply_send,
+        &crate::proto::node::OwnerControlEnvelope {
+            gen: NODE_PROTOCOL_GENERATION,
+            handshake: None,
+            request: Some(OwnerControlRequest {
+                request_id: 22,
+                get_config: None,
+                watch_config: None,
+                apply_config: Some(crate::proto::node::OwnerControlApplyConfigRequest {
+                    requester_node_id: apply_requester_id.as_bytes().to_vec(),
+                    target_node_id: server.id().as_bytes().to_vec(),
+                    expected_revision: initial_revision,
+                    config: Some(NodeConfigSnapshot {
+                        version: 1,
+                        gpu: Some(NodeGpuConfig {
+                            assignment: crate::proto::node::GpuAssignment::Auto as i32,
+                        }),
+                        models: vec![],
+                        plugins: vec![],
+                        config_toml: Some("not valid toml = [".to_string()),
+                    }),
+                }),
+                refresh_inventory: None,
+            }),
+            response: None,
+            error: None,
+        }
+        .encode_to_vec(),
+    )
+    .await?;
+
+    let rejected = read_owner_control_envelope(&mut apply_recv).await?;
+    let error = rejected
+        .error
+        .expect("malformed full config should return an error envelope");
+    assert_eq!(error.code, OwnerControlErrorCode::BadRequest as i32);
+    assert_eq!(error.request_id, Some(22));
+    assert!(error.message.contains("invalid full config_toml payload"));
+    assert_eq!(
+        server.config_state.lock().await.revision(),
+        initial_revision
+    );
+    assert_eq!(
+        *server.config_state.lock().await.config_hash(),
+        initial_hash
+    );
+
+    server.shutdown_control_listener().await;
+    std::fs::remove_dir_all(&tmp).ok();
+    Ok(())
+}
+
+#[tokio::test]
 async fn owner_control_client_reuses_connection_for_sequential_requests() -> Result<()> {
     use mesh_client::{
         ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneConnection, InviteToken,

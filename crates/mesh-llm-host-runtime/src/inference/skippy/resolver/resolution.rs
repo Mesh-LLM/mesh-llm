@@ -33,7 +33,7 @@ pub(crate) fn resolve_skippy_config(
     let kv_policy = KvCachePolicy::for_model_size(context.request.model_bytes);
 
     let model_fit = resolve_model_fit_config(&context, kv_policy)?;
-    let hardware = resolve_hardware_config(&context);
+    let hardware = resolve_hardware_config(&context)?;
     let throughput = resolve_throughput_config(&context);
     let skippy = resolve_execution_config(&context, family_policy.activation_wire_dtype);
     let speculative = resolve_speculative_config(
@@ -269,7 +269,7 @@ fn resolve_kv_offload(context: &ResolverContext<'_>, kv: &KvDefaults) -> String 
     )
 }
 
-fn resolve_hardware_config(context: &ResolverContext<'_>) -> ResolvedHardwareConfig {
+fn resolve_hardware_config(context: &ResolverContext<'_>) -> Result<ResolvedHardwareConfig> {
     let model_hardware = context
         .model_entry
         .and_then(|entry| entry.hardware.as_ref());
@@ -282,7 +282,7 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> ResolvedHardwareCon
     let gpu_layers = parse_gpu_layers(
         model_hardware.and_then(|hardware| hardware.gpu_layers.as_ref()),
         global_hardware.and_then(|hardware| hardware.gpu_layers.as_ref()),
-    )
+    )?
     .unwrap_or(-1);
     let safety_margin_gb = pick_owned(
         model_hardware.and_then(|hardware| hardware.safety_margin_gb),
@@ -310,7 +310,7 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> ResolvedHardwareCon
         global_hardware.and_then(|hardware| hardware.stage_layer_end),
     );
 
-    ResolvedHardwareConfig {
+    Ok(ResolvedHardwareConfig {
         device,
         gpu_layers,
         fit_target_mib,
@@ -318,7 +318,7 @@ fn resolve_hardware_config(context: &ResolverContext<'_>) -> ResolvedHardwareCon
         projector_path,
         stage_layer_start,
         stage_layer_end,
-    }
+    })
 }
 
 fn resolve_projector_path(context: &ResolverContext<'_>) -> Option<PathBuf> {

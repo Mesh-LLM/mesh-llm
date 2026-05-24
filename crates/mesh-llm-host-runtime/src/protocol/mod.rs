@@ -1814,6 +1814,27 @@ alias = "model-alias"
     }
 
     #[test]
+    fn mesh_config_proto_strict_invalid_full_payload_is_rejected() {
+        let mut snapshot = make_config_snapshot();
+        snapshot.config_toml = Some("not valid toml = [".to_string());
+
+        let err = proto_config_to_mesh_strict(&snapshot).unwrap_err();
+
+        assert!(err.to_string().contains("invalid full config_toml payload"));
+    }
+
+    #[test]
+    fn mesh_config_proto_strict_legacy_payload_still_restores_fields() {
+        let mut snapshot = make_config_snapshot();
+        snapshot.config_toml = None;
+
+        let restored = proto_config_to_mesh_strict(&snapshot).unwrap();
+
+        assert_eq!(restored.models[0].model, "Qwen3-8B");
+        assert_eq!(restored.models[0].ctx_size, Some(8192));
+    }
+
+    #[test]
     fn config_sync_prefers_structured_model_refs() {
         let snapshot = NodeConfigSnapshot {
             version: 1,

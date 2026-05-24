@@ -53,6 +53,7 @@ describe('buildTOML', () => {
     expect(toml).toContain('kv_cache_policy = "auto"')
     expect(toml).toContain('[defaults.hardware]')
     expect(toml).toContain('model_runtime = "cuda"')
+    expect(toml).toContain('gpu_layers = -1')
     expect(toml).toContain('safety_margin_gb = 2.0')
     expect(toml).toContain('[defaults.throughput]')
     expect(toml).toContain('parallel = 4')
@@ -104,5 +105,28 @@ describe('buildTOML', () => {
     expect(autoToml).not.toContain('draft_selection_policy')
     expect(autoToml).not.toContain('pairing_fault')
     expect(autoToml).not.toContain('draft_max_tokens')
+  })
+
+  it('emits optional default hardware device and numeric gpu layer sentinel', () => {
+    const toml = buildTOML([], [], [], {
+      defaults: CONFIGURATION_DEFAULTS,
+      defaultsValues: { 'hardware-device': 'cuda:0', 'gpu-layers': '-1' }
+    })
+
+    expect(toml).toContain('[defaults.hardware]')
+    expect(toml).toContain('device = "cuda:0"')
+    expect(toml).toContain('gpu_layers = -1')
+    expect(toml).not.toContain('gpu_layers = "-1"')
+  })
+
+  it('quotes numeric-looking text defaults while keeping numeric controls unquoted', () => {
+    const toml = buildTOML([], [], [], {
+      defaults: CONFIGURATION_DEFAULTS,
+      defaultsValues: { 'hardware-device': '0', 'gpu-layers': '-1' }
+    })
+
+    expect(toml).toContain('device = "0"')
+    expect(toml).not.toContain('device = 0')
+    expect(toml).toContain('gpu_layers = -1')
   })
 })
