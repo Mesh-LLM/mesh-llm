@@ -16,6 +16,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-routing"
   "mesh-llm-system"
   "mesh-llm-types"
+  "mesh-llm-console-server"
   "mesh-llm-ui"
   "mesh-llm-plugin"
   "mesh-llm-client"

@@ -3735,10 +3735,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-console-server"
+version = "0.66.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-ui",
+ "tokio",
+]
+
+[[package]]
 name = "mesh-llm-ffi"
 version = "0.66.0"
 dependencies = [
  "mesh-llm-api-server",
+ "mesh-llm-console-server",
  "mesh-llm-host-runtime",
  "mesh-llm-node",
  "thiserror 2.0.18",
@@ -3870,6 +3880,7 @@ name = "mesh-llm-nodejs"
 version = "0.66.0"
 dependencies = [
  "mesh-llm-api-server",
+ "mesh-llm-console-server",
  "mesh-llm-host-runtime",
  "napi",
  "napi-build",

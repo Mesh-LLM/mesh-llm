@@ -20,6 +20,8 @@ SDK crates:
   controllers, not the local REST management API.
 - `crates/mesh-llm-ffi/` for the UniFFI/native bridge used by Swift and Kotlin
 - `crates/mesh-llm-nodejs/` for the N-API native bridge used by Node.js
+- `crates/mesh-llm-console-server/` for serving packaged console assets from
+  SDKs without embedding the React bundle into every native library
 
 The public surface is split by role: `Client` consumes inference from an
 existing mesh, while `Node` can also manage and serve local models. See
@@ -28,6 +30,18 @@ existing mesh, while `Node` can also manage and serve local models. See
 The customer-facing SDK usage guide lives in `docs/SDK.md`. SDK changes should
 keep Rust, Swift, Kotlin, and Node aligned around real examples, polished
 lifecycle, typed errors, and an honest platform support matrix.
+
+## Optional Console Assets
+
+The CLI embeds the built React console in the shipped binary. SDK packages keep
+the default native runtime smaller and treat the console as optional package
+resources instead. A console-enabled SDK package should include the built UI
+`dist/` files, resolve that resource location internally, and call the native
+`startConsole` hook with the resolved asset directory.
+
+SDK users should not have to pass a raw directory in normal package usage. The
+path-based native boundary exists so SwiftPM resources, Node package files, JVM
+resources, and Android assets can all feed the same Rust console server.
 
 Generated UniFFI bindings and Apple binary artifacts are build outputs, not
 source. Do not check in `sdk/*/Generated`, generated `uniffi/mesh_ffi` Kotlin

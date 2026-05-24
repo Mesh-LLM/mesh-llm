@@ -14,6 +14,7 @@ embedded-runtime = ["mesh-llm-host-runtime"]
 
 [dependencies]
 mesh-llm-api-server = { path = "../mesh-llm-api-server" }
+mesh-llm-console-server = { path = "../mesh-llm-console-server" }
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", default-features = false, optional = true }
 mesh-llm-node = { path = "../mesh-llm-node", optional = true }
 thiserror = "2"

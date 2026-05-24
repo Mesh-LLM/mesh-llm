@@ -19,6 +19,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-routing"
   "mesh-llm-system"
   "mesh-llm-types"
+  "mesh-llm-console-server"
   "mesh-llm-ui"
   "mesh-llm-plugin"
   "mesh-llm-client"
@@ -137,6 +138,7 @@ weights = {
     "mesh-llm-routing": 2,
     "mesh-llm-protocol": 2,
     "mesh-llm-types": 2,
+    "mesh-llm-console-server": 2,
     "mesh-llm-ui": 2,
     "mesh-llm-plugin": 2,
     "mesh-llm-node": 2,

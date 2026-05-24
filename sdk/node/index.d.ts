@@ -116,6 +116,17 @@ export type NodeOptions = {
   servingEnabled?: boolean
 }
 
+export type ConsoleOptions = {
+  assetDir?: string
+  port?: number
+  listenAll?: boolean
+}
+
+export declare class Console {
+  readonly url: string
+  stop(): Promise<void>
+}
+
 export type ClientOptions = {
   ownerKeypairHex: string
   inviteToken: string
@@ -161,6 +172,7 @@ export declare class Node {
   stop(): Promise<void>
   reconnect(): Promise<void>
   status(): Promise<{ connected: boolean; peerCount: number }>
+  startConsole(options?: ConsoleOptions): Promise<Console>
 }
 
 export declare function generateOwnerKeypairHex(): string
