@@ -127,7 +127,13 @@ impl PrefixCandidatePolicy {
             return counts;
         }
         let stride = self.stride_tokens.max(1).min(self.page_size_tokens.max(1));
-        let mut candidate = token_count.saturating_sub(1);
+        let mut candidate = stable_grid_floor(token_count, stride);
+        if candidate == token_count {
+            candidate = candidate.saturating_sub(stride);
+        }
+        if candidate < self.min_tokens {
+            candidate = self.min_tokens;
+        }
         while candidate >= self.min_tokens {
             counts.push(candidate);
             if candidate == self.min_tokens {
@@ -151,32 +157,15 @@ impl PrefixCandidatePolicy {
         let mut selected = Vec::with_capacity(limit);
         selected.push(token_count);
 
-        let lower_bound = candidates
-            .iter()
-            .copied()
-            .filter(|candidate| *candidate != token_count)
-            .min()
-            .unwrap_or(token_count);
         let shared_slots = limit.saturating_sub(1);
         if shared_slots == 0 {
             return selected;
         }
-        for slot in 0..shared_slots {
-            let target = if shared_slots == 1 {
-                lower_bound
-            } else {
-                let span = token_count.saturating_sub(lower_bound);
-                token_count
-                    .saturating_sub(span.saturating_mul((slot + 1) as u64) / shared_slots as u64)
+        for candidate in candidates.iter().copied() {
+            if selected.len() >= limit {
+                break;
             }
-            .max(self.min_tokens)
-            .min(token_count);
-            if let Some(candidate) = candidates
-                .iter()
-                .copied()
-                .filter(|candidate| *candidate <= target && *candidate != token_count)
-                .max()
-            {
+            if candidate != token_count {
                 selected.push(candidate);
             }
         }
@@ -196,6 +185,10 @@ impl PrefixCandidatePolicy {
     }
 }
 
+fn stable_grid_floor(token_count: u64, stride: u64) -> u64 {
+    token_count.saturating_sub(token_count % stride.max(1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,10 +202,7 @@ mod tests {
             page_size_tokens: 64,
         };
 
-        assert_eq!(
-            policy.candidate_token_counts(160),
-            vec![160, 159, 127, 95, 64]
-        );
+        assert_eq!(policy.candidate_token_counts(160), vec![160, 128, 96, 64]);
     }
 
     #[test]
@@ -224,7 +214,7 @@ mod tests {
             page_size_tokens: 64,
         };
 
-        assert_eq!(policy.record_candidate_token_counts(160), vec![160, 64]);
+        assert_eq!(policy.record_candidate_token_counts(160), vec![160, 128]);
     }
 
     #[test]
@@ -251,7 +241,40 @@ mod tests {
 
         assert_eq!(
             policy.record_candidate_token_counts(160),
-            vec![160, 159, 127, 95, 64]
+            vec![160, 128, 96, 64]
         );
+    }
+
+    #[test]
+    fn same_prefix_different_tail_prompts_share_near_tail_candidate() {
+        let policy = PrefixCandidatePolicy {
+            min_tokens: 256,
+            stride_tokens: 128,
+            record_limit: 2,
+            page_size_tokens: 256,
+        };
+
+        let recorded = policy.record_candidate_token_counts(2214);
+        let lookup = policy.candidate_token_counts(2231);
+        let shared = recorded
+            .iter()
+            .copied()
+            .find(|candidate| lookup.contains(candidate));
+
+        assert_eq!(recorded, vec![2214, 2176]);
+        assert_eq!(shared, Some(2176));
+    }
+
+    #[test]
+    fn non_aligned_min_tokens_still_provides_shared_floor_candidate() {
+        let policy = PrefixCandidatePolicy {
+            min_tokens: 300,
+            stride_tokens: 128,
+            record_limit: 2,
+            page_size_tokens: 300,
+        };
+
+        assert_eq!(policy.candidate_token_counts(350), vec![350, 300]);
+        assert_eq!(policy.record_candidate_token_counts(350), vec![350, 300]);
     }
 }

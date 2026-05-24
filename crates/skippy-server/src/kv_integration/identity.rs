@@ -180,7 +180,7 @@ mod tests {
             .map(|identity| identity.identity.token_count)
             .collect::<Vec<_>>();
 
-        assert_eq!(lookup_counts, vec![160, 159, 127, 95, 64]);
-        assert_eq!(record_counts, vec![160, 64]);
+        assert_eq!(lookup_counts, vec![160, 128, 96, 64]);
+        assert_eq!(record_counts, vec![160, 128]);
     }
 }
