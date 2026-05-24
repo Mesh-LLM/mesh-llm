@@ -157,6 +157,10 @@ impl RuntimeState {
         Ok(token)
     }
 
+    pub fn session_batch_size(&mut self, session_id: &str) -> Result<usize> {
+        self.active_session(session_id)?.batch_size()
+    }
+
     pub fn configure_chat_sampling(
         &mut self,
         session_id: &str,
@@ -301,6 +305,13 @@ impl RuntimeState {
             .get_mut(session_id)
             .expect("session inserted above")
             .session)
+    }
+
+    fn active_session(&mut self, session_id: &str) -> Result<&mut StageSession> {
+        self.sessions
+            .get_mut(session_id)
+            .map(|lane_session| &mut lane_session.session)
+            .ok_or_else(|| anyhow::anyhow!("session {session_id} is not active"))
     }
 
     pub fn prewarm_idle_sessions(
@@ -742,7 +753,7 @@ impl RuntimeState {
         session_id: &str,
         cache_seq_id: i32,
     ) -> Result<()> {
-        self.session(session_id)?.drop_sequence(cache_seq_id)
+        self.active_session(session_id)?.drop_sequence(cache_seq_id)
     }
 
     fn add_session_tokens(&mut self, session_id: &str, count: u64) {

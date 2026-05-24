@@ -23,6 +23,40 @@ const MM_CTX_SIZE_ENV: &str = "SKIPPY_MM_CTX_SIZE";
 const MM_MAX_TOKENS_ENV: &str = "SKIPPY_MM_MAX_TOKENS";
 const MM_N_GPU_LAYERS_ENV: &str = "SKIPPY_MM_N_GPU_LAYERS";
 
+#[test]
+fn proactive_eviction_attrs_are_bounded_and_request_free() {
+    let attrs = proactive_eviction_attrs("error", Some("inactive_session"), 1024, 2, 768);
+
+    assert_eq!(
+        attrs.get("skippy.kv.decision"),
+        Some(&json!("proactive_eviction"))
+    );
+    assert_eq!(
+        attrs.get(attr_key::KV_PROACTIVE_EVICTION_STATUS),
+        Some(&json!("error"))
+    );
+    assert_eq!(
+        attrs.get(attr_key::KV_PROACTIVE_EVICTION_ERROR_KIND),
+        Some(&json!("inactive_session"))
+    );
+    assert_eq!(
+        attrs.get(attr_key::KV_PROACTIVE_EVICTION_TARGET_TOKENS),
+        Some(&json!(1024))
+    );
+    assert_eq!(
+        attrs.get(attr_key::KV_PROACTIVE_EVICTED_ENTRIES),
+        Some(&json!(2))
+    );
+    assert_eq!(
+        attrs.get(attr_key::KV_PROACTIVE_EVICTED_TOKENS),
+        Some(&json!(768))
+    );
+    assert!(!attrs.contains_key(attr_key::REQUEST_ID));
+    assert!(!attrs.contains_key(attr_key::SESSION_ID));
+    assert!(!attrs.contains_key("openai.prompt_cache_key"));
+    assert!(!attrs.contains_key("openai.prompt_cache_retention"));
+}
+
 struct MultimodalSmokeFixture {
     model_path: PathBuf,
     projector_path: PathBuf,

@@ -11,6 +11,12 @@ pub mod attr {
     pub const LAYER_START: &str = "skippy.layer_start";
     pub const LAYER_END: &str = "skippy.layer_end";
     pub const LOAD_MODE: &str = "skippy.load_mode";
+    pub const KV_PROACTIVE_EVICTION_STATUS: &str = "skippy.kv.proactive_eviction_status";
+    pub const KV_PROACTIVE_EVICTION_ERROR_KIND: &str = "skippy.kv.proactive_eviction_error_kind";
+    pub const KV_PROACTIVE_EVICTION_TARGET_TOKENS: &str =
+        "skippy.kv.proactive_eviction_target_tokens";
+    pub const KV_PROACTIVE_EVICTED_ENTRIES: &str = "skippy.kv.proactive_evicted_entries";
+    pub const KV_PROACTIVE_EVICTED_TOKENS: &str = "skippy.kv.proactive_evicted_tokens";
 }
 
 pub mod metric {

@@ -285,11 +285,32 @@ impl StageOpenAiBackend {
                         }
                     }
                 }
-                // Proactive eviction: after prefill recording, evict one
-                // LRU resident prefix entry to free KV cells for
-                // grammar-triggered retries during the decode loop.
+                // Proactive eviction: after prefill recording, evict enough
+                // LRU resident-prefix entries to free one native decode batch
+                // for grammar-triggered retries during the decode loop.
+                let mut proactive_eviction_status = "disabled";
+                let mut proactive_eviction_error_kind_attr = None;
+                let mut proactive_eviction_target_tokens = 0_u64;
+                let mut proactive_evicted_entries = 0_usize;
+                let mut proactive_evicted_tokens = 0_u64;
                 if let Some(kv) = self.kv.as_ref() {
-                    let _ = kv.evict_one_resident_prefix(&mut runtime, &session_id);
+                    match kv.evict_resident_prefix_for_decode_batch(&mut runtime, &session_id) {
+                        Ok(eviction) => {
+                            proactive_eviction_status = if eviction.evicted_entries > 0 {
+                                "evicted"
+                            } else {
+                                "noop"
+                            };
+                            proactive_eviction_target_tokens = eviction.target_tokens;
+                            proactive_evicted_entries = eviction.evicted_entries;
+                            proactive_evicted_tokens = eviction.evicted_tokens;
+                        }
+                        Err(error) => {
+                            proactive_eviction_status = "error";
+                            proactive_eviction_error_kind_attr =
+                                Some(proactive_eviction_error_kind(&error));
+                        }
+                    }
                 }
                 let runtime_sessions_after = runtime.session_stats();
                 let runtime_lock_hold_ms = runtime_lock_hold_timer.elapsed_ms();
@@ -335,6 +356,16 @@ impl StageOpenAiBackend {
                     &runtime_sessions_after,
                 );
                 self.emit_openai_phase("stage.openai_prefill", prefill_timer, attrs);
+                self.telemetry.emit(
+                    "stage.openai_kv_record_decision",
+                    proactive_eviction_attrs(
+                        proactive_eviction_status,
+                        proactive_eviction_error_kind_attr,
+                        proactive_eviction_target_tokens,
+                        proactive_evicted_entries,
+                        proactive_evicted_tokens,
+                    ),
+                );
             }
             if let Some(metadata) = request.chat_sampling_metadata {
                 let mut runtime = self
