@@ -25,7 +25,7 @@ on:
         description: "Actually submit HF Jobs and wait for completion"
         required: false
         type: boolean
-        default: false
+        default: true
       mesh_llm_ref:
         description: "mesh-llm git ref for the split job to build"
         required: false
@@ -57,7 +57,7 @@ jobs:
       SEARCH: ${{ github.event.inputs.search || 'GGUF' }}
       MAX_JOBS: ${{ github.event.inputs.max_jobs || '5' }}
       MAX_PER_FAMILY: ${{ github.event.inputs.max_per_family || '1' }}
-      CONFIRM: ${{ github.event.inputs.confirm || 'false' }}
+      CONFIRM: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.confirm }}
       MESH_LLM_REF: ${{ github.event.inputs.mesh_llm_ref || 'main' }}
       QUANT_PREFERENCE: ${{ github.event.inputs.quant_preference || 'UD-Q4_K_XL,UD-Q4_K_M,Q4_K_XL,Q4_K_M' }}
       SPLIT_CANDIDATE_VRAM_GIB: ${{ github.event.inputs.split_candidate_vram_gib || '8' }}

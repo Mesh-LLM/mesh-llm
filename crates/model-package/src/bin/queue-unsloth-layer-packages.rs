@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -56,6 +56,7 @@ struct Candidate {
     model: RankedModel,
     quant: DiscoveredQuant,
     target_repo: String,
+    model_layer_repos: Vec<String>,
     model_id: String,
     family: String,
 }
@@ -66,12 +67,12 @@ struct SubmittedJob {
     info: JobInfo,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum QueueStatus {
     Missing,
-    Published,
-    Cataloged,
-    Queued,
+    Published { repo: String },
+    Cataloged { repo: String },
+    Queued { repo: String },
     StaleQueued,
 }
 
@@ -194,16 +195,25 @@ async fn main() -> Result<()> {
         }
         let status = candidate_status(&hf_client, &candidate, args.retry_queued_after).await?;
         match status {
-            QueueStatus::Published => {
-                println!("skip {}: already published", candidate.target_repo);
+            QueueStatus::Published { repo } => {
+                println!(
+                    "skip {}: already has published layer package {}",
+                    candidate.model.repo_id, repo
+                );
                 continue;
             }
-            QueueStatus::Cataloged => {
-                println!("skip {}: already in meshllm/catalog", candidate.target_repo);
+            QueueStatus::Cataloged { repo } => {
+                println!(
+                    "skip {}: already has layer package {} in meshllm/catalog",
+                    candidate.model.repo_id, repo
+                );
                 continue;
             }
-            QueueStatus::Queued => {
-                println!("skip {}: recently queued", candidate.target_repo);
+            QueueStatus::Queued { repo } => {
+                println!(
+                    "skip {}: already recently queued layer package {}",
+                    candidate.model.repo_id, repo
+                );
                 continue;
             }
             QueueStatus::Missing | QueueStatus::StaleQueued => {}
@@ -658,9 +668,8 @@ async fn build_candidate(
         return Ok(None);
     }
 
-    let distribution_id =
-        model_ref::normalize_gguf_distribution_id(&quant.first_file).unwrap_or(quant.name.clone());
-    let target_repo = format!("{}/{distribution_id}-layers", args.target_namespace);
+    let target_repo = layer_target_repo(&quant, &args.target_namespace);
+    let model_layer_repos = model_layer_repos(&quants, &args.target_namespace);
     let model_id =
         model_ref::format_gguf_selection_ref(&model.repo_id, &quant.first_file, &quant.name);
 
@@ -670,9 +679,25 @@ async fn build_candidate(
         model,
         quant,
         target_repo,
+        model_layer_repos,
         model_id,
         family,
     }))
+}
+
+fn model_layer_repos(quants: &[DiscoveredQuant], target_namespace: &str) -> Vec<String> {
+    quants
+        .iter()
+        .map(|quant| layer_target_repo(quant, target_namespace))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn layer_target_repo(quant: &DiscoveredQuant, target_namespace: &str) -> String {
+    let distribution_id =
+        model_ref::normalize_gguf_distribution_id(&quant.first_file).unwrap_or(quant.name.clone());
+    format!("{target_namespace}/{distribution_id}-layers")
 }
 
 fn select_preferred_quant(
@@ -692,45 +717,50 @@ async fn candidate_status(
     candidate: &Candidate,
     retry_queued_after: Duration,
 ) -> Result<QueueStatus> {
-    if catalog_has_package(client, candidate).await? {
-        return Ok(QueueStatus::Cataloged);
+    if let Some(repo) = catalog_layer_package_repo(client, candidate).await? {
+        return Ok(QueueStatus::Cataloged { repo });
     }
 
-    let Some(repo_info) = model_repo_info(client, &candidate.target_repo).await? else {
-        return Ok(QueueStatus::Missing);
-    };
+    let mut exact_status = QueueStatus::Missing;
+    for repo in &candidate.model_layer_repos {
+        let Some(repo_info) = model_repo_info(client, repo).await? else {
+            continue;
+        };
 
-    let siblings = repo_info.siblings.unwrap_or_default();
-    if siblings
-        .iter()
-        .any(|sibling| sibling.rfilename == "model-package.json")
-    {
-        return Ok(QueueStatus::Published);
-    }
-
-    let has_queue_marker = siblings
-        .iter()
-        .any(|sibling| sibling.rfilename == "automation/queue.json");
-    if has_queue_marker {
-        let queued_recently = repo_info
-            .last_modified
-            .as_deref()
-            .and_then(parse_hf_datetime)
-            .map(|last_modified| {
-                Utc::now()
-                    .signed_duration_since(last_modified)
-                    .to_std()
-                    .unwrap_or_default()
-                    < retry_queued_after
-            })
-            .unwrap_or(true);
-        if queued_recently {
-            return Ok(QueueStatus::Queued);
+        let siblings = repo_info.siblings.unwrap_or_default();
+        if siblings
+            .iter()
+            .any(|sibling| sibling.rfilename == "model-package.json")
+        {
+            return Ok(QueueStatus::Published { repo: repo.clone() });
         }
-        return Ok(QueueStatus::StaleQueued);
+
+        let has_queue_marker = siblings
+            .iter()
+            .any(|sibling| sibling.rfilename == "automation/queue.json");
+        if has_queue_marker {
+            let queued_recently = repo_info
+                .last_modified
+                .as_deref()
+                .and_then(parse_hf_datetime)
+                .map(|last_modified| {
+                    Utc::now()
+                        .signed_duration_since(last_modified)
+                        .to_std()
+                        .unwrap_or_default()
+                        < retry_queued_after
+                })
+                .unwrap_or(true);
+            if queued_recently {
+                return Ok(QueueStatus::Queued { repo: repo.clone() });
+            }
+            if repo == &candidate.target_repo {
+                exact_status = QueueStatus::StaleQueued;
+            }
+        }
     }
 
-    Ok(QueueStatus::Missing)
+    Ok(exact_status)
 }
 
 async fn model_repo_info(client: &HFClient, repo_id: &str) -> Result<Option<ModelInfo>> {
@@ -744,7 +774,10 @@ async fn model_repo_info(client: &HFClient, repo_id: &str) -> Result<Option<Mode
     }
 }
 
-async fn catalog_has_package(client: &HFClient, candidate: &Candidate) -> Result<bool> {
+async fn catalog_layer_package_repo(
+    client: &HFClient,
+    candidate: &Candidate,
+) -> Result<Option<String>> {
     let entry_path = catalog_entry_path(&candidate.model.repo_id)?;
     let dataset = client.dataset("meshllm", "catalog");
     let bytes = match dataset
@@ -756,9 +789,9 @@ async fn catalog_has_package(client: &HFClient, candidate: &Candidate) -> Result
     {
         Ok(bytes) => bytes,
         Err(HFError::EntryNotFound { .. }) | Err(HFError::RepoNotFound { .. }) => {
-            return Ok(false);
+            return Ok(None);
         }
-        Err(HFError::Http { context }) if context.status.as_u16() == 404 => return Ok(false),
+        Err(HFError::Http { context }) if context.status.as_u16() == 404 => return Ok(None),
         Err(err) => {
             return Err(err).with_context(|| format!("download catalog entry {entry_path}"))
         }
@@ -766,26 +799,31 @@ async fn catalog_has_package(client: &HFClient, candidate: &Candidate) -> Result
 
     let value: Value = serde_json::from_slice(&bytes)
         .with_context(|| format!("parse catalog entry {entry_path}"))?;
-    Ok(json_contains_package_repo(&value, &candidate.target_repo))
+    let target_namespace = candidate
+        .target_repo
+        .split_once('/')
+        .map(|(namespace, _)| namespace)
+        .unwrap_or_default();
+    Ok(json_layer_package_repo(&value, target_namespace))
 }
 
-fn json_contains_package_repo(value: &Value, target_repo: &str) -> bool {
+fn json_layer_package_repo(value: &Value, target_namespace: &str) -> Option<String> {
     match value {
         Value::Object(map) => {
-            if map
-                .get("repo")
-                .and_then(Value::as_str)
-                .is_some_and(|repo| repo == target_repo)
-            {
-                return true;
+            if let Some(repo) = map.get("repo").and_then(Value::as_str).filter(|repo| {
+                repo.strip_prefix(target_namespace)
+                    .is_some_and(|suffix| suffix.starts_with('/'))
+                    && repo.ends_with("-layers")
+            }) {
+                return Some(repo.to_string());
             }
             map.values()
-                .any(|value| json_contains_package_repo(value, target_repo))
+                .find_map(|value| json_layer_package_repo(value, target_namespace))
         }
         Value::Array(items) => items
             .iter()
-            .any(|value| json_contains_package_repo(value, target_repo)),
-        _ => false,
+            .find_map(|value| json_layer_package_repo(value, target_namespace)),
+        _ => None,
     }
 }
 
@@ -1031,9 +1069,9 @@ fn estimated_bucket_workspace_bytes(source_bytes: u64) -> u64 {
 fn status_label(status: QueueStatus) -> &'static str {
     match status {
         QueueStatus::Missing => "missing",
-        QueueStatus::Published => "published",
-        QueueStatus::Cataloged => "cataloged",
-        QueueStatus::Queued => "queued",
+        QueueStatus::Published { .. } => "published",
+        QueueStatus::Cataloged { .. } => "cataloged",
+        QueueStatus::Queued { .. } => "queued",
         QueueStatus::StaleQueued => "stale-queued",
     }
 }
@@ -1088,8 +1126,8 @@ mod tests {
     use model_package::jobs::CpuJobPlan;
 
     use super::{
-        estimated_bucket_workspace_bytes, job_spec_with_token, model_family_key, Args, Candidate,
-        DiscoveredQuant, RankedModel,
+        estimated_bucket_workspace_bytes, job_spec_with_token, json_layer_package_repo,
+        model_family_key, model_layer_repos, Args, Candidate, DiscoveredQuant, RankedModel,
     };
 
     #[test]
@@ -1135,6 +1173,7 @@ mod tests {
                 first_file: "UD-Q4_K_XL/GLM-5-UD-Q4_K_XL-00001-of-00010.gguf".to_string(),
             },
             target_repo: "meshllm/GLM-5-UD-Q4_K_XL-layers".to_string(),
+            model_layer_repos: vec!["meshllm/GLM-5-UD-Q4_K_XL-layers".to_string()],
             model_id: "unsloth/GLM-5-GGUF:UD-Q4_K_XL".to_string(),
             family: "glm".to_string(),
         };
@@ -1202,6 +1241,55 @@ mod tests {
         assert_eq!(
             estimated_bucket_workspace_bytes(600 * 1024 * 1024 * 1024),
             1382 * 1024 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn model_layer_repos_include_every_quant_distribution() {
+        let repos = model_layer_repos(
+            &[
+                DiscoveredQuant {
+                    name: "UD-Q4_K_XL".to_string(),
+                    shard_count: 2,
+                    total_bytes: 200,
+                    first_file: "UD-Q4_K_XL/Kimi-K2-Instruct-UD-Q4_K_XL-00001-of-00002.gguf"
+                        .to_string(),
+                },
+                DiscoveredQuant {
+                    name: "Q4_K_M".to_string(),
+                    shard_count: 1,
+                    total_bytes: 100,
+                    first_file: "Kimi-K2-Instruct-Q4_K_M.gguf".to_string(),
+                },
+            ],
+            "meshllm",
+        );
+
+        assert_eq!(
+            repos,
+            vec![
+                "meshllm/Kimi-K2-Instruct-Q4_K_M-layers",
+                "meshllm/Kimi-K2-Instruct-UD-Q4_K_XL-layers"
+            ]
+        );
+    }
+
+    #[test]
+    fn catalog_lookup_treats_any_layer_repo_as_model_coverage() {
+        let catalog = serde_json::json!({
+            "models": [{
+                "variants": [{
+                    "packages": [{
+                        "type": "layer-package",
+                        "repo": "meshllm/Kimi-K2-Instruct-Q4_K_M-layers"
+                    }]
+                }]
+            }]
+        });
+
+        assert_eq!(
+            json_layer_package_repo(&catalog, "meshllm"),
+            Some("meshllm/Kimi-K2-Instruct-Q4_K_M-layers".to_string())
         );
     }
 }
