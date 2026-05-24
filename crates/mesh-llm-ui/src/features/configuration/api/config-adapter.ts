@@ -68,12 +68,12 @@ function runtimeControlErrorMessage(error: unknown): string | undefined {
 }
 
 const LEGACY_CONTROL_DEFAULTS_SECTION_PATHS: Record<string, readonly string[]> = {
-  'parallel-slots': ['model_fit', 'parallel'],
+  'parallel-slots': ['throughput', 'parallel'],
   'tuning-profile': ['throughput', 'tuning_profile'],
   'flash-attention': ['model_fit', 'flash_attention'],
   'llamacpp-flavor': ['hardware', 'model_runtime'],
   'kv-cache': ['model_fit', 'kv_cache_policy'],
-  'memory-margin': ['model_fit', 'safety_margin_gb'],
+  'memory-margin': ['hardware', 'safety_margin_gb'],
   'speculation-mode': ['speculative', 'mode'],
   'draft-selection-policy': ['speculative', 'draft_selection_policy'],
   'incompatible-pairing-behavior': ['speculative', 'pairing_fault'],

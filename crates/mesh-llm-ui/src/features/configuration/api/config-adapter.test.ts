@@ -77,10 +77,12 @@ describe('adaptStatusToConfiguration', () => {
     const defaultsValues = createConfigurationDefaultsValuesFromMeshConfig({
       defaults: {
         throughput: {
-          threads: 12
+          threads: 12,
+          parallel: 8
         },
         hardware: {
-          mlock: true
+          mlock: true,
+          safety_margin_gb: 3.5
         },
         model_fit: {
           kv_cache_policy: 'quality'
@@ -116,7 +118,9 @@ describe('adaptStatusToConfiguration', () => {
     )
 
     expect(values['threads']).toBe('12')
+    expect(values['parallel-slots']).toBe('8')
     expect(values['mlock']).toBe('on')
+    expect(values['memory-margin']).toBe('3.5')
     expect(values['kv-cache']).toBe('quality')
     expect(values['draft-max-tokens']).toBe('24')
     expect(values['temperature']).toBe('0.8')
@@ -143,10 +147,12 @@ describe('adaptStatusToConfiguration', () => {
       plugin: [{ name: 'telemetry', enabled: true }],
       defaults: {
         throughput: {
-          threads: 6
+          threads: 6,
+          parallel: 5
         },
         hardware: {
-          mlock: false
+          mlock: false,
+          safety_margin_gb: 1.5
         },
         request_defaults: {
           temperature: 0.8,
@@ -165,7 +171,9 @@ describe('adaptStatusToConfiguration', () => {
 
     const merged = mergeConfigurationDefaultsIntoMeshConfig(meshConfig, {
       threads: '0',
+      'parallel-slots': '8',
       mlock: 'off',
+      'memory-margin': '3.5',
       'reasoning-format': 'qwen',
       temperature: '1.0',
       'top-p': '1.0',
@@ -188,6 +196,12 @@ describe('adaptStatusToConfiguration', () => {
       models: [{ model: 'hf://meshllm/base@main:Q4_K_M', ctx_size: 8192 }],
       plugin: [{ name: 'telemetry', enabled: true }],
       defaults: {
+        throughput: {
+          parallel: 8
+        },
+        hardware: {
+          safety_margin_gb: 3.5
+        },
         request_defaults: {
           reasoning_format: 'qwen',
           temperature: 1,
@@ -204,10 +218,12 @@ describe('adaptStatusToConfiguration', () => {
     })
     expect(meshConfig.defaults).toEqual({
       throughput: {
-        threads: 6
+        threads: 6,
+        parallel: 5
       },
       hardware: {
-        mlock: false
+        mlock: false,
+        safety_margin_gb: 1.5
       },
       request_defaults: {
         temperature: 0.8,

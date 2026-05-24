@@ -273,6 +273,78 @@ describe('useConfigQuery', () => {
     expect(readSettingValue(result.current.data!, 'server-alias')).toBe('carrack-mesh')
     expect(result.current.controlConfigQuery.data?.snapshot?.revision).toBe(8)
   })
+
+  it('does not replace the cached runtime-control snapshot when apply returns success false', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url.endsWith('/api/status')) return jsonResponse(STATUS_PAYLOAD)
+      if (url.endsWith('/api/models')) return jsonResponse(MODELS_RESPONSE)
+      if (url.endsWith('/api/runtime/control-bootstrap')) {
+        return jsonResponse({
+          enabled: true,
+          local_only: true,
+          requires_explicit_remote_endpoint: false,
+          endpoint: 'control://owner'
+        })
+      }
+      if (url.endsWith('/api/runtime/control/get-config')) {
+        return jsonResponse({
+          snapshot: {
+            revision: 7,
+            config: {
+              version: 1,
+              defaults: {
+                request_defaults: {
+                  reasoning_format: 'deepseek'
+                }
+              }
+            }
+          }
+        })
+      }
+      if (url.endsWith('/api/runtime/control/apply-config')) {
+        const body = JSON.parse(String(init?.body)) as {
+          expected_revision: number
+          config: { defaults?: { request_defaults?: { reasoning_format?: string } } }
+        }
+
+        expect(body.expected_revision).toBe(7)
+        expect(body.config.defaults?.request_defaults?.reasoning_format).toBe('qwen')
+
+        return jsonResponse({
+          success: false,
+          current_revision: 8,
+          config_hash: 'rejected',
+          apply_mode: 'unspecified',
+          error: { code: 'validation_error', message: 'invalid config' }
+        })
+      }
+
+      throw new Error(`Unexpected fetch request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useConfigQuery({ enabled: true }), {
+      wrapper: createWrapper()
+    })
+
+    await waitFor(() => expect(readSettingValue(result.current.data!, 'reasoning-format')).toBe('deepseek'))
+
+    const nextDefaults = readDefaultsValues(result.current.data!)
+    nextDefaults['reasoning-format'] = 'qwen'
+
+    await act(async () => {
+      const response = await result.current.applyDefaults(nextDefaults)
+      expect(response).toMatchObject({
+        success: false,
+        current_revision: 8
+      })
+    })
+
+    expect(readSettingValue(result.current.data!, 'reasoning-format')).toBe('deepseek')
+    expect(result.current.controlConfigQuery.data?.snapshot?.revision).toBe(7)
+  })
 })
 
 function createWrapper() {

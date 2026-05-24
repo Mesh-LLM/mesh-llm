@@ -62,13 +62,15 @@ export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResu
       if (!endpoint || !snapshot) return null
 
       const applied = await applyRuntimeControlConfig(endpoint, snapshot, nextDefaultsValues)
-      queryClient.setQueryData<RuntimeControlConfigResult>(CONFIG_CONTROL_QUERY_KEY, (current) => {
-        if (!current) return current
-        return {
-          ...current,
-          snapshot: applied.snapshot
-        }
-      })
+      if (applied.response.success) {
+        queryClient.setQueryData<RuntimeControlConfigResult>(CONFIG_CONTROL_QUERY_KEY, (current) => {
+          if (!current) return current
+          return {
+            ...current,
+            snapshot: applied.snapshot
+          }
+        })
+      }
       return applied.response
     },
     [controlConfigQuery.data, queryClient]

@@ -8,7 +8,7 @@ DIST_DIR="$UI_DIR/dist"
 NODE_MODULES_DIR="$UI_DIR/node_modules"
 UI_BUILD_ENV_STAMP="$DIST_DIR/.mesh-llm-ui-build-env"
 MESH_LLM_UI_BUILD_PROFILE="${MESH_LLM_BUILD_PROFILE:-debug}"
-MESH_LLM_UI_BUILD_PROFILE="${MESH_LLM_UI_BUILD_PROFILE,,}"
+MESH_LLM_UI_BUILD_PROFILE="$(printf '%s' "$MESH_LLM_UI_BUILD_PROFILE" | tr '[:upper:]' '[:lower:]')"
 
 case "$MESH_LLM_UI_BUILD_PROFILE" in
     dev|debug)
