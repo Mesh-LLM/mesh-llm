@@ -71,6 +71,7 @@ jobs:
             crates/mesh-client/ \
             crates/mesh-llm-api-client/ \
             crates/mesh-llm-api-server/ \
+            crates/mesh-llm-console-server/ \
             crates/mesh-llm-node/ \
             crates/mesh-llm-ffi/ \
             crates/mesh-llm-test-harness/ \

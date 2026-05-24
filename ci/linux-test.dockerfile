@@ -31,6 +31,12 @@ COPY crates/mesh-llm-host-runtime/ crates/mesh-llm-host-runtime/
 COPY crates/mesh-llm/ crates/mesh-llm/
 COPY crates/mesh-llm-plugin/ crates/mesh-llm-plugin/
 COPY crates/mesh-client/ crates/mesh-client/
+COPY crates/mesh-llm-api-client/ crates/mesh-llm-api-client/
+COPY crates/mesh-llm-api-server/ crates/mesh-llm-api-server/
+COPY crates/mesh-llm-console-server/ crates/mesh-llm-console-server/
+COPY crates/mesh-llm-node/ crates/mesh-llm-node/
+COPY crates/mesh-llm-nodejs/ crates/mesh-llm-nodejs/
+COPY crates/mesh-llm-ffi/ crates/mesh-llm-ffi/
 COPY crates/mesh-api/ crates/mesh-api/
 COPY crates/mesh-host-core/ crates/mesh-host-core/
 COPY crates/mesh-api-ffi/ crates/mesh-api-ffi/
