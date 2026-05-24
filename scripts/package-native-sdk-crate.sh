@@ -112,6 +112,8 @@ cp "$manifest" "$crate_dir/native/manifest.json"
 cp -R "$artifact_dir/lib" "$crate_dir/native/lib"
 
 cat > "$crate_dir/Cargo.toml" <<EOF
+[workspace]
+
 [package]
 name = "$crate_name"
 version = "$version"
