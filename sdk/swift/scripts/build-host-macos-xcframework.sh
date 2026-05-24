@@ -96,21 +96,26 @@ PY
 
 FRAMEWORK_DIR="$TARGET_DIR/frameworks/macos-host/$FRAMEWORK_NAME.framework"
 rm -rf "$FRAMEWORK_DIR"
-mkdir -p "$FRAMEWORK_DIR/Headers"
-mkdir -p "$FRAMEWORK_DIR/Modules"
 
-cp "$LIB_PATH" "$FRAMEWORK_DIR/$FRAMEWORK_NAME"
-cp "$FFI_DIR/MeshLLMFFI.h" "$FRAMEWORK_DIR/Headers/MeshLLMFFI.h"
-cp "$FFI_DIR/MeshLLMFFI.modulemap" "$FRAMEWORK_DIR/Modules/module.modulemap"
+# macOS requires a versioned bundle layout (Versions/A/); flat bundles are
+# rejected by the macOS dynamic linker and cause xcframework load failures.
+VERSION_DIR="$FRAMEWORK_DIR/Versions/A"
+mkdir -p "$VERSION_DIR/Headers"
+mkdir -p "$VERSION_DIR/Modules"
+mkdir -p "$VERSION_DIR/Resources"
+
+cp "$LIB_PATH" "$VERSION_DIR/$FRAMEWORK_NAME"
+cp "$FFI_DIR/MeshLLMFFI.h" "$VERSION_DIR/Headers/MeshLLMFFI.h"
+cp "$FFI_DIR/MeshLLMFFI.modulemap" "$VERSION_DIR/Modules/module.modulemap"
 
 if [ -f "$SWIFT_DIR/PrivacyInfo.xcprivacy" ]; then
-  cp "$SWIFT_DIR/PrivacyInfo.xcprivacy" "$FRAMEWORK_DIR/PrivacyInfo.xcprivacy"
+  cp "$SWIFT_DIR/PrivacyInfo.xcprivacy" "$VERSION_DIR/Resources/PrivacyInfo.xcprivacy"
   echo "  Embedded PrivacyInfo.xcprivacy in host macOS framework"
 else
   echo "WARNING: PrivacyInfo.xcprivacy not found at $SWIFT_DIR/PrivacyInfo.xcprivacy"
 fi
 
-cat > "$FRAMEWORK_DIR/Info.plist" << 'PLIST'
+cat > "$VERSION_DIR/Resources/Info.plist" << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -129,11 +134,17 @@ cat > "$FRAMEWORK_DIR/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
+ln -sfh A                          "$FRAMEWORK_DIR/Versions/Current"
+ln -sfh "Versions/Current/$FRAMEWORK_NAME" "$FRAMEWORK_DIR/$FRAMEWORK_NAME"
+ln -sfh "Versions/Current/Headers"         "$FRAMEWORK_DIR/Headers"
+ln -sfh "Versions/Current/Modules"         "$FRAMEWORK_DIR/Modules"
+ln -sfh "Versions/Current/Resources"       "$FRAMEWORK_DIR/Resources"
+
 echo "Creating host macOS XCFramework..."
 XCFW_OUT="$XCFRAMEWORK_DIR/$FRAMEWORK_NAME.xcframework"
 rm -rf "$XCFW_OUT"
 mkdir -p "$XCFW_OUT/$XCFRAMEWORK_ID/$FRAMEWORK_NAME.framework"
-cp -R "$FRAMEWORK_DIR/" "$XCFW_OUT/$XCFRAMEWORK_ID/$FRAMEWORK_NAME.framework/"
+cp -RP "$FRAMEWORK_DIR/" "$XCFW_OUT/$XCFRAMEWORK_ID/$FRAMEWORK_NAME.framework/"
 
 cat > "$XCFW_OUT/Info.plist" << XCINFO
 <?xml version="1.0" encoding="UTF-8"?>
