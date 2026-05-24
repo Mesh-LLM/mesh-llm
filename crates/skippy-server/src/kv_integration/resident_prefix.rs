@@ -208,6 +208,9 @@ impl KvStageIntegration {
             estimated_bytes,
             |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
         )?;
+        if !allocation.should_retain {
+            return Ok(None);
+        }
         if allocation.should_save {
             runtime.save_resident_prefix(session_id, allocation.seq_id, token_count as u64)?;
             cache.commit_record(

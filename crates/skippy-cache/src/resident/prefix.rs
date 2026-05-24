@@ -47,6 +47,36 @@ pub struct ResidentPrefixAllocation {
     pub seq_id: i32,
     pub evictions: Vec<ResidentPrefixEviction>,
     pub should_save: bool,
+    pub should_retain: bool,
+}
+
+impl ResidentPrefixAllocation {
+    fn existing(seq_id: i32) -> Self {
+        Self {
+            seq_id,
+            evictions: Vec::new(),
+            should_save: false,
+            should_retain: true,
+        }
+    }
+
+    fn new_record(seq_id: i32, evictions: Vec<ResidentPrefixEviction>) -> Self {
+        Self {
+            seq_id,
+            evictions,
+            should_save: true,
+            should_retain: true,
+        }
+    }
+
+    fn uncacheable() -> Self {
+        Self {
+            seq_id: -1,
+            evictions: Vec::new(),
+            should_save: false,
+            should_retain: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -124,21 +154,16 @@ impl ResidentPrefixCache {
         }
         self.clock = self.clock.saturating_add(1);
         if let Some(entry) = self.entries.get(page_id) {
-            return Ok(ResidentPrefixAllocation {
-                seq_id: entry.seq_id,
-                evictions: Vec::new(),
-                should_save: false,
-            });
+            return Ok(ResidentPrefixAllocation::existing(entry.seq_id));
+        }
+        if self.candidate_exceeds_single_record_budget(estimated_bytes, token_count) {
+            return Ok(ResidentPrefixAllocation::uncacheable());
         }
 
         let evictions =
             self.evict_until_room_for(estimated_bytes, token_count, &mut drop_evicted)?;
         let seq_id = self.next_sequence_id()?;
-        Ok(ResidentPrefixAllocation {
-            seq_id,
-            evictions,
-            should_save: true,
-        })
+        Ok(ResidentPrefixAllocation::new_record(seq_id, evictions))
     }
 
     pub fn commit_record(
@@ -261,6 +286,16 @@ impl ResidentPrefixCache {
         Ok(evictions)
     }
 
+    fn candidate_exceeds_single_record_budget(
+        &self,
+        estimated_bytes: u64,
+        token_count: u64,
+    ) -> bool {
+        let over_bytes = self.max_bytes > 0 && estimated_bytes > self.max_bytes;
+        let over_tokens = self.max_resident_tokens > 0 && token_count > self.max_resident_tokens;
+        over_bytes || over_tokens
+    }
+
     fn next_sequence_id(&mut self) -> Result<i32> {
         if let Some(seq_id) = self.free_seq_ids.pop() {
             return Ok(seq_id);
@@ -343,6 +378,29 @@ mod tests {
         assert_eq!(dropped, vec![alloc1.seq_id], "LRU should evict oldest");
         assert_eq!(cache.stats().entries, 2);
         assert_eq!(cache.stats().resident_tokens, 3000);
+    }
+
+    #[test]
+    fn oversized_resident_prefix_candidate_is_nonfatal() {
+        let mut cache = ResidentPrefixCache::new(cfg(16, 0, 4096));
+        let small = cache
+            .allocate_for_record("small", 1000, 100, |_| Ok(()))
+            .unwrap();
+        cache.commit_record("small".to_string(), small.seq_id, 1000, 100);
+
+        let allocation = cache
+            .allocate_for_record("huge", 5000, 100, |_| {
+                panic!("oversized candidates should not evict existing entries")
+            })
+            .expect("oversized candidates should be treated as uncacheable, not fatal");
+
+        assert!(!allocation.should_save);
+        assert!(!allocation.should_retain);
+        assert!(allocation.evictions.is_empty());
+        let stats = cache.stats();
+        assert_eq!(stats.entries, 1);
+        assert_eq!(stats.resident_tokens, 1000);
+        assert!(cache.lookup("small").is_some());
     }
 
     #[test]

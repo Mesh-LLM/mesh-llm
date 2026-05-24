@@ -32,6 +32,13 @@ pub const GGML_TYPE_Q4_0: u32 = 2;
 pub const GGML_TYPE_Q8_0: u32 = 8;
 pub const LLAMA_SERVER_DEFAULT_N_BATCH: u32 = 2048;
 pub const LLAMA_SERVER_DEFAULT_N_UBATCH: u32 = 512;
+/// Smaller default prefill batch for multi-lane skippy serving.
+///
+/// When `lane_count > 1`, skippy enables llama.cpp unified KV mode: every
+/// lane shares one `n_ctx` cell pool. A smaller default batch reduces the
+/// amount of KV space each prefill asks the shared pool to reserve at once
+/// after other lanes reset or preserve resident prefixes.
+pub const SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH: u32 = 1024;
 
 /// GGML_LLAMA_LOG_LEVEL values (set before llama_backend_init).
 /// 0=silent, 1=error, 2=warn, 3=info (default), 4=debug.
@@ -757,6 +764,10 @@ impl RuntimeConfig {
 
     fn as_raw(&self) -> Result<RawRuntimeConfigParts> {
         self.validate().map_err(anyhow::Error::msg)?;
+        let n_batch = self
+            .n_batch
+            .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
+        let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
         let selected_backend_device = self
             .selected_backend_device
             .as_ref()
@@ -776,20 +787,8 @@ impl RuntimeConfig {
                 layer_end: i32::try_from(self.layer_end).context("layer_end exceeds i32")?,
                 ctx_size: i32::try_from(self.ctx_size).context("ctx_size exceeds i32")?,
                 lane_count: i32::try_from(self.lane_count).context("lane_count exceeds i32")?,
-                n_batch: self
-                    .n_batch
-                    .or(Some(LLAMA_SERVER_DEFAULT_N_BATCH))
-                    .map(i32::try_from)
-                    .transpose()
-                    .context("n_batch exceeds i32")?
-                    .unwrap_or(0),
-                n_ubatch: self
-                    .n_ubatch
-                    .or(Some(LLAMA_SERVER_DEFAULT_N_UBATCH))
-                    .map(i32::try_from)
-                    .transpose()
-                    .context("n_ubatch exceeds i32")?
-                    .unwrap_or(0),
+                n_batch: i32::try_from(n_batch).context("n_batch exceeds i32")?,
+                n_ubatch: i32::try_from(n_ubatch).context("n_ubatch exceeds i32")?,
                 n_threads: self
                     .n_threads
                     .map(i32::try_from)
@@ -818,6 +817,14 @@ impl RuntimeConfig {
             },
             _selected_backend_device: selected_backend_device,
         })
+    }
+}
+
+fn default_n_batch_for_lane_count(lane_count: u32) -> u32 {
+    if lane_count > 1 {
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH
+    } else {
+        LLAMA_SERVER_DEFAULT_N_BATCH
     }
 }
 
@@ -3493,7 +3500,8 @@ mod tests {
         set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
         ChatTemplateMessage, FlashAttentionType, ModelInfo, NativeLogAggregator, NativeLogEvent,
         RuntimeConfig, RuntimeLoadMode, StageModel, TensorRole, GGML_TYPE_F16, GGML_TYPE_Q4_0,
-        GGML_TYPE_Q8_0,
+        GGML_TYPE_Q8_0, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH,
     };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3638,6 +3646,54 @@ mod tests {
             unsafe { std::ffi::CStr::from_ptr(raw.raw.selected_backend_device).to_string_lossy() };
 
         assert_eq!(device, "MTL0");
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_uses_smaller_batch_for_unified_kv_defaults() -> anyhow::Result<()> {
+        let config = RuntimeConfig {
+            lane_count: 4,
+            n_batch: None,
+            n_ubatch: None,
+            ..RuntimeConfig::default()
+        };
+
+        let raw = config.as_raw()?;
+
+        assert_eq!(raw.raw.n_batch, SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH as i32);
+        assert_eq!(raw.raw.n_ubatch, LLAMA_SERVER_DEFAULT_N_UBATCH as i32);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_keeps_llama_batch_default_for_single_lane() -> anyhow::Result<()> {
+        let config = RuntimeConfig {
+            lane_count: 1,
+            n_batch: None,
+            n_ubatch: None,
+            ..RuntimeConfig::default()
+        };
+
+        let raw = config.as_raw()?;
+
+        assert_eq!(raw.raw.n_batch, LLAMA_SERVER_DEFAULT_N_BATCH as i32);
+        assert_eq!(raw.raw.n_ubatch, LLAMA_SERVER_DEFAULT_N_UBATCH as i32);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_preserves_explicit_unified_kv_batch() -> anyhow::Result<()> {
+        let config = RuntimeConfig {
+            lane_count: 4,
+            n_batch: Some(2048),
+            n_ubatch: Some(256),
+            ..RuntimeConfig::default()
+        };
+
+        let raw = config.as_raw()?;
+
+        assert_eq!(raw.raw.n_batch, 2048);
+        assert_eq!(raw.raw.n_ubatch, 256);
         Ok(())
     }
 
