@@ -2499,31 +2499,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hf-hub"
-version = "1.0.0"
-source = "git+https://github.com/huggingface/hf-hub.git?rev=4cd6d8acd3192021381ff85210be9192b394e0eb#4cd6d8acd3192021381ff85210be9192b394e0eb"
-dependencies = [
- "base64",
- "bon",
- "bytes",
- "futures",
- "globset",
- "hf-xet",
- "hyper",
- "pathdiff",
- "reqwest 0.13.2",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "thiserror 2.0.18",
- "tokio",
- "tokio-retry",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "hf-xet"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3778,7 +3753,7 @@ dependencies = [
  "dirs",
  "ed25519-dalek",
  "hex",
- "hf-hub 1.0.0",
+ "hf-hub",
  "httparse",
  "iroh",
  "keyring",
@@ -4051,7 +4026,7 @@ version = "0.66.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "hf-hub 1.0.0-rc.1",
+ "hf-hub",
  "model-artifact",
  "model-ref",
  "serde",
@@ -4067,7 +4042,7 @@ dependencies = [
  "bytes",
  "chrono",
  "futures",
- "hf-hub 1.0.0",
+ "hf-hub",
  "model-hf",
  "model-ref",
  "reqwest 0.12.28",
