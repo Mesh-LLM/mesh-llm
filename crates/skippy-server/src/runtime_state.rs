@@ -359,70 +359,44 @@ impl RuntimeState {
     pub fn drop_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
         let reset_started = Instant::now();
         let mut reset_session = false;
-        let mut preserved_resident_prefix = false;
+        let preserved_resident_prefix = false;
         let mut lane_discarded = false;
         let mut lane_discard_reason: Option<String> = None;
 
         if let Some(mut lane_session) = self.sessions.remove(session_id) {
             let lane_index = lane_session.index;
-            if let Some(prefix) = self.session_resident_prefixes.remove(session_id) {
-                match lane_session.session.trim_session(prefix.token_count) {
-                    Ok(()) => {
-                        preserved_resident_prefix = true;
-                        lane_session.resident_prefix = Some(prefix);
-                        self.idle_sessions.push(lane_session);
-                    }
-                    Err(trim_err) => {
-                        reset_session = true;
-                        match lane_session.session.reset() {
-                            Ok(()) => {
-                                lane_session.resident_prefix = None;
-                                self.idle_sessions.push(lane_session);
-                            }
-                            Err(reset_err) => {
-                                lane_discarded = true;
-                                let reason = format!(
-                                    "trim_session({}) failed ({trim_err:#}); fallback reset() also failed ({reset_err:#})",
-                                    prefix.token_count
-                                );
-                                eprintln!(
-                                    "skippy::runtime_state: drop_session_timed: discarding lane {lane_index} for session {session_id}: {reason}"
-                                );
-                                lane_discard_reason = Some(reason);
-                                // `lane_session` falls out of scope and its
-                                // StageSession::drop runs, which calls
-                                // skippy_session_free on the C side. After
-                                // the native KV cells for this seq_id are
-                                // released, return the lane index to the
-                                // free list so the next allocation can
-                                // reuse it instead of consuming a fresh
-                                // slot from next_lane_index.
-                                drop(lane_session);
-                                self.free_lane_indices.push(lane_index);
-                            }
-                        }
-                    }
+            // Always release the lane's native KV cells back to the
+            // unified pool. The trim+preserve path kept the lane's cells
+            // pinned to a specific (`page_id`, `token_count`) pair so a
+            // future request whose content prefix hashed to the *exact*
+            // same `page_id` AND same `token_count` could acquire the
+            // warm lane via `acquire_resident_prefix_lane`. Real chat /
+            // agent workloads vary the conversation tail every turn, so
+            // both the hash and the length change request-to-request and
+            // that exact-match acquisition almost never fires. Meanwhile
+            // the pinned cells remain claimed in the unified pool, in
+            // parallel with the cells the cache layer itself pins, and
+            // the pool runs out of contiguous space — producing
+            // `decode: failed to find a memory slot` under repeated
+            // tool-using agent traffic (#652). Cross-request prefix
+            // reuse is still done by the cache layer (by `page_id`); we
+            // just stop double-claiming cells on the lane side.
+            self.session_resident_prefixes.remove(session_id);
+            reset_session = true;
+            match lane_session.session.reset() {
+                Ok(()) => {
+                    lane_session.resident_prefix = None;
+                    self.idle_sessions.push(lane_session);
                 }
-            } else {
-                reset_session = true;
-                match lane_session.session.reset() {
-                    Ok(()) => {
-                        lane_session.resident_prefix = None;
-                        self.idle_sessions.push(lane_session);
-                    }
-                    Err(reset_err) => {
-                        lane_discarded = true;
-                        let reason = format!("reset() failed ({reset_err:#})");
-                        eprintln!(
-                            "skippy::runtime_state: drop_session_timed: discarding lane {lane_index} for session {session_id}: {reason}"
-                        );
-                        lane_discard_reason = Some(reason);
-                        // See sibling branch above: free the lane index
-                        // after the StageSession drop releases the
-                        // native KV cells for this seq_id.
-                        drop(lane_session);
-                        self.free_lane_indices.push(lane_index);
-                    }
+                Err(reset_err) => {
+                    lane_discarded = true;
+                    let reason = format!("reset() failed ({reset_err:#})");
+                    eprintln!(
+                        "skippy::runtime_state: drop_session_timed: discarding lane {lane_index} for session {session_id}: {reason}"
+                    );
+                    lane_discard_reason = Some(reason);
+                    drop(lane_session);
+                    self.free_lane_indices.push(lane_index);
                 }
             }
         }
