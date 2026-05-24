@@ -39,7 +39,8 @@ just release-bundle v0.X.Y
 The current GitHub Actions release workflow publishes macOS aarch64, Linux
 x86_64 CPU, Linux ARM64 CPU, Linux CUDA, Linux CUDA Blackwell, Linux ROCm,
 Linux Vulkan, Windows CPU, Windows CUDA, Windows ROCm, and Windows Vulkan
-bundles. The Linux ARM64 artifact is named
+bundles, plus the SwiftPM `MeshLLMFFI.xcframework.zip` binary artifact. The
+Linux ARM64 artifact is named
 `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`; CUDA lanes are named
 `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz` and
 `mesh-llm-x86_64-unknown-linux-gnu-cuda-blackwell.tar.gz`.

@@ -20,6 +20,11 @@ framework target archived with `xcodebuild archive`, then assembled with
 library, so the current scripts wrap that archive in a static framework bundle
 before handing the framework to `xcodebuild -create-xcframework`.
 
+`xcodebuild -create-xcframework` does not repair invalid input framework
+bundles. A flat macOS `.framework` passed to `xcodebuild` remains flat in the
+output XCFramework, so the macOS `Versions/A` bundle layout must be correct
+before assembly.
+
 Do not switch this package to `xcodebuild -create-xcframework -library
 -headers` unless the privacy manifest is carried by another App Store-visible
 SDK target. Plain static-library XCFramework slices do not have a framework
@@ -69,6 +74,10 @@ scripts/verify-swift-privacy-manifest.sh \
   sdk/swift/Generated/MeshLLMFFI.xcframework
 scripts/verify-swift-release-artifact.sh dist/MeshLLMFFI.xcframework.zip
 ```
+
+The release artifact verifier checks that macOS framework slices are versioned
+before running a temporary SwiftPM consumer that imports `MeshLLM` and calls a
+real UniFFI function from the packaged binary target.
 
 ## Declarations
 

@@ -82,6 +82,9 @@ jobs:
               - 'scripts/ci-kotlin-sdk-smoke.sh'
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
+              - 'scripts/prepare-swift-package-release.sh'
+              - 'scripts/verify-swift-privacy-manifest.sh'
+              - 'scripts/verify-swift-release-artifact.sh'
               - '.github/workflows/ci.yml'
             docker:
               - '.dockerignore'

@@ -34,6 +34,9 @@ For development from a local checkout, build the native artifact first:
 
 That generates `sdk/swift/Generated/MeshLLMFFI.xcframework`, which the root
 Swift package picks up automatically for the real UniFFI-backed implementation.
+The macOS framework slice must already use the versioned `Versions/A` bundle
+layout before it is passed to `xcodebuild -create-xcframework`; `xcodebuild`
+wraps the input framework but does not fix a flat macOS bundle.
 
 Normal SDK builds and tests require the UniFFI-backed XCFramework. The package
 does not ship a pure Swift fallback because the SDK must exercise the native

@@ -68,6 +68,59 @@ plutil -lint "$XCFRAMEWORK_PATH/Info.plist" >/dev/null
   "$REPO_ROOT/sdk/swift/PrivacyInfo.xcprivacy" \
   "$XCFRAMEWORK_PATH"
 
+python3 - "$XCFRAMEWORK_PATH" <<'PY'
+import os
+import plistlib
+import sys
+
+xcframework = sys.argv[1]
+with open(os.path.join(xcframework, "Info.plist"), "rb") as fh:
+    info = plistlib.load(fh)
+
+macos_frameworks = []
+for library in info.get("AvailableLibraries", []):
+    if library.get("SupportedPlatform") != "macos":
+        continue
+    library_path = library.get("LibraryPath")
+    identifier = library.get("LibraryIdentifier")
+    if not library_path or not identifier:
+        raise SystemExit(f"invalid macOS library entry: {library!r}")
+    macos_frameworks.append(os.path.join(xcframework, identifier, library_path))
+
+if not macos_frameworks:
+    raise SystemExit("XCFramework does not contain a macOS framework slice")
+
+for framework in macos_frameworks:
+    name = os.path.splitext(os.path.basename(framework))[0]
+    expected = {
+        "Versions/Current": "A",
+        name: f"Versions/Current/{name}",
+        "Headers": "Versions/Current/Headers",
+        "Modules": "Versions/Current/Modules",
+        "Resources": "Versions/Current/Resources",
+    }
+    for relative, target in expected.items():
+        path = os.path.join(framework, relative)
+        if not os.path.islink(path):
+            raise SystemExit(f"macOS framework is not versioned; missing symlink: {path}")
+        actual = os.readlink(path)
+        if actual != target:
+            raise SystemExit(f"unexpected symlink target for {path}: {actual!r} != {target!r}")
+
+    required_paths = [
+        os.path.join(framework, "Versions", "A", name),
+        os.path.join(framework, "Versions", "A", "Headers"),
+        os.path.join(framework, "Versions", "A", "Modules", "module.modulemap"),
+        os.path.join(framework, "Versions", "A", "Resources", "Info.plist"),
+        os.path.join(framework, "Versions", "A", "Resources", "PrivacyInfo.xcprivacy"),
+    ]
+    for path in required_paths:
+        if not os.path.exists(path):
+            raise SystemExit(f"macOS framework versioned layout is incomplete: {path}")
+
+print(f"verified {len(macos_frameworks)} versioned macOS framework slice(s)")
+PY
+
 CONSUMER_DIR="$TMP_ROOT/consumer"
 mkdir -p "$CONSUMER_DIR/Sources" "$CONSUMER_DIR/Sources/Consumer"
 cp "$ARTIFACT_ZIP" "$CONSUMER_DIR/MeshLLMFFI.xcframework.zip"
@@ -125,7 +178,9 @@ import MeshLLM
 
 let token = InviteToken("release-artifact-smoke")
 let runtimeConfig = NativeRuntimeConfig()
-print("consumer-ok \(token.value) \(runtimeConfig.searchDirectories.count)")
+let ownerKeypair = generateOwnerKeypairHex()
+precondition(!ownerKeypair.isEmpty)
+print("consumer-ok \(token.value) \(runtimeConfig.searchDirectories.count) \(ownerKeypair.prefix(8))")
 EOF
 
 swift build --package-path "$CONSUMER_DIR"
