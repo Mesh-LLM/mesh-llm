@@ -1,24 +1,6 @@
 fn main() {
-    #[cfg(target_os = "macos")]
-    {
-        let object = out_path("mesh_llm_gpu_bench_metal.o");
-        run_or_panic({
-            let mut command = std::process::Command::new("clang");
-            command
-                .arg("-O3")
-                .arg("-fobjc-arc")
-                .arg("-fPIC")
-                .arg("-c")
-                .arg("native/metal/membench_metal.m")
-                .arg("-o")
-                .arg(&object);
-            command
-        });
-        archive_static_lib(&object, "mesh_llm_gpu_bench_metal");
-
-        println!("cargo:rerun-if-changed=native/metal/membench_metal.m");
-        println!("cargo:rustc-link-lib=framework=Foundation");
-        println!("cargo:rustc-link-lib=framework=Metal");
+    if target_os_is("macos") {
+        build_metal();
     }
 
     if std::env::var_os("CARGO_FEATURE_CUDA").is_some() {
@@ -32,6 +14,31 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_INTEL").is_some() {
         build_intel();
     }
+}
+
+fn target_os_is(os: &str) -> bool {
+    std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok(os)
+}
+
+fn build_metal() {
+    let object = out_path("mesh_llm_gpu_bench_metal.o");
+    run_or_panic({
+        let mut command = std::process::Command::new("clang");
+        command
+            .arg("-O3")
+            .arg("-fobjc-arc")
+            .arg("-fPIC")
+            .arg("-c")
+            .arg("native/metal/membench_metal.m")
+            .arg("-o")
+            .arg(&object);
+        command
+    });
+    archive_static_lib(&object, "mesh_llm_gpu_bench_metal");
+
+    println!("cargo:rerun-if-changed=native/metal/membench_metal.m");
+    println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=Metal");
 }
 
 fn native_source(dir: &str, name: &str) -> String {
