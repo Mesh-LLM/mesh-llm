@@ -61,6 +61,15 @@ find sdk/swift/Generated/MeshLLMFFI.xcframework -name PrivacyInfo.xcprivacy | wc
 
 This command should return a count ≥ 1 (ideally 3 or more, one per platform slice).
 
+The stricter verification path is:
+
+```bash
+scripts/verify-swift-privacy-manifest.sh \
+  sdk/swift/PrivacyInfo.xcprivacy \
+  sdk/swift/Generated/MeshLLMFFI.xcframework
+scripts/verify-swift-release-artifact.sh dist/MeshLLMFFI.xcframework.zip
+```
+
 ## Declarations
 
 This manifest declares the following privacy practices for MeshLLM:
@@ -76,12 +85,22 @@ MeshLLM does not perform user tracking. The SDK does not collect identifiers for
 MeshLLM does not collect any user data. The SDK operates as a distributed inference client that communicates with mesh peers via POSIX sockets and QUIC protocol. No personal data, device identifiers, or usage analytics are collected.
 
 ### NSPrivacyAccessedAPITypes
-**Value**: Empty array `[]`
 
-MeshLLM does not access any privacy-sensitive APIs that require declaration. The SDK uses only:
-- POSIX socket APIs (standard C library)
-- QUIC protocol via the `iroh` crate (transport layer)
-- No NSURLSession, NWPathMonitor, or other Apple privacy-sensitive APIs
+MeshLLM declares the required-reason API categories used by the Swift SDK's
+embedded native runtime:
+
+- `NSPrivacyAccessedAPICategoryFileTimestamp` with `C617.1` and `3B52.1`:
+  the runtime reads model, cache, and package metadata inside app-owned
+  containers and for files the host app explicitly asks it to load.
+- `NSPrivacyAccessedAPICategoryDiskSpace` with `E174.1`: model download,
+  materialization, and cache cleanup paths need to know whether there is
+  enough local storage to write files or whether cleanup should run.
+- `NSPrivacyAccessedAPICategorySystemBootTime` with `35F9.1`: async runtime,
+  transport, and inference paths use elapsed-time APIs for timers, deadlines,
+  and measuring intervals within the app.
+
+Do not add `NSPrivacyAccessedAPICategoryUserDefaults` unless the SDK starts
+using `UserDefaults`; the current Swift wrapper does not use it.
 
 ### NSPrivacyTrackingDomains
 **Value**: Empty array `[]`
@@ -91,6 +110,8 @@ MeshLLM does not communicate with any tracking domains. All network communicatio
 ## Implementation notes
 
 - This file is a template and should be copied into each `.framework` bundle during XCFramework construction
+- `scripts/verify-swift-privacy-manifest.sh` intentionally fails if the
+  required-reason API categories drift from the reviewed SDK behavior
 - The plist format is XML (not binary) for readability and version control
 - No modifications to this file are needed unless MeshLLM's privacy practices change
 - If new privacy-sensitive APIs are added to the Rust core, this manifest must be updated accordingly

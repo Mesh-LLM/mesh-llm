@@ -17,6 +17,18 @@ else
     ./sdk/swift/scripts/build-host-macos-xcframework.sh
 fi
 
+scripts/verify-swift-privacy-manifest.sh \
+    sdk/swift/PrivacyInfo.xcprivacy \
+    sdk/swift/Generated/MeshLLMFFI.xcframework
+
+SWIFT_ARTIFACT_SMOKE_DIR="$(mktemp -d)"
+trap 'rm -rf "$SWIFT_ARTIFACT_SMOKE_DIR"' EXIT
+ditto -c -k --sequesterRsrc --keepParent \
+    sdk/swift/Generated/MeshLLMFFI.xcframework \
+    "$SWIFT_ARTIFACT_SMOKE_DIR/MeshLLMFFI.xcframework.zip"
+scripts/verify-swift-release-artifact.sh \
+    "$SWIFT_ARTIFACT_SMOKE_DIR/MeshLLMFFI.xcframework.zip"
+
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
         set -euo pipefail

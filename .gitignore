@@ -23,7 +23,8 @@ dist/MeshLLMFFI.xcframework.zip
 sdk/kotlin/src/main/kotlin/uniffi/
 sdk/kotlin/example/example-jvm/src/main/kotlin/uniffi/
 sdk/node/native/
-sdk/swift/Sources/MeshLLM/Generated/
+sdk/swift/Sources/MeshLLM/Generated/*
+!sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
 sdk/swift/Generated/FFI/
 sdk/swift/Generated/MeshLLMFFI.xcframework/
 .impeccable.md
