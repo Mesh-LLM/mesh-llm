@@ -41,8 +41,8 @@ jobs:
       backend_changed: ${{ steps.compute.outputs.backend_changed }}
       sdk_smoke_required: ${{ steps.compute.outputs.sdk_smoke_required }}
       ui_dist_cache_key: ${{ steps.ui_key.outputs.ui_dist_cache_key }}
-      linux_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.rust == 'true' || steps.filter.outputs.ui == 'true' }}
-      macos_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.filter.outputs.rust == 'true' || steps.filter.outputs.ui == 'true' || steps.filter.outputs.benchmarks == 'true' }}
+      linux_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.rust_changed == 'true' || steps.filter.outputs.ui == 'true' }}
+      macos_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.rust_changed == 'true' || steps.filter.outputs.ui == 'true' || steps.filter.outputs.benchmarks == 'true' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -104,7 +104,6 @@ jobs:
               - 'Cargo.lock'
               - 'Justfile'
               - '.github/cache-version.txt'
-              - '.github/workflows/windows-warm-caches.yml'
             windows_gpu:
               - 'crates/skippy-ffi/**'
               - 'scripts/build-windows.ps1'
@@ -113,7 +112,6 @@ jobs:
               - 'Justfile'
               - '.github/cache-version.txt'
               - '.github/actions/setup-windows-rocm-sdk/**'
-              - '.github/workflows/windows-warm-caches.yml'
 
             docs:
               - 'docs/**'
@@ -269,7 +267,7 @@ jobs:
 
   linux_targets:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux ${{ matrix.name }}
     runs-on: ubuntu-latest
     container:
@@ -418,7 +416,7 @@ jobs:
 
   linux_test_groups:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true') }}
+    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust_changed == 'true' || needs.changes.outputs.ui == 'true') }}
     name: Linux tests (${{ matrix.group }})
     runs-on: ubuntu-latest
     container:
@@ -817,7 +815,7 @@ jobs:
 
   macos_targets:
     needs: changes
-    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: macOS ${{ matrix.name }}
     runs-on: macos-14
     strategy:

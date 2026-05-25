@@ -57,7 +57,7 @@ fail_open() {
   # Build full workspace list as JSON array
   local all_crates_json="["
   for i in "${!WORKSPACE_MEMBERS[@]}"; do
-    if [ $i -gt 0 ]; then
+    if [ "$i" -gt 0 ]; then
       all_crates_json+=","
     fi
     all_crates_json+="\"${WORKSPACE_MEMBERS[$i]}\""
@@ -78,6 +78,20 @@ EOF
 }
 
 trap 'fail_open' ERR
+
+array_contains() {
+  local needle="$1"
+  shift
+
+  local item
+  for item in "$@"; do
+    if [[ "$item" == "$needle" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
 
 main() {
   # Parse input: --stdin or positional args
@@ -109,12 +123,6 @@ main() {
        [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-mac|build-windows|skippy-ci-smoke)\. ]] || \
        [[ "$file" =~ ^Justfile$ ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \
-       [[ "$file" =~ ^\.github/workflows/ci\.yml$ ]] || \
-       [[ "$file" =~ ^\.github/workflows/pr_builds\.yml$ ]] || \
-       [[ "$file" =~ ^\.github/workflows/pr_quality\.yml$ ]] || \
-       [[ "$file" =~ ^\.github/workflows/pr_docker\.yml$ ]] || \
-       [[ "$file" =~ ^\.github/workflows/smoke\.yml$ ]] || \
-       [[ "$file" =~ ^scripts/affected-crates\.sh$ ]] || \
        [[ "$file" =~ ^scripts/plan-clippy-batches\.sh$ ]] || \
        [[ "$file" =~ ^rust-toolchain(\.toml)?$ ]]; then
       escalate=true
@@ -131,7 +139,7 @@ main() {
   if [[ "$escalate" == true ]]; then
     local all_crates_json="["
     for i in "${!WORKSPACE_MEMBERS[@]}"; do
-      if [ $i -gt 0 ]; then
+      if [ "$i" -gt 0 ]; then
         all_crates_json+=","
       fi
       all_crates_json+="\"${WORKSPACE_MEMBERS[$i]}\""
@@ -246,7 +254,7 @@ EOF
       fi
     done
 
-    if [[ -n "$best_crate" ]] && [[ ! " ${test_crates[@]} " =~ " ${best_crate} " ]]; then
+    if [[ -n "$best_crate" ]] && ! array_contains "$best_crate" "${test_crates[@]}"; then
       test_crates+=("$best_crate")
     fi
   done
