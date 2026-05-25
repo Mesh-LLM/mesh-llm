@@ -12,6 +12,7 @@ on:
       - '.github/cache-version.txt'
       - '.github/actions/setup-windows-rocm-sdk/action.yml'
       - '.github/workflows/ci.yml'
+      - '.github/workflows/pr_builds.yml'
       - '.github/workflows/windows-warm-caches.yml'
   workflow_dispatch:
     inputs:
@@ -70,7 +71,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .deps/llama.cpp/build-stage-abi-cpu
-          key: ${{ env.CACHE_NAMESPACE }}-windows-2022-skippy-abi-cpu-${{ hashFiles('scripts/build-windows.ps1', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
+          key: ${{ env.CACHE_NAMESPACE }}-windows-2022-skippy-abi-cpu--cpu-${{ hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', '.github/actions/setup-windows-rocm-sdk/action.yml', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Build Windows CPU ABI cache
         if: steps.llama_cache.outputs.cache-hit != 'true'
         shell: pwsh

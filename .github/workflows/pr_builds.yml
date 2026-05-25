@@ -70,7 +70,6 @@ jobs:
               - 'crates/skippy-bench/**'
               - 'crates/llama-spec-bench/**'
               - 'crates/mesh-llm-gpu-bench/**'
-              - '.github/workflows/pr_builds.yml'
             sdk:
               - 'crates/mesh-llm-api-client/**'
               - 'crates/mesh-llm-api-server/**'
@@ -87,7 +86,6 @@ jobs:
               - 'scripts/ci-kotlin-sdk-smoke.sh'
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
-              - '.github/workflows/pr_builds.yml'
             nodejs_release:
               - 'crates/**'
               - 'scripts/build-windows.ps1'
@@ -106,7 +104,6 @@ jobs:
               - 'Cargo.lock'
               - 'Justfile'
               - '.github/cache-version.txt'
-              - '.github/workflows/pr_builds.yml'
               - '.github/workflows/windows-warm-caches.yml'
             windows_gpu:
               - 'crates/skippy-ffi/**'
@@ -116,7 +113,6 @@ jobs:
               - 'Justfile'
               - '.github/cache-version.txt'
               - '.github/actions/setup-windows-rocm-sdk/**'
-              - '.github/workflows/pr_builds.yml'
               - '.github/workflows/windows-warm-caches.yml'
 
             docs:
