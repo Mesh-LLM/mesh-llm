@@ -29,6 +29,7 @@ jobs:
       benchmarks: ${{ steps.filter.outputs.benchmarks }}
       sdk: ${{ steps.filter.outputs.sdk }}
       docker: ${{ steps.filter.outputs.docker }}
+      nodejs_release: ${{ steps.filter.outputs.nodejs_release }}
       windows_cpu: ${{ steps.filter.outputs.windows_cpu }}
       windows_gpu: ${{ steps.filter.outputs.windows_gpu }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -96,6 +97,15 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - '.github/workflows/pr_docker.yml'
+            nodejs_release:
+              - 'crates/**'
+              - 'scripts/build-windows.ps1'
+              - 'scripts/install-windows-sdk.ps1'
+              - 'third_party/llama.cpp/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'Justfile'
+              - '.github/cache-version.txt'
             windows_cpu:
               - 'crates/mesh-llm-nodejs/**'
               - 'crates/skippy-ffi/**'
@@ -927,6 +937,7 @@ jobs:
             build_args: ""
     env:
       RUN_WINDOWS_CPU_FULL: ${{ matrix.backend == 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true') }}
+      RUN_WINDOWS_NODE_RELEASE: ${{ matrix.backend == 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.nodejs_release == 'true') }}
       RUN_WINDOWS_GPU: ${{ matrix.backend != 'cpu' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true') }}
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-${{ matrix.backend }}
@@ -1048,7 +1059,7 @@ jobs:
         shell: pwsh
         run: cargo check --locked -p mesh-llm-nodejs
       - name: Build Node SDK addon on Windows
-        if: ${{ matrix.backend == 'cpu' && env.RUN_WINDOWS_CPU_FULL == 'true' }}
+        if: ${{ env.RUN_WINDOWS_NODE_RELEASE == 'true' }}
         shell: pwsh
         run: cargo build --release --locked -p mesh-llm-nodejs
       - name: Build Windows GPU backend
