@@ -24,11 +24,9 @@ fn build_metal() {
     let object = out_path("mesh_llm_gpu_bench_metal.o");
     run_or_panic({
         let mut command = std::process::Command::new("clang");
+        command.arg("-O3").arg("-fobjc-arc").arg("-fPIC").arg("-c");
+        add_macos_target_flags(&mut command);
         command
-            .arg("-O3")
-            .arg("-fobjc-arc")
-            .arg("-fPIC")
-            .arg("-c")
             .arg("native/metal/membench_metal.m")
             .arg("-o")
             .arg(&object);
@@ -37,8 +35,41 @@ fn build_metal() {
     archive_static_lib(&object, "mesh_llm_gpu_bench_metal");
 
     println!("cargo:rerun-if-changed=native/metal/membench_metal.m");
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!("cargo:rustc-link-lib=framework=Metal");
+}
+
+fn add_macos_target_flags(command: &mut std::process::Command) {
+    let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64",
+        Ok("x86_64") => "x86_64",
+        Ok(arch) => panic!("unsupported macOS Metal benchmark target architecture: {arch}"),
+        Err(err) => panic!("CARGO_CFG_TARGET_ARCH is required for Metal benchmark build: {err}"),
+    };
+    command.arg("-arch").arg(arch);
+
+    if let Some(sdk_path) = macos_sdk_path() {
+        command.arg("-isysroot").arg(sdk_path);
+    }
+
+    let deployment_target =
+        std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "13.0".to_string());
+    command.arg(format!("-mmacosx-version-min={deployment_target}"));
+}
+
+fn macos_sdk_path() -> Option<String> {
+    let output = std::process::Command::new("xcrun")
+        .args(["--sdk", "macosx", "--show-sdk-path"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8(output.stdout).ok()?;
+    let path = path.trim();
+    (!path.is_empty()).then(|| path.to_string())
 }
 
 fn native_source(dir: &str, name: &str) -> String {
