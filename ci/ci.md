@@ -40,7 +40,7 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
             LinuxCPU["linux_cpu_artifact\ndebug mesh-llm · CLI smoke\n→ ci-linux-inference-binaries"]
             LinuxTests["linux_test_groups matrix\nSDK/API · Skippy · unit · protocol · Skippy smoke"]
             LinuxTargets["linux_targets matrix\nCUDA / ROCm / Vulkan rows build when backend_changed"]
-            WindowsTargets["windows_targets matrix\nCPU / CUDA / ROCm / Vulkan\nCPU checks unless Windows CPU changed"]
+            WindowsTargets["windows_targets matrix\nCPU / CUDA / ROCm / Vulkan\nfull builds only for Windows inputs"]
             MacCPU["macos_cpu_artifact\nmacOS Metal build · CLI smoke\n→ ci-macos-inference-binaries"]
             MacTests["macos_unit_tests"]
             MacTargets["macos_targets matrix\nCUDA / ROCm / Vulkan explicit skips"]
@@ -102,6 +102,15 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   Linux test groups run SDK/API, Skippy, unit, protocol, and Skippy smoke work
   as parallel matrix rows. Linux/macOS backend matrices remain separate from the
   CPU artifact producers.
+- Workflow-only PR edits validate the PR routing graph without fanning out into
+  native backend, Windows GPU, benchmark, or SDK-smoke lanes. Backend lanes are
+  reserved for files that can affect native ABI/backend products, such as
+  `third_party/llama.cpp/**`, `crates/skippy-ffi/**`, backend build scripts,
+  `Justfile`, and `.github/cache-version.txt`.
+- Windows target jobs use the `windows_cpu` and `windows_gpu` filters for full
+  platform builds. The CPU row can still run lightweight Windows cargo checks
+  for broad Rust changes, but CUDA/ROCm/Vulkan rows stay skipped unless Windows
+  GPU inputs changed or the workflow is manually dispatched.
 - `pr_cleanup.yml` deletes PR merge-ref caches and artifacts from positively
   matched PR workflow runs when a pull request closes. Cleanup-only workflow
   edits do not fan out into Rust/build/smoke jobs.
@@ -122,5 +131,29 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   matched PR-run artifacts proactively.
 - Direct `mesh-llm` invocations in workflows and CI scripts must include
   `--log-format json`.
+
+## PR CI performance heuristics
+
+Use these checks when reviewing PR CI wall-clock regressions:
+
+- **Critical path minutes**: compare the first job start to the last required job
+  finish, then identify the longest required job. Workflow-only changes should
+  stay on the Linux artifact/test path instead of being dominated by Windows or
+  SDK smoke jobs.
+- **Heavy-lane eligibility**: every expensive backend/platform lane should be
+  traceable to `backend_changed`, `windows_cpu`, `windows_gpu`, or
+  `sdk_smoke_required`. If a workflow/doc-only edit triggers CUDA, ROCm, Vulkan,
+  Windows release builds, or Swift/Kotlin SDK smokes, routing is too broad.
+- **Duplicate work count**: smoke jobs should consume uploaded Linux/macOS
+  binaries through `.github/actions/restore-smoke-inputs`; they should not build
+  `mesh-llm` or patched llama.cpp again.
+- **Prewarmed ABI cache hit ratio**: Windows ABI cache keys in PR Builds must
+  match the trusted `windows-warm-caches.yml` keys. Check
+  `gh cache list --branch main --limit 100` for
+  `mesh-llm-windows-2022-skippy-abi-*` entries before
+  treating a slow Windows miss as expected.
+- **Runner routing**: platform-specific work should run on its native runner
+  class (`windows-2022` for Windows ABI products, macOS for Swift/Metal, Linux
+  for Linux backends) and skip unsupported combinations explicitly.
 
 For agent-facing workflow editing rules, see `.github/AGENTS.md`.
