@@ -28,7 +28,6 @@ jobs:
       ui: ${{ steps.filter.outputs.ui }}
       benchmarks: ${{ steps.filter.outputs.benchmarks }}
       sdk: ${{ steps.filter.outputs.sdk }}
-      docker: ${{ steps.filter.outputs.docker }}
       nodejs_release: ${{ steps.filter.outputs.nodejs_release }}
       windows_cpu: ${{ steps.filter.outputs.windows_cpu }}
       windows_gpu: ${{ steps.filter.outputs.windows_gpu }}
@@ -89,14 +88,6 @@ jobs:
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
               - '.github/workflows/pr_builds.yml'
-            docker:
-              - '.dockerignore'
-              - 'docker/**'
-              - 'fly/Dockerfile'
-              - 'crates/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - '.github/workflows/pr_docker.yml'
             nodejs_release:
               - 'crates/**'
               - 'scripts/build-windows.ps1'

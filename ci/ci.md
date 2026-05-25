@@ -69,12 +69,6 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     Restore --> SDKSmoke
     SDK --> SDKSmoke
 
-    subgraph PRDocker["pr_docker.yml · PR Docker Build"]
-        DockerBuild["Build Docker client image\npush: false · Buildx GHA cache"]
-    end
-
-    Files --> DockerBuild
-
     subgraph Cleanup["pr_cleanup.yml · PR Cache Cleanup"]
         Closed["pull_request_target closed"]
         DeleteCaches["delete caches for\nrefs/pull/<PR>/merge"]
@@ -93,7 +87,6 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     style PRCI fill:#1a3d2e,stroke:#2ecc71,color:#eaffef
     style Producers fill:#1a3d2e,stroke:#2ecc71,color:#eaffef
     style Smokes fill:#17324d,stroke:#4a90d9,color:#e8f4fd
-    style PRDocker fill:#3d2b00,stroke:#f39c12,color:#fff8e1
     style Cleanup fill:#3d2b00,stroke:#f39c12,color:#fff8e1
     style MainRelease fill:#2a2a2a,stroke:#888,color:#ddd
 ```
@@ -109,13 +102,12 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   Linux test groups run SDK/API, Skippy, unit, protocol, and Skippy smoke work
   as parallel matrix rows. Linux/macOS backend matrices remain separate from the
   CPU artifact producers.
-- `pr_docker.yml` validates the PR Docker client image without publishing and
-  uses Buildx's GitHub Actions cache for PR layer reuse.
 - `pr_cleanup.yml` deletes PR merge-ref caches and artifacts from positively
   matched PR workflow runs when a pull request closes. Cleanup-only workflow
   edits do not fan out into Rust/build/smoke jobs.
-- Non-PR workflows (`ci.yml`, `docker.yml`, `release.yml`) own main, dispatch,
-  tag, and release-grade publishing behavior.
+- Docker image validation and publishing are intentionally not part of pull
+  request CI; non-PR workflows (`ci.yml`, `docker.yml`, `release.yml`) own main,
+  dispatch, tag, and release-grade publishing behavior.
 
 ## Artifact and smoke reuse
 
