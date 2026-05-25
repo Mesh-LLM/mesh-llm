@@ -177,7 +177,9 @@ scripts/qa-kv-tool-loop-stability.py \
   --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
   --attempts 5 \
   --pressure-turns 8 \
+  --timeout 180 \
   --min-cached-tokens 2048 \
+  --suffix-prefill-limit 256 \
   --native-log ~/.mesh-llm/runtime/<pid>/logs/skippy-native.log \
   --output-dir target/kv-tool-loop-stability/local
 ```
@@ -193,11 +195,15 @@ scripts/qa-kv-tool-loop-stability.py \
 - `--min-cached-tokens 2048` matches the known Qwen 3B reproduction shape where
   healthy same-prefix reuse is near the shared prefix, not the 256-token floor
 - `--native-log` scans Skippy native logs for `failed to find a memory slot`,
-  `llama_decode failed`, and proactive eviction errors after the run
+  `llama_decode failed`, and proactive eviction errors appended after the
+  certification starts, so stale failures in long-lived logs do not fail a
+  clean run
 - every run writes `manifest.json`, `results.jsonl`, `summary.json`,
-  `summary.md`, and sanitized transcript JSONL under `transcripts/`
+  `summary.md`, and sanitized transcript JSONL under `transcripts/`; the
+  transcript directory is reset at run start to keep repeated `latest` runs
+  auditable
 - `--print-plan` is side-effect-free and emits the exact models, thresholds,
-  checks, and evidence files that would be produced
+  runtime options, checks, and evidence files that would be produced
 
 This certification is deliberately a lab/release-confidence check, not a
 required PR gate. Use it to prove KV/cache stability on a real direct-model

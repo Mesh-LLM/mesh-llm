@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,21 +24,49 @@ class KvToolLoopStabilityTests(unittest.TestCase):
             base_url="http://localhost:9337",
             models=["Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m"],
             attempts=3,
+            pressure_turns=8,
+            timeout=90.0,
             output_dir=Path("target/kv-tool-loop-stability/latest"),
             min_cached_tokens=2048,
+            suffix_prefill_limit=256,
             native_logs=[Path("skippy-native.log")],
         )
 
         self.assertEqual(plan["name"], "kv-tool-loop-stability")
         self.assertEqual(plan["base_url"], "http://localhost:9337/v1")
         self.assertEqual(plan["attempts"], 3)
+        self.assertEqual(plan["pressure_turns"], 8)
+        self.assertEqual(plan["timeout_seconds"], 90.0)
         self.assertEqual(plan["min_cached_tokens"], 2048)
+        self.assertEqual(plan["suffix_prefill_limit"], 256)
+        self.assertEqual(plan["native_log_scan_mode"], "appended_since_run_start")
         self.assertIn("manifest.json", plan["evidence_files"])
         self.assertIn("results.jsonl", plan["evidence_files"])
         self.assertIn("summary.md", plan["evidence_files"])
         self.assertEqual(
             [check["phase"] for check in plan["checks"]],
             ["tool_loop", "same_prefix_cache", "exact_prefix_cache", "native_log_scan"],
+        )
+        self.assertEqual(plan["checks"][0]["pressure_turns"], 8)
+        self.assertEqual(plan["checks"][1]["suffix_prefill_limit"], 256)
+        self.assertEqual(plan["checks"][2]["timeout_seconds"], 90.0)
+        self.assertEqual(plan["checks"][3]["scan_mode"], "appended_since_run_start")
+
+    def test_parse_native_logs_dedupes_env_and_cli_paths(self):
+        harness = load_module()
+        original = os.environ.get("MESH_KV_TOOL_LOOP_NATIVE_LOGS")
+        os.environ["MESH_KV_TOOL_LOOP_NATIVE_LOGS"] = "skippy-native.log, other.log"
+        try:
+            logs = harness.parse_native_logs(["skippy-native.log", "third.log"])
+        finally:
+            if original is None:
+                os.environ.pop("MESH_KV_TOOL_LOOP_NATIVE_LOGS", None)
+            else:
+                os.environ["MESH_KV_TOOL_LOOP_NATIVE_LOGS"] = original
+
+        self.assertEqual(
+            [str(path) for path in logs],
+            ["skippy-native.log", "other.log", "third.log"],
         )
 
     def test_tool_loop_requests_keep_stable_prefix_and_vary_tail(self):
@@ -108,14 +137,185 @@ class KvToolLoopStabilityTests(unittest.TestCase):
         self.assertEqual(findings[0].pattern, "failed to find a memory slot")
         self.assertEqual(findings[1].pattern, "proactive_eviction status=error")
 
+    def test_native_log_scan_ignores_preexisting_failures_after_checkpoint(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "skippy-native.log"
+            log_path.write_text(
+                "old llama_decode failed before this certification\n",
+                encoding="utf-8",
+            )
+            checkpoints = harness.capture_native_log_checkpoints([log_path])
+            log_path.write_text(
+                log_path.read_text(encoding="utf-8") + "new benign line\n",
+                encoding="utf-8",
+            )
+
+            findings = harness.scan_failure_logs_since(checkpoints)
+
+        self.assertEqual(findings, [])
+
+    def test_native_log_scan_reports_failures_appended_after_checkpoint(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "skippy-native.log"
+            log_path.write_text("old benign line\n", encoding="utf-8")
+            checkpoints = harness.capture_native_log_checkpoints([log_path])
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write("decode: failed to find a memory slot for batch of size 2048\n")
+
+            findings = harness.scan_failure_logs_since(checkpoints)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].line_number, 1)
+        self.assertEqual(findings[0].pattern, "failed to find a memory slot")
+
+    def test_native_log_scan_reports_new_log_created_after_checkpoint(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "skippy-native.log"
+            checkpoints = harness.capture_native_log_checkpoints([log_path])
+            log_path.write_text("RuntimeError: llama_decode failed\n", encoding="utf-8")
+
+            findings = harness.scan_failure_logs_since(checkpoints)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].pattern, "RuntimeError: llama_decode failed")
+
+    def test_native_log_scan_rescans_truncated_log_after_checkpoint(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "skippy-native.log"
+            log_path.write_text("old benign line that makes the file long\n", encoding="utf-8")
+            checkpoints = harness.capture_native_log_checkpoints([log_path])
+            log_path.write_text(
+                "skippy.kv.decision proactive_eviction status=error\n",
+                encoding="utf-8",
+            )
+
+            findings = harness.scan_failure_logs_since(checkpoints)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].pattern, "proactive_eviction status=error")
+
+    def test_prepare_transcript_dir_removes_stale_attempt_files(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "transcripts"
+            transcript_dir.mkdir()
+            stale = transcript_dir / "direct-model-attempt-1.jsonl"
+            stale.write_text('{"phase":"old"}\n', encoding="utf-8")
+
+            harness.prepare_transcript_dir(transcript_dir)
+
+            self.assertTrue(transcript_dir.is_dir())
+            self.assertFalse(stale.exists())
+
+    def test_run_certification_resets_transcripts_before_writing(self):
+        harness = load_module()
+        original_tool_loop = harness.run_tool_loop_probe
+        original_cache_probe = harness.run_cache_probe
+
+        def fake_tool_loop(
+            base_url,
+            model,
+            attempt,
+            timeout,
+            pressure_turns,
+            transcript_dir,
+        ):
+            del base_url, timeout, pressure_turns
+            harness.record_transcript(
+                transcript_dir / f"{model}-attempt-{attempt}.jsonl",
+                "fresh",
+                200,
+            )
+            return harness.ProbeResult(
+                model=model,
+                attempt=attempt,
+                phase="tool_loop",
+                ok=True,
+                detail="fresh transcript",
+                elapsed_ms=1,
+            )
+
+        def fake_cache_probe(
+            base_url,
+            model,
+            phase,
+            timeout,
+            min_cached_tokens,
+            suffix_prefill_limit,
+        ):
+            del base_url, timeout, min_cached_tokens, suffix_prefill_limit
+            return harness.ProbeResult(
+                model=model,
+                attempt=0,
+                phase=phase,
+                ok=True,
+                detail="cache ok",
+                elapsed_ms=1,
+            )
+
+        harness.run_tool_loop_probe = fake_tool_loop
+        harness.run_cache_probe = fake_cache_probe
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                output_dir = Path(tmp)
+                transcript_dir = output_dir / "transcripts"
+                transcript_dir.mkdir()
+                stale = transcript_dir / "direct-model-attempt-1.jsonl"
+                obsolete = transcript_dir / "old-model-attempt-3.jsonl"
+                stale.write_text('{"phase":"old"}\n', encoding="utf-8")
+                obsolete.write_text('{"phase":"obsolete"}\n', encoding="utf-8")
+
+                harness.run_certification(
+                    base_url="http://localhost:9337/v1",
+                    models=["direct-model"],
+                    attempts=1,
+                    timeout=180.0,
+                    pressure_turns=8,
+                    min_cached_tokens=2048,
+                    suffix_prefill_limit=256,
+                    native_logs=[],
+                    output_dir=output_dir,
+                )
+
+                lines = stale.read_text(encoding="utf-8").splitlines()
+                payload = json.loads(lines[0])
+
+            self.assertEqual(len(lines), 1)
+            self.assertEqual(payload["phase"], "fresh")
+            self.assertFalse(obsolete.exists())
+        finally:
+            harness.run_tool_loop_probe = original_tool_loop
+            harness.run_cache_probe = original_cache_probe
+
+    def test_record_transcript_appends_within_attempt(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_path = Path(tmp) / "transcripts" / "direct-model-attempt-1.jsonl"
+            harness.record_transcript(transcript_path, "first_tool_call", 200)
+            harness.record_transcript(transcript_path, "pressure_turn_1", 200)
+
+            phases = [
+                json.loads(line)["phase"]
+                for line in transcript_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual(phases, ["first_tool_call", "pressure_turn_1"])
+
     def test_write_evidence_outputs_manifest_results_and_summary(self):
         harness = load_module()
         plan = harness.build_plan(
             base_url="http://localhost:9337/v1",
             models=["direct-model"],
             attempts=1,
+            pressure_turns=8,
+            timeout=180.0,
             output_dir=Path("target/kv-tool-loop-stability/latest"),
             min_cached_tokens=2048,
+            suffix_prefill_limit=256,
             native_logs=[],
         )
         results = [
@@ -153,6 +353,9 @@ class KvToolLoopStabilityTests(unittest.TestCase):
             summary_md = (output_dir / "summary.md").read_text(encoding="utf-8")
 
         self.assertEqual(manifest["name"], "kv-tool-loop-stability")
+        self.assertEqual(manifest["pressure_turns"], 8)
+        self.assertEqual(manifest["suffix_prefill_limit"], 256)
+        self.assertEqual(manifest["timeout_seconds"], 180.0)
         self.assertFalse(summary["ok"])
         self.assertEqual(summary["total"], 2)
         self.assertEqual(summary["failed"], 1)

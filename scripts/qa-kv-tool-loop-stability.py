@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
+import shutil
 import time
 from typing import Any, Iterable, NamedTuple
 import urllib.error
@@ -28,6 +29,7 @@ DEFAULT_TIMEOUT = 180.0
 DEFAULT_MIN_CACHED_TOKENS = 2048
 DEFAULT_SUFFIX_PREFILL_LIMIT = 256
 DEFAULT_OUTPUT_DIR = "target/kv-tool-loop-stability/latest"
+NATIVE_LOG_CHECKPOINT_TAIL_BYTES = 4096
 FAILURE_PATTERNS = (
     "failed to find a memory slot",
     "RuntimeError: llama_decode failed",
@@ -50,6 +52,13 @@ class LogFinding(NamedTuple):
     line_number: int
     pattern: str
     text: str
+
+
+class NativeLogCheckpoint(NamedTuple):
+    path: Path
+    offset: int
+    identity: tuple[int, int] | None
+    tail: bytes
 
 
 class ProbeResult(NamedTuple):
@@ -84,42 +93,73 @@ def parse_native_logs(values: Iterable[str] | None) -> list[Path]:
     logs: list[Path] = []
     env_value = os.environ.get("MESH_KV_TOOL_LOOP_NATIVE_LOGS")
     if env_value:
-        logs.extend(Path(part.strip()) for part in env_value.split(",") if part.strip())
+        logs.extend(
+            Path(part.strip()).expanduser()
+            for part in env_value.split(",")
+            if part.strip()
+        )
     for value in values or []:
-        logs.append(Path(value))
-    return logs
+        logs.append(Path(value).expanduser())
+    return dedupe_paths(logs)
+
+
+def dedupe_paths(paths: Iterable[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        key = os.fspath(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
 
 
 def build_plan(
     base_url: str,
     models: Iterable[str],
     attempts: int,
+    pressure_turns: int,
+    timeout: float,
     output_dir: Path,
     min_cached_tokens: int,
+    suffix_prefill_limit: int,
     native_logs: Iterable[Path],
 ) -> dict[str, Any]:
     model_list = list(models)
     if attempts < 1:
         raise ValueError("attempts must be at least 1")
+    if pressure_turns < 0:
+        raise ValueError("pressure_turns cannot be negative")
+    if timeout <= 0:
+        raise ValueError("timeout must be positive")
     if min_cached_tokens < 0:
         raise ValueError("min_cached_tokens cannot be negative")
+    if suffix_prefill_limit < 0:
+        raise ValueError("suffix_prefill_limit cannot be negative")
     checks = [
         {
             "phase": "tool_loop",
             "models": model_list,
             "attempts": attempts,
+            "pressure_turns": pressure_turns,
+            "timeout_seconds": timeout,
             "description": "Growing tool-result conversation with a stable long prefix.",
         },
         {
             "phase": "same_prefix_cache",
             "models": model_list,
             "min_cached_tokens": min_cached_tokens,
+            "suffix_prefill_limit": suffix_prefill_limit,
+            "timeout_seconds": timeout,
             "description": "Same long prefix with a different tiny tail should reuse cached tokens.",
         },
         {
             "phase": "exact_prefix_cache",
             "models": model_list,
             "min_cached_tokens": min_cached_tokens,
+            "suffix_prefill_limit": suffix_prefill_limit,
+            "timeout_seconds": timeout,
             "description": "Identical body warm request should still reuse cached tokens.",
         },
     ]
@@ -129,6 +169,7 @@ def build_plan(
             {
                 "phase": "native_log_scan",
                 "paths": log_paths,
+                "scan_mode": "appended_since_run_start",
                 "fatal_patterns": list(FAILURE_PATTERNS)
                 + ["proactive_eviction status=error"],
             }
@@ -138,8 +179,12 @@ def build_plan(
         "base_url": normalize_v1_base(base_url),
         "models": model_list,
         "attempts": attempts,
+        "pressure_turns": pressure_turns,
+        "timeout_seconds": timeout,
         "output_dir": str(output_dir),
         "min_cached_tokens": min_cached_tokens,
+        "suffix_prefill_limit": suffix_prefill_limit,
+        "native_log_scan_mode": "appended_since_run_start" if log_paths else None,
         "native_logs": log_paths,
         "checks": checks,
         "evidence_files": [
@@ -392,6 +437,98 @@ def scan_failure_logs(paths: Iterable[Path]) -> list[LogFinding]:
     return findings
 
 
+def capture_native_log_checkpoints(paths: Iterable[Path]) -> list[NativeLogCheckpoint]:
+    checkpoints: list[NativeLogCheckpoint] = []
+    for path in paths:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            checkpoints.append(NativeLogCheckpoint(path=path, offset=0, identity=None, tail=b""))
+            continue
+        checkpoints.append(
+            NativeLogCheckpoint(
+                path=path,
+                offset=stat.st_size,
+                identity=file_identity(stat),
+                tail=read_checkpoint_tail(path, stat.st_size),
+            )
+        )
+    return checkpoints
+
+
+def scan_failure_logs_since(
+    checkpoints: Iterable[NativeLogCheckpoint],
+) -> list[LogFinding]:
+    findings: list[LogFinding] = []
+    for checkpoint in checkpoints:
+        findings.extend(scan_one_log_since(checkpoint))
+    return findings
+
+
+def scan_one_log_since(checkpoint: NativeLogCheckpoint) -> list[LogFinding]:
+    path = checkpoint.path
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return [
+            LogFinding(
+                path=str(path),
+                line_number=0,
+                pattern="missing log",
+                text="native log path did not exist",
+            )
+        ]
+    offset = checkpoint.offset
+    if (
+        checkpoint.identity != file_identity(stat)
+        or stat.st_size < checkpoint.offset
+        or not checkpoint_tail_matches(checkpoint)
+    ):
+        offset = 0
+    with path.open("rb") as handle:
+        handle.seek(offset)
+        return scan_failure_lines(path, handle)
+
+
+def scan_failure_lines(path: Path, handle: Iterable[bytes]) -> list[LogFinding]:
+    findings: list[LogFinding] = []
+    for line_number, raw_line in enumerate(handle, start=1):
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        pattern = matched_failure_pattern(line)
+        if pattern:
+            findings.append(
+                LogFinding(
+                    path=str(path),
+                    line_number=line_number,
+                    pattern=pattern,
+                    text=line[:500],
+                )
+            )
+    return findings
+
+
+def file_identity(stat: os.stat_result) -> tuple[int, int]:
+    return (int(stat.st_dev), int(stat.st_ino))
+
+
+def read_checkpoint_tail(path: Path, offset: int) -> bytes:
+    if offset <= 0:
+        return b""
+    start = max(offset - NATIVE_LOG_CHECKPOINT_TAIL_BYTES, 0)
+    with path.open("rb") as handle:
+        handle.seek(start)
+        return handle.read(offset - start)
+
+
+def checkpoint_tail_matches(checkpoint: NativeLogCheckpoint) -> bool:
+    if checkpoint.offset <= 0:
+        return True
+    try:
+        return read_checkpoint_tail(checkpoint.path, checkpoint.offset) == checkpoint.tail
+    except OSError:
+        return False
+
+
 def matched_failure_pattern(line: str) -> str | None:
     for pattern in FAILURE_PATTERNS:
         if pattern in line:
@@ -583,9 +720,9 @@ def run_cache_probe(
         return _result(model, 0, phase, False, str(exc), started)
 
 
-def run_native_log_scan(paths: Iterable[Path]) -> ProbeResult:
+def run_native_log_scan(checkpoints: Iterable[NativeLogCheckpoint]) -> ProbeResult:
     started = time.monotonic()
-    findings = scan_failure_logs(paths)
+    findings = scan_failure_logs_since(checkpoints)
     if findings:
         detail = "; ".join(
             f"{finding.path}:{finding.line_number} {finding.pattern}: {finding.text[:160]}"
@@ -609,6 +746,8 @@ def run_certification(
     output_dir: Path,
 ) -> list[ProbeResult]:
     transcript_dir = output_dir / "transcripts"
+    prepare_transcript_dir(transcript_dir)
+    log_checkpoints = capture_native_log_checkpoints(native_logs)
     results: list[ProbeResult] = []
     for model in models:
         for attempt in range(1, attempts + 1):
@@ -644,8 +783,16 @@ def run_certification(
         )
     log_paths = list(native_logs)
     if log_paths:
-        results.append(run_native_log_scan(log_paths))
+        results.append(run_native_log_scan(log_checkpoints))
     return results
+
+
+def prepare_transcript_dir(transcript_dir: Path) -> None:
+    if transcript_dir.is_symlink() or transcript_dir.is_file():
+        transcript_dir.unlink()
+    elif transcript_dir.exists():
+        shutil.rmtree(transcript_dir)
+    transcript_dir.mkdir(parents=True, exist_ok=True)
 
 
 def write_evidence(output_dir: Path, plan: dict[str, Any], results: Iterable[ProbeResult]) -> None:
@@ -866,8 +1013,11 @@ def main() -> int:
         base_url=base_url,
         models=models,
         attempts=args.attempts,
+        pressure_turns=args.pressure_turns,
+        timeout=args.timeout,
         output_dir=output_dir,
         min_cached_tokens=args.min_cached_tokens,
+        suffix_prefill_limit=args.suffix_prefill_limit,
         native_logs=native_logs,
     )
     if args.print_plan:
