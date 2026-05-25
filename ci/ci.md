@@ -102,11 +102,14 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   Linux test groups run SDK/API, Skippy, unit, protocol, and Skippy smoke work
   as parallel matrix rows. Linux/macOS backend matrices remain separate from the
   CPU artifact producers.
-- Workflow-only PR edits validate the PR routing graph without fanning out into
-  native backend, Windows GPU, benchmark, or SDK-smoke lanes. Backend lanes are
-  reserved for files that can affect native ABI/backend products, such as
-  `third_party/llama.cpp/**`, `crates/skippy-ffi/**`, backend build scripts,
-  `Justfile`, and `.github/cache-version.txt`.
+- Workflow/orchestration-only PR edits validate the PR routing graph without
+  becoming Rust crate changes. They must not fan out into Linux/macOS artifact
+  producers, native backend, Windows GPU, benchmark, or SDK-smoke lanes unless a
+  changed file also affects Rust crates, UI assets, SDK inputs, or backend
+  products. Backend lanes are reserved for files that can affect native
+  ABI/backend products, such as `third_party/llama.cpp/**`,
+  `crates/skippy-ffi/**`, backend build scripts, `Justfile`, and
+  `.github/cache-version.txt`.
 - Windows target jobs use the `windows_cpu` and `windows_gpu` filters for full
   platform builds. The CPU row can still run lightweight Windows cargo checks
   for broad Rust changes, but CUDA/ROCm/Vulkan rows stay skipped unless Windows
@@ -137,9 +140,9 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 Use these checks when reviewing PR CI wall-clock regressions:
 
 - **Critical path minutes**: compare the first job start to the last required job
-  finish, then identify the longest required job. Workflow-only changes should
-  stay on the Linux artifact/test path instead of being dominated by Windows or
-  SDK smoke jobs.
+  finish, then identify the longest required job. Workflow/orchestration-only
+  changes should complete after routing validation instead of being dominated by
+  Linux/macOS artifacts, Windows, backend, or SDK smoke jobs.
 - **Heavy-lane eligibility**: every expensive backend/platform lane should be
   traceable to `backend_changed`, `windows_cpu`, `windows_gpu`, or
   `sdk_smoke_required`. If a workflow/doc-only edit triggers CUDA, ROCm, Vulkan,
