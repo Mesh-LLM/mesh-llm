@@ -29,8 +29,9 @@ rustup target add \
   2>/dev/null || true
 
 "$SWIFT_DIR/scripts/generate-swift-bindings.sh"
-export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
-export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-16.0}"
+MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
+export -n IPHONEOS_DEPLOYMENT_TARGET MACOSX_DEPLOYMENT_TARGET 2>/dev/null || true
 "$REPO_ROOT/scripts/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
 
 # Resolve stable rustc from rustup (avoids Homebrew rustc shadowing)
@@ -66,11 +67,22 @@ build_rust_target() {
   local LLAMA_BUILD_DIR="$REPO_ROOT/.deps/llama-build/build-stage-abi-$RUST_TARGET-metal"
 
   echo "Building for $RUST_TARGET ($PLATFORM_NAME)..."
-  RUSTC="$RUSTUP_RUSTC" \
-  LLAMA_STAGE_BACKEND=metal \
-  LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  IPHONEOS_DEPLOYMENT_TARGET="$IPHONEOS_DEPLOYMENT_TARGET" \
-  MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+  local -a CARGO_ENV=(
+    "RUSTC=$RUSTUP_RUSTC"
+    "LLAMA_STAGE_BACKEND=metal"
+    "LLAMA_STAGE_BUILD_DIR=$LLAMA_BUILD_DIR"
+  )
+
+  case "$RUST_TARGET" in
+    *-apple-darwin)
+      CARGO_ENV+=("MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET")
+      ;;
+    *-apple-ios*)
+      CARGO_ENV+=("IPHONEOS_DEPLOYMENT_TARGET=$IPHONEOS_DEPLOYMENT_TARGET")
+      ;;
+  esac
+
+  env "${CARGO_ENV[@]}" \
     cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features "$RUST_FEATURES"
 }
 
