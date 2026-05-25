@@ -67,6 +67,7 @@ jobs:
     name: rust-clippy (${{ matrix.batch.idx }})
     env:
       RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
+      RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v5
       - name: Install system dependencies
@@ -75,7 +76,6 @@ jobs:
         with:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.9
-        continue-on-error: true
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -101,6 +101,14 @@ jobs:
             fi
             cargo clippy -p "$CRATE" --all-targets -- -D warnings
           done
+      - name: Show sccache stats
+        if: ${{ always() }}
+        run: |
+          sccache --show-stats || true
+          requests="$(sccache --show-stats 2>/dev/null | awk '/Compile requests/ { print $3; exit }')"
+          if [ "${requests:-0}" = "0" ]; then
+            echo "::warning::sccache reported zero compile requests; check RUSTC_WRAPPER wiring if this was not a fully reused target cache."
+          fi
 
   ui-quality:
     needs: changes

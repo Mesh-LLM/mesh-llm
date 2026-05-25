@@ -36,10 +36,14 @@ flowchart TD
 
 subgraph PRCI["pr_builds.yml · PR Builds"]
         direction TB
-        subgraph Producers["top-level target matrices"]
-            LinuxTargets["linux_targets matrix\nCPU row: crate tests · debug mesh-llm · CLI/client smoke\nCUDA / ROCm / Vulkan rows build when backend_changed\nCPU → ci-linux-inference-binaries"]
+        subgraph Producers["top-level target jobs"]
+            LinuxCPU["linux_cpu_artifact\ndebug mesh-llm · CLI smoke\n→ ci-linux-inference-binaries"]
+            LinuxTests["linux_test_groups matrix\nSDK/API · Skippy · unit · protocol · Skippy smoke"]
+            LinuxTargets["linux_targets matrix\nCUDA / ROCm / Vulkan rows build when backend_changed"]
             WindowsTargets["windows_targets matrix\nCPU / CUDA / ROCm / Vulkan\nCPU checks unless Windows CPU changed"]
-            MacTargets["macos_targets matrix\nCPU row: macOS Metal build · crate tests · CLI smoke\nCUDA / ROCm / Vulkan explicit skips\nCPU → ci-macos-inference-binaries"]
+            MacCPU["macos_cpu_artifact\nmacOS Metal build · CLI smoke\n→ ci-macos-inference-binaries"]
+            MacTests["macos_unit_tests"]
+            MacTargets["macos_targets matrix\nCUDA / ROCm / Vulkan explicit skips"]
         end
 
         subgraph Smokes["artifact-consuming smokes"]
@@ -51,20 +55,22 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
     end
 
     Docs -. "true: gate heavy jobs" .-> PRCI
-    Affected --> LinuxTargets
-    Affected --> MacTargets
+    Affected --> LinuxCPU
+    Affected --> LinuxTests
+    Affected --> MacCPU
+    Affected --> MacTests
     Backend --> LinuxTargets
     Backend --> WindowsTargets
     Backend --> MacTargets
-    LinuxTargets -- "CPU artifact: ci-linux-inference-binaries" --> Restore
-    MacTargets -- "CPU artifact: ci-macos-inference-binaries" --> Restore
+    LinuxCPU -- "artifact: ci-linux-inference-binaries" --> Restore
+    MacCPU -- "artifact: ci-macos-inference-binaries" --> Restore
     Restore --> Inference
     Restore --> Scripted
     Restore --> SDKSmoke
     SDK --> SDKSmoke
 
     subgraph PRDocker["pr_docker.yml · PR Docker Build"]
-        DockerBuild["Build Docker client image\npush: false"]
+        DockerBuild["Build Docker client image\npush: false · Buildx GHA cache"]
     end
 
     Files --> DockerBuild
@@ -97,10 +103,14 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 - `pr_quality.yml` is named **PR Quality Checks** and owns the earliest feedback:
   formatting, UI quality when relevant, and deterministic clippy bins from
   `scripts/plan-clippy-batches.sh`.
-- `pr_builds.yml` is named **PR Builds** and owns PR target matrices plus integration
-  and smoke validation. Linux, macOS, and Windows are top-level matrices; Linux
-  and macOS CPU rows upload the binaries that downstream smoke jobs consume.
-- `pr_docker.yml` validates the PR Docker client image without publishing.
+- `pr_builds.yml` is named **PR Builds** and owns PR target jobs plus integration
+  and smoke validation. Linux and macOS CPU artifact jobs upload the binaries
+  that downstream smoke jobs consume before long validation groups finish;
+  Linux test groups run SDK/API, Skippy, unit, protocol, and Skippy smoke work
+  as parallel matrix rows. Linux/macOS backend matrices remain separate from the
+  CPU artifact producers.
+- `pr_docker.yml` validates the PR Docker client image without publishing and
+  uses Buildx's GitHub Actions cache for PR layer reuse.
 - `pr_cleanup.yml` deletes PR merge-ref caches and artifacts from positively
   matched PR workflow runs when a pull request closes. Cleanup-only workflow
   edits do not fan out into Rust/build/smoke jobs.
