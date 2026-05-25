@@ -8,6 +8,7 @@ use crate::{
 use super::{
     errors::validation_failed_error,
     policy::{GuardrailPolicy, RetryExhaustionMode},
+    request_contract::RawToolChoice,
     rescue::{
         strip_thinking_blocks, ClassifiedGuardrailResponse, GuardrailParserStage,
         GuardrailResponseCategory,
@@ -87,6 +88,8 @@ pub(crate) fn sanitize_success_response(
         | GuardrailResponseCategory::InvalidToolArguments
         | GuardrailResponseCategory::InvalidStructuredPayload
         | GuardrailResponseCategory::MixedTerminalAndTool
+        | GuardrailResponseCategory::ToolCallsNotAllowed
+        | GuardrailResponseCategory::TooManyToolCalls
         | GuardrailResponseCategory::EmptyOutput => None,
     }
 }
@@ -99,6 +102,8 @@ pub(crate) fn should_retry(classified: &ClassifiedGuardrailResponse) -> bool {
             | GuardrailResponseCategory::InvalidToolArguments
             | GuardrailResponseCategory::InvalidStructuredPayload
             | GuardrailResponseCategory::MixedTerminalAndTool
+            | GuardrailResponseCategory::ToolCallsNotAllowed
+            | GuardrailResponseCategory::TooManyToolCalls
             | GuardrailResponseCategory::EmptyOutput
     )
 }
@@ -141,12 +146,16 @@ fn retry_nudge(
     prepared: &PreparedGuardrailRequest,
     classified: &ClassifiedGuardrailResponse,
 ) -> String {
-    let contract = match request_kind(prepared) {
-        GuardrailContractKind::Tool => {
-            "Reply with exactly one valid tool call using only the provided tools and valid JSON arguments."
-        }
-        GuardrailContractKind::Structured => {
-            "Reply with exactly one valid structured-output tool call whose JSON arguments satisfy the requested schema."
+    let contract = if request_disables_tool_calls(prepared) {
+        "Reply with normal assistant text and do not make a tool call."
+    } else {
+        match request_kind(prepared) {
+            GuardrailContractKind::Tool => {
+                "Reply with exactly one valid tool call using only the provided tools and valid JSON arguments."
+            }
+            GuardrailContractKind::Structured => {
+                "Reply with exactly one valid structured-output tool call whose JSON arguments satisfy the requested schema."
+            }
         }
     };
     let failure = match classified.category {
@@ -165,6 +174,12 @@ fn retry_nudge(
         GuardrailResponseCategory::MixedTerminalAndTool => {
             "Your previous reply mixed terminal text with guarded tool output."
         }
+        GuardrailResponseCategory::ToolCallsNotAllowed => {
+            "Your previous reply used a tool call even though tool calls were disabled for this turn."
+        }
+        GuardrailResponseCategory::TooManyToolCalls => {
+            "Your previous reply used more tool calls than allowed for this turn."
+        }
         GuardrailResponseCategory::EmptyOutput => {
             "Your previous reply was empty after hidden reasoning was stripped."
         }
@@ -176,6 +191,13 @@ fn retry_nudge(
         }
     };
     format!("{failure} {contract} Do not add extra text.\n\n")
+}
+
+fn request_disables_tool_calls(prepared: &PreparedGuardrailRequest) -> bool {
+    matches!(
+        prepared.state.request_contract.tool_choice,
+        RawToolChoice::None
+    ) && !prepared.state.request_contract.requests_structured_output()
 }
 
 fn structured_payload_text(classified: &ClassifiedGuardrailResponse) -> Option<String> {

@@ -100,6 +100,7 @@ impl GuardrailEngine {
                         .structured_output_spec()
                         .expect("supported structured output checked before request rewrite"),
                 );
+                backend_request.tool_choice = None;
                 backend_request.response_format = None;
             }
             suppress_implicit_thinking(request, &mut backend_request);

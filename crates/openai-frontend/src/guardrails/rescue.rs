@@ -5,6 +5,7 @@ use serde_json::{json, Map, Value};
 use crate::{chat::ChatCompletionResponse, common::FinishReason};
 
 use super::{
+    request_contract::{ParallelToolCalls, RawToolChoice},
     state::{GuardrailRequestOutcome, PreparedGuardrailRequest},
     tools::{MESH_EMIT_STRUCTURED_TOOL_NAME, MESH_RESPOND_TOOL_NAME},
 };
@@ -23,6 +24,8 @@ pub(crate) enum GuardrailResponseCategory {
     InvalidToolArguments,
     InvalidStructuredPayload,
     MixedTerminalAndTool,
+    ToolCallsNotAllowed,
+    TooManyToolCalls,
     EmptyOutput,
 }
 
@@ -520,6 +523,51 @@ fn classify_tool_call_value(
         .iter()
         .any(|tool_call| allowed_real_tools.contains(tool_call.name.as_str()));
 
+    if request_disables_tool_calls(prepared) {
+        return ClassifiedGuardrailResponse {
+            category: GuardrailResponseCategory::ToolCallsNotAllowed,
+            parser_stage,
+            visible_content: None,
+            tool_calls: Some(normalized_tool_calls(&parsed_calls)),
+            synthetic_text: None,
+            structured_payload: None,
+            finish_reason,
+        };
+    }
+
+    if let Some(forced_name) = prepared.state.request_contract.forced_tool_name() {
+        if parsed_calls
+            .iter()
+            .any(|tool_call| tool_call.name != forced_name)
+        {
+            return ClassifiedGuardrailResponse {
+                category: GuardrailResponseCategory::UnknownTool,
+                parser_stage,
+                visible_content: None,
+                tool_calls: Some(normalized_tool_calls(&parsed_calls)),
+                synthetic_text: None,
+                structured_payload: None,
+                finish_reason,
+            };
+        }
+    }
+
+    if matches!(
+        prepared.state.request_contract.parallel_tool_calls,
+        ParallelToolCalls::Disabled
+    ) && parsed_calls.len() > 1
+    {
+        return ClassifiedGuardrailResponse {
+            category: GuardrailResponseCategory::TooManyToolCalls,
+            parser_stage,
+            visible_content: None,
+            tool_calls: Some(normalized_tool_calls(&parsed_calls)),
+            synthetic_text: None,
+            structured_payload: None,
+            finish_reason,
+        };
+    }
+
     if (has_synthetic_respond && (has_real_tools || has_synthetic_structured))
         || (has_synthetic_structured && has_real_tools)
     {
@@ -732,7 +780,15 @@ fn request_expects_guarded_contract(prepared: &PreparedGuardrailRequest) -> bool
     matches!(prepared.outcome, GuardrailRequestOutcome::Guarded { .. })
         && (prepared.state.request_contract.has_real_tools()
             || prepared.state.request_contract.requests_structured_output())
+        && !request_disables_tool_calls(prepared)
         && !prepared.state.last_message_is_tool_result
+}
+
+fn request_disables_tool_calls(prepared: &PreparedGuardrailRequest) -> bool {
+    matches!(
+        prepared.state.request_contract.tool_choice,
+        RawToolChoice::None
+    ) && !prepared.state.request_contract.requests_structured_output()
 }
 
 fn normalized_visible_content(content: &str) -> Option<String> {

@@ -1236,6 +1236,7 @@ fn telemetry_response_records_use_bounded_enums_only() {
 }
 
 mod response_validation;
+mod tool_contract_validation;
 
 fn enforce_policy() -> GuardrailPolicy {
     GuardrailPolicy {

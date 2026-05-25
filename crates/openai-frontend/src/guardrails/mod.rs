@@ -252,6 +252,8 @@ fn metrics_only_outcome(
         | rescue::GuardrailResponseCategory::InvalidToolArguments
         | rescue::GuardrailResponseCategory::InvalidStructuredPayload
         | rescue::GuardrailResponseCategory::MixedTerminalAndTool
+        | rescue::GuardrailResponseCategory::ToolCallsNotAllowed
+        | rescue::GuardrailResponseCategory::TooManyToolCalls
         | rescue::GuardrailResponseCategory::EmptyOutput => {
             GuardrailTelemetryOutcome::MetricsOnlyFailure
         }
