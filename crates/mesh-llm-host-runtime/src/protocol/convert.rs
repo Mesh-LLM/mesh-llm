@@ -867,7 +867,7 @@ pub(crate) fn mesh_config_to_proto(
         gpu: Some(crate::proto::node::NodeGpuConfig { assignment }),
         models,
         plugins,
-        config_toml: toml::to_string(config).ok(),
+        config_toml: crate::plugin::config_to_toml(config).ok(),
     }
 }
 
@@ -898,7 +898,7 @@ fn full_config_toml_to_mesh(
         return Ok(None);
     };
 
-    let mut parsed = toml::from_str::<crate::plugin::MeshConfig>(config_toml)
+    let mut parsed = crate::plugin::parse_config_toml(config_toml)
         .context("invalid full config_toml payload")?;
     if parsed.version.is_none() {
         parsed.version = Some(snapshot.version);

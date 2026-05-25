@@ -1,0 +1,19 @@
+[package]
+name = "mesh-llm-config"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+mesh-llm-types = { path = "../mesh-llm-types" }
+serde = { workspace = true }
+skippy-protocol = { path = "../skippy-protocol" }
+toml = "0.9"
+toml_edit = "0.25"
+dirs = "6.0.0"
+
+[dev-dependencies]
+tempfile = "3"

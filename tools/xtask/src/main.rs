@@ -626,6 +626,7 @@ fn check_ci_crate_test_coverage(ci_workflow: &str) -> DynResult<()> {
         ("mesh-llm-client", "mesh client crate tests"),
         ("mesh-llm-api-client", "mesh LLM client API crate tests"),
         ("mesh-llm-api-server", "mesh LLM API crate tests"),
+        ("mesh-llm-config", "mesh LLM config crate tests"),
         (
             "mesh-llm-console-server",
             "mesh LLM console server crate tests",
@@ -650,7 +651,7 @@ fn check_ci_crate_test_coverage(ci_workflow: &str) -> DynResult<()> {
     )?;
     ensure_contains(
         ci_workflow,
-        "for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do",
+        "for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do",
         "CI SDK/API crate test loop",
     )?;
     ensure_contains(

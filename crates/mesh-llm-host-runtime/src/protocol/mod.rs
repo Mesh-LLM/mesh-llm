@@ -1936,7 +1936,9 @@ alias = "model-alias"
     }
     #[test]
     fn config_sync_full_config_roundtrip() {
-        use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry, PluginConfigEntry};
+        use crate::plugin::{
+            GpuAssignment, GpuConfig, HardwareConfig, ModelConfigEntry, PluginConfigEntry,
+        };
         let config = crate::plugin::MeshConfig {
             version: Some(1),
             gpu: GpuConfig {
@@ -1950,13 +1952,17 @@ alias = "model-alias"
                 model: "Qwen3-8B.gguf".to_string(),
                 mmproj: Some("mm.gguf".to_string()),
                 ctx_size: Some(8192),
-                gpu_id: Some("pci:0000:65:00.0".to_string()),
+                gpu_id: None,
                 parallel: None,
                 cache_type_k: None,
                 cache_type_v: None,
                 batch: None,
                 ubatch: None,
                 flash_attention: None,
+                hardware: Some(HardwareConfig {
+                    device: Some("pci:0000:65:00.0".to_string()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             plugins: vec![PluginConfigEntry {
@@ -1976,6 +1982,13 @@ alias = "model-alias"
         assert_eq!(restored.models[0].ctx_size, Some(8192));
         assert_eq!(
             restored.models[0].gpu_id.as_deref(),
+            Some("pci:0000:65:00.0")
+        );
+        assert_eq!(
+            restored.models[0]
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.device.as_deref()),
             Some("pci:0000:65:00.0")
         );
         assert_eq!(restored.plugins.len(), 1);

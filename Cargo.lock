@@ -3735,6 +3735,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-config"
+version = "0.66.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "mesh-llm-types",
+ "serde",
+ "skippy-protocol",
+ "tempfile",
+ "toml",
+ "toml_edit",
+]
+
+[[package]]
 name = "mesh-llm-console-server"
 version = "0.66.0"
 dependencies = [
@@ -3796,6 +3810,7 @@ dependencies = [
  "mdns-sd",
  "mesh-llm-api-server",
  "mesh-llm-client",
+ "mesh-llm-config",
  "mesh-llm-identity",
  "mesh-llm-node",
  "mesh-llm-plugin",
@@ -7710,6 +7725,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.1",
 ]
 

@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::json;
 use std::path::Path;
 
 use crate::cli::runtime::RuntimeCommand;
-use crate::plugin::MeshConfig;
+use crate::plugin::{load_config, MeshConfig};
 
 pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -> Result<()> {
     match command {
@@ -289,9 +289,13 @@ fn build_apply_config_request(
 }
 
 fn load_mesh_config_file(path: &Path) -> Result<MeshConfig> {
-    let raw = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config file {}", path.display()))?;
-    toml::from_str(&raw).with_context(|| format!("Invalid config TOML in {}", path.display()))
+    if !path.exists() {
+        bail!(
+            "Failed to read config file {}: file does not exist",
+            path.display()
+        );
+    }
+    load_config(Some(path))
 }
 
 async fn post_runtime_payload(

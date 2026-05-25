@@ -32,9 +32,10 @@ use url::Url;
 pub use self::config::ExternalPluginSpec;
 #[allow(unused_imports)]
 pub use self::config::{
-    config_path, load_config, resolve_plugins, GpuAssignment, GpuConfig, MeshConfig,
-    ModelConfigEntry, PluginConfigEntry, PluginHostMode, ResolvedPlugins, TelemetryConfig,
-    TelemetryMetricsConfig,
+    config_path, config_to_toml, load_config, parse_config_toml, resolve_plugins, ConfigEditor,
+    ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig, ModelConfigEditor,
+    ModelConfigEntry, ModelDefaultsEditor, ModelRuntimeKind, PluginConfigEditor, PluginConfigEntry,
+    PluginHostMode, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
 };
 pub(crate) use self::config::{telemetry_plugin_enabled, validate_config};
 #[allow(unused_imports)]

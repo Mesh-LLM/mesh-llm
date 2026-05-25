@@ -12,6 +12,7 @@ set -euo pipefail
 
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-config"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
   "mesh-llm-identity"
@@ -129,6 +130,7 @@ weights = {
     "model-artifact": 4,
     "model-hf": 4,
     "model-resolver": 3,
+    "mesh-llm-config": 2,
     "mesh-llm-api-client": 1,
     "mesh-llm-api-server": 3,
     "mesh-llm-gpu-bench": 3,
