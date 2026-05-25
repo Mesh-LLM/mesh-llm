@@ -62,6 +62,8 @@ Counters:
 - `mesh_llm_model_exit_unexpected_total`
 - `mesh_llm_model_request_total`
 - `mesh_llm_route_attempt_total`
+- `mesh_llm_guardrail_decision_total`
+- `mesh_llm_guardrail_outcome_total`
 
 Gauges:
 
@@ -80,6 +82,17 @@ Histograms:
 The telemetry plugin exports metrics only. It does not export prompts,
 completions, logs, traces, hostnames, mesh gossip, relay messages, raw node IDs,
 raw GPU stable IDs, endpoint URLs, or prompt hashes.
+
+Guardrail telemetry follows the same boundary. It exports only bounded labels for
+guardrail mode, contract kind, decision, bypass reason, parser stage, and retry
+bucket. It does not export prompt text, completion text, schemas, tool
+arguments, raw tool names, reserved sentinel names, request paths, endpoints, or
+hostnames.
+
+Guardrail v1 is validated emulation, not hard constrained decoding. Streaming is
+pass-through, no tool execution happens inside the guardrail layer, and real
+tools plus strict structured output stays unsupported in v1. See
+`docs/design/OPENAI_GUARDRAILS.md` for the rollout contract and evidence path.
 
 Local absolute and path-like model labels are reduced to filenames before export.
 Hugging Face refs are preserved. GPU stable IDs and node IDs are exported as
@@ -115,6 +128,13 @@ to an OTLP record.
 | `mesh_llm.target_kind` | route | Bounded target kind: `local`, `remote`, or `endpoint`. |
 | `mesh_llm.target_node_id` | route | Stable pseudonymous hash for local/remote node targets; omitted for endpoint targets. |
 | `mesh_llm.attempt_outcome` | route | Bounded enum. |
+| `mesh_llm.guardrail.mode` | guardrail decision, guardrail outcome | Bounded enum: `disabled`, `metrics`, or `enforce`. |
+| `mesh_llm.guardrail.contract` | guardrail decision, guardrail outcome | Bounded enum: `tools` or `structured`. |
+| `mesh_llm.guardrail.decision` | guardrail decision | Bounded enum: `eligible`, `bypassed`, `unsupported`, or `rejected`. |
+| `mesh_llm.guardrail.bypass_reason` | guardrail decision | Bounded enum: `disabled`, `streaming`, `no_contract`, `unsupported_surface`, `reserved_collision`, or `mixed_tools_structured`. Omitted when no bypass reason applies. |
+| `mesh_llm.guardrail.outcome` | guardrail outcome | Bounded enum: `pass_through`, `valid`, `rescued`, `retried`, `failed`, or `metrics_only_failure`. |
+| `mesh_llm.guardrail.parser_stage` | guardrail outcome | Bounded enum: `none`, `json_exact`, `json_fenced`, or `json_substring`. |
+| `mesh_llm.guardrail.attempt_bucket` | guardrail outcome | Bounded retry bucket: `1`, `2`, or `3_plus`. |
 
 ## Review Checklist
 
@@ -129,6 +149,8 @@ Before adding, renaming, or removing OTLP metrics or attributes:
 4. Update the attribute inventory above.
 5. Add or update focused tests proving private paths, raw node IDs, raw GPU
    stable IDs, endpoint URLs, prompts, and completions are not exported.
+6. Keep guardrail corpus evidence under `.sisyphus/evidence/`, separate from
+   OTLP export and from the telemetry metric payloads themselves.
 
 ## Runtime Safety
 

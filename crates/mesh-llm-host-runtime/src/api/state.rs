@@ -1,9 +1,11 @@
+use super::status::OpenAiGuardrailsPayload;
 use crate::mesh;
 use crate::network::affinity;
 use crate::network::discovery::MeshDiscoveryMode;
 use crate::plugin;
 use crate::runtime_data;
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+use openai_frontend::GuardrailMode;
 use serde::{Serialize, Serializer};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -50,6 +52,10 @@ pub enum RuntimeControlRequest {
         options: UnloadOptions,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeUnloadResponse>>,
     },
+    SetOpenAiGuardrailMode {
+        mode: GuardrailMode,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
+    },
     Shutdown,
 }
 
@@ -69,6 +75,14 @@ pub struct RuntimeUnloadResponse {
     pub model: String,
     pub instance_id: String,
     pub unloaded: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OpenAiGuardrailModeUpdateResponse {
+    pub mode: &'static str,
+    pub updated_models: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<OpenAiGuardrailsPayload>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -104,15 +118,49 @@ pub struct ControlBootstrapPayload {
     pub requires_explicit_remote_endpoint: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_commands: Option<Vec<String>>,
 }
 
 impl Default for ControlBootstrapPayload {
     fn default() -> Self {
+        Self::missing_owner_identity()
+    }
+}
+
+impl ControlBootstrapPayload {
+    pub fn from_control_endpoint(endpoint: Option<String>) -> Self {
+        match endpoint {
+            Some(endpoint) => Self {
+                enabled: true,
+                local_only: true,
+                requires_explicit_remote_endpoint: true,
+                endpoint: Some(endpoint),
+                disabled_reason: None,
+                message: None,
+                suggested_commands: None,
+            },
+            None => Self::missing_owner_identity(),
+        }
+    }
+
+    pub fn missing_owner_identity() -> Self {
         Self {
             enabled: false,
             local_only: true,
             requires_explicit_remote_endpoint: true,
             endpoint: None,
+            disabled_reason: Some("missing_owner_identity".to_string()),
+            message: Some("Configuration saving requires a local owner identity.".to_string()),
+            suggested_commands: Some(vec![
+                "mesh-llm auth status".to_string(),
+                "mesh-llm auth init --no-passphrase".to_string(),
+                "mesh-llm serve --owner-required".to_string(),
+            ]),
         }
     }
 }
@@ -129,6 +177,7 @@ pub struct LocalModelInterest {
 #[derive(Clone)]
 pub struct MeshApi {
     pub(super) inner: Arc<Mutex<ApiInner>>,
+    pub(super) capture_node: mesh::Node,
 }
 
 pub(super) struct ApiInner {
@@ -144,6 +193,7 @@ pub(super) struct ApiInner {
     pub(super) llama_port: Option<u16>,
     pub(super) model_name: String,
     pub(super) primary_backend: Option<String>,
+    pub(super) openai_guardrails: Option<OpenAiGuardrailsPayload>,
     pub(super) draft_name: Option<String>,
     pub(super) api_port: u16,
     pub(super) model_size_bytes: u64,

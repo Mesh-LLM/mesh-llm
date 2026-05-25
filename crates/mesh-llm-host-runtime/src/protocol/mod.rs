@@ -1948,6 +1948,7 @@ alias = "model-alias"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B.gguf".to_string(),
                 mmproj: Some("mm.gguf".to_string()),
@@ -1972,6 +1973,7 @@ alias = "model-alias"
                 args: vec!["--plugin".to_string()],
                 url: None,
             }],
+            extra: Default::default(),
         };
         let snapshot = mesh_config_to_proto(&config);
         let restored = proto_config_to_mesh(&snapshot);
@@ -2008,6 +2010,77 @@ alias = "model-alias"
     }
 
     #[test]
+    fn config_sync_config_toml_roundtrips_additive_defaults_sections() {
+        use crate::plugin::{
+            ModelConfigDefaults, ModelFitConfig, RequestDefaultsConfig, ThroughputConfig,
+        };
+        let config = crate::plugin::MeshConfig {
+            version: Some(1),
+            defaults: Some(ModelConfigDefaults {
+                throughput: Some(ThroughputConfig {
+                    parallel: Some(6),
+                    ..Default::default()
+                }),
+                model_fit: Some(ModelFitConfig {
+                    flash_attention: Some(skippy_protocol::FlashAttentionType::Disabled),
+                    ..Default::default()
+                }),
+                request_defaults: Some(RequestDefaultsConfig {
+                    reasoning_format: Some("deepseek".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let snapshot = mesh_config_to_proto(&config);
+        let config_toml = snapshot
+            .config_toml
+            .as_deref()
+            .expect("config TOML should serialize");
+        assert!(
+            config_toml.contains("parallel") && config_toml.contains("reasoning_format"),
+            "config TOML should carry additive defaults values: {config_toml}"
+        );
+
+        let restored = proto_config_to_mesh(&snapshot);
+        assert_eq!(
+            restored
+                .extra
+                .get("defaults")
+                .and_then(|defaults| defaults.get("throughput"))
+                .and_then(|throughput| throughput.get("parallel"))
+                .and_then(toml::Value::as_integer)
+                .or_else(|| {
+                    restored
+                        .defaults
+                        .as_ref()
+                        .and_then(|defaults| defaults.throughput.as_ref())
+                        .and_then(|throughput| throughput.parallel)
+                        .map(|parallel| parallel as i64)
+                }),
+            Some(6)
+        );
+        assert_eq!(
+            restored
+                .extra
+                .get("defaults")
+                .and_then(|defaults| defaults.get("request_defaults"))
+                .and_then(|request_defaults| request_defaults.get("reasoning_format"))
+                .and_then(toml::Value::as_str)
+                .or_else(|| {
+                    restored
+                        .defaults
+                        .as_ref()
+                        .and_then(|defaults| defaults.request_defaults.as_ref())
+                        .and_then(|request_defaults| request_defaults.reasoning_format.as_deref())
+                }),
+            Some("deepseek")
+        );
+    }
+
+    #[test]
     fn config_sync_config_hash_determinism() {
         use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry};
         let config = crate::plugin::MeshConfig {
@@ -2019,6 +2092,7 @@ alias = "model-alias"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![ModelConfigEntry {
                 model: "test.gguf".to_string(),
                 mmproj: None,
@@ -2033,6 +2107,7 @@ alias = "model-alias"
                 ..Default::default()
             }],
             plugins: vec![],
+            extra: Default::default(),
         };
         let snap1 = mesh_config_to_proto(&config);
         let snap2 = mesh_config_to_proto(&config);
@@ -2049,6 +2124,7 @@ alias = "model-alias"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![ModelConfigEntry {
                 model: "other.gguf".to_string(),
                 mmproj: None,
@@ -2063,6 +2139,7 @@ alias = "model-alias"
                 ..Default::default()
             }],
             plugins: vec![],
+            extra: Default::default(),
         };
         let snap3 = mesh_config_to_proto(&config2);
         let h3 = canonical_config_hash(&snap3);
@@ -2111,6 +2188,7 @@ alias = "model-alias"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".to_string(),
                 mmproj: Some("mmproj-f16.gguf".to_string()),
@@ -2125,6 +2203,7 @@ alias = "model-alias"
                 ..Default::default()
             }],
             plugins: vec![],
+            extra: Default::default(),
         };
 
         let snapshot = mesh_config_to_proto(&config);

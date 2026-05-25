@@ -167,6 +167,21 @@ model_runtime = "bogus"
     }
 
     #[test]
+    fn runtime_model_target_reconciliation_deserializes_from_toml() {
+        let config = parse_config_toml(
+            r#"
+version = 1
+
+[runtime]
+reconcile_model_targets = true
+"#,
+        )
+        .unwrap();
+
+        assert!(config.runtime.reconcile_model_targets);
+    }
+
+    #[test]
     fn nested_hardware_device_does_not_serialize_as_legacy_gpu_id() {
         let config = parse_config_toml(
             r#"

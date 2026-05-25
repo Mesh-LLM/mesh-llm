@@ -3,6 +3,7 @@ pub mod chat;
 pub mod common;
 pub mod completions;
 pub mod errors;
+mod guardrails;
 pub mod hooks;
 pub mod models;
 pub mod responses;
@@ -28,6 +29,11 @@ pub use completions::{
     CompletionResponse,
 };
 pub use errors::{already_openai_error, map_upstream_error_body, OpenAiError, OpenAiErrorKind};
+pub use guardrails::{
+    CompactingOpenAiBackend, CompactionConfig, CompactionDecision, CompactionOverride,
+    CompactionReport, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
+    GuardrailTelemetrySink, StreamingGuardrailMode, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME,
+};
 pub use hooks::{
     chat_mesh_hooks_enabled, first_chat_media, inject_text_into_chat_messages,
     set_chat_mesh_hooks_enabled, ChatHookAction, ChatHookOutcome, ChatMediaKind, ChatMediaRef,

@@ -26,11 +26,14 @@ use futures_util::{stream, StreamExt};
 use openai_frontend::{
     chat_mesh_hooks_enabled, inject_text_into_chat_messages, normalize_reasoning_template_options,
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
-    ChatHookAction, ChatHookOutcome, CompletionChunk, CompletionRequest, CompletionResponse,
-    CompletionStream, FinishReason, GenerationHookSignals, MessageContent, MessageContentPart,
-    ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind, OpenAiHookPolicy,
-    OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort, Usage,
+    ChatHookAction, ChatHookOutcome, CompactingOpenAiBackend, CompactionConfig, CompletionChunk,
+    CompletionRequest, CompletionResponse, CompletionStream, FinishReason, GenerationHookSignals,
+    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, MessageContent,
+    MessageContentPart, ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind,
+    OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort,
+    StreamingGuardrailMode, Usage,
 };
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use skippy_metrics::attr as attr_key;
@@ -231,6 +234,132 @@ pub struct EmbeddedOpenAiArgs {
     pub downstream_wire_condition: WireCondition,
     pub telemetry: Telemetry,
     pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
+    pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OpenAiGuardrailsTarget {
+    Skippy,
+}
+
+impl OpenAiGuardrailsTarget {
+    const fn as_status_label(self) -> &'static str {
+        match self {
+            Self::Skippy => "skippy",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenAiGuardrailsConfig {
+    pub target: OpenAiGuardrailsTarget,
+    pub policy: GuardrailPolicyHandle,
+    pub compaction: Option<CompactionConfig>,
+}
+
+impl OpenAiGuardrailsConfig {
+    pub fn disabled_for_skippy() -> Self {
+        Self {
+            target: OpenAiGuardrailsTarget::Skippy,
+            policy: GuardrailPolicyHandle::default(),
+            compaction: None,
+        }
+    }
+
+    pub fn status(&self) -> OpenAiGuardrailsStatus {
+        let policy = self.policy.snapshot();
+        OpenAiGuardrailsStatus {
+            mode: guardrail_mode_label(policy.mode),
+            target: self.target.as_status_label(),
+            streaming: streaming_mode_label(policy.streaming_mode),
+            retry_exhaustion: retry_exhaustion_label(&policy),
+            small_model_policy: small_model_policy_label(&policy),
+            small_param_threshold_b: policy.small_param_threshold_b,
+            max_tool_retries: policy.max_tool_retries,
+            max_structured_retries: policy.max_structured_retries,
+        }
+    }
+
+    fn should_wrap_guardrail_backend(&self) -> bool {
+        matches!(self.target, OpenAiGuardrailsTarget::Skippy)
+    }
+
+    #[cfg(test)]
+    fn wrap_backend(&self, backend: Arc<dyn OpenAiBackend>) -> Arc<dyn OpenAiBackend> {
+        self.wrap_backend_with_context_limit(backend, None)
+    }
+
+    fn wrap_backend_with_context_limit(
+        &self,
+        backend: Arc<dyn OpenAiBackend>,
+        context_limit_tokens: Option<usize>,
+    ) -> Arc<dyn OpenAiBackend> {
+        let backend = self.wrap_compacting_backend(backend, context_limit_tokens);
+        if self.should_wrap_guardrail_backend() {
+            Arc::new(GuardedOpenAiBackend::with_policy_handle(
+                backend,
+                self.policy.clone(),
+            ))
+        } else {
+            backend
+        }
+    }
+
+    fn wrap_compacting_backend(
+        &self,
+        backend: Arc<dyn OpenAiBackend>,
+        context_limit_tokens: Option<usize>,
+    ) -> Arc<dyn OpenAiBackend> {
+        let Some(mut compaction) = self.compaction else {
+            return backend;
+        };
+        if compaction.context_limit_tokens.is_none() {
+            compaction.context_limit_tokens = context_limit_tokens;
+        }
+        Arc::new(CompactingOpenAiBackend::new(backend, compaction))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct OpenAiGuardrailsStatus {
+    pub mode: &'static str,
+    pub target: &'static str,
+    pub streaming: &'static str,
+    pub retry_exhaustion: &'static str,
+    pub small_model_policy: &'static str,
+    pub small_param_threshold_b: f32,
+    pub max_tool_retries: u8,
+    pub max_structured_retries: u8,
+}
+
+fn guardrail_mode_label(mode: GuardrailMode) -> &'static str {
+    match mode {
+        GuardrailMode::Disabled => "disabled",
+        GuardrailMode::MetricsOnly => "metrics",
+        GuardrailMode::Enforce => "enforce",
+    }
+}
+
+fn streaming_mode_label(mode: StreamingGuardrailMode) -> &'static str {
+    match mode {
+        StreamingGuardrailMode::PassThrough => "pass_through",
+    }
+}
+
+fn retry_exhaustion_label(policy: &GuardrailPolicy) -> &'static str {
+    match format!("{:?}", policy.retry_exhaustion_mode).as_str() {
+        "Error" => "error",
+        "PassLastText" => "pass_last_text",
+        _ => "unknown",
+    }
+}
+
+fn small_model_policy_label(policy: &GuardrailPolicy) -> &'static str {
+    if policy.apply_to_all_models {
+        "all"
+    } else {
+        "small_models_only"
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -308,6 +437,7 @@ pub struct EmbeddedOpenAiBackend {
     pub backend: Arc<dyn OpenAiBackend>,
     pub model_id: String,
     pub generation_concurrency: usize,
+    pub openai_guardrails: Option<OpenAiGuardrailsStatus>,
 }
 
 pub fn embedded_openai_router(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenAiRouter> {
@@ -390,7 +520,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
     .context("prewarm embedded OpenAI runtime sessions")?;
     let kv = KvStageIntegration::from_config(&args.config)?.map(Arc::new);
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
-    let backend = Arc::new(StageOpenAiBackend {
+    let backend: Arc<dyn OpenAiBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
@@ -408,11 +538,22 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         hook_policy: args.hook_policy,
         kv,
     });
+    let openai_guardrails = args
+        .openai_guardrails
+        .as_ref()
+        .map(OpenAiGuardrailsConfig::status);
+    let backend = args
+        .openai_guardrails
+        .as_ref()
+        .map_or(backend.clone(), |guardrails| {
+            guardrails.wrap_backend_with_context_limit(backend, Some(ctx_size))
+        });
 
     Ok(EmbeddedOpenAiBackend {
         backend,
         model_id,
         generation_concurrency: args.generation_concurrency,
+        openai_guardrails,
     })
 }
 
@@ -1884,164 +2025,6 @@ impl GeneratedText {
         Usage::new(self.prompt_tokens, self.completion_tokens)
             .with_cached_tokens(self.cached_prompt_tokens)
     }
-}
-
-fn finish_reason_for_generation(exhausted_max_tokens: bool) -> FinishReason {
-    if exhausted_max_tokens {
-        FinishReason::Length
-    } else {
-        FinishReason::Stop
-    }
-}
-
-fn ensure_context_capacity(
-    prompt_token_count: usize,
-    max_tokens: u32,
-    ctx_size: usize,
-) -> OpenAiResult<()> {
-    let requested_tokens = prompt_token_count.saturating_add(max_tokens as usize);
-    if requested_tokens > ctx_size {
-        return Err(OpenAiError::context_length_exceeded(format!(
-            "requested prompt plus completion tokens ({requested_tokens}) exceed context window ({ctx_size})"
-        )));
-    }
-    Ok(())
-}
-
-fn context_budget_completion_tokens(
-    prompt_token_count: usize,
-    ctx_size: usize,
-) -> OpenAiResult<u32> {
-    if prompt_token_count > ctx_size {
-        return Err(OpenAiError::context_length_exceeded(format!(
-            "requested prompt tokens ({prompt_token_count}) exceed context window ({ctx_size})"
-        )));
-    }
-    Ok(ctx_size
-        .saturating_sub(prompt_token_count)
-        .min(u32::MAX as usize) as u32)
-}
-
-fn detokenize_bytes_with_runtime(
-    runtime: &Arc<Mutex<RuntimeState>>,
-    token_ids: &[i32],
-) -> OpenAiResult<Vec<u8>> {
-    let runtime = runtime
-        .lock()
-        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-    runtime
-        .model
-        .detokenize_bytes(token_ids)
-        .map_err(openai_backend_error)
-}
-
-fn token_is_eog_with_runtime(
-    runtime: &Arc<Mutex<RuntimeState>>,
-    token_id: i32,
-) -> OpenAiResult<bool> {
-    let runtime = runtime
-        .lock()
-        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-    runtime
-        .model
-        .token_is_eog(token_id)
-        .map_err(openai_backend_error)
-}
-
-fn ms_to_us(ms: f64) -> i64 {
-    (ms * 1000.0).round() as i64
-}
-
-fn us_to_ms(us: i64) -> f64 {
-    us as f64 / 1000.0
-}
-
-fn openai_backend_error(error: anyhow::Error) -> OpenAiError {
-    OpenAiError::backend(error.to_string())
-}
-
-fn openai_io_error(error: std::io::Error) -> OpenAiError {
-    OpenAiError::backend(error.to_string())
-}
-
-fn proactive_eviction_error_kind(error: &anyhow::Error) -> &'static str {
-    let message = error.to_string();
-    if message.contains("is not active") {
-        "inactive_session"
-    } else if message.contains("batch size") {
-        "invalid_batch_size"
-    } else {
-        "native_drop_failed"
-    }
-}
-
-fn proactive_eviction_attrs(
-    status: &str,
-    error_kind: Option<&str>,
-    target_tokens: u64,
-    evicted_entries: usize,
-    evicted_tokens: u64,
-) -> BTreeMap<String, Value> {
-    let mut attrs = BTreeMap::from([
-        (
-            "skippy.kv.decision".to_string(),
-            json!("proactive_eviction"),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTION_STATUS.to_string(),
-            json!(status),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTION_TARGET_TOKENS.to_string(),
-            json!(target_tokens),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTED_ENTRIES.to_string(),
-            json!(evicted_entries),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTED_TOKENS.to_string(),
-            json!(evicted_tokens),
-        ),
-    ]);
-    if let Some(error_kind) = error_kind {
-        attrs.insert(
-            attr_key::KV_PROACTIVE_EVICTION_ERROR_KIND.to_string(),
-            json!(error_kind),
-        );
-    }
-    attrs
-}
-
-fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
-    }
-}
-
-fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
-    let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
-    let attempts = timeout_secs.saturating_mul(2).max(1);
-    let mut last_error = None;
-    for _ in 0..attempts {
-        match TcpStream::connect(endpoint) {
-            Ok(mut stream) => {
-                stream.set_nodelay(true).ok();
-                match recv_ready(&mut stream) {
-                    Ok(()) => return Ok(stream),
-                    Err(error) => {
-                        last_error = Some(anyhow!(error).context("ready handshake failed"))
-                    }
-                }
-            }
-            Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
-        }
-        thread::sleep(Duration::from_millis(500));
-    }
-    Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }
 
 #[cfg(test)]

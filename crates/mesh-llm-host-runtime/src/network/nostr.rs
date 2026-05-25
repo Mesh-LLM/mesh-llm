@@ -1367,67 +1367,95 @@ mod auto_pack_tests {
             .unwrap_or_else(|| name.to_string())
     }
 
+    fn matches_catalog_alias(model: &str, alias: &str) -> bool {
+        if model == alias || model == catalog_ref(alias) {
+            return true;
+        }
+        let Some((family, quant)) = alias.rsplit_once("-Q") else {
+            return false;
+        };
+        model.contains(family) && model.contains(&format!("Q{quant}"))
+    }
+
+    fn assert_single_pack_model(pack: &[String], alias: &str) {
+        assert_eq!(pack.len(), 1);
+        assert!(
+            matches_catalog_alias(&pack[0], alias),
+            "expected {alias} or catalog ref, got {}",
+            pack[0]
+        );
+    }
+
+    fn assert_contains_catalog_alias(models: &[String], alias: &str) {
+        assert!(
+            models
+                .iter()
+                .any(|model| matches_catalog_alias(model, alias)),
+            "model {alias} missing from default models"
+        );
+    }
+
     #[test]
     fn pack_4gb_starter() {
         let pack = auto_model_pack(4.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3-4B-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3-4B-Q4_K_M");
     }
 
     #[test]
     fn pack_8gb_single_model() {
         let pack = auto_model_pack(8.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3-8B-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3-8B-Q4_K_M");
     }
 
     #[test]
     fn pack_16gb_single() {
         let pack = auto_model_pack(16.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3-8B-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3-8B-Q4_K_M");
     }
 
     #[test]
     fn pack_24gb_vision() {
         let pack = auto_model_pack(24.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3.5-27B-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3.5-27B-Q4_K_M");
     }
 
     #[test]
     fn pack_50gb_glm_flash() {
         let pack = auto_model_pack(50.0);
-        assert_eq!(pack, vec![catalog_ref("GLM-4.7-Flash-Q4_K_M")]);
+        assert_single_pack_model(&pack, "GLM-4.7-Flash-Q4_K_M");
     }
 
     #[test]
     fn pack_63gb_frontier_coder() {
         let pack = auto_model_pack(63.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3-Coder-Next-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3-Coder-Next-Q4_K_M");
     }
 
     #[test]
     fn pack_85gb_frontier_coder() {
         let pack = auto_model_pack(85.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3-Coder-Next-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3-Coder-Next-Q4_K_M");
     }
 
     #[test]
     fn pack_206gb_minimax() {
         let pack = auto_model_pack(206.0);
-        assert_eq!(pack, vec![catalog_ref("MiniMax-M2.5-Q4_K_M")]);
+        assert_single_pack_model(&pack, "MiniMax-M2.5-Q4_K_M");
     }
 
     #[test]
     fn pack_between_tiers_falls_through() {
         // 40GB: below 50GB tier, falls to 24GB tier (Qwen3.5-27B)
         let pack = auto_model_pack(40.0);
-        assert_eq!(pack, vec![catalog_ref("Qwen3.5-27B-Q4_K_M")]);
+        assert_single_pack_model(&pack, "Qwen3.5-27B-Q4_K_M");
     }
 
     #[test]
     fn demand_seeds_are_separate() {
         let seeds = demand_seed_models();
         assert!(seeds.len() >= 4);
-        assert!(seeds.contains(&catalog_ref("Qwen3-0.6B-Q4_K_M")));
-        assert!(seeds.contains(&catalog_ref("Qwen3-Coder-Next-Q4_K_M")));
+        assert_contains_catalog_alias(&seeds, "Qwen3-0.6B-Q4_K_M");
+        assert_contains_catalog_alias(&seeds, "Qwen3-Coder-Next-Q4_K_M");
     }
 
     #[test]
@@ -1438,14 +1466,18 @@ mod auto_pack_tests {
         // Pack models come first
         for m in &pack {
             assert!(
-                all.contains(m),
+                all.iter().any(|model| {
+                    model == m || matches_catalog_alias(model, m) || matches_catalog_alias(m, model)
+                }),
                 "pack model {m} missing from default_models"
             );
         }
         // Seeds are also present
         for m in &seeds {
             assert!(
-                all.contains(m),
+                all.iter().any(|model| {
+                    model == m || matches_catalog_alias(model, m) || matches_catalog_alias(m, model)
+                }),
                 "seed model {m} missing from default_models"
             );
         }

@@ -4,6 +4,7 @@ use crate::network::metrics::{
 use crate::plugin;
 use crate::system::hardware;
 use anyhow::{Context, Result};
+use openai_frontend::{GuardrailMode, GuardrailTelemetrySink};
 use opentelemetry::metrics::{Counter, Gauge, Histogram, MeterProvider as _};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
@@ -29,6 +30,13 @@ const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
     "mesh_llm.backend_device",
     "mesh_llm.context_bucket",
     "mesh_llm.failure_reason",
+    "mesh_llm.guardrail.attempt_bucket",
+    "mesh_llm.guardrail.bypass_reason",
+    "mesh_llm.guardrail.contract",
+    "mesh_llm.guardrail.decision",
+    "mesh_llm.guardrail.mode",
+    "mesh_llm.guardrail.outcome",
+    "mesh_llm.guardrail.parser_stage",
     "mesh_llm.gpu_count",
     "mesh_llm.gpu_name",
     "mesh_llm.gpu_stable_id",
@@ -47,7 +55,7 @@ const TELEMETRY_ATTRIBUTE_ALLOWLIST: &[&str] = &[
 ];
 
 #[derive(Clone)]
-pub(super) struct SurveyTelemetry {
+pub(crate) struct SurveyTelemetry {
     inner: Option<Arc<SurveyTelemetryInner>>,
 }
 
@@ -58,9 +66,9 @@ struct SurveyTelemetryInner {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct SurveyTelemetrySource {
-    pub(super) node_id: String,
-    pub(super) node_role: String,
+pub(crate) struct SurveyTelemetrySource {
+    pub(crate) node_id: String,
+    pub(crate) node_role: String,
 }
 
 impl SurveyTelemetrySource {
@@ -175,11 +183,11 @@ impl SurveySettings {
 }
 
 impl SurveyTelemetry {
-    pub(super) fn disabled() -> Self {
+    pub(crate) fn disabled() -> Self {
         Self { inner: None }
     }
 
-    pub(super) fn start(
+    pub(crate) fn start(
         config: &plugin::MeshConfig,
         hardware: hardware::HardwareSurvey,
         source: SurveyTelemetrySource,
@@ -205,7 +213,12 @@ impl SurveyTelemetry {
         }
     }
 
-    pub(super) fn routing_sink(&self) -> Option<Arc<dyn RoutingTelemetrySink>> {
+    pub(crate) fn routing_sink(&self) -> Option<Arc<dyn RoutingTelemetrySink>> {
+        self.inner.as_ref()?;
+        Some(Arc::new(self.clone()))
+    }
+
+    pub(crate) fn guardrail_sink(&self) -> Option<Arc<dyn GuardrailTelemetrySink>> {
         self.inner.as_ref()?;
         Some(Arc::new(self.clone()))
     }
@@ -263,6 +276,88 @@ impl SurveyTelemetry {
         if let Some(inner) = self.inner.as_ref() {
             inner.queue.push(event);
         }
+    }
+}
+
+impl GuardrailTelemetrySink for SurveyTelemetry {
+    fn record_decision(
+        &self,
+        mode: GuardrailMode,
+        contract: Option<&'static str>,
+        decision: &'static str,
+        bypass_reason: Option<&'static str>,
+    ) {
+        let Some(inner) = self.inner.as_ref() else {
+            return;
+        };
+        self.emit(SurveyEvent::GuardrailDecision {
+            attrs: GuardrailDecisionAttributes {
+                source: inner.source.clone(),
+                mode: guardrail_mode_label(mode),
+                contract: match contract {
+                    Some(value) => match guardrail_contract_attr(value) {
+                        Some(label) => Some(label),
+                        None => return,
+                    },
+                    None => None,
+                },
+                decision: match guardrail_decision_attr(decision) {
+                    Some(value) => value,
+                    None => return,
+                },
+                bypass_reason: match bypass_reason {
+                    Some(value) => match guardrail_bypass_reason_attr(value) {
+                        Some(label) => Some(label),
+                        None => return,
+                    },
+                    None => None,
+                },
+            },
+        });
+    }
+
+    fn record_outcome(
+        &self,
+        mode: GuardrailMode,
+        contract: Option<&'static str>,
+        outcome: &'static str,
+        parser_stage: Option<&'static str>,
+        attempt_bucket: Option<&'static str>,
+    ) {
+        let Some(inner) = self.inner.as_ref() else {
+            return;
+        };
+        self.emit(SurveyEvent::GuardrailOutcome {
+            attrs: GuardrailOutcomeAttributes {
+                source: inner.source.clone(),
+                mode: guardrail_mode_label(mode),
+                contract: match contract {
+                    Some(value) => match guardrail_contract_attr(value) {
+                        Some(label) => Some(label),
+                        None => return,
+                    },
+                    None => None,
+                },
+                outcome: match guardrail_outcome_attr(outcome) {
+                    Some(value) => value,
+                    None => return,
+                },
+                parser_stage: match parser_stage {
+                    Some(value) => match guardrail_parser_stage_attr(value) {
+                        Some(label) => Some(label),
+                        None => return,
+                    },
+                    None => None,
+                },
+                attempt_bucket: match attempt_bucket {
+                    Some(value) => match guardrail_attempt_bucket_attr(value) {
+                        Some(label) => Some(label),
+                        None => return,
+                    },
+                    None => None,
+                },
+            },
+        });
     }
 }
 
@@ -708,6 +803,123 @@ fn attempt_outcome_label(outcome: AttemptOutcome) -> &'static str {
     }
 }
 
+fn guardrail_mode_label(mode: GuardrailMode) -> &'static str {
+    match mode {
+        GuardrailMode::Disabled => "disabled",
+        GuardrailMode::MetricsOnly => "metrics",
+        GuardrailMode::Enforce => "enforce",
+    }
+}
+
+fn guardrail_contract_attr(value: &'static str) -> Option<&'static str> {
+    match value {
+        "tools" | "structured" => Some(value),
+        _ => None,
+    }
+}
+
+fn guardrail_decision_attr(value: &'static str) -> Option<&'static str> {
+    match value {
+        "eligible" | "bypassed" | "unsupported" | "rejected" => Some(value),
+        _ => None,
+    }
+}
+
+fn guardrail_bypass_reason_attr(value: &'static str) -> Option<&'static str> {
+    match value {
+        "disabled"
+        | "streaming"
+        | "no_contract"
+        | "unsupported_surface"
+        | "reserved_collision"
+        | "mixed_tools_structured" => Some(value),
+        _ => None,
+    }
+}
+
+fn guardrail_outcome_attr(value: &'static str) -> Option<&'static str> {
+    match value {
+        "pass_through" | "valid" | "rescued" | "retried" | "failed" | "metrics_only_failure" => {
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
+fn guardrail_parser_stage_attr(value: &'static str) -> Option<&'static str> {
+    match value {
+        "none" | "json_exact" | "json_fenced" | "json_substring" => Some(value),
+        _ => None,
+    }
+}
+
+fn guardrail_attempt_bucket_attr(value: &'static str) -> Option<&'static str> {
+    match value {
+        "1" | "2" | "3_plus" => Some(value),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GuardrailDecisionAttributes {
+    source: SurveyTelemetrySource,
+    mode: &'static str,
+    contract: Option<&'static str>,
+    decision: &'static str,
+    bypass_reason: Option<&'static str>,
+}
+
+impl GuardrailDecisionAttributes {
+    fn key_values(&self) -> Vec<KeyValue> {
+        let mut attrs = self.source.key_values();
+        attrs.push(KeyValue::new("mesh_llm.guardrail.mode", self.mode));
+        attrs.push(KeyValue::new("mesh_llm.guardrail.decision", self.decision));
+        if let Some(contract) = self.contract {
+            attrs.push(KeyValue::new("mesh_llm.guardrail.contract", contract));
+        }
+        if let Some(reason) = self.bypass_reason {
+            attrs.push(KeyValue::new("mesh_llm.guardrail.bypass_reason", reason));
+        }
+        debug_assert_telemetry_attrs_allowlisted(&attrs);
+        attrs
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GuardrailOutcomeAttributes {
+    source: SurveyTelemetrySource,
+    mode: &'static str,
+    contract: Option<&'static str>,
+    outcome: &'static str,
+    parser_stage: Option<&'static str>,
+    attempt_bucket: Option<&'static str>,
+}
+
+impl GuardrailOutcomeAttributes {
+    fn key_values(&self) -> Vec<KeyValue> {
+        let mut attrs = self.source.key_values();
+        attrs.push(KeyValue::new("mesh_llm.guardrail.mode", self.mode));
+        attrs.push(KeyValue::new("mesh_llm.guardrail.outcome", self.outcome));
+        if let Some(contract) = self.contract {
+            attrs.push(KeyValue::new("mesh_llm.guardrail.contract", contract));
+        }
+        if let Some(parser_stage) = self.parser_stage {
+            attrs.push(KeyValue::new(
+                "mesh_llm.guardrail.parser_stage",
+                parser_stage,
+            ));
+        }
+        if let Some(attempt_bucket) = self.attempt_bucket {
+            attrs.push(KeyValue::new(
+                "mesh_llm.guardrail.attempt_bucket",
+                attempt_bucket,
+            ));
+        }
+        debug_assert_telemetry_attrs_allowlisted(&attrs);
+        attrs
+    }
+}
+
 #[derive(Clone, Debug)]
 enum SurveyEvent {
     LaunchSuccess {
@@ -732,6 +944,12 @@ enum SurveyEvent {
     },
     RouteAttempt {
         attrs: RouteAttemptAttributes,
+    },
+    GuardrailDecision {
+        attrs: GuardrailDecisionAttributes,
+    },
+    GuardrailOutcome {
+        attrs: GuardrailOutcomeAttributes,
     },
     InflightRequests {
         source: SurveyTelemetrySource,
@@ -793,6 +1011,8 @@ struct SurveyRecorder {
     model_context_length: Gauge<u64>,
     model_request_total: Counter<u64>,
     route_attempt_total: Counter<u64>,
+    guardrail_decision_total: Counter<u64>,
+    guardrail_outcome_total: Counter<u64>,
     requests_inflight: Gauge<u64>,
     launch_duration_ms: Histogram<f64>,
     uptime_s: Histogram<f64>,
@@ -871,6 +1091,18 @@ impl SurveyRecorder {
                     "Routing attempts from this node to local, remote, or endpoint targets.",
                 )
                 .build(),
+            guardrail_decision_total: meter
+                .u64_counter("mesh_llm_guardrail_decision_total")
+                .with_description(
+                    "Guardrail request decisions for hosted OpenAI backends on this node.",
+                )
+                .build(),
+            guardrail_outcome_total: meter
+                .u64_counter("mesh_llm_guardrail_outcome_total")
+                .with_description(
+                    "Guardrail attempt and final outcomes for hosted OpenAI backends on this node.",
+                )
+                .build(),
             requests_inflight: meter
                 .u64_gauge("mesh_llm_requests_inflight")
                 .with_description("Current in-flight requests fronted by this node.")
@@ -939,6 +1171,14 @@ impl SurveyRecorder {
             SurveyEvent::RouteAttempt { attrs } => {
                 let kv = attrs.key_values();
                 self.route_attempt_total.add(1, &kv);
+            }
+            SurveyEvent::GuardrailDecision { attrs } => {
+                let kv = attrs.key_values();
+                self.guardrail_decision_total.add(1, &kv);
+            }
+            SurveyEvent::GuardrailOutcome { attrs } => {
+                let kv = attrs.key_values();
+                self.guardrail_outcome_total.add(1, &kv);
             }
             SurveyEvent::InflightRequests { source, current } => {
                 self.requests_inflight.record(current, &source.key_values());
@@ -1200,6 +1440,13 @@ mod tests {
                 "mesh_llm.backend_device",
                 "mesh_llm.context_bucket",
                 "mesh_llm.failure_reason",
+                "mesh_llm.guardrail.attempt_bucket",
+                "mesh_llm.guardrail.bypass_reason",
+                "mesh_llm.guardrail.contract",
+                "mesh_llm.guardrail.decision",
+                "mesh_llm.guardrail.mode",
+                "mesh_llm.guardrail.outcome",
+                "mesh_llm.guardrail.parser_stage",
                 "mesh_llm.gpu_count",
                 "mesh_llm.gpu_name",
                 "mesh_llm.gpu_stable_id",
@@ -1254,8 +1501,90 @@ mod tests {
             )
             .key_values(),
         );
+        assert_attrs_allowlisted(
+            GuardrailDecisionAttributes {
+                source: test_source(),
+                mode: "enforce",
+                contract: Some("tools"),
+                decision: "eligible",
+                bypass_reason: None,
+            }
+            .key_values(),
+        );
+        assert_attrs_allowlisted(
+            GuardrailOutcomeAttributes {
+                source: test_source(),
+                mode: "metrics",
+                contract: Some("structured"),
+                outcome: "metrics_only_failure",
+                parser_stage: Some("json_fenced"),
+                attempt_bucket: Some("2"),
+            }
+            .key_values(),
+        );
         assert_attrs_allowlisted(test_source().key_values());
         assert_attrs_allowlisted(service_version_attrs());
+    }
+
+    #[test]
+    fn guardrail_attributes_stay_bounded_and_allowlisted() {
+        let decision = GuardrailDecisionAttributes {
+            source: test_source(),
+            mode: "disabled",
+            contract: Some("tools"),
+            decision: "bypassed",
+            bypass_reason: Some("streaming"),
+        };
+        let decision_kv: HashMap<_, _> = decision
+            .key_values()
+            .into_iter()
+            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+            .collect();
+        assert_eq!(
+            decision_kv
+                .get("mesh_llm.guardrail.mode")
+                .map(String::as_str),
+            Some("disabled")
+        );
+        assert_eq!(
+            decision_kv
+                .get("mesh_llm.guardrail.bypass_reason")
+                .map(String::as_str),
+            Some("streaming")
+        );
+
+        let outcome = GuardrailOutcomeAttributes {
+            source: test_source(),
+            mode: "enforce",
+            contract: Some("structured"),
+            outcome: "rescued",
+            parser_stage: Some("json_substring"),
+            attempt_bucket: Some("3_plus"),
+        };
+        let outcome_kv: HashMap<_, _> = outcome
+            .key_values()
+            .into_iter()
+            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+            .collect();
+        assert_eq!(
+            outcome_kv
+                .get("mesh_llm.guardrail.contract")
+                .map(String::as_str),
+            Some("structured")
+        );
+        assert_eq!(
+            outcome_kv
+                .get("mesh_llm.guardrail.parser_stage")
+                .map(String::as_str),
+            Some("json_substring")
+        );
+        assert!(outcome_kv.values().all(|value| {
+            !value.contains("prompt")
+                && !value.contains("completion")
+                && !value.contains("http://")
+                && !value.contains("https://")
+                && !value.contains('/')
+        }));
     }
 
     #[test]

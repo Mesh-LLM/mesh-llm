@@ -22,6 +22,7 @@ mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents" }
 mesh-llm-config = { path = "../mesh-llm-config" }
 mesh-llm-plugin = { path = "../mesh-llm-plugin" }
 mesh-llm-identity = { path = "../mesh-llm-identity" }
+mesh-llm-guardrails = { path = "../mesh-llm-guardrails" }
 mesh-llm-protocol = { path = "../mesh-llm-protocol" }
 mesh-llm-routing = { path = "../mesh-llm-routing" }
 mesh-llm-system = { path = "../mesh-llm-system", features = ["skippy-devices"] }
@@ -86,7 +87,7 @@ schemars = "1"
 prost = "0.14"
 toml = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-hf_hub = { package = "hf-hub", git = "https://github.com/huggingface/hf-hub.git", rev = "4cd6d8acd3192021381ff85210be9192b394e0eb", default-features = false, features = ["blocking"] }
+hf_hub = { package = "hf-hub", version = "1.0.0-rc.1", default-features = false, features = ["blocking"] }
 tabwriter = "1"
 
 [dev-dependencies]

@@ -212,6 +212,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
         inflight_change_tx,
         routing_metrics: crate::network::metrics::RoutingMetrics::default(),
         routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+        swarm_capture: Arc::new(std::sync::Mutex::new(None)),
         local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
         runtime_data_producer,
         tunnel_tx,
@@ -1232,6 +1233,9 @@ async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> 
         local_only: true,
         requires_explicit_remote_endpoint: true,
         endpoint: Some(control_endpoint.clone()),
+        disabled_reason: None,
+        message: None,
+        suggested_commands: None,
     })
     .await;
     let status_snapshot = api.status_snapshot_string().await;

@@ -36,10 +36,12 @@ Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.
 | Doc or directory | What belongs there |
 |---|---|
 | [BENCHMARKS.md](BENCHMARKS.md) | Current benchmark numbers and performance context |
+| [SWARM_CAPTURE.md](SWARM_CAPTURE.md) | Opt-in local debug capture for mesh membership and connection diagnostics |
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
 | [plugins/](plugins/) | Plugin architecture and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |
 | [specs/](specs/) | Focused behavior specs for individual features |
+| [design/OPENAI_GUARDRAILS.md](design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |
 
 Per-crate docs stay with their crates. The main binary crate overview lives at
 [../crates/mesh-llm/README.md](../crates/mesh-llm/README.md), and the web

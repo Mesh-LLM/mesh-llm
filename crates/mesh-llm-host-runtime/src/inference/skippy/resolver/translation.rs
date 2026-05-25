@@ -400,6 +400,7 @@ impl ResolvedEmbeddedOpenAiArgs {
             .expect("static downstream wire condition should construct"),
             telemetry,
             hook_policy,
+            openai_guardrails: None,
         }
     }
 }

@@ -7,6 +7,7 @@ members = [
     "crates/mesh-llm-identity",
     "crates/mesh-llm-protocol",
     "crates/mesh-llm-routing",
+    "crates/mesh-llm-guardrails",
     "crates/mesh-llm-system",
     "crates/mesh-llm-types",
     "crates/mesh-llm-console-server",

@@ -967,8 +967,10 @@ fn legacy_proto_config_to_mesh(
         owner_control: Default::default(),
         telemetry: Default::default(),
         defaults: None,
+        runtime: Default::default(),
         models,
         plugins,
+        extra: Default::default(),
     }
 }
 

@@ -26,6 +26,7 @@ pub use embedded::{
 pub use frontend::{
     embedded_openai_backend, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
     EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
-    EmbeddedReasoningFormat, CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
+    EmbeddedReasoningFormat, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
+    OpenAiGuardrailsTarget, CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
 };
 pub use skippy_protocol::StageConfig;

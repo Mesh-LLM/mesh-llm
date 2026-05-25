@@ -461,6 +461,7 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 - `/api/search` returns 200 JSON with canonical model refs for matching results
 - `/api/model-interests` stores and returns local explicit-interest entries keyed by canonical model refs
 - `/api/model-targets` returns ranked targets with explicit-interest counts, request counts, serving-node counts, `wanted` for targets not currently served, and derived `capacity_advice` without changing ranking or routing behavior
+- If `[runtime] reconcile_model_targets = true` is enabled, unserved local explicit interests that are already present on disk and fit the current node may be runtime-loaded automatically. Leave it unset for read-only advisory checks.
 - Discover results can be matched to current mesh by `mesh_id`
 
 ### 24. HTTP proxy single-request connection contract
@@ -470,6 +471,44 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 - Verify only the first request reaches the selected upstream.
 - Verify the proxy closes the routed connection after the first response.
 - Verify the upstream-observed request includes `Connection: close`.
+
+### 25. OpenAI guardrail corpus smoke
+
+Enable the server-side guardrail mode first. Either start the runtime in that
+mode or update the running process without restarting it:
+
+```bash
+mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
+# or, for an already-running node:
+mesh-llm runtime guardrails --mode metrics --port 3131
+curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
+```
+
+```bash
+python3 scripts/run-openai-guardrail-corpus.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --model MiniMax-M2.5-Q4_K_M \
+  --guardrail-mode metrics \
+  --trials 20 \
+  --out .sisyphus/evidence/openai-guardrail-corpus.json
+```
+
+- Phase 0 stays off by default. `metrics` and `enforce` are opt-in.
+- `--guardrail-mode` only records request intent and sends the matching
+  `mesh_guardrails` request override. It does not reconfigure the server; use
+  `--mesh-guardrails`, `mesh-llm runtime guardrails`, or the management API
+  for server-side activation.
+- If the runtime is unavailable, the script falls back to deterministic
+  fake-backend mode and still writes the expected JSON artifact.
+- The corpus covers streaming pass-through, tool-call reliability, synthetic
+  `_mesh_respond` rescue, strict structured output, and the unsupported real
+  tools plus strict structured combination.
+- The command is a reliability check, not a hard constrained decoding promise.
+
+If a Python sidecar baseline is available, you may optionally run a smoke
+comparison on the same corpus to compare behavior before and after this
+adaptation. Treat it as a local comparison aid only; it is not a mandatory
+implementation gate.
 
 ## Resilience
 
