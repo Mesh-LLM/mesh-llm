@@ -206,6 +206,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
@@ -319,11 +320,11 @@ jobs:
       - name: Install base packages
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
         run: |
-          packages="ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld"
+          packages=(ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld)
           if [ "${{ matrix.backend }}" = "vulkan" ]; then
-            packages="$packages software-properties-common glslc libvulkan-dev spirv-headers"
+            packages+=(software-properties-common glslc libvulkan-dev spirv-headers)
           elif [ "${{ matrix.backend }}" = "rocm" ]; then
-            packages="$packages hipblas-dev rocblas-dev"
+            packages+=(hipblas-dev rocblas-dev)
           fi
           for attempt in 1 2 3; do
             if [ "${{ matrix.backend }}" = "vulkan" ]; then
@@ -332,7 +333,7 @@ jobs:
                 add-apt-repository -y universe
             fi
             apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing $packages &&
+              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing "${packages[@]}" &&
               break
             if [ "$attempt" -eq 3 ]; then
               exit 1
@@ -360,6 +361,7 @@ jobs:
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
       - uses: Swatinem/rust-cache@v2
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
@@ -476,6 +478,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.9
 
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
@@ -746,13 +749,15 @@ jobs:
             echo "ERROR: crates/mesh-llm-ui/dist/index.html not found after restore/build"
             exit 1
           fi
-          echo "UI dist OK: $(ls crates/mesh-llm-ui/dist | wc -l) files"
+          file_count="$(find crates/mesh-llm-ui/dist -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          echo "UI dist OK: ${file_count} files"
       - name: Test UI
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         working-directory: crates/mesh-llm-ui
         run: pnpm test
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
@@ -847,6 +852,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
@@ -949,6 +955,7 @@ jobs:
         if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
       - uses: Swatinem/rust-cache@v2
         if: ${{ matrix.backend == 'cpu' || env.RUN_WINDOWS_GPU == 'true' }}
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"

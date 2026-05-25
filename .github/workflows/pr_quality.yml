@@ -77,6 +77,7 @@ jobs:
           components: clippy
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           workspaces: . -> target
           cache-bin: "false"
