@@ -503,7 +503,8 @@ jobs:
             echo "ERROR: crates/mesh-llm-ui/dist/index.html not found after restore/build"
             exit 1
           fi
-          echo "UI dist OK: $(ls crates/mesh-llm-ui/dist | wc -l) files"
+          file_count="$(find crates/mesh-llm-ui/dist -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')"
+          echo "UI dist OK: ${file_count} files"
       - name: Test UI
         if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.ui == 'true' }}
         working-directory: crates/mesh-llm-ui
