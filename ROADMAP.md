@@ -1,6 +1,6 @@
 # Roadmap
 
-High-level directions for mesh-llm. Not promises — just things we're thinking about.
+High-level directions for mesh-llm. Not promises — just things we're thinking about, or have thought about.
 
 ## Smart model router ✅
 
@@ -9,6 +9,8 @@ Implemented. Heuristic classifier detects Code/Reasoning/Chat/Creative/ToolCall 
 ## Mixture of Agents (MoA) ✅
 
 Implemented as the `mesh` virtual model. Fan-out across multiple worker models on the mesh, reducer synthesizes the result. Streaming output, tool-call passthrough, opinionated no-think default, configurable first-answer grace. See [docs/design/MOA_GATEWAY.md](docs/design/MOA_GATEWAY.md).
+
+This could do with ongoing development and benchmarking to improve. 
 
 ## Mobile chat app (exemplar)
 
@@ -59,3 +61,9 @@ Implemented. Shared ephemeral text messages across the mesh — agents post stat
 
 Implemented. Auto-detects MoE, computes overlapping expert assignments, splits locally, and uses session-sticky routing with zero cross-node expert traffic.
 Best thought of as experimental, most results show this doesn't perform as well as one would hope, more research is needed to see if expert sharding this way is actually practical.
+
+## Platform targetting, Desktop apps, embedding of mesh SDK, distribution
+
+Mesh is packaged for many platforms, and can be run as a background process, but it would make sense to have desktop/GUI apps which host it in way that can offer utility to end consumer utility as well as being able to yield compute when needed locally. 
+
+Mesh also needs to be packaged as an SDK which can be used from various client languages to launch as a client/serve node as seamlessly as possible.
