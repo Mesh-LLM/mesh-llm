@@ -10,7 +10,38 @@ Publishes the crates.io package chain in dependency order. Use --dry-run for
 local and CI validation without uploading packages. --allow-dirty is accepted
 only with --dry-run so local pre-commit validation can include uncommitted
 manifest changes; real publishing always requires Cargo's clean-tree check.
+
+Environment:
+  CRATES_IO_PUBLISH_MAX_ATTEMPTS        Real-publish retry attempts for crates.io 429s (default: 6)
+  CRATES_IO_PUBLISH_RETRY_BASE_SECONDS Fallback retry base when crates.io gives no timestamp (default: 60)
+  CRATES_IO_PUBLISH_RETRY_MAX_SECONDS  Fallback retry cap when crates.io gives no timestamp (default: 900)
 USAGE
+}
+
+log() {
+    echo "publish-crates: $*"
+}
+
+warn() {
+    echo "publish-crates: $*" >&2
+}
+
+require_positive_int() {
+    local name="$1"
+    local value="$2"
+    if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+        echo "${name} must be a positive integer" >&2
+        exit 1
+    fi
+}
+
+require_nonnegative_int() {
+    local name="$1"
+    local value="$2"
+    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+        echo "${name} must be a non-negative integer" >&2
+        exit 1
+    fi
 }
 
 dry_run=0
@@ -59,6 +90,15 @@ if [[ -z "$sleep_seconds" ]]; then
     fi
 fi
 
+max_attempts="${CRATES_IO_PUBLISH_MAX_ATTEMPTS:-6}"
+retry_base_seconds="${CRATES_IO_PUBLISH_RETRY_BASE_SECONDS:-60}"
+retry_max_seconds="${CRATES_IO_PUBLISH_RETRY_MAX_SECONDS:-900}"
+
+require_nonnegative_int CRATES_IO_PUBLISH_SETTLE_SECONDS "$sleep_seconds"
+require_positive_int CRATES_IO_PUBLISH_MAX_ATTEMPTS "$max_attempts"
+require_positive_int CRATES_IO_PUBLISH_RETRY_BASE_SECONDS "$retry_base_seconds"
+require_positive_int CRATES_IO_PUBLISH_RETRY_MAX_SECONDS "$retry_max_seconds"
+
 if [[ "$dry_run" -eq 0 && -z "${CARGO_REGISTRY_TOKEN:-}" ]]; then
     echo "CARGO_REGISTRY_TOKEN is required for real crates.io publishing" >&2
     exit 1
@@ -80,15 +120,15 @@ if [[ -z "$workspace_version" ]]; then
     exit 1
 fi
 
-crate_version_published() {
+registry_version_status() {
     local crate="$1"
     local status
     if ! command -v curl >/dev/null 2>&1; then
-        return 1
+        echo "unknown"
+        return 0
     fi
     status="$(
         curl \
-            --fail \
             --silent \
             --show-error \
             --output /dev/null \
@@ -96,7 +136,166 @@ crate_version_published() {
             "https://crates.io/api/v1/crates/${crate}/${workspace_version}" \
             2>/dev/null || true
     )"
-    [[ "$status" == "200" ]]
+    case "$status" in
+        200)
+            echo "published"
+            ;;
+        404)
+            echo "missing"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
+}
+
+crate_version_published() {
+    local crate="$1"
+    [[ "$(registry_version_status "$crate")" == "published" ]]
+}
+
+publish_error_is_429() {
+    local output="$1"
+    [[ "$output" == *"status 429 Too Many Requests"* || "$output" == *"published too many new crates"* ]]
+}
+
+print_publish_output() {
+    local output="$1"
+    if [[ -z "$output" ]]; then
+        return 0
+    fi
+    if [[ -n "${CARGO_REGISTRY_TOKEN:-}" ]]; then
+        output="${output//${CARGO_REGISTRY_TOKEN}/<redacted>}"
+    fi
+    printf '%s\n' "$output"
+}
+
+retry_after_epoch() {
+    local output="$1"
+    local retry_after
+    retry_after="$(
+        printf '%s\n' "$output" \
+            | sed -nE 's/.*Please try again after ([^"]+)$/\1/p' \
+            | head -n 1 \
+            || true
+    )"
+    retry_after="${retry_after%.}"
+    retry_after="${retry_after%\"}"
+    if [[ -z "$retry_after" ]]; then
+        return 1
+    fi
+    if date -u -d "$retry_after" +%s 2>/dev/null; then
+        return 0
+    fi
+    date -u -j -f "%a, %d %b %Y %H:%M:%S %Z" "$retry_after" +%s 2>/dev/null
+}
+
+retry_delay_seconds() {
+    local output="$1"
+    local attempt="$2"
+    local target_epoch now_epoch delay
+    if target_epoch="$(retry_after_epoch "$output")" && now_epoch="$(date -u +%s 2>/dev/null)"; then
+        delay=$((target_epoch - now_epoch + 5))
+        if [[ "$delay" -lt 1 ]]; then
+            delay=1
+        fi
+        echo "$delay"
+        return 0
+    fi
+
+    delay="$retry_base_seconds"
+    for ((step = 1; step < attempt; step++)); do
+        delay=$((delay * 2))
+        if [[ "$delay" -ge "$retry_max_seconds" ]]; then
+            delay="$retry_max_seconds"
+            break
+        fi
+    done
+    echo "$delay"
+}
+
+last_publish_output=""
+
+run_cargo_publish_once() {
+    local crate="$1"
+    local output status
+    local args=(publish --locked -p "$crate")
+    if [[ "$dry_run" -eq 1 ]]; then
+        args+=(--dry-run)
+    fi
+    if [[ "$allow_dirty" -eq 1 ]]; then
+        args+=(--allow-dirty)
+    fi
+
+    echo "cargo ${args[*]}"
+    if output="$(cargo "${args[@]}" 2>&1)"; then
+        last_publish_output="$output"
+        print_publish_output "$output"
+        return 0
+    else
+        status=$?
+    fi
+
+    last_publish_output="$output"
+    print_publish_output "$output" >&2
+    return "$status"
+}
+
+publish_crate_with_retry() {
+    local crate="$1"
+    local index="$2"
+    local total="$3"
+    local attempt status delay
+
+    if [[ "$dry_run" -eq 0 ]]; then
+        status="$(registry_version_status "$crate")"
+        if [[ "$status" == "published" ]]; then
+            log "[${index}/${total}] ${crate}@${workspace_version} already published; skipping"
+            return 0
+        fi
+        if [[ "$status" == "unknown" ]]; then
+            warn "[${index}/${total}] could not verify ${crate}@${workspace_version} on crates.io; aborting before publish"
+            return 1
+        fi
+    fi
+
+    attempt=1
+    while [[ "$attempt" -le "$max_attempts" ]]; do
+        if [[ "$dry_run" -eq 1 ]]; then
+            log "[${index}/${total}] ${crate}@${workspace_version} dry-run"
+        elif [[ "$attempt" -eq 1 ]]; then
+            log "[${index}/${total}] ${crate}@${workspace_version} publish"
+        else
+            log "[${index}/${total}] ${crate}@${workspace_version} publish retry ${attempt}/${max_attempts}"
+        fi
+
+        if run_cargo_publish_once "$crate"; then
+            return 0
+        fi
+
+        if [[ "$dry_run" -eq 0 && "$(registry_version_status "$crate")" == "published" ]]; then
+            log "[${index}/${total}] ${crate}@${workspace_version} is now visible on crates.io; continuing"
+            return 0
+        fi
+
+        if [[ "$dry_run" -eq 0 ]] && publish_error_is_429 "$last_publish_output"; then
+            warn "crates.io rate limit hit for ${crate}@${workspace_version} on attempt ${attempt}/${max_attempts}"
+            if [[ "$attempt" -ge "$max_attempts" ]]; then
+                warn "retry limit exceeded for ${crate}@${workspace_version} after ${max_attempts} attempts"
+                return 101
+            fi
+            delay="$(retry_delay_seconds "$last_publish_output" "$attempt")"
+            warn "retrying ${crate}@${workspace_version} after ${delay}s"
+            sleep "$delay"
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        return 101
+    done
+
+    warn "retry limit exceeded for ${crate}@${workspace_version} after ${max_attempts} attempts"
+    return 101
 }
 
 unpublished_registry_deps() {
@@ -168,20 +367,10 @@ for index in "${!publish_crates[@]}"; do
     if [[ "$dry_run" -eq 1 ]] && should_skip_initial_dry_run "$crate"; then
         continue
     fi
-
-    args=(publish --locked -p "$crate")
-    if [[ "$dry_run" -eq 1 ]]; then
-        args+=(--dry-run)
-    fi
-    if [[ "$allow_dirty" -eq 1 ]]; then
-        args+=(--allow-dirty)
-    fi
-
-    echo "cargo ${args[*]}"
-    cargo "${args[@]}"
+    publish_crate_with_retry "$crate" "$((index + 1))" "${#publish_crates[@]}"
 
     if [[ "$index" -lt "$((${#publish_crates[@]} - 1))" && "$sleep_seconds" -gt 0 ]]; then
-        echo "waiting ${sleep_seconds}s for crates.io index propagation"
+        log "waiting ${sleep_seconds}s for crates.io index propagation"
         sleep "$sleep_seconds"
     fi
 done
