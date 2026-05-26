@@ -183,4 +183,53 @@ mod tests {
         assert_eq!(lookup_counts, vec![160, 128, 96, 64]);
         assert_eq!(record_counts, vec![160, 128]);
     }
+
+    #[test]
+    fn same_prefix_different_tail_identities_share_recorded_grid_page() {
+        let config = StageConfig {
+            ctx_size: 8192,
+            kv_cache: Some(StageKvCacheConfig {
+                min_tokens: 256,
+                shared_prefix_stride_tokens: 128,
+                ..test_config().kv_cache.expect("test cache config")
+            }),
+            ..test_config()
+        };
+        let kv = KvStageIntegration::from_config(&config)
+            .unwrap()
+            .expect("cache enabled");
+        let base = test_base();
+        let recorded_tokens = (0..2214).collect::<Vec<_>>();
+        let mut lookup_tokens = recorded_tokens.clone();
+        lookup_tokens.extend(100_000..100_017);
+
+        let record_identities = kv.record_identities(&config, &base, 0, &recorded_tokens);
+        let lookup_identities = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
+
+        let record_counts = record_identities
+            .iter()
+            .map(|identity| identity.identity.token_count)
+            .collect::<Vec<_>>();
+        assert_eq!(record_counts, vec![2214, 2176]);
+
+        let recorded_shared = record_identities
+            .iter()
+            .find(|identity| identity.identity.token_count == 2176)
+            .expect("record identities should include shared grid prefix");
+        let lookup_shared = lookup_identities
+            .iter()
+            .find(|identity| identity.identity.token_count == 2176)
+            .expect("lookup identities should probe shared grid prefix");
+        let recorded_exact = record_identities
+            .iter()
+            .find(|identity| identity.identity.token_count == 2214)
+            .expect("record identities should include exact first prompt");
+        let lookup_exact = lookup_identities
+            .iter()
+            .find(|identity| identity.identity.token_count == 2231)
+            .expect("lookup identities should include exact second prompt");
+
+        assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
+        assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+    }
 }
