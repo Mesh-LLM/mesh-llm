@@ -539,10 +539,10 @@ mod relay_map_tests {
 mod gated_relay_e2e_tests {
     use super::relay_map_from_urls;
     use futures_util::StreamExt;
-    use iroh::endpoint::{presets, Endpoint, RelayMode};
-    use iroh::test_utils::run_relay_server_with_access;
     use iroh::SecretKey;
     use iroh::Watcher;
+    use iroh::endpoint::{Endpoint, RelayMode, presets};
+    use iroh::test_utils::run_relay_server_with_access;
     use iroh_relay::server::{Access, AccessConfig};
     use iroh_relay::tls::CaRootsConfig;
     use std::collections::HashMap;
