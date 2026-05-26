@@ -114,6 +114,16 @@ function Resolve-CommandPath {
     return $null
 }
 
+function ConvertTo-CmakePath {
+    param([string]$Path)
+
+    if (-not $Path) {
+        return $null
+    }
+
+    return $Path.Replace('\', '/')
+}
+
 function Show-LldInstallInstructions {
     throw @"
 LLVM lld was not found for the Windows MSVC target.
@@ -178,9 +188,10 @@ function Configure-CompilerCache {
     }
 
     Write-Host "Using compiler cache: $script:compilerCacheBin"
+    $cmakeCompilerCacheBin = ConvertTo-CmakePath $script:compilerCacheBin
     $script:compilerLauncherArgs = @(
-        "-DCMAKE_C_COMPILER_LAUNCHER=$script:compilerCacheBin",
-        "-DCMAKE_CXX_COMPILER_LAUNCHER=$script:compilerCacheBin"
+        "-DCMAKE_C_COMPILER_LAUNCHER=$cmakeCompilerCacheBin",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=$cmakeCompilerCacheBin"
     )
 }
 
@@ -921,10 +932,10 @@ Invoke-InRepo {
     $rcPath = Resolve-CommandPath "rc"
     $mtPath = Resolve-CommandPath "mt"
     if ($rcPath) {
-        $cmakeArgs += "-DCMAKE_RC_COMPILER=$rcPath"
+        $cmakeArgs += "-DCMAKE_RC_COMPILER=$(ConvertTo-CmakePath $rcPath)"
     }
     if ($mtPath) {
-        $cmakeArgs += "-DCMAKE_MT=$mtPath"
+        $cmakeArgs += "-DCMAKE_MT=$(ConvertTo-CmakePath $mtPath)"
     }
 
     if (Resolve-CommandPath "ninja") {
@@ -935,7 +946,7 @@ Invoke-InRepo {
         "cuda" {
             $cmakeArgs += "-DGGML_CUDA=ON"
             if (Test-Sccache) {
-                $cmakeArgs += "-DCMAKE_CUDA_COMPILER_LAUNCHER=$compilerCacheBin"
+                $cmakeArgs += "-DCMAKE_CUDA_COMPILER_LAUNCHER=$(ConvertTo-CmakePath $compilerCacheBin)"
             }
             if ($CudaArch) {
                 $cmakeArgs += "-DCMAKE_CUDA_ARCHITECTURES=$CudaArch"
@@ -944,19 +955,19 @@ Invoke-InRepo {
         "rocm" {
             $cmakeArgs += "-DGGML_HIP=ON"
             if ($compilerCacheBin) {
-                $cmakeArgs += "-DCMAKE_HIP_COMPILER_LAUNCHER=$compilerCacheBin"
+                $cmakeArgs += "-DCMAKE_HIP_COMPILER_LAUNCHER=$(ConvertTo-CmakePath $compilerCacheBin)"
             }
             if ($env:HIPCC) {
-                $cmakeArgs += "-DCMAKE_C_COMPILER=$env:HIPCC"
+                $cmakeArgs += "-DCMAKE_C_COMPILER=$(ConvertTo-CmakePath $env:HIPCC)"
             }
             if ($env:HIPCXX) {
-                $cmakeArgs += "-DCMAKE_CXX_COMPILER=$env:HIPCXX"
+                $cmakeArgs += "-DCMAKE_CXX_COMPILER=$(ConvertTo-CmakePath $env:HIPCXX)"
             }
             if ($env:hip_DIR) {
-                $cmakeArgs += "-Dhip_DIR=$env:hip_DIR"
+                $cmakeArgs += "-Dhip_DIR=$(ConvertTo-CmakePath $env:hip_DIR)"
             }
             if ($env:ROCM_PATH) {
-                $cmakeArgs += "-DCMAKE_PREFIX_PATH=$env:ROCM_PATH"
+                $cmakeArgs += "-DCMAKE_PREFIX_PATH=$(ConvertTo-CmakePath $env:ROCM_PATH)"
             }
             if ($RocmArch) {
                 $cmakeArgs += "-DAMDGPU_TARGETS=$RocmArch"
