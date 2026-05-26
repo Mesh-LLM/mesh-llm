@@ -62,7 +62,7 @@ scripts/qa-kv-tool-loop-stability.py \
 ## Reporting Rules
 
 - Report the model list, attempts, pressure turns, timeout, cache thresholds,
-  native log paths, and output directory.
+  success rate, native log paths, and output directory.
 - Include the summary verdict and failing phase details from `summary.md` or
   `summary.json`.
 - Do not paste full prompts, auth headers, huge stable prefixes, or private

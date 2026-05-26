@@ -486,13 +486,18 @@ def scan_one_log_since(checkpoint: NativeLogCheckpoint) -> list[LogFinding]:
     ):
         offset = 0
     with path.open("rb") as handle:
+        start_line_number = line_number_start_for_offset(handle, offset)
         handle.seek(offset)
-        return scan_failure_lines(path, handle)
+        return scan_failure_lines(path, handle, start_line_number)
 
 
-def scan_failure_lines(path: Path, handle: Iterable[bytes]) -> list[LogFinding]:
+def scan_failure_lines(
+    path: Path,
+    handle: Iterable[bytes],
+    start_line_number: int = 1,
+) -> list[LogFinding]:
     findings: list[LogFinding] = []
-    for line_number, raw_line in enumerate(handle, start=1):
+    for line_number, raw_line in enumerate(handle, start=start_line_number):
         line = raw_line.decode("utf-8", errors="replace").strip()
         pattern = matched_failure_pattern(line)
         if pattern:
@@ -505,6 +510,21 @@ def scan_failure_lines(path: Path, handle: Iterable[bytes]) -> list[LogFinding]:
                 )
             )
     return findings
+
+
+def line_number_start_for_offset(handle: Any, offset: int) -> int:
+    if offset <= 0:
+        return 1
+    handle.seek(0)
+    remaining = offset
+    newline_count = 0
+    while remaining > 0:
+        chunk = handle.read(min(remaining, 1024 * 1024))
+        if not chunk:
+            break
+        remaining -= len(chunk)
+        newline_count += chunk.count(b"\n")
+    return newline_count + 1
 
 
 def file_identity(stat: os.stat_result) -> tuple[int, int]:
@@ -699,6 +719,7 @@ def run_cache_probe(
             measured = build_cache_request(model, "Same-prefix measured tail beta.")
         post_json(base_url, "/chat/completions", warm, timeout)
         response, status_code = post_json(base_url, "/chat/completions", measured, timeout)
+        validate_message(response, [KV_PIN])
         metrics = extract_cache_metrics(response)
         ok, detail = evaluate_cache_threshold(
             metrics,

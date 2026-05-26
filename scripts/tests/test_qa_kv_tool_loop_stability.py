@@ -120,6 +120,47 @@ class KvToolLoopStabilityTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("below required minimum", detail)
 
+    def test_cache_probe_fails_wrong_completion_even_with_cached_tokens(self):
+        harness = load_module()
+        original_post_json = harness.post_json
+        responses = [
+            {
+                "choices": [{"message": {"content": f"warmup includes {harness.KV_PIN}"}}],
+                "usage": {
+                    "prompt_tokens": 2240,
+                    "prompt_tokens_details": {"cached_tokens": 2176},
+                },
+            },
+            {
+                "choices": [{"message": {"content": "wrong cached completion"}}],
+                "usage": {
+                    "prompt_tokens": 2240,
+                    "prompt_tokens_details": {"cached_tokens": 2176},
+                },
+            },
+        ]
+
+        def fake_post_json(base_url, path, payload, timeout):
+            del base_url, path, payload, timeout
+            return responses.pop(0), 200
+
+        harness.post_json = fake_post_json
+        try:
+            result = harness.run_cache_probe(
+                base_url="http://localhost:9337/v1",
+                model="direct-model",
+                phase="same_prefix_cache",
+                timeout=180.0,
+                min_cached_tokens=2048,
+                suffix_prefill_limit=256,
+            )
+        finally:
+            harness.post_json = original_post_json
+
+        self.assertFalse(result.ok)
+        self.assertIn("response missing expected values", result.detail)
+        self.assertEqual(responses, [])
+
     def test_log_scan_detects_memory_slot_and_eviction_errors(self):
         harness = load_module()
         with tempfile.TemporaryDirectory() as tmp:
@@ -167,8 +208,29 @@ class KvToolLoopStabilityTests(unittest.TestCase):
             findings = harness.scan_failure_logs_since(checkpoints)
 
         self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0].line_number, 1)
+        self.assertEqual(findings[0].line_number, 2)
         self.assertEqual(findings[0].pattern, "failed to find a memory slot")
+
+    def test_native_log_scan_preserves_file_line_number_after_checkpoint(self):
+        harness = load_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "skippy-native.log"
+            log_path.write_text(
+                "old benign line 1\n"
+                "old llama_decode failed before this certification\n"
+                "old benign line 3\n",
+                encoding="utf-8",
+            )
+            checkpoints = harness.capture_native_log_checkpoints([log_path])
+            with log_path.open("a", encoding="utf-8") as handle:
+                handle.write("new benign line 4\n")
+                handle.write("RuntimeError: llama_decode failed\n")
+
+            findings = harness.scan_failure_logs_since(checkpoints)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].line_number, 5)
+        self.assertEqual(findings[0].pattern, "RuntimeError: llama_decode failed")
 
     def test_native_log_scan_reports_new_log_created_after_checkpoint(self):
         harness = load_module()
