@@ -62,10 +62,10 @@ impl SearchFormatter for ConsoleFormatter {
             if let Some(description) = model.description.as_deref() {
                 writeln!(&mut output, "  {}", description)?;
             }
-            if let Some(size) = model.size.as_deref() {
-                if let Some(fit) = fit_hint_for_size_label(size) {
-                    writeln!(&mut output, "  {}", fit)?;
-                }
+            if let Some(size) = model.size.as_deref()
+                && let Some(fit) = fit_hint_for_size_label(size)
+            {
+                writeln!(&mut output, "  {}", fit)?;
             }
             writeln!(&mut output)?;
         }
@@ -158,10 +158,10 @@ impl SearchFormatter for ConsoleFormatter {
                 "   download: mesh-llm models download {}",
                 result.exact_ref
             )?;
-            if let Some(size) = &result.size_label {
-                if let Some(fit) = fit_hint_for_size_label(size) {
-                    writeln!(&mut output, "   {}", fit)?;
-                }
+            if let Some(size) = &result.size_label
+                && let Some(fit) = fit_hint_for_size_label(size)
+            {
+                writeln!(&mut output, "   {}", fit)?;
             }
             if let Some(model) = result.catalog.as_ref() {
                 match model.size.as_deref() {
@@ -246,10 +246,10 @@ impl ModelsFormatter for ConsoleFormatter {
                     "external"
                 }
             )?;
-            if let Some(last_used_at) = row.last_used_at.as_deref() {
-                if let Some(label) = format_relative_timestamp(last_used_at) {
-                    writeln!(&mut output, "   last used: {}", label)?;
-                }
+            if let Some(last_used_at) = row.last_used_at.as_deref()
+                && let Some(label) = format_relative_timestamp(last_used_at)
+            {
+                writeln!(&mut output, "   last used: {}", label)?;
             }
             let mut caps = vec!["💬 text".to_string()];
             if row.capabilities.multimodal_label().is_some() {
@@ -343,44 +343,44 @@ impl ModelsFormatter for ConsoleFormatter {
             println!("   {}", details.download_url);
         }
 
-        if let Some(variants) = variants {
-            if !variants.is_empty() {
-                println!();
-                println!("Variants:");
-                let mut rows = Vec::new();
-                for variant in variants {
-                    let size = variant.size_label.as_deref().unwrap_or("-");
-                    let fit = variant
-                        .size_label
-                        .as_deref()
-                        .and_then(fit_hint_for_size_label)
-                        .unwrap_or_else(|| "-".to_string());
-                    let selected = variant.exact_ref == details.exact_ref;
-                    rows.push((
-                        variant_selector_label(&variant.exact_ref),
-                        size.to_string(),
-                        fit,
-                        variant.exact_ref.clone(),
-                        selected,
-                    ));
-                }
-                let mut table = TabWriter::new(Vec::new()).padding(2);
-                writeln!(&mut table, "sel\tquant\tsize\tfit\tref")?;
-                writeln!(&mut table, "---\t-----\t----\t---\t---")?;
-                for (quant, size, fit, r#ref, selected) in rows {
-                    writeln!(
-                        &mut table,
-                        "{}\t{}\t{}\t{}\t{}",
-                        if selected { "*" } else { " " },
-                        quant,
-                        size,
-                        fit,
-                        r#ref
-                    )?;
-                }
-                table.flush()?;
-                print!("{}", String::from_utf8_lossy(&table.into_inner()?));
+        if let Some(variants) = variants
+            && !variants.is_empty()
+        {
+            println!();
+            println!("Variants:");
+            let mut rows = Vec::new();
+            for variant in variants {
+                let size = variant.size_label.as_deref().unwrap_or("-");
+                let fit = variant
+                    .size_label
+                    .as_deref()
+                    .and_then(fit_hint_for_size_label)
+                    .unwrap_or_else(|| "-".to_string());
+                let selected = variant.exact_ref == details.exact_ref;
+                rows.push((
+                    variant_selector_label(&variant.exact_ref),
+                    size.to_string(),
+                    fit,
+                    variant.exact_ref.clone(),
+                    selected,
+                ));
             }
+            let mut table = TabWriter::new(Vec::new()).padding(2);
+            writeln!(&mut table, "sel\tquant\tsize\tfit\tref")?;
+            writeln!(&mut table, "---\t-----\t----\t---\t---")?;
+            for (quant, size, fit, r#ref, selected) in rows {
+                writeln!(
+                    &mut table,
+                    "{}\t{}\t{}\t{}\t{}",
+                    if selected { "*" } else { " " },
+                    quant,
+                    size,
+                    fit,
+                    r#ref
+                )?;
+            }
+            table.flush()?;
+            print!("{}", String::from_utf8_lossy(&table.into_inner()?));
         }
         Ok(())
     }

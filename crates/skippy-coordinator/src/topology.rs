@@ -86,13 +86,11 @@ pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, Topo
                 for_each_node_subset(&nodes, node_count, |subset| {
                     if let Some(candidate) =
                         fit_candidate(input, subset, context_length, parallel_lanes)
-                    {
-                        if best_for_count
+                        && best_for_count
                             .as_ref()
                             .is_none_or(|current| candidate.cmp(current) == Ordering::Greater)
-                        {
-                            best_for_count = Some(candidate);
-                        }
+                    {
+                        best_for_count = Some(candidate);
                     }
                 });
                 if let Some(candidate) = best_for_count {

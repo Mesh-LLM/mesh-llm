@@ -193,13 +193,12 @@ fn is_tool_result_message(message: &Value) -> bool {
 fn strip_reasoning_fields(messages: &mut [Value]) -> usize {
     let mut dropped = 0;
     for message in messages {
-        if let Some(object) = message.as_object_mut() {
-            if object.remove("reasoning_content").is_some()
+        if let Some(object) = message.as_object_mut()
+            && (object.remove("reasoning_content").is_some()
                 || object.remove("reasoning").is_some()
-                || object.remove("thinking").is_some()
-            {
-                dropped += 1;
-            }
+                || object.remove("thinking").is_some())
+        {
+            dropped += 1;
         }
     }
     dropped

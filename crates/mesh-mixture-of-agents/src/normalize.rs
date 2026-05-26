@@ -173,25 +173,25 @@ fn try_json_parse(
     // — if the worker writes inline tool JSON and we miss it, MoA leaks
     // the JSON back as `content` and the agent does nothing. This is
     // the failure mode PR #566 review called out.
-    if obj.get("kind").is_none() {
-        if let Some((tool_name, arguments)) = extract_tool_name_and_arguments(&obj) {
-            let args = normalize_tool_arguments(arguments).map(Value::Object);
-            return Some(WorkerOutput {
-                kind: OutputKind::ToolProposal,
-                // OpenAI-shape tool calls have no native confidence
-                // marker, but a structurally well-formed proposal is a
-                // stronger signal than a heuristic catch — score it
-                // higher than the heuristic's 0.6 so the arbiter
-                // prefers it on tie.
-                confidence: 0.75,
-                tool_name: Some(tool_name.to_string()),
-                tool_arguments: args,
-                payload: raw.to_string(),
-                model: model.to_string(),
-                role,
-                elapsed_ms,
-            });
-        }
+    if obj.get("kind").is_none()
+        && let Some((tool_name, arguments)) = extract_tool_name_and_arguments(&obj)
+    {
+        let args = normalize_tool_arguments(arguments).map(Value::Object);
+        return Some(WorkerOutput {
+            kind: OutputKind::ToolProposal,
+            // OpenAI-shape tool calls have no native confidence
+            // marker, but a structurally well-formed proposal is a
+            // stronger signal than a heuristic catch — score it
+            // higher than the heuristic's 0.6 so the arbiter
+            // prefers it on tie.
+            confidence: 0.75,
+            tool_name: Some(tool_name.to_string()),
+            tool_arguments: args,
+            payload: raw.to_string(),
+            model: model.to_string(),
+            role,
+            elapsed_ms,
+        });
     }
 
     let kind = match obj.get("kind").and_then(|k| k.as_str()) {
@@ -515,19 +515,19 @@ fn extract_tool_proposal(raw: &str) -> (Option<String>, Option<Value>) {
     }
 
     // Strategy 1: Look for structured JSON in the text
-    if let Some(json_str) = extract_json_object(raw) {
-        if let Ok(obj) = serde_json::from_str::<Value>(&json_str) {
-            if let Some((name, arguments)) = extract_tool_name_and_arguments(&obj) {
-                let args = normalize_tool_arguments(arguments).map(Value::Object);
-                return (Some(name.to_string()), args);
-            }
-            // Could be the arguments themselves (e.g. {"path": "src/auth.py"})
-            // Look for a tool name in the surrounding text
-            let lower = raw.to_lowercase();
-            for tool in KNOWN_TOOLS {
-                if lower.contains(tool) {
-                    return (Some(tool.to_string()), Some(obj));
-                }
+    if let Some(json_str) = extract_json_object(raw)
+        && let Ok(obj) = serde_json::from_str::<Value>(&json_str)
+    {
+        if let Some((name, arguments)) = extract_tool_name_and_arguments(&obj) {
+            let args = normalize_tool_arguments(arguments).map(Value::Object);
+            return (Some(name.to_string()), args);
+        }
+        // Could be the arguments themselves (e.g. {"path": "src/auth.py"})
+        // Look for a tool name in the surrounding text
+        let lower = raw.to_lowercase();
+        for tool in KNOWN_TOOLS {
+            if lower.contains(tool) {
+                return (Some(tool.to_string()), Some(obj));
             }
         }
     }

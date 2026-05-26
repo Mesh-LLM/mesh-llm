@@ -184,104 +184,103 @@ impl StageOpenAiBackend {
                 cache_stats.matched_prefix_tokens = saturating_u32(restored_prefill_tokens);
                 cache_stats.suffix_prefill_tokens =
                     saturating_u32(prefill_tokens.len().saturating_sub(restored_prefill_tokens));
-                if !restored_prefill || decoded_prefill_suffix {
-                    if let Some(kv) = self.kv.as_ref() {
-                        let base = self.local_kv_message_base(&session_id, request.ids);
-                        let exact_identity =
-                            kv.prefill_identity(&self.config, &base, 0, prefill_tokens);
-                        if let Ok(Some(record)) =
-                            kv.record_exact_state(&mut runtime, &session_id, &exact_identity)
-                        {
+                if (!restored_prefill || decoded_prefill_suffix)
+                    && let Some(kv) = self.kv.as_ref()
+                {
+                    let base = self.local_kv_message_base(&session_id, request.ids);
+                    let exact_identity =
+                        kv.prefill_identity(&self.config, &base, 0, prefill_tokens);
+                    if let Ok(Some(record)) =
+                        kv.record_exact_state(&mut runtime, &session_id, &exact_identity)
+                    {
+                        resident_recorded_pages = resident_recorded_pages.saturating_add(1);
+                        let mut attrs = self.openai_attrs(request.ids);
+                        attrs.insert(
+                            "skippy.exact_cache.recorded_page_id".to_string(),
+                            json!(record.page_id),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.payload_kind".to_string(),
+                            json!(record.payload_kind.to_string()),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.recorded_tokens".to_string(),
+                            json!(record.token_count),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.stored".to_string(),
+                            json!(record.stored),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.logical_bytes".to_string(),
+                            json!(record.logical_bytes),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.physical_bytes".to_string(),
+                            json!(record.physical_bytes),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.entries".to_string(),
+                            json!(record.entries),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.evicted_entries".to_string(),
+                            json!(record.evicted_entries),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.evicted_logical_bytes".to_string(),
+                            json!(record.evicted_logical_bytes),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.dedupe_hash_ms".to_string(),
+                            json!(record.dedupe.hash_ms),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.dedupe_block_count".to_string(),
+                            json!(record.dedupe.block_count),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.dedupe_new_block_count".to_string(),
+                            json!(record.dedupe.new_block_count),
+                        );
+                        attrs.insert(
+                            "skippy.exact_cache.dedupe_reused_block_count".to_string(),
+                            json!(record.dedupe.reused_block_count),
+                        );
+                        self.telemetry
+                            .emit("stage.openai_kv_record_decision", attrs);
+                    }
+                    for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens) {
+                        if let Ok(Some(record)) = kv.record_resident_prefix(
+                            &mut runtime,
+                            &session_id,
+                            &identity,
+                            prefill_tokens,
+                        ) {
                             resident_recorded_pages = resident_recorded_pages.saturating_add(1);
                             let mut attrs = self.openai_attrs(request.ids);
                             attrs.insert(
-                                "skippy.exact_cache.recorded_page_id".to_string(),
+                                "skippy.kv.recorded_page_id".to_string(),
                                 json!(record.page_id),
                             );
                             attrs.insert(
-                                "skippy.exact_cache.payload_kind".to_string(),
-                                json!(record.payload_kind.to_string()),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.recorded_tokens".to_string(),
+                                "skippy.kv.recorded_tokens".to_string(),
                                 json!(record.token_count),
                             );
                             attrs.insert(
-                                "skippy.exact_cache.stored".to_string(),
-                                json!(record.stored),
+                                "skippy.kv.resident_seq_id".to_string(),
+                                json!(record.seq_id),
                             );
                             attrs.insert(
-                                "skippy.exact_cache.logical_bytes".to_string(),
-                                json!(record.logical_bytes),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.physical_bytes".to_string(),
-                                json!(record.physical_bytes),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.entries".to_string(),
+                                "skippy.kv.resident_entries".to_string(),
                                 json!(record.entries),
                             );
                             attrs.insert(
-                                "skippy.exact_cache.evicted_entries".to_string(),
+                                "skippy.kv.evicted_entries".to_string(),
                                 json!(record.evicted_entries),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.evicted_logical_bytes".to_string(),
-                                json!(record.evicted_logical_bytes),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.dedupe_hash_ms".to_string(),
-                                json!(record.dedupe.hash_ms),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.dedupe_block_count".to_string(),
-                                json!(record.dedupe.block_count),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.dedupe_new_block_count".to_string(),
-                                json!(record.dedupe.new_block_count),
-                            );
-                            attrs.insert(
-                                "skippy.exact_cache.dedupe_reused_block_count".to_string(),
-                                json!(record.dedupe.reused_block_count),
                             );
                             self.telemetry
                                 .emit("stage.openai_kv_record_decision", attrs);
-                        }
-                        for identity in kv.record_identities(&self.config, &base, 0, prefill_tokens)
-                        {
-                            if let Ok(Some(record)) = kv.record_resident_prefix(
-                                &mut runtime,
-                                &session_id,
-                                &identity,
-                                prefill_tokens,
-                            ) {
-                                resident_recorded_pages = resident_recorded_pages.saturating_add(1);
-                                let mut attrs = self.openai_attrs(request.ids);
-                                attrs.insert(
-                                    "skippy.kv.recorded_page_id".to_string(),
-                                    json!(record.page_id),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.recorded_tokens".to_string(),
-                                    json!(record.token_count),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.resident_seq_id".to_string(),
-                                    json!(record.seq_id),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.resident_entries".to_string(),
-                                    json!(record.entries),
-                                );
-                                attrs.insert(
-                                    "skippy.kv.evicted_entries".to_string(),
-                                    json!(record.evicted_entries),
-                                );
-                                self.telemetry
-                                    .emit("stage.openai_kv_record_decision", attrs);
-                            }
                         }
                     }
                 }
@@ -463,8 +462,8 @@ impl StageOpenAiBackend {
                         runtime_lock_hold_max_ms.max(token_runtime_lock_hold_ms);
                     predicted
                 };
-                if generation_hooks_active {
-                    if let Some(injected_current) = self.maybe_run_generation_hooks(
+                if generation_hooks_active
+                    && let Some(injected_current) = self.maybe_run_generation_hooks(
                         &session_id,
                         &mut hook_request,
                         hook_runtime.as_ref(),
@@ -473,10 +472,10 @@ impl StageOpenAiBackend {
                         &mut last_mid_generation_hook_at,
                         token_signal,
                         signal_window,
-                    )? {
-                        current = injected_current;
-                        continue;
-                    }
+                    )?
+                {
+                    current = injected_current;
+                    continue;
                 }
                 decoded_tokens += 1;
                 if emit_token_debug {

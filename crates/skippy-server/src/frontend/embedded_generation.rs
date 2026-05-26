@@ -90,28 +90,28 @@ impl StageOpenAiBackend {
                         fused_first_decode = Some(fused);
                     }
                 }
-                if !prefill_chain_cache_restored {
-                    if let Some(restore) = self.try_restore_embedded_split_prefill(
+                if !prefill_chain_cache_restored
+                    && let Some(restore) = self.try_restore_embedded_split_prefill(
                         &request,
                         &session_key,
                         downstream,
                         prefill_tokens,
-                    )? {
-                        prefill_chain_restored_tokens = restore.restored_tokens;
-                        prefill_chain_cache_restored =
-                            prefill_chain_restored_tokens >= prefill_tokens.len();
-                        prefill_chain_cache_stats = restore.stats;
-                        cache_stats.cached_prompt_tokens =
-                            saturating_u32(prefill_chain_restored_tokens);
-                        cache_stats.matched_prefix_tokens =
-                            saturating_u32(prefill_chain_restored_tokens);
-                        cache_stats.suffix_prefill_tokens = saturating_u32(
-                            prefill_tokens
-                                .len()
-                                .saturating_sub(prefill_chain_restored_tokens),
-                        );
-                        cache_stats.hit_kind = Some("chain_prefix");
-                    }
+                    )?
+                {
+                    prefill_chain_restored_tokens = restore.restored_tokens;
+                    prefill_chain_cache_restored =
+                        prefill_chain_restored_tokens >= prefill_tokens.len();
+                    prefill_chain_cache_stats = restore.stats;
+                    cache_stats.cached_prompt_tokens =
+                        saturating_u32(prefill_chain_restored_tokens);
+                    cache_stats.matched_prefix_tokens =
+                        saturating_u32(prefill_chain_restored_tokens);
+                    cache_stats.suffix_prefill_tokens = saturating_u32(
+                        prefill_tokens
+                            .len()
+                            .saturating_sub(prefill_chain_restored_tokens),
+                    );
+                    cache_stats.hit_kind = Some("chain_prefix");
                 }
                 let mut pos_start = prefill_chain_restored_tokens.min(prefill_tokens.len());
                 let mut chunk_index = 0usize;
@@ -663,15 +663,15 @@ impl StageOpenAiBackend {
                     let proposal_limit = remaining.min(adaptive_window);
                     let propose_timer = PhaseTimer::start();
                     let mut draft_tokens = Vec::new();
-                    if draft_tokens.is_empty() {
-                        if let Some(draft) = draft_guard.as_deref_mut() {
-                            let proposal_limit = proposal_limit.min(draft.window);
-                            draft_tokens = draft
-                                .propose(current, proposal_limit)
-                                .map_err(openai_backend_error)?;
-                            if !draft_tokens.is_empty() {
-                                proposal_source = "draft-model";
-                            }
+                    if draft_tokens.is_empty()
+                        && let Some(draft) = draft_guard.as_deref_mut()
+                    {
+                        let proposal_limit = proposal_limit.min(draft.window);
+                        draft_tokens = draft
+                            .propose(current, proposal_limit)
+                            .map_err(openai_backend_error)?;
+                        if !draft_tokens.is_empty() {
+                            proposal_source = "draft-model";
                         }
                     }
                     let draft_propose_ms = propose_timer.elapsed_ms();

@@ -928,15 +928,13 @@ fn resolve_pinned_gpu_with_compatibility<'a>(
                 .iter()
                 .filter(|gpu| !gpu_pinnable_ids(gpu).is_empty())
                 .collect::<Vec<_>>();
-            if accept_single_pinnable_gpu_fallback {
-                if let [gpu] = pinnable_gpus.as_slice() {
-                    tracing::warn!(
-                        "configured gpu_id '{}' did not match the single available pinnable GPU; accepting '{}' for compatibility",
-                        configured_id,
-                        gpu_pinnable_ids(gpu).join(", ")
-                    );
-                    return Ok(*gpu);
-                }
+            if accept_single_pinnable_gpu_fallback && let [gpu] = pinnable_gpus.as_slice() {
+                tracing::warn!(
+                    "configured gpu_id '{}' did not match the single available pinnable GPU; accepting '{}' for compatibility",
+                    configured_id,
+                    gpu_pinnable_ids(gpu).join(", ")
+                );
+                return Ok(*gpu);
             }
 
             Err(PinnedGpuResolverError::NoMatch {

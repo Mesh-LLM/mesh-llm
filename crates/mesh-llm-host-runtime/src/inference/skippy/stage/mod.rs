@@ -225,18 +225,17 @@ impl StageControlState {
             preparation_status_from_load(&request.load, StagePreparationState::Assigned, None);
         {
             let mut preparations = self.preparations.lock().await;
-            if let Some(existing) = preparations.get(&key) {
-                if existing.state == StagePreparationState::Cancelled
-                    && existing.shutdown_generation >= request.load.shutdown_generation
-                {
-                    let mut status = existing.clone();
-                    status.error = Some("stale shutdown generation".to_string());
-                    return Ok(StagePrepareAcceptedResponse {
-                        accepted: false,
-                        status,
-                        error: Some("stale shutdown generation".to_string()),
-                    });
-                }
+            if let Some(existing) = preparations.get(&key)
+                && existing.state == StagePreparationState::Cancelled
+                && existing.shutdown_generation >= request.load.shutdown_generation
+            {
+                let mut status = existing.clone();
+                status.error = Some("stale shutdown generation".to_string());
+                return Ok(StagePrepareAcceptedResponse {
+                    accepted: false,
+                    status,
+                    error: Some("stale shutdown generation".to_string()),
+                });
             }
             preparations.insert(key.clone(), status.clone());
         }
@@ -274,12 +273,12 @@ impl StageControlState {
     ) -> StagePreparationStatus {
         let key = stage_key(&cancel.topology_id, &cancel.run_id, &cancel.stage_id);
         let mut preparations = self.preparations.lock().await;
-        if let Some(existing) = preparations.get(&key) {
-            if cancel.shutdown_generation < existing.shutdown_generation {
-                let mut status = existing.clone();
-                status.error = Some("stale shutdown generation".to_string());
-                return status;
-            }
+        if let Some(existing) = preparations.get(&key)
+            && cancel.shutdown_generation < existing.shutdown_generation
+        {
+            let mut status = existing.clone();
+            status.error = Some("stale shutdown generation".to_string());
+            return status;
         }
 
         if let Some(task) = self.preparation_tasks.remove(&key) {

@@ -1123,18 +1123,18 @@ async fn load_split_runtime_generation(
         &mut cleanup_on_error,
     ))
     .await;
-    if let Err(error) = &result {
-        if cleanup_on_error {
-            tracing::warn!(
-                model_ref = spec.model_ref,
-                topology_id = %spec.generation.topology_id,
-                run_id = %spec.generation.run_id,
-                generation = spec.generation.generation,
-                error = %error,
-                "cleaning up split runtime generation after failed load"
-            );
-            stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
-        }
+    if let Err(error) = &result
+        && cleanup_on_error
+    {
+        tracing::warn!(
+            model_ref = spec.model_ref,
+            topology_id = %spec.generation.topology_id,
+            run_id = %spec.generation.run_id,
+            generation = spec.generation.generation,
+            error = %error,
+            "cleaning up split runtime generation after failed load"
+        );
+        stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
     }
     result
 }

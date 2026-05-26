@@ -256,10 +256,10 @@ pub fn map_upstream_error_body(status_code: u16, body: &[u8]) -> Option<Vec<u8>>
     }
 
     let parsed = serde_json::from_slice::<Value>(body).ok();
-    if let Some(value) = parsed.as_ref() {
-        if already_openai_error(value) {
-            return None;
-        }
+    if let Some(value) = parsed.as_ref()
+        && already_openai_error(value)
+    {
+        return None;
     }
 
     let message = parsed

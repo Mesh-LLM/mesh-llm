@@ -491,17 +491,17 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
         }
     }
 
-    if meta.key_length == 0 && meta.head_count > 0 {
-        if let Some(key_length) = meta.embedding_size.checked_div(meta.head_count) {
-            meta.key_length = key_length;
-        }
+    if meta.key_length == 0
+        && meta.head_count > 0
+        && let Some(key_length) = meta.embedding_size.checked_div(meta.head_count)
+    {
+        meta.key_length = key_length;
     }
-    if meta.value_length == 0 {
-        if let Some(effective_kv) = meta.effective_kv_head_count() {
-            if let Some(value_length) = meta.embedding_size.checked_div(effective_kv) {
-                meta.value_length = value_length;
-            }
-        }
+    if meta.value_length == 0
+        && let Some(effective_kv) = meta.effective_kv_head_count()
+        && let Some(value_length) = meta.embedding_size.checked_div(effective_kv)
+    {
+        meta.value_length = value_length;
     }
 
     Some(meta)

@@ -232,10 +232,10 @@ fn cached_compact_metadata_for_path(
     let Some(cache_path) = gguf_metadata_cache_path(path) else {
         return computed();
     };
-    if let Ok(bytes) = std::fs::read(&cache_path) {
-        if let Ok(cached) = serde_json::from_slice::<CachedCompactModelMetadata>(&bytes) {
-            return cached.into_proto();
-        }
+    if let Ok(bytes) = std::fs::read(&cache_path)
+        && let Ok(cached) = serde_json::from_slice::<CachedCompactModelMetadata>(&bytes)
+    {
+        return cached.into_proto();
     }
     let meta = computed();
     if let Some(parent) = cache_path.parent() {

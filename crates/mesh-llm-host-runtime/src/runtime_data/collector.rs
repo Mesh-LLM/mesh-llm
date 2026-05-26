@@ -184,14 +184,13 @@ impl RuntimeDataCollector {
                 build_llama_runtime_snapshot(&runtime_status.llama_runtime.metrics, snapshot);
             let mut changed = false;
 
-            if let Some(instance_id) = next_runtime.slots.instance_id.clone() {
-                if runtime_status.llama_runtime_by_instance.get(&instance_id) != Some(&next_runtime)
-                {
-                    runtime_status
-                        .llama_runtime_by_instance
-                        .insert(instance_id, next_runtime.clone());
-                    changed = true;
-                }
+            if let Some(instance_id) = next_runtime.slots.instance_id.clone()
+                && runtime_status.llama_runtime_by_instance.get(&instance_id) != Some(&next_runtime)
+            {
+                runtime_status
+                    .llama_runtime_by_instance
+                    .insert(instance_id, next_runtime.clone());
+                changed = true;
             }
 
             if let Some(model) = next_runtime.slots.model.clone() {

@@ -672,7 +672,7 @@ impl moa::ModelBackend for RemoteModelBackend {
         let mut raw = http_request.into_bytes();
         raw.extend_from_slice(&body_bytes);
 
-        let result = tokio::time::timeout(timeout, async {
+        tokio::time::timeout(timeout, async {
             let (mut send, mut recv) = self
                 .node
                 .open_http_tunnel(self.peer_id)
@@ -689,8 +689,7 @@ impl moa::ModelBackend for RemoteModelBackend {
             parse_quic_http_response(&response)
         })
         .await
-        .map_err(|_| format!("remote timeout after {}s", timeout.as_secs()))?;
-        result
+        .map_err(|_| format!("remote timeout after {}s", timeout.as_secs()))?
     }
 }
 

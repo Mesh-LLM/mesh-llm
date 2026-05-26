@@ -374,10 +374,10 @@ impl MeshDownloadProgress {
                 }
             }
             DownloadEvent::Progress { files } => {
-                if let Some(first) = files.first() {
-                    if !first.filename.is_empty() {
-                        state.filename = first.filename.clone();
-                    }
+                if let Some(first) = files.first()
+                    && !first.filename.is_empty()
+                {
+                    state.filename = first.filename.clone();
                 }
                 if !files.is_empty() {
                     let reported_downloaded: u64 =
@@ -433,10 +433,10 @@ impl ProgressHandler for MeshDownloadProgress {
                 spinner.take();
             }
             Self::draw(&mut state, force);
-        } else if matches!(event, DownloadEvent::Complete) {
-            if let Ok(mut spinner) = self.preflight_spinner.lock() {
-                spinner.take();
-            }
+        } else if matches!(event, DownloadEvent::Complete)
+            && let Ok(mut spinner) = self.preflight_spinner.lock()
+        {
+            spinner.take();
         }
     }
 }
