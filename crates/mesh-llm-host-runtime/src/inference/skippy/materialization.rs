@@ -672,7 +672,14 @@ fn verify_resolved_hf_package_files(
         include_embeddings,
         include_output,
     );
-    let options = PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir());
+    let options = if metadata_only {
+        // Metadata-only probes hash only the small shared metadata artifact.
+        // Avoid the cross-run integrity cache here so a same-size metadata
+        // rewrite cannot be hidden by coarse filesystem timestamp resolution.
+        PackageIntegrityOptions::verify_without_cache()
+    } else {
+        PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir())
+    };
     let report = if metadata_only {
         package::verify_layer_package_metadata_integrity(&local_ref, &options)
     } else {
