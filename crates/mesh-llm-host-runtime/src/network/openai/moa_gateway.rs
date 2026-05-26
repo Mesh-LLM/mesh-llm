@@ -1068,8 +1068,8 @@ async fn send_moa_as_sse_inner(
         // Text path: split content into chunks for pseudo-streaming.
         // First chunk carries `role: "assistant"`; continuation chunks
         // carry only `content` (matches OpenAI streaming convention).
-        let pieces = chunk_content_for_streaming(&content, moa_stream_chunk_count());
-        let chunk_delay = moa_stream_chunk_delay();
+        let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
+        let chunk_delay = MOA_STREAM_CHUNK_DELAY;
         let inter_chunk_delay = if pieces.len() > 1 {
             Some(chunk_delay)
         } else {
@@ -1132,39 +1132,24 @@ fn strip_think_from_content(text: &str) -> String {
     moa::strip_thinking(text)
 }
 
-/// Default number of chunks to split MoA winner content into when
-/// emitting pseudo-streaming SSE. Tuned for "feels live" — ~25 chunks
-/// over a buffered response of any reasonable length lets the chat UI
-/// paint progressively instead of jumping from spinner to wall-of-text.
-/// Overridable via `MESH_MOA_STREAM_CHUNKS` for lab tuning.
-const DEFAULT_MOA_STREAM_CHUNKS: usize = 25;
+/// Number of chunks to split MoA winner content into when emitting
+/// pseudo-streaming SSE. Tuned for "feels live" — ~25 chunks over a
+/// buffered response of any reasonable length lets the chat UI paint
+/// progressively instead of jumping from spinner to wall-of-text.
+const MOA_STREAM_CHUNKS: usize = 25;
 
-/// Minimum content length (chars) before pseudo-streaming kicks in.
+/// Minimum content length (bytes) before pseudo-streaming kicks in.
 /// Below this, the one-shot delta is fine and chunking just adds
-/// scheduler noise.
-const MOA_STREAM_MIN_CHARS: usize = 200;
+/// scheduler noise. Checked against `content.len()` which is byte
+/// length; the threshold is loose so the byte/char distinction
+/// doesn't matter for non-ASCII (200 bytes ≥ 50 multi-byte chars,
+/// well above the noise floor).
+const MOA_STREAM_MIN_BYTES: usize = 200;
 
 /// Delay between pseudo-stream chunks. Total animation budget for a
 /// 25-chunk response is ~500ms, which feels live without artificially
 /// slowing down agents that just want to read the whole reply.
-/// Overridable via `MESH_MOA_STREAM_CHUNK_DELAY_MS`.
-const DEFAULT_MOA_STREAM_CHUNK_DELAY_MS: u64 = 20;
-
-fn moa_stream_chunk_count() -> usize {
-    std::env::var("MESH_MOA_STREAM_CHUNKS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or(DEFAULT_MOA_STREAM_CHUNKS)
-}
-
-fn moa_stream_chunk_delay() -> std::time::Duration {
-    let ms = std::env::var("MESH_MOA_STREAM_CHUNK_DELAY_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_MOA_STREAM_CHUNK_DELAY_MS);
-    std::time::Duration::from_millis(ms)
-}
+const MOA_STREAM_CHUNK_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// Split `content` into roughly `target_chunks` pieces along whitespace
 /// or UTF-8 char boundaries. The returned slices, concatenated in order,
@@ -1174,7 +1159,7 @@ fn moa_stream_chunk_delay() -> std::time::Duration {
 /// content too short to split meaningfully).
 fn chunk_content_for_streaming(content: &str, target_chunks: usize) -> Vec<&str> {
     if target_chunks <= 1
-        || content.len() < MOA_STREAM_MIN_CHARS
+        || content.len() < MOA_STREAM_MIN_BYTES
         || content.chars().count() < target_chunks * 2
     {
         return vec![content];
@@ -1325,8 +1310,8 @@ async fn send_moa_as_responses_sse_inner(
     stream.write_all(framed.as_bytes()).await?;
     stream.flush().await?;
 
-    let pieces = chunk_content_for_streaming(&content, moa_stream_chunk_count());
-    let chunk_delay = moa_stream_chunk_delay();
+    let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
+    let chunk_delay = MOA_STREAM_CHUNK_DELAY;
     let inter_chunk_delay = if pieces.len() > 1 {
         Some(chunk_delay)
     } else {
@@ -1930,13 +1915,16 @@ mod tests {
     // ── chunk_content_for_streaming ────────────────────────────────
 
     #[test]
-    fn chunk_helper_empty_input_returns_empty_slice() {
+    fn chunk_helper_empty_input_returns_single_empty_chunk() {
+        // Empty input still returns a one-element vec (`vec![""]`), not
+        // an empty slice — the SSE writer expects to always emit at
+        // least one delta event so it can attach role/finish metadata.
         assert_eq!(chunk_content_for_streaming("", 25), vec![""]);
     }
 
     #[test]
     fn chunk_helper_short_input_returns_single_chunk() {
-        // Below MOA_STREAM_MIN_CHARS — chunking overhead not worth it.
+        // Below MOA_STREAM_MIN_BYTES — chunking overhead not worth it.
         let s = "hello world this is short";
         let out = chunk_content_for_streaming(s, 25);
         assert_eq!(out, vec![s]);
@@ -1982,7 +1970,7 @@ mod tests {
         // No whitespace, multi-byte chars. Should still split cleanly
         // along char boundaries (no panic, exact reconstruction).
         let s = "中文测试内容".repeat(60); // 360 chars, all 3-byte UTF-8
-        assert!(s.len() >= MOA_STREAM_MIN_CHARS);
+        assert!(s.len() >= MOA_STREAM_MIN_BYTES);
         let out = chunk_content_for_streaming(&s, 10);
         assert!(out.len() > 1, "CJK should still chunk; got {}", out.len());
         let reconstructed: String = out.iter().copied().collect();
@@ -2050,7 +2038,7 @@ mod tests {
 
     #[tokio::test]
     async fn chat_sse_emits_multiple_deltas_for_long_content() {
-        // ≥ MOA_STREAM_MIN_CHARS of word-spaced English → must split.
+        // ≥ MOA_STREAM_MIN_BYTES of word-spaced English → must split.
         let long_content = "Hello world. ".repeat(40);
         let response = serde_json::json!({
             "id": "chatcmpl-moa-chunky",
@@ -2062,10 +2050,10 @@ mod tests {
                 "finish_reason": "stop"
             }]
         });
-        // Short delay so the test runs fast.
-        std::env::set_var("MESH_MOA_STREAM_CHUNK_DELAY_MS", "0");
+        // The real MOA_STREAM_CHUNK_DELAY (20ms) × ~25 chunks adds
+        // ~500ms to test runtime — acceptable since this is the only
+        // chunked-delay test on the chat path.
         let raw = capture_chat_sse_body(response).await;
-        std::env::remove_var("MESH_MOA_STREAM_CHUNK_DELAY_MS");
         let n = count_delta_events_with_content(&raw);
         assert!(
             n > 1,
@@ -2131,9 +2119,8 @@ mod tests {
                 "finish_reason": "stop"
             }]
         });
-        std::env::set_var("MESH_MOA_STREAM_CHUNK_DELAY_MS", "0");
+        // ~500ms test runtime acceptable (MOA_STREAM_CHUNK_DELAY × N).
         let raw = capture_responses_sse_body(response).await;
-        std::env::remove_var("MESH_MOA_STREAM_CHUNK_DELAY_MS");
         // Count response.output_text.delta events.
         let mut delta_count = 0;
         for line in raw.lines() {
