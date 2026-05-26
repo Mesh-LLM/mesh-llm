@@ -19,7 +19,7 @@ env:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       pull-requests: read
@@ -134,7 +134,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     name: Linux CPU
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ubuntu:22.04
     defaults:
@@ -269,7 +269,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ${{ matrix.container }}
     defaults:
@@ -418,7 +418,7 @@ jobs:
     needs: [changes, linux_cpu_artifact]
     if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust_changed == 'true' || needs.changes.outputs.ui == 'true') }}
     name: Linux tests (${{ matrix.group }})
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ubuntu:22.04
     defaults:
@@ -585,7 +585,7 @@ jobs:
     needs: [changes, linux_cpu_artifact]
     if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     name: Linux client-auto boot test
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - name: Install client-auto smoke dependencies
@@ -619,7 +619,7 @@ jobs:
   agent_live_smokes:
     needs: [changes, linux_cpu_artifact]
     if: ${{ needs.linux_cpu_artifact.result == 'success' && (vars.MESH_AGENT_BASE_URL != '' || vars.MESH_OPENCODE_BASE_URL != '') && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client')) && needs.changes.outputs.docs_only != 'true' }}
-    runs-on: self-hosted
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
       MESH_AGENT_BASE_URL: ${{ vars.MESH_AGENT_BASE_URL || vars.MESH_OPENCODE_BASE_URL }}
@@ -702,7 +702,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.macos_inference_artifact_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
     name: macOS CPU
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     env:
       RUN_MACOS_CPU: "true"
       LLAMA_STAGE_BACKEND: metal
@@ -817,7 +817,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: macOS ${{ matrix.name }}
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     strategy:
       fail-fast: false
       matrix:
@@ -836,7 +836,7 @@ jobs:
     needs: [changes, macos_cpu_artifact]
     if: ${{ needs.macos_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm')) }}
     name: macOS unit tests
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     env:
       AFFECTED: ${{ needs.changes.outputs.affected_crates }}
       ALL_RUST: ${{ needs.changes.outputs.all_rust }}
@@ -900,7 +900,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Windows ${{ matrix.name }}
-    runs-on: windows-2022
+    runs-on: blacksmith-4vcpu-windows-2025
     strategy:
       fail-fast: false
       matrix:

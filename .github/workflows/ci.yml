@@ -19,7 +19,7 @@ env:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: read
       pull-requests: read
@@ -137,7 +137,7 @@ jobs:
   linux:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true') && needs.changes.outputs.docs_only != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
 
@@ -368,7 +368,7 @@ jobs:
   agent_live_smokes:
     needs: [changes, linux]
     if: ${{ (vars.MESH_AGENT_BASE_URL != '' || vars.MESH_OPENCODE_BASE_URL != '') && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'openai-frontend') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client')) && needs.changes.outputs.docs_only != 'true' }}
-    runs-on: self-hosted
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 45
     env:
       MESH_AGENT_BASE_URL: ${{ vars.MESH_AGENT_BASE_URL || vars.MESH_OPENCODE_BASE_URL }}
@@ -463,7 +463,7 @@ jobs:
   macos:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
-    runs-on: macos-14
+    runs-on: blacksmith-12vcpu-macos-latest
     env:
       LLAMA_STAGE_BACKEND: metal
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-metal
@@ -580,7 +580,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux CUDA slim
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
     env:
@@ -639,7 +639,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.benchmarks == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux ROCm slim
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
@@ -692,7 +692,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Linux Vulkan
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
       LLAMA_STAGE_BACKEND: vulkan
       LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-vulkan
@@ -740,7 +740,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Windows CPU
-    runs-on: windows-2022
+    runs-on: blacksmith-4vcpu-windows-2025
     env:
       RUN_WINDOWS_CPU_FULL: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_cpu == 'true' }}
       LLAMA_STAGE_BACKEND: cpu
@@ -811,7 +811,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Windows ${{ matrix.name }}
-    runs-on: windows-2022
+    runs-on: blacksmith-4vcpu-windows-2025
     env:
       RUN_WINDOWS_GPU: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.windows_gpu == 'true' }}
       LLAMA_STAGE_BUILD_DIR: .deps/llama.cpp/build-stage-abi-${{ matrix.backend }}
