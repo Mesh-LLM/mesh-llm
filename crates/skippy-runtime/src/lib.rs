@@ -685,17 +685,19 @@ const GGML_LOG_LEVEL_CONT: c_int = 5;
 /// `llama_log_internal_v` invokes the callback unconditionally and the
 /// level filter is expected to live in the callback.
 fn should_drop_native_log_line(level: c_int) -> bool {
-    if level != GGML_LOG_LEVEL_DEBUG {
-        return false;
-    }
-    // CONT is "continuation of previous line" — never drop those because
-    // the previous line may have been INFO/WARN and we'd produce a
-    // truncated multi-line message.
+    // CONT ("continuation of previous line") is always kept: the previous
+    // line may have been INFO/WARN/ERROR and dropping the continuation
+    // would produce a truncated multi-line message.
     if level == GGML_LOG_LEVEL_CONT {
         return false;
     }
+    // Only DEBUG is filterable. INFO/WARN/ERROR always pass through.
+    if level != GGML_LOG_LEVEL_DEBUG {
+        return false;
+    }
     // GGML_LLAMA_LOG_LEVEL=4 (LLAMA_LOG_LEVEL_DEBUG) is the explicit opt-in
-    // for verbose native logs. Anything else: drop DEBUG.
+    // for verbose native logs (set by enable_verbose_native_logs). Anything
+    // else: drop DEBUG.
     !matches!(
         std::env::var("GGML_LLAMA_LOG_LEVEL").as_deref(),
         Ok("4") | Ok("debug") | Ok("DEBUG")
