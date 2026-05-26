@@ -43,6 +43,9 @@ The goal is "every modality is just another model behind the mesh's OpenAI-compa
 ## Speculative decoding
 
 Verify draft tokens against the target model to accelerate generation. Experimental, opt-in. See PR #567.
+More work around using ngrams, drafting models is in progress. 
+Some experimental work around predictive prompt completion into prefile has been done (yet to be proven, prefil is parallel so latency tolerant)
+MTP work with llama.cpp ongoing, but should be part of this to accelerate inference and especially reduce vulnerability to latency between layers. 
 
 ## Demand-based rebalancing
 
@@ -55,3 +58,4 @@ Implemented. Shared ephemeral text messages across the mesh — agents post stat
 ## MoE expert sharding ✅
 
 Implemented. Auto-detects MoE, computes overlapping expert assignments, splits locally, and uses session-sticky routing with zero cross-node expert traffic.
+Best thought of as experimental, most results show this doesn't perform as well as one would hope, more research is needed to see if expert sharding this way is actually practical.
