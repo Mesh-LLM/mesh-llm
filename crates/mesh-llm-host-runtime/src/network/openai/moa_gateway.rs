@@ -207,85 +207,114 @@ async fn run_moa_turn_with_progress(
     config: &moa::GatewayConfig,
     response_adapter: proxy::ResponseAdapter,
 ) {
-    let header = "HTTP/1.1 200 OK\r\n\
-                  Content-Type: text/event-stream\r\n\
-                  Transfer-Encoding: chunked\r\n\
-                  Cache-Control: no-cache\r\n\
-                  Connection: close\r\n\r\n";
-    if let Err(e) = tcp_stream.write_all(header.as_bytes()).await {
-        tracing::warn!("MoA progress: header write failed: {e}");
+    if !send_progress_headers(&mut tcp_stream).await {
         return;
     }
-    if let Err(e) = tcp_stream.flush().await {
-        tracing::warn!("MoA progress: header flush failed: {e}");
-        return;
-    }
-
-    let moa_fut = moa::handle_turn(config, &moa_body);
-    tokio::pin!(moa_fut);
-    let mut ticker = tokio::time::interval(MOA_PROGRESS_INTERVAL);
-    // Skip the immediate first tick; we want the first line after one
-    // interval, not at t=0 (would race the header write visually).
-    ticker.tick().await;
-    let mut step = 0usize;
-
-    // tokio::select! cancellation safety: TCP writes are NOT
-    // cancel-safe — a partial write cancelled by the other branch
-    // leaves the socket in an inconsistent state. So we only race
-    // the (cancel-safe) ticker against MoA, and perform the write
-    // outside the select. Worst case: the body write is delayed by
-    // up to one interval after MoA finishes.
-    let moa_result = loop {
-        tokio::select! {
-            biased;
-            r = &mut moa_fut => break r,
-            _ = ticker.tick() => {}
-        }
-        let text = progress_line(step, response_adapter);
-        step += 1;
-        if let Err(e) = write_progress_event(&mut tcp_stream, &text, response_adapter).await {
-            tracing::warn!("MoA progress: tick write failed: {e}; falling back");
-            break (&mut moa_fut).await;
-        }
-    };
-
-    let body = &moa_result.response_body;
-    let is_failure = is_moa_failure_body(body);
-    let result = if is_failure {
-        write_failure_as_sse_tail(&mut tcp_stream, body, response_adapter).await
-    } else {
-        match response_adapter {
-            proxy::ResponseAdapter::OpenAiResponsesStream => {
-                send_moa_as_responses_sse_inner(tcp_stream, body, &[], true).await
-            }
-            _ => send_moa_as_sse_inner(tcp_stream, body, &[], true).await,
-        }
-    };
+    let moa_result =
+        drip_progress_until_moa_completes(&mut tcp_stream, config, &moa_body, response_adapter)
+            .await;
+    let result = write_progress_body(tcp_stream, &moa_result.response_body, response_adapter).await;
     if let Err(e) = result {
         tracing::warn!("MoA progress: body write failed: {e}");
     }
 }
 
+/// Send HTTP response headers up front so the client knows the
+/// stream is alive while MoA arbitrates. Returns true on success.
+async fn send_progress_headers(stream: &mut TcpStream) -> bool {
+    let header = "HTTP/1.1 200 OK\r\n\
+                  Content-Type: text/event-stream\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Cache-Control: no-cache\r\n\
+                  Connection: close\r\n\r\n";
+    if let Err(e) = stream.write_all(header.as_bytes()).await {
+        tracing::warn!("MoA progress: header write failed: {e}");
+        return false;
+    }
+    if let Err(e) = stream.flush().await {
+        tracing::warn!("MoA progress: header flush failed: {e}");
+        return false;
+    }
+    true
+}
+
+/// Drive the heartbeat ticker until MoA's arbiter commits. Returns
+/// the finished MoA result.
+///
+/// tokio::select! cancellation safety: TCP writes are NOT cancel-safe
+/// — a partial write cancelled by the other branch leaves the socket
+/// in an inconsistent state. So we only race the (cancel-safe)
+/// ticker against MoA, and perform the write outside the select.
+/// Worst case: the body write is delayed by up to one interval after
+/// MoA finishes.
+async fn drip_progress_until_moa_completes(
+    stream: &mut TcpStream,
+    config: &moa::GatewayConfig,
+    moa_body: &serde_json::Value,
+    adapter: proxy::ResponseAdapter,
+) -> moa::TurnResult {
+    let moa_fut = moa::handle_turn(config, moa_body);
+    tokio::pin!(moa_fut);
+    let mut ticker = tokio::time::interval(MOA_PROGRESS_INTERVAL);
+    // Skip the immediate first tick; we want the first line after
+    // one interval, not at t=0 (would race the header write).
+    ticker.tick().await;
+    let mut step = 0usize;
+    loop {
+        tokio::select! {
+            biased;
+            r = &mut moa_fut => return r,
+            _ = ticker.tick() => {}
+        }
+        let text = progress_line(step, adapter);
+        step += 1;
+        if let Err(e) = write_progress_event(stream, &text, adapter).await {
+            tracing::warn!("MoA progress: tick write failed: {e}; falling back");
+            return (&mut moa_fut).await;
+        }
+    }
+}
+
+/// After MoA completes, write the final body — either the real
+/// streamed answer or a graceful error tail if MoA failed (we
+/// already sent 200 OK, so we can't change the HTTP status).
+async fn write_progress_body(
+    mut tcp_stream: TcpStream,
+    body: &serde_json::Value,
+    adapter: proxy::ResponseAdapter,
+) -> std::io::Result<()> {
+    if is_moa_failure_body(body) {
+        return write_failure_as_sse_tail(&mut tcp_stream, body, adapter).await;
+    }
+    match adapter {
+        proxy::ResponseAdapter::OpenAiResponsesStream => {
+            send_moa_as_responses_sse_inner(tcp_stream, body, &[], true).await
+        }
+        _ => send_moa_as_sse_inner(tcp_stream, body, &[], true).await,
+    }
+}
+
 /// The lines we drip into the thinking pane while MoA arbitrates.
 /// Short, factual, and grounded in what mesh-llm is actually doing —
-/// not invented model "thoughts". We cycle through the list if MoA
-/// takes longer than expected.
-fn progress_line(step: usize, adapter: proxy::ResponseAdapter) -> String {
-    const LINES: &[&str] = &[
+/// not invented model "thoughts". The opening three lines fire
+/// once each at ~1s/2s/3s; the rest are a slow "waiting on a slow
+/// peer" cycle that explains a long tail without spamming repeats.
+fn progress_line(step: usize, _adapter: proxy::ResponseAdapter) -> String {
+    const OPENING: &[&str] = &[
         "Routing through mesh…",
         "Querying peer models…",
         "Comparing responses…",
-        "Still working…",
     ];
-    let line = LINES[step.min(LINES.len() - 1)];
-    // Responses-API adapter wants stand-alone strings (we'll wrap
-    // them as `response.output_text.delta` events); chat-completion
-    // adapter wants strings that read continuously when concatenated
-    // (clients append into the thinking pane character-by-character).
-    // The simplest shape for both: each line is a complete thought
-    // followed by a newline so consecutive lines render on separate
-    // visual rows.
-    let _ = adapter;
+    const TAIL_CYCLE: &[&str] = &[
+        "Waiting on a slow peer…",
+        "Still gathering responses…",
+        "Hold on, this one's taking a moment…",
+    ];
+    let line = if step < OPENING.len() {
+        OPENING[step]
+    } else {
+        TAIL_CYCLE[(step - OPENING.len()) % TAIL_CYCLE.len()]
+    };
     format!("{line}\n")
 }
 
@@ -943,6 +972,26 @@ async fn send_moa_as_sse(
     send_moa_as_sse_inner(stream, response, extra_headers, false).await
 }
 
+/// Write the standard SSE response header block, with optional
+/// per-response extra headers (used for `x-moa-*` observability).
+async fn write_sse_response_headers(
+    stream: &mut TcpStream,
+    extra_headers: &[(&str, String)],
+) -> std::io::Result<()> {
+    let mut header = String::from(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Transfer-Encoding: chunked\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n",
+    );
+    for (name, value) in extra_headers {
+        crate::network::openai::transport::append_safe_header(&mut header, name, value);
+    }
+    header.push_str("\r\n");
+    stream.write_all(header.as_bytes()).await
+}
+
 async fn send_moa_as_sse_inner(
     mut stream: TcpStream,
     response: &serde_json::Value,
@@ -950,14 +999,7 @@ async fn send_moa_as_sse_inner(
     header_already_sent: bool,
 ) -> std::io::Result<()> {
     if !header_already_sent {
-        let mut header = String::from(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
-        );
-        for (name, value) in extra_headers {
-            crate::network::openai::transport::append_safe_header(&mut header, name, value);
-        }
-        header.push_str("\r\n");
-        stream.write_all(header.as_bytes()).await?;
+        write_sse_response_headers(&mut stream, extra_headers).await?;
     }
 
     let id = response
@@ -1228,14 +1270,7 @@ async fn send_moa_as_responses_sse_inner(
     header_already_sent: bool,
 ) -> std::io::Result<()> {
     if !header_already_sent {
-        let mut header = String::from(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
-        );
-        for (name, value) in extra_headers {
-            crate::network::openai::transport::append_safe_header(&mut header, name, value);
-        }
-        header.push_str("\r\n");
-        stream.write_all(header.as_bytes()).await?;
+        write_sse_response_headers(&mut stream, extra_headers).await?;
     }
 
     let response_id = response
@@ -2124,19 +2159,28 @@ mod tests {
     // ── reasoning_content progress drip ────────────────────────────
 
     #[test]
-    fn progress_line_steps_through_lines_then_stabilises() {
-        // First four steps should be distinct lines.
+    fn progress_line_walks_opening_then_cycles_tail() {
+        // The opening three lines fire once each at the start.
         let l0 = progress_line(0, proxy::ResponseAdapter::None);
         let l1 = progress_line(1, proxy::ResponseAdapter::None);
         let l2 = progress_line(2, proxy::ResponseAdapter::None);
-        let l3 = progress_line(3, proxy::ResponseAdapter::None);
         assert_ne!(l0, l1);
         assert_ne!(l1, l2);
-        assert_ne!(l2, l3);
-        // Steps beyond the canned list clamp to the last line so a
-        // long-running MoA call doesn't panic the indexer.
-        let l99 = progress_line(99, proxy::ResponseAdapter::None);
-        assert_eq!(l99, l3);
+        // After the opening, we cycle through the tail lines so a
+        // long-running MoA call doesn't spam the same string —
+        // important for slow public-mesh peers where MoA can wait
+        // 10-20 seconds before committing.
+        let l3 = progress_line(3, proxy::ResponseAdapter::None);
+        let l4 = progress_line(4, proxy::ResponseAdapter::None);
+        let l5 = progress_line(5, proxy::ResponseAdapter::None);
+        assert_ne!(l3, l4);
+        assert_ne!(l4, l5);
+        // And steps past the cycle wrap deterministically, not panic.
+        let l6 = progress_line(6, proxy::ResponseAdapter::None);
+        assert_eq!(l6, l3);
+        // Also: index 99 must not panic (the original bug we guarded
+        // against — clamping/cycling rather than slice-out-of-bounds).
+        let _ = progress_line(99, proxy::ResponseAdapter::None);
     }
 
     /// Capture the wire bytes produced by `write_progress_event` for
