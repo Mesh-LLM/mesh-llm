@@ -350,10 +350,22 @@ async fn drip_progress_until_moa_completes(
     let moa_fut = moa::handle_turn(config, moa_body);
     tokio::pin!(moa_fut);
     let mut ticker = tokio::time::interval(MOA_PROGRESS_INTERVAL);
+    // Skip stacked ticks: if a write stalls (slow client, brief
+    // network backpressure) the default Burst behaviour would fire
+    // the ticker N times back-to-back as soon as we re-enter the
+    // select!, dumping a burst of progress lines. Skip drops the
+    // missed ticks so we stay at one line per real interval.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Skip the immediate first tick; we want the first line after
     // one interval, not at t=0 (would race the header write).
     ticker.tick().await;
     let mut step = 0usize;
+    // Responses-API uses monotonically increasing sequence_number
+    // across all events in a response stream. response.created was
+    // emitted at seq 0 by write_progress_response_created; progress
+    // reasoning deltas start at 1. Chat-completions ignores the
+    // counter (it's not part of that wire shape).
+    let mut sequence_number: i32 = 1;
     loop {
         tokio::select! {
             biased;
@@ -362,7 +374,9 @@ async fn drip_progress_until_moa_completes(
         }
         let text = progress_line(step, adapter);
         step += 1;
-        if let Err(e) = write_progress_event(stream, &text, adapter, completion_id).await {
+        if let Err(e) =
+            write_progress_event(stream, &text, adapter, completion_id, &mut sequence_number).await
+        {
             tracing::warn!("MoA progress: tick write failed: {e}; falling back");
             return (&mut moa_fut).await;
         }
@@ -418,6 +432,7 @@ async fn write_progress_event(
     text: &str,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
+    sequence_number: &mut i32,
 ) -> std::io::Result<()> {
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
@@ -430,9 +445,17 @@ async fn write_progress_event(
             // item_id derived from completion_id so progress events
             // and the eventual content events share a coherent item
             // schema within one Responses stream.
+            //
+            // sequence_number is monotonically increasing across the
+            // whole Responses stream (response.created was 0, progress
+            // deltas start at 1). Strict Responses-API clients (OpenAI
+            // SDK, Vercel AI SDK) rely on this for ordering/dedup.
             let item_id = item_id_from_completion_id(completion_id);
+            let seq = *sequence_number;
+            *sequence_number = sequence_number.saturating_add(1);
             let ev = serde_json::json!({
                 "type": "response.reasoning_text.delta",
+                "sequence_number": seq,
                 "item_id": item_id,
                 "output_index": 0,
                 "content_index": 0,
@@ -2306,7 +2329,10 @@ mod tests {
         let t = text.to_string();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            write_progress_event(&mut socket, &t, adapter, TEST_COMPLETION_ID)
+            // Tests don't care about the cross-event sequence; start
+            // from 1 to match production (response.created is 0).
+            let mut seq = 1i32;
+            write_progress_event(&mut socket, &t, adapter, TEST_COMPLETION_ID, &mut seq)
                 .await
                 .expect("write");
             // Close so the client read_to_end terminates.
@@ -2417,6 +2443,68 @@ mod tests {
             Some("msg_moa_deadbeef"),
             "progress item_id must derive from completion_id; got: {payload}"
         );
+        // sequence_number must be present and i64 for strict
+        // Responses-API clients. response.created was 0; the first
+        // progress reasoning delta starts at 1.
+        assert_eq!(
+            v.get("sequence_number").and_then(|s| s.as_i64()),
+            Some(1),
+            "Responses-API progress event must carry sequence_number=1 \
+             (response.created=0, progress deltas follow); got: {payload}"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_event_responses_sequence_number_increments() {
+        // Two consecutive progress events written with the same
+        // sequence counter must emit sequence_number=1, then 2, so
+        // strict Responses-API clients can order/dedup events within
+        // a single response stream.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut seq = 1i32;
+            write_progress_event(
+                &mut socket,
+                "first",
+                proxy::ResponseAdapter::OpenAiResponsesStream,
+                TEST_COMPLETION_ID,
+                &mut seq,
+            )
+            .await
+            .unwrap();
+            write_progress_event(
+                &mut socket,
+                "second",
+                proxy::ResponseAdapter::OpenAiResponsesStream,
+                TEST_COMPLETION_ID,
+                &mut seq,
+            )
+            .await
+            .unwrap();
+            socket.shutdown().await.expect("shutdown");
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.expect("read");
+        server.await.expect("server task");
+        let raw = String::from_utf8_lossy(&bytes);
+        let seqs: Vec<i64> = raw
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .filter_map(|p| serde_json::from_str::<serde_json::Value>(p.trim()).ok())
+            .filter_map(|v| v.get("sequence_number").and_then(|s| s.as_i64()))
+            .collect();
+        assert_eq!(
+            seqs,
+            vec![1, 2],
+            "two consecutive progress events must produce monotonically \
+             increasing sequence_number starting at 1; raw=\n{raw}"
+        );
     }
 
     /// Capture the wire bytes produced by `write_failure_as_sse_tail`
@@ -2497,11 +2585,13 @@ mod tests {
             write_progress_response_created(&mut socket, TEST_COMPLETION_ID)
                 .await
                 .unwrap();
+            let mut seq = 1i32;
             write_progress_event(
                 &mut socket,
                 "Routing through mesh…\n",
                 proxy::ResponseAdapter::OpenAiResponsesStream,
                 TEST_COMPLETION_ID,
+                &mut seq,
             )
             .await
             .unwrap();
