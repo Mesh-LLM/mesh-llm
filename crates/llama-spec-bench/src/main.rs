@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use serde::Serialize;
 use serde_json::Value;
@@ -875,10 +875,10 @@ fn prompt_cases(args: &Args) -> Result<Vec<PromptCase>> {
             .is_file()
             .then(|| PathBuf::from(DEFAULT_CORPUS))
     });
-    if prompts.is_empty() {
-        if let Some(path) = corpus.as_ref() {
-            prompts.extend(read_prompt_corpus(path)?);
-        }
+    if prompts.is_empty()
+        && let Some(path) = corpus.as_ref()
+    {
+        prompts.extend(read_prompt_corpus(path)?);
     }
     if prompts.is_empty() {
         prompts.push(PromptCase {

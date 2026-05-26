@@ -5,11 +5,11 @@ use crate::plugin;
 use crate::system::hardware;
 use anyhow::{Context, Result};
 use openai_frontend::{GuardrailMode, GuardrailTelemetrySink};
-use opentelemetry::metrics::{Counter, Gauge, Histogram, MeterProvider as _};
 use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Counter, Gauge, Histogram, MeterProvider as _};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use std::path::Path;
@@ -1255,10 +1255,12 @@ mod tests {
             args: Vec::new(),
             url: None,
         }];
-        assert!(SurveySettings::from_config_with_env(&config, |_| {
-            Some("https://env.example.com".into())
-        })
-        .is_none());
+        assert!(
+            SurveySettings::from_config_with_env(&config, |_| {
+                Some("https://env.example.com".into())
+            })
+            .is_none()
+        );
     }
 
     #[test]

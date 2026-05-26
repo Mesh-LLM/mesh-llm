@@ -1361,11 +1361,7 @@ fn activation_payload_multiplier_for_boundary(
         sideband.kind == SidebandKind::Rwkv7VFirst
             && layer_boundary <= sideband.first_required_layer
     });
-    if has_rwkv7_v_first_sideband {
-        2
-    } else {
-        1
-    }
+    if has_rwkv7_v_first_sideband { 2 } else { 1 }
 }
 
 pub fn wire_payload_bytes_per_token(activation_width: u32, dtype: WireDType) -> u64 {

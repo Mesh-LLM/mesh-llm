@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Client for the HuggingFace Jobs REST API.
@@ -237,7 +237,7 @@ impl HfJobsClient {
         &self,
         namespace: &str,
         job_id: &str,
-    ) -> Result<impl futures::Stream<Item = Result<String>>> {
+    ) -> Result<impl futures::Stream<Item = Result<String>> + use<>> {
         let url = format!("{}/api/jobs/{}/{}/logs", self.endpoint, namespace, job_id);
         let resp = self
             .http

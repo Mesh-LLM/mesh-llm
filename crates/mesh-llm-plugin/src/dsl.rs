@@ -2,24 +2,23 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use schemars::JsonSchema;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
+use crate::PluginContext;
 use crate::helpers::{
-    json_schema_operation, prompt as prompt_definition,
-    resource_template as resource_template_definition, text_resource, CompletionFuture,
-    CompletionRouter, JsonOperationFuture, OperationRouter, PromptFuture, PromptRouter,
-    ResourceFuture, ResourceRouter,
+    CompletionFuture, CompletionRouter, JsonOperationFuture, OperationRouter, PromptFuture,
+    PromptRouter, ResourceFuture, ResourceRouter, json_schema_operation,
+    prompt as prompt_definition, resource_template as resource_template_definition, text_resource,
 };
 use crate::manifest::{
-    capability as capability_entry, completion as completion_entry, mcp_http_endpoint,
-    mcp_stdio_endpoint, mcp_tcp_endpoint, mcp_unix_socket_endpoint, openai_http_inference_endpoint,
-    operation as operation_entry, prompt_service as prompt_entry, resource as resource_entry,
-    resource_template_service as resource_template_entry, EndpointBuilder, ManifestEntry,
-    PluginManifestBuilder,
+    EndpointBuilder, ManifestEntry, PluginManifestBuilder, capability as capability_entry,
+    completion as completion_entry, mcp_http_endpoint, mcp_stdio_endpoint, mcp_tcp_endpoint,
+    mcp_unix_socket_endpoint, openai_http_inference_endpoint, operation as operation_entry,
+    prompt_service as prompt_entry, resource as resource_entry,
+    resource_template_service as resource_template_entry,
 };
 use crate::runtime::{PluginMetadata, SimplePlugin};
-use crate::PluginContext;
 
 fn ensure_description(current: Option<String>, fallback: &str) -> String {
     current.unwrap_or_else(|| fallback.to_string())

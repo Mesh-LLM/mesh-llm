@@ -4,14 +4,14 @@
 //! shared snapshots through this boundary.
 
 use super::inventory::{
-    replace_local_instances_snapshot, replace_local_inventory_snapshot, InventoryScanCoordinator,
+    InventoryScanCoordinator, replace_local_instances_snapshot, replace_local_inventory_snapshot,
 };
 use super::plugins::{
-    clear_plugin_data, clear_plugin_endpoints, plugins_snapshot, upsert_plugin_data,
-    upsert_plugin_endpoint, PluginDataValue, PluginsSnapshotView,
+    PluginDataValue, PluginsSnapshotView, clear_plugin_data, clear_plugin_endpoints,
+    plugins_snapshot, upsert_plugin_data, upsert_plugin_endpoint,
 };
 #[cfg(test)]
-use super::plugins::{plugin_endpoint_snapshot, plugin_snapshot, PluginScopedSnapshot};
+use super::plugins::{PluginScopedSnapshot, plugin_endpoint_snapshot, plugin_snapshot};
 use super::processes::RuntimeProcessSnapshot;
 use super::producers::{RuntimeDataProducer, RuntimeDataSource};
 use super::snapshots::{
@@ -28,8 +28,8 @@ use super::{
     RuntimeLlamaRuntimeSnapshot, RuntimeLlamaSlotItem, RuntimeLlamaSlotsSnapshot,
 };
 use crate::api::status::{
-    build_gpus, build_ownership_payload, LatencySource, LocalInstance, MeshModelPayload, NodeState,
-    PeerPayload, WakeableNode, WakeableNodeState,
+    LatencySource, LocalInstance, MeshModelPayload, NodeState, PeerPayload, WakeableNode,
+    WakeableNodeState, build_gpus, build_ownership_payload,
 };
 use crate::mesh;
 use crate::models::LocalModelInventorySnapshot;
@@ -184,14 +184,13 @@ impl RuntimeDataCollector {
                 build_llama_runtime_snapshot(&runtime_status.llama_runtime.metrics, snapshot);
             let mut changed = false;
 
-            if let Some(instance_id) = next_runtime.slots.instance_id.clone() {
-                if runtime_status.llama_runtime_by_instance.get(&instance_id) != Some(&next_runtime)
-                {
-                    runtime_status
-                        .llama_runtime_by_instance
-                        .insert(instance_id, next_runtime.clone());
-                    changed = true;
-                }
+            if let Some(instance_id) = next_runtime.slots.instance_id.clone()
+                && runtime_status.llama_runtime_by_instance.get(&instance_id) != Some(&next_runtime)
+            {
+                runtime_status
+                    .llama_runtime_by_instance
+                    .insert(instance_id, next_runtime.clone());
+                changed = true;
             }
 
             if let Some(model) = next_runtime.slots.model.clone() {

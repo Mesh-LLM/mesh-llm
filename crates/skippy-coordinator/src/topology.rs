@@ -86,13 +86,11 @@ pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, Topo
                 for_each_node_subset(&nodes, node_count, |subset| {
                     if let Some(candidate) =
                         fit_candidate(input, subset, context_length, parallel_lanes)
-                    {
-                        if best_for_count
+                        && best_for_count
                             .as_ref()
                             .is_none_or(|current| candidate.cmp(current) == Ordering::Greater)
-                        {
-                            best_for_count = Some(candidate);
-                        }
+                    {
+                        best_for_count = Some(candidate);
                     }
                 });
                 if let Some(candidate) = best_for_count {
@@ -696,12 +694,13 @@ mod tests {
         assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
         assert_eq!(plan.parallel_lanes, 4);
         assert_eq!(plan.stages.len(), 5);
-        assert!(plan
-            .stages
-            .iter()
-            .all(|stage| !stage.node_id.ends_with("07")
-                && !stage.node_id.ends_with("08")
-                && !stage.node_id.ends_with("09")));
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| !stage.node_id.ends_with("07")
+                    && !stage.node_id.ends_with("08")
+                    && !stage.node_id.ends_with("09"))
+        );
     }
 
     #[test]

@@ -233,7 +233,9 @@ pub async fn caption_image(
     let prompt = if user_text.is_empty() {
         "Describe this image concisely in one paragraph.".to_string()
     } else {
-        format!("The user asked: \"{user_text}\"\n\nDescribe this image concisely, focusing on details relevant to the user's question.")
+        format!(
+            "The user asked: \"{user_text}\"\n\nDescribe this image concisely, focusing on details relevant to the user's question."
+        )
     };
 
     let messages = vec![serde_json::json!({

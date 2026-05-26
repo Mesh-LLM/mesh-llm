@@ -1,4 +1,4 @@
-use mesh_client::network::router::{classify, strip_split_suffix, Category, Complexity};
+use mesh_client::network::router::{Category, Complexity, classify, strip_split_suffix};
 use serde_json::json;
 
 #[test]

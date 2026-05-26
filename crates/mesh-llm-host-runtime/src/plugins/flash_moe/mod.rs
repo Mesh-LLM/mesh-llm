@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::{
-    capability, plugin_server_info, PluginMetadata, PluginRuntime, PluginStartupPolicy,
+    PluginMetadata, PluginRuntime, PluginStartupPolicy, capability, plugin_server_info,
 };
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
@@ -387,10 +387,12 @@ mod tests {
         assert_eq!(endpoint.protocol.as_deref(), Some("openai_compatible"));
         assert!(endpoint.supports_streaming);
         assert!(endpoint.managed_by_plugin);
-        assert!(manifest
-            .capabilities
-            .iter()
-            .any(|capability| capability == "backend:ssd-expert-streaming"));
+        assert!(
+            manifest
+                .capabilities
+                .iter()
+                .any(|capability| capability == "backend:ssd-expert-streaming")
+        );
     }
 
     #[test]

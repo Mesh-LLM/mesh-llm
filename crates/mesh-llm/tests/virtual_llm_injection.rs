@@ -11,8 +11,8 @@
 //!
 //! Skipped automatically if llama-server or model file is missing.
 
-use axum::{extract::Json, routing::post, Router};
-use serde_json::{json, Value};
+use axum::{Router, extract::Json, routing::post};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -26,11 +26,7 @@ fn find_llama_server() -> Option<PathBuf> {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repo_root = manifest.parent()?;
     let bin = repo_root.join("llama.cpp/build/bin/llama-server");
-    if bin.is_file() {
-        Some(bin)
-    } else {
-        None
-    }
+    if bin.is_file() { Some(bin) } else { None }
 }
 
 fn find_small_model() -> Option<PathBuf> {
@@ -76,12 +72,11 @@ async fn wait_for_ready(port: u16, timeout_secs: u64) -> bool {
         if tokio::time::Instant::now() > deadline {
             return false;
         }
-        if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{port}/health")).await {
-            if let Ok(body) = resp.json::<Value>().await {
-                if body["status"] == "ok" {
-                    return true;
-                }
-            }
+        if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{port}/health")).await
+            && let Ok(body) = resp.json::<Value>().await
+            && body["status"] == "ok"
+        {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
@@ -124,7 +119,9 @@ fn framing_current(hint: &str) -> String {
 }
 
 fn framing_reference(hint: &str) -> String {
-    format!("\n\nReference answer: {hint}\n\nUse the reference above to provide an accurate response.\n")
+    format!(
+        "\n\nReference answer: {hint}\n\nUse the reference above to provide an accurate response.\n"
+    )
 }
 
 fn framing_assistant_draft(hint: &str) -> String {
@@ -160,8 +157,7 @@ const CASES: &[TestCase] = &[
     },
     TestCase {
         question: "Who won the 1953 Pulitzer Prize for Fiction?",
-        hint:
-            "Ernest Hemingway won the 1953 Pulitzer Prize for Fiction for The Old Man and the Sea.",
+        hint: "Ernest Hemingway won the 1953 Pulitzer Prize for Fiction for The Old Man and the Sea.",
         accept: &["hemingway", "old man and the sea"],
     },
     TestCase {

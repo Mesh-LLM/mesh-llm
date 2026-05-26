@@ -135,10 +135,10 @@ pub(crate) fn is_single_digit_b_name(name: &str) -> bool {
             continue;
         }
         // Byte after must not be another digit (avoid BF16-like continuations)
-        if let Some(&after) = bytes.get(i + 2) {
-            if after.is_ascii_digit() {
-                continue;
-            }
+        if let Some(&after) = bytes.get(i + 2)
+            && after.is_ascii_digit()
+        {
+            continue;
         }
         return true;
     }
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn truncate_chars_handles_multibyte_only() {
         let s = "日本語"; // each char is 3 bytes ⇒ 9 bytes total
-                          // Byte 4 lands mid-char ⇒ walks back to 3 (first char only).
+        // Byte 4 lands mid-char ⇒ walks back to 3 (first char only).
         assert_eq!(truncate_chars(s, 4), "日");
         // Byte 0 is always safe.
         assert_eq!(truncate_chars(s, 0), "");

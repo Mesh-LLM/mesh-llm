@@ -1,16 +1,16 @@
 use super::capacity::{model_fits_runtime_capacity, runtime_model_required_bytes};
 use super::context_planning::{
-    plan_runtime_resources, RuntimeResourcePlan, RuntimeResourcePlanInput,
+    RuntimeResourcePlan, RuntimeResourcePlanInput, plan_runtime_resources,
+};
+use super::split_planning::{
+    PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs, format_gb,
+    plan_runtime_slice_topology_with_resources, split_participant_exclusion_labels,
+    split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
 };
 #[cfg(test)]
 use super::split_planning::{format_aggregate_split_capacity_error, validate_split_capacity};
-use super::split_planning::{
-    format_gb, plan_runtime_slice_topology_with_resources, split_participant_exclusion_labels,
-    split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
-    PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs,
-};
 use crate::api;
-use crate::cli::output::{emit_event, OutputEvent};
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, skippy};
 use crate::mesh::{self, NodeRole};
 use crate::models;
@@ -1123,18 +1123,18 @@ async fn load_split_runtime_generation(
         &mut cleanup_on_error,
     ))
     .await;
-    if let Err(error) = &result {
-        if cleanup_on_error {
-            tracing::warn!(
-                model_ref = spec.model_ref,
-                topology_id = %spec.generation.topology_id,
-                run_id = %spec.generation.run_id,
-                generation = spec.generation.generation,
-                error = %error,
-                "cleaning up split runtime generation after failed load"
-            );
-            stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
-        }
+    if let Err(error) = &result
+        && cleanup_on_error
+    {
+        tracing::warn!(
+            model_ref = spec.model_ref,
+            topology_id = %spec.generation.topology_id,
+            run_id = %spec.generation.run_id,
+            generation = spec.generation.generation,
+            error = %error,
+            "cleaning up split runtime generation after failed load"
+        );
+        stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
     }
     result
 }
@@ -2140,19 +2140,20 @@ impl SplitTopologyCoordinator {
         reason: &'static str,
         unavailable_stage_nodes: Vec<iroh::EndpointId>,
     ) -> bool {
-        if let Err(err) = self
+        match self
             .request_local_fallback(reason, unavailable_stage_nodes)
             .await
         {
-            tracing::warn!(
-                model_ref = self.model_ref,
-                reason,
-                error = %err,
-                "failed to publish split topology local fallback request"
-            );
-            true
-        } else {
-            false
+            Err(err) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    error = %err,
+                    "failed to publish split topology local fallback request"
+                );
+                true
+            }
+            _ => false,
         }
     }
 
@@ -2161,19 +2162,20 @@ impl SplitTopologyCoordinator {
         reason: &'static str,
         unavailable_stage_nodes: Vec<iroh::EndpointId>,
     ) -> bool {
-        if let Err(err) = self
+        match self
             .withdraw_active_generation(reason, unavailable_stage_nodes)
             .await
         {
-            tracing::warn!(
-                model_ref = self.model_ref,
-                reason,
-                error = %err,
-                "failed to publish split topology withdrawal"
-            );
-            true
-        } else {
-            false
+            Err(err) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    error = %err,
+                    "failed to publish split topology withdrawal"
+                );
+                true
+            }
+            _ => false,
         }
     }
 
@@ -4584,8 +4586,8 @@ max_tokens = 222
     fn split_participant_signature_includes_package_signals_for_stability() {
         let node_id = make_id(9);
         let first = vec![SplitParticipant::new(node_id, 24_000_000_000, None)];
-        let second = vec![SplitParticipant::new(node_id, 24_000_000_000, None)
-            .with_package_signals(
+        let second = vec![
+            SplitParticipant::new(node_id, 24_000_000_000, None).with_package_signals(
                 SplitParticipantPackageSignal {
                     cached_slice_bytes: 12_000_000,
                     missing_artifact_bytes: 0,
@@ -4593,7 +4595,8 @@ max_tokens = 222
                 },
                 Some(20),
                 true,
-            )];
+            ),
+        ];
 
         assert_ne!(
             split_participant_signature(&first),

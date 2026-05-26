@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use hf_hub::{
-    buckets::{BucketDownload, BucketTreeEntry, BucketUpload},
     HFClient,
+    buckets::{BucketDownload, BucketTreeEntry, BucketUpload},
 };
 use sha2::{Digest, Sha256};
 
@@ -169,13 +169,21 @@ mod tests {
         assert!(EMBEDDED_SCRIPT.contains(r#"TMPDIR="$BUILD_TMP_DIR""#));
         assert!(EMBEDDED_SCRIPT.contains(r#"TMPDIR="$JOB_TMP_DIR""#));
         assert!(EMBEDDED_SCRIPT.contains("export TMPDIR TEMP TMP"));
-        assert!(EMBEDDED_SCRIPT
-            .contains(r#"CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${LOCAL_WORK_DIR}/cargo-target}""#));
-        assert!(EMBEDDED_SCRIPT
-            .contains(r#"rm -rf "$BUILD_DIR" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$RUSTUP_HOME""#));
+        assert!(
+            EMBEDDED_SCRIPT.contains(
+                r#"CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${LOCAL_WORK_DIR}/cargo-target}""#
+            )
+        );
+        assert!(
+            EMBEDDED_SCRIPT.contains(
+                r#"rm -rf "$BUILD_DIR" "$CARGO_TARGET_DIR" "$CARGO_HOME" "$RUSTUP_HOME""#
+            )
+        );
         assert!(EMBEDDED_SCRIPT.contains(r#"SOURCE_REF="${SOURCE_REPO}:${SOURCE_QUANT}""#));
-        assert!(EMBEDDED_SCRIPT
-            .contains(r#"SOURCE_REF="${SOURCE_REPO}@${SOURCE_REVISION}:${SOURCE_QUANT}""#));
+        assert!(
+            EMBEDDED_SCRIPT
+                .contains(r#"SOURCE_REF="${SOURCE_REPO}@${SOURCE_REVISION}:${SOURCE_QUANT}""#)
+        );
         assert!(EMBEDDED_SCRIPT.contains("log_storage_snapshot"));
         assert!(EMBEDDED_SCRIPT.contains("start_heartbeat"));
         assert!(EMBEDDED_SCRIPT.contains("Starting write-package"));

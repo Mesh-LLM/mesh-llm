@@ -1,7 +1,7 @@
 use std::{io, thread, time::Duration};
 
-use anyhow::{bail, Result};
-use skippy_protocol::binary::{write_stage_message, StageWireMessage, WireActivationDType};
+use anyhow::{Result, bail};
+use skippy_protocol::binary::{StageWireMessage, WireActivationDType, write_stage_message};
 
 #[derive(Clone, Copy, Debug)]
 pub struct WireCondition {

@@ -126,20 +126,21 @@ pub(super) fn media_url(part: &MessageContentPart) -> Option<String> {
 
 pub(super) fn media_data(part: &MessageContentPart) -> Option<String> {
     for key in ["input_audio", "audio", "image", "input_image", "image_url"] {
-        if let Some(value) = part.extra.get(key) {
-            if let Some(data) = value.get("data").and_then(Value::as_str) {
-                return Some(data.to_string());
-            }
+        if let Some(value) = part.extra.get(key)
+            && let Some(data) = value.get("data").and_then(Value::as_str)
+        {
+            return Some(data.to_string());
         }
     }
     None
 }
 
 pub(super) fn decode_media_url(url: &str) -> OpenAiResult<Vec<u8>> {
-    if let Some((prefix, payload)) = url.split_once(',') {
-        if prefix.starts_with("data:") && prefix.contains(";base64") {
-            return decode_base64_payload(payload);
-        }
+    if let Some((prefix, payload)) = url.split_once(',')
+        && prefix.starts_with("data:")
+        && prefix.contains(";base64")
+    {
+        return decode_base64_payload(payload);
     }
     if url.starts_with("http://") || url.starts_with("https://") {
         return Err(OpenAiError::unsupported(
@@ -196,27 +197,26 @@ fn apply_shared_request_defaults(
             .as_ref()
             .map(|values| stop_sequence_from_defaults(values.clone()));
     }
-    if extra_value_is_omitted(extra, "top_k") {
-        if let Some(value) = defaults.top_k {
-            extra.insert("top_k".to_string(), serde_json::json!(value));
-        }
+    if extra_value_is_omitted(extra, "top_k")
+        && let Some(value) = defaults.top_k
+    {
+        extra.insert("top_k".to_string(), serde_json::json!(value));
     }
-    if extra_value_is_omitted(extra, "min_p") {
-        if let Some(value) = defaults.min_p {
-            extra.insert("min_p".to_string(), serde_json::json!(value));
-        }
+    if extra_value_is_omitted(extra, "min_p")
+        && let Some(value) = defaults.min_p
+    {
+        extra.insert("min_p".to_string(), serde_json::json!(value));
     }
     if extra_value_is_omitted(extra, "repeat_penalty")
         && extra_value_is_omitted(extra, "repetition_penalty")
+        && let Some(value) = defaults.repeat_penalty
     {
-        if let Some(value) = defaults.repeat_penalty {
-            extra.insert("repeat_penalty".to_string(), serde_json::json!(value));
-        }
+        extra.insert("repeat_penalty".to_string(), serde_json::json!(value));
     }
-    if extra_value_is_omitted(extra, "repeat_last_n") {
-        if let Some(value) = defaults.repeat_last_n {
-            extra.insert("repeat_last_n".to_string(), serde_json::json!(value));
-        }
+    if extra_value_is_omitted(extra, "repeat_last_n")
+        && let Some(value) = defaults.repeat_last_n
+    {
+        extra.insert("repeat_last_n".to_string(), serde_json::json!(value));
     }
     apply_reasoning_defaults(reasoning, reasoning_effort, extra, defaults);
 }

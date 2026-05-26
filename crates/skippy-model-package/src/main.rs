@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use model_artifact::{ModelArtifactFile, ResolvedModelArtifact};
 use model_hf::HfModelRepository;
@@ -15,7 +15,7 @@ use model_ref::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use skippy_ffi::TensorRole;
-use skippy_runtime::{write_gguf_from_parts, ModelInfo, TensorInfo};
+use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_from_parts};
 
 #[derive(Debug, Parser)]
 #[command(name = "skippy-model-package")]
@@ -616,7 +616,9 @@ fn resolve_package_input(model: String, explicit: ExplicitSourceIdentity) -> Res
         || explicit.source_revision.is_some()
         || explicit.source_file.is_some()
     {
-        bail!("explicit source identity flags are only valid when write-package input is a local path");
+        bail!(
+            "explicit source identity flags are only valid when write-package input is a local path"
+        );
     }
 
     parse_model_ref(&model).with_context(|| {
@@ -1214,11 +1216,11 @@ fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 }
 
 fn create_parent_dir(path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create output directory {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create output directory {}", parent.display()))?;
     }
     Ok(())
 }
@@ -1793,8 +1795,8 @@ fn hex_lower(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        activation_width, local_artifact_files, model_distribution_id, resolve_gguf_shard_paths,
-        resolve_local_package_input, ExplicitSourceIdentity,
+        ExplicitSourceIdentity, activation_width, local_artifact_files, model_distribution_id,
+        resolve_gguf_shard_paths, resolve_local_package_input,
     };
     use std::path::{Path, PathBuf};
 

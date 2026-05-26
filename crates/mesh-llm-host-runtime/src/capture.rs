@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    mpsc::{self, SyncSender, TrySendError},
     Arc,
+    mpsc::{self, SyncSender, TrySendError},
 };
 
 pub(crate) const SWARM_CAPTURE_ENV: &str = "MESH_LLM_SWARM_CAPTURE";
@@ -251,14 +251,16 @@ mod tests {
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
             match &self.previous {
-                Some(value) => std::env::set_var(self.key, value),
-                None => std::env::remove_var(self.key),
+                // TODO: Audit that the environment access only happens in single-threaded code.
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                // TODO: Audit that the environment access only happens in single-threaded code.
+                None => unsafe { std::env::remove_var(self.key) },
             }
         }
     }
 
     #[cfg(unix)]
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::{PermissionsExt, symlink};
 
     #[test]
     fn recorder_appends_jsonl_events() {
@@ -294,7 +296,8 @@ mod tests {
     #[serial]
     fn empty_env_disables_capture() {
         let _env_guard = EnvVarGuard::capture(SWARM_CAPTURE_ENV);
-        std::env::set_var(SWARM_CAPTURE_ENV, "");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(SWARM_CAPTURE_ENV, "") };
 
         let recorder = SwarmCaptureRecorder::from_cli_or_env(None).expect("env resolution");
 
@@ -343,7 +346,8 @@ mod tests {
         let env_dir = temp.path().join("env_dir");
         let cli_dir = temp.path().join("cli_dir");
         let _env_guard = EnvVarGuard::capture(SWARM_CAPTURE_ENV);
-        std::env::set_var(SWARM_CAPTURE_ENV, env_dir.to_str().unwrap());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(SWARM_CAPTURE_ENV, env_dir.to_str().unwrap()) };
 
         let recorder =
             SwarmCaptureRecorder::from_cli_or_env(Some(&cli_dir)).expect("cli takes precedence");

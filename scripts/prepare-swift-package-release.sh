@@ -19,7 +19,6 @@ PACKAGE_SWIFT="$REPO_ROOT/Package.swift"
 ARTIFACT_DIR="$REPO_ROOT/dist"
 ARTIFACT_NAME="MeshLLMFFI.xcframework.zip"
 ARTIFACT_PATH="$ARTIFACT_DIR/$ARTIFACT_NAME"
-ARTIFACT_URL="https://github.com/Mesh-LLM/mesh-llm/releases/download/$TAG/$ARTIFACT_NAME"
 
 mkdir -p "$ARTIFACT_DIR"
 
@@ -30,15 +29,10 @@ ditto -c -k --sequesterRsrc --keepParent \
     "$REPO_ROOT/sdk/swift/Generated/MeshLLMFFI.xcframework" \
     "$ARTIFACT_PATH"
 
-CHECKSUM="$(swift package compute-checksum "$ARTIFACT_PATH")"
 "$REPO_ROOT/scripts/verify-swift-release-artifact.sh" "$ARTIFACT_PATH"
-
-perl -0pi -e 's#let remoteFFIXCFrameworkURL = ".*"#let remoteFFIXCFrameworkURL = "'"$ARTIFACT_URL"'"#' "$PACKAGE_SWIFT"
-perl -0pi -e 's#let remoteFFIXCFrameworkChecksum = ".*"#let remoteFFIXCFrameworkChecksum = "'"$CHECKSUM"'"#' "$PACKAGE_SWIFT"
+"$REPO_ROOT/scripts/update-swift-package-manifest.sh" "$TAG" "$ARTIFACT_PATH" "$PACKAGE_SWIFT"
 "$REPO_ROOT/scripts/verify-swift-package-manifest.sh" "$TAG" "$ARTIFACT_PATH" "$PACKAGE_SWIFT"
 
 echo "Prepared SwiftPM artifact:"
 echo "  tag: $TAG"
 echo "  path: $ARTIFACT_PATH"
-echo "  url: $ARTIFACT_URL"
-echo "  checksum: $CHECKSUM"

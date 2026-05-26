@@ -526,10 +526,10 @@ fn map_key_event(code: KeyCode, modifiers: KeyModifiers) -> Option<TuiEvent> {
 #[cfg(test)]
 mod tests {
     use super::{
-        console_session_mode_for_term, interactive_entry_kind, map_key_event,
+        HELP_TEXT, InitialPromptMode, InteractiveCommand, InteractiveEntryKind, READY_PROMPT,
+        TuiLoopError, console_session_mode_for_term, interactive_entry_kind, map_key_event,
         maybe_write_initial_prompt, parse_command, read_tui_event, restore_tui_terminal_after_loop,
-        write_ready_prompt, InitialPromptMode, InteractiveCommand, InteractiveEntryKind,
-        TuiLoopError, HELP_TEXT, READY_PROMPT,
+        write_ready_prompt,
     };
     use crate::cli::output::{ConsoleSessionMode, TuiEvent, TuiKeyEvent};
     use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};

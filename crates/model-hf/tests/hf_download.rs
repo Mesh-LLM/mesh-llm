@@ -12,7 +12,7 @@
 //! The split-GGUF resolution tests use `unsloth/gemma-3-27b-it-GGUF` for file
 //! listing only (no download).
 
-use model_artifact::{resolve_model_artifact_ref, ModelArtifactFile, ModelFormat, ModelRepository};
+use model_artifact::{ModelArtifactFile, ModelFormat, ModelRepository, resolve_model_artifact_ref};
 use model_hf::HfModelRepository;
 use std::path::Path;
 

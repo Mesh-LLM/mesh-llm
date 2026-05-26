@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,8 +15,8 @@ use skippy_runtime::package::{
     self, LayerPackageInfo, PackageIntegrityOptions, PackageStageRequest,
 };
 
-use crate::cli::output::{emit_event, interactive_tui_active, ModelProgressStatus, OutputEvent};
-use crate::cli::terminal_progress::{start_spinner, SpinnerHandle};
+use crate::cli::output::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
+use crate::cli::terminal_progress::{SpinnerHandle, start_spinner};
 
 use super::StageLoadRequest;
 
@@ -143,7 +143,8 @@ struct PinFile {
 
 pub(crate) fn configure_materialized_stage_cache() {
     if std::env::var_os("SKIPPY_MATERIALIZED_DIR").is_none() {
-        std::env::set_var("SKIPPY_MATERIALIZED_DIR", materialized_stage_cache_dir());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("SKIPPY_MATERIALIZED_DIR", materialized_stage_cache_dir()) };
     }
 }
 
@@ -473,10 +474,10 @@ impl ProgressHandler for LayerPackageDownloadProgress {
         let force = matches!(event, DownloadEvent::Complete) && should_show_progress;
         if should_show_progress {
             self.draw(&mut state, force);
-        } else if matches!(event, DownloadEvent::Complete) {
-            if let Ok(mut spinner) = self.preflight_spinner.lock() {
-                spinner.take();
-            }
+        } else if matches!(event, DownloadEvent::Complete)
+            && let Ok(mut spinner) = self.preflight_spinner.lock()
+        {
+            spinner.take();
         }
     }
 }
@@ -591,31 +592,29 @@ fn resolve_local_package_files(
         "missing shared metadata: {}",
         metadata_path.display()
     );
-    if include_embeddings {
-        if let Some(path) = manifest
+    if include_embeddings
+        && let Some(path) = manifest
             .pointer("/shared/embeddings/path")
             .and_then(|v| v.as_str())
-        {
-            let path = safe_manifest_file_path(path)?;
-            anyhow::ensure!(
-                package_dir.join(&path).is_file(),
-                "missing shared embeddings: {}",
-                path.display()
-            );
-        }
+    {
+        let path = safe_manifest_file_path(path)?;
+        anyhow::ensure!(
+            package_dir.join(&path).is_file(),
+            "missing shared embeddings: {}",
+            path.display()
+        );
     }
-    if include_output {
-        if let Some(path) = manifest
+    if include_output
+        && let Some(path) = manifest
             .pointer("/shared/output/path")
             .and_then(|v| v.as_str())
-        {
-            let path = safe_manifest_file_path(path)?;
-            anyhow::ensure!(
-                package_dir.join(&path).is_file(),
-                "missing shared output: {}",
-                path.display()
-            );
-        }
+    {
+        let path = safe_manifest_file_path(path)?;
+        anyhow::ensure!(
+            package_dir.join(&path).is_file(),
+            "missing shared output: {}",
+            path.display()
+        );
     }
     // Verify needed layer files exist
     if let Some(layers) = manifest.get("layers").and_then(|l| l.as_array()) {
@@ -624,15 +623,16 @@ fn resolve_local_package_files(
                 .get("layer_index")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(i as u64) as u32;
-            if idx >= layer_start && idx < layer_end {
-                if let Some(path) = layer.get("path").and_then(|a| a.as_str()) {
-                    let path = safe_manifest_file_path(path)?;
-                    anyhow::ensure!(
-                        package_dir.join(&path).is_file(),
-                        "missing layer file: {}",
-                        path.display()
-                    );
-                }
+            if idx >= layer_start
+                && idx < layer_end
+                && let Some(path) = layer.get("path").and_then(|a| a.as_str())
+            {
+                let path = safe_manifest_file_path(path)?;
+                anyhow::ensure!(
+                    package_dir.join(&path).is_file(),
+                    "missing layer file: {}",
+                    path.display()
+                );
             }
         }
     }
@@ -672,7 +672,14 @@ fn verify_resolved_hf_package_files(
         include_embeddings,
         include_output,
     );
-    let options = PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir());
+    let options = if metadata_only {
+        // Metadata-only probes hash only the small shared metadata artifact.
+        // Avoid the cross-run integrity cache here so a same-size metadata
+        // rewrite cannot be hidden by coarse filesystem timestamp resolution.
+        PackageIntegrityOptions::verify_without_cache()
+    } else {
+        PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir())
+    };
     let report = if metadata_only {
         package::verify_layer_package_metadata_integrity(&local_ref, &options)
     } else {
@@ -818,16 +825,16 @@ pub(crate) fn resolve_hf_package_to_local(
         .join(&repo_folder)
         .join("snapshots")
         .join(&revision_cache_path);
-    if direct_snapshot_dir.join("model-package.json").is_file() {
-        if let Some(local_ref) = cache_resolution::resolve_cached_hf_package_snapshot(
+    if direct_snapshot_dir.join("model-package.json").is_file()
+        && let Some(local_ref) = cache_resolution::resolve_cached_hf_package_snapshot(
             &direct_snapshot_dir,
             layer_start,
             layer_end,
             include_embeddings,
             include_output,
-        )? {
-            return Ok(local_ref);
-        }
+        )?
+    {
+        return Ok(local_ref);
     }
     if let Ok(commit_hash) = fs::read_to_string(&ref_path) {
         let commit_hash = commit_hash.trim();
@@ -838,16 +845,16 @@ pub(crate) fn resolve_hf_package_to_local(
             .join(&repo_folder)
             .join("snapshots")
             .join(commit_hash_path);
-        if snapshot_dir.join("model-package.json").is_file() {
-            if let Some(local_ref) = cache_resolution::resolve_cached_hf_package_snapshot(
+        if snapshot_dir.join("model-package.json").is_file()
+            && let Some(local_ref) = cache_resolution::resolve_cached_hf_package_snapshot(
                 &snapshot_dir,
                 layer_start,
                 layer_end,
                 include_embeddings,
                 include_output,
-            )? {
-                return Ok(local_ref);
-            }
+            )?
+        {
+            return Ok(local_ref);
         }
     }
     let downloaded = crate::models::run_hf_sync(move || {
@@ -962,25 +969,23 @@ fn download_hf_package_to_local_sync(
         safe_manifest_file_path(metadata_path)?,
         manifest_artifact_bytes(metadata_artifact),
     ));
-    if include_embeddings {
-        if let Some(artifact) = manifest.pointer("/shared/embeddings") {
-            if let Some(path) = artifact.get("path").and_then(|v| v.as_str()) {
-                needed_files.push((
-                    safe_manifest_file_path(path)?,
-                    manifest_artifact_bytes(artifact),
-                ));
-            }
-        }
+    if include_embeddings
+        && let Some(artifact) = manifest.pointer("/shared/embeddings")
+        && let Some(path) = artifact.get("path").and_then(|v| v.as_str())
+    {
+        needed_files.push((
+            safe_manifest_file_path(path)?,
+            manifest_artifact_bytes(artifact),
+        ));
     }
-    if include_output {
-        if let Some(artifact) = manifest.pointer("/shared/output") {
-            if let Some(path) = artifact.get("path").and_then(|v| v.as_str()) {
-                needed_files.push((
-                    safe_manifest_file_path(path)?,
-                    manifest_artifact_bytes(artifact),
-                ));
-            }
-        }
+    if include_output
+        && let Some(artifact) = manifest.pointer("/shared/output")
+        && let Some(path) = artifact.get("path").and_then(|v| v.as_str())
+    {
+        needed_files.push((
+            safe_manifest_file_path(path)?,
+            manifest_artifact_bytes(artifact),
+        ));
     }
 
     // Layer files for assigned range — use explicit layer_index if present,
@@ -991,25 +996,26 @@ fn download_hf_package_to_local_sync(
                 .get("layer_index")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(i as u64) as u32;
-            if idx >= layer_start && idx < layer_end {
-                if let Some(path) = layer.get("path").and_then(|a| a.as_str()) {
-                    needed_files.push((
-                        safe_manifest_file_path(path)?,
-                        manifest_artifact_bytes(layer),
-                    ));
-                }
+            if idx >= layer_start
+                && idx < layer_end
+                && let Some(path) = layer.get("path").and_then(|a| a.as_str())
+            {
+                needed_files.push((
+                    safe_manifest_file_path(path)?,
+                    manifest_artifact_bytes(layer),
+                ));
             }
         }
     }
-    if layer_start == 0 {
-        if let Some(projectors) = manifest.get("projectors").and_then(|p| p.as_array()) {
-            for projector in projectors {
-                if let Some(path) = projector.get("path").and_then(|value| value.as_str()) {
-                    needed_files.push((
-                        safe_manifest_file_path(path)?,
-                        manifest_artifact_bytes(projector),
-                    ));
-                }
+    if layer_start == 0
+        && let Some(projectors) = manifest.get("projectors").and_then(|p| p.as_array())
+    {
+        for projector in projectors {
+            if let Some(path) = projector.get("path").and_then(|value| value.as_str()) {
+                needed_files.push((
+                    safe_manifest_file_path(path)?,
+                    manifest_artifact_bytes(projector),
+                ));
             }
         }
     }
@@ -1466,9 +1472,11 @@ mod tests {
 
     fn restore_env(key: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -1820,9 +1828,12 @@ mod tests {
         let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path());
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let error = resolve_hf_package_to_local("hf://owner/repo@../../evil", 0, 0, false, false)
             .unwrap_err()
@@ -1845,9 +1856,12 @@ mod tests {
         let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path());
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let refs_dir = temp
             .path()
@@ -1878,9 +1892,12 @@ mod tests {
         let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path());
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let snapshot = temp
             .path()
@@ -1912,10 +1929,14 @@ mod tests {
         let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path().join("hf"));
-        std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache"));
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path().join("hf")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let repo_cache = temp
             .path()
@@ -1951,10 +1972,14 @@ mod tests {
         let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path().join("hf"));
-        std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache"));
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path().join("hf")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let snapshot = temp
             .path()
@@ -1998,10 +2023,14 @@ mod tests {
         let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path().join("hf"));
-        std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache"));
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path().join("hf")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let snapshot = temp
             .path()
@@ -2090,7 +2119,8 @@ mod tests {
         };
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("XDG_CACHE_HOME", temp.path());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path()) };
 
         let root = materialized_stage_cache_dir();
         fs::create_dir_all(&root).unwrap();

@@ -5,9 +5,9 @@ use std::{
 };
 
 use super::inventory::inventory_source_candidates;
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
-use tokio::sync::{oneshot, Mutex as TokioMutex};
+use tokio::sync::{Mutex as TokioMutex, oneshot};
 
 fn load_request() -> StageLoadRequest {
     StageLoadRequest {
@@ -265,18 +265,22 @@ fn stage_config_rejects_empty_selected_backend_device() {
 #[test]
 fn stage_status_filter_matches_optional_identity_fields() {
     let load = load_request();
-    assert!(StageStatusFilter {
-        topology_id: Some("topology-a".to_string()),
-        run_id: None,
-        stage_id: Some("stage-0".to_string()),
-    }
-    .matches(&load));
-    assert!(!StageStatusFilter {
-        topology_id: Some("other".to_string()),
-        run_id: None,
-        stage_id: None,
-    }
-    .matches(&load));
+    assert!(
+        StageStatusFilter {
+            topology_id: Some("topology-a".to_string()),
+            run_id: None,
+            stage_id: Some("stage-0".to_string()),
+        }
+        .matches(&load)
+    );
+    assert!(
+        !StageStatusFilter {
+            topology_id: Some("other".to_string()),
+            run_id: None,
+            stage_id: None,
+        }
+        .matches(&load)
+    );
 }
 
 #[test]

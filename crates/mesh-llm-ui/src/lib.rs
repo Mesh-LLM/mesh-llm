@@ -21,7 +21,7 @@ pub struct UiAsset {
 
 #[cfg(feature = "embed-assets")]
 mod embedded {
-    use include_dir::{include_dir, Dir};
+    use include_dir::{Dir, include_dir};
 
     pub(super) static CONSOLE_DIST: Dir<'_> = include_dir!("$MESH_LLM_UI_DIST");
 }

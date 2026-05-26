@@ -232,12 +232,27 @@ jobs:
             sdk/swift/Generated/MeshLLMFFI.xcframework \
             dist/MeshLLMFFI.xcframework.zip
 
+      - name: Prepare SwiftPM manifest for dispatched release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          scripts/update-swift-package-manifest.sh \
+            "${{ needs.metadata.outputs.tag }}" \
+            dist/MeshLLMFFI.xcframework.zip
+
       - name: Verify SwiftPM binary artifact
         run: |
           scripts/verify-swift-release-artifact.sh dist/MeshLLMFFI.xcframework.zip
           scripts/verify-swift-package-manifest.sh \
             "${{ needs.metadata.outputs.tag }}" \
             dist/MeshLLMFFI.xcframework.zip
+
+      - name: Upload generated SwiftPM manifest
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v6
+        with:
+          name: swift-package-manifest
+          path: Package.swift
+          if-no-files-found: error
 
       - name: Upload SwiftPM binary artifact
         uses: actions/upload-artifact@v6
@@ -460,7 +475,7 @@ jobs:
   build_windows_cpu:
     name: Build Windows CPU
     needs: metadata
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: blacksmith-8vcpu-windows-2025
     env:
       LLAMA_STAGE_BACKEND: cpu
     steps:
@@ -496,7 +511,7 @@ jobs:
     name: Build Windows ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: blacksmith-8vcpu-windows-2025
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
       # Pin Windows CUDA to a version sccache 0.15.0 supports.
@@ -604,6 +619,11 @@ jobs:
     if: ${{ always() && needs.metadata.result == 'success' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_cuda_blackwell.result == 'success' || needs.build_linux_cuda_blackwell.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          fetch-depth: 0
+
       - name: Download release artifacts
         uses: actions/download-artifact@v7
         with:
@@ -613,6 +633,35 @@ jobs:
 
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
+
+      - name: Download generated SwiftPM manifest
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@v7
+        with:
+          name: swift-package-manifest
+          path: generated-swift-manifest
+
+      - name: Create dispatched release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          cp generated-swift-manifest/Package.swift Package.swift
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Package.swift
+          if git diff --cached --quiet -- Package.swift; then
+            echo "Package.swift already matches generated SwiftPM manifest"
+          else
+            git commit -m "$RELEASE_TAG: prepare Swift package manifest"
+          fi
+          git tag "$RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

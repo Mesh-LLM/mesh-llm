@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use prost::Message;
 #[cfg(unix)]
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::{proto, PROTOCOL_VERSION};
+use crate::{PROTOCOL_VERSION, proto};
 
 pub enum LocalStream {
     #[cfg(unix)]

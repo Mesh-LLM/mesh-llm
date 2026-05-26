@@ -604,10 +604,12 @@ async fn malformed_tool_arguments_retry_once_then_succeed() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].prompt_cache_key.as_deref(), Some("cache-1"));
     assert_eq!(requests[1].prompt_cache_key, None);
-    assert!(request.messages[0]
-        .content
-        .as_ref()
-        .is_some_and(|content| content == &MessageContent::Text("weather".to_string())));
+    assert!(
+        request.messages[0]
+            .content
+            .as_ref()
+            .is_some_and(|content| content == &MessageContent::Text("weather".to_string()))
+    );
     let retry_text = crate::chat::message_content_to_text(
         requests[1].messages[0]
             .content
@@ -917,11 +919,13 @@ async fn no_mesh_tool_survives_responses_function_call_conversion() {
     let parsed: serde_json::Value = serde_json::from_slice(&translated).unwrap();
 
     assert_eq!(parsed["output_text"], "{\"answer\":42}");
-    assert!(parsed["output"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|item| item["type"] != "function_call"));
+    assert!(
+        parsed["output"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["type"] != "function_call")
+    );
 }
 
 #[tokio::test]

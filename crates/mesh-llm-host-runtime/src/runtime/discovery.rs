@@ -1,5 +1,5 @@
-use crate::cli::output::{emit_event, OutputEvent};
 use crate::cli::Cli;
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::mesh;
 use crate::network::{nostr, router};
 use anyhow::{Context, Result};
@@ -318,17 +318,17 @@ pub(crate) async fn check_mesh(
 
     let mut models: Vec<String> = Vec::new();
     for i in 0..40 {
-        if let Ok(resp) = client.get(&url).send().await {
-            if let Ok(body) = resp.json::<serde_json::Value>().await {
-                models = body["data"]
-                    .as_array()
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .filter_map(|m| m["id"].as_str().map(String::from))
-                    .collect();
-                if !models.is_empty() {
-                    break;
-                }
+        if let Ok(resp) = client.get(&url).send().await
+            && let Ok(body) = resp.json::<serde_json::Value>().await
+        {
+            models = body["data"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .filter_map(|m| m["id"].as_str().map(String::from))
+                .collect();
+            if !models.is_empty() {
+                break;
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -350,7 +350,7 @@ pub(crate) async fn check_mesh(
         );
     }
 
-    let chosen = if let Some(ref m) = model {
+    let chosen = if let Some(m) = model {
         if !models.iter().any(|n| n == m) {
             if let Some(mut c) = child {
                 let _ = c.kill();

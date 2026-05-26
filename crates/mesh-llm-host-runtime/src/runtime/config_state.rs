@@ -2,7 +2,7 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::plugin::{load_config, validate_config, MeshConfig};
+use crate::plugin::{MeshConfig, load_config, validate_config};
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
 /// Mirrors the `ConfigApplyMode` proto enum; kept in the domain layer so

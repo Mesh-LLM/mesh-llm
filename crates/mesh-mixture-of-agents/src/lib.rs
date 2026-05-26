@@ -45,14 +45,14 @@ pub mod session;
 mod tool_guard;
 pub mod worker;
 
-pub use backend::{apply_enable_thinking, HttpBackend, ModelBackend, ModelEntry, SamplingParams};
+pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
 
 use backend::call_backend;
 use fanout::gather_workers_incremental;
 use mesh_llm_guardrails::tool_arguments_wire_string;
 use normalize::WorkerOutput;
 use reducer::{hedged_reducer_call, reducer_candidates};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
 use tool_guard::enforce_allowed_tools;

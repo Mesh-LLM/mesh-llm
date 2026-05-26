@@ -187,8 +187,8 @@ pub(crate) trait ValidateControlFrame: prost::Message + Default + Sized {
 
 impl ValidateControlFrame for crate::proto::node::GossipFrame {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.sender_id.len() != 32 {
             return Err(ControlFrameError::InvalidSenderId {
@@ -221,8 +221,8 @@ impl ValidateControlFrame for crate::proto::node::TunnelMap {
 }
 impl ValidateControlFrame for crate::proto::node::RouteTableRequest {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if !self.requester_id.is_empty() && self.requester_id.len() != 32 {
             return Err(ControlFrameError::InvalidEndpointId {
@@ -234,8 +234,8 @@ impl ValidateControlFrame for crate::proto::node::RouteTableRequest {
 }
 impl ValidateControlFrame for crate::proto::node::RouteTable {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         for entry in &self.entries {
             if entry.endpoint_id.len() != 32 {
@@ -249,8 +249,8 @@ impl ValidateControlFrame for crate::proto::node::RouteTable {
 }
 impl ValidateControlFrame for crate::proto::node::PeerDown {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.peer_id.len() != 32 {
             return Err(ControlFrameError::InvalidEndpointId {
@@ -262,8 +262,8 @@ impl ValidateControlFrame for crate::proto::node::PeerDown {
 }
 impl ValidateControlFrame for crate::proto::node::PeerLeaving {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.peer_id.len() != 32 {
             return Err(ControlFrameError::InvalidEndpointId {
@@ -276,8 +276,8 @@ impl ValidateControlFrame for crate::proto::node::PeerLeaving {
 
 impl ValidateControlFrame for crate::proto::node::OwnerControlEnvelope {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         let payloads = [
             self.handshake.is_some(),
@@ -515,8 +515,8 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlConfigUpdate {
 
 impl ValidateControlFrame for crate::proto::node::MeshSubprotocolOpen {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.name.trim().is_empty() || self.major == 0 {
             return Err(ControlFrameError::InvalidSubprotocol);
@@ -687,7 +687,7 @@ pub(crate) fn decode_control_frame<T: ValidateControlFrame>(
 mod tests {
     use super::*;
     use crate::crypto::OwnershipSummary;
-    use crate::mesh::{resolve_peer_down, resolve_peer_leaving, PeerInfo};
+    use crate::mesh::{PeerInfo, resolve_peer_down, resolve_peer_leaving};
     use crate::proto::node::{
         ConfiguredModelRef, GossipFrame, MeshSubprotocolOpen, NodeConfigSnapshot, NodeGpuConfig,
         NodeModelEntry, NodePluginEntry, NodeRole, OwnerControlError, OwnerControlErrorCode,
@@ -701,7 +701,7 @@ mod tests {
 
     fn make_valid_gossip_frame() -> GossipFrame {
         GossipFrame {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             sender_id: vec![0u8; 32],
             peers: vec![PeerAnnouncement {
                 endpoint_id: vec![0u8; 32],
@@ -923,7 +923,7 @@ alias = "model-alias"
         let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
         let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
             .expect("valid gossip frame must decode successfully");
-        assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+        assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
         assert_eq!(decoded.peers.len(), 1);
         assert_eq!(decoded.peers[0].endpoint_id, vec![0u8; 32]);
         assert_eq!(decoded.peers[0].role, NodeRole::Worker as i32);
@@ -932,7 +932,7 @@ alias = "model-alias"
     #[test]
     fn mesh_subprotocol_open_roundtrips_and_validates() {
         let open = MeshSubprotocolOpen {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
             major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
         };
@@ -943,7 +943,7 @@ alias = "model-alias"
         assert_eq!(decoded.major, skippy_protocol::STAGE_SUBPROTOCOL_MAJOR);
 
         let bad = MeshSubprotocolOpen {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             name: String::new(),
             major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
         };
@@ -959,7 +959,7 @@ alias = "model-alias"
 
         let zero_gen_req = RouteTableRequest {
             requester_id: vec![0u8; 32],
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &zero_gen_req);
         let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -972,7 +972,7 @@ alias = "model-alias"
 
         let wrong_gen_req = RouteTableRequest {
             requester_id: vec![0u8; 32],
-            gen: 99,
+            r#gen: 99,
         };
         let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &wrong_gen_req);
         let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -986,7 +986,7 @@ alias = "model-alias"
         let bad_gen_response = RouteTable {
             entries: vec![],
             mesh_id: None,
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &bad_gen_response);
         let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
@@ -1000,7 +1000,7 @@ alias = "model-alias"
         let wrong_gen_response = RouteTable {
             entries: vec![],
             mesh_id: None,
-            gen: 42,
+            r#gen: 42,
         };
         let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &wrong_gen_response);
         let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
@@ -1037,7 +1037,7 @@ alias = "model-alias"
 
         let leaving_msg = PeerLeaving {
             peer_id: leaving_id.as_bytes().to_vec(),
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
         };
         let encoded = encode_control_frame(STREAM_PEER_LEAVING, &leaving_msg);
         let decoded_leaving: PeerLeaving = decode_control_frame(STREAM_PEER_LEAVING, &encoded)
@@ -1068,7 +1068,7 @@ alias = "model-alias"
 
         let down_msg = PeerDown {
             peer_id: dead_id.as_bytes().to_vec(),
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
         };
         let encoded = encode_control_frame(STREAM_PEER_DOWN, &down_msg);
         let decoded_down: PeerDown =
@@ -1095,7 +1095,7 @@ alias = "model-alias"
             "dead peer must be removed from connections when confirmed unreachable"
         );
 
-        assert_eq!(decoded_down.gen, NODE_PROTOCOL_GENERATION);
+        assert_eq!(decoded_down.r#gen, NODE_PROTOCOL_GENERATION);
     }
 
     #[test]
@@ -1108,7 +1108,7 @@ alias = "model-alias"
 
         let bad_gen_down = PeerDown {
             peer_id: valid_peer_bytes.clone(),
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_PEER_DOWN, &bad_gen_down);
         let err = decode_control_frame::<PeerDown>(STREAM_PEER_DOWN, &encoded)
@@ -1121,7 +1121,7 @@ alias = "model-alias"
 
         let bad_gen_leaving = PeerLeaving {
             peer_id: valid_peer_bytes.clone(),
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_PEER_LEAVING, &bad_gen_leaving);
         let err = decode_control_frame::<PeerLeaving>(STREAM_PEER_LEAVING, &encoded)
@@ -1140,7 +1140,7 @@ alias = "model-alias"
 
         let forged = PeerLeaving {
             peer_id: victim_id.as_bytes().to_vec(),
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
         };
         let encoded = encode_control_frame(STREAM_PEER_LEAVING, &forged);
         let decoded: PeerLeaving = decode_control_frame(STREAM_PEER_LEAVING, &encoded)
@@ -1230,7 +1230,7 @@ alias = "model-alias"
 
         // All migrated streams must also reject gen=0 and gen=99 where gen is checked
         let bad_gen_gossip = GossipFrame {
-            gen: 0,
+            r#gen: 0,
             sender_id: vec![],
             peers: vec![PeerAnnouncement {
                 endpoint_id: vec![0u8; 32],
@@ -1245,7 +1245,7 @@ alias = "model-alias"
 
         let bad_gen_req = RouteTableRequest {
             requester_id: vec![0u8; 32],
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &bad_gen_req);
         let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -1254,7 +1254,7 @@ alias = "model-alias"
 
         let bad_gen_down = PeerDown {
             peer_id: vec![0u8; 32],
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_PEER_DOWN, &bad_gen_down);
         let err = decode_control_frame::<PeerDown>(STREAM_PEER_DOWN, &encoded)
@@ -1263,7 +1263,7 @@ alias = "model-alias"
 
         let bad_gen_leaving = PeerLeaving {
             peer_id: vec![0u8; 32],
-            gen: 0,
+            r#gen: 0,
         };
         let encoded = encode_control_frame(STREAM_PEER_LEAVING, &bad_gen_leaving);
         let err = decode_control_frame::<PeerLeaving>(STREAM_PEER_LEAVING, &encoded)
@@ -1272,7 +1272,7 @@ alias = "model-alias"
 
         // Wrong gen (e.g. 2) also rejected
         let wrong_gen_gossip = GossipFrame {
-            gen: 2,
+            r#gen: 2,
             sender_id: vec![0u8; 32],
             peers: vec![PeerAnnouncement {
                 endpoint_id: vec![0u8; 32],
@@ -1357,10 +1357,12 @@ alias = "model-alias"
                 .any(|feature| feature
                     == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER)
         );
-        assert!(skippy
-            .features
-            .iter()
-            .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST));
+        assert!(
+            skippy
+                .features
+                .iter()
+                .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
+        );
         assert!(skippy.features.iter().any(|feature| feature
             == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V2));
         assert_eq!(
@@ -2131,10 +2133,12 @@ reasoning_format = "qwen"
         let config: crate::plugin::MeshConfig = toml::from_str(FULL_SURFACE_VALID_FIXTURE).unwrap();
         let snapshot = mesh_config_to_proto(&config);
 
-        assert!(snapshot
-            .config_toml
-            .as_deref()
-            .is_some_and(|toml| toml.contains("prefill_chunk_schedule = \"128,256,384\"")));
+        assert!(
+            snapshot
+                .config_toml
+                .as_deref()
+                .is_some_and(|toml| toml.contains("prefill_chunk_schedule = \"128,256,384\""))
+        );
 
         let restored = proto_config_to_mesh(&snapshot);
         let json = serde_json::to_value(&restored).expect("restored config serializes");

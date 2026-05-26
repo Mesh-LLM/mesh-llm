@@ -651,7 +651,10 @@ mod tests {
         fn save_and_remove(key: &str) -> Self {
             let original = std::env::var(key).ok();
             #[allow(deprecated)]
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe {
+                std::env::remove_var(key)
+            };
             Self {
                 key: key.to_string(),
                 original,
@@ -661,7 +664,10 @@ mod tests {
         fn save_and_set(key: &str, value: &str) -> Self {
             let original = std::env::var(key).ok();
             #[allow(deprecated)]
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe {
+                std::env::set_var(key, value)
+            };
             Self {
                 key: key.to_string(),
                 original,
@@ -673,9 +679,11 @@ mod tests {
         fn drop(&mut self) {
             match &self.original {
                 #[allow(deprecated)]
-                Some(v) => std::env::set_var(&self.key, v),
+                // TODO: Audit that the environment access only happens in single-threaded code.
+                Some(v) => unsafe { std::env::set_var(&self.key, v) },
                 #[allow(deprecated)]
-                None => std::env::remove_var(&self.key),
+                // TODO: Audit that the environment access only happens in single-threaded code.
+                None => unsafe { std::env::remove_var(&self.key) },
             }
         }
     }

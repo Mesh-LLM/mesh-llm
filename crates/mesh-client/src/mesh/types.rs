@@ -1,8 +1,8 @@
 use iroh::{EndpointAddr, EndpointId};
 pub use mesh_llm_types::mesh::{
-    infer_available_model_descriptors, infer_local_served_model_descriptor,
-    infer_served_model_descriptors, merge_demand, ModelDemand, ModelRuntimeDescriptor,
-    ModelSourceKind, ServedModelDescriptor, ServedModelIdentity, DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS,
+    DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
+    ServedModelDescriptor, ServedModelIdentity, infer_available_model_descriptors,
+    infer_local_served_model_descriptor, infer_served_model_descriptors, merge_demand,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

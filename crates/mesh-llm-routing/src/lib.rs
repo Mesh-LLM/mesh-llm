@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Calculate total model size, summing all split files if present.
 /// Split files follow the pattern: name-00001-of-00004.gguf.
@@ -9,17 +9,17 @@ pub fn total_model_bytes(model: &Path) -> u64 {
     let name = model.to_string_lossy();
     if let Some(pos) = name.find("-00001-of-") {
         let of_pos = pos + 10;
-        if let Some(ext_pos) = name[of_pos..].find(".gguf") {
-            if let Ok(n_split) = name[of_pos..of_pos + ext_pos].parse::<u32>() {
-                let prefix = &name[..pos + 1];
-                let suffix = &name[of_pos + ext_pos..];
-                let mut total: u64 = 0;
-                for i in 1..=n_split {
-                    let split_name = format!("{}{:05}-of-{:05}{}", prefix, i, n_split, suffix);
-                    total += std::fs::metadata(&split_name).map(|m| m.len()).unwrap_or(0);
-                }
-                return total;
+        if let Some(ext_pos) = name[of_pos..].find(".gguf")
+            && let Ok(n_split) = name[of_pos..of_pos + ext_pos].parse::<u32>()
+        {
+            let prefix = &name[..pos + 1];
+            let suffix = &name[of_pos + ext_pos..];
+            let mut total: u64 = 0;
+            for i in 1..=n_split {
+                let split_name = format!("{}{:05}-of-{:05}{}", prefix, i, n_split, suffix);
+                total += std::fs::metadata(&split_name).map(|m| m.len()).unwrap_or(0);
             }
+            return total;
         }
     }
     std::fs::metadata(model).map(|m| m.len()).unwrap_or(0)

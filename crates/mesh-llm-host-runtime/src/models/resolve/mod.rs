@@ -1,13 +1,13 @@
-use super::local::HuggingFaceModelIdentity;
 use super::ModelCapabilities;
+use super::local::HuggingFaceModelIdentity;
 use super::{
     capabilities, catalog, find_model_path, format_size_bytes, huggingface_identity_for_path,
     remote_catalog, track_model_usage,
 };
 use crate::cli::terminal_progress::start_spinner;
 use crate::models::usage::ModelUsageRecord;
-use anyhow::{bail, Context, Result};
-use model_artifact::{select_primary_artifact_file, ModelArtifactFile};
+use anyhow::{Context, Result, bail};
+use model_artifact::{ModelArtifactFile, select_primary_artifact_file};
 use serde::Deserialize;
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -241,12 +241,12 @@ pub async fn resolve_model_spec_with_progress(input: &Path, progress: bool) -> R
             record_resolved_model_usage(&installed_path, Some(&model_ref));
             return Ok(installed_path);
         }
-        if let Ok(canonical) = canonicalize_model_ref_input(&raw).await {
-            if canonical != raw {
-                return download_exact_ref_with_progress(&canonical, progress)
-                    .await
-                    .with_context(|| format!("Resolve model spec {raw}"));
-            }
+        if let Ok(canonical) = canonicalize_model_ref_input(&raw).await
+            && canonical != raw
+        {
+            return download_exact_ref_with_progress(&canonical, progress)
+                .await
+                .with_context(|| format!("Resolve model spec {raw}"));
         }
         bail!(
             "Model not found: {raw}\nNot a local file, not in the Hugging Face cache, not in catalog.\n\
@@ -979,10 +979,10 @@ async fn fetch_repo_sibling_entries(
     #[cfg(test)]
     {
         let func = REPO_SIBLING_ENTRIES_OVERRIDE.lock().unwrap().clone();
-        if let Some(func) = func {
-            if let Some(entries) = func(repo, revision) {
-                return Ok(entries);
-            }
+        if let Some(func) = func
+            && let Some(entries) = func(repo, revision)
+        {
+            return Ok(entries);
         }
     }
 

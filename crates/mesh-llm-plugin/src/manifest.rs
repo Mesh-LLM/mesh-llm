@@ -553,7 +553,7 @@ fn default_binding_id(path: &str, operation_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{inference, mcp, plugin_server_info, Plugin, PluginMetadata};
+    use crate::{Plugin, PluginMetadata, inference, mcp, plugin_server_info};
 
     #[allow(dead_code)]
     #[derive(serde::Deserialize, schemars::JsonSchema)]

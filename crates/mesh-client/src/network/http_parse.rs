@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::network::transport::TransportIo;
 
@@ -530,10 +530,10 @@ fn translate_responses_content_item(item: &serde_json::Value) -> Result<serde_js
 }
 
 fn collapse_blocks_if_text_only(blocks: Vec<serde_json::Value>) -> serde_json::Value {
-    if blocks.len() == 1 {
-        if let Some(text) = blocks[0].get("text").and_then(|value| value.as_str()) {
-            return serde_json::Value::String(text.to_string());
-        }
+    if blocks.len() == 1
+        && let Some(text) = blocks[0].get("text").and_then(|value| value.as_str())
+    {
+        return serde_json::Value::String(text.to_string());
     }
     serde_json::Value::Array(blocks)
 }
@@ -632,13 +632,13 @@ fn translate_openai_responses_input(
     let mut messages = Vec::new();
 
     if let Some(instructions_value) = object.remove("instructions") {
-        if let Some(instructions) = instructions_value.as_str().map(str::trim) {
-            if !instructions.is_empty() {
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": instructions,
-                }));
-            }
+        if let Some(instructions) = instructions_value.as_str().map(str::trim)
+            && !instructions.is_empty()
+        {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": instructions,
+            }));
         }
         changed = true;
     }

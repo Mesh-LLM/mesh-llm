@@ -5,8 +5,8 @@ use std::{
     env, fs,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -15,7 +15,7 @@ use axum::{http::StatusCode, response::IntoResponse};
 use openai_frontend::{AssistantMessage, ChatCompletionChoice};
 use serde_json::json;
 use skippy_protocol::{
-    LoadMode, PeerConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload, SCHEMA_VERSION,
+    LoadMode, PeerConfig, SCHEMA_VERSION, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
 use tokio::sync::Semaphore;
 
@@ -194,8 +194,8 @@ fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
         Some(path) => PathBuf::from(path),
         None => {
             eprintln!(
-                    "skipping real multimodal smoke: set {MM_MODEL_ENV}, {MM_PROJECTOR_ENV}, and {MM_IMAGE_ENV}"
-                );
+                "skipping real multimodal smoke: set {MM_MODEL_ENV}, {MM_PROJECTOR_ENV}, and {MM_IMAGE_ENV}"
+            );
             return Ok(None);
         }
     };
@@ -1595,9 +1595,9 @@ fn explicit_chat_request_values_override_request_defaults() {
     assert_eq!(request.effective_max_tokens(), Some(32));
     assert_eq!(
         request.stop,
-        Some(openai_frontend::StopSequence::Many(
-            vec!["USER".to_string()]
-        ))
+        Some(openai_frontend::StopSequence::Many(vec![
+            "USER".to_string()
+        ]))
     );
     assert_eq!(sampling.top_p, 0.7);
     assert_eq!(sampling.presence_penalty, 0.1);

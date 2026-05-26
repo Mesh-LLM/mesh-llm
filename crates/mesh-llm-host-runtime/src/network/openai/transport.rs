@@ -6,16 +6,16 @@
 use crate::inference::election;
 use crate::mesh;
 use crate::network::affinity::{
-    prepare_remote_targets_for_request, AffinityRouter, PreparedTargets, TargetSelection,
+    AffinityRouter, PreparedTargets, TargetSelection, prepare_remote_targets_for_request,
 };
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::{
-    normalize_chat_completion_json_body, ChatStreamNormalizationState,
+    ChatStreamNormalizationState, normalize_chat_completion_json_body,
 };
 use crate::network::router;
 use crate::network::target_health::TargetHealthOutcome;
 use crate::plugin;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 // moa imports relocated into moa_gateway.rs (sole user after merge)
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -2696,12 +2696,12 @@ fn rewrite_http_request_target(
     let mut rebuilt = format!("{method} {new_path} {version}\r\n");
     let mut saw_host = false;
     for line in lines {
-        if let Some((name, _value)) = line.split_once(':') {
-            if name.eq_ignore_ascii_case("host") {
-                rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
-                saw_host = true;
-                continue;
-            }
+        if let Some((name, _value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("host")
+        {
+            rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+            saw_host = true;
+            continue;
         }
         rebuilt.push_str(line);
         rebuilt.push_str("\r\n");
@@ -2871,10 +2871,8 @@ async fn build_mesh_request_plan(
     if is_auto_request {
         inject_mesh_hooks_flag(&mut request.raw, true);
     }
-    if track_demand {
-        if let Some(name) = effective_model.as_deref() {
-            node.record_request(name);
-        }
+    if track_demand && let Some(name) = effective_model.as_deref() {
+        node.record_request(name);
     }
 
     let resolved_hosts = match resolve_mesh_target_hosts(node, effective_model.as_deref()).await {
@@ -2910,10 +2908,10 @@ async fn build_mesh_request_plan(
 }
 
 fn rewrite_effective_model(request: &mut BufferedHttpRequest, effective_model: Option<&str>) {
-    if let Some(name) = effective_model {
-        if request.model_name.as_deref() != Some(name) {
-            rewrite_model_field(request, name);
-        }
+    if let Some(name) = effective_model
+        && request.model_name.as_deref() != Some(name)
+    {
+        rewrite_model_field(request, name);
     }
 }
 
@@ -3242,10 +3240,9 @@ fn forget_mesh_cached_target(
         effective_model,
         prepared.learn_prefix_hash,
         prepared.cached_target.as_ref(),
-    ) {
-        if cached_target == failed_target {
-            affinity.forget_target(name, prefix_hash, failed_target);
-        }
+    ) && cached_target == failed_target
+    {
+        affinity.forget_target(name, prefix_hash, failed_target);
     }
 }
 
@@ -3592,7 +3589,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
                     state.attempts,
                     result,
                     &target,
-                )
+                );
             }
         }
     }
@@ -3719,10 +3716,10 @@ fn handle_delivered_route_model_attempt(
     state: &RouteModelState,
     affinity: &AffinityRouter,
 ) -> RouteModelDisposition {
-    if should_learn_affinity(status_code) {
-        if let Some(prefix_hash) = selection.learn_prefix_hash {
-            affinity.learn_target(model, prefix_hash, target);
-        }
+    if should_learn_affinity(status_code)
+        && let Some(prefix_hash) = selection.learn_prefix_hash
+    {
+        affinity.learn_target(model, prefix_hash, target);
     }
     node.record_routed_request(
         Some(model),
@@ -3789,10 +3786,9 @@ fn forget_selected_route_model_target(
     if let (Some(prefix_hash), Some(cached_target)) = (
         selection.learn_prefix_hash,
         selection.cached_target.as_ref(),
-    ) {
-        if cached_target == target {
-            affinity.forget_target(model, prefix_hash, target);
-        }
+    ) && cached_target == target
+    {
+        affinity.forget_target(model, prefix_hash, target);
     }
 }
 
@@ -3967,7 +3963,8 @@ pub async fn send_models_list_with_descriptors(
     let body = models_list_json(models, descriptors).to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -4074,12 +4071,11 @@ fn public_model_id(model_name: &str, descriptor: Option<&mesh::ServedModelDescri
     // local models), and finally the internal model_name (which
     // always carries the quant suffix our resolver knows how to
     // route).
-    if let Some(descriptor) = descriptor {
-        if descriptor_can_produce_lossless_id(&descriptor.identity) {
-            if let Some(id) = public_model_id_from_identity(&descriptor.identity) {
-                return id;
-            }
-        }
+    if let Some(descriptor) = descriptor
+        && descriptor_can_produce_lossless_id(&descriptor.identity)
+        && let Some(id) = public_model_id_from_identity(&descriptor.identity)
+    {
+        return id;
     }
 
     if let Some(id) = public_model_id_from_local_path(model_name) {
@@ -4300,7 +4296,8 @@ pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io:
     };
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -4316,7 +4313,8 @@ async fn send_503_inner(mut stream: TcpStream, reason: &str) -> std::io::Result<
     let body = serde_json::json!({"error": reason}).to_string();
     let resp = format!(
         "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;

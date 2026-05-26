@@ -30,7 +30,8 @@ pub(super) async fn respond_error(
     };
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     Ok(())

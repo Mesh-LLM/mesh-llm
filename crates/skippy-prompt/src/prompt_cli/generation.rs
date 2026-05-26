@@ -493,11 +493,10 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             }
         }
         speculative_stats.adaptive_window_final = adaptive_window;
-        if decision.rejected() || reached_eog {
-            if let Some(draft) = draft.as_deref_mut() {
+        if (decision.rejected() || reached_eog)
+            && let Some(draft) = draft.as_deref_mut() {
                 draft.reset_to_context(&context_tokens)?;
             }
-        }
         if reached_eog {
             break;
         }
@@ -511,8 +510,8 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         );
     }
     let mut live_rematerialize_failed = false;
-    if live_enabled {
-        if let Err(error) = rematerialize_live_transcript(
+    if live_enabled
+        && let Err(error) = rematerialize_live_transcript(
             stream,
             tokenizer,
             chat_template_model,
@@ -533,7 +532,6 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
                  the next prompt will reset the live session: {error:#}"
             );
         }
-    }
 
     if !live_enabled {
         stop_prompt_stream(stream, wire_dtype, request_id, wire_session_id, args)?;
@@ -557,12 +555,11 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             live.stream = None;
         }
         live.messages = live_messages;
-        if let Some(last) = live.messages.last_mut() {
-            if last.role == "user" {
+        if let Some(last) = live.messages.last_mut()
+            && last.role == "user" {
                 live.messages
                     .push(ChatTemplateMessage::new("assistant", &assistant_raw_text));
             }
-        }
         live.resident_tokens =
             live_transcript_tokens(tokenizer, chat_template_model, args, &live.messages)?;
         live.dirty = !generation_reached_eog || live_rematerialize_failed;

@@ -1,7 +1,7 @@
-use std::ffi::{c_char, CStr};
+use std::ffi::{CStr, c_char};
 use std::ptr;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use skippy_ffi::{BackendDevice as RawBackendDevice, BackendDeviceType as RawBackendDeviceType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

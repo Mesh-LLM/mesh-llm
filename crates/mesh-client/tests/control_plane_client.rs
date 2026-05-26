@@ -5,8 +5,8 @@ use mesh_client::proto::node::{
     OwnerControlErrorCode,
 };
 use mesh_client::protocol::{
-    decode_owner_control_envelope, read_len_prefixed, write_len_prefixed, ALPN_CONTROL_V1,
-    NODE_PROTOCOL_GENERATION,
+    ALPN_CONTROL_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope, read_len_prefixed,
+    write_len_prefixed,
 };
 use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
@@ -15,7 +15,7 @@ use mesh_client::{
 use prost::Message;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 #[derive(Clone)]
 struct TestServerState {

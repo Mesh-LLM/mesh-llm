@@ -6,20 +6,20 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use skippy_metrics::attr;
 use skippy_protocol::{
-    AckMessage, MessageBase, StageConfig, StageMessage, StageTopology, TokenReplyMessage,
-    SCHEMA_VERSION,
+    AckMessage, MessageBase, SCHEMA_VERSION, StageConfig, StageMessage, StageTopology,
+    TokenReplyMessage,
 };
 use tokio::net::TcpListener;
 
@@ -27,8 +27,8 @@ use crate::{
     cli::ServeArgs,
     config::{load_json, validate_config},
     kv_integration::KvStageIntegration,
-    runtime_state::{load_runtime, RuntimeState},
-    telemetry::{lifecycle_attrs, now_unix_nanos, Telemetry, TelemetryLevel, TelemetryStats},
+    runtime_state::{RuntimeState, load_runtime},
+    telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
 };
 
 type KvRecordCandidate = ();
@@ -319,28 +319,28 @@ async fn message(
                 &prefill.token_ids,
             )
             .await;
-            if let Some(runtime) = state.runtime.as_ref() {
-                if restored_tokens < prefill.token_ids.len() {
-                    let records = {
-                        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                        runtime.prefill(
-                            &prefill.base.session_id,
-                            &prefill.token_ids[restored_tokens..],
-                        )?;
-                        let records = maybe_plan_record_prefill(
-                            &state,
-                            &prefill.base,
-                            prefill.prompt_token_start,
-                            &prefill.token_ids,
-                            restored_tokens as u64,
-                        );
-                        state
-                            .telemetry
-                            .emit("stage.llama_decode", lifecycle_attrs(&state.config));
-                        records
-                    };
-                    spawn_record_prefill(state.clone(), records);
-                }
+            if let Some(runtime) = state.runtime.as_ref()
+                && restored_tokens < prefill.token_ids.len()
+            {
+                let records = {
+                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                    runtime.prefill(
+                        &prefill.base.session_id,
+                        &prefill.token_ids[restored_tokens..],
+                    )?;
+                    let records = maybe_plan_record_prefill(
+                        &state,
+                        &prefill.base,
+                        prefill.prompt_token_start,
+                        &prefill.token_ids,
+                        restored_tokens as u64,
+                    );
+                    state
+                        .telemetry
+                        .emit("stage.llama_decode", lifecycle_attrs(&state.config));
+                    records
+                };
+                spawn_record_prefill(state.clone(), records);
             }
             StageMessage::PrefillChunk(prefill).ack_for(&state.config)
         }
@@ -353,28 +353,28 @@ async fn message(
                 &prefill.token_ids,
             )
             .await;
-            if let Some(runtime) = state.runtime.as_ref() {
-                if restored_tokens < prefill.token_ids.len() {
-                    let records = {
-                        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                        runtime.prefill(
-                            &prefill.base.session_id,
-                            &prefill.token_ids[restored_tokens..],
-                        )?;
-                        let records = maybe_plan_record_prefill(
-                            &state,
-                            &prefill.base,
-                            prefill.prompt_token_start,
-                            &prefill.token_ids,
-                            restored_tokens as u64,
-                        );
-                        state
-                            .telemetry
-                            .emit("stage.llama_decode", lifecycle_attrs(&state.config));
-                        records
-                    };
-                    spawn_record_prefill(state.clone(), records);
-                }
+            if let Some(runtime) = state.runtime.as_ref()
+                && restored_tokens < prefill.token_ids.len()
+            {
+                let records = {
+                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                    runtime.prefill(
+                        &prefill.base.session_id,
+                        &prefill.token_ids[restored_tokens..],
+                    )?;
+                    let records = maybe_plan_record_prefill(
+                        &state,
+                        &prefill.base,
+                        prefill.prompt_token_start,
+                        &prefill.token_ids,
+                        restored_tokens as u64,
+                    );
+                    state
+                        .telemetry
+                        .emit("stage.llama_decode", lifecycle_attrs(&state.config));
+                    records
+                };
+                spawn_record_prefill(state.clone(), records);
             }
             StageMessage::FinalPrefillChunk(prefill).ack_for(&state.config)
         }

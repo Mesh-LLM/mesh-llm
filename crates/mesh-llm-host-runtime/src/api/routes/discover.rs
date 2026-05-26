@@ -1,4 +1,4 @@
-use super::super::{http::respond_error, MeshApi};
+use super::super::{MeshApi, http::respond_error};
 use crate::network::{discovery, nostr};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;

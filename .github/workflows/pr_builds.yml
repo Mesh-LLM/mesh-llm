@@ -900,7 +900,7 @@ jobs:
     needs: changes
     if: ${{ (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || needs.changes.outputs.windows_cpu == 'true' || needs.changes.outputs.windows_gpu == 'true') && needs.changes.outputs.docs_only != 'true' }}
     name: Windows ${{ matrix.name }}
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: blacksmith-8vcpu-windows-2025
     strategy:
       fail-fast: false
       matrix:

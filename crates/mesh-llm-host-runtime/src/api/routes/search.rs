@@ -1,7 +1,7 @@
 use super::super::http::{respond_error, respond_json};
 use crate::models::{
-    remote_catalog, search_catalog_json_payload, search_catalog_models, search_huggingface,
-    search_huggingface_json_payload, SearchArtifactFilter, SearchSort,
+    SearchArtifactFilter, SearchSort, remote_catalog, search_catalog_json_payload,
+    search_catalog_models, search_huggingface, search_huggingface_json_payload,
 };
 use url::form_urlencoded;
 

@@ -1,12 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use hf_hub::{
-    repository::{AddSource, ModelInfo},
     HFClient, HFError, HFRepository, RepoTypeModel,
+    repository::{AddSource, ModelInfo},
 };
 use model_package::jobs::{CpuJobPlan, HfJobsClient, JobInfo, JobSpec, JobStage, JobVolume};
 use model_package::prepare::{self, DiscoveredQuant};
@@ -793,7 +793,7 @@ async fn catalog_layer_package_repo(
         }
         Err(HFError::Http { context }) if context.status.as_u16() == 404 => return Ok(None),
         Err(err) => {
-            return Err(err).with_context(|| format!("download catalog entry {entry_path}"))
+            return Err(err).with_context(|| format!("download catalog entry {entry_path}"));
         }
     };
 
@@ -1126,8 +1126,8 @@ mod tests {
     use model_package::jobs::CpuJobPlan;
 
     use super::{
-        estimated_bucket_workspace_bytes, job_spec_with_token, json_layer_package_repo,
-        model_family_key, model_layer_repos, Args, Candidate, DiscoveredQuant, RankedModel,
+        Args, Candidate, DiscoveredQuant, RankedModel, estimated_bucket_workspace_bytes,
+        job_spec_with_token, json_layer_package_repo, model_family_key, model_layer_repos,
     };
 
     #[test]

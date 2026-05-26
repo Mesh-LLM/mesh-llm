@@ -55,14 +55,16 @@ fn dense_attention_plan_allows_costed_kv_migration() {
     let plan = plan_even_contiguous(&request).expect("plan");
 
     assert_eq!(plan.stages.len(), 3);
-    assert!(plan
-        .stages
-        .iter()
-        .all(|stage| stage.state_affinity == StateAffinity::AttentionKv));
-    assert!(plan
-        .stages
-        .iter()
-        .all(|stage| stage.migration_policy == MigrationPolicy::CostedKv));
+    assert!(
+        plan.stages
+            .iter()
+            .all(|stage| stage.state_affinity == StateAffinity::AttentionKv)
+    );
+    assert!(
+        plan.stages
+            .iter()
+            .all(|stage| stage.migration_policy == MigrationPolicy::CostedKv)
+    );
     assert!(plan.diagnostics.is_empty());
 }
 
@@ -155,12 +157,16 @@ fn package_aware_plan_prefers_cached_peer_for_equal_capacity() {
     let plan = plan_package_aware_contiguous_with_signals(&request, &[cold, warm]).expect("plan");
 
     assert_eq!(stage_layout(&plan), vec![("warm", 0, 4), ("cold", 4, 8)]);
-    assert!(plan.stages[0]
-        .reason_codes
-        .contains(&PlanReasonCode::CacheLocalityPreferred));
-    assert!(plan.stages[1]
-        .reason_codes
-        .contains(&PlanReasonCode::ArtifactTransferPenalty));
+    assert!(
+        plan.stages[0]
+            .reason_codes
+            .contains(&PlanReasonCode::CacheLocalityPreferred)
+    );
+    assert!(
+        plan.stages[1]
+            .reason_codes
+            .contains(&PlanReasonCode::ArtifactTransferPenalty)
+    );
 }
 
 #[test]
@@ -186,9 +192,11 @@ fn package_aware_plan_penalizes_missing_untransferable_artifacts() {
     let plan = plan_package_aware_contiguous_with_signals(&request, &[cold, ready]).expect("plan");
 
     assert_eq!(plan.stages[0].node_id, "ready-lower-vram");
-    assert!(plan.stages[1]
-        .reason_codes
-        .contains(&PlanReasonCode::ArtifactTransferPenalty));
+    assert!(
+        plan.stages[1]
+            .reason_codes
+            .contains(&PlanReasonCode::ArtifactTransferPenalty)
+    );
 }
 
 #[test]
@@ -212,9 +220,11 @@ fn package_aware_plan_treats_high_rtt_as_cost_not_exclusion() {
         .iter()
         .find(|stage| stage.node_id == "distant")
         .expect("distant stage");
-    assert!(distant_stage
-        .reason_codes
-        .contains(&PlanReasonCode::NetworkPipelineCost));
+    assert!(
+        distant_stage
+            .reason_codes
+            .contains(&PlanReasonCode::NetworkPipelineCost)
+    );
 }
 
 #[test]
@@ -238,10 +248,11 @@ fn package_aware_plan_can_promote_extra_cached_peer() {
 
     assert_eq!(plan.stages.len(), 2);
     assert_eq!(plan.stages[0].node_id, "cached-extra");
-    assert!(plan
-        .stages
-        .iter()
-        .any(|stage| stage.node_id == "cold-a" || stage.node_id == "cold-b"));
+    assert!(
+        plan.stages
+            .iter()
+            .any(|stage| stage.node_id == "cold-a" || stage.node_id == "cold-b")
+    );
 }
 
 #[test]
@@ -264,14 +275,16 @@ fn falcon_h1_marks_every_stage_as_sticky() {
             .collect::<Vec<_>>(),
         vec![(0, 2), (2, 4), (4, 6)]
     );
-    assert!(plan
-        .stages
-        .iter()
-        .all(|stage| stage.state_affinity == StateAffinity::Mixed));
-    assert!(plan
-        .stages
-        .iter()
-        .all(|stage| stage.migration_policy == MigrationPolicy::StickyRecurrentOwner));
+    assert!(
+        plan.stages
+            .iter()
+            .all(|stage| stage.state_affinity == StateAffinity::Mixed)
+    );
+    assert!(
+        plan.stages
+            .iter()
+            .all(|stage| stage.migration_policy == MigrationPolicy::StickyRecurrentOwner)
+    );
     assert_eq!(plan.diagnostics.len(), 3);
 }
 
@@ -356,9 +369,11 @@ fn qwen3_family_defaults_to_f16_and_records_q8_rejection() {
     assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
     assert_eq!(plan.boundaries[0].raw_activation_bytes_per_token, 4096);
     assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 2048);
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::Q8WireRejected));
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::Q8WireRejected)
+    );
 }
 
 #[test]
@@ -380,10 +395,11 @@ fn accepted_dense_families_emit_exact_state_mobility_reason() {
             .reason_codes
             .contains(&PlanReasonCode::ExactStateMobilityAccepted)
     }));
-    assert!(plan
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == PlanReasonCode::ExactStateMobilityAccepted));
+    assert!(
+        plan.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == PlanReasonCode::ExactStateMobilityAccepted)
+    );
 }
 
 #[test]
@@ -402,15 +418,21 @@ fn untested_dense_family_blocks_q8_but_has_no_split_constraints() {
     assert_eq!(plan.family_id.as_deref(), Some("olmo"));
     assert_eq!(plan.boundaries[0].decision, BoundaryDecision::Accepted);
     assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::DefaultWireDtypeF16));
-    assert!(!plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::Q8WireValidated));
-    assert!(!plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::Q8WireRejected));
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::DefaultWireDtypeF16)
+    );
+    assert!(
+        !plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::Q8WireValidated)
+    );
+    assert!(
+        !plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::Q8WireRejected)
+    );
 }
 
 #[test]
@@ -467,21 +489,26 @@ fn falcon_family_capability_marks_attention_layers_sticky() {
 
     let plan = plan_even_contiguous(&request).expect("plan");
 
-    assert!(plan
-        .stages
-        .iter()
-        .all(|stage| stage.state_affinity == StateAffinity::Mixed));
-    assert!(plan
-        .stages
-        .iter()
-        .all(|stage| stage.migration_policy == MigrationPolicy::StickyRecurrentOwner));
-    assert!(plan
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == PlanReasonCode::ExactStateMobilityRejected));
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::RecurrentOwnerSticky));
+    assert!(
+        plan.stages
+            .iter()
+            .all(|stage| stage.state_affinity == StateAffinity::Mixed)
+    );
+    assert!(
+        plan.stages
+            .iter()
+            .all(|stage| stage.migration_policy == MigrationPolicy::StickyRecurrentOwner)
+    );
+    assert!(
+        plan.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == PlanReasonCode::ExactStateMobilityRejected)
+    );
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::RecurrentOwnerSticky)
+    );
 }
 
 #[test]
@@ -502,12 +529,16 @@ fn gemma4_e4b_accepts_validated_boundary_with_sideband() {
     assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
     assert_eq!(plan.boundaries[0].raw_activation_bytes_per_token, 10240);
     assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 5120);
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::TokenSidebandRequired));
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::Q8WireRejected));
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::TokenSidebandRequired)
+    );
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::Q8WireRejected)
+    );
 }
 
 #[test]
@@ -527,12 +558,16 @@ fn rwkv7_boundary_accounts_for_v_first_sideband() {
     assert_eq!(plan.boundaries[0].wire_dtype, WireDType::F16);
     assert_eq!(plan.boundaries[0].raw_activation_bytes_per_token, 6144);
     assert_eq!(plan.boundaries[0].wire_payload_bytes_per_token, 3072);
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::ActivationSidebandRequired));
-    assert!(plan.boundaries[0]
-        .reason_codes
-        .contains(&PlanReasonCode::RecurrentOwnerSticky));
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::ActivationSidebandRequired)
+    );
+    assert!(
+        plan.boundaries[0]
+            .reason_codes
+            .contains(&PlanReasonCode::RecurrentOwnerSticky)
+    );
 }
 
 #[test]
@@ -558,10 +593,11 @@ fn gemma4_e4b_rejects_known_bad_shared_kv_boundaries() {
             (28, BoundaryDecision::Rejected)
         ]
     );
-    assert!(plan
-        .diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.code == PlanReasonCode::SharedKvRegionCut));
+    assert!(
+        plan.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == PlanReasonCode::SharedKvRegionCut)
+    );
 }
 
 #[test]
@@ -594,9 +630,11 @@ fn gemma3n_requires_altup_sideband_and_reviewed_kv_boundary() {
             (20, BoundaryDecision::Rejected, 32768, 16384)
         ]
     );
-    assert!(even_plan.boundaries.iter().all(|boundary| boundary
-        .reason_codes
-        .contains(&PlanReasonCode::ActivationSidebandRequired)));
+    assert!(even_plan.boundaries.iter().all(|boundary| {
+        boundary
+            .reason_codes
+            .contains(&PlanReasonCode::ActivationSidebandRequired)
+    }));
 
     let reviewed_plan = plan_contiguous_with_splits(&request, &[10, 15]).expect("reviewed plan");
     assert_eq!(

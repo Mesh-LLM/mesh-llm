@@ -78,7 +78,7 @@ pub(crate) fn mesh_models(snapshot: ModelViewSnapshot) -> Vec<MeshModelPayload> 
 mod tests {
     use super::*;
     use crate::api::status::{
-        build_gpus, build_ownership_payload, LocalInstance, NodeState, StatusPayload,
+        LocalInstance, NodeState, StatusPayload, build_gpus, build_ownership_payload,
     };
     use crate::crypto::OwnershipSummary;
     use crate::mesh::MeshCatalogEntry;

@@ -1,8 +1,8 @@
 use super::{
-    PluginSummary, BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID,
-    OPENAI_ENDPOINT_PLUGIN_ID, TELEMETRY_PLUGIN_ID,
+    BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID,
+    PluginSummary, TELEMETRY_PLUGIN_ID,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::MeshVisibility;
 use serde::{Deserialize, Serialize};
 use skippy_protocol::FlashAttentionType;
@@ -939,17 +939,16 @@ pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
 }
 
 pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
-    if let Some(version) = config.version {
-        if version != 1 {
-            bail!("unsupported config version {version}; expected version = 1");
-        }
+    if let Some(version) = config.version
+        && version != 1
+    {
+        bail!("unsupported config version {version}; expected version = 1");
     }
-    if let Some(bind) = config.owner_control.bind {
-        if bind.port() == 0 && !bind.ip().is_loopback() {
-            bail!(
-                "owner_control.bind must use a concrete port when binding a non-loopback address"
-            );
-        }
+    if let Some(bind) = config.owner_control.bind
+        && bind.port() == 0
+        && !bind.ip().is_loopback()
+    {
+        bail!("owner_control.bind must use a concrete port when binding a non-loopback address");
     }
     if let Some(advertise_addr) = config.owner_control.advertise_addr {
         if advertise_addr.port() == 0 {
@@ -959,10 +958,10 @@ pub(crate) fn validate_config(config: &MeshConfig) -> Result<()> {
             bail!("owner_control.advertise_addr must not use an unspecified IP address");
         }
     }
-    if let Some(parallel) = config.gpu.parallel {
-        if parallel < 1 {
-            bail!("gpu.parallel must be at least 1, got {parallel}");
-        }
+    if let Some(parallel) = config.gpu.parallel
+        && parallel < 1
+    {
+        bail!("gpu.parallel must be at least 1, got {parallel}");
     }
     validate_telemetry_config(&config.telemetry)?;
     let defaults_hardware = config
@@ -1126,10 +1125,10 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
     validate_optional_positive_u32(config.ctx_size, &format!("{base_path}.ctx_size"))?;
     validate_optional_positive_u32(config.batch, &format!("{base_path}.batch"))?;
     validate_optional_positive_u32(config.ubatch, &format!("{base_path}.ubatch"))?;
-    if let (Some(batch), Some(ubatch)) = (config.batch, config.ubatch) {
-        if ubatch > batch {
-            bail!("{base_path}.ubatch must be less than or equal to {base_path}.batch");
-        }
+    if let (Some(batch), Some(ubatch)) = (config.batch, config.ubatch)
+        && ubatch > batch
+    {
+        bail!("{base_path}.ubatch must be less than or equal to {base_path}.batch");
     }
     validate_optional_non_empty(
         config.cache_type_k.as_deref(),
@@ -1160,18 +1159,19 @@ fn validate_model_fit(config: &ModelFitConfig, base_path: &str) -> Result<()> {
         config.context_shift.as_ref(),
         &format!("{base_path}.context_shift"),
     )?;
-    if let Some(cache_idle_slots) = config.cache_idle_slots {
-        if cache_idle_slots > 0 && matches!(config.prompt_cache, Some(BoolOrAuto::Bool(false))) {
-            bail!("{base_path}.cache_idle_slots requires {base_path}.prompt_cache = true");
-        }
+    if let Some(cache_idle_slots) = config.cache_idle_slots
+        && cache_idle_slots > 0
+        && matches!(config.prompt_cache, Some(BoolOrAuto::Bool(false)))
+    {
+        bail!("{base_path}.cache_idle_slots requires {base_path}.prompt_cache = true");
     }
     if let Some(prefix_cache) = &config.prefix_cache {
         validate_prefix_cache(prefix_cache, &format!("{base_path}.prefix_cache"))?;
     }
-    if let (Some(keep_tokens), Some(ctx_size)) = (config.keep_tokens, config.ctx_size) {
-        if keep_tokens > ctx_size {
-            bail!("{base_path}.keep_tokens must be less than or equal to {base_path}.ctx_size");
-        }
+    if let (Some(keep_tokens), Some(ctx_size)) = (config.keep_tokens, config.ctx_size)
+        && keep_tokens > ctx_size
+    {
+        bail!("{base_path}.keep_tokens must be less than or equal to {base_path}.ctx_size");
     }
     validate_optional_positive_u32(
         config.checkpoint_interval,
@@ -1319,10 +1319,10 @@ fn validate_hardware(
 }
 
 fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()> {
-    if let Some(parallel) = config.parallel {
-        if parallel < 1 {
-            bail!("{base_path}.parallel must be at least 1, got {parallel}");
-        }
+    if let Some(parallel) = config.parallel
+        && parallel < 1
+    {
+        bail!("{base_path}.parallel must be at least 1, got {parallel}");
     }
     validate_bool_or_auto(
         config.continuous_batching.as_ref(),
@@ -1350,10 +1350,10 @@ fn validate_throughput(config: &ThroughputConfig, base_path: &str) -> Result<()>
         }
     }
     validate_optional_non_empty(config.numa.as_deref(), &format!("{base_path}.numa"))?;
-    if let Some(slot_prompt_similarity) = config.slot_prompt_similarity {
-        if slot_prompt_similarity < 0.0 {
-            bail!("{base_path}.slot_prompt_similarity must be non-negative");
-        }
+    if let Some(slot_prompt_similarity) = config.slot_prompt_similarity
+        && slot_prompt_similarity < 0.0
+    {
+        bail!("{base_path}.slot_prompt_similarity must be non-negative");
     }
     if config.sleep_idle_seconds.is_some() {
         bail!("{base_path}.sleep_idle_seconds is documented-rejected and must not be set");
@@ -1419,7 +1419,9 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
                     .filter(|value| *value > 0)
                     .is_none()
             {
-                bail!("{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers");
+                bail!(
+                    "{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers"
+                );
             }
         }
     }
@@ -1458,10 +1460,12 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
         config.draft_max_tokens,
         &format!("{base_path}.draft_max_tokens"),
     )?;
-    if let (Some(min), Some(max)) = (config.draft_min_tokens, config.draft_max_tokens) {
-        if min > max {
-            bail!("{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens");
-        }
+    if let (Some(min), Some(max)) = (config.draft_min_tokens, config.draft_max_tokens)
+        && min > max
+    {
+        bail!(
+            "{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens"
+        );
     }
     validate_probability(
         config.draft_acceptance_threshold,
@@ -1471,10 +1475,10 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
         config.draft_split_probability,
         &format!("{base_path}.draft_split_probability"),
     )?;
-    if let Some(gpu_layers) = config.draft_gpu_layers {
-        if gpu_layers < -1 {
-            bail!("{base_path}.draft_gpu_layers must be at least -1");
-        }
+    if let Some(gpu_layers) = config.draft_gpu_layers
+        && gpu_layers < -1
+    {
+        bail!("{base_path}.draft_gpu_layers must be at least -1");
     }
     validate_optional_non_empty(
         config.draft_device.as_deref(),
@@ -1491,10 +1495,10 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
     )?;
     validate_optional_positive_u32(config.ngram_min, &format!("{base_path}.ngram_min"))?;
     validate_optional_positive_u32(config.ngram_max, &format!("{base_path}.ngram_max"))?;
-    if let (Some(min), Some(max)) = (config.ngram_min, config.ngram_max) {
-        if max < min {
-            bail!("{base_path}.ngram_max must be greater than or equal to {base_path}.ngram_min");
-        }
+    if let (Some(min), Some(max)) = (config.ngram_min, config.ngram_max)
+        && max < min
+    {
+        bail!("{base_path}.ngram_max must be greater than or equal to {base_path}.ngram_min");
     }
     validate_bool_or_auto(
         config.spec_default.as_ref(),
@@ -1505,7 +1509,9 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
         && config.draft_hf_repo.is_none()
         && config.draft_selection_policy.is_none()
     {
-        bail!("{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured");
+        bail!(
+            "{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured"
+        );
     }
     Ok(())
 }
@@ -1524,10 +1530,10 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
     }
     validate_non_negative_f64(config.temperature, &format!("{base_path}.temperature"))?;
     validate_probability(config.top_p, &format!("{base_path}.top_p"))?;
-    if let Some(top_k) = config.top_k {
-        if top_k < 0 {
-            bail!("{base_path}.top_k must be greater than or equal to 0");
-        }
+    if let Some(top_k) = config.top_k
+        && top_k < 0
+    {
+        bail!("{base_path}.top_k must be greater than or equal to 0");
     }
     validate_probability(config.min_p, &format!("{base_path}.min_p"))?;
     validate_probability(config.typical_p, &format!("{base_path}.typical_p"))?;
@@ -1544,10 +1550,10 @@ fn validate_request_defaults(config: &RequestDefaultsConfig, base_path: &str) ->
         config.repeat_penalty,
         &format!("{base_path}.repeat_penalty"),
     )?;
-    if let Some(repeat_last_n) = config.repeat_last_n {
-        if repeat_last_n < -1 {
-            bail!("{base_path}.repeat_last_n must be greater than or equal to -1");
-        }
+    if let Some(repeat_last_n) = config.repeat_last_n
+        && repeat_last_n < -1
+    {
+        bail!("{base_path}.repeat_last_n must be greater than or equal to -1");
     }
     validate_non_negative_f64(
         config.presence_penalty,
@@ -1644,20 +1650,18 @@ fn validate_multimodal_pair(
     if let (Some(hardware), Some(multimodal)) = (hardware, multimodal) {
         if let (Some(hardware_mmproj), Some(multimodal_mmproj)) =
             (hardware.mmproj.as_deref(), multimodal.mmproj.as_deref())
+            && hardware_mmproj != multimodal_mmproj
         {
-            if hardware_mmproj != multimodal_mmproj {
-                bail!(
-                    "{multimodal_path}.mmproj must match {hardware_path}.mmproj when both are set"
-                );
-            }
+            bail!("{multimodal_path}.mmproj must match {hardware_path}.mmproj when both are set");
         }
         if let (Some(hardware_offload), Some(multimodal_offload)) = (
             hardware.mmproj_offload.as_ref(),
             multimodal.mmproj_offload.as_ref(),
-        ) {
-            if hardware_offload != multimodal_offload {
-                bail!("{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set");
-            }
+        ) && hardware_offload != multimodal_offload
+        {
+            bail!(
+                "{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set"
+            );
         }
     }
     Ok(())
@@ -1673,10 +1677,12 @@ fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Result<()>
         config.mmproj_offload.as_ref(),
         &format!("{base_path}.mmproj_offload"),
     )?;
-    if let (Some(min), Some(max)) = (config.image_min_tokens, config.image_max_tokens) {
-        if min > max {
-            bail!("{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens");
-        }
+    if let (Some(min), Some(max)) = (config.image_min_tokens, config.image_max_tokens)
+        && min > max
+    {
+        bail!(
+            "{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens"
+        );
     }
     if config.embeddings.is_some() {
         bail!("{base_path}.embeddings is documented-rejected and must not be set");
@@ -1788,28 +1794,28 @@ fn validate_bool_or_auto(value: Option<&BoolOrAuto>, path: &str) -> Result<()> {
 }
 
 fn validate_probability(value: Option<f64>, path: &str) -> Result<()> {
-    if let Some(value) = value {
-        if !(0.0..=1.0).contains(&value) {
-            bail!("{path} must be between 0.0 and 1.0");
-        }
+    if let Some(value) = value
+        && !(0.0..=1.0).contains(&value)
+    {
+        bail!("{path} must be between 0.0 and 1.0");
     }
     Ok(())
 }
 
 fn validate_non_negative_f64(value: Option<f64>, path: &str) -> Result<()> {
-    if let Some(value) = value {
-        if value < 0.0 {
-            bail!("{path} must be greater than or equal to 0.0");
-        }
+    if let Some(value) = value
+        && value < 0.0
+    {
+        bail!("{path} must be greater than or equal to 0.0");
     }
     Ok(())
 }
 
 fn validate_positive_f64(value: Option<f64>, path: &str) -> Result<()> {
-    if let Some(value) = value {
-        if value <= 0.0 {
-            bail!("{path} must be greater than 0.0");
-        }
+    if let Some(value) = value
+        && value <= 0.0
+    {
+        bail!("{path} must be greater than 0.0");
     }
     Ok(())
 }
@@ -1837,35 +1843,35 @@ fn validate_string_list(values: &[String], path: &str) -> Result<()> {
 }
 
 fn validate_telemetry_config(config: &TelemetryConfig) -> Result<()> {
-    if let Some(service_name) = &config.service_name {
-        if service_name.trim().is_empty() {
-            bail!("telemetry.service_name must not be empty when set");
-        }
+    if let Some(service_name) = &config.service_name
+        && service_name.trim().is_empty()
+    {
+        bail!("telemetry.service_name must not be empty when set");
     }
-    if let Some(endpoint) = &config.endpoint {
-        if endpoint.trim().is_empty() {
-            bail!("telemetry.endpoint must not be empty when set");
-        }
+    if let Some(endpoint) = &config.endpoint
+        && endpoint.trim().is_empty()
+    {
+        bail!("telemetry.endpoint must not be empty when set");
     }
-    if let Some(endpoint) = &config.metrics.endpoint {
-        if endpoint.trim().is_empty() {
-            bail!("telemetry.metrics.endpoint must not be empty when set");
-        }
+    if let Some(endpoint) = &config.metrics.endpoint
+        && endpoint.trim().is_empty()
+    {
+        bail!("telemetry.metrics.endpoint must not be empty when set");
     }
     for key in config.headers.keys() {
         if key.trim().is_empty() {
             bail!("telemetry.headers keys must not be empty");
         }
     }
-    if let Some(export_interval_secs) = config.export_interval_secs {
-        if export_interval_secs < 1 {
-            bail!("telemetry.export_interval_secs must be at least 1");
-        }
+    if let Some(export_interval_secs) = config.export_interval_secs
+        && export_interval_secs < 1
+    {
+        bail!("telemetry.export_interval_secs must be at least 1");
     }
-    if let Some(queue_size) = config.queue_size {
-        if queue_size < 1 {
-            bail!("telemetry.queue_size must be at least 1");
-        }
+    if let Some(queue_size) = config.queue_size
+        && queue_size < 1
+    {
+        bail!("telemetry.queue_size must be at least 1");
     }
     if config.prompt_shape_metrics {
         bail!("telemetry.prompt_shape_metrics is not supported yet and must remain false");
@@ -2343,9 +2349,10 @@ advertise_addr = "0.0.0.0:18443"
         .unwrap();
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("owner_control.advertise_addr must not use an unspecified IP address"));
+        assert!(
+            err.to_string()
+                .contains("owner_control.advertise_addr must not use an unspecified IP address")
+        );
     }
 
     #[test]
@@ -2359,9 +2366,10 @@ advertise_addr = "127.0.0.1:0"
         .unwrap();
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("owner_control.advertise_addr must use a concrete port"));
+        assert!(
+            err.to_string()
+                .contains("owner_control.advertise_addr must use a concrete port")
+        );
     }
 
     #[test]
@@ -2502,9 +2510,10 @@ device = "CUDA1"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].hardware.device must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].hardware.device must not be empty when set")
+        );
     }
 
     #[test]
@@ -2543,9 +2552,11 @@ gpu_layers = 2147483648
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].hardware.device must not be set when gpu.assignment = \"auto\""));
+        assert!(
+            err.to_string().contains(
+                "models[0].hardware.device must not be set when gpu.assignment = \"auto\""
+            )
+        );
     }
 
     #[test]
@@ -2777,9 +2788,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.cache_type_k must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.cache_type_k must not be empty when set")
+        );
     }
 
     #[test]
@@ -2793,9 +2805,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.cache_type_v must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.cache_type_v must not be empty when set")
+        );
     }
 
     #[test]
@@ -2809,9 +2822,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.batch must be at least 1 when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.batch must be at least 1 when set")
+        );
     }
 
     #[test]
@@ -2825,9 +2839,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.ubatch must be at least 1 when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.ubatch must be at least 1 when set")
+        );
     }
 
     #[test]

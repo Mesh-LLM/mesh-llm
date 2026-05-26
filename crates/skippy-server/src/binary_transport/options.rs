@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-use anyhow::{bail, Context, Result};
-use skippy_protocol::{binary::WireActivationDType, StageConfig, StageTopology};
+use anyhow::{Context, Result, bail};
+use skippy_protocol::{StageConfig, StageTopology, binary::WireActivationDType};
 
 use crate::{cli::ServeBinaryArgs, config::load_json, telemetry::TelemetryLevel};
 

@@ -1,10 +1,10 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use skippy_protocol::{FlashAttentionType, StageKvCacheMode, StageKvCachePayload};
 
 use super::super::{KvCachePolicy, StageWireDType};
 use super::types::{
-    ResolvedStageKvCache, ResolvedStageKvCacheTemplate, BUILTIN_BATCH, BUILTIN_PARALLEL,
-    BUILTIN_UBATCH,
+    BUILTIN_BATCH, BUILTIN_PARALLEL, BUILTIN_UBATCH, ResolvedStageKvCache,
+    ResolvedStageKvCacheTemplate,
 };
 use crate::plugin::{
     BoolOrAuto, HardwareConfig, IntegerOrString, ModelFitConfig, SkippyConfig, StringOrStringList,

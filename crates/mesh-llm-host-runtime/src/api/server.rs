@@ -1,8 +1,8 @@
 use super::{
+    MeshApi,
     assets::{respond_console_asset, respond_console_index},
     http::{http_body_text, respond_error},
     routes::dispatch_request,
-    MeshApi,
 };
 use crate::{inference::election, network::proxy};
 use tokio::{

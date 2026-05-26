@@ -2,8 +2,8 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::cli::ChatCorpusArgs;
 
@@ -118,13 +118,15 @@ pub fn chat_corpus(args: ChatCorpusArgs) -> Result<()> {
         let next = Arc::clone(&next);
         let results = Arc::clone(&results);
         let args = Arc::clone(&args);
-        workers.push(thread::spawn(move || loop {
-            let index = next.fetch_add(1, Ordering::Relaxed);
-            let Some(prompt_case) = prompts.get(index) else {
-                break;
-            };
-            let result = run_case(&client, &args, prompt_case);
-            results.lock().expect("results mutex poisoned").push(result);
+        workers.push(thread::spawn(move || {
+            loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(prompt_case) = prompts.get(index) else {
+                    break;
+                };
+                let result = run_case(&client, &args, prompt_case);
+                results.lock().expect("results mutex poisoned").push(result);
+            }
         }));
     }
 

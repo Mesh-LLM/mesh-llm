@@ -2,11 +2,11 @@ pub mod gguf;
 
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use model_ref::{
-    format_canonical_ref, gguf_matches_quant_selector, normalize_gguf_distribution_id,
-    parse_model_ref, split_gguf_shard_info, ModelRef,
+    ModelRef, format_canonical_ref, gguf_matches_quant_selector, normalize_gguf_distribution_id,
+    parse_model_ref, split_gguf_shard_info,
 };
 use serde::{Deserialize, Serialize};
 
@@ -218,11 +218,7 @@ fn select_default_file(files: &[ModelArtifactFile]) -> Result<ModelArtifactFile>
                 if lower.contains("-000") && !lower.contains("-00001-of-") {
                     return None;
                 }
-                if lower.contains("-00001-of-") {
-                    2
-                } else {
-                    3
-                }
+                if lower.contains("-00001-of-") { 2 } else { 3 }
             } else {
                 return None;
             };
@@ -257,11 +253,13 @@ fn artifact_file_set(primary_file: &str, files: &[ModelArtifactFile]) -> Vec<Mod
         }
     }
 
-    vec![files
-        .iter()
-        .find(|file| file.path == primary_file)
-        .cloned()
-        .unwrap_or_else(|| ModelArtifactFile::new(primary_file))]
+    vec![
+        files
+            .iter()
+            .find(|file| file.path == primary_file)
+            .cloned()
+            .unwrap_or_else(|| ModelArtifactFile::new(primary_file)),
+    ]
 }
 
 fn format_for_file(file: &str) -> Result<ModelFormat> {
@@ -551,8 +549,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("no model artifact matching selector"));
+        assert!(
+            error
+                .to_string()
+                .contains("no model artifact matching selector")
+        );
     }
 }

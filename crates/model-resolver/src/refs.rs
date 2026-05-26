@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 /// Parses a Hugging Face resolve URL into repo, revision, and file path.
 pub fn parse_hf_resolve_url(url: &str) -> Option<(String, Option<String>, String)> {

@@ -2,8 +2,8 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -14,8 +14,9 @@ use tokio::sync::Mutex;
 use crate::inference::skippy::materialization::{inspect_stage_package, is_layer_package_ref};
 
 use super::{
-    preparation_status_from_load, SourceModelKind, StageInventoryRequest, StageLoadRequest,
-    StagePackagePrefetcher, StagePreparationState, StagePreparationStatus, StagePrepareRequest,
+    SourceModelKind, StageInventoryRequest, StageLoadRequest, StagePackagePrefetcher,
+    StagePreparationState, StagePreparationStatus, StagePrepareRequest,
+    preparation_status_from_load,
 };
 
 #[derive(Clone, Debug)]
@@ -60,10 +61,10 @@ pub(super) fn resolve_inventory_source(request: &StageInventoryRequest) -> Optio
 
 pub(super) fn inventory_source_candidates(request: &StageInventoryRequest) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(path) = request.package_ref.strip_prefix("gguf://") {
-        if !path.is_empty() {
-            candidates.push(PathBuf::from(path));
-        }
+    if let Some(path) = request.package_ref.strip_prefix("gguf://")
+        && !path.is_empty()
+    {
+        candidates.push(PathBuf::from(path));
     }
     if !request.model_id.is_empty() {
         candidates.push(crate::models::find_model_path(&request.model_id));

@@ -6,9 +6,9 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hf_hub::{
+    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
     cache::{CachedRepoInfo, HFCacheInfo},
     repository::ModelInfo,
-    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
 };
 use model_artifact::{ModelArtifactFile, ModelIdentity, ModelRepository, ResolvedModelArtifact};
 use model_ref::{
@@ -244,31 +244,30 @@ pub fn huggingface_identity_for_path_in_cache(
     let resolved_cache_root = cache_root
         .canonicalize()
         .unwrap_or_else(|_| cache_root.to_path_buf());
-    if resolved_cache_root != cache_root {
-        if let Some(identity) = identity_from_cache_snapshot_path(path, &resolved_cache_root) {
-            return Some(identity);
-        }
+    if resolved_cache_root != cache_root
+        && let Some(identity) = identity_from_cache_snapshot_path(path, &resolved_cache_root)
+    {
+        return Some(identity);
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if resolved != path {
         if let Some(identity) = identity_from_cache_snapshot_path(&resolved, cache_root) {
             return Some(identity);
         }
-        if resolved_cache_root != cache_root {
-            if let Some(identity) =
+        if resolved_cache_root != cache_root
+            && let Some(identity) =
                 identity_from_cache_snapshot_path(&resolved, &resolved_cache_root)
-            {
-                return Some(identity);
-            }
+        {
+            return Some(identity);
         }
     }
     if let Some(identity) = identity_from_snapshot_layout_ancestors(path) {
         return Some(identity);
     }
-    if resolved != path {
-        if let Some(identity) = identity_from_snapshot_layout_ancestors(&resolved) {
-            return Some(identity);
-        }
+    if resolved != path
+        && let Some(identity) = identity_from_snapshot_layout_ancestors(&resolved)
+    {
+        return Some(identity);
     }
     scan_hf_cache_identity_for_path(path, cache_root)
 }
