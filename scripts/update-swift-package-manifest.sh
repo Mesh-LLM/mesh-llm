@@ -41,8 +41,35 @@ fi
 
 CHECKSUM="$(swift package compute-checksum "$ARTIFACT_PATH")"
 
-perl -0pi -e 's#let remoteFFIXCFrameworkURL = ".*"#let remoteFFIXCFrameworkURL = "'"$ARTIFACT_URL"'"#' "$PACKAGE_SWIFT"
-perl -0pi -e 's#let remoteFFIXCFrameworkChecksum = ".*"#let remoteFFIXCFrameworkChecksum = "'"$CHECKSUM"'"#' "$PACKAGE_SWIFT"
+python3 - "$PACKAGE_SWIFT" "$ARTIFACT_URL" "$CHECKSUM" <<'PY'
+import re
+import sys
+
+manifest_path, artifact_url, checksum = sys.argv[1:4]
+with open(manifest_path, encoding="utf-8") as handle:
+    manifest = handle.read()
+
+replacements = [
+    (
+        r'let\s+remoteFFIXCFrameworkURL\s*=\s*"[^"]*"',
+        f'let remoteFFIXCFrameworkURL = "{artifact_url}"',
+        "remoteFFIXCFrameworkURL",
+    ),
+    (
+        r'let\s+remoteFFIXCFrameworkChecksum\s*=\s*"[^"]*"',
+        f'let remoteFFIXCFrameworkChecksum = "{checksum}"',
+        "remoteFFIXCFrameworkChecksum",
+    ),
+]
+
+for pattern, replacement, name in replacements:
+    manifest, count = re.subn(pattern, lambda _: replacement, manifest, count=1)
+    if count != 1:
+        raise SystemExit(f"missing {name} in {manifest_path}")
+
+with open(manifest_path, "w", encoding="utf-8") as handle:
+    handle.write(manifest)
+PY
 
 echo "updated Swift package manifest for $TAG"
 echo "  url: $ARTIFACT_URL"
