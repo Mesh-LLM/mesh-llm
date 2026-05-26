@@ -1214,10 +1214,10 @@ async fn send_moa_as_sse_inner(
             let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
             stream.write_all(framed.as_bytes()).await?;
             stream.flush().await?;
-            if let Some(delay) = inter_chunk_delay {
-                if idx + 1 < pieces.len() {
-                    tokio::time::sleep(delay).await;
-                }
+            if let Some(delay) = inter_chunk_delay
+                && idx + 1 < pieces.len()
+            {
+                tokio::time::sleep(delay).await;
             }
         }
     }
@@ -1445,10 +1445,10 @@ async fn send_moa_as_responses_sse_inner(
         let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
         stream.write_all(framed.as_bytes()).await?;
         stream.flush().await?;
-        if let Some(delay) = inter_chunk_delay {
-            if idx + 1 < pieces.len() {
-                tokio::time::sleep(delay).await;
-            }
+        if let Some(delay) = inter_chunk_delay
+            && idx + 1 < pieces.len()
+        {
+            tokio::time::sleep(delay).await;
         }
     }
 
