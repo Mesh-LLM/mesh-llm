@@ -16,9 +16,11 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 
 fn restore_env(key: &str, previous: Option<OsString>) {
     if let Some(value) = previous {
-        std::env::set_var(key, value);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, value) };
     } else {
-        std::env::remove_var(key);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(key) };
     }
 }
 
@@ -49,9 +51,10 @@ async fn resolve_model_identifier_rejects_filesystem_paths() {
     let err = resolve_model_identifier("/tmp/model.gguf")
         .await
         .unwrap_err();
-    assert!(err
-        .to_string()
-        .contains("does not support filesystem paths"));
+    assert!(
+        err.to_string()
+            .contains("does not support filesystem paths")
+    );
 }
 
 #[tokio::test]
@@ -92,9 +95,12 @@ async fn resolve_model_identifier_returns_all_split_shards_from_selector_ref() {
         4,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let resolved = resolve_model_identifier("bartowski/GLM-5-UD-IQ2_XXS-GGUF:UD-IQ2_XXS")
         .await
@@ -138,9 +144,12 @@ async fn delete_model_by_identifier_removes_only_the_resolved_split_shards() {
         4,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let expected_deleted = vec![
         shard1.canonicalize().unwrap(),
@@ -183,9 +192,12 @@ async fn delete_model_by_identifier_supports_dotted_quant_selector_refs() {
         4,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let resolved = resolve_model_identifier("Example/tiny-qwen3-variant-GGUF:Q2_K")
         .await
@@ -236,9 +248,12 @@ async fn resolve_model_identifier_repo_ref_matches_shared_resolver_semantics() {
         128,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let sibling_entries = vec![
         ("GLM-5-UD-IQ2_XXS-00001-of-00002.gguf".to_string(), Some(64)),
@@ -328,9 +343,12 @@ async fn resolve_model_identifier_repo_ref_returns_all_layered_package_files() {
         10,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let resolved = resolve_model_identifier("meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers")
         .await
@@ -376,9 +394,12 @@ async fn resolve_model_identifier_rejects_layers_repo_without_package_ggufs() {
         10,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let err = resolve_model_identifier("meshllm/Reports-layers")
         .await
@@ -445,9 +466,12 @@ async fn delete_model_by_identifier_removes_all_layered_package_files() {
         10,
     );
 
-    std::env::set_var("HF_HUB_CACHE", &temp);
-    std::env::remove_var("HF_HOME");
-    std::env::remove_var("XDG_CACHE_HOME");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("HF_HOME") };
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
     let expected_deleted = vec![
         layer_000.canonicalize().unwrap(),

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mesh_llm_plugin::{
-    capability, plugin_server_info, PluginMetadata, PluginRuntime, PluginStartupPolicy,
+    PluginMetadata, PluginRuntime, PluginStartupPolicy, capability, plugin_server_info,
 };
 
 const DEFAULT_BASE_URL: &str = "http://localhost:8000/v1";

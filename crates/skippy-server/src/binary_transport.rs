@@ -4,8 +4,9 @@ use std::{
     io,
     net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -16,26 +17,26 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs},
     kv_integration::{KvStageIntegration, PrefillKvIdentity},
-    runtime_state::{load_runtime, RuntimeSessionStats, RuntimeState},
-    telemetry::{lifecycle_attrs, now_unix_nanos, Telemetry},
+    runtime_state::{RuntimeSessionStats, RuntimeState, load_runtime},
+    telemetry::{Telemetry, lifecycle_attrs, now_unix_nanos},
 };
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
 use skippy_metrics::{attr, metric};
 use skippy_protocol::{
+    MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
+        STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
+        STAGE_WIRE_FIXED_HEADER_BYTES, StageReplyStats, StageSamplingConfig, StageStateHeader,
+        StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
         activation_frame_flags_from_state_flags, read_stage_message, recv_reply, send_ready,
         send_reply_ack, send_reply_ack_with_stats, send_reply_predicted_tokens_with_stats,
-        send_reply_predicted_with_stats, state_flags, StageReplyStats, StageSamplingConfig,
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
-        STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-        STAGE_WIRE_FIXED_HEADER_BYTES,
+        send_reply_predicted_with_stats, state_flags,
     },
-    MessageBase, StageConfig, StageTopology, SCHEMA_VERSION,
 };
 use skippy_runtime::{
-    ActivationDesc, ActivationFrame, LogitBias, RuntimeActivationDType, RuntimeActivationLayout,
-    SamplingConfig, MAX_LOGIT_BIAS,
+    ActivationDesc, ActivationFrame, LogitBias, MAX_LOGIT_BIAS, RuntimeActivationDType,
+    RuntimeActivationLayout, SamplingConfig,
 };
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
@@ -45,10 +46,10 @@ mod socket;
 mod wire;
 
 pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_message_timed};
-pub use self::options::{parse_wire_dtype, BinaryStageOptions, EmbeddedOpenAiStageOptions};
+pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions, parse_wire_dtype};
 use self::socket::*;
-pub(crate) use self::wire::write_stage_message_conditioned;
 pub use self::wire::WireCondition;
+pub(crate) use self::wire::write_stage_message_conditioned;
 
 static BINARY_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 

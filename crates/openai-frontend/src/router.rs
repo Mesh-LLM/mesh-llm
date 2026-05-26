@@ -3,26 +3,26 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
+    Json, Router,
     body::Body,
-    extract::{rejection::JsonRejection, DefaultBodyLimit, State},
-    http::{header::HeaderName, HeaderValue, Method, Request, StatusCode, Uri},
+    extract::{DefaultBodyLimit, State, rejection::JsonRejection},
+    http::{HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
     middleware::{self, Next},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
-    Json, Router,
 };
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -35,14 +35,13 @@ use crate::{
     errors::OpenAiError,
     models::ModelsResponse,
     responses::{
-        chunk_delta_text, normalize_openai_compat_request,
+        ResponseAdapterMode, ResponseSseState, chunk_delta_text, normalize_openai_compat_request,
         responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
         responses_stream_content_part_done_event, responses_stream_created_event_with_sequence,
         responses_stream_delta_event_with_logprobs_and_sequence,
         responses_stream_output_item_added_event, responses_stream_output_item_done_event,
         responses_stream_text_done_event_with_sequence,
         translate_chat_completion_response_to_responses, usage_to_responses_usage,
-        ResponseAdapterMode, ResponseSseState,
     },
     sse::{done_event, json_event},
 };
@@ -562,30 +561,30 @@ mod tests {
 
     use async_trait::async_trait;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
-        Router,
     };
     use futures_util::stream;
     use http_body_util::BodyExt;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tower::ServiceExt;
 
     use super::*;
     use crate::{
+        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
         backend::{
             CancellationToken, ChatCompletionStream, CompletionStream, OpenAiRequestContext,
             OpenAiResult,
         },
         chat::{
-            messages_to_plain_prompt, AssistantMessage, ChatCompletionChoice,
-            ChatCompletionResponse, ChatMessage, MessageContent, MessageContentPart,
+            AssistantMessage, ChatCompletionChoice, ChatCompletionResponse, ChatMessage,
+            MessageContent, MessageContentPart, messages_to_plain_prompt,
         },
         common::Usage,
         completions::{CompletionPrompt, CompletionResponse},
-        errors::{already_openai_error, map_upstream_error_body, OpenAiErrorKind},
+        errors::{OpenAiErrorKind, already_openai_error, map_upstream_error_body},
         models::ModelObject,
-        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
     };
 
     struct FakeBackend;
@@ -1332,10 +1331,12 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response_body_json(response).await;
         assert_eq!(body["error"]["code"], "unsupported_model_feature");
-        assert!(body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("structured output"));
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("structured output")
+        );
     }
 
     #[tokio::test]

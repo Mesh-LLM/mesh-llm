@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio_stream::StreamExt;
 
 use model_package::jobs::HfJobsClient;

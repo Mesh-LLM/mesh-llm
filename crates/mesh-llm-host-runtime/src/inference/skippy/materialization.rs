@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,8 +15,8 @@ use skippy_runtime::package::{
     self, LayerPackageInfo, PackageIntegrityOptions, PackageStageRequest,
 };
 
-use crate::cli::output::{emit_event, interactive_tui_active, ModelProgressStatus, OutputEvent};
-use crate::cli::terminal_progress::{start_spinner, SpinnerHandle};
+use crate::cli::output::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
+use crate::cli::terminal_progress::{SpinnerHandle, start_spinner};
 
 use super::StageLoadRequest;
 
@@ -143,7 +143,8 @@ struct PinFile {
 
 pub(crate) fn configure_materialized_stage_cache() {
     if std::env::var_os("SKIPPY_MATERIALIZED_DIR").is_none() {
-        std::env::set_var("SKIPPY_MATERIALIZED_DIR", materialized_stage_cache_dir());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("SKIPPY_MATERIALIZED_DIR", materialized_stage_cache_dir()) };
     }
 }
 
@@ -672,7 +673,14 @@ fn verify_resolved_hf_package_files(
         include_embeddings,
         include_output,
     );
-    let options = PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir());
+    let options = if metadata_only {
+        // Metadata-only probes hash only the small shared metadata artifact.
+        // Avoid the cross-run integrity cache here so a same-size metadata
+        // rewrite cannot be hidden by coarse filesystem timestamp resolution.
+        PackageIntegrityOptions::verify_without_cache()
+    } else {
+        PackageIntegrityOptions::verify_with_cache(package_integrity_cache_dir())
+    };
     let report = if metadata_only {
         package::verify_layer_package_metadata_integrity(&local_ref, &options)
     } else {
@@ -1466,9 +1474,11 @@ mod tests {
 
     fn restore_env(key: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -1820,9 +1830,12 @@ mod tests {
         let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path());
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let error = resolve_hf_package_to_local("hf://owner/repo@../../evil", 0, 0, false, false)
             .unwrap_err()
@@ -1845,9 +1858,12 @@ mod tests {
         let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path());
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let refs_dir = temp
             .path()
@@ -1878,9 +1894,12 @@ mod tests {
         let prev_huggingface_cache = std::env::var_os("HUGGINGFACE_HUB_CACHE");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path());
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let snapshot = temp
             .path()
@@ -1912,10 +1931,14 @@ mod tests {
         let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path().join("hf"));
-        std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache"));
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path().join("hf")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let repo_cache = temp
             .path()
@@ -1951,10 +1974,14 @@ mod tests {
         let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path().join("hf"));
-        std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache"));
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path().join("hf")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let snapshot = temp
             .path()
@@ -1998,10 +2025,14 @@ mod tests {
         let prev_xdg_cache = std::env::var_os("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HF_HOME", temp.path().join("hf"));
-        std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache"));
-        std::env::remove_var("HF_HUB_CACHE");
-        std::env::remove_var("HUGGINGFACE_HUB_CACHE");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", temp.path().join("hf")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HUB_CACHE") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HUGGINGFACE_HUB_CACHE") };
 
         let snapshot = temp
             .path()
@@ -2090,7 +2121,8 @@ mod tests {
         };
 
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("XDG_CACHE_HOME", temp.path());
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path()) };
 
         let root = materialized_stage_cache_dir();
         fs::create_dir_all(&root).unwrap();

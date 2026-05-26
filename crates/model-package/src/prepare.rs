@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
-use hf_hub::repository::RepoTreeEntry;
 use hf_hub::HFClient;
+use hf_hub::repository::RepoTreeEntry;
 use model_ref::{
     gguf_matches_quant_selector, normalize_gguf_distribution_id, quant_selector_from_gguf_file,
     split_gguf_shard_info,

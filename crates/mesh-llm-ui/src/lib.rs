@@ -46,7 +46,7 @@ impl FileSystemConsoleAssets {
 
 #[cfg(feature = "embed-assets")]
 mod embedded {
-    use include_dir::{include_dir, Dir};
+    use include_dir::{Dir, include_dir};
 
     pub(super) static CONSOLE_DIST: Dir<'_> = include_dir!("$MESH_LLM_UI_DIST");
 }
@@ -138,7 +138,7 @@ pub fn cache_control(path: &str) -> &'static str {
 
 #[cfg(all(test, feature = "embed-assets"))]
 mod tests {
-    use super::{asset, content_type, ConsoleAssetProvider, FileSystemConsoleAssets};
+    use super::{ConsoleAssetProvider, FileSystemConsoleAssets, asset, content_type};
     use std::fs;
 
     #[test]

@@ -338,9 +338,11 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -362,9 +364,12 @@ mod tests {
         let model = temp.join("Inventory-Root-Q4_K_M.gguf");
         std::fs::write(&model, b"gguf").unwrap();
 
-        std::env::set_var("HF_HUB_CACHE", &temp);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let paths = local_gguf_paths();
         assert!(paths.iter().any(|path| path == &model));
@@ -398,10 +403,14 @@ mod tests {
         let model = snapshot_dir.join("Inventory-Snapshot-Q4_K_M.gguf");
         std::fs::write(&model, b"gguf").unwrap();
 
-        std::env::set_var("HF_HUB_CACHE", &temp);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
-        std::env::remove_var("MESH_LLM_ALLOW_FULL_HF_CACHE_SCAN");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("MESH_LLM_ALLOW_FULL_HF_CACHE_SCAN") };
 
         let paths = local_gguf_paths();
         assert!(paths.iter().any(|path| path == &model));

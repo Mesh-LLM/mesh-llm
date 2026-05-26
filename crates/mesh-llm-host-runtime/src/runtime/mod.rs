@@ -13,39 +13,39 @@ pub(crate) mod wakeable;
 
 pub(crate) use self::capacity::runtime_model_required_bytes;
 use self::capacity::{
-    model_fits_runtime_capacity, RuntimeCapacityLedger, RuntimeCapacityPool,
-    RuntimeCapacityRequest, RuntimeCapacityReservation,
+    RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
+    model_fits_runtime_capacity,
 };
 use self::discovery::{nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
-    add_runtime_local_target, add_serving_assignment, advertise_model_ready, local_process_payload,
+    LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController,
+    OpenAiGuardrailPolicyHandle, RuntimeEvent, SplitCoordinatorAck, SplitCoordinatorEvent,
+    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, add_runtime_local_target,
+    add_serving_assignment, advertise_model_ready, local_process_payload,
     openai_guardrail_policy_handle, remove_runtime_local_target, remove_serving_assignment,
     resolved_model_name, runtime_model_planning_bytes, set_advertised_model_context,
     set_openai_guardrail_policy_mode, set_runtime_verified_served_model_capabilities,
     start_runtime_local_model, start_runtime_split_model, startup_runtime_plan,
-    stop_split_generation_cleanup, withdraw_advertised_model, LocalRuntimeModelHandle,
-    LocalRuntimeModelStartSpec, ManagedModelController, OpenAiGuardrailPolicyHandle, RuntimeEvent,
-    SplitCoordinatorAck, SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart,
-    StartupRuntimePlan,
+    stop_split_generation_cleanup, withdraw_advertised_model,
 };
 use self::model_target_reconciliation::{
-    plan_model_target_reconciliation, ModelTargetReconciliationCandidate,
-    ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
-    ModelTargetReconciliationPolicy, ModelTargetReconciliationState,
+    ModelTargetReconciliationCandidate, ModelTargetReconciliationCapacityState,
+    ModelTargetReconciliationInput, ModelTargetReconciliationPolicy,
+    ModelTargetReconciliationState, plan_model_target_reconciliation,
 };
 use self::proxy::{api_proxy, bootstrap_proxy};
 use crate::api;
 use crate::cli::output::{
-    emit_event, flush_output, sort_dashboard_endpoint_rows, ConsoleSessionMode,
-    DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan, DashboardModelLane,
-    DashboardModelRow, DashboardProcessRow, DashboardSnapshot, DashboardSnapshotFuture,
-    DashboardSnapshotProvider, OutputEvent, RuntimeStatus,
+    ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
+    DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
+    DashboardSnapshotFuture, DashboardSnapshotProvider, OutputEvent, RuntimeStatus, emit_event,
+    flush_output, sort_dashboard_endpoint_rows,
 };
 use crate::cli::{Cli, Command, RuntimeSurface};
 use crate::crypto::{
-    default_keystore_path, default_trust_store_path, keystore_exists, keystore_metadata,
-    load_keystore, load_owner_keypair_from_keychain, load_trust_store, OwnerKeychainLoadError,
+    OwnerKeychainLoadError, default_keystore_path, default_trust_store_path, keystore_exists,
+    keystore_metadata, load_keystore, load_owner_keypair_from_keychain, load_trust_store,
 };
 use crate::inference::{election, skippy};
 use crate::mesh;
@@ -63,8 +63,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::fmt::MakeWriter;
@@ -2788,7 +2788,7 @@ fn emit_configuration_ui_read_only_hint() {
 async fn wait_shutdown_signal() -> &'static str {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut term = match signal(SignalKind::terminate()) {
             Ok(s) => s,
             Err(_) => {
@@ -4228,10 +4228,11 @@ fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
 
 #[cfg(test)]
 fn assert_llama_process_row(plan: &DashboardLaunchPlan, name: &str) {
-    assert!(plan
-        .llama_process_rows
-        .iter()
-        .any(|row| { row.name == name && row.status == RuntimeStatus::Loading && row.port == 0 }));
+    assert!(
+        plan.llama_process_rows.iter().any(|row| {
+            row.name == name && row.status == RuntimeStatus::Loading && row.port == 0
+        })
+    );
 }
 
 #[cfg(test)]
@@ -4806,7 +4807,7 @@ async fn pick_model_assignment(node: &mesh::Node, local_models: &[String]) -> Op
         let (pick, count, _) = &underserved[0];
         let max_model = serving_count
             .iter()
-            .max_by_key(|(_, &v)| v)
+            .max_by_key(|&(_, &v)| v)
             .map(|(k, _)| k.as_str())
             .unwrap_or("?");
         let _ = emit_event(OutputEvent::Info {
@@ -5265,7 +5266,8 @@ fn configure_run_auto_process_state(
     cli: &Cli,
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 ) {
-    std::env::set_var("MESH_API_PORT", cli.console.to_string());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("MESH_API_PORT", cli.console.to_string()) };
 
     let verbose_native_debug = cli.debug
         && std::env::var("MESH_LLM_DEBUG_NATIVE_VERBOSE")
@@ -5716,19 +5718,20 @@ async fn select_run_auto_model_path(
     };
 
     let Some(model_name) = assignment else {
-        let passive_api_listener = if let Some(tx) = bootstrap_listener_tx.take() {
-            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            if tx.send(resp_tx).await.is_ok() {
-                Some(
-                    resp_rx
-                        .await
-                        .context("bootstrap API listener handoff was cancelled")?,
-                )
-            } else {
-                None
+        let passive_api_listener = match bootstrap_listener_tx.take() {
+            Some(tx) => {
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                if tx.send(resp_tx).await.is_ok() {
+                    Some(
+                        resp_rx
+                            .await
+                            .context("bootstrap API listener handoff was cancelled")?,
+                    )
+                } else {
+                    None
+                }
             }
-        } else {
-            None
+            _ => None,
         };
         if is_client {
             let _ = emit_event(OutputEvent::PassiveMode {
@@ -7108,7 +7111,10 @@ async fn spawn_run_auto_nostr_publisher(
                 message: format!(
                     "Publishing to Nostr failed: {e}. Mesh is running privately — add --publish after fixing the issue to make discoverable."
                 ),
-                context: cli.mesh_name.as_ref().map(|mesh_name| format!("mesh={mesh_name}")),
+                context: cli
+                    .mesh_name
+                    .as_ref()
+                    .map(|mesh_name| format!("mesh={mesh_name}")),
             });
             tracing::warn!("Nostr publish failed: {e}");
             if let Some(cs) = console_state {
@@ -8034,7 +8040,10 @@ async fn setup_passive_publication(
                         message: format!(
                             "Publishing to Nostr failed: {e}. Standby node is running privately — add --publish after fixing the issue to make discoverable."
                         ),
-                        context: cli.mesh_name.as_ref().map(|mesh_name| format!("mesh={mesh_name}")),
+                        context: cli
+                            .mesh_name
+                            .as_ref()
+                            .map(|mesh_name| format!("mesh={mesh_name}")),
                     });
                     tracing::warn!("Passive Nostr publish failed: {e}");
                     setup.state = Some(api::PublicationState::PublishFailed);
@@ -8284,9 +8293,11 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -9067,9 +9078,12 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&cache_root).unwrap();
-        std::env::set_var("HF_HUB_CACHE", &cache_root);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &cache_root) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let repo_id = "bartowski/Llama-3.2-1B-Instruct-GGUF";
         let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
@@ -9106,9 +9120,12 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&cache_root).unwrap();
-        std::env::set_var("HF_HUB_CACHE", &cache_root);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &cache_root) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let repo_id = "someone/Custom-GGUF";
         let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
@@ -10294,7 +10311,8 @@ mod tests {
     fn swarm_capture_env_client_registers_runtime_owner() {
         let key = crate::capture::SWARM_CAPTURE_ENV;
         let old = std::env::var_os(key);
-        std::env::set_var(key, "/tmp/mesh-capture");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, "/tmp/mesh-capture") };
         let cli = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
 
         assert!(swarm_capture_observer_requested(&cli));

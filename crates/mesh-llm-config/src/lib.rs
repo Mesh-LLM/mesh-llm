@@ -8,14 +8,14 @@ pub use authoring::{
     PluginConfigEditor,
 };
 pub use model::*;
-pub use store::{config_path, config_to_toml, load_config, parse_config_toml, ConfigStore};
+pub use store::{ConfigStore, config_path, config_to_toml, load_config, parse_config_toml};
 pub use validate::validate_config;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_config_toml, ConfigStore, GpuAssignment, LocalServingNodeConfig, MeshConfig,
-        ModelRuntimeKind,
+        ConfigStore, GpuAssignment, LocalServingNodeConfig, MeshConfig, ModelRuntimeKind,
+        parse_config_toml,
     };
     use std::fs;
     use tempfile::TempDir;

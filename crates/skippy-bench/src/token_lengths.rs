@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 use skippy_runtime::{
-    suppress_native_logs, ChatTemplateMessage, ChatTemplateOptions, RuntimeConfig, RuntimeLoadMode,
-    StageModel,
+    ChatTemplateMessage, ChatTemplateOptions, RuntimeConfig, RuntimeLoadMode, StageModel,
+    suppress_native_logs,
 };
 
 use crate::cli::TokenLengthsArgs;

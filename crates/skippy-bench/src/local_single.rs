@@ -5,15 +5,15 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     cli::LocalSingleArgs,
     model_identity::model_identity_for_path,
-    support::{generate_run_id, retry, temp_config_path, temp_db_path, ChildGuard},
+    support::{ChildGuard, generate_run_id, retry, temp_config_path, temp_db_path},
 };
 
 #[derive(Deserialize)]

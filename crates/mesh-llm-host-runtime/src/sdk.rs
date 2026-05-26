@@ -14,7 +14,6 @@ use tokio::sync::Mutex;
 
 pub mod config {
     pub use mesh_llm_config::{
-        config_path, config_to_toml, load_config, parse_config_toml, validate_config,
         AdvancedConfig, AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigEditor, ConfigStore,
         FlashAttentionType, GpuAssignment, GpuConfig, HardwareConfig, IntegerOrString,
         LocalServingNodeConfig, MeshConfig, ModelConfigDefaults, ModelConfigEditor,
@@ -22,7 +21,8 @@ pub mod config {
         OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PrefixCacheConfig,
         ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, ReservedObjectConfig,
         SkippyConfig, SpeculativeConfig, StringOrStringList, TelemetryConfig,
-        TelemetryMetricsConfig, TensorSplitConfig, ThroughputConfig,
+        TelemetryMetricsConfig, TensorSplitConfig, ThroughputConfig, config_path, config_to_toml,
+        load_config, parse_config_toml, validate_config,
     };
 }
 

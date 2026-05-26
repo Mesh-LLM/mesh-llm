@@ -15,6 +15,6 @@ pub mod provider {
 }
 
 pub use mesh_llm_identity::{
-    open_message, owner_id_from_verifying_key, seal_message, CryptoError, InMemoryKeyProvider,
-    KeyProvider, KeyProviderError, OpenedMessage, OwnerKeypair, SignedEncryptedEnvelope,
+    CryptoError, InMemoryKeyProvider, KeyProvider, KeyProviderError, OpenedMessage, OwnerKeypair,
+    SignedEncryptedEnvelope, open_message, owner_id_from_verifying_key, seal_message,
 };

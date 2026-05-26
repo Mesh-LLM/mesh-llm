@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mesh_llm_plugin::{
-    capability, plugin_server_info, PluginMetadata, PluginRuntime, PluginStartupPolicy,
+    PluginMetadata, PluginRuntime, PluginStartupPolicy, capability, plugin_server_info,
 };
 
 fn build_plugin(name: String) -> mesh_llm_plugin::SimplePlugin {

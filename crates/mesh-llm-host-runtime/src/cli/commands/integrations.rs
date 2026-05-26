@@ -206,7 +206,7 @@ fn pi_missing_binary_guidance(model_arg: &str) -> Vec<String> {
 }
 
 fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
-    if let Some(ref mut child) = mesh_child {
+    if let Some(child) = mesh_child {
         eprintln!("🧹 Stopping mesh-llm node we started...");
         let _ = child.kill();
         let _ = child.wait();
@@ -245,7 +245,7 @@ async fn fetch_mesh_models(
         );
     }
 
-    let chosen = if let Some(ref model) = requested_model {
+    let chosen = if let Some(model) = requested_model {
         if !models.iter().any(|name| name == model) {
             anyhow::bail!(
                 "Model '{}' not available. Available: {}",
@@ -841,12 +841,12 @@ pub(crate) fn build_mesh_provider_spec_for_test(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mesh_provider_spec_for_test, build_opencode_launch_spec,
+        OPENCODE_INSTALL_HINT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
         build_opencode_launch_spec_with_limits, build_pi_provider_config,
         build_pi_provider_config_with_limits, cleanup_mesh_child, normalize_opencode_host,
         opencode_missing_binary_guidance, pi_missing_binary_guidance,
         resolve_opencode_config_path_from_home, write_opencode_config_for_test,
-        write_pi_config_for_test, write_pi_config_to_path, OPENCODE_INSTALL_HINT,
+        write_pi_config_for_test, write_pi_config_to_path,
     };
 
     const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";

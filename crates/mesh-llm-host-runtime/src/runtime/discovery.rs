@@ -1,5 +1,5 @@
-use crate::cli::output::{emit_event, OutputEvent};
 use crate::cli::Cli;
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::mesh;
 use crate::network::{nostr, router};
 use anyhow::{Context, Result};
@@ -350,7 +350,7 @@ pub(crate) async fn check_mesh(
         );
     }
 
-    let chosen = if let Some(ref m) = model {
+    let chosen = if let Some(m) = model {
         if !models.iter().any(|n| n == m) {
             if let Some(mut c) = child {
                 let _ = c.kill();

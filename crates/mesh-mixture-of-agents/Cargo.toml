@@ -1,7 +1,7 @@
 [package]
 name = "mesh-mixture-of-agents"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Mixture-of-Agents — fan out to heterogeneous LLMs, arbitrate, return one response"
 
 [dependencies]

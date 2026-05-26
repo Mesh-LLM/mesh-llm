@@ -1,4 +1,4 @@
-use mesh_client::network::rewrite::{new_rewrite_map, PortRewriteMap};
+use mesh_client::network::rewrite::{PortRewriteMap, new_rewrite_map};
 
 #[test]
 fn rewrite_map_creation_and_clone() {

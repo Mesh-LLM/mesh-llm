@@ -1,6 +1,6 @@
 use super::runtime::PluginRuntime;
-use super::{proto, PluginMeshEvent, PluginRpcBridge, PluginSummary, PROTOCOL_VERSION};
-use anyhow::{anyhow, bail, Context, Result};
+use super::{PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, proto};
+use anyhow::{Context, Result, anyhow, bail};
 use rand::RngExt;
 use rmcp::model::ErrorCode;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 pub(crate) enum LocalStream {
     #[cfg(unix)]

@@ -318,11 +318,7 @@ mod linux {
             return None;
         }
         let value = CStr::from_ptr(ptr).to_string_lossy().trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        if value.is_empty() { None } else { Some(value) }
     }
 
     fn normalize_pci_bdf(value: &str) -> Option<String> {

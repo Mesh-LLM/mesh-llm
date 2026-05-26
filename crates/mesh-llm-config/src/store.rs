@@ -1,7 +1,7 @@
-use crate::{validate_config, ConfigEditor, MeshConfig};
-use anyhow::{bail, Context, Result};
+use crate::{ConfigEditor, MeshConfig, validate_config};
+use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
-use toml_edit::{value, ArrayOfTables, DocumentMut, Item, Table};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 
 pub fn config_path(override_path: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = override_path {

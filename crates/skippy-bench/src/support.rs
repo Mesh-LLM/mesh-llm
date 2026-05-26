@@ -6,10 +6,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use skippy_protocol::binary::{
-    activation_payload_multiplier_from_state_flags, activation_state_flags_from_frame_flags,
-    recv_ready, WireActivationDType,
+    WireActivationDType, activation_payload_multiplier_from_state_flags,
+    activation_state_flags_from_frame_flags, recv_ready,
 };
 
 pub struct ChildGuard {

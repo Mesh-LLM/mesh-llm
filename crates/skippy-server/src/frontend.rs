@@ -4,68 +4,68 @@ use std::{
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use axum::{
+    Router,
     body::Body,
     extract::State,
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::Response,
-    Router,
 };
 use base64::Engine;
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 use openai_frontend::{
-    chat_mesh_hooks_enabled, inject_text_into_chat_messages, normalize_reasoning_template_options,
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
     ChatHookAction, ChatHookOutcome, CompactingOpenAiBackend, CompactionConfig, CompletionChunk,
     CompletionRequest, CompletionResponse, CompletionStream, FinishReason, GenerationHookSignals,
     GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, MessageContent,
     MessageContentPart, ModelId, ModelObject, OpenAiBackend, OpenAiError, OpenAiErrorKind,
     OpenAiHookPolicy, OpenAiRequestContext, OpenAiResult, PrefillHookSignals, ReasoningEffort,
-    StreamingGuardrailMode, Usage,
+    StreamingGuardrailMode, Usage, chat_mesh_hooks_enabled, inject_text_into_chat_messages,
+    normalize_reasoning_template_options,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use skippy_metrics::attr as attr_key;
 use skippy_protocol::binary::{
-    recv_ready, recv_reply, state_flags, write_stage_message, StageLogitBias as WireLogitBias,
-    StageReply, StageReplyStats, StageSamplingConfig as WireSamplingConfig, StageStateHeader,
-    StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind, LLAMA_TOKEN_NULL,
-    MAX_STAGE_LOGIT_BIAS,
+    LLAMA_TOKEN_NULL, MAX_STAGE_LOGIT_BIAS, StageLogitBias as WireLogitBias, StageReply,
+    StageReplyStats, StageSamplingConfig as WireSamplingConfig, StageStateHeader, StageWireMessage,
+    WireActivationDType, WireMessageKind, WireReplyKind, recv_ready, recv_reply, state_flags,
+    write_stage_message,
 };
-use skippy_protocol::{MessageBase, StageConfig, StageTopology, SCHEMA_VERSION};
+use skippy_protocol::{MessageBase, SCHEMA_VERSION, StageConfig, StageTopology};
 use skippy_runtime::{
     ActivationFrame, ChatTemplateJsonOptions, ChatTemplateOptions,
     FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
-    LogitBias as RuntimeLogitBias, MediaInput, ModelInfo, RuntimeConfig, RuntimeLoadMode,
-    SamplingConfig, StageModel, StageSession, TokenSignal, MAX_LOGIT_BIAS,
+    LogitBias as RuntimeLogitBias, MAX_LOGIT_BIAS, MediaInput, ModelInfo, RuntimeConfig,
+    RuntimeLoadMode, SamplingConfig, StageModel, StageSession, TokenSignal,
 };
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore, TryAcquireError},
+    sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError, mpsc},
     task,
 };
 
 use crate::{
     binary_transport::{
-        connect_binary_downstream, forwarded_stage_message, forwarded_stage_message_timed,
-        run_binary_stage_message, write_stage_message_conditioned, WireCondition,
+        WireCondition, connect_binary_downstream, forwarded_stage_message,
+        forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
     },
     cli::ServeOpenAiArgs,
     config::{load_json, validate_config},
     kv_integration::KvStageIntegration,
-    runtime_state::{load_runtime, RuntimeSessionStats, RuntimeState},
-    telemetry::{lifecycle_attrs, now_unix_nanos, Telemetry},
+    runtime_state::{RuntimeSessionStats, RuntimeState, load_runtime},
+    telemetry::{Telemetry, lifecycle_attrs, now_unix_nanos},
 };
 
 mod backend;

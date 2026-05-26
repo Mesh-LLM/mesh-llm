@@ -1,8 +1,8 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use openai_frontend::ReasoningEffort;
 use skippy_server::{
-    EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
-    CONTEXT_BUDGET_MAX_TOKENS,
+    CONTEXT_BUDGET_MAX_TOKENS, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
+    EmbeddedReasoningFormat,
 };
 
 use super::support::string_list_value;

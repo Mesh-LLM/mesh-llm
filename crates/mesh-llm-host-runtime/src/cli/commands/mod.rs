@@ -15,7 +15,7 @@ use anyhow::Result;
 
 use crate::cli::commands::benchmark::dispatch_benchmark_command;
 use crate::cli::commands::blackboard::{install_skill, run_blackboard};
-use crate::cli::commands::discover::{run_discover, run_stop, DiscoverOptions};
+use crate::cli::commands::discover::{DiscoverOptions, run_discover, run_stop};
 use crate::cli::commands::download::dispatch_download_command;
 use crate::cli::commands::gpus::dispatch_gpu_command;
 use crate::cli::commands::integrations::{run_claude, run_goose, run_opencode, run_pi};

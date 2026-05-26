@@ -4,13 +4,13 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{
-    parse_cache_type, ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType,
-    GenerationSignalWindow, MediaInput, MediaPrefill, MediaPrefillFrame, RuntimeConfig,
-    RuntimeKvPage, RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, StageModel, StageSession,
-    StageSessionCheckpoint, TokenSignal,
+    ActivationFrame, FlashAttentionType as RuntimeFlashAttentionType, GenerationSignalWindow,
+    MediaInput, MediaPrefill, MediaPrefillFrame, RuntimeConfig, RuntimeKvPage, RuntimeKvPageDesc,
+    RuntimeLoadMode, SamplingConfig, StageModel, StageSession, StageSessionCheckpoint, TokenSignal,
+    parse_cache_type,
 };
 
 use crate::package::select_package_parts;
@@ -951,13 +951,13 @@ fn open_stage_model_from_parts(
 
 #[cfg(test)]
 mod tests {
-    use anyhow::{bail, Result};
+    use anyhow::{Result, bail};
     use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig, StageDevice};
     use skippy_runtime::FlashAttentionType as RuntimeFlashAttentionType;
 
     use super::{
-        create_indexed_lane_resource, runtime_config_from_stage_config,
-        should_attach_package_projector, RuntimeLaunchOverrides,
+        RuntimeLaunchOverrides, create_indexed_lane_resource, runtime_config_from_stage_config,
+        should_attach_package_projector,
     };
 
     #[test]

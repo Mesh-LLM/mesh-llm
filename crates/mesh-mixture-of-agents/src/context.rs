@@ -14,7 +14,7 @@
 use crate::normalize::WorkerOutput;
 use crate::session::Session;
 use crate::worker::WorkerRole;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Packed context ready to send to a worker.
 pub struct PackedContext {

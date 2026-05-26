@@ -1,5 +1,5 @@
 pub use crate::mesh::should_be_host_for_model;
-pub use mesh_llm_routing::{total_model_bytes, InferenceTarget, ModelTargets};
+pub use mesh_llm_routing::{InferenceTarget, ModelTargets, total_model_bytes};
 
 #[derive(Clone, Debug)]
 pub struct LocalProcessInfo {

@@ -10,8 +10,8 @@ use super::{
     policy::{GuardrailPolicy, RetryExhaustionMode},
     request_contract::RawToolChoice,
     rescue::{
-        strip_thinking_blocks, ClassifiedGuardrailResponse, GuardrailParserStage,
-        GuardrailResponseCategory,
+        ClassifiedGuardrailResponse, GuardrailParserStage, GuardrailResponseCategory,
+        strip_thinking_blocks,
     },
     state::{GuardrailRequestOutcome, PreparedGuardrailRequest},
     tools::is_reserved_tool_name,

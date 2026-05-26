@@ -2,22 +2,22 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use skippy_coordinator::{ClaimDecision, ClaimFence, LoadClaimRef};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig, StageConfig};
 use skippy_server::{
+    EmbeddedServerHandle,
     binary_transport::{BinaryStageOptions, WireCondition},
     telemetry::TelemetryLevel,
-    EmbeddedServerHandle,
 };
 use tokio::{
-    sync::{mpsc, Mutex},
+    sync::{Mutex, mpsc},
     task::JoinHandle,
 };
 

@@ -1,15 +1,15 @@
+#[cfg(test)]
+use super::RuntimeLlamaMetricsSnapshot;
+use super::RuntimeLlamaSlotsSnapshot;
 use super::collector::RuntimeDataCollector;
 use super::plugins::{
-    plugin_manifest_key, plugin_providers_key, plugin_summary_key, PluginDataValue,
+    PluginDataValue, plugin_manifest_key, plugin_providers_key, plugin_summary_key,
 };
 use super::processes::RuntimeProcessSnapshot;
 #[cfg(test)]
 use super::snapshots::RuntimeDataSnapshots;
 use super::snapshots::{PluginDataKey, PluginEndpointKey, RuntimeStatusSnapshot};
 use super::subscriptions::{RuntimeDataDirty, RuntimeDataSubscriptionState};
-#[cfg(test)]
-use super::RuntimeLlamaMetricsSnapshot;
-use super::RuntimeLlamaSlotsSnapshot;
 use crate::network::metrics::RoutingCollectorSnapshot;
 use crate::plugin::{
     PluginCapabilityProvider, PluginEndpointSummary, PluginManifestOverview, PluginSummary,

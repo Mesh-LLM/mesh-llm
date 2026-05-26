@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 pub use mesh_llm_gpu_bench::BenchmarkOutput;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -529,9 +529,11 @@ mod tests {
     }
 
     fn with_benchmark_child_override<T>(path: &Path, f: impl FnOnce() -> T) -> T {
-        std::env::set_var(BENCHMARK_CHILD_ENV, path);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(BENCHMARK_CHILD_ENV, path) };
         let result = f();
-        std::env::remove_var(BENCHMARK_CHILD_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(BENCHMARK_CHILD_ENV) };
         result
     }
 

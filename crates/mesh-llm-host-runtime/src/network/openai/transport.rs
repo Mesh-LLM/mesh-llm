@@ -6,16 +6,16 @@
 use crate::inference::election;
 use crate::mesh;
 use crate::network::affinity::{
-    prepare_remote_targets_for_request, AffinityRouter, PreparedTargets, TargetSelection,
+    AffinityRouter, PreparedTargets, TargetSelection, prepare_remote_targets_for_request,
 };
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::{
-    normalize_chat_completion_json_body, ChatStreamNormalizationState,
+    ChatStreamNormalizationState, normalize_chat_completion_json_body,
 };
 use crate::network::router;
 use crate::network::target_health::TargetHealthOutcome;
 use crate::plugin;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 // moa imports relocated into moa_gateway.rs (sole user after merge)
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -3592,7 +3592,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
                     state.attempts,
                     result,
                     &target,
-                )
+                );
             }
         }
     }
@@ -3967,7 +3967,8 @@ pub async fn send_models_list_with_descriptors(
     let body = models_list_json(models, descriptors).to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -4300,7 +4301,8 @@ pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io:
     };
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -4316,7 +4318,8 @@ async fn send_503_inner(mut stream: TcpStream, reason: &str) -> std::io::Result<
     let body = serde_json::json!({"error": reason}).to_string();
     let resp = format!(
         "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;

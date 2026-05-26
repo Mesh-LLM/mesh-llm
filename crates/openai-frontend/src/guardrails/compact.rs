@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use mesh_llm_guardrails::{
-    compact_messages, CompactionConfig, CompactionOverride, CompactionRequest, MESH_COMPACT_FIELD,
+    CompactionConfig, CompactionOverride, CompactionRequest, MESH_COMPACT_FIELD, compact_messages,
 };
 
 use crate::{

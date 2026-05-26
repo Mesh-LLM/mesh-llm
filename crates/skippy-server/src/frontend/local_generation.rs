@@ -110,9 +110,9 @@ impl StageOpenAiBackend {
                                 );
                                 attrs.insert(
                                     "skippy.kv.suffix_prefill_tokens".to_string(),
-                                    json!(prefill_tokens
-                                        .len()
-                                        .saturating_sub(restored.token_count)),
+                                    json!(
+                                        prefill_tokens.len().saturating_sub(restored.token_count)
+                                    ),
                                 );
                                 restored_prefill_tokens = restored.token_count;
                                 cache_stats.cached_prompt_tokens =

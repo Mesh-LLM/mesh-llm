@@ -9,7 +9,7 @@ use mesh_llm_api_server::{
 use mesh_llm_host_runtime::sdk::{EmbeddedChatMessage, EmbeddedServingController};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;

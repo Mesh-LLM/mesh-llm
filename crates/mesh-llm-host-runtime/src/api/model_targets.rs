@@ -4,11 +4,11 @@
 //! wanted hints that API handlers expose to operators.
 
 use super::{
+    LocalModelInterest, MeshApi,
     model_target_capacity::{
-        evaluate_model_target_capacity, ModelTargetCapacityInput, ModelTargetSizeLookup,
+        ModelTargetCapacityInput, ModelTargetSizeLookup, evaluate_model_target_capacity,
     },
     status::ModelTargetPayload,
-    LocalModelInterest, MeshApi,
 };
 use crate::mesh;
 use std::cmp::Ordering;

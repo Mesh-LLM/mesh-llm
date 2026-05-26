@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
-    common::{Usage, THINKING_BOOLEAN_ALIASES},
+    common::{THINKING_BOOLEAN_ALIASES, Usage},
     errors::OpenAiError,
 };
 
@@ -1166,9 +1166,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
-        Router,
     };
     use futures_util::stream;
     use http_body_util::BodyExt;
@@ -1176,11 +1176,11 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        router_for_with_config, AssistantMessage, ChatCompletionChoice, ChatCompletionRequest,
-        ChatCompletionResponse, ChatCompletionStream, CompletionRequest, CompletionResponse,
-        CompletionStream, FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
-        ModelObject, OpenAiBackend, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult,
-        Usage,
+        AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
+        ChatCompletionStream, CompletionRequest, CompletionResponse, CompletionStream,
+        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject,
+        OpenAiBackend, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage,
+        router_for_with_config,
     };
 
     #[derive(Default)]
@@ -1553,11 +1553,13 @@ mod tests {
             serde_json::from_str(body["output_text"].as_str().unwrap()).expect("json text");
         assert_eq!(parsed_payload, json!({"answer": 42}));
         assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
-        assert!(body["output"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|item| item["type"] != "function_call"));
+        assert!(
+            body["output"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["type"] != "function_call")
+        );
 
         let seen_requests = backend.seen_chat_requests.lock().unwrap();
         assert_eq!(seen_requests.len(), 1);

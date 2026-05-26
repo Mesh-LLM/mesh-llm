@@ -1,5 +1,5 @@
 use crate::api;
-use crate::cli::output::{emit_event, OutputEvent};
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, pipeline};
 use crate::mesh;
 use crate::network::affinity;

@@ -12,7 +12,7 @@
 
 use crate::inference::consult;
 use crate::mesh;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ===========================================================================
 // handle_image — model can't see media, get a caption/transcript

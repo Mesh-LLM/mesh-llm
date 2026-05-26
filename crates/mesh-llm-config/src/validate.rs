@@ -1,6 +1,6 @@
 use crate::model::{merge_hardware, merge_model_fit, merge_multimodal, merge_throughput};
 use crate::*;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub fn validate_config(config: &MeshConfig) -> Result<()> {
     if let Some(version) = config.version {
@@ -478,7 +478,9 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
                     .filter(|value| *value > 0)
                     .is_none()
             {
-                bail!("{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers");
+                bail!(
+                    "{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers"
+                );
             }
         }
     }
@@ -519,7 +521,9 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
     )?;
     if let (Some(min), Some(max)) = (config.draft_min_tokens, config.draft_max_tokens) {
         if min > max {
-            bail!("{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens");
+            bail!(
+                "{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens"
+            );
         }
     }
     validate_probability(
@@ -564,7 +568,9 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
         && config.draft_hf_repo.is_none()
         && config.draft_selection_policy.is_none()
     {
-        bail!("{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured");
+        bail!(
+            "{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured"
+        );
     }
     Ok(())
 }
@@ -715,7 +721,9 @@ fn validate_multimodal_pair(
             multimodal.mmproj_offload.as_ref(),
         ) {
             if hardware_offload != multimodal_offload {
-                bail!("{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set");
+                bail!(
+                    "{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set"
+                );
             }
         }
     }
@@ -734,7 +742,9 @@ fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Result<()>
     )?;
     if let (Some(min), Some(max)) = (config.image_min_tokens, config.image_max_tokens) {
         if min > max {
-            bail!("{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens");
+            bail!(
+                "{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens"
+            );
         }
     }
     if config.embeddings.is_some() {

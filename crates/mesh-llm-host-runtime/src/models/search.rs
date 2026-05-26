@@ -1,16 +1,16 @@
+use super::ModelCapabilities;
 use super::resolve::{
     file_preference_score, gguf_variant_size_bytes_from_siblings, is_known_gguf_sidecar,
     matching_remote_catalog_model_for_huggingface, merge_capabilities,
     quant_selector_from_gguf_file, remote_catalog_model_draft_ref, remote_catalog_model_ref,
     remote_hf_size_label_with_api,
 };
-use super::ModelCapabilities;
 use super::{build_hf_tokio_api, capabilities, catalog, remote_catalog};
 use crate::system::hardware;
 use anyhow::{Context, Result};
 use hf_hub::repository::ModelInfo;
 use regex_lite::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::LazyLock;
 use tokio::task::JoinSet;

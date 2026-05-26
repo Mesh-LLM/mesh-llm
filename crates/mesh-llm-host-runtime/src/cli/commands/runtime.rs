@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::path::Path;
 
-use crate::cli::runtime::RuntimeCommand;
 use crate::cli::MeshGuardrailCliMode;
-use crate::plugin::{load_config, MeshConfig};
+use crate::cli::runtime::RuntimeCommand;
+use crate::plugin::{MeshConfig, load_config};
 
 pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -> Result<()> {
     match command {
@@ -393,11 +393,7 @@ fn print_control_response(title: &str, body: &serde_json::Value, json_output: bo
 }
 
 fn yes_no(value: bool) -> &'static str {
-    if value {
-        "yes"
-    } else {
-        "no"
-    }
+    if value { "yes" } else { "no" }
 }
 
 fn display_runtime_state(value: &str) -> &'static str {

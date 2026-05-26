@@ -8,29 +8,30 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use model_artifact::ModelIdentity;
 use model_ref::ModelRef;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use skippy_protocol::binary::{
-    recv_ready, recv_reply, write_stage_message, StageStateHeader, StageWireMessage,
-    WireMessageKind, WireReplyKind,
+    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_ready, recv_reply,
+    write_stage_message,
 };
 use skippy_runtime::{
-    package::{materialize_layer_package_details, PackageStageRequest},
-    write_gguf_from_parts, RuntimeConfig, RuntimeLoadMode, StageModel,
+    RuntimeConfig, RuntimeLoadMode, StageModel,
+    package::{PackageStageRequest, materialize_layer_package_details},
+    write_gguf_from_parts,
 };
 use skippy_topology::{
-    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits, BoundaryDecision,
-    NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
+    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
+    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
 };
 
 use crate::{
-    cli::{FocusedRuntimeArgs, FocusedRuntimeScenario, RunArgs, DEFAULT_RUN_MAX_NEW_TOKENS},
+    cli::{DEFAULT_RUN_MAX_NEW_TOKENS, FocusedRuntimeArgs, FocusedRuntimeScenario, RunArgs},
     model_identity::model_identity_for_path,
-    support::{parse_wire_dtype, retry, ChildGuard},
+    support::{ChildGuard, parse_wire_dtype, retry},
 };
 
 struct DistributedRunOutcome {
@@ -889,10 +890,16 @@ fn validate_topology_plan(args: &RunArgs, hosts: &[String], ranges: &[(u32, u32)
         match family.as_ref().map(|family| family.q8_wire_validation) {
             Some(WireValidation::Validated) => {}
             Some(WireValidation::Rejected) => {
-                bail!("topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record", args.model_id);
+                bail!(
+                    "topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record",
+                    args.model_id
+                );
             }
             Some(WireValidation::Untested) => {
-                bail!("topology planner has no q8 validation for {}; use f16 until this family/split passes correctness", args.model_id);
+                bail!(
+                    "topology planner has no q8 validation for {}; use f16 until this family/split passes correctness",
+                    args.model_id
+                );
             }
             None => {}
         }
@@ -1804,7 +1811,9 @@ impl DriverTokenizer {
             materialized_model_path = Some(package.output_path.clone());
             (package.output_path, RuntimeLoadMode::LayerPackage)
         } else {
-            bail!("--model-path or a local layer-package --stage-model is required for prompt tokenization");
+            bail!(
+                "--model-path or a local layer-package --stage-model is required for prompt tokenization"
+            );
         };
 
         let model = StageModel::open(
@@ -2994,9 +3003,10 @@ mod tests {
         };
 
         let err = focused_runtime_schema_smoke_report(&args).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("provide one separate node per stage"));
+        assert!(
+            err.to_string()
+                .contains("provide one separate node per stage")
+        );
 
         let mut run = test_run_args();
         run.hosts = "host-a,host-b,host-c,host-d".to_string();

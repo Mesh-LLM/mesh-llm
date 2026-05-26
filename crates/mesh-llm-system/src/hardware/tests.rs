@@ -485,9 +485,10 @@ fn pinned_gpu_runtime_resolver_missing_configured_id_fails() {
             available_pinnable_ids: vec!["pci:0000:65:00.0".to_string()],
         }
     );
-    assert!(err
-        .to_string()
-        .contains("available pinnable GPU IDs: pci:0000:65:00.0"));
+    assert!(
+        err.to_string()
+            .contains("available pinnable GPU IDs: pci:0000:65:00.0")
+    );
 }
 
 #[test]

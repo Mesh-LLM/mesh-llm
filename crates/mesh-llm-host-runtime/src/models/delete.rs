@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use hf_hub::cache::{CachedFileInfo, CachedRevisionInfo, HFCacheInfo};
 use hf_hub::{RepoType, RepoTypeModel};
 
@@ -10,7 +10,7 @@ use crate::models::local::{
     mesh_llm_cache_dir, scan_hf_cache_info, split_gguf_base_name,
 };
 use crate::models::resolve::{
-    parse_delete_model_ref, resolve_huggingface_file_from_sibling_entries, DeleteModelRef,
+    DeleteModelRef, parse_delete_model_ref, resolve_huggingface_file_from_sibling_entries,
 };
 use crate::models::usage;
 

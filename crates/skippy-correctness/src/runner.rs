@@ -7,7 +7,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use model_hf::HfModelRepository;
 use model_ref::ModelRef;
@@ -16,13 +16,14 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use skippy_protocol::binary::{
+    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
     activation_state_flags_from_frame_flags, read_stage_message, recv_reply, state_flags,
-    write_stage_message, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    write_stage_message,
 };
 use skippy_runtime::{
-    package::{materialize_layer_package_details, MaterializedPackage, PackageStageRequest},
-    ActivationFrame, RuntimeConfig, RuntimeKvPageDesc, RuntimeLoadMode, StageModel, StageSession,
-    GGML_TYPE_F16,
+    ActivationFrame, GGML_TYPE_F16, RuntimeConfig, RuntimeKvPageDesc, RuntimeLoadMode, StageModel,
+    StageSession,
+    package::{MaterializedPackage, PackageStageRequest, materialize_layer_package_details},
 };
 
 use crate::{
@@ -37,8 +38,8 @@ use crate::{
         StatePayloadDigestReport,
     },
     support::{
-        activation_width, connect_ready, generate_run_id, parse_wire_dtype, temp_config_path_for,
-        ChildGuard,
+        ChildGuard, activation_width, connect_ready, generate_run_id, parse_wire_dtype,
+        temp_config_path_for,
     },
 };
 
@@ -2858,11 +2859,7 @@ fn ensure_matches(matches: bool, allow_mismatch: bool) -> Result<()> {
 }
 
 fn status(matches: bool) -> &'static str {
-    if matches {
-        "pass"
-    } else {
-        "fail"
-    }
+    if matches { "pass" } else { "fail" }
 }
 
 #[allow(dead_code)]

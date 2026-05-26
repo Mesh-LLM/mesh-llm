@@ -1,4 +1,4 @@
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 const MODEL_RUNTIME_KIND_VARIANTS: &[&str] = &["auto", "cpu", "cuda", "rocm", "metal", "vulkan"];
 

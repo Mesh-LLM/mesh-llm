@@ -2,7 +2,7 @@ use crate::{
     GpuAssignment, HardwareConfig, MeshConfig, ModelConfigDefaults, ModelConfigEntry,
     ModelFitConfig, MultimodalConfig, PluginConfigEntry, RequestDefaultsConfig, ThroughputConfig,
 };
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use mesh_llm_types::runtime::ModelRuntimeKind;
 use std::net::SocketAddr;
 

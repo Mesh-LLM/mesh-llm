@@ -25,7 +25,8 @@ fn watch_path(path: &Path) {
 
 fn compile_proto() {
     let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc");
-    std::env::set_var("PROTOC", protoc);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("PROTOC", protoc) };
 
     prost_build::Config::new()
         .compile_protos(&["proto/plugin.proto"], &["proto"])

@@ -207,9 +207,11 @@ async fn mesh_node_models_recommended_and_show_include_capabilities() {
 
     let recommended = node.models().recommended().await.expect("recommended");
     assert!(!recommended.is_empty());
-    assert!(recommended
-        .iter()
-        .any(|model| model.id == "Qwen3-4B-Q4_K_M"));
+    assert!(
+        recommended
+            .iter()
+            .any(|model| model.id == "Qwen3-4B-Q4_K_M")
+    );
 
     let search = node
         .models()
@@ -220,9 +222,11 @@ async fn mesh_node_models_recommended_and_show_include_capabilities() {
         .await
         .expect("search");
     assert!(!search.is_empty());
-    assert!(search
-        .iter()
-        .any(|model| model.capabilities.reasoning == CapabilityLevel::Supported));
+    assert!(
+        search
+            .iter()
+            .any(|model| model.capabilities.reasoning == CapabilityLevel::Supported)
+    );
 
     let details = node
         .models()
@@ -262,10 +266,12 @@ async fn mesh_node_models_download_returns_installed_model_without_network() {
         .expect("download installed");
     assert_eq!(downloaded.model_ref, "org/repo-GGUF:Q4_K_M");
     assert_eq!(downloaded.primary_path.as_deref(), Some(model.as_path()));
-    assert!(downloaded
-        .details
-        .as_ref()
-        .is_some_and(|details| details.installed));
+    assert!(
+        downloaded
+            .details
+            .as_ref()
+            .is_some_and(|details| details.installed)
+    );
 
     let _ = std::fs::remove_dir_all(cache_dir);
 }

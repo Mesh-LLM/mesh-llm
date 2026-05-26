@@ -158,8 +158,8 @@ pub trait ValidateControlFrame: prost::Message + Default + Sized {
 
 impl ValidateControlFrame for crate::proto::node::GossipFrame {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.sender_id.len() != 32 {
             return Err(ControlFrameError::InvalidSenderId {
@@ -192,8 +192,8 @@ impl ValidateControlFrame for crate::proto::node::TunnelMap {
 }
 impl ValidateControlFrame for crate::proto::node::RouteTableRequest {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if !self.requester_id.is_empty() && self.requester_id.len() != 32 {
             return Err(ControlFrameError::InvalidEndpointId {
@@ -205,8 +205,8 @@ impl ValidateControlFrame for crate::proto::node::RouteTableRequest {
 }
 impl ValidateControlFrame for crate::proto::node::RouteTable {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         for entry in &self.entries {
             if entry.endpoint_id.len() != 32 {
@@ -220,8 +220,8 @@ impl ValidateControlFrame for crate::proto::node::RouteTable {
 }
 impl ValidateControlFrame for crate::proto::node::PeerDown {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.peer_id.len() != 32 {
             return Err(ControlFrameError::InvalidEndpointId {
@@ -233,8 +233,8 @@ impl ValidateControlFrame for crate::proto::node::PeerDown {
 }
 impl ValidateControlFrame for crate::proto::node::PeerLeaving {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.peer_id.len() != 32 {
             return Err(ControlFrameError::InvalidEndpointId {
@@ -247,8 +247,8 @@ impl ValidateControlFrame for crate::proto::node::PeerLeaving {
 
 impl ValidateControlFrame for crate::proto::node::OwnerControlEnvelope {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         let payloads = [
             self.handshake.is_some(),
@@ -486,8 +486,8 @@ impl ValidateControlFrame for crate::proto::node::OwnerControlConfigUpdate {
 
 impl ValidateControlFrame for crate::proto::node::MeshSubprotocolOpen {
     fn validate_frame(&self) -> Result<(), ControlFrameError> {
-        if self.gen != NODE_PROTOCOL_GENERATION {
-            return Err(ControlFrameError::BadGeneration { got: self.gen });
+        if self.r#gen != NODE_PROTOCOL_GENERATION {
+            return Err(ControlFrameError::BadGeneration { got: self.r#gen });
         }
         if self.name.trim().is_empty() || self.major == 0 {
             return Err(ControlFrameError::InvalidSubprotocol);
@@ -636,7 +636,7 @@ pub fn owner_control_error_envelope(
     message: impl Into<String>,
 ) -> crate::proto::node::OwnerControlEnvelope {
     crate::proto::node::OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: None,
         response: None,
@@ -708,7 +708,7 @@ mod tests {
 
     fn control_plane_test_handshake() -> OwnerControlEnvelope {
         OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: Some(OwnerControlHandshake {
                 ownership: Some(SignedNodeOwnership {
                     version: 1,
@@ -747,7 +747,7 @@ mod tests {
         assert!(decoded.handshake.is_some());
 
         let get_request = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 10,
@@ -767,7 +767,7 @@ mod tests {
         assert_eq!(decoded.request.unwrap().request_id, 10);
 
         let watch_response = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
@@ -789,7 +789,7 @@ mod tests {
             .expect("watch-config response must decode");
 
         let apply_request = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 12,
@@ -810,7 +810,7 @@ mod tests {
             .expect("apply-config request must decode");
 
         let apply_response = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
@@ -832,7 +832,7 @@ mod tests {
             .expect("apply-config response must decode");
 
         let refresh_request = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 13,
@@ -851,7 +851,7 @@ mod tests {
             .expect("refresh-inventory request must decode");
 
         let refresh_response = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
@@ -869,7 +869,7 @@ mod tests {
             .expect("refresh-inventory response must decode");
 
         let get_response = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
@@ -887,7 +887,7 @@ mod tests {
             .expect("get-config response must decode");
 
         let update_response = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
@@ -915,7 +915,7 @@ mod tests {
     #[test]
     fn control_plane_messages_unknown_command_rejects_with_structured_error() {
         let envelope = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 42,

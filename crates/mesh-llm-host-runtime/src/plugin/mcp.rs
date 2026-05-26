@@ -1,5 +1,6 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rmcp::{
+    ErrorData, RoleClient, RoleServer, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, ClientResult,
         CompleteRequestParams, CompleteResult, CreateElicitationRequest,
@@ -13,8 +14,7 @@ use rmcp::{
         SubscribeRequestParams, UnsubscribeRequestParams,
     },
     service::{NotificationContext, Peer, RequestContext, RunningService},
-    transport::{io::stdio, StreamableHttpClientTransport, TokioChildProcess},
-    ErrorData, RoleClient, RoleServer, ServerHandler, ServiceExt,
+    transport::{StreamableHttpClientTransport, TokioChildProcess, io::stdio},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1409,7 +1409,7 @@ fn canonical_name(plugin_name: &str, local_name: &str) -> String {
 
 mod proto_error {
     use anyhow::Error;
-    use rmcp::{model::ErrorCode, ServiceError};
+    use rmcp::{ServiceError, model::ErrorCode};
 
     pub fn from_anyhow(err: Error) -> crate::plugin::proto::ErrorResponse {
         crate::plugin::proto::ErrorResponse {
@@ -1450,7 +1450,7 @@ mod tests {
     };
     use rmcp::service::RequestContext;
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpService,
+        StreamableHttpService, session::local::LocalSessionManager,
     };
     use serde_json::json;
     use std::path::PathBuf;
@@ -1559,12 +1559,11 @@ mod tests {
             _request: Option<PaginatedRequestParams>,
             _context: RequestContext<RoleServer>,
         ) -> Result<ListResourcesResult, ErrorData> {
-            Ok(ListResourcesResult::with_all_items(vec![RawResource::new(
-                "note://one",
-                "First Note",
-            )
-            .with_description("External note")
-            .no_annotation()]))
+            Ok(ListResourcesResult::with_all_items(vec![
+                RawResource::new("note://one", "First Note")
+                    .with_description("External note")
+                    .no_annotation(),
+            ]))
         }
 
         async fn list_resource_templates(

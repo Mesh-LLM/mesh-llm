@@ -1,7 +1,7 @@
 use super::{build_hf_api, huggingface_hub_cache_dir, run_hf_sync, short_revision};
-use crate::cli::terminal_progress::{clear_stderr_line, DeterminateProgressLine};
+use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line};
 use anyhow::{Context, Result};
-use hf_hub::{repository::ModelInfo, RepoTypeModel};
+use hf_hub::{RepoTypeModel, repository::ModelInfo};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -47,7 +47,9 @@ fn run_update_sync(repo: Option<&str>, all: bool, check: bool) -> Result<()> {
         repos
     } else {
         let Some(repo_id) = repo else {
-            anyhow::bail!("Pass a repo id or --all. Use `mesh-llm models updates --check` to inspect updates without downloading.");
+            anyhow::bail!(
+                "Pass a repo id or --all. Use `mesh-llm models updates --check` to inspect updates without downloading."
+            );
         };
         let repo_id = repo_id.trim();
         let Some(found) = repos.into_iter().find(|entry| entry.repo_id == repo_id) else {
@@ -383,7 +385,7 @@ fn update_cached_repo(api: &hf_hub::HFClientSync, repo: &CachedRepo) -> Result<U
                 counts.missing_meta += 1;
             }
             Err(err) => {
-                return Err(err).with_context(|| format!("Download {}/{}", repo.repo_id, file))
+                return Err(err).with_context(|| format!("Download {}/{}", repo.repo_id, file));
             }
         }
     }
@@ -483,9 +485,11 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<OsString>) {
         if let Some(value) = value {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -510,9 +514,12 @@ mod tests {
         std::fs::create_dir_all(snapshot.join("BF16")).unwrap();
         std::fs::write(snapshot.join("BF16/model.gguf"), b"gguf").unwrap();
 
-        std::env::set_var("HF_HUB_CACHE", &base);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &base) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let repo = CachedRepo {
             repo_id: "unsloth/Qwen3.6-35B-A3B-GGUF".to_string(),

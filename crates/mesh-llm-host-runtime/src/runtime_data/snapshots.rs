@@ -1,10 +1,10 @@
 use super::plugins::PluginDataValue;
 use super::processes::RuntimeProcessSnapshot;
+use crate::api::RuntimeProcessPayload;
 use crate::api::status::{
     GpuEntry, LocalInstance, MeshModelPayload, NodeState, OwnershipPayload, PeerPayload,
     WakeableNode,
 };
-use crate::api::RuntimeProcessPayload;
 use crate::crypto::OwnershipSummary;
 use crate::mesh::{MeshCatalogEntry, ModelDemand, PeerInfo};
 use crate::models::LocalModelInventorySnapshot;

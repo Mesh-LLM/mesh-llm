@@ -1,13 +1,13 @@
 use std::{fs, path::PathBuf, time::Duration};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use skippy_runtime::package::{self, PackageIntegrityOptions, PackageStageRequest};
 
 use super::materialization::{
-    inspect_stage_package, resolve_hf_package_to_local, StagePackageInfo, StagePackageRef,
+    StagePackageInfo, StagePackageRef, inspect_stage_package, resolve_hf_package_to_local,
 };
 
 const RUNTIME_SMOKE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -455,9 +455,9 @@ fn failed_gate_message(name: &str, details: String) -> CertificationGate {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_certification_status, certification_stage_ranges, models_response_contains,
-        response_has_chat_choice_content, response_has_responses_output, smoke_chat_completions,
-        smoke_responses, CertificationGateStatus,
+        CertificationGateStatus, aggregate_certification_status, certification_stage_ranges,
+        models_response_contains, response_has_chat_choice_content, response_has_responses_output,
+        smoke_chat_completions, smoke_responses,
     };
     use crate::inference::skippy::materialization::{StagePackageInfo, StagePackageLayerInfo};
     use serde_json::json;

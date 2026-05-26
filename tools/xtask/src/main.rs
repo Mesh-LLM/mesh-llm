@@ -515,6 +515,8 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         fs::read_to_string(repo_root.join(".github/workflows/pr_quality.yml"))?;
     let pr_cleanup_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_cleanup.yml"))?;
+    let windows_warm_caches_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/windows-warm-caches.yml"))?;
 
     ensure_contains(
         &readme,
@@ -538,7 +540,7 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &release_workflow,
-        "runs-on: ubuntu-24.04-arm",
+        "runs-on: blacksmith-4vcpu-ubuntu-2404-arm",
         "release workflow ARM64 runner",
     )?;
     ensure_contains(
@@ -616,7 +618,55 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "push:\n    branches: [main]",
         "main CI push trigger",
     )?;
+    check_windows_abi_cache_key_alignment(
+        &ci_workflow,
+        &pr_builds_workflow,
+        &windows_warm_caches_workflow,
+    )?;
     check_ci_crate_test_coverage(&pr_builds_workflow)?;
+
+    Ok(())
+}
+
+fn check_windows_abi_cache_key_alignment(
+    ci_workflow: &str,
+    pr_builds_workflow: &str,
+    windows_warm_caches_workflow: &str,
+) -> DynResult<()> {
+    const WINDOWS_ABI_CACHE_HASH_INPUTS: &str = concat!(
+        "hashFiles('scripts/build-windows.ps1', 'scripts/install-windows-sdk.ps1', ",
+        "'.github/actions/setup-windows-rocm-sdk/action.yml', ",
+        "'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', ",
+        "'Justfile', '.github/cache-version.txt')",
+    );
+    let windows_cpu_abi_cache_key =
+        format!("windows-2025-skippy-abi-cpu--cpu-${{{{ {WINDOWS_ABI_CACHE_HASH_INPUTS} }}}}");
+
+    ensure_contains(
+        ci_workflow,
+        &windows_cpu_abi_cache_key,
+        "main CI Windows CPU ABI cache key",
+    )?;
+    ensure_contains(
+        windows_warm_caches_workflow,
+        &windows_cpu_abi_cache_key,
+        "Windows warm-cache CPU ABI cache key",
+    )?;
+    ensure_contains(
+        pr_builds_workflow,
+        "windows-2025-skippy-abi-${{ matrix.backend }}-${{ matrix.build_args }}-",
+        "PR Builds Windows ABI cache key template",
+    )?;
+    ensure_contains(
+        pr_builds_workflow,
+        "|| 'cpu' }}-${{ hashFiles(",
+        "PR Builds Windows CPU ABI cache discriminator",
+    )?;
+    ensure_contains(
+        pr_builds_workflow,
+        WINDOWS_ABI_CACHE_HASH_INPUTS,
+        "PR Builds Windows ABI cache hash inputs",
+    )?;
 
     Ok(())
 }

@@ -1032,7 +1032,7 @@ pub(crate) fn assert_mesh_requirements_docs_examples_parse() {
 mod tests {
     use super::*;
     use crate::cli::models::{ModelSearchSort, ModelsCommand};
-    use clap::{error::ErrorKind, CommandFactory, Parser};
+    use clap::{CommandFactory, Parser, error::ErrorKind};
 
     #[test]
     fn normalize_runtime_surface_args_rewrites_serve_invocation() {
@@ -1127,12 +1127,10 @@ mod tests {
         let normalized = normalize_runtime_surface_args(["mesh-llm", "client", "--auto"]);
         let cli = Cli::parse_from(normalized.normalized.clone());
 
-        assert!(legacy_runtime_surface_warning(
-            &cli,
-            &normalized.original,
-            normalized.explicit_surface
-        )
-        .is_none());
+        assert!(
+            legacy_runtime_surface_warning(&cli, &normalized.original, normalized.explicit_surface)
+                .is_none()
+        );
     }
 
     #[test]

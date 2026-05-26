@@ -42,11 +42,7 @@ pub(super) fn stable_wire_id(parts: &[&[u8]]) -> u64 {
             .try_into()
             .expect("sha256 digest has an 8-byte prefix"),
     );
-    if id == 0 {
-        1
-    } else {
-        id
-    }
+    if id == 0 { 1 } else { id }
 }
 
 pub(super) fn detokenize_bytes_with_runtime(

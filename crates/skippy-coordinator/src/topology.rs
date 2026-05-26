@@ -696,12 +696,13 @@ mod tests {
         assert_eq!(plan.context_length, QWEN_CODER_480B_NATIVE_CONTEXT);
         assert_eq!(plan.parallel_lanes, 4);
         assert_eq!(plan.stages.len(), 5);
-        assert!(plan
-            .stages
-            .iter()
-            .all(|stage| !stage.node_id.ends_with("07")
-                && !stage.node_id.ends_with("08")
-                && !stage.node_id.ends_with("09")));
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| !stage.node_id.ends_with("07")
+                    && !stage.node_id.ends_with("08")
+                    && !stage.node_id.ends_with("09"))
+        );
     }
 
     #[test]

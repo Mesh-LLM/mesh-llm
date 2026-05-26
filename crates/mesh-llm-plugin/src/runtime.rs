@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use rmcp::model::{
     CallToolResult, CancelTaskParams, CancelTaskResult, CompleteRequestParams, CompleteResult,
     GetPromptRequestParams, GetPromptResult, GetTaskInfoParams, GetTaskPayloadResult,
@@ -14,15 +14,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::{
+    PROTOCOL_VERSION,
     context::PluginContext,
     error::{PluginError, PluginResult, PluginRpcResult},
     helpers::{
+        CompletionRouter, PromptRouter, ResourceRouter, TaskRouter, ToolCallRequest, ToolRouter,
         json_response, parse_get_prompt_request, parse_read_resource_request, parse_rpc_params,
-        parse_tool_call_request, CompletionRouter, PromptRouter, ResourceRouter, TaskRouter,
-        ToolCallRequest, ToolRouter,
+        parse_tool_call_request,
     },
-    io::{connect_from_env, read_envelope, write_envelope, LocalStream},
-    proto, PROTOCOL_VERSION,
+    io::{LocalStream, connect_from_env, read_envelope, write_envelope},
+    proto,
 };
 use serde::{Deserialize, Serialize};
 

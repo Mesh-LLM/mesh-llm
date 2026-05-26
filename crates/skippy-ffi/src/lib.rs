@@ -289,14 +289,14 @@ pub struct GenerationSignalWindow {
     pub repetition_count: u32,
 }
 
-extern "C" {
+unsafe extern "C" {
     pub fn llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
 
     pub fn skippy_status_string(status: Status) -> *const c_char;
     pub fn skippy_error_free(error: *mut Error);
 
     pub fn skippy_backend_device_count(out_count: *mut usize, out_error: *mut *mut Error)
-        -> Status;
+    -> Status;
 
     pub fn skippy_backend_device_at(
         index: usize,
