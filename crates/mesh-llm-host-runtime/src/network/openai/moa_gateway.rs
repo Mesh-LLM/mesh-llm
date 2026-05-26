@@ -275,10 +275,7 @@ fn short_hex_nanos() -> String {
 
 /// Wrapper: emit `response.created` and log on failure. Returns
 /// false if the connection died so the caller can bail cleanly.
-async fn send_responses_created_for_progress(
-    stream: &mut TcpStream,
-    completion_id: &str,
-) -> bool {
+async fn send_responses_created_for_progress(stream: &mut TcpStream, completion_id: &str) -> bool {
     if let Err(e) = write_progress_response_created(stream, completion_id).await {
         tracing::warn!("MoA progress: response.created write failed: {e}");
         return false;
