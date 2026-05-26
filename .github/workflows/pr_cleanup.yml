@@ -4,44 +4,92 @@ on:
   pull_request_target:
     types:
       - closed
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number whose refs/pull/<number>/merge caches should be cleaned.
+        required: true
+        type: string
+      artifact_head_sha:
+        description: Optional PR head SHA to also clean artifacts from matching pull_request runs.
+        required: false
+        type: string
+
+concurrency:
+  group: pr-cache-cleanup-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
-  cleanup:
-    name: Delete PR-scoped caches and artifacts
+  plan_cache_cleanup:
+    name: Plan PR cache cleanup shards
     runs-on: ubuntu-latest
     permissions:
-      actions: write
+      actions: read
+    outputs:
+      cache-ref: ${{ steps.plan.outputs.cache-ref }}
+      cache-count: ${{ steps.plan.outputs.cache-count }}
+      cache-bytes: ${{ steps.plan.outputs.cache-bytes }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      worker-count: ${{ steps.plan.outputs.worker-count }}
     steps:
       # pull_request_target is used only for cache API cleanup. Do not check out
       # or run pull request code in this workflow.
-      - name: Delete every cache created for this pull request
-        id: delete-pr-caches
+      - name: Plan cache deletion shards
+        id: plan
         uses: actions/github-script@v8
         env:
-          PR_CACHE_REF: refs/pull/${{ github.event.pull_request.number }}/merge
+          PR_CACHE_REF: refs/pull/${{ github.event.inputs.pr_number || github.event.pull_request.number }}/merge
+          PR_CACHE_CLEANUP_WORKERS: ${{ vars.PR_CACHE_CLEANUP_WORKERS }}
         with:
           github-token: ${{ github.token }}
           script: |
+            const fs = require("fs");
+            const path = require("path");
+
             const { owner, repo } = context.repo;
             const ref = process.env.PR_CACHE_REF;
             const perPage = 100;
-            const deleteBatchSize = 20;
-            const deleteBatchPauseMs = 15_000;
-            const caches = [];
+            const defaultWorkerCount = 5;
+            const maxWorkerCount = 20;
+            const configuredWorkers = process.env.PR_CACHE_CLEANUP_WORKERS?.trim();
 
-            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-            async function pauseBetweenDeleteBatches(nextIndex, totalCount, label) {
-              if (nextIndex >= totalCount) {
-                return;
+            function parseWorkerCount(value) {
+              if (!value) {
+                return defaultWorkerCount;
               }
-              core.notice(
-                `Deleted ${nextIndex}/${totalCount} ${label}; waiting ${
-                  deleteBatchPauseMs / 1000
-                }s before the next batch to avoid GitHub secondary rate limits.`,
-              );
-              await sleep(deleteBatchPauseMs);
+
+              const parsed = Number.parseInt(value, 10);
+              if (!Number.isInteger(parsed) || parsed < 1) {
+                core.warning(
+                  `Invalid PR_CACHE_CLEANUP_WORKERS value ${JSON.stringify(
+                    value,
+                  )}; using ${defaultWorkerCount}.`,
+                );
+                return defaultWorkerCount;
+              }
+
+              if (parsed > maxWorkerCount) {
+                core.warning(
+                  `PR_CACHE_CLEANUP_WORKERS=${parsed} is above ${maxWorkerCount}; ` +
+                    `using ${maxWorkerCount}.`,
+                );
+                return maxWorkerCount;
+              }
+
+              return parsed;
             }
+
+            const workerCount = parseWorkerCount(configuredWorkers);
+            const shards = Array.from({ length: workerCount }, (_, index) => ({
+              workerIndex: index,
+              workerNumber: index + 1,
+              workerCount,
+              caches: [],
+              bytes: 0,
+            }));
+
+            let cacheCount = 0;
+            let cacheBytes = 0;
 
             for (let page = 1; ; page += 1) {
               const response = await github.request(
@@ -49,55 +97,380 @@ jobs:
                 { owner, repo, ref, per_page: perPage, page },
               );
               const pageCaches = response.data.actions_caches ?? [];
-              caches.push(...pageCaches);
+
+              for (const cache of pageCaches) {
+                if (cache.ref !== ref) {
+                  core.warning(
+                    `Skipping cache ${cache.id} because ref ${cache.ref} does not match ${ref}.`,
+                  );
+                  continue;
+                }
+
+                const size = cache.size_in_bytes ?? 0;
+                const shard = shards[Number(cache.id) % workerCount];
+                shard.caches.push({
+                  id: cache.id,
+                  key: cache.key,
+                  ref: cache.ref,
+                  size_in_bytes: size,
+                });
+                shard.bytes += size;
+                cacheBytes += size;
+                cacheCount += 1;
+              }
+
               if (pageCaches.length < perPage) {
                 break;
               }
             }
 
-            let deletedBytes = 0;
-            const deleted = [];
+            const planDir = path.join(process.cwd(), "cache-cleanup-plan");
+            fs.mkdirSync(planDir, { recursive: true });
 
-            for (let index = 0; index < caches.length; index += deleteBatchSize) {
-              const batch = caches.slice(index, index + deleteBatchSize);
-              for (const cache of batch) {
+            for (const shard of shards) {
+              const plan = {
+                ref,
+                workerIndex: shard.workerIndex,
+                workerNumber: shard.workerNumber,
+                workerCount: shard.workerCount,
+                cacheCount: shard.caches.length,
+                cacheBytes: shard.bytes,
+                caches: shard.caches,
+              };
+              fs.writeFileSync(
+                path.join(planDir, `shard-${shard.workerIndex}.json`),
+                `${JSON.stringify(plan, null, 2)}\n`,
+              );
+              core.notice(
+                `Planned shard ${shard.workerNumber}/${workerCount}: ` +
+                  `${shard.caches.length} cache(s), ${shard.bytes} byte(s).`,
+              );
+            }
+
+            const matrix = {
+              shard: shards.map((shard) => ({
+                index: shard.workerIndex,
+                number: shard.workerNumber,
+                count: shard.workerCount,
+              })),
+            };
+
+            core.setOutput("cache-ref", ref);
+            core.setOutput("cache-count", String(cacheCount));
+            core.setOutput("cache-bytes", String(cacheBytes));
+            core.setOutput("matrix", JSON.stringify(matrix));
+            core.setOutput("worker-count", String(workerCount));
+
+            if (cacheCount === 0) {
+              core.notice(`No GitHub Actions caches found for ${ref}.`);
+            } else {
+              core.notice(
+                `Planned ${cacheCount} cache(s) from ${ref} across ${workerCount} worker(s).`,
+              );
+            }
+
+      - name: Upload cache deletion plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-cache-cleanup-plan-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+          path: cache-cleanup-plan
+          retention-days: 1
+
+  delete_pr_caches:
+    name: Delete PR caches (${{ matrix.shard.number }}/${{ matrix.shard.count }})
+    needs: plan_cache_cleanup
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan_cache_cleanup.outputs.matrix) }}
+    steps:
+      # Each worker runs on its own runner and deletes only its precomputed shard.
+      # Deletes remain serial inside each worker so every host keeps the same
+      # rate-limited request shape as the previous single-runner cleanup.
+      - name: Download cache deletion plan
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-cache-cleanup-plan-${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+          path: cache-cleanup-plan
+
+      - name: Delete cache shard
+        id: delete-cache-shard
+        uses: actions/github-script@v8
+        env:
+          PR_CACHE_SHARD_INDEX: ${{ matrix.shard.index }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+
+            const { owner, repo } = context.repo;
+            const shardIndex = Number(process.env.PR_CACHE_SHARD_INDEX);
+            const planPath = path.join(
+              process.cwd(),
+              "cache-cleanup-plan",
+              `shard-${shardIndex}.json`,
+            );
+            const resultDir = path.join(process.cwd(), "cache-cleanup-results");
+            const resultPath = path.join(resultDir, `shard-${shardIndex}.json`);
+            const deleteBatchSize = 10;
+            const deleteBatchPauseMs = 15_000;
+            const deleteRequestPauseMs = 4_000;
+            const deleteRequestJitterMs = 1_000;
+            const shardStartStaggerMs = 15_000;
+            const shardStartJitterMs = 15_000;
+            const secondaryRateLimitPauseMs = 10 * 60_000;
+            const maxSecondaryRateLimitPauseMs = 30 * 60_000;
+            const maxAttempts = 5;
+
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            function randomDelay(maxMs) {
+              return Math.floor(Math.random() * maxMs);
+            }
+
+            function errorBody(error) {
+              const data = error.response?.data;
+              if (typeof data === "string") {
+                return data;
+              }
+              if (!data) {
+                return "";
+              }
+              return JSON.stringify(data);
+            }
+
+            function isSecondaryRateLimit(error) {
+              if (![403, 429].includes(error.status)) {
+                return false;
+              }
+              const body = errorBody(error).toLowerCase();
+              return (
+                body.includes("secondary rate limit") ||
+                body.includes("too many requests") ||
+                body.includes("abuse detection")
+              );
+            }
+
+            function retryDelayMs(error, attempt) {
+              const retryAfter = Number.parseInt(error.response?.headers?.["retry-after"], 10);
+              if (Number.isInteger(retryAfter) && retryAfter > 0) {
+                return retryAfter * 1000;
+              }
+
+              const remaining = error.response?.headers?.["x-ratelimit-remaining"];
+              const reset = Number.parseInt(error.response?.headers?.["x-ratelimit-reset"], 10);
+              if (remaining === "0" && Number.isInteger(reset)) {
+                return Math.max(reset * 1000 - Date.now(), 0) + 5_000;
+              }
+
+              if (isSecondaryRateLimit(error)) {
+                return (
+                  Math.min(secondaryRateLimitPauseMs * attempt, maxSecondaryRateLimitPauseMs) +
+                  randomDelay(60_000)
+                );
+              }
+
+              const base = Math.min(2 ** attempt * 1000, 60_000);
+              return base + randomDelay(1000);
+            }
+
+            function shouldRetry(error) {
+              return [403, 429, 500, 502, 503, 504].includes(error.status);
+            }
+
+            async function deleteCache(cache) {
+              for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
                 try {
                   await github.request(
                     "DELETE /repos/{owner}/{repo}/actions/caches/{cache_id}",
                     { owner, repo, cache_id: cache.id },
                   );
-                  deletedBytes += cache.size_in_bytes ?? 0;
-                  deleted.push(cache);
-                  core.info(`Deleted cache ${cache.id} (${cache.key}) from ${cache.ref}.`);
+                  return { deleted: true };
                 } catch (error) {
                   if (error.status === 404) {
                     core.warning(`Cache ${cache.id} (${cache.key}) was already deleted.`);
-                    continue;
+                    return { deleted: false };
                   }
-                  throw error;
+
+                  if (!shouldRetry(error) || attempt === maxAttempts) {
+                    if (isSecondaryRateLimit(error)) {
+                      return {
+                        deleted: false,
+                        skipped: true,
+                        error:
+                          `secondary rate limit after ${maxAttempts} attempts; ` +
+                          "leaving cache for a later cleanup run",
+                      };
+                    }
+                    return {
+                      deleted: false,
+                      error: `status=${error.status ?? "unknown"} message=${error.message}`,
+                    };
+                  }
+
+                  const delayMs = retryDelayMs(error, attempt);
+                  core.warning(
+                    `Delete cache ${cache.id} (${cache.key}) failed with status ` +
+                      `${error.status}; retrying in ${Math.round(delayMs / 1000)}s ` +
+                      `(attempt ${attempt + 1}/${maxAttempts}).`,
+                  );
+                  await sleep(delayMs);
                 }
               }
+
+              return { deleted: false, error: "unreachable retry state" };
+            }
+
+            async function pauseBetweenDeleteBatches(nextIndex, totalCount) {
+              if (nextIndex >= totalCount) {
+                return;
+              }
+              core.notice(
+                `Shard ${plan.workerNumber}/${plan.workerCount} deleted ` +
+                  `${nextIndex}/${totalCount} cache(s); waiting ` +
+                  `${deleteBatchPauseMs / 1000}s before the next batch.`,
+              );
+              await sleep(deleteBatchPauseMs);
+            }
+
+            async function pauseAfterDeleteRequest(nextIndex, totalCount) {
+              if (nextIndex >= totalCount) {
+                return;
+              }
+              await sleep(deleteRequestPauseMs + randomDelay(deleteRequestJitterMs));
+            }
+
+            async function staggerShardStart(plan) {
+              if (plan.cacheCount === 0) {
+                return;
+              }
+              const delayMs =
+                plan.workerIndex * shardStartStaggerMs + randomDelay(shardStartJitterMs);
+              core.notice(
+                `Shard ${plan.workerNumber}/${plan.workerCount} waiting ` +
+                  `${Math.round(delayMs / 1000)}s before first delete to avoid a request herd.`,
+              );
+              await sleep(delayMs);
+            }
+
+            const plan = JSON.parse(fs.readFileSync(planPath, "utf8"));
+            await staggerShardStart(plan);
+            let deletedBytes = 0;
+            const deleted = [];
+            const skipped = [];
+            const failed = [];
+
+            for (let index = 0; index < plan.caches.length; index += deleteBatchSize) {
+              const batch = plan.caches.slice(index, index + deleteBatchSize);
+
+              for (let batchOffset = 0; batchOffset < batch.length; batchOffset += 1) {
+                const cache = batch[batchOffset];
+                const nextIndex = index + batchOffset + 1;
+
+                if (cache.ref !== plan.ref) {
+                  failed.push({ id: cache.id, key: cache.key, error: "ref mismatch" });
+                  core.warning(
+                    `Skipping cache ${cache.id} (${cache.key}) because ref ${cache.ref} ` +
+                      `does not match ${plan.ref}.`,
+                  );
+                  continue;
+                }
+
+                const result = await deleteCache(cache);
+                if (result.deleted) {
+                  deletedBytes += cache.size_in_bytes ?? 0;
+                  deleted.push(cache);
+                  core.info(`Deleted cache ${cache.id} (${cache.key}) from ${cache.ref}.`);
+                } else if (result.error) {
+                  if (result.skipped) {
+                    skipped.push({ id: cache.id, key: cache.key, reason: result.error });
+                    core.warning(
+                      `Skipped cache ${cache.id} (${cache.key}): ${result.error}.`,
+                    );
+                  } else {
+                    failed.push({ id: cache.id, key: cache.key, error: result.error });
+                    core.warning(
+                      `Failed to delete cache ${cache.id} (${cache.key}): ${result.error}.`,
+                    );
+                  }
+                }
+
+                await pauseAfterDeleteRequest(nextIndex, plan.caches.length);
+              }
+
               await pauseBetweenDeleteBatches(
-                Math.min(index + deleteBatchSize, caches.length),
-                caches.length,
-                "cache(s)",
+                Math.min(index + deleteBatchSize, plan.caches.length),
+                plan.caches.length,
               );
             }
 
-            core.setOutput("cache-ref", ref);
+            fs.mkdirSync(resultDir, { recursive: true });
+            fs.writeFileSync(
+              resultPath,
+              `${JSON.stringify(
+                {
+                  ref: plan.ref,
+                  workerIndex: plan.workerIndex,
+                  workerNumber: plan.workerNumber,
+                  workerCount: plan.workerCount,
+                  plannedCount: plan.caches.length,
+                  plannedBytes: plan.cacheBytes,
+                  deletedCount: deleted.length,
+                  deletedBytes,
+                  skippedCount: skipped.length,
+                  skipped,
+                  failedCount: failed.length,
+                  failed,
+                },
+                null,
+                2,
+              )}\n`,
+            );
+
+            core.setOutput("planned-count", String(plan.caches.length));
             core.setOutput("deleted-count", String(deleted.length));
             core.setOutput("deleted-bytes", String(deletedBytes));
+            core.setOutput("skipped-count", String(skipped.length));
+            core.setOutput("failed-count", String(failed.length));
 
-            if (deleted.length === 0) {
-              core.notice(`No GitHub Actions caches found for ${ref}.`);
+            if (failed.length > 0) {
+              core.setFailed(
+                `Shard ${plan.workerNumber}/${plan.workerCount} failed to delete ` +
+                  `${failed.length} cache(s).`,
+              );
             }
 
+      - name: Upload cache deletion result
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-cache-cleanup-result-${{ github.event.inputs.pr_number || github.event.pull_request.number }}-${{ matrix.shard.number }}
+          path: cache-cleanup-results
+          if-no-files-found: warn
+          retention-days: 1
+
+  delete_pr_artifacts:
+    name: Delete PR artifacts
+    needs: delete_pr_caches
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    outputs:
+      matched-runs: ${{ steps.delete-pr-artifacts.outputs.matched-runs }}
+      deleted-count: ${{ steps.delete-pr-artifacts.outputs.deleted-count }}
+      deleted-bytes: ${{ steps.delete-pr-artifacts.outputs.deleted-bytes }}
+    steps:
       - name: Delete artifacts from pull request runs
         id: delete-pr-artifacts
         uses: actions/github-script@v8
         env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.inputs.artifact_head_sha || github.event.pull_request.head.sha }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -110,6 +483,21 @@ jobs:
             const matchingRuns = [];
 
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+            if (!Number.isInteger(prNumber) || prNumber < 1) {
+              core.setFailed(`Invalid PR_NUMBER value: ${JSON.stringify(process.env.PR_NUMBER)}`);
+              return;
+            }
+
+            if (!headSha) {
+              core.notice(
+                "No PR head SHA is available; skipping artifact cleanup for this manual run.",
+              );
+              core.setOutput("matched-runs", "0");
+              core.setOutput("deleted-count", "0");
+              core.setOutput("deleted-bytes", "0");
+              return;
+            }
 
             async function deleteInBatches(items, label, deleteItem) {
               for (let index = 0; index < items.length; index += deleteBatchSize) {
@@ -208,22 +596,79 @@ jobs:
               core.notice(`No pull request artifacts found for PR #${prNumber}.`);
             }
 
+  summarize_cleanup:
+    name: Summarize cache cleanup
+    needs:
+      - plan_cache_cleanup
+      - delete_pr_caches
+      - delete_pr_artifacts
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download cache deletion results
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: pr-cache-cleanup-result-${{ github.event.inputs.pr_number || github.event.pull_request.number }}-*
+          path: cache-cleanup-results
+          merge-multiple: true
+
       - name: Summarize cache cleanup
         env:
-          CACHE_REF: ${{ steps.delete-pr-caches.outputs.cache-ref }}
-          DELETED_COUNT: ${{ steps.delete-pr-caches.outputs.deleted-count }}
-          DELETED_BYTES: ${{ steps.delete-pr-caches.outputs.deleted-bytes }}
-          ARTIFACT_RUNS: ${{ steps.delete-pr-artifacts.outputs.matched-runs }}
-          ARTIFACT_COUNT: ${{ steps.delete-pr-artifacts.outputs.deleted-count }}
-          ARTIFACT_BYTES: ${{ steps.delete-pr-artifacts.outputs.deleted-bytes }}
+          CACHE_REF: ${{ needs.plan_cache_cleanup.outputs.cache-ref }}
+          PLANNED_CACHE_COUNT: ${{ needs.plan_cache_cleanup.outputs.cache-count }}
+          PLANNED_CACHE_BYTES: ${{ needs.plan_cache_cleanup.outputs.cache-bytes }}
+          WORKER_COUNT: ${{ needs.plan_cache_cleanup.outputs.worker-count }}
+          ARTIFACT_RUNS: ${{ needs.delete_pr_artifacts.outputs.matched-runs }}
+          ARTIFACT_COUNT: ${{ needs.delete_pr_artifacts.outputs.deleted-count }}
+          ARTIFACT_BYTES: ${{ needs.delete_pr_artifacts.outputs.deleted-bytes }}
         run: |
-          {
-            echo "## Pull request cache and artifact cleanup"
-            echo ""
-            echo "- Cache ref: \`${CACHE_REF}\`"
-            echo "- Deleted caches: ${DELETED_COUNT}"
-            echo "- Deleted bytes: ${DELETED_BYTES}"
-            echo "- Pull request runs inspected: ${ARTIFACT_RUNS}"
-            echo "- Deleted artifacts: ${ARTIFACT_COUNT}"
-            echo "- Deleted artifact bytes: ${ARTIFACT_BYTES}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          node <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+
+          const resultDir = "cache-cleanup-results";
+          const totals = {
+            plannedCount: 0,
+            plannedBytes: 0,
+            deletedCount: 0,
+            deletedBytes: 0,
+            failedCount: 0,
+            skippedCount: 0,
+          };
+
+          if (fs.existsSync(resultDir)) {
+            for (const file of fs.readdirSync(resultDir)) {
+              if (!file.endsWith(".json")) {
+                continue;
+              }
+              const result = JSON.parse(fs.readFileSync(path.join(resultDir, file), "utf8"));
+              totals.plannedCount += result.plannedCount ?? 0;
+              totals.plannedBytes += result.plannedBytes ?? 0;
+              totals.deletedCount += result.deletedCount ?? 0;
+              totals.deletedBytes += result.deletedBytes ?? 0;
+              totals.skippedCount += result.skippedCount ?? 0;
+              totals.failedCount += result.failedCount ?? 0;
+            }
+          }
+
+          const summary = [
+            "## Pull request cache and artifact cleanup",
+            "",
+            `- Cache ref: \`${process.env.CACHE_REF}\``,
+            `- Cache cleanup workers: ${process.env.WORKER_COUNT || "0"}`,
+            `- Planned caches: ${process.env.PLANNED_CACHE_COUNT || totals.plannedCount}`,
+            `- Planned cache bytes: ${process.env.PLANNED_CACHE_BYTES || totals.plannedBytes}`,
+            `- Deleted caches: ${totals.deletedCount}`,
+            `- Deleted cache bytes: ${totals.deletedBytes}`,
+            `- Skipped cache deletions: ${totals.skippedCount}`,
+            `- Failed cache deletions: ${totals.failedCount}`,
+            `- Pull request runs inspected: ${process.env.ARTIFACT_RUNS || "0"}`,
+            `- Deleted artifacts: ${process.env.ARTIFACT_COUNT || "0"}`,
+            `- Deleted artifact bytes: ${process.env.ARTIFACT_BYTES || "0"}`,
+          ];
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary.join("\n")}\n`);
+          NODE

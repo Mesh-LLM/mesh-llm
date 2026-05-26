@@ -71,10 +71,14 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 
     subgraph Cleanup["pr_cleanup.yml · PR Cache Cleanup"]
         Closed["pull_request_target closed"]
-        DeleteCaches["delete caches for\nrefs/pull/<PR>/merge"]
+        PlanCaches["plan cache shards for\nrefs/pull/<PR>/merge"]
+        DeleteCaches["matrix delete cache shards\nrepo-var workers · serial per worker"]
         DeleteArtifacts["delete artifacts from\nmatched PR workflow runs"]
-        Closed --> DeleteCaches
+        CleanupSummary["cleanup summary"]
+        Closed --> PlanCaches --> DeleteCaches
         Closed --> DeleteArtifacts
+        DeleteCaches --> CleanupSummary
+        DeleteArtifacts --> CleanupSummary
     end
 
     subgraph MainRelease["non-PR workflows"]
@@ -115,8 +119,12 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   for broad Rust changes, but CUDA/ROCm/Vulkan rows stay skipped unless Windows
   GPU inputs changed or the workflow is manually dispatched.
 - `pr_cleanup.yml` deletes PR merge-ref caches and artifacts from positively
-  matched PR workflow runs when a pull request closes. Cleanup-only workflow
-  edits do not fan out into Rust/build/smoke jobs.
+  matched PR workflow runs when a pull request closes. Cache cleanup first plans
+  deterministic shards, then fans deletion out across
+  `vars.PR_CACHE_CLEANUP_WORKERS` workers (default `5`) while keeping each worker
+  serial and rate-limited; a final summary aggregates cache shard results plus
+  artifact cleanup. Cleanup-only workflow edits do not fan out into
+  Rust/build/smoke jobs.
 - Docker image validation and publishing are intentionally not part of pull
   request CI; non-PR workflows (`ci.yml`, `docker.yml`, `release.yml`) own main,
   dispatch, tag, and release-grade publishing behavior.
