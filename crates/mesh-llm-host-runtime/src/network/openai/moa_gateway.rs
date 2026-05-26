@@ -166,12 +166,14 @@ async fn run_moa_turn(
     // Trade-off: HTTP headers must precede the body, so this path
     // loses the post-hoc `x-moa-*` observability headers (the
     // result-derived ones). Worth it for the live feel.
-    if was_streaming && matches!(
-        response_adapter,
-        proxy::ResponseAdapter::None
-            | proxy::ResponseAdapter::OpenAiChatCompletionsStream
-            | proxy::ResponseAdapter::OpenAiResponsesStream
-    ) {
+    if was_streaming
+        && matches!(
+            response_adapter,
+            proxy::ResponseAdapter::None
+                | proxy::ResponseAdapter::OpenAiChatCompletionsStream
+                | proxy::ResponseAdapter::OpenAiResponsesStream
+        )
+    {
         run_moa_turn_with_progress(tcp_stream, moa_body, config, response_adapter).await;
         return;
     }
