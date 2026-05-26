@@ -382,6 +382,9 @@ test-all:
     echo "=== 2/8 Rust format check ==="
     just with-lld cargo fmt --all -- --check
     echo ""
+    echo "=== GPU bench Rust feature check ==="
+    MESH_LLM_GPU_BENCH_RUST_ONLY=1 just with-lld cargo check -p mesh-llm-gpu-bench --features cuda,hip,intel
+    echo ""
     echo "=== 3/8 Clippy ==="
     mapfile -t clippy_crates < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
     for crate in "${clippy_crates[@]}"; do

@@ -1,5 +1,12 @@
 use crate::BenchmarkOutput;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+#[cfg(any(
+    not(target_os = "macos"),
+    not(feature = "cuda"),
+    not(feature = "hip"),
+    not(feature = "intel")
+))]
+use anyhow::anyhow;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
