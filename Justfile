@@ -383,7 +383,11 @@ test-all:
     just with-lld cargo fmt --all -- --check
     echo ""
     echo "=== 3/8 Clippy ==="
-    just with-lld cargo clippy -p mesh-llm -- -D warnings
+    mapfile -t clippy_crates < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
+    for crate in "${clippy_crates[@]}"; do
+        echo "--- $crate ---"
+        just with-lld cargo clippy -p "$crate" --all-targets -- -D warnings
+    done
     echo ""
     echo "=== 4/8 Rust tests ==="
     echo "--- mesh-llm-host-runtime lib ---"

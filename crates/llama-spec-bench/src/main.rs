@@ -875,10 +875,10 @@ fn prompt_cases(args: &Args) -> Result<Vec<PromptCase>> {
             .is_file()
             .then(|| PathBuf::from(DEFAULT_CORPUS))
     });
-    if prompts.is_empty() {
-        if let Some(path) = corpus.as_ref() {
-            prompts.extend(read_prompt_corpus(path)?);
-        }
+    if prompts.is_empty()
+        && let Some(path) = corpus.as_ref()
+    {
+        prompts.extend(read_prompt_corpus(path)?);
     }
     if prompts.is_empty() {
         prompts.push(PromptCase {

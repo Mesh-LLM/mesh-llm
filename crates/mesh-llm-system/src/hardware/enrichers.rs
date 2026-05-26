@@ -28,11 +28,11 @@ mod linux {
         }
 
         unsafe fn symbol<T: Copy>(&self, name: &'static [u8]) -> Option<T> {
-            let symbol = libc::dlsym(self.0, name.as_ptr().cast());
+            let symbol = unsafe { libc::dlsym(self.0, name.as_ptr().cast()) };
             if symbol.is_null() {
                 None
             } else {
-                Some(std::mem::transmute_copy(&symbol))
+                Some(unsafe { std::mem::transmute_copy(&symbol) })
             }
         }
     }
@@ -147,13 +147,12 @@ mod linux {
             return None;
         }
 
-        if let Some(pci_bdf) = gpu.pci_bdf.as_deref().and_then(normalize_pci_bdf) {
-            if let Some(info) = infos
+        if let Some(pci_bdf) = gpu.pci_bdf.as_deref().and_then(normalize_pci_bdf)
+            && let Some(info) = infos
                 .iter()
                 .find(|info| info.pci_bdf.as_deref() == Some(pci_bdf.as_str()))
-            {
-                return Some(info);
-            }
+        {
+            return Some(info);
         }
 
         infos.get(gpu.index).or_else(|| {
@@ -317,7 +316,10 @@ mod linux {
         if ptr.is_null() {
             return None;
         }
-        let value = CStr::from_ptr(ptr).to_string_lossy().trim().to_string();
+        let value = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .trim()
+            .to_string();
         if value.is_empty() { None } else { Some(value) }
     }
 

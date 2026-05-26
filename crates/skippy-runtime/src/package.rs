@@ -568,10 +568,10 @@ fn parse_hf_package_ref(value: &str) -> Result<HfPackageRef> {
     if repo_id.split('/').count() != 2 || repo_id.contains(':') || repo_id.contains('@') {
         bail!("HF package repo id must look like namespace/repo");
     }
-    if let Some(revision) = revision {
-        if revision.is_empty() {
-            bail!("HF package revision is empty");
-        }
+    if let Some(revision) = revision
+        && revision.is_empty()
+    {
+        bail!("HF package revision is empty");
     }
 
     Ok(HfPackageRef {
