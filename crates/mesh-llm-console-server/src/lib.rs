@@ -110,8 +110,18 @@ async fn handle_connection(
 fn is_index_route(path: &str) -> bool {
     matches!(
         path,
-        "/" | "/dashboard" | "/dashboard/" | "/chat" | "/chat/"
+        "/" | "/dashboard"
+            | "/dashboard/"
+            | "/reserves"
+            | "/reserves/"
+            | "/chat"
+            | "/chat/"
+            | "/configuration"
+            | "/configuration/"
+            | "/__playground"
+            | "/__meshviz-perf"
     ) || path.starts_with("/chat/")
+        || path.starts_with("/configuration/")
 }
 
 fn is_static_asset_route(path: &str) -> bool {
@@ -227,6 +237,43 @@ mod tests {
         let asset = blocking_get(handle.url().to_string(), "/assets/app.js".to_string()).await;
         assert!(asset.contains("200 OK"));
         assert!(asset.contains("text/javascript"));
+
+        handle.stop().await;
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn serves_index_for_console_deep_links() {
+        let root = std::env::temp_dir().join(format!(
+            "mesh-llm-console-server-deep-link-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("assets")).expect("create asset root");
+        fs::write(root.join("index.html"), "<html>console</html>").expect("write index");
+
+        let handle = start_file_console(ConsoleServerOptions {
+            asset_dir: root.clone(),
+            port: 0,
+            listen_all: false,
+        })
+        .await
+        .expect("start console");
+
+        for path in [
+            "/configuration",
+            "/configuration/defaults",
+            "/configuration/local-deployment",
+            "/reserves",
+            "/chat/thread",
+        ] {
+            let response = blocking_get(handle.url().to_string(), path.to_string()).await;
+            assert!(
+                response.contains("200 OK"),
+                "expected {path} to serve index, got {response}"
+            );
+            assert!(response.contains("<html>console</html>"));
+        }
 
         handle.stop().await;
         let _ = fs::remove_dir_all(root);

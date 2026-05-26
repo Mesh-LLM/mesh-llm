@@ -167,6 +167,30 @@ model_runtime = "bogus"
     }
 
     #[test]
+    fn parse_config_toml_accepts_mixed_case_runtime_kind() {
+        let config = parse_config_toml(
+            r#"
+version = 1
+
+[[models]]
+model = "Qwen3-8B-Q4_K_M"
+
+[models.hardware]
+model_runtime = "Metal"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.models[0]
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.model_runtime),
+            Some(ModelRuntimeKind::Metal)
+        );
+    }
+
+    #[test]
     fn runtime_model_target_reconciliation_deserializes_from_toml() {
         let config = parse_config_toml(
             r#"

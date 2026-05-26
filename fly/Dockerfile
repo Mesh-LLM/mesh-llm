@@ -39,6 +39,7 @@ COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
 COPY crates/mesh-llm-system/ crates/mesh-llm-system/
 COPY crates/mesh-llm-types/ crates/mesh-llm-types/
 COPY crates/mesh-llm-config/ crates/mesh-llm-config/
+COPY crates/mesh-llm-console-server/ crates/mesh-llm-console-server/
 COPY crates/mesh-llm-host-runtime/Cargo.toml crates/mesh-llm-host-runtime/Cargo.toml
 COPY crates/mesh-llm/Cargo.toml crates/mesh-llm/Cargo.toml
 COPY crates/mesh-llm/build.rs crates/mesh-llm/build.rs
