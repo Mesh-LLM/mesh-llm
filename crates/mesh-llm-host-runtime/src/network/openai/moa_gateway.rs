@@ -207,16 +207,112 @@ async fn run_moa_turn_with_progress(
     config: &moa::GatewayConfig,
     response_adapter: proxy::ResponseAdapter,
 ) {
+    // Generate a single completion id up front so progress chunks,
+    // the (eventual) final body, and any failure tail all share the
+    // same `chat.completion.chunk.id` — clients correlate the stream
+    // by id and a mismatch makes them treat the progress and content
+    // as belonging to different completions.
+    //
+    // We match MoA's own id shape (`chatcmpl-moa-<hex-nanos>`) so the
+    // id looks identical to a non-progress-path MoA response. When the
+    // body writer runs we'll overwrite the real MoA id with this one.
+    let completion_id = format!("chatcmpl-moa-{}", short_hex_nanos());
+
     if !send_progress_headers(&mut tcp_stream).await {
         return;
     }
-    let moa_result =
-        drip_progress_until_moa_completes(&mut tcp_stream, config, &moa_body, response_adapter)
-            .await;
-    let result = write_progress_body(tcp_stream, &moa_result.response_body, response_adapter).await;
+
+    // Responses-API: emit `response.created` immediately, BEFORE any
+    // progress deltas. The Responses-API contract is strict about
+    // event ordering (`created` → deltas → `completed`), and some
+    // clients will reject a stream that starts with deltas.
+    if response_adapter == proxy::ResponseAdapter::OpenAiResponsesStream
+        && !send_responses_created_for_progress(&mut tcp_stream, &completion_id).await
+    {
+        return;
+    }
+
+    let mut moa_result = drip_progress_until_moa_completes(
+        &mut tcp_stream,
+        config,
+        &moa_body,
+        response_adapter,
+        &completion_id,
+    )
+    .await;
+
+    // Mutate the response id so the downstream body writer reuses
+    // our generated id rather than emitting a fresh one. Same for
+    // the failure path.
+    if let Some(obj) = moa_result.response_body.as_object_mut() {
+        obj.insert(
+            "id".to_string(),
+            serde_json::Value::String(completion_id.clone()),
+        );
+    }
+
+    let result = write_progress_body(
+        tcp_stream,
+        &moa_result.response_body,
+        response_adapter,
+        &completion_id,
+    )
+    .await;
     if let Err(e) = result {
         tracing::warn!("MoA progress: body write failed: {e}");
     }
+}
+
+/// Match MoA's `short_id()` — hex of nanos since epoch. Locally
+/// derived so we don't have to expose the internal helper.
+fn short_hex_nanos() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{nanos:x}")
+}
+
+/// Wrapper: emit `response.created` and log on failure. Returns
+/// false if the connection died so the caller can bail cleanly.
+async fn send_responses_created_for_progress(
+    stream: &mut TcpStream,
+    completion_id: &str,
+) -> bool {
+    if let Err(e) = write_progress_response_created(stream, completion_id).await {
+        tracing::warn!("MoA progress: response.created write failed: {e}");
+        return false;
+    }
+    true
+}
+
+/// Emit `response.created` early on the progress path so the
+/// Responses-API stream stays in the required order (`created` first,
+/// then any `reasoning_text.delta` progress, then the real
+/// `output_text.delta` content from the body writer).
+async fn write_progress_response_created(
+    stream: &mut TcpStream,
+    completion_id: &str,
+) -> std::io::Result<()> {
+    use openai_frontend::responses as resp;
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let mut created = resp::responses_stream_created_event(moa::VIRTUAL_MODEL_NAME, created_at);
+    if let Some(obj) = created
+        .get_mut("response")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        obj.insert(
+            "id".to_string(),
+            serde_json::Value::String(completion_id.to_string()),
+        );
+    }
+    let data = format!("data: {created}\n\n");
+    let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+    stream.write_all(framed.as_bytes()).await?;
+    stream.flush().await
 }
 
 /// Send HTTP response headers up front so the client knows the
@@ -252,6 +348,7 @@ async fn drip_progress_until_moa_completes(
     config: &moa::GatewayConfig,
     moa_body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
+    completion_id: &str,
 ) -> moa::TurnResult {
     let moa_fut = moa::handle_turn(config, moa_body);
     tokio::pin!(moa_fut);
@@ -268,7 +365,7 @@ async fn drip_progress_until_moa_completes(
         }
         let text = progress_line(step, adapter);
         step += 1;
-        if let Err(e) = write_progress_event(stream, &text, adapter).await {
+        if let Err(e) = write_progress_event(stream, &text, adapter, completion_id).await {
             tracing::warn!("MoA progress: tick write failed: {e}; falling back");
             return (&mut moa_fut).await;
         }
@@ -282,9 +379,10 @@ async fn write_progress_body(
     mut tcp_stream: TcpStream,
     body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
+    completion_id: &str,
 ) -> std::io::Result<()> {
     if is_moa_failure_body(body) {
-        return write_failure_as_sse_tail(&mut tcp_stream, body, adapter).await;
+        return write_failure_as_sse_tail(&mut tcp_stream, body, adapter, completion_id).await;
     }
     match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
@@ -322,6 +420,7 @@ async fn write_progress_event(
     stream: &mut TcpStream,
     text: &str,
     adapter: proxy::ResponseAdapter,
+    completion_id: &str,
 ) -> std::io::Result<()> {
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
@@ -330,9 +429,14 @@ async fn write_progress_event(
             // final answer. Emitting output_text.delta here would
             // pollute the visible content (mesh-llm-ui appends
             // output_text into the main bubble).
+            //
+            // item_id derived from completion_id so progress events
+            // and the eventual content events share a coherent item
+            // schema within one Responses stream.
+            let item_id = item_id_from_completion_id(completion_id);
             let ev = serde_json::json!({
                 "type": "response.reasoning_text.delta",
-                "item_id": "msg_moa_progress",
+                "item_id": item_id,
                 "output_index": 0,
                 "content_index": 0,
                 "delta": text,
@@ -344,8 +448,11 @@ async fn write_progress_event(
             // so goose/openai-sdk-aware clients route this to their
             // "thinking" pane and don't mix it with the final answer.
             // Clients that don't know the field ignore it.
+            //
+            // `id` matches the completion id we'll use on the final
+            // body chunks so clients can correlate the whole stream.
             let chunk = serde_json::json!({
-                "id": "chatcmpl-mesh",
+                "id": completion_id,
                 "object": "chat.completion.chunk",
                 "model": moa::VIRTUAL_MODEL_NAME,
                 "choices": [{
@@ -362,6 +469,17 @@ async fn write_progress_event(
     stream.flush().await
 }
 
+/// Match the item-id shape used by send_moa_as_responses_sse_inner so
+/// progress events and final content events share a coherent
+/// item_id within one Responses stream. The body writer uses
+/// `format!("msg_moa_{}", short_id_from_response(response))` where
+/// `short_id_from_response` takes the suffix after the last `-` from
+/// `response.id`. We mirror that here from `completion_id`.
+fn item_id_from_completion_id(completion_id: &str) -> String {
+    let suffix = completion_id.rsplit('-').next().unwrap_or("x");
+    format!("msg_moa_{suffix}")
+}
+
 /// Progress-path failure tail: we've already sent 200 OK, so emit
 /// the error as a final SSE event followed by [DONE]. The HTTP
 /// status can't be changed at this point — best we can do is make
@@ -370,6 +488,7 @@ async fn write_failure_as_sse_tail(
     stream: &mut TcpStream,
     body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
+    completion_id: &str,
 ) -> std::io::Result<()> {
     let err_msg = body
         .pointer("/error/message")
@@ -381,14 +500,18 @@ async fn write_failure_as_sse_tail(
             let ev = serde_json::json!({
                 "type": "response.failed",
                 "response": {
+                    "id": completion_id,
                     "error": { "message": err_msg },
                 },
             });
             format!("data: {ev}\n\n")
         }
         _ => {
+            // Same completion_id used by progress chunks — clients
+            // correlate the stream by id; mixing ids within one
+            // stream confuses chunk-aggregating clients.
             let chunk = serde_json::json!({
-                "id": "chatcmpl-mesh",
+                "id": completion_id,
                 "object": "chat.completion.chunk",
                 "model": moa::VIRTUAL_MODEL_NAME,
                 "choices": [{
@@ -1287,28 +1410,31 @@ async fn send_moa_as_responses_sse_inner(
 
     use openai_frontend::responses as resp;
 
-    // The created/completed events must share the same `response.id`
-    // so clients can correlate the stream by id. Overwrite the
-    // auto-generated `resp_{created_at}` placeholder with the MoA
-    // response id we'll also use on the completed event.
-    let mut created = resp::responses_stream_created_event(&model, created_at);
-    if let Some(obj) = created
-        .get_mut("response")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        obj.insert(
-            "id".to_string(),
-            serde_json::Value::String(response_id.clone()),
-        );
+    // `response.created` must come before any delta events. When the
+    // progress path is driving us (header_already_sent), it already
+    // emitted `response.created` up front with the correct id — so
+    // we must NOT emit a second one here (clients would see two
+    // `created` events with different timestamps within one stream).
+    //
+    // When we're called directly (header_already_sent = false), the
+    // body writer owns the `created` event; emit it now with the
+    // correct response_id.
+    if !header_already_sent {
+        let mut created = resp::responses_stream_created_event(&model, created_at);
+        if let Some(obj) = created
+            .get_mut("response")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            obj.insert(
+                "id".to_string(),
+                serde_json::Value::String(response_id.clone()),
+            );
+        }
+        let data = format!("data: {created}\n\n");
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
+        stream.flush().await?;
     }
-
-    // Emit `response.created` first, then the content split into
-    // multiple `output_text.delta` events for pseudo-streaming, then
-    // the standard `text_done` + `completed` + `[DONE]` tail.
-    let data = format!("data: {}\n\n", created);
-    let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
-    stream.write_all(framed.as_bytes()).await?;
-    stream.flush().await?;
 
     let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
     let chunk_delay = MOA_STREAM_CHUNK_DELAY;
@@ -2170,6 +2296,10 @@ mod tests {
         let _ = progress_line(99, proxy::ResponseAdapter::None);
     }
 
+    /// Test fixture: a stable completion id with the same shape as
+    /// MoA's real ids, so tests can assert correlation behaviour.
+    const TEST_COMPLETION_ID: &str = "chatcmpl-moa-deadbeef";
+
     /// Capture the wire bytes produced by `write_progress_event` for
     /// a given adapter, by writing into a loopback TCP pair.
     async fn capture_progress_event(adapter: proxy::ResponseAdapter, text: &str) -> String {
@@ -2180,7 +2310,7 @@ mod tests {
         let t = text.to_string();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            write_progress_event(&mut socket, &t, adapter)
+            write_progress_event(&mut socket, &t, adapter, TEST_COMPLETION_ID)
                 .await
                 .expect("write");
             // Close so the client read_to_end terminates.
@@ -2233,6 +2363,27 @@ mod tests {
                 .unwrap_or(false),
             "finish_reason must be null on a progress event so the client keeps the stream open"
         );
+        // Id must match the supplied completion_id so progress and
+        // the eventual final body chunks correlate as one stream.
+        assert_eq!(
+            v.pointer("/id").and_then(|i| i.as_str()),
+            Some(TEST_COMPLETION_ID),
+            "progress chunk id must equal completion_id; got: {payload}"
+        );
+    }
+
+    #[test]
+    fn item_id_derives_short_suffix_from_completion_id() {
+        // Body writer constructs item_id as `msg_moa_<short-suffix>`
+        // where short-suffix is everything after the last `-` in
+        // response.id. Progress path must mirror this so item_id is
+        // stable across progress and final events in one stream.
+        assert_eq!(
+            item_id_from_completion_id("chatcmpl-moa-deadbeef"),
+            "msg_moa_deadbeef"
+        );
+        assert_eq!(item_id_from_completion_id("nodashes"), "msg_moa_nodashes");
+        assert_eq!(item_id_from_completion_id(""), "msg_moa_");
     }
 
     #[tokio::test]
@@ -2262,6 +2413,14 @@ mod tests {
             delta.contains("Querying peer models"),
             "expected progress text in delta; got: {payload}"
         );
+        // item_id must derive from completion_id (msg_moa_<suffix>)
+        // so progress events share item_id with the final
+        // output_text.delta events the body writer emits.
+        assert_eq!(
+            v.get("item_id").and_then(|i| i.as_str()),
+            Some("msg_moa_deadbeef"),
+            "progress item_id must derive from completion_id; got: {payload}"
+        );
     }
 
     /// Capture the wire bytes produced by `write_failure_as_sse_tail`
@@ -2276,7 +2435,7 @@ mod tests {
         let addr = listener.local_addr().expect("local_addr");
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            write_failure_as_sse_tail(&mut socket, &body, adapter)
+            write_failure_as_sse_tail(&mut socket, &body, adapter, TEST_COMPLETION_ID)
                 .await
                 .expect("tail write");
         });
@@ -2310,6 +2469,109 @@ mod tests {
         assert!(
             raw.contains("data: [DONE]"),
             "expected [DONE] terminator so clients release the stream; got: {raw}"
+        );
+        // The error chunk must carry the same id as progress + final
+        // chunks so chunk-aggregating clients see the stream as one
+        // completion.
+        assert!(
+            raw.contains(TEST_COMPLETION_ID),
+            "expected completion id {TEST_COMPLETION_ID} on the error chunk; got: {raw}"
+        );
+    }
+
+    /// End-to-end-ish test for response.created ordering: emit the
+    /// progress-path response.created first, then a progress delta,
+    /// then ensure the body writer (with header_already_sent=true)
+    /// does NOT emit a second response.created event in the same
+    /// stream. Two `response.created` events in one stream is a
+    /// Responses-API protocol violation that strict clients reject.
+    #[tokio::test]
+    async fn responses_progress_path_emits_exactly_one_response_created() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let addr = listener.local_addr().expect("addr");
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            // Imitate run_moa_turn_with_progress on the Responses path:
+            // headers → response.created → one progress delta → body
+            // writer with header_already_sent=true.
+            write_sse_response_headers(&mut socket, &[]).await.unwrap();
+            write_progress_response_created(&mut socket, TEST_COMPLETION_ID)
+                .await
+                .unwrap();
+            write_progress_event(
+                &mut socket,
+                "Routing through mesh…\n",
+                proxy::ResponseAdapter::OpenAiResponsesStream,
+                TEST_COMPLETION_ID,
+            )
+            .await
+            .unwrap();
+            // Body writer takes a chat-shape response (MoA's output);
+            // we use a minimal one with a non-trivial content so the
+            // chunker has something to split.
+            let body = serde_json::json!({
+                "id": TEST_COMPLETION_ID,
+                "object": "chat.completion",
+                "model": moa::VIRTUAL_MODEL_NAME,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Bees are fuzzy insects that make honey."
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+            });
+            send_moa_as_responses_sse_inner(socket, &body, &[], /*header_already_sent=*/ true)
+                .await
+                .expect("send_moa_as_responses_sse_inner failed");
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.expect("read");
+        server.await.expect("server");
+        let raw = String::from_utf8_lossy(&bytes);
+
+        // Count occurrences of `response.created` events.
+        let created_count = raw
+            .lines()
+            .filter_map(|l| l.strip_prefix("data: "))
+            .filter(|p| {
+                serde_json::from_str::<serde_json::Value>(p.trim())
+                    .ok()
+                    .and_then(|v| {
+                        v.get("type")
+                            .and_then(|t| t.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .as_deref()
+                    == Some("response.created")
+            })
+            .count();
+        assert_eq!(
+            created_count, 1,
+            "exactly one response.created event must be emitted per Responses stream; \
+             body writer must skip its own when header_already_sent=true. \
+             raw stream:\n{raw}"
+        );
+
+        // And the single response.created must come BEFORE any delta
+        // (reasoning_text or output_text). Find the byte offsets.
+        let created_at = raw.find("\"response.created\"").expect("created present");
+        let first_delta = raw
+            .find("\"response.reasoning_text.delta\"")
+            .or_else(|| raw.find("\"response.output_text.delta\""))
+            .expect("at least one delta event");
+        assert!(
+            created_at < first_delta,
+            "response.created must precede all delta events; \
+             created_at={created_at} first_delta={first_delta}\n{raw}"
         );
     }
 }
