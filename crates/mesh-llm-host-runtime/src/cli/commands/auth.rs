@@ -2,17 +2,17 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::result::Result as StdResult;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use iroh::{EndpointId, SecretKey};
 use zeroize::Zeroizing;
 
 use crate::cli::TrustCommand;
 use crate::crypto::{
-    default_keystore_path, default_node_ownership_path, default_trust_store_path, keystore_exists,
-    keystore_metadata, load_keystore, load_node_ownership, load_owner_keypair_from_keychain,
-    load_trust_store, save_keystore, save_keystore_with_keychain, save_node_ownership,
-    save_trust_store, sign_node_ownership, verify_node_ownership, OwnerKeychainLoadError,
-    OwnerKeypair, SignedNodeOwnership, TrustPolicy, TrustStore, KEYCHAIN_SERVICE,
+    KEYCHAIN_SERVICE, OwnerKeychainLoadError, OwnerKeypair, SignedNodeOwnership, TrustPolicy,
+    TrustStore, default_keystore_path, default_node_ownership_path, default_trust_store_path,
+    keystore_exists, keystore_metadata, load_keystore, load_node_ownership,
+    load_owner_keypair_from_keychain, load_trust_store, save_keystore, save_keystore_with_keychain,
+    save_node_ownership, save_trust_store, sign_node_ownership, verify_node_ownership,
 };
 use crate::mesh::{default_node_key_path, load_node_key_from_path, save_node_key_to_path};
 

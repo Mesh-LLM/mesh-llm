@@ -1,6 +1,6 @@
 use super::*;
 use crate::api::status::decode_runtime_model_path;
-use crate::crypto::{default_keystore_path, save_keystore, OwnerKeypair};
+use crate::crypto::{OwnerKeypair, default_keystore_path, save_keystore};
 use crate::plugin;
 use crate::plugins::{blackboard, blobstore};
 use base64::Engine;
@@ -10,7 +10,7 @@ use mesh_client::proto::node::{
     OwnerControlError, OwnerControlErrorCode, OwnerControlGetConfigResponse, OwnerControlResponse,
 };
 use mesh_llm_plugin::MeshVisibility;
-use mesh_llm_protocol::{decode_owner_control_envelope, write_len_prefixed, ALPN_CONTROL_V1};
+use mesh_llm_protocol::{ALPN_CONTROL_V1, decode_owner_control_envelope, write_len_prefixed};
 use prost::Message;
 use rmcp::model::ErrorCode;
 use serde_json::json;
@@ -919,11 +919,11 @@ async fn status_payload_control_plane_compat() {
     let payload = serde_json::to_value(state.status().await).unwrap();
     assert!(payload.get("control_bootstrap").is_none());
     assert!(payload.get("control_endpoint").is_none());
-    assert!(payload["peers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|peer| { peer.get("control_endpoint").is_none() && peer.get("endpoint").is_none() }));
+    assert!(
+        payload["peers"].as_array().unwrap().iter().all(|peer| {
+            peer.get("control_endpoint").is_none() && peer.get("endpoint").is_none()
+        })
+    );
 }
 
 #[tokio::test]
@@ -1015,7 +1015,8 @@ async fn config_apply_does_not_emit_peer_churn() {
 #[serial]
 async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchestration() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -1063,7 +1064,8 @@ async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchest
 #[serial]
 async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -1154,7 +1156,8 @@ async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
 #[serial]
 async fn control_plane_api_apply_config_reports_revision_conflict() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -1252,7 +1255,8 @@ async fn control_route_rejects_non_loopback() {
 #[serial]
 async fn control_plane_api_reports_remote_endpoint_unreachable() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -1293,7 +1297,8 @@ async fn control_plane_api_reports_remote_endpoint_unreachable() {
 #[serial]
 async fn control_plane_api_cli_uses_custom_owner_key_path() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let custom_owner_key = temp.path().join("custom-owner.json");
     save_keystore(&custom_owner_key, &OwnerKeypair::generate(), None, true).unwrap();
 
@@ -1354,7 +1359,7 @@ async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
         let envelope = decode_owner_control_envelope(&request).unwrap();
         let request_id = envelope.request.as_ref().unwrap().request_id;
         let response = OwnerControlEnvelope {
-            gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
+            r#gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
@@ -1448,7 +1453,7 @@ async fn spawn_owner_control_apply_test_server(
         let _ = apply_tx.send(apply);
         let envelope = match response {
             OwnerControlApplyTestResponse::Success(response) => OwnerControlEnvelope {
-                gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
+                r#gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(OwnerControlResponse {
@@ -1465,7 +1470,7 @@ async fn spawn_owner_control_apply_test_server(
                 message,
                 current_revision,
             } => OwnerControlEnvelope {
-                gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
+                r#gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: None,
@@ -1948,10 +1953,10 @@ async fn spawn_capturing_upstream(
         let _ = request_tx.send(request.raw);
 
         let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response.len(),
-                response
-            );
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
         stream.write_all(resp.as_bytes()).await.unwrap();
         let _ = stream.shutdown().await;
     });
@@ -1972,8 +1977,8 @@ async fn spawn_streaming_upstream(
         let _ = request_tx.send(request.raw);
 
         let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-            );
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        );
         if stream.write_all(header.as_bytes()).await.is_err() {
             return;
         }
@@ -2048,9 +2053,9 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
     let addr = listener.local_addr().unwrap();
     let body = br#"{"text":"fragmented"}"#;
     let headers = format!(
-            "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        );
+        "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
 
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -2506,11 +2511,13 @@ async fn runtime_data_api_routes_remain_payload_stable() {
 
     let providers_body = request_management_json(state.clone(), "/api/plugins/providers").await;
     assert!(providers_body.as_array().is_some());
-    assert!(providers_body
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|provider| provider["capability"] == json!("chat")));
+    assert!(
+        providers_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["capability"] == json!("chat"))
+    );
 
     let provider_body = request_management_json(state.clone(), "/api/plugins/providers/chat").await;
     assert_eq!(provider_body["capability"], json!("chat"));
@@ -2694,9 +2701,11 @@ async fn test_api_search_rejects_invalid_sort_value() {
     assert!(response.starts_with("HTTP/1.1 400"));
     let payload = json_body(&response);
     assert_eq!(
-            payload["error"],
-            json!("Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc")
-        );
+        payload["error"],
+        json!(
+            "Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc"
+        )
+    );
 
     handle.abort();
 }
@@ -2756,10 +2765,10 @@ async fn test_api_model_interests_post_is_idempotent() {
     let state = build_test_mesh_api().await;
     let body = r#"{"model_ref":"Qwen/Qwen3-Coder-Next-GGUF@main:Q4_K_M","source":"ui"}"#;
     let request = format!(
-            "POST /api/model-interests HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/model-interests HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let (first_addr, first_handle) = spawn_management_test_server(state.clone()).await;
     let first_response = send_management_request(first_addr, request.clone()).await;
@@ -3295,9 +3304,11 @@ async fn wakeable_inventory_is_not_routable_capacity() {
     let hosts = node.hosts_for_model("wakeable-only-model").await;
 
     assert_eq!(status.wakeable_nodes.len(), 1);
-    assert!(!served_models
-        .iter()
-        .any(|model| model == "wakeable-only-model"));
+    assert!(
+        !served_models
+            .iter()
+            .any(|model| model == "wakeable-only-model")
+    );
     assert!(hosts.is_empty());
 }
 
@@ -3317,9 +3328,11 @@ async fn wakeable_inventory_is_excluded_from_v1_models() {
     let node = { state.inner.lock().await.node.clone() };
     let served_models = node.models_being_served().await;
 
-    assert!(!served_models
-        .iter()
-        .any(|model| model == "wakeable-only-model"));
+    assert!(
+        !served_models
+            .iter()
+            .any(|model| model == "wakeable-only-model")
+    );
     assert!(served_models.is_empty());
 }
 
@@ -3542,20 +3555,22 @@ async fn test_api_objects_routes_through_object_store_capability() {
     })
     .to_string();
     let request = format!(
-            "POST /api/objects HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/objects HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
     let response = send_management_request(addr, request).await;
 
     assert!(response.starts_with("HTTP/1.1 201"));
     let payload = json_body(&response);
     assert_eq!(payload["request_id"], "req-api-object");
     assert_eq!(payload["mime_type"], "text/plain");
-    assert!(payload["token"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("obj_"));
+    assert!(
+        payload["token"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("obj_")
+    );
 
     handle.abort();
     let _ = std::fs::remove_dir_all(blobstore_root);
@@ -3569,10 +3584,10 @@ async fn test_api_blackboard_routes_through_blackboard_capability() {
     let (post_addr, post_handle) = spawn_management_test_server(state.clone()).await;
     let post_body = json!({ "text": "hello integration blackboard" }).to_string();
     let post_request = format!(
-            "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            post_body.len(),
-            post_body
-        );
+        "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        post_body.len(),
+        post_body
+    );
     let post_response = send_management_request(post_addr, post_request).await;
     assert!(post_response.starts_with("HTTP/1.1 200"));
     let posted = json_body(&post_response);
@@ -3588,9 +3603,11 @@ async fn test_api_blackboard_routes_through_blackboard_capability() {
     assert!(feed_response.starts_with("HTTP/1.1 200"));
     let feed = json_body(&feed_response);
     let feed_items = feed.as_array().cloned().unwrap_or_default();
-    assert!(feed_items
-        .iter()
-        .any(|item| item["text"] == "hello integration blackboard"));
+    assert!(
+        feed_items
+            .iter()
+            .any(|item| item["text"] == "hello integration blackboard")
+    );
     feed_handle.abort();
 
     let (search_addr, search_handle) = spawn_management_test_server(state).await;
@@ -3602,9 +3619,11 @@ async fn test_api_blackboard_routes_through_blackboard_capability() {
     assert!(search_response.starts_with("HTTP/1.1 200"));
     let search = json_body(&search_response);
     let search_items = search.as_array().cloned().unwrap_or_default();
-    assert!(search_items
-        .iter()
-        .any(|item| item["text"] == "hello integration blackboard"));
+    assert!(
+        search_items
+            .iter()
+            .any(|item| item["text"] == "hello integration blackboard")
+    );
     search_handle.abort();
 }
 
@@ -3629,10 +3648,10 @@ async fn test_api_chat_smoke_for_image_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3676,10 +3695,10 @@ async fn test_api_chat_smoke_for_audio_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3721,10 +3740,10 @@ async fn test_api_responses_smoke_for_image_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3771,10 +3790,10 @@ async fn test_api_responses_smoke_for_file_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3823,10 +3842,10 @@ data: [DONE]
     })
     .to_string();
     let request = format!(
-            "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();

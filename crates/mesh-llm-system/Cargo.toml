@@ -1,7 +1,7 @@
 [package]
 name = "mesh-llm-system"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 anyhow = "1"

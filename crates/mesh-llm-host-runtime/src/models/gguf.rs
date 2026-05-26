@@ -1,1 +1,1 @@
-pub use model_artifact::gguf::{scan_gguf_compact_meta, GgufCompactMeta, GgufKvCacheQuant};
+pub use model_artifact::gguf::{GgufCompactMeta, GgufKvCacheQuant, scan_gguf_compact_meta};

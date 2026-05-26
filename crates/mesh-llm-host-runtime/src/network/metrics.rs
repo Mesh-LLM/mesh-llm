@@ -1225,12 +1225,16 @@ mod tests {
                 "routing_metrics.pressure",
             ]
         );
-        assert!(ROUTING_METRIC_GROUPS
-            .iter()
-            .all(|group| !group.description.is_empty()));
-        assert!(ROUTING_METRIC_GROUPS
-            .iter()
-            .all(|group| !group.api_surface.is_empty()));
+        assert!(
+            ROUTING_METRIC_GROUPS
+                .iter()
+                .all(|group| !group.description.is_empty())
+        );
+        assert!(
+            ROUTING_METRIC_GROUPS
+                .iter()
+                .all(|group| !group.api_surface.is_empty())
+        );
         assert!(ROUTING_METRIC_GROUPS.iter().all(|group| matches!(
             group.layer,
             MetricLayer::Runtime | MetricLayer::Information | MetricLayer::Strategy
@@ -1239,9 +1243,11 @@ mod tests {
             group.scope,
             MetricScope::LocalOnly | MetricScope::PeerAdvertised | MetricScope::MeshDerived
         )));
-        assert!(ROUTING_METRIC_GROUPS
-            .iter()
-            .all(|group| group.scope == MetricScope::LocalOnly));
+        assert!(
+            ROUTING_METRIC_GROUPS
+                .iter()
+                .all(|group| group.scope == MetricScope::LocalOnly)
+        );
     }
 
     #[test]
@@ -1472,9 +1478,11 @@ mod tests {
             Some(42),
         );
 
-        assert!(metrics
-            .throughput_hint_for_target("qwen", target.clone())
-            .is_some());
+        assert!(
+            metrics
+                .throughput_hint_for_target("qwen", target.clone())
+                .is_some()
+        );
         metrics.age_model_for_test("qwen", METRICS_TTL + Duration::from_secs(1));
 
         assert!(metrics.throughput_hint_for_target("qwen", target).is_none());

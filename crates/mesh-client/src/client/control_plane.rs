@@ -9,8 +9,8 @@ use crate::proto::node::{
     SignedNodeOwnership,
 };
 use crate::protocol::{
-    decode_owner_control_envelope, write_len_prefixed, ALPN_CONTROL_V1, ALPN_V1,
-    NODE_PROTOCOL_GENERATION,
+    ALPN_CONTROL_V1, ALPN_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope,
+    write_len_prefixed,
 };
 use anyhow::Context;
 use base64::Engine;
@@ -386,7 +386,7 @@ impl OwnerControlClient {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (mut send, recv) = self.open_authenticated_stream().await?;
         let envelope = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id,
@@ -423,7 +423,7 @@ impl OwnerControlClient {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (mut send, mut recv) = self.open_authenticated_stream().await?;
         let envelope = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(build_request(
                 request_id,
@@ -451,7 +451,7 @@ impl OwnerControlClient {
             .await
             .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         let handshake = OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: Some(OwnerControlHandshake {
                 ownership: Some(sign_node_ownership_proto(
                     &self.owner_keypair,

@@ -1,9 +1,9 @@
 use anyhow::Result;
 use opentelemetry_proto::tonic::{
-    collector::trace::v1::{trace_service_client::TraceServiceClient, ExportTraceServiceRequest},
+    collector::trace::v1::{ExportTraceServiceRequest, trace_service_client::TraceServiceClient},
     common::v1::InstrumentationScope,
     resource::v1::Resource,
-    trace::v1::{span, ResourceSpans, ScopeSpans, Span},
+    trace::v1::{ResourceSpans, ScopeSpans, Span, span},
 };
 use skippy_metrics::attr;
 

@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use skippy_topology::{
-    infer_family_capability, plan_package_aware_contiguous_with_signals, BoundaryDecision,
-    DiagnosticSeverity, LayerSpec, NodePlacementSignal, NodeSpec, PlannerPolicy,
-    TopologyPlanRequest,
+    BoundaryDecision, DiagnosticSeverity, LayerSpec, NodePlacementSignal, NodeSpec, PlannerPolicy,
+    TopologyPlanRequest, infer_family_capability, plan_package_aware_contiguous_with_signals,
 };
 
 use super::{materialization::StagePackageInfo, package::SkippyPackageIdentity};
@@ -324,10 +323,11 @@ mod tests {
             ),
             (id_b, 1, 2)
         );
-        assert!(plan
-            .stages
-            .iter()
-            .all(|stage| stage.layer_start < stage.layer_end));
+        assert!(
+            plan.stages
+                .iter()
+                .all(|stage| stage.layer_start < stage.layer_end)
+        );
     }
 
     #[test]

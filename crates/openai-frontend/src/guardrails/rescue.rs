@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::{chat::ChatCompletionResponse, common::FinishReason};
 
@@ -465,7 +465,7 @@ fn classify_tool_call_value(
                 synthetic_text: None,
                 structured_payload: None,
                 finish_reason,
-            }
+            };
         }
     };
 
@@ -482,7 +482,7 @@ fn classify_tool_call_value(
                     synthetic_text: None,
                     structured_payload: None,
                     finish_reason,
-                }
+                };
             }
             ParsedToolCallStatus::InvalidArguments { structured_payload } => {
                 return ClassifiedGuardrailResponse {
@@ -497,7 +497,7 @@ fn classify_tool_call_value(
                     synthetic_text: None,
                     structured_payload: None,
                     finish_reason,
-                }
+                };
             }
             ParsedToolCallStatus::Malformed => {
                 return ClassifiedGuardrailResponse {
@@ -508,7 +508,7 @@ fn classify_tool_call_value(
                     synthetic_text: None,
                     structured_payload: None,
                     finish_reason,
-                }
+                };
             }
         }
     }
@@ -535,21 +535,20 @@ fn classify_tool_call_value(
         };
     }
 
-    if let Some(forced_name) = prepared.state.request_contract.forced_tool_name() {
-        if parsed_calls
+    if let Some(forced_name) = prepared.state.request_contract.forced_tool_name()
+        && parsed_calls
             .iter()
             .any(|tool_call| tool_call.name != forced_name)
-        {
-            return ClassifiedGuardrailResponse {
-                category: GuardrailResponseCategory::UnknownTool,
-                parser_stage,
-                visible_content: None,
-                tool_calls: Some(normalized_tool_calls(&parsed_calls)),
-                synthetic_text: None,
-                structured_payload: None,
-                finish_reason,
-            };
-        }
+    {
+        return ClassifiedGuardrailResponse {
+            category: GuardrailResponseCategory::UnknownTool,
+            parser_stage,
+            visible_content: None,
+            tool_calls: Some(normalized_tool_calls(&parsed_calls)),
+            synthetic_text: None,
+            structured_payload: None,
+            finish_reason,
+        };
     }
 
     if matches!(

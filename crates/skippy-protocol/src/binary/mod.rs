@@ -13,15 +13,15 @@ pub use codec::{
     send_reply_predicted_with_stats, write_stage_message,
 };
 pub use types::{
-    activation_frame_flags_from_state_flags, activation_state_flags_from_frame_flags, state_flags,
-    StageLogitBias, StageReply, StageReplyStats, StageSamplingConfig, StageStateHeader,
-    StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind, WireStagePhase,
     ACTIVATION_FLAG_GEMMA3N_ALTUP, ACTIVATION_FLAG_RWKV7_V_FIRST, LLAMA_TOKEN_NULL,
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
-    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
+    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageReply,
+    StageReplyStats, StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType,
+    WireMessageKind, WireReplyKind, WireStagePhase, activation_frame_flags_from_state_flags,
+    activation_state_flags_from_frame_flags, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {

@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use skippy_protocol::StageConfig;
 pub use skippy_runtime::package::is_hf_package_ref;
 use skippy_runtime::package::{
-    materialize_layer_package as materialize_runtime_package, select_layer_package_parts,
     PackageStageRequest, SelectedPackageParts,
+    materialize_layer_package as materialize_runtime_package, select_layer_package_parts,
 };
 use std::path::PathBuf;
 

@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{LineWriter, Write};
 use std::path::Path;
@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
@@ -53,7 +53,7 @@ pub enum FlashAttentionType {
     Enabled = 1,
 }
 
-pub use devices::{backend_devices, BackendDevice, BackendDeviceType};
+pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::{
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
@@ -353,15 +353,14 @@ impl NativeLogAggregator {
         }
 
         if let Some(layer_index) = parse_layer_assign_index(s) {
-            if self.layer_assign_progress.total.is_none() {
-                if let Some(total) = self
+            if self.layer_assign_progress.total.is_none()
+                && let Some(total) = self
                     .metadata_highlights
                     .block_count
                     .as_deref()
                     .and_then(|s| s.parse::<usize>().ok())
-                {
-                    self.layer_assign_progress.set_total(total);
-                }
+            {
+                self.layer_assign_progress.set_total(total);
             }
             let new_completed = layer_index + 1;
             if new_completed > self.layer_assign_progress.completed {
@@ -659,12 +658,14 @@ pub fn restore_native_logs() {
 /// Enable verbose llama.cpp logging. Call before `llama_backend_init()` / model loading.
 /// Sets GGML_LLAMA_LOG_LEVEL=4 so LLAMA_LOG_DEBUG macros produce output.
 pub fn enable_verbose_native_logs() {
-    std::env::set_var("GGML_LLAMA_LOG_LEVEL", LLAMA_LOG_LEVEL_DEBUG);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("GGML_LLAMA_LOG_LEVEL", LLAMA_LOG_LEVEL_DEBUG) };
 }
 
 /// Disable verbose llama.cpp logging (restore default level).
 pub fn disable_verbose_native_logs() {
-    std::env::remove_var("GGML_LLAMA_LOG_LEVEL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("GGML_LLAMA_LOG_LEVEL") };
 }
 
 unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_data: *mut c_void) {
@@ -673,10 +674,10 @@ unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_
     }
 
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
-    if let Ok(mut guard) = native_log_file().lock() {
-        if let Some(writer) = guard.as_mut() {
-            let _ = writer.write_all(bytes);
-        }
+    if let Ok(mut guard) = native_log_file().lock()
+        && let Some(writer) = guard.as_mut()
+    {
+        let _ = writer.write_all(bytes);
     }
 
     // Also send aggregated messages through the channel when runtime forwarding is enabled.
@@ -685,18 +686,16 @@ unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_
     }
 
     if let Ok(text_str) = core::str::from_utf8(bytes) {
-        let events = if let Ok(mut aggregator) = native_log_aggregator().lock() {
-            aggregator.process_line(text_str.trim())
-        } else {
-            Vec::new()
+        let events = match native_log_aggregator().lock() {
+            Ok(mut aggregator) => aggregator.process_line(text_str.trim()),
+            _ => Vec::new(),
         };
-        if let Some(tx) = NATIVE_LOG_FILTERED_TX.get() {
-            if let Ok(guard) = tx.lock() {
-                if let Some(ref sender) = *guard {
-                    for event in events {
-                        let _ = sender.send(event);
-                    }
-                }
+        if let Some(tx) = NATIVE_LOG_FILTERED_TX.get()
+            && let Ok(guard) = tx.lock()
+            && let Some(ref sender) = *guard
+        {
+            for event in events {
+                let _ = sender.send(event);
             }
         }
     }
@@ -3487,21 +3486,21 @@ mod tests {
         path::PathBuf,
         ptr,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::{SystemTime, UNIX_EPOCH},
     };
     use tokio::sync::mpsc::error::TryRecvError;
 
     use super::{
-        flush_native_log_writer, parse_cache_type, parse_layer_assign_index,
-        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
-        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
-        ChatTemplateMessage, FlashAttentionType, ModelInfo, NativeLogAggregator, NativeLogEvent,
-        RuntimeConfig, RuntimeLoadMode, StageModel, TensorRole, GGML_TYPE_F16, GGML_TYPE_Q4_0,
-        GGML_TYPE_Q8_0, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH,
+        ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
+        LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
+        NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, StageModel, TensorRole, flush_native_log_writer,
+        parse_cache_type, parse_layer_assign_index, redirect_native_logs_to_file,
+        register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
+        unregister_filtered_native_logs, write_native_log,
     };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3824,9 +3823,11 @@ mod tests {
     #[test]
     fn aggregator_ignores_non_backend_cuda_mentions() {
         let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator
-            .process_line("CUDA kernel launch for attention")
-            .is_empty());
+        assert!(
+            aggregator
+                .process_line("CUDA kernel launch for attention")
+                .is_empty()
+        );
         assert!(aggregator.process_line("offloading to CUDA").is_empty());
     }
 
@@ -3871,17 +3872,21 @@ mod tests {
         }
 
         let flush_events = aggregator.process_line("llm_load_print_meta: version = 3");
-        assert!(flush_events
-            .iter()
-            .any(|event| event.message == "llm_load_print_meta: version = 3"));
-        assert!(flush_events
-            .iter()
-            .any(|event| event.message == "Reading model metadata..."));
-        assert!(flush_events.iter().any(|event| event
-            .params
-            .iter()
-            .any(|(key, value)| key == "architecture"
-                && value == &Value::String("qwen35".to_string()))));
+        assert!(
+            flush_events
+                .iter()
+                .any(|event| event.message == "llm_load_print_meta: version = 3")
+        );
+        assert!(
+            flush_events
+                .iter()
+                .any(|event| event.message == "Reading model metadata...")
+        );
+        assert!(flush_events.iter().any(|event| {
+            event.params.iter().any(|(key, value)| {
+                key == "architecture" && value == &Value::String("qwen35".to_string())
+            })
+        }));
     }
 
     #[test]
@@ -3892,17 +3897,23 @@ mod tests {
         );
 
         let first = aggregator.process_line("llama_model_loader: - type  f32:  30 tensors");
-        assert!(first
-            .iter()
-            .any(|event| event.message.contains("tensors 10%")));
-        assert!(first
-            .iter()
-            .any(|event| event.message.contains("tensors 30%")));
+        assert!(
+            first
+                .iter()
+                .any(|event| event.message.contains("tensors 10%"))
+        );
+        assert!(
+            first
+                .iter()
+                .any(|event| event.message.contains("tensors 30%"))
+        );
 
         let second = aggregator.process_line("llama_model_loader: - type q4_k:  70 tensors");
-        assert!(second
-            .iter()
-            .any(|event| event.message.contains("tensors 100%")));
+        assert!(
+            second
+                .iter()
+                .any(|event| event.message.contains("tensors 100%"))
+        );
         assert!(second.iter().any(|event| {
             event.message == "Reading tensor groups..."
                 && event
@@ -3945,9 +3956,11 @@ mod tests {
         );
 
         let first = aggregator.process_line("llama_kv_cache: layer   0: filtered");
-        assert!(first
-            .iter()
-            .any(|event| event.message.contains("kv cache 10%")));
+        assert!(
+            first
+                .iter()
+                .any(|event| event.message.contains("kv cache 10%"))
+        );
 
         let duplicate = aggregator.process_line("llama_kv_cache: layer   0: dev = MTL0");
         assert!(duplicate.is_empty());
@@ -3983,9 +3996,11 @@ mod tests {
     #[test]
     fn aggregator_suppresses_print_info_lines() {
         let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator
-            .process_line("print_info: n_vocab               = 248320")
-            .is_empty());
+        assert!(
+            aggregator
+                .process_line("print_info: n_vocab               = 248320")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3998,12 +4013,18 @@ mod tests {
     #[test]
     fn aggregator_suppresses_raw_noise_lines() {
         let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator
-            .process_line("clip_model_loader: tensor[0]: n_dims = 1, name = v.blk.0.attn_out.bias")
-            .is_empty());
-        assert!(aggregator
-            .process_line("tokenizer.ggml.tokens arr[str,248320] = [\"!\", ...]")
-            .is_empty());
+        assert!(
+            aggregator
+                .process_line(
+                    "clip_model_loader: tensor[0]: n_dims = 1, name = v.blk.0.attn_out.bias"
+                )
+                .is_empty()
+        );
+        assert!(
+            aggregator
+                .process_line("tokenizer.ggml.tokens arr[str,248320] = [\"!\", ...]")
+                .is_empty()
+        );
     }
 
     #[test]

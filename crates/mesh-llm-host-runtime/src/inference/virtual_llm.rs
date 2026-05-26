@@ -12,7 +12,7 @@
 
 use crate::inference::consult;
 use crate::mesh;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ===========================================================================
 // handle_image — model can't see media, get a caption/transcript
@@ -329,10 +329,10 @@ pub fn extract_image(payload: &Value) -> (String, String) {
                     Some("text") => {
                         // Check for mesh_image_url preserved by the OpenAI surface
                         // when mesh hooks strip unsupported images.
-                        if image_url.is_empty() {
-                            if let Some(url) = part["mesh_image_url"]["url"].as_str() {
-                                image_url = url.to_string();
-                            }
+                        if image_url.is_empty()
+                            && let Some(url) = part["mesh_image_url"]["url"].as_str()
+                        {
+                            image_url = url.to_string();
                         }
                         text = part["text"].as_str().unwrap_or("").to_string();
                     }

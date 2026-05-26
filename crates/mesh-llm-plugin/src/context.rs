@@ -2,9 +2,10 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::{
+    PROTOCOL_VERSION,
     helpers::{channel_message, json_channel_message},
-    io::{send_bulk_transfer_message, send_channel_message, write_envelope, LocalStream},
-    proto, PROTOCOL_VERSION,
+    io::{LocalStream, send_bulk_transfer_message, send_channel_message, write_envelope},
+    proto,
 };
 
 pub struct PluginContext<'a> {

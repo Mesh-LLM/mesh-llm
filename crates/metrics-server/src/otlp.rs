@@ -1,13 +1,13 @@
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{
-        logs_service_server::LogsService, ExportLogsServiceRequest, ExportLogsServiceResponse,
+        ExportLogsServiceRequest, ExportLogsServiceResponse, logs_service_server::LogsService,
     },
     metrics::v1::{
-        metrics_service_server::MetricsService, ExportMetricsServiceRequest,
-        ExportMetricsServiceResponse,
+        ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+        metrics_service_server::MetricsService,
     },
     trace::v1::{
-        trace_service_server::TraceService, ExportTraceServiceRequest, ExportTraceServiceResponse,
+        ExportTraceServiceRequest, ExportTraceServiceResponse, trace_service_server::TraceService,
     },
 };
 use tonic::{Request, Response as TonicResponse, Status};

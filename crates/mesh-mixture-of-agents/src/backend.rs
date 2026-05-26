@@ -8,7 +8,7 @@
 //! local models via direct HTTP and remote models via QUIC tunnel.
 
 use crate::worker;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 // ─── Sampling params ─────────────────────────────────────────────────
@@ -268,20 +268,20 @@ fn extract_text_from_response(resp: &Value) -> Result<String, String> {
         .ok_or_else(|| "malformed response: missing choices[0].message".to_string())?;
 
     // Native tool_calls → KV format for normalizer
-    if let Some(tool_calls) = message.get("tool_calls").and_then(|tc| tc.as_array()) {
-        if let Some(tc) = tool_calls.first() {
-            let name = tc
-                .pointer("/function/name")
-                .and_then(|n| n.as_str())
-                .unwrap_or("unknown");
-            let args = tc
-                .pointer("/function/arguments")
-                .and_then(|a| a.as_str())
-                .unwrap_or("{}");
-            return Ok(format!(
-                "kind: tool_proposal\ntool: {name}\narguments: {args}\nconfidence: 0.9\npayload: calling {name}",
-            ));
-        }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(|tc| tc.as_array())
+        && let Some(tc) = tool_calls.first()
+    {
+        let name = tc
+            .pointer("/function/name")
+            .and_then(|n| n.as_str())
+            .unwrap_or("unknown");
+        let args = tc
+            .pointer("/function/arguments")
+            .and_then(|a| a.as_str())
+            .unwrap_or("{}");
+        return Ok(format!(
+            "kind: tool_proposal\ntool: {name}\narguments: {args}\nconfidence: 0.9\npayload: calling {name}",
+        ));
     }
 
     let content = message

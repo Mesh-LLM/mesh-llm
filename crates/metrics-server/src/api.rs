@@ -1,10 +1,10 @@
 use anyhow::Context;
 use axum::{
+    Json,
     body::Bytes,
     extract::{Path, State},
     http::header,
     response::IntoResponse,
-    Json,
 };
 use opentelemetry_proto::tonic::collector::{
     logs::v1::{ExportLogsServiceRequest, ExportLogsServiceResponse},

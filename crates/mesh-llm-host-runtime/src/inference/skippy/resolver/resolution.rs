@@ -2,22 +2,21 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
-use super::super::{family_policy_for_model_path, KvCachePolicy, StageWireDType};
+use super::super::{KvCachePolicy, StageWireDType, family_policy_for_model_path};
 use super::request_defaults::resolve_request_defaults;
 use super::speculative::resolve_speculative_config;
 use super::support::{
-    bool_or_auto_value, derive_fit_target_mib, effective_flash_attention,
-    has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers, pick_owned, pick_string,
-    pick_string_owned, pick_value, reject_unsupported_hardware_controls,
+    KvMacroDefaults, ThroughputMacroDefaults, bool_or_auto_value, derive_fit_target_mib,
+    effective_flash_attention, has_explicit_prefill_controls, kv_macro_defaults, parse_gpu_layers,
+    pick_owned, pick_string, pick_string_owned, pick_value, reject_unsupported_hardware_controls,
     reject_unsupported_model_fit_controls, resolve_field_string, resolve_field_value,
-    resolve_prefix_cache, resolve_wire_dtype, throughput_macro_defaults, KvMacroDefaults,
-    ThroughputMacroDefaults,
+    resolve_prefix_cache, resolve_wire_dtype, throughput_macro_defaults,
 };
 use super::types::{
-    ResolvedHardwareConfig, ResolvedModelFitConfig, ResolvedSkippyConfig,
-    ResolvedSkippyExecutionConfig, ResolvedThroughputConfig, SkippyConfigResolveRequest,
     BUILTIN_BATCH, BUILTIN_CTX_SIZE, BUILTIN_PARALLEL, BUILTIN_PREFILL_CHUNK_SIZE,
-    BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH,
+    BUILTIN_SAFETY_MARGIN_GB, BUILTIN_UBATCH, ResolvedHardwareConfig, ResolvedModelFitConfig,
+    ResolvedSkippyConfig, ResolvedSkippyExecutionConfig, ResolvedThroughputConfig,
+    SkippyConfigResolveRequest,
 };
 use crate::plugin::{ModelConfigDefaults, ModelConfigEntry, ModelFitConfig, ThroughputConfig};
 

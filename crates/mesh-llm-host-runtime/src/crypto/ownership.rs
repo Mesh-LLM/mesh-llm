@@ -5,7 +5,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use super::keystore::write_keystore_bytes_atomically;
-use super::{owner_id_from_verifying_key, CryptoError, OwnerKeypair};
+use super::{CryptoError, OwnerKeypair, owner_id_from_verifying_key};
 
 pub const NODE_OWNERSHIP_VERSION: u32 = 1;
 pub const TRUST_STORE_VERSION: u32 = 1;

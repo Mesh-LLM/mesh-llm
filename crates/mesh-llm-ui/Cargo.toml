@@ -1,7 +1,7 @@
 [package]
 name = "mesh-llm-ui"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 description = "Embedded Mesh LLM web console assets"
 license = "Apache-2.0"
 repository = "https://github.com/Mesh-LLM/mesh-llm"

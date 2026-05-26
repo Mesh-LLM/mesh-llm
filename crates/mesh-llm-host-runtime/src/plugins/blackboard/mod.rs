@@ -8,13 +8,13 @@ pub mod mcp;
 
 use anyhow::Result;
 use mesh_llm_plugin::{
-    capability, plugin_server_info, PluginMetadata, PluginRuntime, PluginStartupPolicy,
+    PluginMetadata, PluginRuntime, PluginStartupPolicy, capability, plugin_server_info,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::Mutex;
 
 pub const BLACKBOARD_CHANNEL: &str = "blackboard.v1";
@@ -485,8 +485,8 @@ fn build_blackboard_plugin(name: String) -> mesh_llm_plugin::SimplePlugin {
         },
         on_mesh_event: move |event, context| {
             Box::pin(async move {
-                if event.kind() == mesh_llm_plugin::proto::mesh_event::Kind::PeerUp {
-                    if let Some(peer) = event.peer {
+                if event.kind() == mesh_llm_plugin::proto::mesh_event::Kind::PeerUp
+                    && let Some(peer) = event.peer {
                         context
                             .send_json_channel(
                                 BLACKBOARD_CHANNEL,
@@ -496,7 +496,6 @@ fn build_blackboard_plugin(name: String) -> mesh_llm_plugin::SimplePlugin {
                             )
                             .await?;
                     }
-                }
                 Ok(())
             })
         },
@@ -688,25 +687,33 @@ mod tests {
     fn manifest_declares_blackboard_capability_and_bindings() {
         let plugin = build_blackboard_plugin("blackboard".into());
         let manifest = plugin.manifest().expect("manifest");
-        assert!(manifest
-            .capabilities
-            .iter()
-            .any(|cap| cap == "blackboard.v1"));
+        assert!(
+            manifest
+                .capabilities
+                .iter()
+                .any(|cap| cap == "blackboard.v1")
+        );
         assert_eq!(manifest.mesh_channels.len(), 1);
         assert_eq!(manifest.mesh_channels[0].name, BLACKBOARD_CHANNEL);
         assert_eq!(manifest.mesh_event_subscriptions.len(), 1);
-        assert!(manifest
-            .http_bindings
-            .iter()
-            .any(|binding| binding.binding_id == "feed"));
-        assert!(manifest
-            .http_bindings
-            .iter()
-            .any(|binding| binding.binding_id == "search"));
-        assert!(manifest
-            .http_bindings
-            .iter()
-            .any(|binding| binding.binding_id == "post"));
+        assert!(
+            manifest
+                .http_bindings
+                .iter()
+                .any(|binding| binding.binding_id == "feed")
+        );
+        assert!(
+            manifest
+                .http_bindings
+                .iter()
+                .any(|binding| binding.binding_id == "search")
+        );
+        assert!(
+            manifest
+                .http_bindings
+                .iter()
+                .any(|binding| binding.binding_id == "post")
+        );
     }
 
     #[tokio::test]

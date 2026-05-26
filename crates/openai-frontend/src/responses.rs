@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     chat::{ChatCompletionChunk, ChatCompletionResponse},
-    common::{Usage, THINKING_BOOLEAN_ALIASES},
+    common::{THINKING_BOOLEAN_ALIASES, Usage},
     errors::OpenAiError,
 };
 
@@ -371,10 +371,10 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
 }
 
 fn collapse_blocks_if_text_only(blocks: Vec<Value>) -> Value {
-    if blocks.len() == 1 {
-        if let Some(text) = blocks[0].get("text").and_then(Value::as_str) {
-            return Value::String(text.to_string());
-        }
+    if blocks.len() == 1
+        && let Some(text) = blocks[0].get("text").and_then(Value::as_str)
+    {
+        return Value::String(text.to_string());
     }
     Value::Array(blocks)
 }
@@ -469,13 +469,13 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     let mut state_cache_key = None;
 
     if let Some(instructions_value) = object.remove("instructions") {
-        if let Some(instructions) = instructions_value.as_str().map(str::trim) {
-            if !instructions.is_empty() {
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": instructions,
-                }));
-            }
+        if let Some(instructions) = instructions_value.as_str().map(str::trim)
+            && !instructions.is_empty()
+        {
+            messages.push(serde_json::json!({
+                "role": "system",
+                "content": instructions,
+            }));
         }
         changed = true;
     }
@@ -495,10 +495,10 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     if let Some(value) = object.get("previous_response_id") {
         state_cache_key = value.as_str().map(ToString::to_string);
     }
-    if state_cache_key.is_none() {
-        if let Some(value) = object.get("conversation") {
-            state_cache_key = responses_conversation_cache_key(value);
-        }
+    if state_cache_key.is_none()
+        && let Some(value) = object.get("conversation")
+    {
+        state_cache_key = responses_conversation_cache_key(value);
     }
     if let Some(cache_key) = state_cache_key {
         object
@@ -607,10 +607,10 @@ fn response_output_text_content(text: &str, logprobs: Option<Value>) -> Value {
         "text": text,
         "annotations": [],
     });
-    if let Some(logprobs) = logprobs {
-        if let Some(object) = content.as_object_mut() {
-            object.insert("logprobs".to_string(), logprobs);
-        }
+    if let Some(logprobs) = logprobs
+        && let Some(object) = content.as_object_mut()
+    {
+        object.insert("logprobs".to_string(), logprobs);
     }
     content
 }
@@ -902,10 +902,10 @@ pub fn responses_stream_delta_event_with_logprobs_and_sequence(
         "content_index": 0,
         "delta": delta,
     });
-    if let Some(logprobs) = logprobs {
-        if let Some(object) = event.as_object_mut() {
-            object.insert("logprobs".to_string(), logprobs);
-        }
+    if let Some(logprobs) = logprobs
+        && let Some(object) = event.as_object_mut()
+    {
+        object.insert("logprobs".to_string(), logprobs);
     }
     event
 }
@@ -1166,9 +1166,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
-        Router,
     };
     use futures_util::stream;
     use http_body_util::BodyExt;
@@ -1176,11 +1176,11 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        router_for_with_config, AssistantMessage, ChatCompletionChoice, ChatCompletionRequest,
-        ChatCompletionResponse, ChatCompletionStream, CompletionRequest, CompletionResponse,
-        CompletionStream, FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
-        ModelObject, OpenAiBackend, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult,
-        Usage,
+        AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
+        ChatCompletionStream, CompletionRequest, CompletionResponse, CompletionStream,
+        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject,
+        OpenAiBackend, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage,
+        router_for_with_config,
     };
 
     #[derive(Default)]
@@ -1553,11 +1553,13 @@ mod tests {
             serde_json::from_str(body["output_text"].as_str().unwrap()).expect("json text");
         assert_eq!(parsed_payload, json!({"answer": 42}));
         assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
-        assert!(body["output"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|item| item["type"] != "function_call"));
+        assert!(
+            body["output"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["type"] != "function_call")
+        );
 
         let seen_requests = backend.seen_chat_requests.lock().unwrap();
         assert_eq!(seen_requests.len(), 1);

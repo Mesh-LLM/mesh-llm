@@ -1,6 +1,6 @@
 use super::super::{
-    http::{respond_error, respond_json},
     LocalModelInterest, MeshApi,
+    http::{respond_error, respond_json},
 };
 use crate::models::canonicalize_interest_model_ref;
 use serde::{Deserialize, Serialize};

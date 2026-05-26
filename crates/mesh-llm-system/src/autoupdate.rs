@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 #[cfg(unix)]
 use std::ffi::CString;
 use std::io;
@@ -288,9 +288,13 @@ fn require_update_target(llama_flavor: Option<backend::BinaryFlavor>) -> Result<
     };
     let Some(release_target) = current_release_target(bundle_flavor) else {
         #[cfg(not(windows))]
-        bail!("No published release bundle matches this install. Reinstall with {INSTALL_SCRIPT_URL}.");
+        bail!(
+            "No published release bundle matches this install. Reinstall with {INSTALL_SCRIPT_URL}."
+        );
         #[cfg(windows)]
-        bail!("No published release bundle matches this install. Download the latest release from {RELEASES_URL}.");
+        bail!(
+            "No published release bundle matches this install. Download the latest release from {RELEASES_URL}."
+        );
     };
 
     Ok(UpdateTarget {
@@ -344,7 +348,8 @@ async fn apply_update_if_available(
     {
         Ok(InstallOutcome::RestartNow) => {
             eprintln!("✅ Updated to v{}; restarting", release.version);
-            std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1");
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1") };
             exec_current_binary(&target.exe)?;
         }
         Ok(InstallOutcome::ExitNow) => {
@@ -725,8 +730,8 @@ mod zip_tests {
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
+    use zip::write::SimpleFileOptions;
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -1152,7 +1157,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_asset_url() {
-        std::env::remove_var(SELF_UPDATE_REPO_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
         assert_eq!(
             release_asset_url("v0.60.0", "mesh-llm-aarch64-apple-darwin.tar.gz"),
             "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.60.0/mesh-llm-aarch64-apple-darwin.tar.gz"
@@ -1162,7 +1168,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_repo_defaults_to_main_repo() {
-        std::env::remove_var(SELF_UPDATE_REPO_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
         assert_eq!(release_repo(), "Mesh-LLM/mesh-llm");
         assert_eq!(
             latest_release_api_url(),
@@ -1173,7 +1180,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_release_repo_can_be_overridden_for_testing() {
-        std::env::set_var(SELF_UPDATE_REPO_ENV, "jdumay/mesh-llm");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(SELF_UPDATE_REPO_ENV, "jdumay/mesh-llm") };
         assert_eq!(release_repo(), "jdumay/mesh-llm");
         assert_eq!(
             latest_release_api_url(),
@@ -1187,7 +1195,8 @@ mod tests {
             release_asset_url("v0.60.0", "mesh-llm-x86_64-unknown-linux-gnu.tar.gz"),
             "https://github.com/jdumay/mesh-llm/releases/download/v0.60.0/mesh-llm-x86_64-unknown-linux-gnu.tar.gz"
         );
-        std::env::remove_var(SELF_UPDATE_REPO_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(SELF_UPDATE_REPO_ENV) };
     }
 
     #[test]
@@ -1439,7 +1448,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_should_attempt_auto_update_only_when_flag_is_set() {
-        std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV) };
         assert!(should_attempt_auto_update(AutoUpdateOptions {
             auto_update: true,
             plugin_requested: false,
@@ -1468,7 +1478,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_should_attempt_auto_update_respects_restart_guard() {
-        std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(SELF_UPDATE_ATTEMPTED_ENV, "1") };
         assert!(!should_attempt_auto_update(AutoUpdateOptions {
             auto_update: true,
             plugin_requested: false,
@@ -1476,7 +1487,8 @@ mod tests {
             llama_flavor: None,
             current_version: "0.66.0",
         }));
-        std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV) };
     }
 
     #[test]

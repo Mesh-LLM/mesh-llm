@@ -80,28 +80,28 @@ pub async fn relay_with_rewrite(
             .to_string();
 
             // Parse port from endpoint string like "127.0.0.1:49502"
-            if let Some(port_str) = endpoint_str.rsplit(':').next() {
-                if let Ok(remote_port) = port_str.parse::<u16>() {
-                    let map = port_map.read().await;
-                    if let Some(&local_port) = map.get(&remote_port) {
-                        // Rewrite endpoint field
-                        let new_endpoint = format!("127.0.0.1:{local_port}");
-                        let mut new_endpoint_bytes = [0u8; 128];
-                        let copy_len = new_endpoint.len().min(127);
-                        new_endpoint_bytes[..copy_len]
-                            .copy_from_slice(&new_endpoint.as_bytes()[..copy_len]);
-                        payload[4..132].copy_from_slice(&new_endpoint_bytes);
+            if let Some(port_str) = endpoint_str.rsplit(':').next()
+                && let Ok(remote_port) = port_str.parse::<u16>()
+            {
+                let map = port_map.read().await;
+                if let Some(&local_port) = map.get(&remote_port) {
+                    // Rewrite endpoint field
+                    let new_endpoint = format!("127.0.0.1:{local_port}");
+                    let mut new_endpoint_bytes = [0u8; 128];
+                    let copy_len = new_endpoint.len().min(127);
+                    new_endpoint_bytes[..copy_len]
+                        .copy_from_slice(&new_endpoint.as_bytes()[..copy_len]);
+                    payload[4..132].copy_from_slice(&new_endpoint_bytes);
 
-                        tracing::info!(
-                            "Rewrote REGISTER_PEER: peer_id={peer_id} \
+                    tracing::info!(
+                        "Rewrote REGISTER_PEER: peer_id={peer_id} \
                              {endpoint_str} → 127.0.0.1:{local_port}"
-                        );
-                    } else {
-                        tracing::warn!(
-                            "REGISTER_PEER: no rewrite mapping for port {remote_port} \
+                    );
+                } else {
+                    tracing::warn!(
+                        "REGISTER_PEER: no rewrite mapping for port {remote_port} \
                              (peer_id={peer_id}, endpoint={endpoint_str}), passing through"
-                        );
-                    }
+                    );
                 }
             }
 

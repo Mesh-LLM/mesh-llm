@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
 use skippy_protocol::{LoadMode, StageConfig, StageTopology};
 
 use crate::package::is_hf_package_ref;

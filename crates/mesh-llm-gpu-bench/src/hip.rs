@@ -1,8 +1,8 @@
-use crate::{capture::capture_stdout, parse_benchmark_output, BenchmarkOutput};
+use crate::{BenchmarkOutput, capture::capture_stdout, parse_benchmark_output};
 use anyhow::{Context, Result};
 use std::ffi::c_int;
 
-extern "C" {
+unsafe extern "C" {
     fn mesh_llm_gpu_bench_hip_main() -> c_int;
 }
 

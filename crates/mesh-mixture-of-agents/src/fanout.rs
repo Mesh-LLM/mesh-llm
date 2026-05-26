@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::enforce_allowed_tools;
 use crate::worker::WorkerRole;
-use crate::{arbiter, normalize, WorkerSummary};
+use crate::{WorkerSummary, arbiter, normalize};
 use normalize::WorkerOutput;
 
 /// Min confidence for the time-based grace path; matches the consensus rule.

@@ -322,11 +322,11 @@ fn plan_cleanup_entries(
         }
         let last_used =
             parse_timestamp(&record.last_used_at).unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
-        if let Some(cutoff) = cutoff {
-            if last_used > cutoff {
-                *skipped_recent += 1;
-                continue;
-            }
+        if let Some(cutoff) = cutoff
+            && last_used > cutoff
+        {
+            *skipped_recent += 1;
+            continue;
         }
 
         let removable_paths: Vec<PathBuf> = unique_paths(record.managed_paths.clone())
@@ -371,13 +371,12 @@ fn execute_model_cleanup_entries(entries: Vec<CleanupEntry>) -> Result<ModelClea
                 std::fs::remove_file(path).with_context(|| format!("Remove {}", path.display()))?;
                 result.removed_files += 1;
             }
-            if let Some(cache_path) = gguf_metadata_cache_path(path) {
-                if cache_path.exists() {
-                    std::fs::remove_file(&cache_path).with_context(|| {
-                        format!("Remove metadata cache {}", cache_path.display())
-                    })?;
-                    result.removed_metadata_files += 1;
-                }
+            if let Some(cache_path) = gguf_metadata_cache_path(path)
+                && cache_path.exists()
+            {
+                std::fs::remove_file(&cache_path)
+                    .with_context(|| format!("Remove metadata cache {}", cache_path.display()))?;
+                result.removed_metadata_files += 1;
             }
             prune_empty_ancestors(path, &huggingface_hub_cache_dir());
         }

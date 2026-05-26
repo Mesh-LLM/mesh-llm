@@ -59,10 +59,10 @@ pub(crate) use self::status::classify_runtime_error;
 
 use self::state::ApiInner;
 use self::status::{
-    build_runtime_processes_payload, build_runtime_stage_payloads, build_runtime_status_payload,
-    runtime_stage_state_label, runtime_stage_wire_dtype_label, MeshModelPayload,
-    OpenAiGuardrailsPayload, RuntimeLlamaPayload, RuntimeProcessesPayload, RuntimeStatusPayload,
-    StatusPayload,
+    MeshModelPayload, OpenAiGuardrailsPayload, RuntimeLlamaPayload, RuntimeProcessesPayload,
+    RuntimeStatusPayload, StatusPayload, build_runtime_processes_payload,
+    build_runtime_stage_payloads, build_runtime_status_payload, runtime_stage_state_label,
+    runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
 use crate::network::{affinity, nostr};
@@ -79,7 +79,7 @@ use tokio::sync::Mutex;
 #[cfg(test)]
 use self::http::http_body_text;
 #[cfg(test)]
-use self::status::{build_gpus, LocalInstance, NodeState, WakeableNode, WakeableNodeState};
+use self::status::{LocalInstance, NodeState, WakeableNode, WakeableNodeState, build_gpus};
 #[cfg(test)]
 use crate::inference::election;
 #[cfg(test)]

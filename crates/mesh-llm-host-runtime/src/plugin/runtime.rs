@@ -1,21 +1,21 @@
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
-use super::transport::{bind_local_listener, connection_loop, LocalListener, LocalStream};
+use super::transport::{LocalListener, LocalStream, bind_local_listener, connection_loop};
 use super::{
-    proto, PluginMeshEvent, PluginRpcBridge, PluginSummary, ToolCallResult, ToolSummary,
-    CONNECT_TIMEOUT_SECS, PROTOCOL_VERSION, REQUEST_TIMEOUT_SECS,
+    CONNECT_TIMEOUT_SECS, PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary,
+    REQUEST_TIMEOUT_SECS, ToolCallResult, ToolSummary, proto,
 };
 use crate::runtime_data::RuntimeDataProducer;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::{MeshVisibility, STARTUP_DISABLED_ERROR_CODE};
 use rmcp::model::{InitializeRequestParams, ServerInfo};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 pub(crate) struct ExternalPlugin {
     spec: ExternalPluginSpec,

@@ -33,9 +33,9 @@
 
 use async_trait::async_trait;
 use mesh_mixture_of_agents as moa;
-use serde_json::{json, Value};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use serde_json::{Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Backend that returns a deterministic answer text after a configurable

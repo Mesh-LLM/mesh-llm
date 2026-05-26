@@ -233,15 +233,16 @@ fn link_linux_cuda_libs(cmake_cache: &std::path::Path) {
     // Check CMakeCache for NCCL_FOUND or NCCL_LIBRARY to detect this and extract the search path.
     if let Ok(contents) = std::fs::read_to_string(cmake_cache) {
         let mut nccl_found = cmake_cache_bool(&contents, "NCCL_FOUND");
-        if let Some(nccl_path) = cmake_cache_value(&contents, "NCCL_LIBRARY") {
-            if !nccl_path.contains("NOTFOUND") && !nccl_path.contains("-NOTFOUND") {
-                nccl_found = true;
-                let path = std::path::PathBuf::from(&nccl_path);
-                if let Some(parent) = path.parent() {
-                    if parent.is_dir() {
-                        println!("cargo:rustc-link-search=native={}", parent.display());
-                    }
-                }
+        if let Some(nccl_path) = cmake_cache_value(&contents, "NCCL_LIBRARY")
+            && !nccl_path.contains("NOTFOUND")
+            && !nccl_path.contains("-NOTFOUND")
+        {
+            nccl_found = true;
+            let path = std::path::PathBuf::from(&nccl_path);
+            if let Some(parent) = path.parent()
+                && parent.is_dir()
+            {
+                println!("cargo:rustc-link-search=native={}", parent.display());
             }
         }
         if nccl_found {
@@ -387,14 +388,14 @@ fn windows_openmp_search_paths(
 }
 
 fn link_linux_lib_from_cache(cmake_cache: &std::path::Path, cache_key: &str, lib: &str) {
-    if let Ok(cache) = std::fs::read_to_string(cmake_cache) {
-        if let Some(path) = cmake_cache_value(&cache, cache_key) {
-            let path = std::path::PathBuf::from(path);
-            if path.exists() {
-                if let Some(parent) = path.parent() {
-                    println!("cargo:rustc-link-search=native={}", parent.display());
-                }
-            }
+    if let Ok(cache) = std::fs::read_to_string(cmake_cache)
+        && let Some(path) = cmake_cache_value(&cache, cache_key)
+    {
+        let path = std::path::PathBuf::from(path);
+        if path.exists()
+            && let Some(parent) = path.parent()
+        {
+            println!("cargo:rustc-link-search=native={}", parent.display());
         }
     }
     println!("cargo:rustc-link-lib=dylib={lib}");

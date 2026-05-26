@@ -1,7 +1,7 @@
 use std::io;
 
 use super::{
-    invalid_data, state_flags, types::MAX_STAGE_DECODED_ACTIVATION_BYTES, WireActivationDType,
+    WireActivationDType, invalid_data, state_flags, types::MAX_STAGE_DECODED_ACTIVATION_BYTES,
 };
 
 pub fn activation_wire_bytes(

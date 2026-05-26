@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::{
     common::{
-        completion_id, now_unix_secs, FinishReason, PromptCacheRetention, ReasoningConfig,
-        ReasoningEffort, StopSequence, StreamOptions, Usage,
+        FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, StopSequence,
+        StreamOptions, Usage, completion_id, now_unix_secs,
     },
     errors::OpenAiError,
 };

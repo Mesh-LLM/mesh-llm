@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use openai_frontend::{
-    chat_mesh_hooks_enabled, first_chat_media, inject_text_into_chat_messages,
     ChatCompletionRequest, ChatHookAction, ChatHookOutcome, ChatMediaKind, GenerationHookSignals,
-    OpenAiHookPolicy, OpenAiResult, PrefillHookSignals,
+    OpenAiHookPolicy, OpenAiResult, PrefillHookSignals, chat_mesh_hooks_enabled, first_chat_media,
+    inject_text_into_chat_messages,
 };
 use serde_json::Value;
 

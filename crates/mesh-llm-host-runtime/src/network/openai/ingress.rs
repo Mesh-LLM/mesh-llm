@@ -1,5 +1,5 @@
 use crate::api;
-use crate::cli::output::{emit_event, OutputEvent};
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, pipeline};
 use crate::mesh;
 use crate::network::affinity;
@@ -147,10 +147,10 @@ async fn handle_models_list_request(
 ) {
     let mut models = callable_models(targets);
     models.extend(node.models_being_served().await);
-    if let Some(plugin_manager) = plugin_manager {
-        if let Ok(mut external_models) = plugin_manager.inference_models().await {
-            models.append(&mut external_models);
-        }
+    if let Some(plugin_manager) = plugin_manager
+        && let Ok(mut external_models) = plugin_manager.inference_models().await
+    {
+        models.append(&mut external_models);
     }
     models.sort();
     models.dedup();
@@ -169,12 +169,12 @@ async fn collect_available_models_for_auto_route(
             available_models.push(name);
         }
     }
-    if let Some(plugin_manager) = plugin_manager {
-        if let Ok(external_models) = plugin_manager.inference_models().await {
-            for name in external_models {
-                if !available_models.iter().any(|existing| existing == &name) {
-                    available_models.push(name);
-                }
+    if let Some(plugin_manager) = plugin_manager
+        && let Ok(external_models) = plugin_manager.inference_models().await
+    {
+        for name in external_models {
+            if !available_models.iter().any(|existing| existing == &name) {
+                available_models.push(name);
             }
         }
     }

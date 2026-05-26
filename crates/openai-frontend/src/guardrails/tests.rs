@@ -5,25 +5,25 @@ use futures_util::stream;
 use serde_json::json;
 
 use crate::{
-    chat::MessageContent, common::ReasoningEffort,
-    responses::translate_chat_completion_to_responses, Usage,
+    Usage, chat::MessageContent, common::ReasoningEffort,
+    responses::translate_chat_completion_to_responses,
 };
 
 use super::{
     errors::{
-        reserved_tool_name_error, unsupported_combination_error, validation_failed_error,
         GUARDRAIL_RESERVED_TOOL_NAME_CODE, GUARDRAIL_RESERVED_TOOL_NAME_MESSAGE,
         GUARDRAIL_UNSUPPORTED_COMBINATION_CODE, GUARDRAIL_UNSUPPORTED_COMBINATION_MESSAGE,
         GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_CODE, GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_MESSAGE,
         GUARDRAIL_VALIDATION_FAILED_CODE, GUARDRAIL_VALIDATION_FAILED_MESSAGE,
+        reserved_tool_name_error, unsupported_combination_error, validation_failed_error,
     },
     policy::RetryExhaustionMode,
     request_contract::{
         MeshGuardrailsOverride, ParallelToolCalls, RawResponseFormat, RawToolChoice, RawToolSpec,
     },
     rescue::{
-        strip_thinking_blocks, ClassifiedGuardrailResponse, GuardrailParserStage,
-        GuardrailResponseCategory,
+        ClassifiedGuardrailResponse, GuardrailParserStage, GuardrailResponseCategory,
+        strip_thinking_blocks,
     },
     telemetry::{
         GuardrailTelemetryBypassReason, GuardrailTelemetryContract, GuardrailTelemetryDecision,

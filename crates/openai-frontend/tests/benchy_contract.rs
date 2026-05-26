@@ -8,12 +8,12 @@ use axum::{
 use futures_util::stream;
 use http_body_util::BodyExt;
 use openai_frontend::{
-    messages_to_plain_prompt, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionStream, CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream,
-    FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject, OpenAiBackend,
-    OpenAiError, OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
+    CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, FinishReason,
+    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject, OpenAiBackend, OpenAiError,
+    OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage, messages_to_plain_prompt,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 struct BenchyBackend;
@@ -249,17 +249,20 @@ async fn benchy_stream_chat_contract_has_role_content_usage_and_done() {
 
     let data = sse_data(response_text(response).await);
     assert_eq!(data.last().unwrap(), "[DONE]");
-    assert!(data
-        .iter()
-        .any(|line| line.contains(r#""role":"assistant""#)));
+    assert!(
+        data.iter()
+            .any(|line| line.contains(r#""role":"assistant""#))
+    );
     assert!(data.iter().any(|line| line.contains(r#""content":"tok""#)));
     assert!(data.iter().any(|line| line.contains(r#""content":"en""#)));
-    assert!(data
-        .iter()
-        .any(|line| line.contains(r#""finish_reason":"length""#)));
-    assert!(data
-        .iter()
-        .any(|line| line.contains(r#""total_tokens":11"#)));
+    assert!(
+        data.iter()
+            .any(|line| line.contains(r#""finish_reason":"length""#))
+    );
+    assert!(
+        data.iter()
+            .any(|line| line.contains(r#""total_tokens":11"#))
+    );
 }
 
 #[tokio::test]

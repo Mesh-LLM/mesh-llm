@@ -1,5 +1,5 @@
 use skippy_cache::{
-    prefix_identity_with_namespace, NATIVE_KV_DTYPE, NATIVE_KV_RUNTIME_ABI_VERSION,
+    NATIVE_KV_DTYPE, NATIVE_KV_RUNTIME_ABI_VERSION, prefix_identity_with_namespace,
 };
 use skippy_protocol::{MessageBase, StageConfig};
 
@@ -95,8 +95,8 @@ impl KvStageIntegration {
 #[cfg(test)]
 mod tests {
     use skippy_protocol::{
-        LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
-        SCHEMA_VERSION,
+        LoadMode, SCHEMA_VERSION, StageConfig, StageKvCacheConfig, StageKvCacheMode,
+        StageKvCachePayload,
     };
 
     use super::*;

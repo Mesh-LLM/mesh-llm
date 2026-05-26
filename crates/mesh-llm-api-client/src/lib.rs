@@ -7,12 +7,12 @@ mod identity;
 mod token;
 
 pub use client::{
-    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, MeshApiError, MeshClient, Model,
-    RequestId, ResponsesRequest, Status, MAX_RECONNECT_ATTEMPTS,
+    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, MAX_RECONNECT_ATTEMPTS, MeshApiError,
+    MeshClient, Model, RequestId, ResponsesRequest, Status,
 };
 pub use discover::{
-    create_auto_client, discover_public_meshes, select_public_mesh, AutoConnectResult, PublicMesh,
-    PublicMeshQuery,
+    AutoConnectResult, PublicMesh, PublicMeshQuery, create_auto_client, discover_public_meshes,
+    select_public_mesh,
 };
 pub use identity::OwnerKeypair;
 pub use token::InviteToken;

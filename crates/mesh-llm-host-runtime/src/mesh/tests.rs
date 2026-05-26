@@ -1,8 +1,8 @@
 use super::heartbeat::{
-    relay_reconnect_reason, should_remove_connection, HeartbeatFailurePolicy,
-    HomeRelayStatusTransition, RelayPathSnapshot, RelayPeerHealth, RelayPeerObservation,
-    RelayReconnectController, RelayReconnectReason, SelectedPathKind, RELAY_DEGRADED_RTT_MS,
+    HeartbeatFailurePolicy, HomeRelayStatusTransition, RELAY_DEGRADED_RTT_MS,
     RELAY_MISSING_GRACE_SECS, RELAY_ONLY_RECONNECT_SECS, RELAY_RECONNECT_COOLDOWN_SECS,
+    RelayPathSnapshot, RelayPeerHealth, RelayPeerObservation, RelayReconnectController,
+    RelayReconnectReason, SelectedPathKind, relay_reconnect_reason, should_remove_connection,
 };
 use super::*;
 use crate::api;
@@ -110,10 +110,12 @@ fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidate
     assert!(!ip_addrs.contains("172.23.0.1:47916"));
     assert!(!ip_addrs.contains("100.107.22.123:47916"));
     assert!(!ip_addrs.contains("192.168.1.20:47916"));
-    assert!(filtered
-        .addrs
-        .iter()
-        .any(|addr| matches!(addr, iroh::TransportAddr::Relay(_))));
+    assert!(
+        filtered
+            .addrs
+            .iter()
+            .any(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+    );
 }
 
 fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
@@ -265,8 +267,8 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
 }
 
 #[tokio::test]
-async fn set_serving_models_preserves_existing_known_descriptor_capabilities_when_adding_model(
-) -> Result<()> {
+async fn set_serving_models_preserves_existing_known_descriptor_capabilities_when_adding_model()
+-> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
     let vision_model = "Qwen3VL-2B-Instruct-Q4_K_M".to_string();
     let text_model = "Qwen3-8B-Q4_K_M".to_string();
@@ -881,7 +883,7 @@ fn test_peer_announcement_backward_compat_no_bandwidth_field() {
 
 fn make_valid_gossip_frame() -> GossipFrame {
     GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -933,7 +935,7 @@ fn control_frame_roundtrip() {
     let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
     let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
         .expect("valid gossip frame must decode successfully");
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(decoded.peers.len(), 1);
     assert_eq!(decoded.peers[0].endpoint_id, vec![0u8; 32]);
     assert_eq!(decoded.peers[0].role, NodeRole::Worker as i32);
@@ -1011,19 +1013,22 @@ struct EnvVarGuard {
 impl EnvVarGuard {
     fn set(key: &'static str, value: &std::path::Path) -> Self {
         let previous = std::env::var_os(key);
-        std::env::set_var(key, value);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
 
     fn set_str(key: &'static str, value: &str) -> Self {
         let previous = std::env::var_os(key);
-        std::env::set_var(key, value);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, value) };
         Self { key, previous }
     }
 
     fn unset(key: &'static str) -> Self {
         let previous = std::env::var_os(key);
-        std::env::remove_var(key);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(key) };
         Self { key, previous }
     }
 }
@@ -1031,9 +1036,11 @@ impl EnvVarGuard {
 impl Drop for EnvVarGuard {
     fn drop(&mut self) {
         if let Some(value) = self.previous.take() {
-            std::env::set_var(self.key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(self.key, value) };
         } else {
-            std::env::remove_var(self.key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(self.key) };
         }
     }
 }
@@ -1169,9 +1176,11 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
     let decoded = Node::decode_invite_token(&endpoint)?;
     assert_eq!(decoded.id, node.endpoint.id());
     assert_eq!(decoded.addrs.len(), 1);
-    assert!(decoded
-        .addrs
-        .contains(&iroh::TransportAddr::Ip(advertised_addr)));
+    assert!(
+        decoded
+            .addrs
+            .contains(&iroh::TransportAddr::Ip(advertised_addr))
+    );
 
     node.shutdown_control_listener().await;
     Ok(())
@@ -1239,9 +1248,11 @@ async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> 
         .expect("verified owner should expose control endpoint");
 
     let announcements = node.collect_announcements().await;
-    assert!(announcements
-        .iter()
-        .all(|announcement| encode_endpoint_addr_token(&announcement.addr) != control_endpoint));
+    assert!(
+        announcements
+            .iter()
+            .all(|announcement| encode_endpoint_addr_token(&announcement.addr) != control_endpoint)
+    );
 
     let api = build_mesh_api_for_control_tests(node.clone()).await;
     api.set_control_bootstrap(api::ControlBootstrapPayload {
@@ -1307,7 +1318,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
     write_len_prefixed(
         &mut get_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 1,
@@ -1342,7 +1353,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
     write_len_prefixed(
         &mut watch_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 2,
@@ -1392,7 +1403,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
     write_len_prefixed(
         &mut apply_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 3,
@@ -1438,7 +1449,7 @@ async fn control_plane_get_watch_apply_config() -> Result<()> {
     write_len_prefixed(
         &mut apply_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 4,
@@ -1492,7 +1503,7 @@ async fn control_plane_watch_observes_apply_revision() -> Result<()> {
     write_len_prefixed(
         &mut watch_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 10,
@@ -1526,7 +1537,7 @@ async fn control_plane_watch_observes_apply_revision() -> Result<()> {
     write_len_prefixed(
         &mut apply_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 11,
@@ -1601,7 +1612,7 @@ async fn control_plane_watch_without_snapshot_starts_with_accepted() -> Result<(
     write_len_prefixed(
         &mut watch_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 12,
@@ -1658,7 +1669,7 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
     write_len_prefixed(
         &mut watch_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 13,
@@ -1678,20 +1689,22 @@ async fn control_plane_watch_without_snapshot_observes_apply_revision() -> Resul
     )
     .await?;
     let accepted = read_owner_control_envelope(&mut watch_recv).await?;
-    assert!(accepted
-        .response
-        .expect("watch should return a response")
-        .watch_config
-        .expect("watch should return watch_config")
-        .accepted
-        .is_some());
+    assert!(
+        accepted
+            .response
+            .expect("watch should return a response")
+            .watch_config
+            .expect("watch should return watch_config")
+            .accepted
+            .is_some()
+    );
 
     let (_apply_endpoint, mut apply_send, mut apply_recv, apply_requester_id) =
         open_owner_control_stream(&server, &owner_keypair).await?;
     write_len_prefixed(
         &mut apply_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 14,
@@ -1766,7 +1779,7 @@ async fn control_plane_apply_rejects_stale_revision() -> Result<()> {
     let (_apply_endpoint, mut apply_send, mut apply_recv, apply_requester_id) =
         open_owner_control_stream(&server, &owner_keypair).await?;
     let apply_once = |request_id, expected_revision| crate::proto::node::OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: Some(OwnerControlRequest {
             request_id,
@@ -1856,7 +1869,7 @@ async fn control_plane_apply_rejects_malformed_full_config_toml() -> Result<()> 
     write_len_prefixed(
         &mut apply_send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 22,
@@ -1987,7 +2000,7 @@ async fn control_plane_refresh_inventory() -> Result<()> {
     let (_refresh_endpoint, mut refresh_send, mut refresh_recv, requester_id) =
         open_owner_control_stream(&server, &owner_keypair).await?;
     let refresh_request = |request_id| crate::proto::node::OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: Some(OwnerControlRequest {
             request_id,
@@ -2013,14 +2026,18 @@ async fn control_plane_refresh_inventory() -> Result<()> {
         .snapshot
         .expect("refresh should include a config snapshot");
     assert_eq!(first_snapshot.node_id, server.id().as_bytes().to_vec());
-    assert!(server
-        .available_models()
-        .await
-        .contains(&expected_model_ref));
+    assert!(
+        server
+            .available_models()
+            .await
+            .contains(&expected_model_ref)
+    );
     let inventory_snapshot = server.runtime_data_collector().local_inventory_snapshot();
-    assert!(inventory_snapshot
-        .model_names
-        .contains(&expected_inventory_name));
+    assert!(
+        inventory_snapshot
+            .model_names
+            .contains(&expected_inventory_name)
+    );
 
     write_len_prefixed(&mut refresh_send, &refresh_request(31).encode_to_vec()).await?;
     let second = read_owner_control_envelope(&mut refresh_recv).await?;
@@ -2137,7 +2154,7 @@ fn artifact_transfer_authorization_is_limited_to_stage_assignment() {
     };
     let request = |relative_path: &str, expected_size: u64, expected_sha256: String| {
         skippy_stage_proto::StageArtifactTransferRequest {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: stage0.as_bytes().to_vec(),
             topology_id: "topology-a".to_string(),
             run_id: "run-a".to_string(),
@@ -2152,44 +2169,52 @@ fn artifact_transfer_authorization_is_limited_to_stage_assignment() {
     };
 
     let layer0 = request("layers/layer-000.gguf", 8, sha256_hex(b"layer000"));
-    assert!(artifact_transfer_allowed_by_topology(
-        std::slice::from_ref(&topology),
-        stage0,
-        package.path(),
-        &layer0,
-    )
-    .unwrap());
+    assert!(
+        artifact_transfer_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            stage0,
+            package.path(),
+            &layer0,
+        )
+        .unwrap()
+    );
 
     let mut wrong_topology = layer0.clone();
     wrong_topology.topology_id = "other-topology".to_string();
-    assert!(!artifact_transfer_allowed_by_topology(
-        std::slice::from_ref(&topology),
-        stage0,
-        package.path(),
-        &wrong_topology,
-    )
-    .unwrap());
+    assert!(
+        !artifact_transfer_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            stage0,
+            package.path(),
+            &wrong_topology,
+        )
+        .unwrap()
+    );
 
     let layer1 = request("layers/layer-001.gguf", 8, sha256_hex(b"layer001"));
-    assert!(!artifact_transfer_allowed_by_topology(
-        std::slice::from_ref(&topology),
-        stage0,
-        package.path(),
-        &layer1,
-    )
-    .unwrap());
+    assert!(
+        !artifact_transfer_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            stage0,
+            package.path(),
+            &layer1,
+        )
+        .unwrap()
+    );
 
     let projector = request("projectors/mmproj.gguf", 9, sha256_hex(b"projector"));
-    assert!(artifact_transfer_allowed_by_topology(
-        std::slice::from_ref(&topology),
-        stage0,
-        package.path(),
-        &projector,
-    )
-    .unwrap());
+    assert!(
+        artifact_transfer_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            stage0,
+            package.path(),
+            &projector,
+        )
+        .unwrap()
+    );
 
     let manifest = skippy_stage_proto::StageArtifactTransferRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: stage1.as_bytes().to_vec(),
         topology_id: "topology-a".to_string(),
         run_id: "run-a".to_string(),
@@ -2258,7 +2283,7 @@ async fn artifact_transfer_stream_serves_authorized_stage_artifact() -> Result<(
         .await;
 
     let request = skippy_stage_proto::StageArtifactTransferRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: client_id.as_bytes().to_vec(),
         topology_id: "topology-artifact".to_string(),
         run_id: "run-artifact".to_string(),
@@ -2392,7 +2417,7 @@ async fn artifact_transfer_stream_rejects_corrupt_same_size_cached_artifact() ->
         .await;
 
     let request = skippy_stage_proto::StageArtifactTransferRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: client_id.as_bytes().to_vec(),
         topology_id: "topology-artifact-corrupt".to_string(),
         run_id: "run-artifact-corrupt".to_string(),
@@ -2470,7 +2495,7 @@ async fn artifact_transfer_stream_rejects_public_mesh_without_opt_in() -> Result
         .await;
 
     let request = skippy_stage_proto::StageArtifactTransferRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: client_id.as_bytes().to_vec(),
         topology_id: "topology-artifact-disabled".to_string(),
         run_id: "run-artifact-disabled".to_string(),
@@ -2513,9 +2538,11 @@ async fn artifact_transfer_body_read_has_idle_timeout() {
     .await
     .expect_err("stalled body read must time out");
 
-    assert!(error
-        .to_string()
-        .contains("artifact transfer body read idle timeout"));
+    assert!(
+        error
+            .to_string()
+            .contains("artifact transfer body read idle timeout")
+    );
 }
 
 #[test]
@@ -2525,7 +2552,7 @@ fn artifact_transfer_invalid_resume_offset_removes_preserved_partial() {
     std::fs::write(&partial, b"stale manifest bytes").unwrap();
     let mut guard = PartialArtifactGuard::preserve_on_error(partial.clone());
     let response = skippy_stage_proto::StageArtifactTransferResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         accepted: false,
         total_size: 8,
         sha256: Some(sha256_hex(b"manifest")),
@@ -2544,7 +2571,7 @@ fn artifact_transfer_smaller_resume_response_removes_preserved_partial() {
     std::fs::write(&partial, b"stale manifest bytes").unwrap();
     let mut guard = PartialArtifactGuard::preserve_on_error(partial.clone());
     let response = skippy_stage_proto::StageArtifactTransferResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         accepted: true,
         total_size: 8,
         sha256: Some(sha256_hex(b"manifest")),
@@ -2938,7 +2965,7 @@ fn incoming_peer_promoted_after_valid_gossip() {
     let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
     let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
         .expect("valid gossip frame must decode successfully");
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
     assert!(!decoded.peers.is_empty());
 
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xab; 32]).public());
@@ -2985,7 +3012,7 @@ fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     );
 
     let bad_gen_frame = GossipFrame {
-        gen: 0,
+        r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -3068,17 +3095,17 @@ fn passive_route_table_request_does_not_admit_peer() {
 
     let valid_req = RouteTableRequest {
         requester_id: vec![0xef_u8; 32],
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &valid_req);
     let decoded: RouteTableRequest = decode_control_frame(STREAM_ROUTE_REQUEST, &encoded)
         .expect("valid RouteTableRequest must decode successfully");
     assert_eq!(decoded.requester_id, vec![0xef_u8; 32]);
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
 
     let bad_req = RouteTableRequest {
         requester_id: vec![0u8; 16],
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded_bad = encode_control_frame(STREAM_ROUTE_REQUEST, &bad_req);
     let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded_bad)
@@ -3115,7 +3142,7 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_gen = GossipFrame {
-        gen: 99,
+        r#gen: 99,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -3133,7 +3160,7 @@ fn control_frame_rejects_oversize_or_bad_generation() {
     );
 
     let bad_id = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 16],
@@ -3416,7 +3443,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     let peer_id_bytes = peer_id.as_bytes().to_vec();
 
     let invalid_sender_frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 16],
         peers: vec![PeerAnnouncement {
             endpoint_id: peer_id_bytes.clone(),
@@ -3435,7 +3462,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
 
     let impersonator_id = EndpointId::from(SecretKey::from_bytes(&[0xbb; 32]).public());
     let mismatch_frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: impersonator_id.as_bytes().to_vec(),
         peers: vec![PeerAnnouncement {
             endpoint_id: peer_id_bytes.clone(),
@@ -3452,7 +3479,7 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     );
 
     let bad_endpoint_frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id_bytes.clone(),
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 20],
@@ -3843,13 +3870,13 @@ fn route_table_request_roundtrip() {
 
     let req = RouteTableRequest {
         requester_id: peer_bytes.clone(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &req);
     let decoded: RouteTableRequest = decode_control_frame(STREAM_ROUTE_REQUEST, &encoded)
         .expect("valid RouteTableRequest must decode successfully");
     assert_eq!(decoded.requester_id, peer_bytes);
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
 
     let table = RouteTable {
         entries: vec![ProtoRouteEntry {
@@ -3857,12 +3884,12 @@ fn route_table_request_roundtrip() {
             model: "Qwen3-8B-Q4_K_M".to_string(),
         }],
         mesh_id: Some("test-mesh-0102030405060708".to_string()),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded_table = encode_control_frame(STREAM_ROUTE_REQUEST, &table);
     let decoded_table: RouteTable = decode_control_frame(STREAM_ROUTE_REQUEST, &encoded_table)
         .expect("valid RouteTable must decode successfully");
-    assert_eq!(decoded_table.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded_table.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(decoded_table.entries.len(), 1);
     assert_eq!(decoded_table.entries[0].endpoint_id, peer_bytes);
     assert_eq!(decoded_table.entries[0].model, "Qwen3-8B-Q4_K_M");
@@ -3878,7 +3905,7 @@ fn route_table_request_roundtrip() {
     assert_eq!(local.mesh_id.as_deref(), Some("test-mesh-0102030405060708"));
 
     let round_tripped = routing_table_to_proto(&local);
-    assert_eq!(round_tripped.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(round_tripped.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(round_tripped.entries.len(), 1);
     assert_eq!(round_tripped.entries[0].endpoint_id, peer_bytes);
     assert_eq!(round_tripped.entries[0].model, "Qwen3-8B-Q4_K_M");
@@ -3895,7 +3922,7 @@ fn proto_v1_route_table_rejects_bad_generation_or_legacy_payload() {
 
     let zero_gen_req = RouteTableRequest {
         requester_id: vec![0u8; 32],
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &zero_gen_req);
     let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -3908,7 +3935,7 @@ fn proto_v1_route_table_rejects_bad_generation_or_legacy_payload() {
 
     let wrong_gen_req = RouteTableRequest {
         requester_id: vec![0u8; 32],
-        gen: 99,
+        r#gen: 99,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &wrong_gen_req);
     let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -3922,7 +3949,7 @@ fn proto_v1_route_table_rejects_bad_generation_or_legacy_payload() {
     let bad_gen_response = RouteTable {
         entries: vec![],
         mesh_id: None,
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &bad_gen_response);
     let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
@@ -3936,7 +3963,7 @@ fn proto_v1_route_table_rejects_bad_generation_or_legacy_payload() {
     let wrong_gen_response = RouteTable {
         entries: vec![],
         mesh_id: None,
-        gen: 42,
+        r#gen: 42,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &wrong_gen_response);
     let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
@@ -3973,7 +4000,7 @@ fn peer_lifecycle_messages_roundtrip() {
 
     let leaving_msg = PeerLeaving {
         peer_id: leaving_id.as_bytes().to_vec(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_PEER_LEAVING, &leaving_msg);
     let decoded_leaving: PeerLeaving =
@@ -4004,7 +4031,7 @@ fn peer_lifecycle_messages_roundtrip() {
 
     let down_msg = PeerDown {
         peer_id: dead_id.as_bytes().to_vec(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_PEER_DOWN, &down_msg);
     let decoded_down: PeerDown =
@@ -4031,7 +4058,7 @@ fn peer_lifecycle_messages_roundtrip() {
         "dead peer must be removed from connections when confirmed unreachable"
     );
 
-    assert_eq!(decoded_down.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded_down.r#gen, NODE_PROTOCOL_GENERATION);
 }
 
 #[test]
@@ -4044,7 +4071,7 @@ fn peer_lifecycle_rejects_forged_sender_or_unverified_down() {
 
     let bad_gen_down = PeerDown {
         peer_id: valid_peer_bytes.clone(),
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_PEER_DOWN, &bad_gen_down);
     let err = decode_control_frame::<PeerDown>(STREAM_PEER_DOWN, &encoded)
@@ -4057,7 +4084,7 @@ fn peer_lifecycle_rejects_forged_sender_or_unverified_down() {
 
     let bad_gen_leaving = PeerLeaving {
         peer_id: valid_peer_bytes.clone(),
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_PEER_LEAVING, &bad_gen_leaving);
     let err = decode_control_frame::<PeerLeaving>(STREAM_PEER_LEAVING, &encoded)
@@ -4076,7 +4103,7 @@ fn peer_lifecycle_rejects_forged_sender_or_unverified_down() {
 
     let forged = PeerLeaving {
         peer_id: victim_id.as_bytes().to_vec(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_PEER_LEAVING, &forged);
     let decoded: PeerLeaving = decode_control_frame(STREAM_PEER_LEAVING, &encoded)
@@ -4410,7 +4437,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     // All migrated streams must also reject gen=0 and gen=99 where gen is checked
     let bad_gen_gossip = GossipFrame {
-        gen: 0,
+        r#gen: 0,
         sender_id: vec![],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -4425,7 +4452,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     let bad_gen_req = RouteTableRequest {
         requester_id: vec![0u8; 32],
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &bad_gen_req);
     let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -4434,7 +4461,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     let bad_gen_down = PeerDown {
         peer_id: vec![0u8; 32],
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_PEER_DOWN, &bad_gen_down);
     let err = decode_control_frame::<PeerDown>(STREAM_PEER_DOWN, &encoded)
@@ -4443,7 +4470,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     let bad_gen_leaving = PeerLeaving {
         peer_id: vec![0u8; 32],
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_PEER_LEAVING, &bad_gen_leaving);
     let err = decode_control_frame::<PeerLeaving>(STREAM_PEER_LEAVING, &encoded)
@@ -4452,7 +4479,7 @@ fn proto_v1_control_frames_reject_legacy_json_and_wrong_gen() {
 
     // Wrong gen (e.g. 2) also rejected
     let wrong_gen_gossip = GossipFrame {
-        gen: 2,
+        r#gen: 2,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -4501,7 +4528,7 @@ fn remote_model_scans_are_ignored_after_gossip() {
     model_sizes.insert("Llama-3.3-70B-Q4_K_M".to_string(), 42_000_000_000u64);
 
     let gossip_frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: peer_id.as_bytes().to_vec(),
         peers: vec![ProtoPA {
             endpoint_id: peer_id.as_bytes().to_vec(),
@@ -4520,7 +4547,7 @@ fn remote_model_scans_are_ignored_after_gossip() {
     let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
         .expect("gossip frame with model scan metadata must decode successfully");
 
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(decoded.sender_id, peer_id.as_bytes());
     assert_eq!(decoded.peers.len(), 1);
     let wire_pa = &decoded.peers[0];
@@ -4580,7 +4607,7 @@ fn passive_client_route_table_models_and_mesh_id_populated() {
             },
         ],
         mesh_id: Some("cafebabe12345678".to_string()),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
 
     // Encode/decode via the same path as the live server
@@ -4588,7 +4615,7 @@ fn passive_client_route_table_models_and_mesh_id_populated() {
     let decoded: RouteTable = decode_control_frame(STREAM_ROUTE_REQUEST, &encoded)
         .expect("valid RouteTable must decode successfully for passive client");
 
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(decoded.entries.len(), 2);
     assert_eq!(decoded.mesh_id.as_deref(), Some("cafebabe12345678"));
 
@@ -4641,7 +4668,7 @@ fn passive_client_route_table_models_and_mesh_id_populated() {
     let stale_table = RouteTable {
         entries: vec![],
         mesh_id: None,
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &stale_table);
     let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
@@ -4682,7 +4709,7 @@ fn worker_only_legacy_models_are_excluded_from_http_routes() {
 #[test]
 fn canonical_demand_model_ref_uses_loaded_catalog_without_refreshing() {
     use crate::models::remote_catalog::{
-        set_catalog_entries_for_test, CatalogCurated, CatalogEntry, CatalogSource, CatalogVariant,
+        CatalogCurated, CatalogEntry, CatalogSource, CatalogVariant, set_catalog_entries_for_test,
     };
     use std::collections::HashMap;
 
@@ -4750,7 +4777,7 @@ fn dead_peer_cleanup_prevents_readmission() {
     // Receive valid PeerLeaving from the peer
     let leaving = PeerLeaving {
         peer_id: peer_id.as_bytes().to_vec(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_PEER_LEAVING, &leaving);
     let decoded: PeerLeaving =
@@ -4799,7 +4826,7 @@ fn dead_peer_cleanup_prevents_readmission() {
     // resolve_peer_leaving still succeeds structurally but cleanup is idempotent
     let leaving2 = PeerLeaving {
         peer_id: peer_id.as_bytes().to_vec(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded2 = encode_control_frame(STREAM_PEER_LEAVING, &leaving2);
     let decoded2: PeerLeaving = decode_control_frame(STREAM_PEER_LEAVING, &encoded2)
@@ -5314,7 +5341,7 @@ async fn open_owner_control_stream(
     write_len_prefixed(
         &mut send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: Some(crate::proto::node::OwnerControlHandshake {
                 ownership: Some(proto_signed_node_ownership(&ownership)),
             }),
@@ -5418,17 +5445,19 @@ async fn control_plane_legacy_compat_new_client_prefers_control_alpn() -> Result
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
         .await?;
-    assert!(wrong_alpn_client
-        .connect(control_addr.clone(), ALPN_V1)
-        .await
-        .is_err());
+    assert!(
+        wrong_alpn_client
+            .connect(control_addr.clone(), ALPN_V1)
+            .await
+            .is_err()
+    );
 
     let (_endpoint, mut send, mut recv, requester_id) =
         open_owner_control_stream(&server, &owner_keypair).await?;
     write_len_prefixed(
         &mut send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(OwnerControlRequest {
                 request_id: 41,
@@ -5524,7 +5553,7 @@ async fn control_plane_validation_error_preserves_request_id() -> Result<()> {
     write_len_prefixed(
         &mut send,
         &crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: Some(crate::proto::node::OwnerControlRequest {
                 request_id: 7,

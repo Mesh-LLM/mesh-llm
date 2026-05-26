@@ -5,7 +5,7 @@ pub mod error;
 pub mod keys;
 pub mod provider;
 
-pub use envelope::{open_message, seal_message, OpenedMessage, SignedEncryptedEnvelope};
+pub use envelope::{OpenedMessage, SignedEncryptedEnvelope, open_message, seal_message};
 pub use error::CryptoError;
-pub use keys::{owner_id_from_verifying_key, OwnerKeypair};
+pub use keys::{OwnerKeypair, owner_id_from_verifying_key};
 pub use provider::{InMemoryKeyProvider, KeyProvider, KeyProviderError};

@@ -1,7 +1,7 @@
 [package]
 name = "mesh-llm-host-runtime"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 
 [features]
 default = ["web-ui"]

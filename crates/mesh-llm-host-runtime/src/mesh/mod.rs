@@ -6,9 +6,9 @@
 //! latency-sensitive `skippy-stage/1` ALPN.
 
 pub use mesh_llm_types::mesh::{
-    infer_available_model_descriptors, infer_local_served_model_descriptor,
-    infer_served_model_descriptors, merge_demand, ModelDemand, ModelRuntimeDescriptor,
-    ModelSourceKind, ServedModelDescriptor, ServedModelIdentity, DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS,
+    DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
+    ServedModelDescriptor, ServedModelIdentity, infer_available_model_descriptors,
+    infer_local_served_model_descriptor, infer_served_model_descriptors, merge_demand,
 };
 
 use anyhow::{Context, Result};
@@ -22,17 +22,17 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::crypto::{
-    default_node_ownership_path, save_node_ownership, sign_node_ownership,
-    verify_control_plane_target_node, verify_node_ownership, OwnershipStatus, OwnershipSummary,
-    SignedNodeOwnership, TrustPolicy, TrustStore, DEFAULT_NODE_CERT_LIFETIME_SECS,
+    DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipStatus, OwnershipSummary, SignedNodeOwnership,
+    TrustPolicy, TrustStore, default_node_ownership_path, save_node_ownership, sign_node_ownership,
+    verify_control_plane_target_node, verify_node_ownership,
 };
 use crate::protocol::*;
 
 use self::artifact_transfer_io::{
-    append_artifact_transfer_body, select_partial_artifact, PartialArtifactGuard,
+    PartialArtifactGuard, append_artifact_transfer_body, select_partial_artifact,
 };
 
 #[cfg(test)]
@@ -710,7 +710,7 @@ async fn write_artifact_transfer_response(
     error: Option<&str>,
 ) -> Result<()> {
     let response = skippy_stage_proto::StageArtifactTransferResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         accepted,
         total_size,
         sha256: sha256.map(str::to_string),
@@ -878,7 +878,7 @@ fn owner_control_error_envelope(
     message: impl Into<String>,
 ) -> crate::proto::node::OwnerControlEnvelope {
     crate::proto::node::OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: None,
         response: None,
@@ -2059,11 +2059,11 @@ impl LocalRequestMetricsSampler {
             .lock()
             .expect("pretty request metrics mutex poisoned");
         guard.prune(now_sec);
-        if let Some((second, count)) = guard.accepted_by_second.back_mut() {
-            if *second == now_sec {
-                *count += 1;
-                return;
-            }
+        if let Some((second, count)) = guard.accepted_by_second.back_mut()
+            && *second == now_sec
+        {
+            *count += 1;
+            return;
         }
         guard.accepted_by_second.push_back((now_sec, 1));
     }
@@ -2374,14 +2374,13 @@ impl StageTopologyState {
         if !runtime_status.bind_addr.is_empty() && !runtime_status.bind_addr.ends_with(":0") {
             let topology_key =
                 stage_topology_key(&runtime_status.topology_id, &runtime_status.run_id);
-            if let Some(topology) = self.topologies.get_mut(&topology_key) {
-                if let Some(stage) = topology
+            if let Some(topology) = self.topologies.get_mut(&topology_key)
+                && let Some(stage) = topology
                     .stages
                     .iter_mut()
                     .find(|stage| stage.stage_id == runtime_status.stage_id)
-                {
-                    stage.endpoint.bind_addr = runtime_status.bind_addr.clone();
-                }
+            {
+                stage.endpoint.bind_addr = runtime_status.bind_addr.clone();
             }
         }
         self.statuses.insert(
@@ -3063,7 +3062,7 @@ impl Node {
         use prost::Message as _;
 
         let open = skippy_protocol::proto::stage::StageTransportOpen {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: self.endpoint.id().as_bytes().to_vec(),
             topology_id: topology_id.into(),
             run_id: run_id.into(),
@@ -3639,10 +3638,10 @@ impl Node {
     pub fn invite_token(&self) -> String {
         let mut addr = self.endpoint_addr_for_advertisement();
         // Inject STUN-discovered public address if relay STUN didn't provide one.
-        if let Some(pub_addr) = self.public_addr {
-            if !endpoint_addr_has_public_ipv4(&addr) {
-                addr.addrs.insert(TransportAddr::Ip(pub_addr));
-            }
+        if let Some(pub_addr) = self.public_addr
+            && !endpoint_addr_has_public_ipv4(&addr)
+        {
+            addr.addrs.insert(TransportAddr::Ip(pub_addr));
         }
         addr = filter_endpoint_addr_for_bind_ip(addr, self.quic_bind.ip);
         let json = serde_json::to_vec(&addr).expect("serializable");
@@ -3995,21 +3994,20 @@ impl Node {
         detail_json: String,
     ) {
         let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager {
-            if let Err(err) = plugin_manager
+        if let Some(plugin_manager) = plugin_manager
+            && let Err(err) = plugin_manager
                 .broadcast_mesh_event(
                     self.build_mesh_event(kind, peer.map(peer_info_to_mesh_peer), detail_json)
                         .await,
                 )
                 .await
-            {
-                tracing::debug!(
-                    "Failed to deliver plugin mesh event {:?} for {}: {err}",
-                    kind,
-                    peer.map(|p| p.id.fmt_short().to_string())
-                        .unwrap_or_else(|| self.endpoint.id().fmt_short().to_string())
-                );
-            }
+        {
+            tracing::debug!(
+                "Failed to deliver plugin mesh event {:?} for {}: {err}",
+                kind,
+                peer.map(|p| p.id.fmt_short().to_string())
+                    .unwrap_or_else(|| self.endpoint.id().fmt_short().to_string())
+            );
         }
     }
 
@@ -4322,18 +4320,17 @@ impl Node {
         noun: &str,
     ) -> bool {
         let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager {
-            if !plugin_manager
+        if let Some(plugin_manager) = plugin_manager
+            && !plugin_manager
                 .plugin_declares_mesh_channel(plugin_id, channel)
                 .await
-            {
-                tracing::debug!(
-                    plugin = %plugin_id,
-                    channel = %channel,
-                    "Dropping outbound {noun} for undeclared mesh channel"
-                );
-                return false;
-            }
+        {
+            tracing::debug!(
+                plugin = %plugin_id,
+                channel = %channel,
+                "Dropping outbound {noun} for undeclared mesh channel"
+            );
+            return false;
         }
         true
     }
@@ -4858,7 +4855,7 @@ impl Node {
         let (mut send, recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_SUBPROTOCOL]).await?;
         let open = crate::proto::node::MeshSubprotocolOpen {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             name: name.to_string(),
             major,
         };
@@ -5450,11 +5447,14 @@ impl Node {
 
     async fn reconnect_closed_connection_or_remove(&self, remote: EndpointId, addr: EndpointAddr) {
         tracing::info!("Attempting reconnect to {}...", remote.fmt_short());
-        if let Some(new_conn) = self.reconnect_closed_peer(remote, addr).await {
-            self.complete_recovered_connection(remote, new_conn).await;
-        } else {
-            tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
-            self.remove_peer(remote).await;
+        match self.reconnect_closed_peer(remote, addr).await {
+            Some(new_conn) => {
+                self.complete_recovered_connection(remote, new_conn).await;
+            }
+            _ => {
+                tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
+                self.remove_peer(remote).await;
+            }
         }
     }
 
@@ -6262,11 +6262,10 @@ impl Node {
                     {
                         if let Ok(path) =
                             crate::models::resolve_model_spec(std::path::Path::new(candidate)).await
+                            && path.exists()
                         {
-                            if path.exists() {
-                                load.model_path = Some(path.to_string_lossy().to_string());
-                                break;
-                            }
+                            load.model_path = Some(path.to_string_lossy().to_string());
+                            break;
                         }
                     }
                 }
@@ -6438,7 +6437,7 @@ impl Node {
         let mut partial_guard = PartialArtifactGuard::preserve_on_error(temp_path.clone());
 
         let frame = skippy_stage_proto::StageArtifactTransferRequest {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: self.endpoint.id().as_bytes().to_vec(),
             topology_id: load.topology_id.clone(),
             run_id: load.run_id.clone(),
@@ -7007,7 +7006,7 @@ impl Node {
         watch_response: crate::proto::node::OwnerControlWatchConfigResponse,
     ) -> crate::proto::node::OwnerControlEnvelope {
         crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(crate::proto::node::OwnerControlResponse {
@@ -7062,7 +7061,7 @@ impl Node {
         self.send_owner_control_envelope(
             send,
             crate::proto::node::OwnerControlEnvelope {
-                gen: NODE_PROTOCOL_GENERATION,
+                r#gen: NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(crate::proto::node::OwnerControlResponse {
@@ -7267,7 +7266,7 @@ impl Node {
                     let _ = self.config_revision_tx.send(revision);
                 }
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -7306,7 +7305,7 @@ impl Node {
             } => {
                 let _ = self.config_revision_tx.send(revision);
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -7327,7 +7326,7 @@ impl Node {
             }
             ApplyResult::ValidationError(error) | ApplyResult::PersistError(error) => {
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -7376,7 +7375,7 @@ impl Node {
         self.send_owner_control_envelope(
             send,
             crate::proto::node::OwnerControlEnvelope {
-                gen: NODE_PROTOCOL_GENERATION,
+                r#gen: NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(crate::proto::node::OwnerControlResponse {
@@ -7751,7 +7750,7 @@ fn stage_control_request_to_proto(
     };
 
     skippy_stage_proto::StageControlRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: requester_id.as_bytes().to_vec(),
         command: Some(command),
     }
@@ -8317,7 +8316,7 @@ fn stage_control_response_to_proto(
     };
 
     skippy_stage_proto::StageControlResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         response: Some(response),
     }
 }
@@ -9070,9 +9069,9 @@ pub use gossip::backfill_legacy_descriptors;
 #[allow(unused_imports)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 #[allow(unused_imports)]
-use heartbeat::{heartbeat_failure_policy_for_peer, HeartbeatFailurePolicy};
+use heartbeat::{HeartbeatFailurePolicy, heartbeat_failure_policy_for_peer};
 pub(crate) use heartbeat::{
-    peer_down_report_disposition, resolve_peer_down, PeerDownReportDisposition,
+    PeerDownReportDisposition, peer_down_report_disposition, resolve_peer_down,
 };
 
 #[cfg(test)]

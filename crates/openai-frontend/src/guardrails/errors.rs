@@ -17,8 +17,7 @@ pub const GUARDRAIL_VALIDATION_FAILED_CODE: &str = "guardrail_validation_failed"
 pub const GUARDRAIL_VALIDATION_FAILED_MESSAGE: &str =
     "model output did not satisfy requested tool/structured contract after retries";
 pub const GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_CODE: &str = "guardrail_unsupported_schema_feature";
-pub const GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_MESSAGE: &str =
-    "guardrails support only json_object or a json_schema subset using type/properties/required/additionalProperties/items in v1";
+pub const GUARDRAIL_UNSUPPORTED_SCHEMA_FEATURE_MESSAGE: &str = "guardrails support only json_object or a json_schema subset using type/properties/required/additionalProperties/items in v1";
 
 pub fn reserved_tool_name_error() -> OpenAiError {
     OpenAiError::invalid_request(GUARDRAIL_RESERVED_TOOL_NAME_MESSAGE)

@@ -1,10 +1,10 @@
 use super::super::{
+    MeshApi, RuntimeControlRequest,
     http::{respond_error, respond_json, respond_runtime_error},
     status::decode_runtime_model_path,
-    MeshApi, RuntimeControlRequest,
 };
 use crate::crypto::{
-    keystore_metadata, load_keystore, load_owner_keypair_from_keychain, OwnerKeychainLoadError,
+    OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
 };
 use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
@@ -851,7 +851,7 @@ async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{is_loopback_control_caller, parse_guardrail_mode, GuardrailMode};
+    use super::{GuardrailMode, is_loopback_control_caller, parse_guardrail_mode};
 
     #[test]
     fn loopback_control_caller_accepts_localhost_only() {

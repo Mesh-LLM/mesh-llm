@@ -206,7 +206,7 @@ fn pi_missing_binary_guidance(model_arg: &str) -> Vec<String> {
 }
 
 fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
-    if let Some(ref mut child) = mesh_child {
+    if let Some(child) = mesh_child {
         eprintln!("🧹 Stopping mesh-llm node we started...");
         let _ = child.kill();
         let _ = child.wait();
@@ -245,7 +245,7 @@ async fn fetch_mesh_models(
         );
     }
 
-    let chosen = if let Some(ref model) = requested_model {
+    let chosen = if let Some(model) = requested_model {
         if !models.iter().any(|name| name == model) {
             anyhow::bail!(
                 "Model '{}' not available. Available: {}",
@@ -725,14 +725,14 @@ async fn fetch_model_context_lengths(
 ) -> std::collections::HashMap<String, Option<u32>> {
     let mut context_map = std::collections::HashMap::new();
 
-    if let Ok(resp) = client.get(management_models_url).send().await {
-        if let Ok(body) = resp.json::<serde_json::Value>().await {
-            for model in body["mesh_models"].as_array().unwrap_or(&vec![]) {
-                let name = model["name"].as_str().map(String::from);
-                let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
-                if let Some(n) = name {
-                    context_map.insert(n, ctx_len);
-                }
+    if let Ok(resp) = client.get(management_models_url).send().await
+        && let Ok(body) = resp.json::<serde_json::Value>().await
+    {
+        for model in body["mesh_models"].as_array().unwrap_or(&vec![]) {
+            let name = model["name"].as_str().map(String::from);
+            let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
+            if let Some(n) = name {
+                context_map.insert(n, ctx_len);
             }
         }
     }
@@ -774,18 +774,18 @@ async fn write_opencode_config_to_path(
 
     // Merge schema if needed (for display in ordered format)
     let mut merged_config = existing_config.clone();
-    if merged_config.get("$schema").is_none() {
-        if let Some(schema) = config_value.get("$schema") {
-            merged_config
-                .as_object_mut()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Expected {} to contain a JSON object",
-                        config_path.display()
-                    )
-                })?
-                .insert("$schema".to_string(), schema.clone());
-        }
+    if merged_config.get("$schema").is_none()
+        && let Some(schema) = config_value.get("$schema")
+    {
+        merged_config
+            .as_object_mut()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Expected {} to contain a JSON object",
+                    config_path.display()
+                )
+            })?
+            .insert("$schema".to_string(), schema.clone());
     }
 
     merge_mesh_provider(&mut merged_config, mesh_provider.clone(), config_path)?;
@@ -841,12 +841,12 @@ pub(crate) fn build_mesh_provider_spec_for_test(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mesh_provider_spec_for_test, build_opencode_launch_spec,
+        OPENCODE_INSTALL_HINT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
         build_opencode_launch_spec_with_limits, build_pi_provider_config,
         build_pi_provider_config_with_limits, cleanup_mesh_child, normalize_opencode_host,
         opencode_missing_binary_guidance, pi_missing_binary_guidance,
         resolve_opencode_config_path_from_home, write_opencode_config_for_test,
-        write_pi_config_for_test, write_pi_config_to_path, OPENCODE_INSTALL_HINT,
+        write_pi_config_for_test, write_pi_config_to_path,
     };
 
     const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";

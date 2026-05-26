@@ -1,8 +1,8 @@
 use crate::chat::ChatCompletionRequest;
 
 pub use mesh_llm_guardrails::{
-    GuardrailRequestContract, MeshGuardrailsOverride, ParallelToolCalls, RawToolChoice,
-    MESH_GUARDRAILS_FIELD,
+    GuardrailRequestContract, MESH_GUARDRAILS_FIELD, MeshGuardrailsOverride, ParallelToolCalls,
+    RawToolChoice,
 };
 
 #[cfg(test)]

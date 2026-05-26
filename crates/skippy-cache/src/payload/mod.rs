@@ -1,6 +1,6 @@
 use std::{borrow::Cow, fmt};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 mod blob_store;
 pub(super) mod bytes;

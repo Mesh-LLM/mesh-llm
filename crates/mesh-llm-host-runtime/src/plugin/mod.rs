@@ -8,7 +8,7 @@ mod transport;
 use crate::runtime_data::{
     PluginDataKey, PluginEndpointKey, RuntimeDataCollector, RuntimeDataSource,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 pub use mesh_llm_plugin::proto;
 use rmcp::model::ServerInfo;
 use rmcp::model::{
@@ -16,33 +16,33 @@ use rmcp::model::{
     ReadResourceRequestParams, ReadResourceResult,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use url::Url;
 
 #[allow(unused_imports)]
 pub use self::config::ExternalPluginSpec;
-#[allow(unused_imports)]
-pub use self::config::{
-    config_path, load_config, resolve_plugins, GpuAssignment, GpuConfig, MeshConfig,
-    ModelConfigEntry, PluginConfigEntry, PluginHostMode, ResolvedPlugins, TelemetryConfig,
-    TelemetryMetricsConfig,
-};
-pub(crate) use self::config::{telemetry_plugin_enabled, validate_config};
 #[allow(unused_imports)]
 pub(crate) use self::config::{
     BoolOrAuto, HardwareConfig, IntegerOrString, ModelConfigDefaults, ModelFitConfig,
     MultimodalConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, SkippyConfig,
     SpeculativeConfig, StringOrStringList, ThroughputConfig,
 };
+#[allow(unused_imports)]
+pub use self::config::{
+    GpuAssignment, GpuConfig, MeshConfig, ModelConfigEntry, PluginConfigEntry, PluginHostMode,
+    ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig, config_path, load_config,
+    resolve_plugins,
+};
+pub(crate) use self::config::{telemetry_plugin_enabled, validate_config};
 use self::runtime::ExternalPlugin;
 pub(crate) use self::support::parse_optional_json;
 use self::support::{format_args_for_log, format_slice_for_log, format_tool_names_for_log};
@@ -50,7 +50,7 @@ use self::support::{format_args_for_log, format_slice_for_log, format_tool_names
 use self::transport::unix_socket_path;
 #[cfg(all(test, windows))]
 use self::transport::windows_pipe_name;
-use self::transport::{connect_side_stream, make_instance_id, LocalStream};
+use self::transport::{LocalStream, connect_side_stream, make_instance_id};
 #[cfg(test)]
 use mesh_llm_plugin::MeshVisibility;
 
@@ -1788,8 +1788,8 @@ mod tests {
     use super::config::{MeshConfig, PluginConfigEntry};
     use super::*;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -1882,9 +1882,11 @@ mod tests {
         assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
         assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.externals[1].args.contains(&"--plugin".to_string()));
-        assert!(resolved.externals[1]
-            .args
-            .contains(&TELEMETRY_PLUGIN_ID.to_string()));
+        assert!(
+            resolved.externals[1]
+                .args
+                .contains(&TELEMETRY_PLUGIN_ID.to_string())
+        );
 
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
@@ -2138,9 +2140,11 @@ mod tests {
         let prefix = format!("p{}-", std::process::id());
         assert!(instance_id.starts_with(&prefix));
         assert_eq!(instance_id.len(), prefix.len() + 8);
-        assert!(instance_id[prefix.len()..]
-            .chars()
-            .all(|ch| ch.is_ascii_hexdigit()));
+        assert!(
+            instance_id[prefix.len()..]
+                .chars()
+                .all(|ch| ch.is_ascii_hexdigit())
+        );
     }
 
     #[cfg(unix)]
@@ -2344,11 +2348,13 @@ mod tests {
         assert!(!health.available);
         assert_eq!(health.state, "unhealthy");
         assert!(health.models.is_empty());
-        assert!(health
-            .detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains("503 Service Unavailable"));
+        assert!(
+            health
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("503 Service Unavailable")
+        );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
 
         handle.await.unwrap();

@@ -1,7 +1,7 @@
-use meshllm_ffi::{create_node, ChatMessageNative, ChatRequestNative, ClientEvent, EventListener};
+use meshllm_ffi::{ChatMessageNative, ChatRequestNative, ClientEvent, EventListener, create_node};
 use std::env;
-use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
+use std::sync::mpsc::{self, Sender};
 use std::time::{Duration, Instant};
 
 struct ChannelListener {

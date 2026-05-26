@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::{request_contract::GuardrailRequestContract, structured::StructuredOutputSpec};
 
@@ -53,10 +53,10 @@ pub fn model_param_size_b(name: &str) -> Option<f32> {
         if unit != b'b' && unit != b'B' {
             continue;
         }
-        if let Some(&after) = bytes.get(end + 1) {
-            if after.is_ascii_digit() {
-                continue;
-            }
+        if let Some(&after) = bytes.get(end + 1)
+            && after.is_ascii_digit()
+        {
+            continue;
         }
 
         let number = std::str::from_utf8(&bytes[i..end])
@@ -140,7 +140,7 @@ pub fn tool_arguments_wire_string(arguments: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
 
     use super::*;
 
