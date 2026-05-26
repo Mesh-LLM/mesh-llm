@@ -72,12 +72,11 @@ async fn wait_for_ready(port: u16, timeout_secs: u64) -> bool {
         if tokio::time::Instant::now() > deadline {
             return false;
         }
-        if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{port}/health")).await {
-            if let Ok(body) = resp.json::<Value>().await {
-                if body["status"] == "ok" {
-                    return true;
-                }
-            }
+        if let Ok(resp) = reqwest::get(format!("http://127.0.0.1:{port}/health")).await
+            && let Ok(body) = resp.json::<Value>().await
+            && body["status"] == "ok"
+        {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }

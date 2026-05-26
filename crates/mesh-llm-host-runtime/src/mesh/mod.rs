@@ -1787,11 +1787,11 @@ impl LocalRequestMetricsSampler {
             .lock()
             .expect("pretty request metrics mutex poisoned");
         guard.prune(now_sec);
-        if let Some((second, count)) = guard.accepted_by_second.back_mut() {
-            if *second == now_sec {
-                *count += 1;
-                return;
-            }
+        if let Some((second, count)) = guard.accepted_by_second.back_mut()
+            && *second == now_sec
+        {
+            *count += 1;
+            return;
         }
         guard.accepted_by_second.push_back((now_sec, 1));
     }
@@ -2102,14 +2102,13 @@ impl StageTopologyState {
         if !runtime_status.bind_addr.is_empty() && !runtime_status.bind_addr.ends_with(":0") {
             let topology_key =
                 stage_topology_key(&runtime_status.topology_id, &runtime_status.run_id);
-            if let Some(topology) = self.topologies.get_mut(&topology_key) {
-                if let Some(stage) = topology
+            if let Some(topology) = self.topologies.get_mut(&topology_key)
+                && let Some(stage) = topology
                     .stages
                     .iter_mut()
                     .find(|stage| stage.stage_id == runtime_status.stage_id)
-                {
-                    stage.endpoint.bind_addr = runtime_status.bind_addr.clone();
-                }
+            {
+                stage.endpoint.bind_addr = runtime_status.bind_addr.clone();
             }
         }
         self.statuses.insert(
@@ -3362,10 +3361,10 @@ impl Node {
     pub fn invite_token(&self) -> String {
         let mut addr = self.endpoint_addr_for_advertisement();
         // Inject STUN-discovered public address if relay STUN didn't provide one.
-        if let Some(pub_addr) = self.public_addr {
-            if !endpoint_addr_has_public_ipv4(&addr) {
-                addr.addrs.insert(TransportAddr::Ip(pub_addr));
-            }
+        if let Some(pub_addr) = self.public_addr
+            && !endpoint_addr_has_public_ipv4(&addr)
+        {
+            addr.addrs.insert(TransportAddr::Ip(pub_addr));
         }
         addr = filter_endpoint_addr_for_bind_ip(addr, self.quic_bind.ip);
         let json = serde_json::to_vec(&addr).expect("serializable");
@@ -3718,21 +3717,20 @@ impl Node {
         detail_json: String,
     ) {
         let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager {
-            if let Err(err) = plugin_manager
+        if let Some(plugin_manager) = plugin_manager
+            && let Err(err) = plugin_manager
                 .broadcast_mesh_event(
                     self.build_mesh_event(kind, peer.map(peer_info_to_mesh_peer), detail_json)
                         .await,
                 )
                 .await
-            {
-                tracing::debug!(
-                    "Failed to deliver plugin mesh event {:?} for {}: {err}",
-                    kind,
-                    peer.map(|p| p.id.fmt_short().to_string())
-                        .unwrap_or_else(|| self.endpoint.id().fmt_short().to_string())
-                );
-            }
+        {
+            tracing::debug!(
+                "Failed to deliver plugin mesh event {:?} for {}: {err}",
+                kind,
+                peer.map(|p| p.id.fmt_short().to_string())
+                    .unwrap_or_else(|| self.endpoint.id().fmt_short().to_string())
+            );
         }
     }
 
@@ -4045,18 +4043,17 @@ impl Node {
         noun: &str,
     ) -> bool {
         let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager {
-            if !plugin_manager
+        if let Some(plugin_manager) = plugin_manager
+            && !plugin_manager
                 .plugin_declares_mesh_channel(plugin_id, channel)
                 .await
-            {
-                tracing::debug!(
-                    plugin = %plugin_id,
-                    channel = %channel,
-                    "Dropping outbound {noun} for undeclared mesh channel"
-                );
-                return false;
-            }
+        {
+            tracing::debug!(
+                plugin = %plugin_id,
+                channel = %channel,
+                "Dropping outbound {noun} for undeclared mesh channel"
+            );
+            return false;
         }
         true
     }
@@ -5988,11 +5985,10 @@ impl Node {
                     {
                         if let Ok(path) =
                             crate::models::resolve_model_spec(std::path::Path::new(candidate)).await
+                            && path.exists()
                         {
-                            if path.exists() {
-                                load.model_path = Some(path.to_string_lossy().to_string());
-                                break;
-                            }
+                            load.model_path = Some(path.to_string_lossy().to_string());
+                            break;
                         }
                     }
                 }

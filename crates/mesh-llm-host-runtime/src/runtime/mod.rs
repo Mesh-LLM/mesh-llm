@@ -413,10 +413,10 @@ impl RuntimeDashboardSnapshotProvider {
     async fn inventory_snapshot(&self) -> crate::models::LocalModelInventorySnapshot {
         {
             let cache = self.inventory_snapshot_cache.lock().await;
-            if let Some(captured_at) = cache.captured_at {
-                if captured_at.elapsed() < self.inventory_snapshot_ttl {
-                    return cache.snapshot.clone();
-                }
+            if let Some(captured_at) = cache.captured_at
+                && captured_at.elapsed() < self.inventory_snapshot_ttl
+            {
+                return cache.snapshot.clone();
             }
         }
 
@@ -2945,10 +2945,10 @@ async fn maybe_discover_join_candidates(
         return Ok(());
     }
 
-    if let Some(name) = cli.discover.as_ref().filter(|name| !name.is_empty()) {
-        if cli.mesh_name.is_none() {
-            cli.mesh_name = Some(name.clone());
-        }
+    if let Some(name) = cli.discover.as_ref().filter(|name| !name.is_empty())
+        && cli.mesh_name.is_none()
+    {
+        cli.mesh_name = Some(name.clone());
     }
 
     let my_vram_gb = mesh::detect_vram_bytes_capped(cli.max_vram) as f64 / 1e9;
@@ -3504,10 +3504,10 @@ fn build_startup_model_specs(
                 flash_attention: FlashAttentionType::Auto,
             });
         }
-        if let Some(mmproj) = &cli.mmproj {
-            if let Some(primary) = specs.first_mut() {
-                primary.mmproj_ref = Some(mmproj.clone());
-            }
+        if let Some(mmproj) = &cli.mmproj
+            && let Some(primary) = specs.first_mut()
+        {
+            primary.mmproj_ref = Some(mmproj.clone());
         }
         return Ok(specs);
     }
@@ -3877,16 +3877,14 @@ fn startup_launch_plan(
         port: api_port,
         pid: None,
     }];
-    if !headless {
-        if let Some(console_port) = console_port {
-            webserver_rows.push(DashboardEndpointRow {
-                label: "Console".to_string(),
-                status: RuntimeStatus::NotReady,
-                url: format!("http://localhost:{console_port}"),
-                port: console_port,
-                pid: None,
-            });
-        }
+    if !headless && let Some(console_port) = console_port {
+        webserver_rows.push(DashboardEndpointRow {
+            label: "Console".to_string(),
+            status: RuntimeStatus::NotReady,
+            url: format!("http://localhost:{console_port}"),
+            port: console_port,
+            pid: None,
+        });
     }
     sort_dashboard_endpoint_rows(&mut webserver_rows);
 
@@ -3927,10 +3925,8 @@ fn serve_path_builtin_endpoint_ready_events(
 ) -> Vec<OutputEvent> {
     let mut events = vec![OutputEvent::ApiReady { url: api_url }];
 
-    if !headless {
-        if let Some(console_url) = console_url {
-            events.push(OutputEvent::WebserverReady { url: console_url });
-        }
+    if !headless && let Some(console_url) = console_url {
+        events.push(OutputEvent::WebserverReady { url: console_url });
     }
 
     events
@@ -4609,10 +4605,10 @@ async fn handle_auto_decision(
                 // Clients skip health probe — joining itself is the test.
                 // Queue all candidates so we can fall back if the top one is unreachable.
                 let (_, mesh) = &candidates[0];
-                if cli.mesh_name.is_none() {
-                    if let Some(ref name) = mesh.listing.name {
-                        cli.mesh_name = Some(name.clone());
-                    }
+                if cli.mesh_name.is_none()
+                    && let Some(ref name) = mesh.listing.name
+                {
+                    cli.mesh_name = Some(name.clone());
                 }
                 let _ = emit_event(OutputEvent::DiscoveryJoined {
                     mesh: mesh
@@ -5512,10 +5508,10 @@ fn update_cli_with_successful_run_auto_join(
     cli.join.clear();
     if let Some((token, mesh_name)) = successful_join {
         cli.join.push(token);
-        if cli.mesh_name.is_none() {
-            if let Some(name) = mesh_name {
-                cli.mesh_name = Some(name);
-            }
+        if cli.mesh_name.is_none()
+            && let Some(name) = mesh_name
+        {
+            cli.mesh_name = Some(name);
         }
     }
 }
@@ -8242,10 +8238,10 @@ fn update_pi_models_json(model_id: &str, port: u16) {
     if let Some(parent) = models_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_string_pretty(&root) {
-        if let Err(e) = std::fs::write(&models_path, json) {
-            tracing::warn!("Failed to update {}: {e}", models_path.display());
-        }
+    if let Ok(json) = serde_json::to_string_pretty(&root)
+        && let Err(e) = std::fs::write(&models_path, json)
+    {
+        tracing::warn!("Failed to update {}: {e}", models_path.display());
     }
 }
 

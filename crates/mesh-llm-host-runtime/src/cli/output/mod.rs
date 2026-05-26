@@ -873,10 +873,10 @@ impl OutputEvent {
                 if let Some(capacity_gb) = capacity_gb {
                     line.push_str(&format!(" ({capacity_gb:.1}GB capacity)"));
                 }
-                if let Some(models_on_disk) = models_on_disk {
-                    if !models_on_disk.is_empty() {
-                        line.push_str(&format!(" models={}", models_on_disk.join(", ")));
-                    }
+                if let Some(models_on_disk) = models_on_disk
+                    && !models_on_disk.is_empty()
+                {
+                    line.push_str(&format!(" models={}", models_on_disk.join(", ")));
                 }
                 line
             }
@@ -2138,29 +2138,29 @@ impl DashboardState {
         let llama_component =
             self.startup_component_for_truthful_status(TruthfulStartupStatusKey::LlamaServer);
 
-        if let Some(webserver) = &mut self.webserver {
-            if let Some(key) = Self::truthful_startup_key_for_endpoint(&webserver.label) {
-                webserver.status = Self::truthful_runtime_status_for_component(
-                    match key {
-                        TruthfulStartupStatusKey::Console => &console_component,
-                        TruthfulStartupStatusKey::Api => &api_component,
-                        TruthfulStartupStatusKey::LlamaServer => &llama_component,
-                    },
-                    &webserver.status,
-                );
-            }
+        if let Some(webserver) = &mut self.webserver
+            && let Some(key) = Self::truthful_startup_key_for_endpoint(&webserver.label)
+        {
+            webserver.status = Self::truthful_runtime_status_for_component(
+                match key {
+                    TruthfulStartupStatusKey::Console => &console_component,
+                    TruthfulStartupStatusKey::Api => &api_component,
+                    TruthfulStartupStatusKey::LlamaServer => &llama_component,
+                },
+                &webserver.status,
+            );
         }
-        if let Some(api) = &mut self.api {
-            if let Some(key) = Self::truthful_startup_key_for_endpoint(&api.label) {
-                api.status = Self::truthful_runtime_status_for_component(
-                    match key {
-                        TruthfulStartupStatusKey::Console => &console_component,
-                        TruthfulStartupStatusKey::Api => &api_component,
-                        TruthfulStartupStatusKey::LlamaServer => &llama_component,
-                    },
-                    &api.status,
-                );
-            }
+        if let Some(api) = &mut self.api
+            && let Some(key) = Self::truthful_startup_key_for_endpoint(&api.label)
+        {
+            api.status = Self::truthful_runtime_status_for_component(
+                match key {
+                    TruthfulStartupStatusKey::Console => &console_component,
+                    TruthfulStartupStatusKey::Api => &api_component,
+                    TruthfulStartupStatusKey::LlamaServer => &llama_component,
+                },
+                &api.status,
+            );
         }
         let ready_llama_process_rows = self.ready_llama_process_rows.clone();
         for row in &mut self.llama_process_rows {
@@ -2464,13 +2464,13 @@ impl DashboardState {
             return None;
         }
 
-        if let Some(progress) = self.model_progress.as_ref() {
-            if let Some(ratio) = model_download_progress_ratio(progress) {
-                return Some(LoadingProgressState {
-                    ratio,
-                    detail: loading_progress_detail(model_progress_detail(progress), ratio, None),
-                });
-            }
+        if let Some(progress) = self.model_progress.as_ref()
+            && let Some(ratio) = model_download_progress_ratio(progress)
+        {
+            return Some(LoadingProgressState {
+                ratio,
+                detail: loading_progress_detail(model_progress_detail(progress), ratio, None),
+            });
         }
 
         if let Some(progress) = self.startup_progress.as_ref() {
@@ -8555,19 +8555,16 @@ impl OutputManager {
                                     } else if matches!(mode, LogFormat::Pretty)
                                         && worker_prompt_active.load(Ordering::Acquire)
                                         && formatter.writes_ready_prompt()
-                                    {
-                                        if let Err(err) = write_prompt() {
+                                        && let Err(err) = write_prompt() {
                                             tracing::warn!("interactive prompt write failed: {err}");
                                         }
-                                    }
                                 }
                                 OutputCommand::ActivateReadyPrompt => {
                                     worker_prompt_active.store(true, Ordering::Release);
-                                    if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt() {
-                                        if let Err(err) = write_prompt() {
+                                    if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt()
+                                        && let Err(err) = write_prompt() {
                                             tracing::warn!("interactive prompt write failed: {err}");
                                         }
-                                    }
                                 }
                                 OutputCommand::Flush(response) => {
                                     let flush_result = if formatter.is_interactive_dashboard() {

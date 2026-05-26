@@ -319,28 +319,28 @@ async fn message(
                 &prefill.token_ids,
             )
             .await;
-            if let Some(runtime) = state.runtime.as_ref() {
-                if restored_tokens < prefill.token_ids.len() {
-                    let records = {
-                        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                        runtime.prefill(
-                            &prefill.base.session_id,
-                            &prefill.token_ids[restored_tokens..],
-                        )?;
-                        let records = maybe_plan_record_prefill(
-                            &state,
-                            &prefill.base,
-                            prefill.prompt_token_start,
-                            &prefill.token_ids,
-                            restored_tokens as u64,
-                        );
-                        state
-                            .telemetry
-                            .emit("stage.llama_decode", lifecycle_attrs(&state.config));
-                        records
-                    };
-                    spawn_record_prefill(state.clone(), records);
-                }
+            if let Some(runtime) = state.runtime.as_ref()
+                && restored_tokens < prefill.token_ids.len()
+            {
+                let records = {
+                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                    runtime.prefill(
+                        &prefill.base.session_id,
+                        &prefill.token_ids[restored_tokens..],
+                    )?;
+                    let records = maybe_plan_record_prefill(
+                        &state,
+                        &prefill.base,
+                        prefill.prompt_token_start,
+                        &prefill.token_ids,
+                        restored_tokens as u64,
+                    );
+                    state
+                        .telemetry
+                        .emit("stage.llama_decode", lifecycle_attrs(&state.config));
+                    records
+                };
+                spawn_record_prefill(state.clone(), records);
             }
             StageMessage::PrefillChunk(prefill).ack_for(&state.config)
         }
@@ -353,28 +353,28 @@ async fn message(
                 &prefill.token_ids,
             )
             .await;
-            if let Some(runtime) = state.runtime.as_ref() {
-                if restored_tokens < prefill.token_ids.len() {
-                    let records = {
-                        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                        runtime.prefill(
-                            &prefill.base.session_id,
-                            &prefill.token_ids[restored_tokens..],
-                        )?;
-                        let records = maybe_plan_record_prefill(
-                            &state,
-                            &prefill.base,
-                            prefill.prompt_token_start,
-                            &prefill.token_ids,
-                            restored_tokens as u64,
-                        );
-                        state
-                            .telemetry
-                            .emit("stage.llama_decode", lifecycle_attrs(&state.config));
-                        records
-                    };
-                    spawn_record_prefill(state.clone(), records);
-                }
+            if let Some(runtime) = state.runtime.as_ref()
+                && restored_tokens < prefill.token_ids.len()
+            {
+                let records = {
+                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                    runtime.prefill(
+                        &prefill.base.session_id,
+                        &prefill.token_ids[restored_tokens..],
+                    )?;
+                    let records = maybe_plan_record_prefill(
+                        &state,
+                        &prefill.base,
+                        prefill.prompt_token_start,
+                        &prefill.token_ids,
+                        restored_tokens as u64,
+                    );
+                    state
+                        .telemetry
+                        .emit("stage.llama_decode", lifecycle_attrs(&state.config));
+                    records
+                };
+                spawn_record_prefill(state.clone(), records);
             }
             StageMessage::FinalPrefillChunk(prefill).ack_for(&state.config)
         }

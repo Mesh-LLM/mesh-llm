@@ -2513,11 +2513,11 @@ fn emit_report<T: Serialize>(report: &T, report_out: Option<&Path>) -> Result<()
     let json = serde_json::to_string_pretty(report)?;
     println!("{json}");
     if let Some(path) = report_out {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("create report directory {}", parent.display()))?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create report directory {}", parent.display()))?;
         }
         fs::write(path, format!("{json}\n"))
             .with_context(|| format!("write correctness report {}", path.display()))?;

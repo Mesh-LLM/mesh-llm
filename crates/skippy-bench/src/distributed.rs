@@ -1270,13 +1270,13 @@ fn prepare_local_stage(args: &RunArgs, stage: &StageAssignment) -> Result<()> {
             stage.remote_config_path
         )
     })?;
-    if args.rsync_model_artifacts {
-        if let (Some(stage_model), Some(local_model)) = (
+    if args.rsync_model_artifacts
+        && let (Some(stage_model), Some(local_model)) = (
             args.stage_model.as_ref(),
             stage.local_materialized_model_path.as_ref(),
-        ) {
-            materialize_stage_model_on_coordinator(stage_model, stage, local_model)?;
-        }
+        )
+    {
+        materialize_stage_model_on_coordinator(stage_model, stage, local_model)?;
     }
     Ok(())
 }

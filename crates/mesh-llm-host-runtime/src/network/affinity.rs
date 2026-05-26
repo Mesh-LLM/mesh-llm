@@ -530,11 +530,9 @@ fn scaffold_prefix_hash_from_body(body: &Value) -> Option<u64> {
     // prompt and no tools — plenty of real chats look like this, and without
     // a fallback the prefix cache is never populated, so turn-2+ has no way
     // to stick to the same peer and reuse its serving-runtime KV cache.
-    if !found {
-        if let Some(user_hash) = first_user_hash_from_body(body) {
-            hash = hash_combine(hash, user_hash);
-            found = true;
-        }
+    if !found && let Some(user_hash) = first_user_hash_from_body(body) {
+        hash = hash_combine(hash, user_hash);
+        found = true;
     }
 
     found.then_some(hash)
@@ -710,11 +708,11 @@ pub fn prepare_remote_targets_for_request(
 
     let eligible = affinity.route_eligible_candidates(model, &ordered);
     if eligible.len() != ordered.len() {
-        if let (Some(prefix_hash), Some(target)) = (learn_prefix_hash, cached_target.as_ref()) {
-            if !eligible.contains(target) {
-                affinity.forget_target(model, prefix_hash, target);
-                cached_target = None;
-            }
+        if let (Some(prefix_hash), Some(target)) = (learn_prefix_hash, cached_target.as_ref())
+            && !eligible.contains(target)
+        {
+            affinity.forget_target(model, prefix_hash, target);
+            cached_target = None;
         }
         ordered = eligible;
     }

@@ -324,31 +324,30 @@ pub fn huggingface_identity_for_path(path: &Path) -> Option<HuggingFaceModelIden
     let resolved_cache_root = cache_root
         .canonicalize()
         .unwrap_or_else(|_| cache_root.clone());
-    if resolved_cache_root != *cache_root {
-        if let Some(identity) = identity_from_cache_snapshot_path(path, &resolved_cache_root) {
-            return Some(identity);
-        }
+    if resolved_cache_root != *cache_root
+        && let Some(identity) = identity_from_cache_snapshot_path(path, &resolved_cache_root)
+    {
+        return Some(identity);
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if resolved != path {
         if let Some(identity) = identity_from_cache_snapshot_path(&resolved, &cache_root) {
             return Some(identity);
         }
-        if resolved_cache_root != *cache_root {
-            if let Some(identity) =
+        if resolved_cache_root != *cache_root
+            && let Some(identity) =
                 identity_from_cache_snapshot_path(&resolved, &resolved_cache_root)
-            {
-                return Some(identity);
-            }
+        {
+            return Some(identity);
         }
     }
     if let Some(identity) = identity_from_snapshot_layout_ancestors(path) {
         return Some(identity);
     }
-    if resolved != path {
-        if let Some(identity) = identity_from_snapshot_layout_ancestors(&resolved) {
-            return Some(identity);
-        }
+    if resolved != path
+        && let Some(identity) = identity_from_snapshot_layout_ancestors(&resolved)
+    {
+        return Some(identity);
     }
     scan_hf_cache_identity_for_path(path, &cache_root)
 }
@@ -718,10 +717,10 @@ fn find_hf_cache_model_ref_path(root: &Path, model: &model_ref::ModelRef) -> Opt
             continue;
         }
         for revision in &repo.revisions {
-            if let Some(wanted_revision) = model.revision.as_deref() {
-                if revision.commit_hash != wanted_revision {
-                    continue;
-                }
+            if let Some(wanted_revision) = model.revision.as_deref()
+                && revision.commit_hash != wanted_revision
+            {
+                continue;
             }
             for file in &revision.files {
                 if !file.file_name.ends_with(".gguf") {
@@ -825,10 +824,10 @@ pub fn find_model_path(model_ref: &str) -> PathBuf {
         return path;
     }
     let canonical_dir = huggingface_hub_cache_dir();
-    if let Ok(parsed) = model_ref::ModelRef::parse(model_ref) {
-        if let Some(found) = find_hf_cache_model_ref_path(&canonical_dir, &parsed) {
-            return found;
-        }
+    if let Ok(parsed) = model_ref::ModelRef::parse(model_ref)
+        && let Some(found) = find_hf_cache_model_ref_path(&canonical_dir, &parsed)
+    {
+        return found;
     }
 
     if let Some(found) = find_hf_cache_model_path(&canonical_dir, model_ref) {
@@ -896,10 +895,9 @@ fn is_named_mmproj_match(lower: &str, model_base: &str, model_stem: &str) -> boo
     if let Some((prefix, _)) = lower
         .split_once("-mmproj")
         .or_else(|| lower.split_once("_mmproj"))
+        && (model_base.starts_with(prefix) || model_stem.starts_with(prefix))
     {
-        if model_base.starts_with(prefix) || model_stem.starts_with(prefix) {
-            return true;
-        }
+        return true;
     }
     // Try pattern: mmproj-<model>... (model name after mmproj)
     if let Some(after) = lower
@@ -1015,24 +1013,22 @@ pub fn find_mmproj_path(model_name: &str, model_path: &Path) -> Option<PathBuf> 
 
     if !named_matches.is_empty() {
         // Multiple named matches: try quant-aware selection before precision fallback
-        if named_matches.len() > 1 {
-            if let Some(ref quant) = model_quant {
-                if let Some(candidate) = pick_quant_match(&named_matches, quant) {
-                    return Some(candidate);
-                }
-            }
+        if named_matches.len() > 1
+            && let Some(ref quant) = model_quant
+            && let Some(candidate) = pick_quant_match(&named_matches, quant)
+        {
+            return Some(candidate);
         }
         // Single named match, or quant-match failed: precision-variant pick or None
         return choose_mmproj_candidate(&named_matches);
     }
 
     // No named matches: try quant-aware selection among all siblings, then precision fallback
-    if mmproj_siblings.len() > 1 {
-        if let Some(ref quant) = model_quant {
-            if let Some(candidate) = pick_quant_match(&mmproj_siblings, quant) {
-                return Some(candidate);
-            }
-        }
+    if mmproj_siblings.len() > 1
+        && let Some(ref quant) = model_quant
+        && let Some(candidate) = pick_quant_match(&mmproj_siblings, quant)
+    {
+        return Some(candidate);
     }
     choose_mmproj_candidate(&mmproj_siblings)
 }

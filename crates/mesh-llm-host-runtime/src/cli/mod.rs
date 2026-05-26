@@ -483,10 +483,10 @@ pub(crate) fn validate_discovery_mode_args(cli: &Cli) -> anyhow::Result<()> {
     if !cli.nostr_relay.is_empty() {
         anyhow::bail!("--nostr-relay is only valid with --mesh-discovery-mode nostr");
     }
-    if let Some(Command::Discover { relay, .. }) = cli.command.as_ref() {
-        if !relay.is_empty() {
-            anyhow::bail!("discover --relay is only valid with --mesh-discovery-mode nostr");
-        }
+    if let Some(Command::Discover { relay, .. }) = cli.command.as_ref()
+        && !relay.is_empty()
+    {
+        anyhow::bail!("discover --relay is only valid with --mesh-discovery-mode nostr");
     }
 
     Ok(())
@@ -848,11 +848,11 @@ where
         // Check for --flag value form
         if value_taking_flags.contains(&arg_str) {
             // Advance by 2 if next token exists and doesn't start with '-'
-            if let Some(next) = original.get(pos + 1).and_then(|arg| arg.to_str()) {
-                if !next.starts_with('-') {
-                    pos += 2;
-                    continue;
-                }
+            if let Some(next) = original.get(pos + 1).and_then(|arg| arg.to_str())
+                && !next.starts_with('-')
+            {
+                pos += 2;
+                continue;
             }
             // If next doesn't exist or starts with '-', advance by 1 (let Clap handle the error)
             pos += 1;
