@@ -97,7 +97,7 @@ just release-build-cuda-windows
 just release-bundle-cuda-windows v0.X.0
 ```
 
-GitHub Actions uses hosted `windows-2022` runners for compile-only Windows CI. The release workflow keeps the Windows release build/publish block commented out for now, so Windows release packaging is currently local-only via the `*-windows` `just` recipes above.
+GitHub Actions uses Blacksmith Windows 2025 runners for compile-only Windows CI and release bundle validation.
 
 Create a portable bundle:
 

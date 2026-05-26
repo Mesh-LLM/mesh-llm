@@ -161,10 +161,10 @@ Use these checks when reviewing PR CI wall-clock regressions:
 - **Prewarmed ABI cache hit ratio**: Windows ABI cache keys in PR Builds must
   match the trusted `windows-warm-caches.yml` keys. Check
   `gh cache list --branch main --limit 100` for
-  `mesh-llm-windows-2022-skippy-abi-*` entries before
+  `mesh-llm-windows-2025-skippy-abi-*` entries before
   treating a slow Windows miss as expected.
 - **Runner routing**: platform-specific work should run on its native runner
-  class (`windows-2022` for Windows ABI products, macOS for Swift/Metal, Linux
+  class (Blacksmith Windows 2025 for Windows ABI products, Blacksmith macOS for Swift/Metal, Linux
   for Linux backends) and skip unsupported combinations explicitly.
 
 For agent-facing workflow editing rules, see `.github/AGENTS.md`.

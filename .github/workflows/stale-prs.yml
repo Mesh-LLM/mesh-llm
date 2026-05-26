@@ -20,7 +20,7 @@ env:
 
 jobs:
   close_stale_prs:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Calculate stale warning window
         id: stale_window

@@ -22,7 +22,7 @@ concurrency:
 jobs:
   plan_cache_cleanup:
     name: Plan PR cache cleanup shards
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       actions: read
     outputs:
@@ -179,7 +179,7 @@ jobs:
   delete_pr_caches:
     name: Delete PR caches (${{ matrix.shard.number }}/${{ matrix.shard.count }})
     needs: plan_cache_cleanup
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 240
     permissions:
       actions: write
@@ -457,7 +457,7 @@ jobs:
     name: Delete PR artifacts
     needs: delete_pr_caches
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       actions: write
     outputs:
@@ -603,7 +603,7 @@ jobs:
       - delete_pr_caches
       - delete_pr_artifacts
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       actions: read
     steps:
