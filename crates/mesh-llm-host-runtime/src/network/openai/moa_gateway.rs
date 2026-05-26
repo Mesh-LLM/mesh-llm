@@ -137,6 +137,12 @@ fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
     result
 }
 
+/// Time between progress events while MoA's arbiter is still waiting.
+/// One second feels alive without flooding the wire; the typical MoA
+/// turn finishes in ~3s, so we emit two or three lines before the
+/// real answer starts streaming.
+const MOA_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
+
 /// Run a turn through the gateway and write the response with x-moa-* headers.
 /// Caller has already validated the request and built the config.
 async fn run_moa_turn(
@@ -152,6 +158,24 @@ async fn run_moa_turn(
     let mut moa_body = body_json;
     moa_body.as_object_mut().map(|o| o.remove("stream"));
 
+    // Streaming MoA: the arbiter takes ~3s before any content can be
+    // emitted. Send response headers immediately and drip progress
+    // text into `reasoning_content` so the chat UI's "thinking" pane
+    // shows live activity instead of a stalled spinner.
+    //
+    // Trade-off: HTTP headers must precede the body, so this path
+    // loses the post-hoc `x-moa-*` observability headers (the
+    // result-derived ones). Worth it for the live feel.
+    if was_streaming && matches!(
+        response_adapter,
+        proxy::ResponseAdapter::None
+            | proxy::ResponseAdapter::OpenAiChatCompletionsStream
+            | proxy::ResponseAdapter::OpenAiResponsesStream
+    ) {
+        run_moa_turn_with_progress(tcp_stream, moa_body, config, response_adapter).await;
+        return;
+    }
+
     let moa_result = moa::handle_turn(config, &moa_body).await;
     let extra_headers = build_moa_headers(&moa_result);
     write_moa_response(
@@ -162,6 +186,197 @@ async fn run_moa_turn(
         response_adapter,
     )
     .await;
+}
+
+/// Streaming MoA turn with `reasoning_content` progress drip.
+///
+/// 1. Send HTTP response headers immediately (no x-moa-* — those
+///    require the result, which we don't have yet).
+/// 2. Race `moa::handle_turn` against a periodic ticker. On each
+///    tick, emit one progress line via `delta.reasoning_content`.
+///    Goose and other OpenAI-shape clients route this to the
+///    "thinking" pane; clients that ignore the field simply skip it
+///    and see only the final answer.
+/// 3. Once MoA returns, hand to the existing SSE body writers with
+///    `header_already_sent = true`.
+async fn run_moa_turn_with_progress(
+    mut tcp_stream: TcpStream,
+    moa_body: serde_json::Value,
+    config: &moa::GatewayConfig,
+    response_adapter: proxy::ResponseAdapter,
+) {
+    let header = "HTTP/1.1 200 OK\r\n\
+                  Content-Type: text/event-stream\r\n\
+                  Transfer-Encoding: chunked\r\n\
+                  Cache-Control: no-cache\r\n\
+                  Connection: close\r\n\r\n";
+    if let Err(e) = tcp_stream.write_all(header.as_bytes()).await {
+        tracing::warn!("MoA progress: header write failed: {e}");
+        return;
+    }
+    if let Err(e) = tcp_stream.flush().await {
+        tracing::warn!("MoA progress: header flush failed: {e}");
+        return;
+    }
+
+    let moa_fut = moa::handle_turn(config, &moa_body);
+    tokio::pin!(moa_fut);
+    let mut ticker = tokio::time::interval(MOA_PROGRESS_INTERVAL);
+    // Skip the immediate first tick; we want the first line after one
+    // interval, not at t=0 (would race the header write visually).
+    ticker.tick().await;
+    let mut step = 0usize;
+
+    // tokio::select! cancellation safety: TCP writes are NOT
+    // cancel-safe — a partial write cancelled by the other branch
+    // leaves the socket in an inconsistent state. So we only race
+    // the (cancel-safe) ticker against MoA, and perform the write
+    // outside the select. Worst case: the body write is delayed by
+    // up to one interval after MoA finishes.
+    let moa_result = loop {
+        tokio::select! {
+            biased;
+            r = &mut moa_fut => break r,
+            _ = ticker.tick() => {}
+        }
+        let text = progress_line(step, response_adapter);
+        step += 1;
+        if let Err(e) = write_progress_event(&mut tcp_stream, &text, response_adapter).await {
+            tracing::warn!("MoA progress: tick write failed: {e}; falling back");
+            break (&mut moa_fut).await;
+        }
+    };
+
+    let body = &moa_result.response_body;
+    let is_failure = is_moa_failure_body(body);
+    let result = if is_failure {
+        write_failure_as_sse_tail(&mut tcp_stream, body, response_adapter).await
+    } else {
+        match response_adapter {
+            proxy::ResponseAdapter::OpenAiResponsesStream => {
+                send_moa_as_responses_sse_inner(tcp_stream, body, &[], true).await
+            }
+            _ => send_moa_as_sse_inner(tcp_stream, body, &[], true).await,
+        }
+    };
+    if let Err(e) = result {
+        tracing::warn!("MoA progress: body write failed: {e}");
+    }
+}
+
+/// The lines we drip into the thinking pane while MoA arbitrates.
+/// Short, factual, and grounded in what mesh-llm is actually doing —
+/// not invented model "thoughts". We cycle through the list if MoA
+/// takes longer than expected.
+fn progress_line(step: usize, adapter: proxy::ResponseAdapter) -> String {
+    const LINES: &[&str] = &[
+        "Routing through mesh…",
+        "Querying peer models…",
+        "Comparing responses…",
+        "Still working…",
+    ];
+    let line = LINES[step.min(LINES.len() - 1)];
+    // Responses-API adapter wants stand-alone strings (we'll wrap
+    // them as `response.output_text.delta` events); chat-completion
+    // adapter wants strings that read continuously when concatenated
+    // (clients append into the thinking pane character-by-character).
+    // The simplest shape for both: each line is a complete thought
+    // followed by a newline so consecutive lines render on separate
+    // visual rows.
+    let _ = adapter;
+    format!("{line}\n")
+}
+
+async fn write_progress_event(
+    stream: &mut TcpStream,
+    text: &str,
+    adapter: proxy::ResponseAdapter,
+) -> std::io::Result<()> {
+    let data = match adapter {
+        proxy::ResponseAdapter::OpenAiResponsesStream => {
+            // The Responses-API stream has no first-class "thinking"
+            // event today. Emit as `response.output_text.delta` so
+            // the UI shows progress text inline; the final answer
+            // overwrites/extends it. Same field used for the real
+            // content, so clients always know what to do.
+            let ev = serde_json::json!({
+                "type": "response.output_text.delta",
+                "item_id": "msg_moa_progress",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": text,
+            });
+            format!("data: {ev}\n\n")
+        }
+        _ => {
+            // Chat-completions stream: drip into `reasoning_content`
+            // so goose/openai-sdk-aware clients route this to their
+            // "thinking" pane and don't mix it with the final answer.
+            // Clients that don't know the field ignore it.
+            let chunk = serde_json::json!({
+                "id": "chatcmpl-mesh",
+                "object": "chat.completion.chunk",
+                "model": moa::VIRTUAL_MODEL_NAME,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "reasoning_content": text },
+                    "finish_reason": null,
+                }],
+            });
+            format!("data: {chunk}\n\n")
+        }
+    };
+    let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+    stream.write_all(framed.as_bytes()).await?;
+    stream.flush().await
+}
+
+/// Progress-path failure tail: we've already sent 200 OK, so emit
+/// the error as a final SSE event followed by [DONE]. The HTTP
+/// status can't be changed at this point — best we can do is make
+/// sure the stream doesn't silently truncate.
+async fn write_failure_as_sse_tail(
+    stream: &mut TcpStream,
+    body: &serde_json::Value,
+    adapter: proxy::ResponseAdapter,
+) -> std::io::Result<()> {
+    let err_msg = body
+        .pointer("/error/message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("MoA failed after streaming headers were sent");
+
+    let data = match adapter {
+        proxy::ResponseAdapter::OpenAiResponsesStream => {
+            let ev = serde_json::json!({
+                "type": "response.failed",
+                "response": {
+                    "error": { "message": err_msg },
+                },
+            });
+            format!("data: {ev}\n\n")
+        }
+        _ => {
+            let chunk = serde_json::json!({
+                "id": "chatcmpl-mesh",
+                "object": "chat.completion.chunk",
+                "model": moa::VIRTUAL_MODEL_NAME,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": format!("[error: {err_msg}]") },
+                    "finish_reason": "error",
+                }],
+            });
+            format!("data: {chunk}\n\n")
+        }
+    };
+    let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+    stream.write_all(framed.as_bytes()).await?;
+
+    let done = "data: [DONE]\n\n";
+    let framed = format!("{:x}\r\n{}\r\n", done.len(), done);
+    stream.write_all(framed.as_bytes()).await?;
+    stream.write_all(b"0\r\n\r\n").await?;
+    stream.shutdown().await
 }
 
 /// Write the MoA response on the chosen transport (JSON or SSE), logging
@@ -719,18 +934,29 @@ fn parse_quic_http_response(response: &[u8]) -> Result<serde_json::Value, String
 /// `extra_headers` are emitted alongside the standard SSE response headers
 /// (used to attach `x-moa-*` observability headers).
 async fn send_moa_as_sse(
-    mut stream: TcpStream,
+    stream: TcpStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
-    let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
-    );
-    for (name, value) in extra_headers {
-        crate::network::openai::transport::append_safe_header(&mut header, name, value);
+    send_moa_as_sse_inner(stream, response, extra_headers, false).await
+}
+
+async fn send_moa_as_sse_inner(
+    mut stream: TcpStream,
+    response: &serde_json::Value,
+    extra_headers: &[(&str, String)],
+    header_already_sent: bool,
+) -> std::io::Result<()> {
+    if !header_already_sent {
+        let mut header = String::from(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
+        );
+        for (name, value) in extra_headers {
+            crate::network::openai::transport::append_safe_header(&mut header, name, value);
+        }
+        header.push_str("\r\n");
+        stream.write_all(header.as_bytes()).await?;
     }
-    header.push_str("\r\n");
-    stream.write_all(header.as_bytes()).await?;
 
     let id = response
         .get("id")
@@ -986,18 +1212,29 @@ fn chunk_content_for_streaming(content: &str, target_chunks: usize) -> Vec<&str>
 /// so we don't bother with incremental delta streaming — it would only
 /// make the UI's spinner-to-text transition smoother.
 async fn send_moa_as_responses_sse(
-    mut stream: TcpStream,
+    stream: TcpStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
-    let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
-    );
-    for (name, value) in extra_headers {
-        crate::network::openai::transport::append_safe_header(&mut header, name, value);
+    send_moa_as_responses_sse_inner(stream, response, extra_headers, false).await
+}
+
+async fn send_moa_as_responses_sse_inner(
+    mut stream: TcpStream,
+    response: &serde_json::Value,
+    extra_headers: &[(&str, String)],
+    header_already_sent: bool,
+) -> std::io::Result<()> {
+    if !header_already_sent {
+        let mut header = String::from(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
+        );
+        for (name, value) in extra_headers {
+            crate::network::openai::transport::append_safe_header(&mut header, name, value);
+        }
+        header.push_str("\r\n");
+        stream.write_all(header.as_bytes()).await?;
     }
-    header.push_str("\r\n");
-    stream.write_all(header.as_bytes()).await?;
 
     let response_id = response
         .get("id")
@@ -1879,6 +2116,165 @@ mod tests {
         assert!(
             delta_count > 1,
             "expected multiple output_text.delta events; got {delta_count}\nraw: {raw}"
+        );
+    }
+
+    // ── reasoning_content progress drip ────────────────────────────
+
+    #[test]
+    fn progress_line_steps_through_lines_then_stabilises() {
+        // First four steps should be distinct lines.
+        let l0 = progress_line(0, proxy::ResponseAdapter::None);
+        let l1 = progress_line(1, proxy::ResponseAdapter::None);
+        let l2 = progress_line(2, proxy::ResponseAdapter::None);
+        let l3 = progress_line(3, proxy::ResponseAdapter::None);
+        assert_ne!(l0, l1);
+        assert_ne!(l1, l2);
+        assert_ne!(l2, l3);
+        // Steps beyond the canned list clamp to the last line so a
+        // long-running MoA call doesn't panic the indexer.
+        let l99 = progress_line(99, proxy::ResponseAdapter::None);
+        assert_eq!(l99, l3);
+    }
+
+    /// Capture the wire bytes produced by `write_progress_event` for
+    /// a given adapter, by writing into a loopback TCP pair.
+    async fn capture_progress_event(adapter: proxy::ResponseAdapter, text: &str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        let t = text.to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            write_progress_event(&mut socket, &t, adapter)
+                .await
+                .expect("write");
+            // Close so the client read_to_end terminates.
+            socket.shutdown().await.expect("shutdown");
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.expect("read");
+        server.await.expect("server task");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[tokio::test]
+    async fn progress_event_chat_uses_reasoning_content_field() {
+        // Chat-completions adapter: progress text must land in
+        // delta.reasoning_content (so goose/openai-sdk-aware clients
+        // route it to a thinking pane, not the main answer).
+        let raw =
+            capture_progress_event(proxy::ResponseAdapter::None, "Routing through mesh…\n").await;
+
+        // Pull out the JSON payload from the framed SSE event.
+        let payload = raw
+            .lines()
+            .find_map(|l| l.strip_prefix("data: "))
+            .expect("a data: line");
+        let v: serde_json::Value = serde_json::from_str(payload.trim()).expect("valid json");
+
+        // Required shape for goose/openai SDKs: chat.completion.chunk
+        // with delta.reasoning_content set and no delta.content.
+        assert_eq!(
+            v.pointer("/object").and_then(|o| o.as_str()),
+            Some("chat.completion.chunk")
+        );
+        let reasoning = v
+            .pointer("/choices/0/delta/reasoning_content")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        assert!(
+            reasoning.contains("Routing through mesh"),
+            "expected progress text in reasoning_content; got: {payload}"
+        );
+        assert!(
+            v.pointer("/choices/0/delta/content").is_none(),
+            "delta.content must NOT be set on progress events (would pollute the final answer): {payload}"
+        );
+        assert!(
+            v.pointer("/choices/0/finish_reason")
+                .map(|f| f.is_null())
+                .unwrap_or(false),
+            "finish_reason must be null on a progress event so the client keeps the stream open"
+        );
+    }
+
+    #[tokio::test]
+    async fn progress_event_responses_uses_output_text_delta() {
+        // Responses-API adapter has no dedicated reasoning channel, so
+        // we drip progress into output_text.delta — same field the
+        // real answer uses, so any spec-compliant client will display
+        // it inline rather than rejecting an unknown event type.
+        let raw = capture_progress_event(
+            proxy::ResponseAdapter::OpenAiResponsesStream,
+            "Querying peer models…\n",
+        )
+        .await;
+        let payload = raw
+            .lines()
+            .find_map(|l| l.strip_prefix("data: "))
+            .expect("a data: line");
+        let v: serde_json::Value = serde_json::from_str(payload.trim()).expect("valid json");
+        assert_eq!(
+            v.get("type").and_then(|t| t.as_str()),
+            Some("response.output_text.delta")
+        );
+        let delta = v.get("delta").and_then(|d| d.as_str()).unwrap_or("");
+        assert!(
+            delta.contains("Querying peer models"),
+            "expected progress text in delta; got: {payload}"
+        );
+    }
+
+    /// Capture the wire bytes produced by `write_failure_as_sse_tail`
+    /// for a given adapter and error body.
+    async fn capture_failure_tail(
+        adapter: proxy::ResponseAdapter,
+        body: serde_json::Value,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            write_failure_as_sse_tail(&mut socket, &body, adapter)
+                .await
+                .expect("tail write");
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.expect("read");
+        server.await.expect("server task");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    #[tokio::test]
+    async fn failure_tail_emits_error_then_done_for_chat_adapter() {
+        // After progress headers go out, an MoA failure can't change
+        // the HTTP status (already 200). We at least owe the client a
+        // terminal SSE event + [DONE] so the stream doesn't silently
+        // truncate (which makes harnesses hang waiting for more).
+        let body = serde_json::json!({
+            "error": { "message": "all workers failed" }
+        });
+        let raw = capture_failure_tail(proxy::ResponseAdapter::None, body).await;
+        // Final chunk shape: chat.completion.chunk with content + error finish.
+        assert!(
+            raw.contains("\"finish_reason\":\"error\""),
+            "expected finish_reason=error in tail; got: {raw}"
+        );
+        assert!(
+            raw.contains("all workers failed"),
+            "expected error message in content; got: {raw}"
+        );
+        assert!(
+            raw.contains("data: [DONE]"),
+            "expected [DONE] terminator so clients release the stream; got: {raw}"
         );
     }
 }
