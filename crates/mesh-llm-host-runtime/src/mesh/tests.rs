@@ -2914,7 +2914,11 @@ fn stale_dispatcher_cannot_remove_replacement_connection() {
 }
 
 #[test]
-fn relay_only_peers_get_extra_heartbeat_cycle() {
+fn relay_only_peers_get_extra_heartbeat_grace() {
+    // Relay-only peers get a higher failure threshold so transient
+    // relay path-renegotiation (which can spike RTT to 10s+) doesn't
+    // prematurely declare them dead and cause MoA reducer fallback.
+    // See heartbeat_failure_policy_for_peer for the rationale.
     let peer = make_test_peer_info(make_test_endpoint_id(12));
     let local_descriptors = vec![];
     let local_runtime = vec![];
@@ -2925,8 +2929,46 @@ fn relay_only_peers_get_extra_heartbeat_cycle() {
         policy,
         HeartbeatFailurePolicy {
             allow_recent_inbound_grace: true,
-            failure_threshold: 3,
-        }
+            failure_threshold: 5,
+        },
+        "relay-only peers must have a noticeably higher grace than direct \
+         (60s heartbeats × 5 = 5 min)"
+    );
+}
+
+#[test]
+fn is_relay_only_path_set_classifies_correctly() {
+    use crate::mesh::heartbeat::is_relay_only_path_set;
+    // Empty path set: be lenient (treat as relay-only). The connection
+    // is brand-new or mid-failure; we don't want to declare the peer
+    // dead prematurely.
+    assert!(
+        is_relay_only_path_set(std::iter::empty::<bool>()),
+        "empty path set must default to relay-only (lenient)"
+    );
+    // All paths are non-IP (relay): relay-only.
+    assert!(is_relay_only_path_set([false]));
+    assert!(is_relay_only_path_set([false, false, false]));
+    // Any IP path means NOT relay-only.
+    assert!(!is_relay_only_path_set([true]));
+    assert!(!is_relay_only_path_set([true, false]));
+    assert!(!is_relay_only_path_set([false, true]));
+    assert!(!is_relay_only_path_set([true, true, true]));
+}
+
+#[test]
+fn direct_peers_use_strict_heartbeat_threshold() {
+    let peer = make_test_peer_info(make_test_endpoint_id(13));
+    let local_descriptors = vec![];
+    let local_runtime = vec![];
+
+    let policy =
+        heartbeat_failure_policy_for_peer(&local_descriptors, &local_runtime, &peer, false);
+
+    assert_eq!(
+        policy.failure_threshold, 2,
+        "direct paths stay at 2 misses — when the network is up at all, \
+         two consecutive cycles of silence is a real failure signal"
     );
 }
 
