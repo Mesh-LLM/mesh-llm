@@ -36,9 +36,9 @@ just release-build
 just release-bundle v0.X.Y
 ```
 
-Before cutting a tag that should be consumable through SwiftPM, prepare the
-Swift binary target manifest on macOS and commit the resulting `Package.swift`
-change:
+Before manually cutting a tag that should be consumable through SwiftPM,
+prepare the Swift binary target manifest on macOS and commit the resulting
+`Package.swift` change:
 
 ```bash
 scripts/prepare-swift-package-release.sh v0.X.Y
@@ -49,8 +49,14 @@ git commit -m "v0.X.Y: prepare Swift package artifact"
 The release workflow rebuilds `MeshLLMFFI.xcframework.zip`, verifies the macOS
 framework layout, runs a zipped-artifact SwiftPM consumer smoke, and checks that
 the tagged `Package.swift` already points at the exact release URL and checksum.
-If `Package.swift` still contains placeholders, or if the checksum does not
-match the artifact built in release CI, the release fails before publishing.
+If `Package.swift` still contains placeholders on a tag push, or if the
+checksum does not match the artifact built in release CI, the release fails
+before publishing.
+
+For `workflow_dispatch` releases, the release workflow computes the SwiftPM
+checksum from the XCFramework artifact it just built, patches `Package.swift`
+in the workflow workspace, and creates the requested release tag at a
+manifest-only commit before publishing.
 
 The current GitHub Actions release workflow publishes macOS aarch64, Linux
 x86_64 CPU, Linux ARM64 CPU, Linux CUDA, Linux CUDA Blackwell, Linux ROCm,
