@@ -2624,57 +2624,81 @@ fn maybe_record_binary_full_prefill(
     if !kv.should_record() || token_ids.is_empty() {
         return result;
     }
-    let base = binary_message_base(config, session_id, message);
-    let identity = kv.prefill_identity(config, &base, 0, token_ids);
+    let identities =
+        binary_full_prefill_record_identities(kv, config, session_id, message, token_ids);
     let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());
-    attrs.insert("skippy.kv.record_candidates".to_string(), json!(1));
+    attrs.insert(
+        "skippy.kv.record_candidates".to_string(),
+        json!(identities.len()),
+    );
     attrs.insert(
         "skippy.kv.decision".to_string(),
         json!("full_prefill_record"),
     );
     let started = Instant::now();
-    match kv.record_exact_state(runtime, session_id, &identity) {
-        Ok(Some(record)) => {
-            result.recorded_pages = 1;
-            result.recorded_tokens = record.token_count as u64;
-            result.evicted_entries = record.evicted_entries;
-            result.evicted_tokens = record.evicted_logical_bytes;
-            attrs.insert(
-                "skippy.exact_cache.recorded_page_id".to_string(),
-                json!(record.page_id),
-            );
-            attrs.insert(
-                "skippy.exact_cache.payload_kind".to_string(),
-                json!(record.payload_kind.to_string()),
-            );
-            attrs.insert(
-                "skippy.exact_cache.logical_bytes".to_string(),
-                json!(record.logical_bytes),
-            );
-            attrs.insert(
-                "skippy.exact_cache.physical_bytes".to_string(),
-                json!(record.physical_bytes),
-            );
-            attrs.insert(
-                "skippy.exact_cache.entries".to_string(),
-                json!(record.entries),
-            );
+    for identity in identities {
+        let token_count_usize = usize::try_from(identity.identity.token_count)
+            .unwrap_or(usize::MAX)
+            .min(token_ids.len());
+        if token_count_usize == token_ids.len() {
+            match kv.record_exact_state(runtime, session_id, &identity) {
+                Ok(Some(record)) => {
+                    result.recorded_pages = result.recorded_pages.saturating_add(1);
+                    result.recorded_tokens = result
+                        .recorded_tokens
+                        .saturating_add(record.token_count as u64);
+                    result.evicted_entries = result
+                        .evicted_entries
+                        .saturating_add(record.evicted_entries);
+                    result.evicted_tokens = result
+                        .evicted_tokens
+                        .saturating_add(record.evicted_logical_bytes);
+                    attrs.insert(
+                        "skippy.exact_cache.recorded_page_id".to_string(),
+                        json!(record.page_id),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.payload_kind".to_string(),
+                        json!(record.payload_kind.to_string()),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.logical_bytes".to_string(),
+                        json!(record.logical_bytes),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.physical_bytes".to_string(),
+                        json!(record.physical_bytes),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.entries".to_string(),
+                        json!(record.entries),
+                    );
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    attrs.insert(
+                        "skippy.exact_cache.record_error".to_string(),
+                        json!(error.to_string()),
+                    );
+                }
+            }
         }
-        Ok(None) => {}
-        Err(error) => {
-            attrs.insert(
-                "skippy.exact_cache.record_error".to_string(),
-                json!(error.to_string()),
-            );
-        }
-    }
-    if result.recorded_pages == 0 {
-        match kv.record_resident_prefix(runtime, session_id, &identity, token_ids) {
+        match kv.record_resident_prefix(
+            runtime,
+            session_id,
+            &identity,
+            &token_ids[..token_count_usize],
+        ) {
             Ok(Some(record)) => {
-                result.recorded_pages = 1;
-                result.recorded_tokens = record.token_count as u64;
-                result.evicted_entries = record.evicted_entries;
-                result.evicted_tokens = record.evicted_tokens;
+                result.recorded_pages = result.recorded_pages.saturating_add(1);
+                result.recorded_tokens = result
+                    .recorded_tokens
+                    .saturating_add(record.token_count as u64);
+                result.evicted_entries = result
+                    .evicted_entries
+                    .saturating_add(record.evicted_entries);
+                result.evicted_tokens = result.evicted_tokens.saturating_add(record.evicted_tokens);
                 attrs.insert(
                     "skippy.kv.recorded_page_id".to_string(),
                     json!(record.page_id),
@@ -2690,6 +2714,7 @@ fn maybe_record_binary_full_prefill(
                     "skippy.kv.record_error".to_string(),
                     json!(error.to_string()),
                 );
+                break;
             }
         }
     }
@@ -2707,6 +2732,17 @@ fn maybe_record_binary_full_prefill(
     );
     telemetry.emit("stage.binary_kv_record_decision", attrs);
     result
+}
+
+fn binary_full_prefill_record_identities(
+    kv: &KvStageIntegration,
+    config: &StageConfig,
+    session_id: &str,
+    message: &StageWireMessage,
+    token_ids: &[i32],
+) -> Vec<PrefillKvIdentity> {
+    let base = binary_message_base(config, session_id, message);
+    kv.record_identities(config, &base, 0, token_ids)
 }
 
 #[derive(Default)]
