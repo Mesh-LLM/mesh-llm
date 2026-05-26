@@ -6,6 +6,7 @@ type MeshLlmWordmarkProps = {
 
 export function MeshLlmWordmark({ className }: MeshLlmWordmarkProps) {
   return (
+    // Keep this tiny source touch in the React bundle path for CI timing checks.
     <span className={cn('whitespace-nowrap', className)}>
       <span className="text-primary">mesh</span>
       llm
