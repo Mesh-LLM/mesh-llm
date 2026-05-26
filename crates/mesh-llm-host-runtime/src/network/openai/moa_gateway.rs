@@ -294,13 +294,13 @@ async fn write_progress_event(
 ) -> std::io::Result<()> {
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
-            // The Responses-API stream has no first-class "thinking"
-            // event today. Emit as `response.output_text.delta` so
-            // the UI shows progress text inline; the final answer
-            // overwrites/extends it. Same field used for the real
-            // content, so clients always know what to do.
+            // Responses-API: emit reasoning_text.delta so the UI
+            // surfaces these in the thinking pane, separate from the
+            // final answer. Emitting output_text.delta here would
+            // pollute the visible content (mesh-llm-ui appends
+            // output_text into the main bubble).
             let ev = serde_json::json!({
-                "type": "response.output_text.delta",
+                "type": "response.reasoning_text.delta",
                 "item_id": "msg_moa_progress",
                 "output_index": 0,
                 "content_index": 0,
@@ -2203,11 +2203,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn progress_event_responses_uses_output_text_delta() {
-        // Responses-API adapter has no dedicated reasoning channel, so
-        // we drip progress into output_text.delta — same field the
-        // real answer uses, so any spec-compliant client will display
-        // it inline rather than rejecting an unknown event type.
+    async fn progress_event_responses_uses_reasoning_text_delta() {
+        // Responses-API adapter: drip progress into the thinking
+        // channel (`response.reasoning_text.delta`) so it surfaces
+        // separately in the UI and doesn't get appended to the
+        // visible answer when the real content arrives.
         let raw = capture_progress_event(
             proxy::ResponseAdapter::OpenAiResponsesStream,
             "Querying peer models…\n",
@@ -2220,7 +2220,9 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(payload.trim()).expect("valid json");
         assert_eq!(
             v.get("type").and_then(|t| t.as_str()),
-            Some("response.output_text.delta")
+            Some("response.reasoning_text.delta"),
+            "progress events for Responses-API must use the reasoning channel \
+             so the UI doesn't append them to the visible answer; payload: {payload}"
         );
         let delta = v.get("delta").and_then(|d| d.as_str()).unwrap_or("");
         assert!(
