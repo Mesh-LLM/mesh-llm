@@ -1,7 +1,7 @@
 [package]
 name = "mesh-llm-client"
 version.workspace = true
-edition = "2021"
+edition = "2024"
 description = "Low-level Rust client implementation for Mesh LLM embedded integrations"
 license = "Apache-2.0"
 repository = "https://github.com/Mesh-LLM/mesh-llm"

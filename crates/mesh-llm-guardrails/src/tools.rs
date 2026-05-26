@@ -1,4 +1,4 @@
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::{request_contract::GuardrailRequestContract, structured::StructuredOutputSpec};
 
@@ -140,7 +140,7 @@ pub fn tool_arguments_wire_string(arguments: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
 
     use super::*;
 

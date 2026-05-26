@@ -631,7 +631,7 @@ pub(crate) fn build_gossip_frame(
     let peers: Vec<crate::proto::node::PeerAnnouncement> =
         anns.iter().map(local_ann_to_proto_ann).collect();
     crate::proto::node::GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: sender_id.as_bytes().to_vec(),
         peers,
     }
@@ -820,7 +820,7 @@ pub(crate) fn routing_table_to_proto(table: &RoutingTable) -> crate::proto::node
     crate::proto::node::RouteTable {
         entries,
         mesh_id: table.mesh_id.clone(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     }
 }
 

@@ -175,7 +175,7 @@ impl<E: Clone> ExactStateCache<E> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{exact_state::ExactStateCache, ExactStatePayload};
+    use crate::{ExactStatePayload, exact_state::ExactStateCache};
 
     #[test]
     fn exact_state_cache_evicts_lru_by_entry_cap() {

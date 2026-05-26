@@ -1,7 +1,7 @@
 use crate::inference::skippy;
 use anyhow::{Context, Result};
 use skippy_coordinator::topology::{
-    minimum_valid_context, plan_topology, TopologyNode, TopologyPlanningInput, TopologyStagePlan,
+    TopologyNode, TopologyPlanningInput, TopologyStagePlan, minimum_valid_context, plan_topology,
 };
 use std::collections::HashMap;
 

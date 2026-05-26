@@ -1,8 +1,8 @@
-use crate::{parse_benchmark_output, BenchmarkOutput};
-use anyhow::{anyhow, Context, Result};
-use std::ffi::{c_char, c_void, CStr};
+use crate::{BenchmarkOutput, parse_benchmark_output};
+use anyhow::{Context, Result, anyhow};
+use std::ffi::{CStr, c_char, c_void};
 
-extern "C" {
+unsafe extern "C" {
     fn mesh_llm_gpu_bench_metal_json(error_out: *mut *mut c_char) -> *mut c_char;
     fn mesh_llm_gpu_bench_free(ptr: *mut c_void);
 }

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use skippy_topology::infer_family_capability;
 
 use super::support::{pick_owned, pick_string, pick_string_owned};

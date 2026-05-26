@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use skippy_cache::{
     ExactStateCache, PrefixCandidatePolicy, ResidentActivationCache, ResidentPrefixCache,
@@ -12,7 +12,7 @@ use skippy_cache::{
 use skippy_runtime::{ActivationFrame, RuntimeKvPageDesc};
 
 use crate::kv_proto::{
-    Checksum, ChecksumAlgorithm, KvPageManifest, PageIdentity, PageState, MANIFEST_SCHEMA_VERSION,
+    Checksum, ChecksumAlgorithm, KvPageManifest, MANIFEST_SCHEMA_VERSION, PageIdentity, PageState,
 };
 
 mod activation;

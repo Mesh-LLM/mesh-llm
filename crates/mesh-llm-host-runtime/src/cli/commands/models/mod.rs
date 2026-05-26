@@ -5,27 +5,27 @@ mod formatters_json;
 use crate::cli::commands::model_package;
 use crate::cli::models::ModelSearchSort;
 use crate::cli::models::ModelsCommand;
-use crate::cli::terminal_progress::{clear_stderr_line, start_spinner, DeterminateProgressLine};
+use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use crate::inference::skippy::{
-    certify_layer_package, CertificationGateStatus, SkippyCertificationRequest,
+    CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
 use crate::models::{
-    delete, download_model_ref_with_progress_details, find_remote_catalog_model_exact,
-    installed_model_capabilities, load_model_usage_record_for_path, model_usage_cache_dir,
-    plan_model_cleanup, remote_catalog, remote_catalog_model_ref, scan_installed_models,
-    search_catalog_models, search_huggingface, show_exact_model, show_model_variants_with_progress,
     ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter, SearchProgress, SearchSort,
-    ShowVariantsProgress,
+    ShowVariantsProgress, delete, download_model_ref_with_progress_details,
+    find_remote_catalog_model_exact, installed_model_capabilities,
+    load_model_usage_record_for_path, model_usage_cache_dir, plan_model_cleanup, remote_catalog,
+    remote_catalog_model_ref, scan_installed_models, search_catalog_models, search_huggingface,
+    show_exact_model, show_model_variants_with_progress,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use std::io::IsTerminal;
 use std::time::Duration;
 use std::time::Instant;
 
 use formatters::{
-    catalog_model_is_mlx, format_installed_size, format_relative_timestamp, model_kind_code,
-    models_formatter, search_formatter, InstalledRow,
+    InstalledRow, catalog_model_is_mlx, format_installed_size, format_relative_timestamp,
+    model_kind_code, models_formatter, search_formatter,
 };
 
 pub async fn run_model_search(
@@ -263,7 +263,9 @@ fn validate_model_certify_options(
     let api_base = api_base.map(str::trim).filter(|value| !value.is_empty());
     if package_only {
         if api_base.is_some() {
-            bail!("Do not combine --package-only with --api-base; remove --package-only to run runtime smoke gates.");
+            bail!(
+                "Do not combine --package-only with --api-base; remove --package-only to run runtime smoke gates."
+            );
         }
         return Ok(());
     }
@@ -634,7 +636,9 @@ fn render_cleanup_console(
             }
             println!("   path: {}", candidate.primary_path.display());
             if candidate.stale_record_only {
-                println!("   note: no managed files remain on disk; cleanup only removes the usage record");
+                println!(
+                    "   note: no managed files remain on disk; cleanup only removes the usage record"
+                );
             }
             println!();
         }
@@ -788,9 +792,11 @@ mod tests {
 
     fn restore_env(key: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -918,9 +924,12 @@ mod tests {
             9,
         );
 
-        std::env::set_var("HF_HUB_CACHE", &temp);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let rows = build_installed_rows();
         assert_eq!(rows.len(), 1);

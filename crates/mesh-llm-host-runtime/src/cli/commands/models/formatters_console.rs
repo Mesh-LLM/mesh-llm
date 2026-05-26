@@ -1,13 +1,13 @@
 use super::formatters::{
-    catalog_model_capabilities, filter_label, fit_hint_for_size_label, format_count,
-    format_installed_size, format_relative_timestamp, format_source_label, huggingface_cache_dir,
-    huggingface_repo_url, installed_model_kind, model_kind_code, sort_label,
-    variant_selector_label, ConsoleFormatter, InstalledRow, ModelsFormatter, SearchFormatter,
+    ConsoleFormatter, InstalledRow, ModelsFormatter, SearchFormatter, catalog_model_capabilities,
+    filter_label, fit_hint_for_size_label, format_count, format_installed_size,
+    format_relative_timestamp, format_source_label, huggingface_cache_dir, huggingface_repo_url,
+    installed_model_kind, model_kind_code, sort_label, variant_selector_label,
 };
 use crate::models::{
-    remote_catalog, remote_catalog_model_draft_ref, remote_catalog_model_ref,
     DeleteResult as CliDeleteResult, ModelDetails, ResolvedModel as CliResolvedModel,
-    SearchArtifactFilter, SearchHit, SearchSort,
+    SearchArtifactFilter, SearchHit, SearchSort, remote_catalog, remote_catalog_model_draft_ref,
+    remote_catalog_model_ref,
 };
 use anyhow::Result;
 use std::fmt::Write as FmtWrite;

@@ -1,7 +1,7 @@
 use axum::{
-    http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -267,11 +267,7 @@ pub fn map_upstream_error_body(status_code: u16, body: &[u8]) -> Option<Vec<u8>>
         .and_then(extract_message)
         .or_else(|| {
             let text = String::from_utf8_lossy(body).trim().to_string();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
+            if text.is_empty() { None } else { Some(text) }
         })
         .unwrap_or_else(|| "Unknown error".to_string());
 

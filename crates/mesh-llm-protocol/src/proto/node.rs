@@ -143,7 +143,7 @@ pub struct MeshSubprotocol {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MeshSubprotocolOpen {
     #[prost(uint32, tag = "1")]
-    pub gen: u32,
+    pub r#gen: u32,
     /// e.g. "skippy-stage"
     #[prost(string, tag = "2")]
     pub name: ::prost::alloc::string::String,

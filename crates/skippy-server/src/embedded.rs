@@ -9,14 +9,14 @@ use skippy_protocol::{StageConfig, StageTopology};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
-    binary_transport::{serve_binary_stage_with_shutdown, BinaryStageOptions},
+    binary_transport::{BinaryStageOptions, serve_binary_stage_with_shutdown},
     config::validate_config,
-    frontend::{serve_embedded_openai_with_shutdown, EmbeddedOpenAiArgs},
-    http::{serve_stage_http_with_shutdown, StageHttpOptions},
+    frontend::{EmbeddedOpenAiArgs, serve_embedded_openai_with_shutdown},
+    http::{StageHttpOptions, serve_stage_http_with_shutdown},
     runtime_state::{
-        load_runtime_with_overrides, RuntimeLaunchOverrides, RuntimeSessionStats, RuntimeState,
+        RuntimeLaunchOverrides, RuntimeSessionStats, RuntimeState, load_runtime_with_overrides,
     },
-    telemetry::{lifecycle_attrs, now_unix_nanos, Telemetry, TelemetryLevel, TelemetryStats},
+    telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

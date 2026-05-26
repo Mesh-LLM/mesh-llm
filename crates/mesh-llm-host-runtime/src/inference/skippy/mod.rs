@@ -30,14 +30,14 @@ use openai_frontend::{
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig, StageDevice, StageKvCacheConfig};
 use skippy_runtime::ModelInfo;
 use skippy_server::{
-    binary_transport::WireCondition, embedded_openai_backend, telemetry::Telemetry,
-    telemetry::TelemetryLevel, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
+    DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
     EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
-    OpenAiGuardrailsTarget, SkippyRuntimeHandle, DEFAULT_EMBEDDED_MAX_TOKENS,
+    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::WireCondition,
+    embedded_openai_backend, telemetry::Telemetry, telemetry::TelemetryLevel,
 };
 
 pub(crate) use certification::{
-    certify_layer_package, CertificationGateStatus, SkippyCertificationRequest,
+    CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
 pub(crate) use family_policy::{family_policy_for_model_path, family_policy_for_stage_config};
 pub(crate) use hooks::MeshAutoHookPolicy;
@@ -49,27 +49,27 @@ pub(crate) use materialization::{
     resolve_hf_package_to_local,
 };
 pub(crate) use package::{
-    identity_from_layer_package, synthetic_direct_gguf_package, SkippyPackageIdentity,
+    SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
 };
 #[allow(unused_imports)]
 pub(crate) use resolver::{
-    resolve_skippy_config, ResolvedEmbeddedOpenAiArgs, ResolvedHardwareConfig,
-    ResolvedModelFitConfig, ResolvedRequestDefaultsConfig, ResolvedSkippyConfig,
-    ResolvedSkippyExecutionConfig, ResolvedSpeculativeConfig, ResolvedThroughputConfig,
-    SkippyConfigResolveRequest,
+    ResolvedEmbeddedOpenAiArgs, ResolvedHardwareConfig, ResolvedModelFitConfig,
+    ResolvedRequestDefaultsConfig, ResolvedSkippyConfig, ResolvedSkippyExecutionConfig,
+    ResolvedSpeculativeConfig, ResolvedThroughputConfig, SkippyConfigResolveRequest,
+    resolve_skippy_config,
 };
 pub(crate) use skippy_server::OpenAiGuardrailsStatus as SkippyOpenAiGuardrailsStatus;
 pub(crate) use stage::{
-    spawn_stage_control_loop, stage_load_timeout, LayerRange, SourceModelKind,
-    StageCancelPrepareRequest, StageControlCommand, StageControlRequest, StageControlResponse,
-    StageCoordinatorClaim, StageCoordinatorClaimAck, StageInventoryRequest, StageLayerInventory,
-    StageLoadRequest, StagePackagePrefetcher, StagePeerDescriptor, StagePreparationState,
-    StagePreparationStatus, StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse,
-    StageRuntimeState, StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest,
-    StageWireDType,
+    LayerRange, SourceModelKind, StageCancelPrepareRequest, StageControlCommand,
+    StageControlRequest, StageControlResponse, StageCoordinatorClaim, StageCoordinatorClaimAck,
+    StageInventoryRequest, StageLayerInventory, StageLoadRequest, StagePackagePrefetcher,
+    StagePeerDescriptor, StagePreparationState, StagePreparationStatus,
+    StagePrepareAcceptedResponse, StagePrepareRequest, StageReadyResponse, StageRuntimeState,
+    StageStatusAck, StageStatusFilter, StageStatusSnapshot, StageStopRequest, StageWireDType,
+    spawn_stage_control_loop, stage_load_timeout,
 };
 #[cfg(test)]
-pub(crate) use topology::{plan_package_identity_topology, StageTopologyParticipant};
+pub(crate) use topology::{StageTopologyParticipant, plan_package_identity_topology};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SkippyModelState {
@@ -949,7 +949,7 @@ fn now_unix_nanos() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openai_frontend::{OpenAiError, MESH_COMPACT_FIELD};
+    use openai_frontend::{MESH_COMPACT_FIELD, OpenAiError};
     use serde_json::json;
     use skippy_server::runtime_state::RuntimeSessionStats;
     use skippy_server::telemetry::TelemetryStats;

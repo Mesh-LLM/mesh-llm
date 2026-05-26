@@ -5,9 +5,9 @@ use crate::chat::ChatCompletionRequest;
 use super::structured::StructuredOutputSpec;
 
 pub(crate) use mesh_llm_guardrails::{
-    is_reserved_tool_name, mesh_emit_structured_tool_definition, mesh_respond_tool_definition,
-    model_param_size_b, request_uses_reserved_tool_name, MESH_EMIT_STRUCTURED_TOOL_NAME,
-    MESH_RESPOND_TOOL_NAME,
+    MESH_EMIT_STRUCTURED_TOOL_NAME, MESH_RESPOND_TOOL_NAME, is_reserved_tool_name,
+    mesh_emit_structured_tool_definition, mesh_respond_tool_definition, model_param_size_b,
+    request_uses_reserved_tool_name,
 };
 
 pub(crate) fn append_mesh_respond_tool(request: &mut ChatCompletionRequest) {

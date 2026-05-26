@@ -4,16 +4,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use openai_frontend::OpenAiHookPolicy;
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCachePayload};
 use skippy_server::{
-    telemetry::Telemetry, EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
+    EmbeddedOpenAiArgs, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions, telemetry::Telemetry,
 };
 
 use super::super::{
-    family_policy_for_model_path, single_stage_config, synthetic_direct_gguf_package,
     SkippyDeviceDescriptor, SkippyModelLoadOptions, SkippyPackageIdentity, SkippyTelemetryOptions,
+    family_policy_for_model_path, single_stage_config, synthetic_direct_gguf_package,
 };
 use super::request_defaults::{
     resolve_reasoning_budget, resolve_reasoning_enabled, resolve_reasoning_format,
@@ -22,9 +22,9 @@ use super::request_defaults::{
 };
 use super::support::resolve_prefill_chunk_policy;
 use super::types::{
-    ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, ResolvedStageKvCache,
     BUILTIN_PREFILL_ADAPTIVE_MAX, BUILTIN_PREFILL_ADAPTIVE_START, BUILTIN_PREFILL_ADAPTIVE_STEP,
-    BUILTIN_PREFILL_CHUNK_SIZE,
+    BUILTIN_PREFILL_CHUNK_SIZE, ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig,
+    ResolvedStageKvCache,
 };
 
 impl ResolvedSkippyConfig {

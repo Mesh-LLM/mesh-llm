@@ -14,11 +14,11 @@ use std::{
 
 #[cfg(test)]
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, LazyLock,
+    atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use model_resolver::{
     CatalogProvider, CatalogSidecarAsset, CatalogSidecarRef,
     CatalogVariant as ResolverCatalogVariant, HfCatalogProvider, ModelArtifactCandidate,
@@ -1141,11 +1141,14 @@ mod tests {
     #[serial]
     fn stale_check_returns_true_for_nonexistent() {
         let prev = std::env::var_os("HF_HOME");
-        std::env::set_var("HF_HOME", "/tmp/meshllm-test-nonexistent-dir-xyz");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", "/tmp/meshllm-test-nonexistent-dir-xyz") };
         let result = is_catalog_stale();
         match prev {
-            Some(val) => std::env::set_var("HF_HOME", val),
-            None => std::env::remove_var("HF_HOME"),
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            Some(val) => unsafe { std::env::set_var("HF_HOME", val) },
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            None => unsafe { std::env::remove_var("HF_HOME") },
         }
         assert!(result);
     }
@@ -1161,7 +1164,8 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        std::env::set_var("HF_HOME", &temp);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HOME", &temp) };
 
         let entries_dir = catalog_cache_dir().join("entries");
         fs::create_dir_all(&entries_dir).unwrap();
@@ -1172,8 +1176,10 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp);
         match prev {
-            Some(val) => std::env::set_var("HF_HOME", val),
-            None => std::env::remove_var("HF_HOME"),
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            Some(val) => unsafe { std::env::set_var("HF_HOME", val) },
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            None => unsafe { std::env::remove_var("HF_HOME") },
         }
     }
 }

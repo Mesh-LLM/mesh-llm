@@ -2,8 +2,8 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -14,8 +14,9 @@ use tokio::sync::Mutex;
 use crate::inference::skippy::materialization::{inspect_stage_package, is_layer_package_ref};
 
 use super::{
-    preparation_status_from_load, SourceModelKind, StageInventoryRequest, StageLoadRequest,
-    StagePackagePrefetcher, StagePreparationState, StagePreparationStatus, StagePrepareRequest,
+    SourceModelKind, StageInventoryRequest, StageLoadRequest, StagePackagePrefetcher,
+    StagePreparationState, StagePreparationStatus, StagePrepareRequest,
+    preparation_status_from_load,
 };
 
 #[derive(Clone, Debug)]

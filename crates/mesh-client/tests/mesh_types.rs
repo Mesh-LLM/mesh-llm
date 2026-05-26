@@ -1,9 +1,9 @@
 use iroh::{EndpointId, SecretKey};
 use mesh_client::mesh::{
-    infer_available_model_descriptors, infer_local_served_model_descriptor,
-    infer_served_model_descriptors, merge_demand, should_be_host_for_model, ModelDemand,
-    ModelRuntimeDescriptor, ModelSourceKind, NodeRole, PeerInfo, ServedModelDescriptor,
-    ServedModelIdentity,
+    ModelDemand, ModelRuntimeDescriptor, ModelSourceKind, NodeRole, PeerInfo,
+    ServedModelDescriptor, ServedModelIdentity, infer_available_model_descriptors,
+    infer_local_served_model_descriptor, infer_served_model_descriptors, merge_demand,
+    should_be_host_for_model,
 };
 use std::collections::HashMap;
 

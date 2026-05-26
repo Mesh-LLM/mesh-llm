@@ -558,7 +558,7 @@ fn json_contains_tool_use_tokens(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_name_signals, CapabilityLevel};
+    use super::{CapabilityLevel, merge_name_signals};
 
     #[test]
     fn qwen3vl_name_signal_is_supported_vision() {

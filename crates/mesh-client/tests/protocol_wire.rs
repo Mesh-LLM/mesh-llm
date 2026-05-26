@@ -7,12 +7,12 @@ use mesh_client::proto::node::{
     PeerDown, PeerLeaving, RouteTable, RouteTableRequest,
 };
 use mesh_client::protocol::{
-    decode_control_frame, decode_legacy_tunnel_map_frame, decode_owner_control_envelope,
-    encode_control_frame, encode_owner_control_envelope, owner_control_rejection_envelope,
-    ControlFrameError, ControlProtocol, ALPN_CONTROL_V1, ALPN_V0, ALPN_V1, MAX_CONTROL_FRAME_BYTES,
+    ALPN_CONTROL_V1, ALPN_V0, ALPN_V1, ControlFrameError, ControlProtocol, MAX_CONTROL_FRAME_BYTES,
     NODE_PROTOCOL_GENERATION, STREAM_CONFIG_PUSH, STREAM_CONFIG_SUBSCRIBE, STREAM_GOSSIP,
     STREAM_PEER_DOWN, STREAM_PEER_LEAVING, STREAM_ROUTE_REQUEST, STREAM_SUBPROTOCOL,
-    STREAM_TUNNEL_MAP,
+    STREAM_TUNNEL_MAP, decode_control_frame, decode_legacy_tunnel_map_frame,
+    decode_owner_control_envelope, encode_control_frame, encode_owner_control_envelope,
+    owner_control_rejection_envelope,
 };
 use mesh_client::{
     ConfigTransportSelection, ControlPlaneBootstrapOptions, ControlPlaneRetryPolicy,
@@ -124,7 +124,7 @@ fn control_plane_bootstrap_uses_explicit_control_endpoint() {
 
 fn make_valid_gossip_frame() -> GossipFrame {
     GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -140,7 +140,7 @@ fn gossip_frame_roundtrip() {
     let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
     let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
         .expect("valid gossip frame must decode successfully");
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(decoded.sender_id, vec![0u8; 32]);
     assert_eq!(decoded.peers.len(), 1);
     assert_eq!(decoded.peers[0].endpoint_id, vec![0u8; 32]);
@@ -150,7 +150,7 @@ fn gossip_frame_roundtrip() {
 #[test]
 fn gossip_frame_bad_generation_rejected() {
     let mut frame = make_valid_gossip_frame();
-    frame.gen = 0;
+    frame.r#gen = 0;
     let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
     let err = decode_control_frame::<GossipFrame>(STREAM_GOSSIP, &encoded)
         .expect_err("gen=0 gossip frame must be rejected");
@@ -163,7 +163,7 @@ fn gossip_frame_bad_generation_rejected() {
 #[test]
 fn gossip_subprotocol_discovery_roundtrip_and_validation() {
     let frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0u8; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -193,7 +193,7 @@ fn gossip_subprotocol_discovery_roundtrip_and_validation() {
 #[test]
 fn mesh_subprotocol_open_validates_generic_envelope() {
     let open = MeshSubprotocolOpen {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         name: "skippy-stage".to_string(),
         major: 1,
     };
@@ -203,7 +203,7 @@ fn mesh_subprotocol_open_validates_generic_envelope() {
     assert_eq!(decoded.major, 1);
 
     let bad = MeshSubprotocolOpen {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         name: " ".to_string(),
         major: 1,
     };
@@ -250,33 +250,33 @@ fn wrong_stream_type_rejected() {
 fn peer_down_roundtrip() {
     let msg = PeerDown {
         peer_id: vec![0xAB; 32],
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_PEER_DOWN, &msg);
     let decoded: PeerDown =
         decode_control_frame(STREAM_PEER_DOWN, &encoded).expect("valid PeerDown must decode");
     assert_eq!(decoded.peer_id, vec![0xAB; 32]);
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
 }
 
 #[test]
 fn peer_leaving_roundtrip() {
     let msg = PeerLeaving {
         peer_id: vec![0xCD; 32],
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     let encoded = encode_control_frame(STREAM_PEER_LEAVING, &msg);
     let decoded: PeerLeaving =
         decode_control_frame(STREAM_PEER_LEAVING, &encoded).expect("valid PeerLeaving must decode");
     assert_eq!(decoded.peer_id, vec![0xCD; 32]);
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
 }
 
 #[test]
 fn peer_down_bad_generation_rejected() {
     let msg = PeerDown {
         peer_id: vec![0x77; 32],
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_PEER_DOWN, &msg);
     let err = decode_control_frame::<PeerDown>(STREAM_PEER_DOWN, &encoded)
@@ -293,7 +293,7 @@ fn peer_down_bad_generation_rejected() {
 fn route_table_request_bad_generation_rejected() {
     let req = RouteTableRequest {
         requester_id: vec![0u8; 32],
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &req);
     let err = decode_control_frame::<RouteTableRequest>(STREAM_ROUTE_REQUEST, &encoded)
@@ -309,7 +309,7 @@ fn route_table_bad_generation_rejected() {
     let table = RouteTable {
         entries: vec![],
         mesh_id: None,
-        gen: 0,
+        r#gen: 0,
     };
     let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &table);
     let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
@@ -363,7 +363,7 @@ fn control_frame_error_implements_std_error() {
 #[test]
 fn owner_control_envelope_roundtrip() {
     let envelope = OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: Some(OwnerControlRequest {
             request_id: 5,
@@ -386,7 +386,7 @@ fn owner_control_envelope_roundtrip() {
 #[test]
 fn owner_control_unknown_command_rejects_with_structured_error() {
     let envelope = OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: Some(OwnerControlRequest {
             request_id: 6,

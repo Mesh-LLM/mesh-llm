@@ -6,20 +6,20 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use skippy_metrics::attr;
 use skippy_protocol::{
-    AckMessage, MessageBase, StageConfig, StageMessage, StageTopology, TokenReplyMessage,
-    SCHEMA_VERSION,
+    AckMessage, MessageBase, SCHEMA_VERSION, StageConfig, StageMessage, StageTopology,
+    TokenReplyMessage,
 };
 use tokio::net::TcpListener;
 
@@ -27,8 +27,8 @@ use crate::{
     cli::ServeArgs,
     config::{load_json, validate_config},
     kv_integration::KvStageIntegration,
-    runtime_state::{load_runtime, RuntimeState},
-    telemetry::{lifecycle_attrs, now_unix_nanos, Telemetry, TelemetryLevel, TelemetryStats},
+    runtime_state::{RuntimeState, load_runtime},
+    telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
 };
 
 type KvRecordCandidate = ();

@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map::DefaultHasher, BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
     io::{self, BufRead, BufReader, IsTerminal, Read, Write},
@@ -7,36 +7,38 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex, OnceLock,
+        mpsc,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand, ValueEnum};
-use mesh_client::models::gguf::{scan_gguf_compact_meta, GgufCompactMeta};
-use openai_frontend::{normalize_reasoning_template_options, ReasoningConfig};
-use rustyline::{error::ReadlineError, DefaultEditor};
+use mesh_client::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
+use openai_frontend::{ReasoningConfig, normalize_reasoning_template_options};
+use rustyline::{DefaultEditor, error::ReadlineError};
 use serde_json::Value;
 use skippy_protocol::binary::{
-    recv_reply, state_flags, write_stage_message, StageReplyStats, StageStateHeader,
-    StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind, LLAMA_TOKEN_NULL,
-    READY_MAGIC,
+    LLAMA_TOKEN_NULL, READY_MAGIC, StageReplyStats, StageStateHeader, StageWireMessage,
+    WireActivationDType, WireMessageKind, WireReplyKind, recv_reply, state_flags,
+    write_stage_message,
 };
 use skippy_protocol::{
     FlashAttentionType as StageFlashAttentionType, LoadMode, PeerConfig, StageConfig,
     StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
 use skippy_runtime::{
-    package::{inspect_layer_package, materialize_layer_package, PackageStageRequest},
-    restore_native_logs, suppress_native_logs, ChatTemplateMessage, ChatTemplateOptions, ModelInfo,
-    RuntimeConfig, RuntimeLoadMode, StageModel, StageSession, GGML_TYPE_F16,
+    ChatTemplateMessage, ChatTemplateOptions, GGML_TYPE_F16, ModelInfo, RuntimeConfig,
+    RuntimeLoadMode, StageModel, StageSession,
+    package::{PackageStageRequest, inspect_layer_package, materialize_layer_package},
+    restore_native_logs, suppress_native_logs,
 };
 use skippy_topology::{
-    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits, BoundaryDecision,
-    NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
+    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
+    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
 };
 
 const DEFAULT_MIN_WINNER_COUNT: u32 = 2;

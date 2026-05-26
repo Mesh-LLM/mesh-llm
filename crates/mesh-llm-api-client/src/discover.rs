@@ -187,7 +187,7 @@ fn public_mesh_to_discovered(mesh: PublicMesh) -> mesh_client::network::nostr::D
 
 #[cfg(test)]
 mod tests {
-    use super::{matches_target_name, PublicMesh};
+    use super::{PublicMesh, matches_target_name};
 
     fn sample_mesh(name: Option<&str>) -> mesh_client::network::nostr::DiscoveredMesh {
         mesh_client::network::nostr::DiscoveredMesh {

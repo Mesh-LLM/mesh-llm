@@ -6,9 +6,9 @@
 //! latency-sensitive `skippy-stage/1` ALPN.
 
 pub use mesh_llm_types::mesh::{
-    infer_available_model_descriptors, infer_local_served_model_descriptor,
-    infer_served_model_descriptors, merge_demand, ModelDemand, ModelRuntimeDescriptor,
-    ModelSourceKind, ServedModelDescriptor, ServedModelIdentity, DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS,
+    DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
+    ServedModelDescriptor, ServedModelIdentity, infer_available_model_descriptors,
+    infer_local_served_model_descriptor, infer_served_model_descriptors, merge_demand,
 };
 
 use anyhow::{Context, Result};
@@ -22,17 +22,17 @@ use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::crypto::{
-    default_node_ownership_path, save_node_ownership, sign_node_ownership,
-    verify_control_plane_target_node, verify_node_ownership, OwnershipStatus, OwnershipSummary,
-    SignedNodeOwnership, TrustPolicy, TrustStore, DEFAULT_NODE_CERT_LIFETIME_SECS,
+    DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipStatus, OwnershipSummary, SignedNodeOwnership,
+    TrustPolicy, TrustStore, default_node_ownership_path, save_node_ownership, sign_node_ownership,
+    verify_control_plane_target_node, verify_node_ownership,
 };
 use crate::protocol::*;
 
 use self::artifact_transfer_io::{
-    append_artifact_transfer_body, select_partial_artifact, PartialArtifactGuard,
+    PartialArtifactGuard, append_artifact_transfer_body, select_partial_artifact,
 };
 
 #[cfg(test)]
@@ -442,7 +442,7 @@ async fn write_artifact_transfer_response(
     error: Option<&str>,
 ) -> Result<()> {
     let response = skippy_stage_proto::StageArtifactTransferResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         accepted,
         total_size,
         sha256: sha256.map(str::to_string),
@@ -610,7 +610,7 @@ fn owner_control_error_envelope(
     message: impl Into<String>,
 ) -> crate::proto::node::OwnerControlEnvelope {
     crate::proto::node::OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: None,
         response: None,
@@ -2791,7 +2791,7 @@ impl Node {
         use prost::Message as _;
 
         let open = skippy_protocol::proto::stage::StageTransportOpen {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: self.endpoint.id().as_bytes().to_vec(),
             topology_id: topology_id.into(),
             run_id: run_id.into(),
@@ -4581,7 +4581,7 @@ impl Node {
         let (mut send, recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_SUBPROTOCOL]).await?;
         let open = crate::proto::node::MeshSubprotocolOpen {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             name: name.to_string(),
             major,
         };
@@ -5173,11 +5173,14 @@ impl Node {
 
     async fn reconnect_closed_connection_or_remove(&self, remote: EndpointId, addr: EndpointAddr) {
         tracing::info!("Attempting reconnect to {}...", remote.fmt_short());
-        if let Some(new_conn) = self.reconnect_closed_peer(remote, addr).await {
-            self.complete_recovered_connection(remote, new_conn).await;
-        } else {
-            tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
-            self.remove_peer(remote).await;
+        match self.reconnect_closed_peer(remote, addr).await {
+            Some(new_conn) => {
+                self.complete_recovered_connection(remote, new_conn).await;
+            }
+            _ => {
+                tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
+                self.remove_peer(remote).await;
+            }
         }
     }
 
@@ -6161,7 +6164,7 @@ impl Node {
         let mut partial_guard = PartialArtifactGuard::preserve_on_error(temp_path.clone());
 
         let frame = skippy_stage_proto::StageArtifactTransferRequest {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: self.endpoint.id().as_bytes().to_vec(),
             topology_id: load.topology_id.clone(),
             run_id: load.run_id.clone(),
@@ -6730,7 +6733,7 @@ impl Node {
         watch_response: crate::proto::node::OwnerControlWatchConfigResponse,
     ) -> crate::proto::node::OwnerControlEnvelope {
         crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(crate::proto::node::OwnerControlResponse {
@@ -6785,7 +6788,7 @@ impl Node {
         self.send_owner_control_envelope(
             send,
             crate::proto::node::OwnerControlEnvelope {
-                gen: NODE_PROTOCOL_GENERATION,
+                r#gen: NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(crate::proto::node::OwnerControlResponse {
@@ -6990,7 +6993,7 @@ impl Node {
                     let _ = self.config_revision_tx.send(revision);
                 }
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -7029,7 +7032,7 @@ impl Node {
             } => {
                 let _ = self.config_revision_tx.send(revision);
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -7050,7 +7053,7 @@ impl Node {
             }
             ApplyResult::ValidationError(error) | ApplyResult::PersistError(error) => {
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -7099,7 +7102,7 @@ impl Node {
         self.send_owner_control_envelope(
             send,
             crate::proto::node::OwnerControlEnvelope {
-                gen: NODE_PROTOCOL_GENERATION,
+                r#gen: NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(crate::proto::node::OwnerControlResponse {
@@ -7474,7 +7477,7 @@ fn stage_control_request_to_proto(
     };
 
     skippy_stage_proto::StageControlRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: requester_id.as_bytes().to_vec(),
         command: Some(command),
     }
@@ -8040,7 +8043,7 @@ fn stage_control_response_to_proto(
     };
 
     skippy_stage_proto::StageControlResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         response: Some(response),
     }
 }
@@ -8793,9 +8796,9 @@ pub use gossip::backfill_legacy_descriptors;
 #[allow(unused_imports)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 #[allow(unused_imports)]
-use heartbeat::{heartbeat_failure_policy_for_peer, HeartbeatFailurePolicy};
+use heartbeat::{HeartbeatFailurePolicy, heartbeat_failure_policy_for_peer};
 pub(crate) use heartbeat::{
-    peer_down_report_disposition, resolve_peer_down, PeerDownReportDisposition,
+    PeerDownReportDisposition, peer_down_report_disposition, resolve_peer_down,
 };
 
 #[cfg(test)]

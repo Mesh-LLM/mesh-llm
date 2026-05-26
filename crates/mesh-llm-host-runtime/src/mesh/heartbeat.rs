@@ -301,11 +301,7 @@ pub(crate) fn resolve_peer_down(
     if dead_id == self_id {
         return None;
     }
-    if should_remove {
-        Some(dead_id)
-    } else {
-        None
-    }
+    if should_remove { Some(dead_id) } else { None }
 }
 
 fn default_heartbeat_failure_policy() -> HeartbeatFailurePolicy {
@@ -958,7 +954,7 @@ impl Node {
                     let _ = protocol;
                     let proto_msg = crate::proto::node::PeerDown {
                         peer_id: bytes,
-                        gen: NODE_PROTOCOL_GENERATION,
+                        r#gen: NODE_PROTOCOL_GENERATION,
                     };
                     write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
                     send.finish()?;
@@ -996,7 +992,7 @@ impl Node {
                     let _ = protocol;
                     let proto_msg = crate::proto::node::PeerLeaving {
                         peer_id: bytes,
-                        gen: NODE_PROTOCOL_GENERATION,
+                        r#gen: NODE_PROTOCOL_GENERATION,
                     };
                     write_len_prefixed(&mut send, &proto_msg.encode_to_vec()).await?;
                     send.finish()?;

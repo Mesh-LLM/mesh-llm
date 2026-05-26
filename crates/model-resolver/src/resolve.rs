@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
-use model_ref::{gguf_matches_quant_selector, ModelRef};
+use model_ref::{ModelRef, gguf_matches_quant_selector};
 
 use crate::catalog::{CatalogEntry, CatalogPackage, CatalogSource, CatalogVariant};
 use crate::types::{

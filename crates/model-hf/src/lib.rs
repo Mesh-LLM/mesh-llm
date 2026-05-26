@@ -6,9 +6,9 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hf_hub::{
+    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
     cache::{CachedRepoInfo, HFCacheInfo},
     repository::ModelInfo,
-    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
 };
 use model_artifact::{ModelArtifactFile, ModelIdentity, ModelRepository, ResolvedModelArtifact};
 use model_ref::{

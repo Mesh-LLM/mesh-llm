@@ -236,12 +236,12 @@ fn query_metal_recommended_working_set_bytes() -> Option<u64> {
     use std::ffi::{c_char, c_void};
 
     #[link(name = "Metal", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         fn MTLCreateSystemDefaultDevice() -> *mut c_void;
     }
 
     #[link(name = "objc")]
-    extern "C" {
+    unsafe extern "C" {
         fn sel_registerName(name: *const c_char) -> *mut c_void;
         fn objc_msgSend(receiver: *mut c_void, selector: *mut c_void, ...) -> usize;
     }
@@ -519,11 +519,7 @@ impl Collector for DefaultCollector {
                     }
                     let s = String::from_utf8(out.stdout).ok()?;
                     let names = parse_nvidia_gpu_names(&s);
-                    if names.is_empty() {
-                        None
-                    } else {
-                        Some(names)
-                    }
+                    if names.is_empty() { None } else { Some(names) }
                 })();
 
                 if let Some(ref names) = nvidia_names {
@@ -599,11 +595,7 @@ impl Collector for DefaultCollector {
                         }
                         let s = String::from_utf8(out.stdout).ok()?;
                         let names = parse_nvidia_gpu_names(&s);
-                        if names.is_empty() {
-                            None
-                        } else {
-                            Some(names)
-                        }
+                        if names.is_empty() { None } else { Some(names) }
                     })
             } else {
                 None
@@ -1052,9 +1044,11 @@ fn hydrate_gpu_facts_with_identities(
         })
         .collect();
 
-    debug_assert!(pinnable_gpu_stable_ids(&survey.gpus)
-        .into_iter()
-        .all(|stable_id| resolve_pinned_gpu(Some(&stable_id), &survey.gpus).is_ok()));
+    debug_assert!(
+        pinnable_gpu_stable_ids(&survey.gpus)
+            .into_iter()
+            .all(|stable_id| resolve_pinned_gpu(Some(&stable_id), &survey.gpus).is_ok())
+    );
 
     if metrics.contains(&Metric::GpuCount) && survey.gpu_count == 0 {
         survey.gpu_count = u8::try_from(survey.gpus.len()).unwrap_or(u8::MAX);

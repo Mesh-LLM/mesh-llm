@@ -1,8 +1,8 @@
 use super::{
-    PluginSummary, BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID,
-    OPENAI_ENDPOINT_PLUGIN_ID, TELEMETRY_PLUGIN_ID,
+    BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID,
+    PluginSummary, TELEMETRY_PLUGIN_ID,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::MeshVisibility;
 use serde::{Deserialize, Serialize};
 use skippy_protocol::FlashAttentionType;
@@ -1419,7 +1419,9 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> Result<()> {
                     .filter(|value| *value > 0)
                     .is_none()
             {
-                bail!("{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers");
+                bail!(
+                    "{base_path}.prefill_chunk_schedule must contain only comma-separated positive integers"
+                );
             }
         }
     }
@@ -1460,7 +1462,9 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
     )?;
     if let (Some(min), Some(max)) = (config.draft_min_tokens, config.draft_max_tokens) {
         if min > max {
-            bail!("{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens");
+            bail!(
+                "{base_path}.draft_min_tokens must be less than or equal to {base_path}.draft_max_tokens"
+            );
         }
     }
     validate_probability(
@@ -1505,7 +1509,9 @@ fn validate_speculative(config: &SpeculativeConfig, base_path: &str) -> Result<(
         && config.draft_hf_repo.is_none()
         && config.draft_selection_policy.is_none()
     {
-        bail!("{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured");
+        bail!(
+            "{base_path}.draft_selection_policy must be set when {base_path}.mode = \"draft\" and no explicit draft model source is configured"
+        );
     }
     Ok(())
 }
@@ -1656,7 +1662,9 @@ fn validate_multimodal_pair(
             multimodal.mmproj_offload.as_ref(),
         ) {
             if hardware_offload != multimodal_offload {
-                bail!("{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set");
+                bail!(
+                    "{multimodal_path}.mmproj_offload must match {hardware_path}.mmproj_offload when both are set"
+                );
             }
         }
     }
@@ -1675,7 +1683,9 @@ fn validate_multimodal(config: &MultimodalConfig, base_path: &str) -> Result<()>
     )?;
     if let (Some(min), Some(max)) = (config.image_min_tokens, config.image_max_tokens) {
         if min > max {
-            bail!("{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens");
+            bail!(
+                "{base_path}.image_min_tokens must be less than or equal to {base_path}.image_max_tokens"
+            );
         }
     }
     if config.embeddings.is_some() {
@@ -2343,9 +2353,10 @@ advertise_addr = "0.0.0.0:18443"
         .unwrap();
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("owner_control.advertise_addr must not use an unspecified IP address"));
+        assert!(
+            err.to_string()
+                .contains("owner_control.advertise_addr must not use an unspecified IP address")
+        );
     }
 
     #[test]
@@ -2359,9 +2370,10 @@ advertise_addr = "127.0.0.1:0"
         .unwrap();
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("owner_control.advertise_addr must use a concrete port"));
+        assert!(
+            err.to_string()
+                .contains("owner_control.advertise_addr must use a concrete port")
+        );
     }
 
     #[test]
@@ -2502,9 +2514,10 @@ device = "CUDA1"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].hardware.device must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].hardware.device must not be empty when set")
+        );
     }
 
     #[test]
@@ -2543,9 +2556,11 @@ gpu_layers = 2147483648
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].hardware.device must not be set when gpu.assignment = \"auto\""));
+        assert!(
+            err.to_string().contains(
+                "models[0].hardware.device must not be set when gpu.assignment = \"auto\""
+            )
+        );
     }
 
     #[test]
@@ -2777,9 +2792,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.cache_type_k must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.cache_type_k must not be empty when set")
+        );
     }
 
     #[test]
@@ -2793,9 +2809,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.cache_type_v must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.cache_type_v must not be empty when set")
+        );
     }
 
     #[test]
@@ -2809,9 +2826,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.batch must be at least 1 when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.batch must be at least 1 when set")
+        );
     }
 
     #[test]
@@ -2825,9 +2843,10 @@ reconcile_model_targets = true
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.ubatch must be at least 1 when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.ubatch must be at least 1 when set")
+        );
     }
 
     #[test]

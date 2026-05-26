@@ -1,6 +1,6 @@
 use std::{borrow::Cow, sync::Arc, time::Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 #[derive(Debug, Clone)]
 pub struct CacheBytes {

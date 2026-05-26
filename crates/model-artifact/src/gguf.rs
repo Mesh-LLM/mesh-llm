@@ -882,9 +882,10 @@ mod tests {
         let mut file = std::fs::File::open(&path).unwrap();
         let err = read_gguf_value_as_u32(&mut file, GgufType::Int32).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err
-            .to_string()
-            .contains("negative Int32 where unsigned GGUF value was expected"));
+        assert!(
+            err.to_string()
+                .contains("negative Int32 where unsigned GGUF value was expected")
+        );
         let _ = std::fs::remove_file(path);
     }
 

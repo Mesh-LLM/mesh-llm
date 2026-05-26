@@ -1,6 +1,6 @@
 pub use mesh_llm_types::models::capabilities::{
-    merge_config_signals, merge_name_signals, merge_sibling_signals, CapabilityLevel,
-    ModelCapabilities,
+    CapabilityLevel, ModelCapabilities, merge_config_signals, merge_name_signals,
+    merge_sibling_signals,
 };
 
 use super::build_hf_tokio_api;
@@ -172,8 +172,8 @@ async fn fetch_remote_json_with_api(
 #[cfg(test)]
 mod tests {
     use super::{
-        runtime_verified_capabilities_from_static, runtime_verified_model_capabilities,
         CapabilityLevel, ModelCapabilities, RuntimeMediaCapabilityEvidence,
+        runtime_verified_capabilities_from_static, runtime_verified_model_capabilities,
     };
     use std::path::Path;
 

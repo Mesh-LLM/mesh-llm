@@ -3,17 +3,17 @@ use std::{
     process::{Command, Stdio},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use model_artifact::ModelIdentity;
 use serde_json::json;
 use skippy_protocol::binary::{
-    recv_reply, write_stage_message, StageStateHeader, StageWireMessage, WireMessageKind,
-    WireReplyKind,
+    StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_reply,
+    write_stage_message,
 };
 use skippy_runtime::{RuntimeConfig, RuntimeLoadMode, StageModel};
 use skippy_topology::{
-    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits, BoundaryDecision,
-    NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
+    BoundaryDecision, NodeSpec, PlannerPolicy, TopologyPlanRequest, WireValidation,
+    dense_attention_layers, infer_family_capability, plan_contiguous_with_splits,
 };
 
 use crate::{
@@ -23,8 +23,8 @@ use crate::{
     },
     model_identity::model_identity_for_path,
     support::{
-        activation_width, connect_ready, generate_run_id, parse_wire_dtype, temp_config_path_for,
-        ChildGuard,
+        ChildGuard, activation_width, connect_ready, generate_run_id, parse_wire_dtype,
+        temp_config_path_for,
     },
 };
 
@@ -635,10 +635,16 @@ fn validate_local_topology_plan(
         match family.as_ref().map(|family| family.q8_wire_validation) {
             Some(WireValidation::Validated) => {}
             Some(WireValidation::Rejected) => {
-                bail!("topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record", model_path.display());
+                bail!(
+                    "topology planner rejected q8 activation wire dtype for {}; use f16 or add a passing q8 correctness record",
+                    model_path.display()
+                );
             }
             Some(WireValidation::Untested) => {
-                bail!("topology planner has no q8 validation for {}; use f16 until this family/split passes correctness", model_path.display());
+                bail!(
+                    "topology planner has no q8 validation for {}; use f16 until this family/split passes correctness",
+                    model_path.display()
+                );
             }
             None => {}
         }

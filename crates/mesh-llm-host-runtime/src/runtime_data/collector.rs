@@ -4,14 +4,14 @@
 //! shared snapshots through this boundary.
 
 use super::inventory::{
-    replace_local_instances_snapshot, replace_local_inventory_snapshot, InventoryScanCoordinator,
+    InventoryScanCoordinator, replace_local_instances_snapshot, replace_local_inventory_snapshot,
 };
 use super::plugins::{
-    clear_plugin_data, clear_plugin_endpoints, plugins_snapshot, upsert_plugin_data,
-    upsert_plugin_endpoint, PluginDataValue, PluginsSnapshotView,
+    PluginDataValue, PluginsSnapshotView, clear_plugin_data, clear_plugin_endpoints,
+    plugins_snapshot, upsert_plugin_data, upsert_plugin_endpoint,
 };
 #[cfg(test)]
-use super::plugins::{plugin_endpoint_snapshot, plugin_snapshot, PluginScopedSnapshot};
+use super::plugins::{PluginScopedSnapshot, plugin_endpoint_snapshot, plugin_snapshot};
 use super::processes::RuntimeProcessSnapshot;
 use super::producers::{RuntimeDataProducer, RuntimeDataSource};
 use super::snapshots::{
@@ -28,8 +28,8 @@ use super::{
     RuntimeLlamaRuntimeSnapshot, RuntimeLlamaSlotItem, RuntimeLlamaSlotsSnapshot,
 };
 use crate::api::status::{
-    build_gpus, build_ownership_payload, LatencySource, LocalInstance, MeshModelPayload, NodeState,
-    PeerPayload, WakeableNode, WakeableNodeState,
+    LatencySource, LocalInstance, MeshModelPayload, NodeState, PeerPayload, WakeableNode,
+    WakeableNodeState, build_gpus, build_ownership_payload,
 };
 use crate::mesh;
 use crate::models::LocalModelInventorySnapshot;

@@ -8,7 +8,7 @@
 //! local models via direct HTTP and remote models via QUIC tunnel.
 
 use crate::worker;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Duration;
 
 // ─── Sampling params ─────────────────────────────────────────────────

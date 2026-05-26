@@ -15,33 +15,34 @@ pub use backend::{
     OpenAiResult,
 };
 pub use chat::{
-    message_content_to_text, messages_to_plain_prompt, AssistantMessage, ChatCompletionChoice,
-    ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionRequest,
-    ChatCompletionResponse, ChatMessage, MessageContent, MessageContentPart,
+    AssistantMessage, ChatCompletionChoice, ChatCompletionChunk, ChatCompletionChunkChoice,
+    ChatCompletionDelta, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
+    MessageContent, MessageContentPart, message_content_to_text, messages_to_plain_prompt,
 };
 pub use common::{
-    completion_id, normalize_reasoning_template_options, now_unix_secs, FinishReason,
-    PromptCacheRetention, ReasoningConfig, ReasoningEffort, ReasoningTemplateOptions, StopSequence,
-    StreamOptions, Usage, THINKING_BOOLEAN_ALIASES,
+    FinishReason, PromptCacheRetention, ReasoningConfig, ReasoningEffort, ReasoningTemplateOptions,
+    StopSequence, StreamOptions, THINKING_BOOLEAN_ALIASES, Usage, completion_id,
+    normalize_reasoning_template_options, now_unix_secs,
 };
 pub use completions::{
     CompletionChoice, CompletionChunk, CompletionChunkChoice, CompletionPrompt, CompletionRequest,
     CompletionResponse,
 };
-pub use errors::{already_openai_error, map_upstream_error_body, OpenAiError, OpenAiErrorKind};
+pub use errors::{OpenAiError, OpenAiErrorKind, already_openai_error, map_upstream_error_body};
 pub use guardrails::{
     CompactingOpenAiBackend, CompactionConfig, CompactionDecision, CompactionOverride,
     CompactionReport, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle,
-    GuardrailTelemetrySink, StreamingGuardrailMode, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME,
+    GuardrailTelemetrySink, MESH_COMPACT_FIELD, MESH_RESPOND_TOOL_NAME, StreamingGuardrailMode,
 };
 pub use hooks::{
+    ChatHookAction, ChatHookOutcome, ChatMediaKind, ChatMediaRef, GenerationHookSignals,
+    HookedOpenAiBackend, MESH_HOOKS_FIELD, OpenAiHookPolicy, PrefillHookSignals,
     chat_mesh_hooks_enabled, first_chat_media, inject_text_into_chat_messages,
-    set_chat_mesh_hooks_enabled, ChatHookAction, ChatHookOutcome, ChatMediaKind, ChatMediaRef,
-    GenerationHookSignals, HookedOpenAiBackend, OpenAiHookPolicy, PrefillHookSignals,
-    MESH_HOOKS_FIELD,
+    set_chat_mesh_hooks_enabled,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use responses::{
+    NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,
     chat_usage_to_responses_usage, normalize_openai_compat_request, parse_chat_stream_chunk,
     responses_stream_completed_event, responses_stream_completed_event_with_sequence,
     responses_stream_content_part_added_event, responses_stream_content_part_done_event,
@@ -52,8 +53,7 @@ pub use responses::{
     responses_stream_reasoning_delta_event_with_sequence, responses_stream_text_done_event,
     responses_stream_text_done_event_with_sequence, stream_usage_to_responses_usage,
     translate_chat_completion_response_to_responses, translate_chat_completion_to_responses,
-    NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,
 };
 pub use router::{
-    router, router_for, router_for_with_config, router_with_config, OpenAiFrontendConfig,
+    OpenAiFrontendConfig, router, router_for, router_for_with_config, router_with_config,
 };

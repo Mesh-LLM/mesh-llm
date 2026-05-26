@@ -1,5 +1,5 @@
 use crate::{InviteToken, MeshApiError, MeshNode, MeshNodeBuilder, OwnerKeypair};
-pub use mesh_llm_api_client::{create_auto_client, discover_public_meshes, AutoConnectResult};
+pub use mesh_llm_api_client::{AutoConnectResult, create_auto_client, discover_public_meshes};
 use mesh_llm_api_client::{PublicMesh, PublicMeshQuery};
 
 pub struct AutoNodeResult {

@@ -6,7 +6,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -1354,22 +1354,26 @@ mod tests {
 
     #[test]
     fn checks_abi_version_compatibility() {
-        assert!(abi_version_supported(&format!(
-            "{}.{}.0",
-            skippy_ffi::ABI_VERSION_MAJOR,
-            skippy_ffi::ABI_VERSION_MINOR
-        ))
-        .unwrap());
+        assert!(
+            abi_version_supported(&format!(
+                "{}.{}.0",
+                skippy_ffi::ABI_VERSION_MAJOR,
+                skippy_ffi::ABI_VERSION_MINOR
+            ))
+            .unwrap()
+        );
         assert!(
             !abi_version_supported(&format!("{}.{}.0", skippy_ffi::ABI_VERSION_MAJOR + 1, 0))
                 .unwrap()
         );
-        assert!(!abi_version_supported(&format!(
-            "{}.{}.0",
-            skippy_ffi::ABI_VERSION_MAJOR,
-            skippy_ffi::ABI_VERSION_MINOR + 1
-        ))
-        .unwrap());
+        assert!(
+            !abi_version_supported(&format!(
+                "{}.{}.0",
+                skippy_ffi::ABI_VERSION_MAJOR,
+                skippy_ffi::ABI_VERSION_MINOR + 1
+            ))
+            .unwrap()
+        );
     }
 
     #[test]
