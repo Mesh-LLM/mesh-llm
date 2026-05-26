@@ -829,10 +829,7 @@ impl Node {
         // selected path is often Unknown — and the original check
         // (`selected == Relay`) returned false in that case, defeating the
         // relay-only grace threshold. See is_relay_only_connection doc.
-        let is_relay_only = conn
-            .as_ref()
-            .map(|conn| is_relay_only_connection(conn))
-            .unwrap_or(true);
+        let is_relay_only = conn.as_ref().map(is_relay_only_connection).unwrap_or(true);
         let policy = self
             .heartbeat_failure_policy(peer.as_ref(), is_relay_only)
             .await;
