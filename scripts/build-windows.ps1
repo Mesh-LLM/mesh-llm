@@ -506,10 +506,26 @@ function Normalize-RecipeArgument {
     return $normalized.Trim()
 }
 
+function Get-MissingCommands {
+    param([string[]]$Commands)
+
+    $missing = @()
+    foreach ($command in $Commands) {
+        if (-not (Resolve-CommandPath $command)) {
+            $missing += $command
+        }
+    }
+    return $missing
+}
+
 function Ensure-MsvcToolchain {
-    if ((Resolve-CommandPath "cl") -and (Resolve-CommandPath "link") -and (Resolve-CommandPath "lib")) {
+    $requiredTools = @("cl", "link", "lib", "rc", "mt")
+    $missingTools = @(Get-MissingCommands -Commands $requiredTools)
+    if ($missingTools.Count -eq 0) {
         return
     }
+
+    Write-Host "MSVC/Windows SDK tools missing before vcvars64 import: $($missingTools -join ', ')"
 
     $programFilesX86 = ${env:ProgramFiles(x86)}
     $vswhereCandidates = @()
@@ -556,8 +572,9 @@ function Ensure-MsvcToolchain {
 
     Import-CmdEnvironment "`"$vcvars64`" >nul"
 
-    if (-not (Resolve-CommandPath "cl")) {
-        throw "MSVC toolchain initialization completed, but cl.exe is still not available in PATH."
+    $missingTools = @(Get-MissingCommands -Commands $requiredTools)
+    if ($missingTools.Count -gt 0) {
+        throw "MSVC toolchain initialization completed, but required Visual Studio/Windows SDK tools are still unavailable in PATH: $($missingTools -join ', '). Install the Windows SDK and Visual Studio Build Tools on this runner."
     }
 }
 
@@ -900,6 +917,15 @@ Invoke-InRepo {
         "-DLLAMA_BUILD_TESTS=OFF",
         "-DGGML_BUILD_TESTS=OFF"
     )
+
+    $rcPath = Resolve-CommandPath "rc"
+    $mtPath = Resolve-CommandPath "mt"
+    if ($rcPath) {
+        $cmakeArgs += "-DCMAKE_RC_COMPILER=$rcPath"
+    }
+    if ($mtPath) {
+        $cmakeArgs += "-DCMAKE_MT=$mtPath"
+    }
 
     if (Resolve-CommandPath "ninja") {
         $cmakeArgs = @("-G", "Ninja") + $cmakeArgs

@@ -73,14 +73,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: blacksmith-6vcpu-macos-15
-            os: macos-14
+          - name: macOS aarch64 Metal
+            os: blacksmith-6vcpu-macos-15
             artifact_name: release-macos
             build_recipe: release-build
             bundle_recipe: release-bundle
             backend: metal
           - name: Linux x86_64 CPU
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
             artifact_name: release-linux
             build_recipe: release-build
             bundle_recipe: release-bundle
@@ -156,14 +156,14 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: macos-14
+            os: blacksmith-6vcpu-macos-15
             backend: metal
             target: aarch64-apple-darwin
             artifact_suffix: darwin-aarch64-metal
           - name: Linux x86_64 CPU
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
             backend: cpu
-            target: blacksmith-4vcpu-ubuntu-2404
+            target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64-cpu
     env:
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
