@@ -200,6 +200,22 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
+      - name: Disable sccache when GitHub cache backend is unavailable
+        run: |
+          if sccache rustc -vV >/tmp/sccache-rustc-version.log 2>/tmp/sccache-rustc-error.log; then
+            cat /tmp/sccache-rustc-version.log
+            exit 0
+          fi
+
+          echo "::warning::sccache could not start with the GitHub Actions cache backend; continuing without RUSTC_WRAPPER."
+          cat /tmp/sccache-rustc-error.log
+          {
+            echo "RUSTC_WRAPPER="
+            echo "LLAMA_STAGE_USE_SCCACHE=0"
+            echo "MESH_LLM_REQUIRE_SCCACHE=0"
+          } >> "$GITHUB_ENV"
+          sccache --stop-server || true
+
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
@@ -354,6 +370,22 @@ jobs:
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
       - uses: mozilla-actions/sccache-action@v0.0.9
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
+      - name: Disable sccache when GitHub cache backend is unavailable
+        if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
+        run: |
+          if sccache rustc -vV >/tmp/sccache-rustc-version.log 2>/tmp/sccache-rustc-error.log; then
+            cat /tmp/sccache-rustc-version.log
+            exit 0
+          fi
+
+          echo "::warning::sccache could not start with the GitHub Actions cache backend; continuing without RUSTC_WRAPPER."
+          cat /tmp/sccache-rustc-error.log
+          {
+            echo "RUSTC_WRAPPER="
+            echo "LLAMA_STAGE_USE_SCCACHE=0"
+            echo "MESH_LLM_REQUIRE_SCCACHE=0"
+          } >> "$GITHUB_ENV"
+          sccache --stop-server || true
       - uses: Swatinem/rust-cache@v2
         if: ${{ env.RUN_LINUX_BACKEND == 'true' }}
         continue-on-error: true
@@ -471,6 +503,22 @@ jobs:
           EOF
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Disable sccache when GitHub cache backend is unavailable
+        run: |
+          if sccache rustc -vV >/tmp/sccache-rustc-version.log 2>/tmp/sccache-rustc-error.log; then
+            cat /tmp/sccache-rustc-version.log
+            exit 0
+          fi
+
+          echo "::warning::sccache could not start with the GitHub Actions cache backend; continuing without RUSTC_WRAPPER."
+          cat /tmp/sccache-rustc-error.log
+          {
+            echo "RUSTC_WRAPPER="
+            echo "LLAMA_STAGE_USE_SCCACHE=0"
+            echo "MESH_LLM_REQUIRE_SCCACHE=0"
+          } >> "$GITHUB_ENV"
+          sccache --stop-server || true
 
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
