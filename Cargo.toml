@@ -61,7 +61,7 @@ serde_json = "1"
 sha2 = "0.10"
 
 [patch.crates-io]
-hf-hub = { git = "https://github.com/Mesh-LLM/hf-hub", branch = "mesh/resumable-downloads" }
+hf-hub = { git = "https://github.com/Mesh-LLM/hf-hub", branch = "mesh-llm" }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"
