@@ -13,8 +13,6 @@ pub(crate) mod survey;
 pub(crate) mod wakeable;
 
 pub(crate) use self::capacity::runtime_model_required_bytes;
-#[cfg(test)]
-pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
     model_fits_runtime_capacity,
@@ -38,6 +36,8 @@ use self::model_target_reconciliation::{
     ModelTargetReconciliationState, plan_model_target_reconciliation,
 };
 use self::proxy::{api_proxy, bootstrap_proxy};
+#[cfg(test)]
+pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use crate::MeshRequirements;
 use crate::api;
 use crate::cli::output::{

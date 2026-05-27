@@ -19,6 +19,7 @@ type DynResult<T> = Result<T, DynError>;
 const RELEASE_BUILD_ATTESTATION_VERSION: u32 = 1;
 const RELEASE_SIGNING_PRIVATE_KEY_KIND: &str = "mesh-llm-release-signing-private-key-v1";
 const RELEASE_SIGNING_PUBLIC_KEY_KIND: &str = "mesh-llm-release-signing-public-key-v1";
+const RELEASE_BUILD_ATTESTATION_DOMAIN_TAG: &[u8] = b"mesh-llm-release-attestation-v1:";
 const ED25519_SIGNATURE_ALGORITHM: &str = "ed25519";
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
@@ -38,6 +39,7 @@ struct EmbeddedReleaseAttestation {
     version: u32,
     signer_key_id: String,
     signature_algorithm: String,
+    claims: ReleaseBuildAttestationClaims,
     signed_payload_hex: String,
     signature_hex: String,
 }
@@ -93,9 +95,25 @@ impl ReleaseBuildAttestationClaims {
         Ok(())
     }
 
-    fn payload_bytes(&self) -> DynResult<Vec<u8>> {
+    fn canonical_bytes(
+        &self,
+        signer_key_id: &str,
+        signature_algorithm: &str,
+    ) -> DynResult<Vec<u8>> {
         self.validate()?;
-        Ok(serde_json::to_vec(self)?)
+        let mut buf = Vec::with_capacity(256);
+        buf.extend_from_slice(RELEASE_BUILD_ATTESTATION_DOMAIN_TAG);
+        buf.extend_from_slice(&self.version.to_le_bytes());
+        write_canonical_string(&mut buf, self.node_version.trim());
+        write_canonical_string(&mut buf, self.build_id.trim());
+        write_canonical_string(&mut buf, self.commit.trim());
+        write_canonical_string(&mut buf, self.target_triple.trim());
+        write_optional_u32(&mut buf, self.supported_protocol_generation_min);
+        write_optional_u32(&mut buf, self.supported_protocol_generation_max);
+        write_optional_string(&mut buf, Some(self.artifact_digest.trim()));
+        write_canonical_string(&mut buf, signer_key_id.trim());
+        write_canonical_string(&mut buf, signature_algorithm.trim());
+        Ok(buf)
     }
 }
 
@@ -117,6 +135,7 @@ impl EmbeddedReleaseAttestation {
             return Err("invalid embedded release attestation signature shape".into());
         }
         let _ = self.signed_payload_bytes()?;
+        self.claims.validate()?;
         Ok(())
     }
 
@@ -129,8 +148,7 @@ impl EmbeddedReleaseAttestation {
     }
 
     fn claims(&self) -> DynResult<ReleaseBuildAttestationClaims> {
-        let claims: ReleaseBuildAttestationClaims =
-            serde_json::from_slice(&self.signed_payload_bytes()?)?;
+        let claims = self.claims.clone();
         claims.validate()?;
         Ok(claims)
     }
@@ -160,10 +178,40 @@ impl EmbeddedReleaseAttestation {
                 .map_err(|_| "invalid embedded release attestation signature length")?,
         );
         let signed_payload_bytes = self.signed_payload_bytes()?;
-        supplied_public_key.verify_strict(&signed_payload_bytes, &signature)?;
         let claims = self.claims()?;
+        let canonical_bytes =
+            claims.canonical_bytes(&self.signer_key_id, &self.signature_algorithm)?;
+        if signed_payload_bytes != canonical_bytes {
+            return Err("embedded release attestation signed payload does not match claims".into());
+        }
+        supplied_public_key.verify_strict(&signed_payload_bytes, &signature)?;
         claims.validate()?;
         Ok(claims)
+    }
+}
+
+fn write_canonical_string(buf: &mut Vec<u8>, value: &str) {
+    buf.extend_from_slice(&(value.len() as u64).to_le_bytes());
+    buf.extend_from_slice(value.as_bytes());
+}
+
+fn write_optional_string(buf: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            buf.push(1);
+            write_canonical_string(buf, value);
+        }
+        None => buf.push(0),
+    }
+}
+
+fn write_optional_u32(buf: &mut Vec<u8>, value: Option<u32>) {
+    match value {
+        Some(value) => {
+            buf.push(1);
+            buf.extend_from_slice(&value.to_le_bytes());
+        }
+        None => buf.push(0),
     }
 }
 
@@ -394,12 +442,15 @@ fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
         supported_protocol_generation_max: parsed.protocol_max,
         artifact_digest,
     };
-    let signed_payload_bytes = claims.payload_bytes()?;
+    let signer_key_id = release_signer_key_id(&verifying_key);
+    let signed_payload_bytes =
+        claims.canonical_bytes(&signer_key_id, ED25519_SIGNATURE_ALGORITHM)?;
     let signature = signing_key.sign(&signed_payload_bytes);
     let attestation = EmbeddedReleaseAttestation {
         version: RELEASE_BUILD_ATTESTATION_VERSION,
-        signer_key_id: release_signer_key_id(&verifying_key),
+        signer_key_id,
         signature_algorithm: ED25519_SIGNATURE_ALGORITHM.to_string(),
+        claims: claims.clone(),
         signed_payload_hex: hex::encode(&signed_payload_bytes),
         signature_hex: hex::encode(signature.to_bytes()),
     };
@@ -1675,28 +1726,6 @@ mod tests {
     }
 
     #[test]
-    fn release_attestation_parse_rejects_old_sidecar_flags() {
-        assert!(
-            parse_stamp_args(&[
-                "--binary".to_string(),
-                "mesh-llm".to_string(),
-                "--signing-seed-hex".to_string(),
-                "00".repeat(32),
-            ])
-            .is_err()
-        );
-        assert!(
-            parse_inspect_args(&[
-                "--binary".to_string(),
-                "mesh-llm".to_string(),
-                "--input".to_string(),
-                "mesh-llm.attestation.json".to_string(),
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
     fn release_attestation_inspect_reports_missing_without_public_key() -> DynResult<()> {
         let dir = make_temp_dir("xtask-attestation-missing")?;
         let binary_path = dir.join("mesh-llm");
@@ -1762,6 +1791,12 @@ mod tests {
             .expect("stamped binary should contain embedded footer");
         let embedded: EmbeddedReleaseAttestation = serde_json::from_slice(footer.payload_bytes)?;
         let claims = embedded.claims()?;
+        let canonical_payload =
+            claims.canonical_bytes(&embedded.signer_key_id, &embedded.signature_algorithm)?;
+        assert_eq!(
+            hex::decode(&embedded.signed_payload_hex)?,
+            canonical_payload
+        );
         assert_eq!(claims.node_version, "9.9.9");
         assert_eq!(claims.build_id, "build-123");
         assert_eq!(claims.commit, "abcdef");

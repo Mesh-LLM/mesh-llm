@@ -541,7 +541,8 @@ fn mesh_requirements_release_attestation_rejects_missing_proof_when_required() {
 }
 
 #[test]
-fn mesh_requirements_release_attestation_allows_missing_proof_for_mixed_version_peers_when_optional() {
+fn mesh_requirements_release_attestation_allows_missing_proof_for_mixed_version_peers_when_optional()
+ {
     assert_eq!(
         MeshRequirements::unrestricted().evaluate(&MeshRequirementEvaluationInput {
             release_attestation: PeerReleaseAttestationStatus::Unsigned,

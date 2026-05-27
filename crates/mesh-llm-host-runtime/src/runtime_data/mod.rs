@@ -578,7 +578,10 @@ pub(crate) mod tests {
             hardware,
         });
 
-        assert_eq!(snapshot.release_attestation.status, ReleaseAttestationStatus::Valid);
+        assert_eq!(
+            snapshot.release_attestation.status,
+            ReleaseAttestationStatus::Valid
+        );
         assert_eq!(
             snapshot.peers[0].release_attestation.status,
             ReleaseAttestationStatus::Invalid
@@ -586,14 +589,20 @@ pub(crate) mod tests {
         assert_eq!(snapshot.peers[0].owner.status, "unsigned");
 
         let payload = status_payload(snapshot);
-        assert_eq!(payload.release_attestation.status, ReleaseAttestationStatus::Valid);
+        assert_eq!(
+            payload.release_attestation.status,
+            ReleaseAttestationStatus::Valid
+        );
         assert_eq!(payload.owner.status, "unsigned");
         assert_eq!(
             payload.peers[0].release_attestation.status,
             ReleaseAttestationStatus::Invalid
         );
         assert_eq!(
-            payload.peers[0].release_attestation.signer_key_id.as_deref(),
+            payload.peers[0]
+                .release_attestation
+                .signer_key_id
+                .as_deref(),
             Some("ed25519:peer-signer")
         );
         assert_eq!(payload.peers[0].owner.status, "unsigned");

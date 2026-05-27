@@ -3,31 +3,19 @@ use std::path::{Path, PathBuf};
 use std::{error::Error, fmt};
 
 use mesh_llm_system::embedded_release_footer::{
-    EmbeddedReleasePayloadSummary, EmbeddedReleasePayloadVerifier,
-    EmbeddedReleaseFooterStatus, verify_embedded_release_footer,
+    EmbeddedReleaseFooterStatus, EmbeddedReleasePayloadSummary, EmbeddedReleasePayloadVerifier,
+    verify_embedded_release_footer,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::keystore::write_keystore_bytes_atomically;
 use super::CryptoError;
+use super::keystore::write_keystore_bytes_atomically;
 
 pub const RELEASE_BUILD_ATTESTATION_VERSION: u32 = 1;
 pub const RELEASE_SIGNER_TRUST_STORE_VERSION: u32 = 1;
 const RELEASE_BUILD_ATTESTATION_DOMAIN_TAG: &[u8] = b"mesh-llm-release-attestation-v1:";
 const ED25519_SIGNATURE_ALGORITHM: &str = "ed25519";
-
-#[derive(Debug, Clone, Serialize)]
-struct LegacySignedPayloadClaims<'a> {
-    version: u32,
-    node_version: &'a str,
-    build_id: &'a str,
-    commit: &'a str,
-    target_triple: &'a str,
-    supported_protocol_generation_min: Option<u32>,
-    supported_protocol_generation_max: Option<u32>,
-    artifact_digest: &'a str,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReleaseBuildAttestation {
@@ -49,6 +37,7 @@ pub struct EmbeddedReleaseAttestation {
     pub version: u32,
     pub signer_key_id: String,
     pub signature_algorithm: String,
+    pub claims: ReleaseAttestationClaims,
     pub signed_payload_hex: String,
     pub signature_hex: String,
 }
@@ -165,7 +154,9 @@ impl fmt::Display for ReleaseAttestationError {
         match self {
             Self::InvalidShape(reason) => write!(f, "invalid release attestation shape: {reason}"),
             Self::InvalidSignerKeyId => write!(f, "release signer key id is invalid"),
-            Self::InvalidSignature => write!(f, "release attestation signature verification failed"),
+            Self::InvalidSignature => {
+                write!(f, "release attestation signature verification failed")
+            }
             Self::UnsupportedVersion(version) => {
                 write!(f, "release attestation version {version} is unsupported")
             }
@@ -174,10 +165,16 @@ impl fmt::Display for ReleaseAttestationError {
                 "release attestation signature algorithm {algorithm} is unsupported"
             ),
             Self::InvalidProtocolBounds => {
-                write!(f, "release attestation protocol generation bounds are invalid")
+                write!(
+                    f,
+                    "release attestation protocol generation bounds are invalid"
+                )
             }
             Self::MissingRequiredSignedField(field) => {
-                write!(f, "release attestation signed payload is missing required field {field}")
+                write!(
+                    f,
+                    "release attestation signed payload is missing required field {field}"
+                )
             }
             Self::Expired => write!(f, "release attestation has expired"),
             Self::UntrustedSigner => write!(f, "release attestation signer is not trusted"),
@@ -204,7 +201,9 @@ pub fn default_release_signer_trust_store_path() -> Result<PathBuf, CryptoError>
     Ok(mesh_dir()?.join("trusted-release-signers.json"))
 }
 
-pub fn load_release_signer_trust_store(path: &Path) -> Result<ReleaseSignerTrustStore, CryptoError> {
+pub fn load_release_signer_trust_store(
+    path: &Path,
+) -> Result<ReleaseSignerTrustStore, CryptoError> {
     if !path.exists() {
         return Ok(ReleaseSignerTrustStore::default());
     }
@@ -372,31 +371,9 @@ impl ReleaseBuildAttestation {
                 .try_into()
                 .map_err(|_| ReleaseAttestationError::InvalidSignature)?,
         );
-        let canonical = self.canonical_bytes()?;
-        if signer_public_key.verify_strict(&canonical, &signature).is_ok() {
-            return Ok(());
-        }
-        let legacy_payload = self.legacy_signed_payload_bytes()?;
         signer_public_key
-            .verify_strict(&legacy_payload, &signature)
+            .verify_strict(&self.canonical_bytes()?, &signature)
             .map_err(|_| ReleaseAttestationError::InvalidSignature)
-    }
-
-    fn legacy_signed_payload_bytes(&self) -> Result<Vec<u8>, ReleaseAttestationError> {
-        let artifact_digest = self.artifact_digest.as_deref().ok_or(
-            ReleaseAttestationError::MissingRequiredSignedField("artifact_digest"),
-        )?;
-        serde_json::to_vec(&LegacySignedPayloadClaims {
-            version: self.version,
-            node_version: self.node_version.trim(),
-            build_id: self.build_id.trim(),
-            commit: self.commit.trim(),
-            target_triple: self.target_triple.trim(),
-            supported_protocol_generation_min: self.supported_protocol_generation_min,
-            supported_protocol_generation_max: self.supported_protocol_generation_max,
-            artifact_digest,
-        })
-        .map_err(|error| ReleaseAttestationError::Json(error.to_string()))
     }
 }
 
@@ -409,7 +386,8 @@ impl EmbeddedReleaseAttestation {
     pub fn signature_bytes(&self) -> Result<[u8; 64], ReleaseAttestationError> {
         let bytes = hex::decode(self.signature_hex.trim())
             .map_err(|error| ReleaseAttestationError::Json(error.to_string()))?;
-        bytes.try_into()
+        bytes
+            .try_into()
             .map_err(|_| ReleaseAttestationError::InvalidSignature)
     }
 
@@ -433,6 +411,7 @@ impl EmbeddedReleaseAttestation {
         let _ = parse_release_signer_public_key(&self.signer_key_id)?;
         let _ = self.signature_bytes()?;
         let _ = self.signed_payload_bytes()?;
+        self.claims.validate_against_signer(&self.signer_key_id)?;
         Ok(())
     }
 
@@ -441,13 +420,19 @@ impl EmbeddedReleaseAttestation {
         let signer_public_key = parse_release_signer_public_key(&self.signer_key_id)?;
         let signature = ed25519_dalek::Signature::from_bytes(&self.signature_bytes()?);
         let signed_payload_bytes = self.signed_payload_bytes()?;
+        let attestation = self.claims.clone().into_release_build_attestation(
+            self.signer_key_id.clone(),
+            self.signature_bytes()?.to_vec(),
+        );
+        if signed_payload_bytes != attestation.canonical_bytes()? {
+            return Err(ReleaseAttestationError::InvalidShape(
+                "embedded release attestation signed payload does not match claims",
+            ));
+        }
         signer_public_key
             .verify_strict(&signed_payload_bytes, &signature)
             .map_err(|_| ReleaseAttestationError::InvalidSignature)?;
-        let claims: ReleaseAttestationClaims = serde_json::from_slice(&signed_payload_bytes)
-            .map_err(|error| ReleaseAttestationError::Json(error.to_string()))?;
-        claims.validate_against_signer(&self.signer_key_id)?;
-        Ok(claims)
+        Ok(self.claims.clone())
     }
 }
 
@@ -460,19 +445,29 @@ impl ReleaseAttestationClaims {
             return Err(ReleaseAttestationError::UnsupportedVersion(self.version));
         }
         if self.node_version.trim().is_empty() {
-            return Err(ReleaseAttestationError::MissingRequiredSignedField("node_version"));
+            return Err(ReleaseAttestationError::MissingRequiredSignedField(
+                "node_version",
+            ));
         }
         if self.build_id.trim().is_empty() {
-            return Err(ReleaseAttestationError::MissingRequiredSignedField("build_id"));
+            return Err(ReleaseAttestationError::MissingRequiredSignedField(
+                "build_id",
+            ));
         }
         if self.commit.trim().is_empty() {
-            return Err(ReleaseAttestationError::MissingRequiredSignedField("commit"));
+            return Err(ReleaseAttestationError::MissingRequiredSignedField(
+                "commit",
+            ));
         }
         if self.target_triple.trim().is_empty() {
-            return Err(ReleaseAttestationError::MissingRequiredSignedField("target_triple"));
+            return Err(ReleaseAttestationError::MissingRequiredSignedField(
+                "target_triple",
+            ));
         }
         if self.artifact_digest.trim().is_empty() {
-            return Err(ReleaseAttestationError::MissingRequiredSignedField("artifact_digest"));
+            return Err(ReleaseAttestationError::MissingRequiredSignedField(
+                "artifact_digest",
+            ));
         }
         if !self.artifact_digest.starts_with("sha256:") {
             return Err(ReleaseAttestationError::InvalidShape(
@@ -622,7 +617,10 @@ impl EmbeddedReleasePayloadVerifier for EmbeddedReleasePayloadCapture<'_> {
         let embedded: EmbeddedReleaseAttestation = serde_json::from_slice(payload_bytes)
             .map_err(|error| ReleaseAttestationError::Json(error.to_string()))?;
         let claims = embedded.verify_claims()?;
-        if claims.expires_at_unix_ms.is_some_and(|expires_at| self.now_unix_ms > expires_at) {
+        if claims
+            .expires_at_unix_ms
+            .is_some_and(|expires_at| self.now_unix_ms > expires_at)
+        {
             return Err(ReleaseAttestationError::Expired);
         }
         if !self.trust_store.trusted_signers.is_empty()
@@ -645,7 +643,10 @@ impl EmbeddedReleasePayloadVerifier for EmbeddedReleasePayloadCapture<'_> {
             None,
         );
         self.verified
-            .replace(Some(VerifiedEmbeddedReleaseAttestation { attestation, summary }));
+            .replace(Some(VerifiedEmbeddedReleaseAttestation {
+                attestation,
+                summary,
+            }));
         Ok(EmbeddedReleasePayloadSummary {
             artifact_digest: claims.artifact_digest,
         })
@@ -732,7 +733,9 @@ pub(crate) mod tests {
         }
     }
 
-    fn signed_canonical_attestation(signing_key: &ed25519_dalek::SigningKey) -> ReleaseBuildAttestation {
+    fn signed_canonical_attestation(
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> ReleaseBuildAttestation {
         let signer_key_id = release_signer_key_id(&signing_key.verifying_key());
         let mut attestation = ReleaseBuildAttestation {
             version: RELEASE_BUILD_ATTESTATION_VERSION,
@@ -749,11 +752,23 @@ pub(crate) mod tests {
         };
         attestation.signature = ed25519_dalek::Signer::sign(
             signing_key,
-            &attestation.canonical_bytes().expect("canonical attestation bytes"),
+            &attestation
+                .canonical_bytes()
+                .expect("canonical attestation bytes"),
         )
         .to_bytes()
         .to_vec();
         attestation
+    }
+
+    fn signed_json_claim_attestation(
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> ReleaseBuildAttestation {
+        let signer_key_id = release_signer_key_id(&signing_key.verifying_key());
+        let claims = test_claims(Some(signer_key_id.clone()));
+        let signed_payload_bytes = serde_json::to_vec(&claims).expect("claims json");
+        let signature = ed25519_dalek::Signer::sign(signing_key, &signed_payload_bytes);
+        claims.into_release_build_attestation(signer_key_id, signature.to_bytes().to_vec())
     }
 
     pub(crate) fn stamped_binary_bytes(signing_key: &ed25519_dalek::SigningKey) -> Vec<u8> {
@@ -762,12 +777,19 @@ pub(crate) mod tests {
         let signer_key_id = release_signer_key_id(&signing_key.verifying_key());
         let mut claims = test_claims(Some(signer_key_id.clone()));
         claims.artifact_digest = artifact_digest;
-        let signed_payload_bytes = serde_json::to_vec(&claims).expect("claims json");
+        let mut attestation = claims
+            .clone()
+            .into_release_build_attestation(signer_key_id.clone(), vec![0; 64]);
+        let signed_payload_bytes = attestation
+            .canonical_bytes()
+            .expect("canonical attestation bytes");
         let signature = ed25519_dalek::Signer::sign(signing_key, &signed_payload_bytes);
+        attestation.signature = signature.to_bytes().to_vec();
         let embedded = EmbeddedReleaseAttestation {
             version: RELEASE_BUILD_ATTESTATION_VERSION,
             signer_key_id,
             signature_algorithm: ED25519_SIGNATURE_ALGORITHM.to_string(),
+            claims,
             signed_payload_hex: hex::encode(&signed_payload_bytes),
             signature_hex: hex::encode(signature.to_bytes()),
         };
@@ -790,7 +812,10 @@ pub(crate) mod tests {
 
         assert_eq!(summary.status, ReleaseAttestationStatus::Valid);
         assert!(summary.verified);
-        assert_eq!(summary.signer_key_id.as_deref(), Some(signer_key_id.as_str()));
+        assert_eq!(
+            summary.signer_key_id.as_deref(),
+            Some(signer_key_id.as_str())
+        );
     }
 
     #[test]
@@ -805,7 +830,10 @@ pub(crate) mod tests {
 
         assert_eq!(summary.status, ReleaseAttestationStatus::Invalid);
         assert!(!summary.verified);
-        assert_eq!(summary.error.as_deref(), Some("release attestation signer is not trusted"));
+        assert_eq!(
+            summary.error.as_deref(),
+            Some("release attestation signer is not trusted")
+        );
     }
 
     #[test]
@@ -823,6 +851,56 @@ pub(crate) mod tests {
 
         assert_eq!(loaded.summary.status, ReleaseAttestationStatus::Valid);
         assert!(loaded.summary.verified);
-        assert!(loaded.attestation.is_some());
+        let attestation = loaded.attestation.expect("embedded attestation");
+        attestation
+            .verify()
+            .expect("embedded attestation should verify as canonical protocol attestation");
+    }
+
+    #[test]
+    fn release_attestation_rejects_json_claim_signature() {
+        let signing_key = test_release_signing_key(9);
+        let attestation = signed_json_claim_attestation(&signing_key);
+
+        let error = attestation
+            .verify()
+            .expect_err("json claim signatures are not canonical release attestations");
+
+        assert_eq!(error, ReleaseAttestationError::InvalidSignature);
+    }
+
+    #[test]
+    fn embedded_release_attestation_rejects_claim_payload_mismatch() {
+        let signing_key = test_release_signing_key(10);
+        let signer_key_id = release_signer_key_id(&signing_key.verifying_key());
+        let claims = test_claims(Some(signer_key_id.clone()));
+        let attestation = claims
+            .clone()
+            .into_release_build_attestation(signer_key_id.clone(), vec![0; 64]);
+        let signed_payload_bytes = attestation
+            .canonical_bytes()
+            .expect("canonical attestation bytes");
+        let signature = ed25519_dalek::Signer::sign(&signing_key, &signed_payload_bytes);
+        let mut mismatched_claims = claims;
+        mismatched_claims.build_id = "different-build".into();
+        let embedded = EmbeddedReleaseAttestation {
+            version: RELEASE_BUILD_ATTESTATION_VERSION,
+            signer_key_id,
+            signature_algorithm: ED25519_SIGNATURE_ALGORITHM.to_string(),
+            claims: mismatched_claims,
+            signed_payload_hex: hex::encode(&signed_payload_bytes),
+            signature_hex: hex::encode(signature.to_bytes()),
+        };
+
+        let error = embedded
+            .verify_claims()
+            .expect_err("claims must match the signed canonical payload exactly");
+
+        assert_eq!(
+            error,
+            ReleaseAttestationError::InvalidShape(
+                "embedded release attestation signed payload does not match claims"
+            )
+        );
     }
 }

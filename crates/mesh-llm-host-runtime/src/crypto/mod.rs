@@ -24,13 +24,12 @@ pub use self::ownership::{
     verify_node_ownership,
 };
 pub use self::release_attestation::{
-    EmbeddedReleaseAttestation, LoadedEmbeddedReleaseAttestation,
-    ReleaseAttestationClaims, ReleaseAttestationError, ReleaseAttestationStatus,
-    ReleaseAttestationSummary, ReleaseBuildAttestation, ReleaseSignerTrustStore,
-    TrustedReleaseSigner, default_release_signer_trust_store_path,
-    load_embedded_release_attestation_for_binary, load_release_signer_trust_store,
-    parse_release_signer_public_key, release_signer_key_id, save_release_signer_trust_store,
-    verify_release_attestation,
+    EmbeddedReleaseAttestation, LoadedEmbeddedReleaseAttestation, ReleaseAttestationClaims,
+    ReleaseAttestationError, ReleaseAttestationStatus, ReleaseAttestationSummary,
+    ReleaseBuildAttestation, ReleaseSignerTrustStore, TrustedReleaseSigner,
+    default_release_signer_trust_store_path, load_embedded_release_attestation_for_binary,
+    load_release_signer_trust_store, parse_release_signer_public_key, release_signer_key_id,
+    save_release_signer_trust_store, verify_release_attestation,
 };
 pub use mesh_llm_identity::{
     CryptoError, OpenedMessage, OwnerKeypair, SignedEncryptedEnvelope, open_message,

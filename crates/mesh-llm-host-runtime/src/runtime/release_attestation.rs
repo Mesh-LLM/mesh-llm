@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
 use crate::crypto::{
     LoadedEmbeddedReleaseAttestation, ReleaseSignerTrustStore,
     load_embedded_release_attestation_for_binary,
 };
+use anyhow::{Context, Result};
 
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedReleaseAttestation {
@@ -26,7 +26,10 @@ pub(crate) fn assert_release_attestation_reports_missing_for_unstamped_binary() 
     let loaded = load_for_binary_path(&binary_path, &ReleaseSignerTrustStore::default())
         .expect("load release attestation");
 
-    assert_eq!(loaded.summary.status, crate::ReleaseAttestationStatus::Missing);
+    assert_eq!(
+        loaded.summary.status,
+        crate::ReleaseAttestationStatus::Missing
+    );
     assert!(loaded.attestation.is_none());
 }
 
@@ -57,7 +60,9 @@ fn load_for_binary_path(
 mod tests {
     use super::*;
     use crate::ReleaseAttestationStatus;
-    use crate::crypto::release_attestation::tests::{stamped_binary_bytes, test_release_signing_key};
+    use crate::crypto::release_attestation::tests::{
+        stamped_binary_bytes, test_release_signing_key,
+    };
 
     #[test]
     fn load_for_binary_path_reports_missing_when_no_footer_exists() {
@@ -75,6 +80,10 @@ mod tests {
             .expect("load release attestation");
 
         assert_eq!(loaded.summary.status, ReleaseAttestationStatus::Valid);
-        assert!(loaded.attestation.is_some());
+        loaded
+            .attestation
+            .expect("embedded attestation")
+            .verify()
+            .expect("embedded attestation should verify as canonical protocol attestation");
     }
 }
