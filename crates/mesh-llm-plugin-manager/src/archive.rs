@@ -27,15 +27,29 @@ pub fn extract_plugin_archive(
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
     validate_plugin_root(&extracted_root, plugin_name)?;
     let final_dir = install_dir.join(plugin_name);
-    if final_dir.exists() {
-        fs::remove_dir_all(&final_dir)
-            .with_context(|| format!("remove previous plugin install {}", final_dir.display()))?;
-    }
     fs::create_dir_all(install_dir)
         .with_context(|| format!("create plugin install dir {}", install_dir.display()))?;
-    fs::rename(&extracted_root, &final_dir)
-        .or_else(|_| copy_dir_and_remove(&extracted_root, &final_dir))?;
+    replace_plugin_dir(&extracted_root, &final_dir, plugin_name)?;
     Ok(final_dir)
+}
+
+fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> Result<()> {
+    if to.exists() {
+        let backup_parent = tempfile::Builder::new()
+            .prefix(&format!("{plugin_name}-previous-"))
+            .tempdir_in(to.parent().unwrap_or_else(|| Path::new(".")))
+            .with_context(|| format!("create plugin install backup for {}", to.display()))?;
+        let backup_dir = backup_parent.path().join(plugin_name);
+        move_dir(to, &backup_dir)
+            .with_context(|| format!("backup previous plugin install {}", to.display()))?;
+        if let Err(error) = move_dir(from, to) {
+            let _ = move_dir(&backup_dir, to);
+            return Err(error).with_context(|| format!("replace plugin install {}", to.display()));
+        }
+    } else {
+        move_dir(from, to).with_context(|| format!("install plugin to {}", to.display()))?;
+    }
+    Ok(())
 }
 
 fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
@@ -176,6 +190,10 @@ fn copy_dir_and_remove(from: &Path, to: &Path) -> Result<()> {
     fs::remove_dir_all(from)
         .with_context(|| format!("remove copied plugin source {}", from.display()))?;
     Ok(())
+}
+
+fn move_dir(from: &Path, to: &Path) -> Result<()> {
+    fs::rename(from, to).or_else(|_| copy_dir_and_remove(from, to))
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {

@@ -94,6 +94,9 @@ fn resolve_required_cli_plugin(cli: &Cli, command: &str) -> Result<plugin::Exter
     if let Some(spec) = resolve_configured_cli_plugin(cli, command)? {
         return Ok(spec);
     }
+    if let Some(spec) = resolve_installed_cli_plugin(command)? {
+        return Ok(spec);
+    }
     bail!("Unknown command '{command}'. Run `mesh-llm --help` to see available commands.");
 }
 
@@ -136,10 +139,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
     if !metadata.enabled {
         return Ok(None);
     }
-    let executable =
-        metadata
-            .install_path
-            .join(format!("{}{}", metadata.name, std::env::consts::EXE_SUFFIX));
+    let executable = metadata.executable_path();
     if !executable.exists() {
         bail!(
             "Plugin command '{}' is installed but not runnable: missing executable {}",

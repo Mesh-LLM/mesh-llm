@@ -195,9 +195,7 @@ fn append_installed_plugins(
 }
 
 fn installed_plugin_command(metadata: &InstalledPluginMetadata) -> PathBuf {
-    metadata
-        .install_path
-        .join(format!("{}{}", metadata.name, std::env::consts::EXE_SUFFIX))
+    metadata.executable_path()
 }
 
 fn disabled_installed_plugin_summary(metadata: &InstalledPluginMetadata) -> PluginSummary {
