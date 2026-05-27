@@ -295,7 +295,7 @@ jobs:
       # Keep the debug binary build and smoke always-on: smoke coverage still
       # exercises the built mesh-llm binary even when the unit-test set shrinks.
       - name: Build mesh-llm binary (debug)
-        run: cargo build -p mesh-llm
+        run: cargo build -p mesh-llm --bin mesh-llm
 
       - name: Unit tests
         if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') }}
@@ -336,7 +336,7 @@ jobs:
       - name: Client-auto boot test
         run: scripts/ci-client-auto-test.sh target/debug/mesh-llm
 
-      - name: Upload Linux inference binaries
+      - name: Upload Linux inference binary
         uses: actions/upload-artifact@v6
         with:
           name: ci-linux-inference-binaries
@@ -545,7 +545,7 @@ jobs:
         if: steps.llama_cache.outputs.cache-hit != 'true'
         run: scripts/build-llama.sh
       - name: Build mesh-llm binary (debug)
-        run: cargo build -p mesh-llm
+        run: cargo build -p mesh-llm --bin mesh-llm
       - name: Unit tests
         if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') }}
         env:
@@ -568,7 +568,7 @@ jobs:
         run: |
           target/debug/mesh-llm --log-format json --version
           target/debug/mesh-llm --log-format json --help | head -5
-      - name: Upload macOS inference binaries
+      - name: Upload macOS inference binary
         uses: actions/upload-artifact@v6
         with:
           name: ci-macos-inference-binaries

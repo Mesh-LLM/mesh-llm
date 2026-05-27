@@ -267,7 +267,7 @@ bundle output="/tmp/mesh-bundle.tar.gz":
     mkdir -p "$BUNDLE"
     cp {{ mesh_bin }} "$BUNDLE/"
     # Fix rpaths for portability
-    for bin in "$BUNDLE"/*; do
+    for bin in "$BUNDLE/mesh-llm"; do
         [ -f "$bin" ] || continue
         install_name_tool -add_rpath @executable_path/ "$bin" 2>/dev/null || true
     done

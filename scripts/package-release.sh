@@ -9,7 +9,6 @@ trap 'rm -rf "$_STAGING_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_BIN_DIR="$REPO_ROOT/target/release"
-BUNDLED_PLUGIN_BINS=()
 
 python_bin() {
     if command -v python3 >/dev/null 2>&1; then
@@ -335,12 +334,9 @@ main() {
     mkdir -p "$bundle_dir"
 
     cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_dir/$(bundle_bin_name mesh-llm)"
-    for plugin_bin in "${BUNDLED_PLUGIN_BINS[@]}"; do
-        cp "$RELEASE_BIN_DIR/${plugin_bin}${BIN_EXT}" "$bundle_dir/${plugin_bin}${BIN_EXT}"
-    done
 
     if [[ "$os_name" == "Darwin" ]]; then
-        for bin in "$bundle_dir"/*; do
+        for bin in "$bundle_dir/$(bundle_bin_name mesh-llm)"; do
             [[ -f "$bin" ]] || continue
             install_name_tool -add_rpath @executable_path/ "$bin" 2>/dev/null || true
         done
