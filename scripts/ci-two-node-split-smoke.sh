@@ -226,6 +226,8 @@ done
 
 WORKER_PID="$(start_node worker "$TOKEN" "$WORKER_API_PORT" "$WORKER_CONSOLE_PORT" "$WORKER_BIND_PORT" "$WORKER_LOG")"
 
+DRIVER_LABEL=""
+DRIVER_API_PORT=""
 for i in $(seq 1 "$MAX_WAIT"); do
     if ! kill -0 "$SEED_PID" 2>/dev/null; then
         echo "seed exited unexpectedly" >&2
@@ -238,18 +240,27 @@ for i in $(seq 1 "$MAX_WAIT"); do
         exit 1
     fi
 
-    PEERS="$(query_peer_count "$(status_json "$SEED_CONSOLE_PORT")")"
-    if [[ "$PEERS" -ge 1 ]]; then
-        MODELS_JSON="$(curl -fsS --max-time 5 "http://127.0.0.1:${SEED_API_PORT}/v1/models" 2>/dev/null || true)"
-        READY_SUMMARY="$(query_split_ready "$(stages_json "$SEED_CONSOLE_PORT")" "$MODELS_JSON" 2>/dev/null || true)"
-        if [[ "$READY_SUMMARY" == ready=true* ]]; then
-            echo "Split topology ready after ${i}s: ${READY_SUMMARY}"
-            break
+    for endpoint in \
+        "seed:${SEED_API_PORT}:${SEED_CONSOLE_PORT}" \
+        "worker:${WORKER_API_PORT}:${WORKER_CONSOLE_PORT}"; do
+        IFS=: read -r label api_port console_port <<<"$endpoint"
+        PEERS="$(query_peer_count "$(status_json "$console_port")")"
+        if [[ "$PEERS" -lt 1 ]]; then
+            continue
         fi
-    fi
+        MODELS_JSON="$(curl -fsS --max-time 5 "http://127.0.0.1:${api_port}/v1/models" 2>/dev/null || true)"
+        READY_SUMMARY="$(query_split_ready "$(stages_json "$console_port")" "$MODELS_JSON" 2>/dev/null || true)"
+        if [[ "$READY_SUMMARY" == ready=true* ]]; then
+            DRIVER_LABEL="$label"
+            DRIVER_API_PORT="$api_port"
+            echo "Split topology ready after ${i}s on ${label}: ${READY_SUMMARY}"
+            break 2
+        fi
+    done
 
     if [[ "$i" -eq "$MAX_WAIT" ]]; then
         echo "timed out waiting for real split topology" >&2
+        echo "last checked endpoint: ${label:-unknown}" >&2
         echo "last peer count: ${PEERS:-unknown}" >&2
         echo "last split summary: ${READY_SUMMARY:-unknown}" >&2
         tail -160 "$SEED_LOG" >&2 || true
@@ -261,12 +272,16 @@ done
 
 WORK_PAYLOAD="${WORK_DIR}/chat-payload.json"
 CHAT_RESPONSE="${WORK_DIR}/chat-response.json"
+if [[ -z "$DRIVER_API_PORT" ]]; then
+    echo "no split driver API port was selected" >&2
+    exit 1
+fi
 MODEL_ID="$(
-    curl -fsS --max-time 5 "http://127.0.0.1:${SEED_API_PORT}/v1/models" |
+    curl -fsS --max-time 5 "http://127.0.0.1:${DRIVER_API_PORT}/v1/models" |
         python3 -c 'import json,sys; data=json.load(sys.stdin).get("data", []); print(data[0].get("id", "") if data else "")'
 )"
 if [[ -z "$MODEL_ID" ]]; then
-    echo "seed /v1/models did not return a model id" >&2
+    echo "${DRIVER_LABEL:-selected driver} /v1/models did not return a model id" >&2
     exit 1
 fi
 
@@ -287,7 +302,7 @@ with open(path, "w", encoding="utf-8") as fh:
 PY
 
 curl -fsS --max-time 180 \
-    "http://127.0.0.1:${SEED_API_PORT}/v1/chat/completions" \
+    "http://127.0.0.1:${DRIVER_API_PORT}/v1/chat/completions" \
     -H 'content-type: application/json' \
     -d @"$WORK_PAYLOAD" \
     -o "$CHAT_RESPONSE"
