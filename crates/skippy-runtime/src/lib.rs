@@ -668,47 +668,8 @@ pub fn disable_verbose_native_logs() {
     unsafe { std::env::remove_var("GGML_LLAMA_LOG_LEVEL") };
 }
 
-// ggml_log_level constants (matching ggml.h):
-// NONE=0, DEBUG=1, INFO=2, WARN=3, ERROR=4, CONT=5
-const GGML_LOG_LEVEL_DEBUG: c_int = 1;
-const GGML_LOG_LEVEL_CONT: c_int = 5;
-
-/// Filter llama.cpp/ggml log lines by level.
-///
-/// Default: drop DEBUG (level 1). Keep CONT (level 5) so multi-line debug
-/// messages don't end up half-written. Verbose mode (set via
-/// [`enable_verbose_native_logs`]) keeps DEBUG so callers can opt in.
-///
-/// Without this filter every debug line — including llama.cpp's per-token
-/// "Grammar still awaiting trigger" trace — ends up in the native log file
-/// regardless of `GGML_LLAMA_LOG_LEVEL`, because llama.cpp's
-/// `llama_log_internal_v` invokes the callback unconditionally and the
-/// level filter is expected to live in the callback.
-fn should_drop_native_log_line(level: c_int) -> bool {
-    // CONT ("continuation of previous line") is always kept: the previous
-    // line may have been INFO/WARN/ERROR and dropping the continuation
-    // would produce a truncated multi-line message.
-    if level == GGML_LOG_LEVEL_CONT {
-        return false;
-    }
-    // Only DEBUG is filterable. INFO/WARN/ERROR always pass through.
-    if level != GGML_LOG_LEVEL_DEBUG {
-        return false;
-    }
-    // GGML_LLAMA_LOG_LEVEL=4 (LLAMA_LOG_LEVEL_DEBUG) is the explicit opt-in
-    // for verbose native logs (set by enable_verbose_native_logs). Anything
-    // else: drop DEBUG.
-    !matches!(
-        std::env::var("GGML_LLAMA_LOG_LEVEL").as_deref(),
-        Ok("4") | Ok("debug") | Ok("DEBUG")
-    )
-}
-
-unsafe extern "C" fn write_native_log(level: c_int, text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_data: *mut c_void) {
     if text.is_null() {
-        return;
-    }
-    if should_drop_native_log_line(level) {
         return;
     }
 
@@ -4210,62 +4171,5 @@ mod tests {
             "expected layers 100% at final layer, got {:?}",
             pcts
         );
-    }
-
-    // ---- native log level filtering (see should_drop_native_log_line) ----
-    //
-    // These tests touch the GGML_LLAMA_LOG_LEVEL env var. Run them serially
-    // via a per-test lock so they don't race each other or other tests in
-    // this module that read environment.
-
-    fn with_log_level_env<R>(value: Option<&str>, f: impl FnOnce() -> R) -> R {
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev = env::var("GGML_LLAMA_LOG_LEVEL").ok();
-        match value {
-            Some(v) => unsafe { env::set_var("GGML_LLAMA_LOG_LEVEL", v) },
-            None => unsafe { env::remove_var("GGML_LLAMA_LOG_LEVEL") },
-        }
-        let out = f();
-        match prev {
-            Some(p) => unsafe { env::set_var("GGML_LLAMA_LOG_LEVEL", p) },
-            None => unsafe { env::remove_var("GGML_LLAMA_LOG_LEVEL") },
-        }
-        out
-    }
-
-    #[test]
-    fn native_log_filter_drops_debug_by_default() {
-        // Default (env unset): drop DEBUG so per-token llama.cpp traces
-        // like "Grammar still awaiting trigger" stop bloating the native
-        // log. INFO / WARN / ERROR must pass through.
-        with_log_level_env(None, || {
-            assert!(super::should_drop_native_log_line(1)); // DEBUG
-            assert!(!super::should_drop_native_log_line(2)); // INFO
-            assert!(!super::should_drop_native_log_line(3)); // WARN
-            assert!(!super::should_drop_native_log_line(4)); // ERROR
-        });
-    }
-
-    #[test]
-    fn native_log_filter_keeps_debug_when_verbose() {
-        // GGML_LLAMA_LOG_LEVEL=4 is the explicit "verbose" opt-in
-        // (mirrors enable_verbose_native_logs). When set, DEBUG must pass
-        // through so the operator actually sees what they asked for.
-        with_log_level_env(Some("4"), || {
-            assert!(!super::should_drop_native_log_line(1));
-            assert!(!super::should_drop_native_log_line(2));
-        });
-    }
-
-    #[test]
-    fn native_log_filter_keeps_continuation_lines() {
-        // CONT lines (level 5) are continuations of a previously emitted
-        // INFO/WARN line; dropping them would produce truncated
-        // multi-line messages. Keep them regardless of verbose mode.
-        with_log_level_env(None, || {
-            assert!(!super::should_drop_native_log_line(5));
-        });
     }
 }
