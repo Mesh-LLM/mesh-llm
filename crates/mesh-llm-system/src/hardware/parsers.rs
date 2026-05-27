@@ -79,17 +79,20 @@ pub fn parse_rocm_gpu_names(output: &str) -> Vec<String> {
 /// `reserved_bytes`.
 #[cfg(any(target_os = "linux", test))]
 pub fn parse_rocm_gpu_memory_and_used(output: &str) -> Vec<(u64, Option<u64>)> {
-    output
-        .lines()
-        .skip(1)
-        .filter_map(|line| {
-            let mut columns = line.split(',').map(str::trim);
-            let _device = columns.next()?;
-            let total = columns.next()?.parse::<u64>().ok()?;
-            let used = columns.next().and_then(|value| value.parse::<u64>().ok());
-            Some((total, used))
-        })
-        .collect()
+    let mut rows = output.lines();
+    let _header = rows.find(|line| {
+        let lower = line.to_ascii_lowercase();
+        lower.contains("total") && lower.contains("memory")
+    });
+
+    rows.filter_map(|line| {
+        let mut columns = line.split(',').map(str::trim);
+        let _device = columns.next()?;
+        let total = columns.next()?.parse::<u64>().ok()?;
+        let used = columns.next().and_then(|value| value.parse::<u64>().ok());
+        Some((total, used))
+    })
+    .collect()
 }
 
 #[cfg(all(

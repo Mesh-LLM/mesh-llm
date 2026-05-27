@@ -212,6 +212,19 @@ card1,25753026560,512000000";
 }
 
 #[test]
+fn test_parse_rocm_gpu_memory_and_used_ignores_warning_preamble() {
+    let fixture = "\
+WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status
+
+device,VRAM Total Memory (B),VRAM Total Used Memory (B)
+card0,206158430208,0";
+    assert_eq!(
+        parse_rocm_gpu_memory_and_used(fixture),
+        vec![(206_158_430_208, Some(0))]
+    );
+}
+
+#[test]
 fn test_parse_xpu_smi_discovery_json() {
     let fixture = r#"{
           "devices": [
@@ -652,7 +665,7 @@ fn test_cpu_only_runtime_budget_respects_requested_metrics() {
 
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
-fn test_skippy_backend_error_falls_through_to_legacy_collectors() {
+fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Err(anyhow::anyhow!("boom")));
 
     let mut survey = HardwareSurvey::default();
@@ -663,23 +676,35 @@ fn test_skippy_backend_error_falls_through_to_legacy_collectors() {
 
     skippy_devices::clear_test_gpu_facts_result();
 
-    assert!(!handled);
+    assert!(handled);
     assert_eq!(survey.gpu_name, None);
     assert_eq!(survey.gpu_count, 0);
-    assert_eq!(survey.vram_bytes, 0);
+    assert!(survey.gpu_vram.is_empty());
+    assert!(survey.gpus.is_empty());
+    assert!(survey.vram_bytes > 0);
 }
 
 #[cfg(all(target_os = "linux", feature = "skippy-devices"))]
 #[test]
-fn test_skippy_backend_empty_result_uses_cpu_only_budget() {
+fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
     skippy_devices::set_test_gpu_facts_result(Ok(vec![]));
 
     let mut survey = HardwareSurvey::default();
-    let handled = apply_skippy_backend_devices_to_survey(&mut survey, &[Metric::VramBytes]);
+    let handled = apply_skippy_backend_devices_to_survey(
+        &mut survey,
+        &[
+            Metric::GpuName,
+            Metric::GpuCount,
+            Metric::VramBytes,
+            Metric::GpuFacts,
+        ],
+    );
 
     skippy_devices::clear_test_gpu_facts_result();
 
     assert!(handled);
+    assert_eq!(survey.gpu_name, None);
+    assert_eq!(survey.gpu_count, 0);
     assert!(survey.gpu_vram.is_empty());
     assert!(survey.gpus.is_empty());
     assert!(survey.vram_bytes > 0);

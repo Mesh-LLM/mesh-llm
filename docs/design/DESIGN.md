@@ -305,6 +305,13 @@ trait Collector {
 | `DefaultCollector` | Linux AMD | `/sys/class/drm`, `rocm-smi` |
 | `TegraCollector` | Jetson / Tegra | sysfs + `tegrastats` |
 
+The shipped `mesh-llm` binary builds `mesh-llm-system` with `skippy-devices`.
+In that mode, runtime-selectable GPU inventory is authoritative from the
+embedded Skippy/llama backend device API. Platform collectors remain legacy
+fallbacks for non-Skippy builds and diagnostic surfaces, but they must not
+invent GPU count, backend identity, or usable runtime capacity when the embedded
+backend reports no selectable GPU.
+
 `survey()` calls all applicable collectors and returns a `HardwareSurvey` with `gpu_name`, `gpu_vram` (per-GPU bytes), `gpu_reserved` (per-GPU reserved or unavailable bytes when the platform reports a true reserved/unavailable metric), `vram_bytes` (total), `hostname`, `is_soc`, and per-device `GpuFacts` entries. Benchmark-derived memory-bandwidth and compute-throughput hints are attached later when cached or freshly measured results are available. ROCm `rocm-smi --showmeminfo` and Intel `xpu-smi` discovery expose live used-memory counters, so mesh-llm intentionally omits `gpu_reserved` for those backends instead of reinterpreting used bytes as reserved memory.
 
 ### Gossip Fields

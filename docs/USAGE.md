@@ -734,7 +734,7 @@ mesh-llm gpus --json
 mesh-llm gpu benchmark --json
 ```
 
-This prints the local GPU inventory with stable IDs, backend device names, VRAM, unified-memory status, and cached bandwidth when a benchmark fingerprint is already present. Add `--json` for machine-readable inventory output, or run `mesh-llm gpu benchmark --json` to refresh the cached fingerprint and print the benchmark summary as JSON.
+This prints the local runtime-selectable GPU inventory with stable IDs, backend device names, VRAM, unified-memory status, and cached bandwidth when a benchmark fingerprint is already present. In the shipped Skippy-enabled binary, a GPU appears here only when the embedded backend reports it as selectable. Add `--json` for machine-readable inventory output, or run `mesh-llm gpu benchmark --json` to refresh the cached fingerprint and print the benchmark summary as JSON.
 
 ## Local runtime control
 
