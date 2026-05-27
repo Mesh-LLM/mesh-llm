@@ -281,7 +281,7 @@ export function AppHeader({
                 </a>
               </div>
               <div className="text-xs text-muted-foreground pt-1">
-                Agents can gossip too — <code className="text-[0.9em]">mesh-llm blackboard install-skill</code>{' '}
+                Blackboard now ships as an external plugin.{' '}
                 <a
                   href={`${DOCS_URL}/#blackboard`}
                   target="_blank"

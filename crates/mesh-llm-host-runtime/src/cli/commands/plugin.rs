@@ -13,15 +13,17 @@ use crate::runtime;
 
 pub(crate) async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Result<()> {
     match command {
-        PluginCommand::Install { reference } => install(reference).await,
-        PluginCommand::Update { name } => update(name).await,
-        PluginCommand::Enable { name } => set_enabled(name, true),
-        PluginCommand::Disable { name } => set_enabled(name, false),
-        PluginCommand::Delete { name } => delete(name),
-        PluginCommand::Info { name } => info(name),
-        PluginCommand::Search { query } => search(query.as_deref()).await,
-        PluginCommand::List => list(cli),
+        PluginCommand::Install { reference } => install(reference).await?,
+        PluginCommand::Update { name } => update(name).await?,
+        PluginCommand::Enable { name } => set_enabled(name, true)?,
+        PluginCommand::Disable { name } => set_enabled(name, false)?,
+        PluginCommand::Delete { name } => delete(name)?,
+        PluginCommand::Info { name } => info(name)?,
+        PluginCommand::Search { query } => search(query.as_deref()).await?,
+        PluginCommand::List => list(cli)?,
+        PluginCommand::Mcp => runtime::run_plugin_mcp(cli).await?,
     }
+    Ok(())
 }
 
 async fn install(reference: &str) -> Result<()> {

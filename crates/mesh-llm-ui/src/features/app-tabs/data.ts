@@ -2116,8 +2116,7 @@ export const SHELL_HARNESS: ShellHarnessData = {
       prefix: '$',
       hint: 'Matches the Connect panel flow: join, select a model, and serve the API.'
     },
-    { label: 'Client-only join command', value: 'mesh-llm client --join <mesh-invite-token>', prefix: '$' },
-    { label: 'Blackboard skill command', value: 'mesh-llm blackboard install-skill', prefix: '$' }
+    { label: 'Client-only join command', value: 'mesh-llm client --join <mesh-invite-token>', prefix: '$' }
   ],
   topNavJoinLinks: [
     { href: 'https://docs.meshllm.cloud/', label: 'Setup' },

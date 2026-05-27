@@ -566,16 +566,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32637268377fc7b10a8c6d51de3e7fba1ce5dd371a96e342b34e6078db558e7f"
 
 [[package]]
-name = "biip"
-version = "0.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e85575af624c98bfc59609e274059bc120ffb3db6abfa5b662e3ed9519898bf"
-dependencies = [
- "dotenv",
- "regex",
-]
-
-[[package]]
 name = "bip39"
 version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1729,12 +1719,6 @@ checksum = "d4b8a88685455ed29a21542a33abd9cb6510b6b129abadabdcef0f4c55bc8f61"
 dependencies = [
  "litrs",
 ]
-
-[[package]]
-name = "dotenv"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "dtor"
@@ -3793,7 +3777,6 @@ dependencies = [
  "mesh-llm-identity",
  "mesh-llm-node",
  "mesh-llm-plugin",
- "mesh-llm-plugin-blackboard",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
  "mesh-llm-routing",
@@ -3897,25 +3880,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "mesh-llm-plugin-blackboard"
-version = "0.66.0"
-dependencies = [
- "anyhow",
- "biip",
- "clap",
- "dirs",
- "mesh-llm-plugin",
- "regex-lite",
- "reqwest 0.12.28",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
  "tokio",
 ]
 

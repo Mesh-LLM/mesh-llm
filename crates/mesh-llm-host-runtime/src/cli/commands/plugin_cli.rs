@@ -35,27 +35,6 @@ pub(crate) async fn run_external_plugin_command(cli: &Cli, raw_args: &[OsString]
     run_plugin_cli_request(cli, spec, request).await
 }
 
-pub(crate) async fn run_named_plugin_command(
-    cli: &Cli,
-    command: &str,
-    args: Vec<String>,
-) -> Result<()> {
-    let spec = resolve_required_cli_plugin(cli, command)?;
-    let argv = std::iter::once(command.to_string())
-        .chain(args.iter().cloned())
-        .collect();
-    let cwd = std::env::current_dir()
-        .ok()
-        .map(|path| path.display().to_string());
-    let request = PluginCliRunRequest {
-        command: command.to_string(),
-        args,
-        argv,
-        cwd,
-    };
-    run_plugin_cli_request(cli, spec, request).await
-}
-
 async fn run_plugin_cli_request(
     cli: &Cli,
     spec: plugin::ExternalPluginSpec,

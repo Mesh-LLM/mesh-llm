@@ -10325,8 +10325,8 @@ mod tests {
             "--auto",
             "--swarm-capture",
             capture_dir.to_str().expect("utf8 temp path"),
-            "blackboard",
-            "--mcp",
+            "plugin",
+            "mcp",
         ]);
 
         let recorder = configure_plugin_mcp_swarm_capture(&cli)

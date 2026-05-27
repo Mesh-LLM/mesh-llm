@@ -240,7 +240,7 @@ elif [[ -d "$UI_DIR" ]]; then
 fi
 
 if [[ "${MESH_LLM_BUILD_PROFILE:-debug}" == "dev" || "${MESH_LLM_BUILD_PROFILE:-debug}" == "debug" ]]; then
-    echo "Building mesh-llm and bundled CLI plugins (profile: dev)..."
+    echo "Building mesh-llm (profile: dev)..."
     cargo_features=()
     case "$BACKEND" in
         cuda) cargo_features=(--features gpu-bench-cuda) ;;
@@ -248,11 +248,10 @@ if [[ "${MESH_LLM_BUILD_PROFILE:-debug}" == "dev" || "${MESH_LLM_BUILD_PROFILE:-
     esac
     (cd "$REPO_ROOT" && cargo build \
         -p mesh-llm \
-        -p mesh-llm-plugin-blackboard \
         "${cargo_features[@]}")
-    echo "Mesh binaries: target/debug/mesh-llm, target/debug/mesh-llm-plugin-blackboard"
+    echo "Mesh binary: target/debug/mesh-llm"
 elif [[ "${MESH_LLM_BUILD_PROFILE:-debug}" == "release" ]]; then
-    echo "Building mesh-llm and bundled CLI plugins (profile: release)..."
+    echo "Building mesh-llm (profile: release)..."
     cargo_features=()
     case "$BACKEND" in
         cuda) cargo_features=(--features gpu-bench-cuda) ;;
@@ -260,9 +259,8 @@ elif [[ "${MESH_LLM_BUILD_PROFILE:-debug}" == "release" ]]; then
     esac
     (cd "$REPO_ROOT" && cargo build --release \
         -p mesh-llm \
-        -p mesh-llm-plugin-blackboard \
         "${cargo_features[@]}")
-    echo "Mesh binaries: target/release/mesh-llm, target/release/mesh-llm-plugin-blackboard"
+    echo "Mesh binary: target/release/mesh-llm"
 else
     echo "Unsupported MESH_LLM_BUILD_PROFILE '${MESH_LLM_BUILD_PROFILE:-debug}'. Expected debug, dev, or release." >&2
     exit 1

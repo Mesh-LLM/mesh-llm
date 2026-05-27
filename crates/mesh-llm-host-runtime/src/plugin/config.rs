@@ -1,6 +1,6 @@
 use super::{
-    BLACKBOARD_PLUGIN_ID, BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID,
-    PluginSummary, TELEMETRY_PLUGIN_ID,
+    BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID, PluginSummary,
+    TELEMETRY_PLUGIN_ID,
 };
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin::MeshVisibility;
@@ -1893,7 +1893,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut externals = Vec::new();
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
-    let mut blackboard_enabled = true;
     let mut blobstore_enabled = true;
     let mut openai_endpoint_enabled = false;
     let mut openai_endpoint_url: Option<String> = None;
@@ -1904,16 +1903,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             bail!("Duplicate plugin entry '{}'", entry.name);
         }
         let enabled = entry.enabled.unwrap_or(true);
-        if entry.name == BLACKBOARD_PLUGIN_ID {
-            if entry.command.is_some() || !entry.args.is_empty() || entry.url.is_some() {
-                bail!(
-                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
-                    BLACKBOARD_PLUGIN_ID
-                );
-            }
-            blackboard_enabled = enabled;
-            continue;
-        }
         if entry.name == BLOBSTORE_PLUGIN_ID {
             if entry.command.is_some() || !entry.args.is_empty() || entry.url.is_some() {
                 bail!(
@@ -1970,18 +1959,10 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         });
     }
 
-    let installed_blackboard = append_installed_plugins(&mut externals, &mut inactive, &mut names);
-    if installed_blackboard {
-        blackboard_enabled = false;
-    }
+    append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
-    if blackboard_enabled {
-        externals.insert(0, blackboard_plugin_spec()?);
-    }
     if telemetry_enabled {
-        let insert_at =
-            usize::from(blackboard_enabled || installed_blackboard).min(externals.len());
-        externals.insert(insert_at, telemetry_plugin_spec()?);
+        externals.insert(0, telemetry_plugin_spec()?);
     }
     if openai_endpoint_enabled {
         let mut spec = openai_endpoint_plugin_spec()?;
@@ -2005,20 +1986,24 @@ fn append_installed_plugins(
     externals: &mut Vec<ExternalPluginSpec>,
     inactive: &mut Vec<PluginSummary>,
     names: &mut BTreeMap<String, ()>,
-) -> bool {
+) {
+    #[cfg(test)]
+    if std::env::var_os("MESH_LLM_PLUGIN_DIR").is_none() {
+        return;
+    }
+
     let Ok(root) = default_store_root() else {
-        return false;
+        return;
     };
     let store = PluginStore::new(root);
     let installed = match store.list() {
         Ok(installed) => installed,
         Err(error) => {
             inactive.push(installed_store_error_summary(error));
-            return false;
+            return;
         }
     };
 
-    let mut installed_blackboard = false;
     for metadata in installed {
         if names.contains_key(&metadata.name) {
             continue;
@@ -2040,14 +2025,8 @@ fn append_installed_plugins(
             url: None,
             env: BTreeMap::new(),
         };
-        if metadata.name == BLACKBOARD_PLUGIN_ID {
-            externals.insert(0, spec);
-            installed_blackboard = true;
-        } else {
-            externals.push(spec);
-        }
+        externals.push(spec);
     }
-    installed_blackboard
 }
 
 fn installed_plugin_command(metadata: &InstalledPluginMetadata) -> PathBuf {
@@ -2110,16 +2089,6 @@ fn installed_plugin_summary(
         manifest: None,
         error,
     }
-}
-
-pub fn blackboard_plugin_spec() -> Result<ExternalPluginSpec> {
-    Ok(ExternalPluginSpec {
-        name: BLACKBOARD_PLUGIN_ID.to_string(),
-        command: bundled_plugin_command(BLACKBOARD_PLUGIN_ID),
-        args: Vec::new(),
-        url: None,
-        env: BTreeMap::new(),
-    })
 }
 
 pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
@@ -2251,25 +2220,8 @@ pub fn telemetry_plugin_spec() -> Result<ExternalPluginSpec> {
     })
 }
 
-pub fn bundled_cli_plugin_spec(name: &str) -> Result<Option<ExternalPluginSpec>> {
-    if name == BLACKBOARD_PLUGIN_ID {
-        return blackboard_plugin_spec().map(Some);
-    }
-
+pub fn bundled_cli_plugin_spec(_name: &str) -> Result<Option<ExternalPluginSpec>> {
     Ok(None)
-}
-
-fn bundled_plugin_command(name: &str) -> String {
-    let executable = format!("mesh-llm-plugin-{name}{}", std::env::consts::EXE_SUFFIX);
-    if let Ok(current_exe) = std::env::current_exe()
-        && let Some(parent) = current_exe.parent()
-    {
-        let sibling = parent.join(&executable);
-        if sibling.exists() {
-            return sibling.display().to_string();
-        }
-    }
-    executable
 }
 
 #[cfg(test)]

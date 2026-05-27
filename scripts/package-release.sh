@@ -9,9 +9,7 @@ trap 'rm -rf "$_STAGING_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_BIN_DIR="$REPO_ROOT/target/release"
-BUNDLED_PLUGIN_BINS=(
-    mesh-llm-plugin-blackboard
-)
+BUNDLED_PLUGIN_BINS=()
 
 python_bin() {
     if command -v python3 >/dev/null 2>&1; then

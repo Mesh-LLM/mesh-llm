@@ -22,7 +22,6 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-types"
   "mesh-llm-ui"
   "mesh-llm-plugin"
-  "mesh-llm-plugin-blackboard"
   "mesh-llm-plugin-manager"
   "mesh-llm-client"
   "mesh-llm-api-client"

@@ -240,8 +240,8 @@ jobs:
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
 
-      - name: Build mesh-llm binaries (debug)
-        run: cargo build -p mesh-llm -p mesh-llm-plugin-blackboard
+      - name: Build mesh-llm binary (debug)
+        run: cargo build -p mesh-llm
 
       - name: CLI smoke test
         run: |
@@ -252,9 +252,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ci-linux-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/mesh-llm-plugin-blackboard
+          path: target/debug/mesh-llm
           if-no-files-found: error
           retention-days: 1
 
@@ -788,8 +786,8 @@ jobs:
       - name: Build patched llama.cpp ABI libraries
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
-      - name: Build mesh-llm binaries (debug)
-        run: cargo build -p mesh-llm -p mesh-llm-plugin-blackboard
+      - name: Build mesh-llm binary (debug)
+        run: cargo build -p mesh-llm
       - name: CLI smoke test
         run: |
           target/debug/mesh-llm --log-format json --version
@@ -798,9 +796,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ci-macos-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/mesh-llm-plugin-blackboard
+          path: target/debug/mesh-llm
           if-no-files-found: error
           retention-days: 1
 

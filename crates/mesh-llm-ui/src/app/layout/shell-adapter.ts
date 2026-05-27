@@ -66,8 +66,7 @@ function buildAvailableJoinCommands(inviteToken: string): TopNavJoinCommand[] {
       prefix: '$',
       hint: 'Matches the Connect panel flow: join, select a model, and serve the API.'
     },
-    { label: 'Client-only join command', value: `mesh-llm client --join ${inviteToken}`, prefix: '$' },
-    { label: 'Blackboard skill command', value: 'mesh-llm blackboard install-skill', prefix: '$' }
+    { label: 'Client-only join command', value: `mesh-llm client --join ${inviteToken}`, prefix: '$' }
   ]
 }
 
@@ -78,8 +77,7 @@ function buildPublicJoinCommands(): TopNavJoinCommand[] {
       value: 'mesh-llm --auto',
       prefix: '$',
       hint: 'Join public discovery, auto-select a model, and serve the local API.'
-    },
-    { label: 'Blackboard skill command', value: 'mesh-llm blackboard install-skill', prefix: '$' }
+    }
   ]
 }
 
@@ -105,8 +103,7 @@ function buildUnavailableJoinCommands(): TopNavJoinCommand[] {
       prefix: '$',
       hint: 'This command becomes available after the backend issues a live invite token.',
       disabled: true
-    },
-    { label: 'Blackboard skill command', value: 'mesh-llm blackboard install-skill', prefix: '$' }
+    }
   ]
 }
 

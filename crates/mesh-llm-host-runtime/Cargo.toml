@@ -94,5 +94,4 @@ tabwriter = "1"
 axum = "0.8"
 serial_test = "3"
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client" }
-mesh-llm-plugin-blackboard = { path = "../mesh-llm-plugin-blackboard" }
 tempfile = "3"

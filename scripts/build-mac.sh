@@ -92,26 +92,25 @@ if [[ -d "$MESH_DIR" ]]; then
     configure_rust_cache
     mesh_packages=(
         -p mesh-llm
-        -p mesh-llm-plugin-blackboard
     )
     case "$build_profile" in
         dev|debug)
-            echo "Building mesh-llm and bundled CLI plugins (profile: dev)..."
+            echo "Building mesh-llm (profile: dev)..."
             if [[ -n "$rustc_wrapper" ]]; then
                 (cd "$REPO_ROOT" && RUSTC_WRAPPER="$rustc_wrapper" cargo build "${mesh_packages[@]}")
             else
                 (cd "$REPO_ROOT" && cargo build "${mesh_packages[@]}")
             fi
-            echo "Mesh binaries: target/debug/mesh-llm, target/debug/mesh-llm-plugin-blackboard"
+            echo "Mesh binary: target/debug/mesh-llm"
             ;;
         release)
-            echo "Building mesh-llm and bundled CLI plugins (profile: release)..."
+            echo "Building mesh-llm (profile: release)..."
             if [[ -n "$rustc_wrapper" ]]; then
                 (cd "$REPO_ROOT" && RUSTC_WRAPPER="$rustc_wrapper" cargo build --release "${mesh_packages[@]}")
             else
                 (cd "$REPO_ROOT" && cargo build --release "${mesh_packages[@]}")
             fi
-            echo "Mesh binaries: target/release/mesh-llm, target/release/mesh-llm-plugin-blackboard"
+            echo "Mesh binary: target/release/mesh-llm"
             ;;
         *)
             echo "Unsupported MESH_LLM_BUILD_PROFILE '$build_profile'. Expected debug, dev, or release." >&2

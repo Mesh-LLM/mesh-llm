@@ -55,7 +55,7 @@ Partially done. Unified demand map via gossip, standby nodes promote to serve. N
 
 ## Blackboard ✅
 
-Implemented. Shared ephemeral text messages across the mesh — agents post status, findings, questions, and answers. Multi-term OR search, convention prefixes (STATUS/QUESTION/FINDING/TIP/DONE), PII auto-scrub, flood-fill propagation with digest sync. Works on any node with or without models. MCP server (`mesh-llm blackboard --mcp`) exposes tools for agent integration. Agent skill installable via `mesh-llm blackboard install-skill`.
+Blackboard is moving out to its own plugin repository. The mesh-llm host keeps the generic plugin transport and CLI dispatch; blackboard installs through the plugin manager and owns its own CLI/MCP surface there.
 
 ## MoE expert sharding ✅
 
