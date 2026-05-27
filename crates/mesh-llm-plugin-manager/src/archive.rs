@@ -128,6 +128,34 @@ fn validate_plugin_root(plugin_dir: &Path, plugin_name: &str) -> Result<()> {
     Ok(())
 }
 
+fn copy_dir_and_remove(from: &Path, to: &Path) -> Result<()> {
+    copy_dir(from, to)?;
+    fs::remove_dir_all(from)
+        .with_context(|| format!("remove copied plugin source {}", from.display()))?;
+    Ok(())
+}
+
+fn move_dir(from: &Path, to: &Path) -> Result<()> {
+    fs::rename(from, to).or_else(|_| copy_dir_and_remove(from, to))
+}
+
+fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir_all(to).with_context(|| format!("create directory {}", to.display()))?;
+    for entry in fs::read_dir(from).with_context(|| format!("read directory {}", from.display()))? {
+        let entry = entry?;
+        let from_path = entry.path();
+        let to_path = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&from_path, &to_path)?;
+        } else {
+            fs::copy(&from_path, &to_path).with_context(|| {
+                format!("copy {} to {}", from_path.display(), to_path.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use flate2::{Compression, write::GzEncoder};
@@ -183,32 +211,4 @@ mod tests {
             "keep me"
         );
     }
-}
-
-fn copy_dir_and_remove(from: &Path, to: &Path) -> Result<()> {
-    copy_dir(from, to)?;
-    fs::remove_dir_all(from)
-        .with_context(|| format!("remove copied plugin source {}", from.display()))?;
-    Ok(())
-}
-
-fn move_dir(from: &Path, to: &Path) -> Result<()> {
-    fs::rename(from, to).or_else(|_| copy_dir_and_remove(from, to))
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    fs::create_dir_all(to).with_context(|| format!("create directory {}", to.display()))?;
-    for entry in fs::read_dir(from).with_context(|| format!("read directory {}", from.display()))? {
-        let entry = entry?;
-        let from_path = entry.path();
-        let to_path = to.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir(&from_path, &to_path)?;
-        } else {
-            fs::copy(&from_path, &to_path).with_context(|| {
-                format!("copy {} to {}", from_path.display(), to_path.display())
-            })?;
-        }
-    }
-    Ok(())
 }
