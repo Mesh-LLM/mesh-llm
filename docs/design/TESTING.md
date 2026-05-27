@@ -285,8 +285,13 @@ mesh-llm serve \
 - A short `/v1/chat/completions` request should return an OpenAI-shaped
   response from the layer-package model.
 
-> **CI gap (TODO):** There is no CI test for this scenario. The closest CI
-> coverage today is:
+> **CI coverage:** `two_node_split_smoke` runs
+> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary and a
+> tiny GGUF. It starts two serving nodes, waits for a topology with stages on
+> two distinct nodes, checks `/v1/models`, and sends a short
+> `/v1/chat/completions` request through stage 0.
+>
+> Other nearby CI coverage:
 >
 > - `scripts/ci-two-node-client-serving-smoke.sh` — two nodes, but only tests
 >   `client` -> `serve` routing. The model is held entirely on one node.
@@ -294,19 +299,6 @@ mesh-llm serve \
 >   `skippy-correctness chain`, but all stages run on `127.0.0.1` in a single
 >   runner. It validates the staged-runtime ABI, not mesh-llm node-to-node
 >   split serving over QUIC.
->
-> Cross-node split via `--split` / `--join` / `--max-vram` is currently only
-> validated manually (lab nodes, `mic-lab` skill). A future CI smoke should:
->
-> 1. Start node A: `mesh-llm serve --model <tiny-gguf> --split --max-vram <small> --bind-port <p>`
-> 2. Start node B: `mesh-llm serve --model <tiny-gguf> --split --max-vram <small> --join <TOKEN>`
->    — pick `--max-vram` low enough on both sides that neither node can hold
->    the model alone, so the runtime is forced to actually split across the
->    mesh rather than fall back to single-host serving.
-> 3. Wait for `/api/status` on both nodes to show `peers >= 1` and
->    `/v1/models` to become non-empty.
-> 4. Send a short `/v1/chat/completions` against either node and assert a
->    valid OpenAI-shaped response.
 >
 > Use real flags only: `--split`, `--max-vram`, `--join`, `--bind-port`,
 > `--port`, `--console`. There is no `--layer-range` flag — layer placement
