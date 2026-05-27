@@ -166,13 +166,14 @@ async fn respond_asset(
         .await;
     };
     let header = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nConnection: close\r\n\r\n",
         asset.content_type,
         asset.contents.len(),
         asset.cache_control
     );
     stream.write_all(header.as_bytes()).await?;
     stream.write_all(asset.contents.as_ref()).await?;
+    stream.shutdown().await?;
     Ok(())
 }
 
@@ -183,11 +184,12 @@ async fn respond_text(
     body: &str,
 ) -> anyhow::Result<()> {
     let header = format!(
-        "HTTP/1.1 {code} {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-cache\r\n\r\n",
+        "HTTP/1.1 {code} {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n",
         body.len()
     );
     stream.write_all(header.as_bytes()).await?;
     stream.write_all(body.as_bytes()).await?;
+    stream.shutdown().await?;
     Ok(())
 }
 
