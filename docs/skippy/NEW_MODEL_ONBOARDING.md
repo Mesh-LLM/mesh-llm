@@ -14,7 +14,7 @@ Issue #630, Cohere Command A+, is the first model tracked with this flow.
 | --- | --- | --- |
 | Candidate identified | A source model and at least one plausible GGUF or package artifact are known. | No support claim. |
 | Artifact inspected | GGUF metadata or package manifest gives architecture, layer count, activation width, quant, shard layout, and tokenizer sidecars. | May plan a package job. |
-| Package validated | `skippy-model-package` writes and validates a package with no missing, duplicate, or checksum-mismatched owned tensors. | May test staged serving. |
+| Package validated | `skippy-model-package` writes, validates, and preflights a package with no unresolved manifest, artifact, sidecar, materialization, missing, duplicate, or checksum diagnostics. | May test staged serving. |
 | Runtime smoke passed | A package-backed model starts and answers through the OpenAI-compatible surface. | May collect serving evidence. |
 | Family certified | Split correctness, dtype matrix, state handoff/cache policy, and required multimodal sidebands pass. | May promote to reviewed support. |
 | Reviewed support | `docs/skippy/FAMILY_STATUS.md` and reviewed topology records are updated from evidence. | User-visible support claim. |
@@ -71,7 +71,8 @@ After a package exists, validate the package and then run the certification
 surface that matches the evidence you need:
 
 ```bash
-skippy-model-package validate-package /path/to/package
+skippy-model-package validate-package /path/to/model.gguf /path/to/package
+skippy-model-package preflight /path/to/package --stages 2 --verify-sha256
 mesh-llm models certify hf://namespace/repo@revision --package-only --report-out cert.json
 mesh-llm models certify hf://namespace/repo@revision --api-base http://127.0.0.1:9337 --json
 ```

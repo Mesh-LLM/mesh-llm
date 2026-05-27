@@ -325,6 +325,21 @@ mesh-llm serve --model Qwen2.5-32B --split --join <TOKEN>
 - `--listen-all` is not a substitute for this test; it only affects local
   HTTP API/console listeners.
 
+#### Split-package preflight diagnostics
+
+Before starting a package-backed split run, preflight the local package
+directory and then certify the immutable published ref:
+
+```bash
+skippy-model-package preflight ./model-package --stages 2 --verify-sha256
+mesh-llm models certify hf://namespace/repo@revision --package-only --report-out target/skippy-preflight/cert.json
+```
+
+Clean packages should pass with a machine-readable report. Deliberately broken
+packages or refs should fail before the model is advertised through `/v1/models`
+and should name the blocked manifest field, missing artifact, size/SHA mismatch,
+sidecar, or stage part.
+
 ### 4. Two GPU nodes, model too big for one
 
 When the model exceeds host VRAM, split happens automatically without `--split`.

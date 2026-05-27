@@ -175,6 +175,57 @@ probe_nvidia() {
         [[ -d /proc/driver/nvidia/gpus ]]
 }
 
+normalize_cuda_sm() {
+    local raw="$1"
+    printf '%s\n' "${raw//[^0-9]/}"
+}
+
+is_blackwell_cuda_sm() {
+    local sm
+    sm="$(normalize_cuda_sm "$1")"
+    [[ "$sm" =~ ^[0-9]+$ ]] && (( sm >= 100 && sm < 200 ))
+}
+
+nvidia_model_is_blackwell() {
+    local model
+    model="$(printf '%s\n' "$1" | tr '[:lower:]' '[:upper:]')"
+    case "$model" in
+        *BLACKWELL*|*GB300*|*B300*|*GB200*|*B200*|*B100*|*GB10*|*THOR*|\
+        *RTX\ 5090*|*RTX\ 5080*|*RTX\ 5070*|*RTX\ 5060*|*RTX\ 5050*|\
+        *RTX\ PRO\ 6000*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+probe_cuda_blackwell() {
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        local raw
+        while IFS= read -r raw; do
+            if is_blackwell_cuda_sm "$raw"; then
+                return 0
+            fi
+        done < <(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null || true)
+    fi
+
+    if [[ -d /proc/driver/nvidia/gpus ]]; then
+        local info
+        for info in /proc/driver/nvidia/gpus/*/information; do
+            [[ -f "$info" ]] || continue
+            local model
+            model="$(sed -n 's/^Model:[[:space:]]*//p' "$info" | head -n 1)"
+            if [[ -n "$model" ]] && nvidia_model_is_blackwell "$model"; then
+                return 0
+            fi
+        done
+    fi
+
+    return 1
+}
+
 probe_rocm() {
     command -v rocm-smi >/dev/null 2>&1 ||
         command -v rocminfo >/dev/null 2>&1 ||
@@ -211,7 +262,7 @@ supported_flavors() {
             echo "cpu"
             ;;
         Linux/x86_64)
-            echo "cpu cuda cuda-blackwell rocm vulkan"
+            echo "cuda-blackwell cuda rocm vulkan cpu"
             ;;
         *)
                 platform_error_message >&2
@@ -226,6 +277,8 @@ supported_flavors() {
     esac
 }
 
+# Keep this detection order and the probes above in sync with the Rust updater
+# flavor selection in crates/mesh-llm-system/src/autoupdate.rs.
 recommended_flavor() {
     case "$(platform_support_status)" in
         supported)
@@ -237,7 +290,9 @@ recommended_flavor() {
             echo "cpu"
             ;;
         Linux/x86_64)
-            if probe_nvidia; then
+            if probe_cuda_blackwell; then
+                echo "cuda-blackwell"
+            elif probe_nvidia; then
                 echo "cuda"
             elif probe_rocm; then
                 echo "rocm"
@@ -267,6 +322,9 @@ recommendation_reason() {
             ;;
         cuda)
             echo "NVIDIA tooling or devices were detected."
+            ;;
+        cuda-blackwell)
+            echo "Blackwell NVIDIA hardware was detected."
             ;;
         rocm)
             echo "ROCm/HIP tooling was detected."

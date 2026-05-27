@@ -42,7 +42,7 @@ class PublishCratesScriptTests(unittest.TestCase):
             self.assertIn("-p mesh-llm-api-server", cargo_log)
             self.assertRegex(fixture.read_log("sleep.log"), r"^[1-9][0-9]*$")
             self.assertIn(
-                "crates.io rate limit hit for model-artifact@0.66.0",
+                "crates.io rate limit hit for model-artifact@0.68.0",
                 result.stderr,
             )
 
@@ -69,7 +69,7 @@ class PublishCratesScriptTests(unittest.TestCase):
             self.assertEqual(cargo_log.count("-p model-artifact"), 2)
             self.assertNotIn("-p model-hf", cargo_log)
             self.assertIn(
-                "retry limit exceeded for model-artifact@0.66.0 after 2 attempts",
+                "retry limit exceeded for model-artifact@0.68.0 after 2 attempts",
                 result.stderr,
             )
 
@@ -84,7 +84,7 @@ class PublishCratesScriptTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
             self.assertIn(
-                "dry-run cannot verify model-artifact until model-ref@0.66.0 exists in crates.io",
+                "dry-run cannot verify model-artifact until model-ref@0.68.0 exists in crates.io",
                 result.stdout,
             )
             self.assertIn(
@@ -121,7 +121,7 @@ class PublishCratesScriptTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertIn("model-ref@0.66.0 already published; skipping", result.stdout)
+            self.assertIn("model-ref@0.68.0 already published; skipping", result.stdout)
             self.assertNotIn("-p model-ref", fixture.read_log("cargo.log"))
 
     def test_real_publish_fails_closed_when_registry_status_is_unknown(self) -> None:
@@ -135,7 +135,7 @@ class PublishCratesScriptTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(
-                "could not verify model-ref@0.66.0 on crates.io; aborting before publish",
+                "could not verify model-ref@0.68.0 on crates.io; aborting before publish",
                 result.stderr,
             )
             self.assertFalse((fixture.tmp_path / "cargo.log").exists())
@@ -164,7 +164,7 @@ class PublishCratesFixture:
         self.bin_dir = self.tmp_path / "bin"
         self.bin_dir.mkdir()
         (self.tmp_path / "Cargo.toml").write_text(
-            '[workspace.package]\nversion = "0.66.0"\n',
+            '[workspace.package]\nversion = "0.68.0"\n',
             encoding="utf-8",
         )
 
@@ -251,7 +251,7 @@ exit 0
 
     def write_curl_statuses(self, statuses: dict[str, int]) -> None:
         cases = "\n".join(
-            f"*crates/{crate}/0.66.0*) status={status} ;;"
+            f"*crates/{crate}/0.68.0*) status={status} ;;"
             for crate, status in statuses.items()
         )
         self._write_executable(
@@ -304,7 +304,7 @@ fi
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-CRATES_IO_429 = """error: failed to publish model-artifact v0.66.0
+CRATES_IO_429 = """error: failed to publish model-artifact v0.68.0
 status 429 Too Many Requests:
 "You have published too many new crates in a short period of time.
 Please try again after Fri, 22 May 2026 09:58:23 GMT

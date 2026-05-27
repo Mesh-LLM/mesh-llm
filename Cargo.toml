@@ -53,7 +53,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
-version = "0.66.0"
+version = "0.68.0"
 
 [workspace.dependencies]
 anyhow = "1"
@@ -62,6 +62,9 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+
+[patch.crates-io]
+hf-hub = { git = "https://github.com/Mesh-LLM/hf-hub", branch = "mesh-llm" }
 
 [workspace.lints.clippy]
 cognitive_complexity = "warn"

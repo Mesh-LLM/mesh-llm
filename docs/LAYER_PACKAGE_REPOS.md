@@ -42,18 +42,20 @@ subcommands are:
 
 ```bash
 skippy-model-package inspect <model.gguf>
-skippy-model-package plan <model.gguf>
-skippy-model-package write <model.gguf> --out ./package
-skippy-model-package write-stages <model.gguf> --out ./stages
-skippy-model-package write-package <model.gguf> --out ./package
-skippy-model-package validate ./package/model-package.json
-skippy-model-package validate-package ./package
+skippy-model-package plan <model.gguf> --stages 4
+skippy-model-package write <model.gguf> --layers 0..12 --out ./stage-0.gguf
+skippy-model-package write-stages <model.gguf> --stages 4 --out-dir ./stages
+skippy-model-package write-package <model.gguf> --out-dir ./package
+skippy-model-package validate <model.gguf> ./stages/stage-*.gguf
+skippy-model-package validate-package <model.gguf> ./package
+skippy-model-package preflight ./package --stages 4 --verify-sha256
 ```
 
 Validate before publishing:
 
 ```bash
-skippy-model-package validate-package ./package
+skippy-model-package validate-package <model.gguf> ./package
+skippy-model-package preflight ./package --stages 4 --verify-sha256
 ```
 
 ## Queue a Hugging Face package job
@@ -120,6 +122,10 @@ Run package-only certification first:
 ```bash
 mesh-llm models certify hf://namespace/repo@revision --package-only --report-out cert.json
 ```
+
+Use the immutable published ref for certification, not only the local package
+directory. Fix package-local preflight diagnostics and published-ref
+package-only certification failures before moving on to a live endpoint smoke.
 
 Then run a live endpoint smoke once the mesh is serving it:
 
