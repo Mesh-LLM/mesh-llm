@@ -8,6 +8,97 @@ use crate::cli::runtime::RuntimeCommand;
 use crate::crypto::TrustPolicy;
 use crate::network::discovery::MeshDiscoveryMode;
 
+/// Parse a `URL=TOKEN` pair for `--relay-auth`. Splits on the first `=` only,
+/// so tokens may contain `=` (base64 padding, JWTs).
+///
+/// Error messages must never include the token portion of the input —
+/// `--relay-auth` carries bearer credentials, and a parse failure could
+/// otherwise leak them into terminal output, logs, and bug reports. The URL
+/// is safe to echo back (it's the public identity of the relay).
+fn parse_relay_auth_pair(s: &str) -> Result<(String, String), String> {
+    let Some((url, token)) = s.split_once('=') else {
+        return Err("expected URL=TOKEN, no '=' separator found (token redacted)".to_string());
+    };
+    if url.is_empty() {
+        return Err("expected URL=TOKEN, got empty URL (token redacted)".to_string());
+    }
+    if token.is_empty() {
+        return Err(format!(
+            "expected URL=TOKEN, got empty token for URL {url:?}"
+        ));
+    }
+    Ok((url.to_string(), token.to_string()))
+}
+
+#[cfg(test)]
+mod relay_auth_parser_tests {
+    use super::parse_relay_auth_pair;
+
+    #[test]
+    fn parses_simple_pair() {
+        let (url, token) = parse_relay_auth_pair("https://r.example/=abc123").unwrap();
+        assert_eq!(url, "https://r.example/");
+        assert_eq!(token, "abc123");
+    }
+
+    #[test]
+    fn preserves_equals_in_token() {
+        // Base64-padded tokens and NIP-98-style payloads often contain `=`.
+        let (_, token) = parse_relay_auth_pair("https://r/=eyJhbGciOiJFZERTQSJ9.payload==")
+            .expect("token with '=' must parse");
+        assert_eq!(token, "eyJhbGciOiJFZERTQSJ9.payload==");
+    }
+
+    #[test]
+    fn rejects_missing_separator() {
+        assert!(parse_relay_auth_pair("no-separator").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_url() {
+        assert!(parse_relay_auth_pair("=token").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_token() {
+        assert!(parse_relay_auth_pair("https://r/=").is_err());
+    }
+
+    #[test]
+    fn parser_errors_never_leak_token_portion() {
+        // --relay-auth carries bearer credentials; if parsing fails, the
+        // token portion of the input must never appear in the error
+        // message (which lands in terminal output, logs, and bug reports).
+        // The URL is safe to echo back — it's the public identity of the
+        // relay — but everything after the first `=` is secret.
+        let secret_token = "super-secret-bearer-token-xyz-12345";
+
+        // Case 1: no `=` separator. Whole input is treated as a malformed
+        // URL-or-token blob; we cannot tell which it is, so redact both.
+        let err = parse_relay_auth_pair(secret_token).expect_err("should fail");
+        assert!(
+            !err.contains(secret_token),
+            "missing-separator error must not echo the input: {err}"
+        );
+
+        // Case 2: empty URL (`=token`). URL is empty, the token portion is
+        // the secret — must not appear.
+        let err = parse_relay_auth_pair(&format!("={secret_token}")).expect_err("should fail");
+        assert!(
+            !err.contains(secret_token),
+            "empty-URL error must not echo the token: {err}"
+        );
+
+        // Case 3: empty token (`URL=`). Token is empty, no secret to leak;
+        // the URL is fine to include and helps the user diagnose.
+        let err = parse_relay_auth_pair("https://r.example/=").expect_err("should fail");
+        assert!(
+            err.contains("https://r.example/"),
+            "empty-token error should name the URL: {err}"
+        );
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum TrustCommand {
     /// Add an owner to the local trust store allowlist.
@@ -349,11 +440,7 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) region: Option<String>,
 
-    /// Enable blackboard on public meshes (on by default for private meshes).
-    #[arg(long)]
-    pub(crate) blackboard: bool,
-
-    /// Your display name on the blackboard.
+    /// Display name for this node.
     #[arg(long)]
     pub(crate) name: Option<String>,
 
@@ -413,6 +500,17 @@ pub(crate) struct Cli {
     /// Override iroh relay URLs.
     #[arg(long, hide = true)]
     pub(crate) relay: Vec<String>,
+
+    /// Per-relay bearer token for gated iroh relays, formatted as
+    /// `URL=TOKEN`. Repeatable. The token is sent as
+    /// `Authorization: Bearer <TOKEN>` on the WebSocket upgrade to the
+    /// matching `--relay` URL. Relays not listed here register without
+    /// authentication (the correct behavior for public relays).
+    ///
+    /// Splits on the first `=` only, so tokens may contain `=` (base64
+    /// padding, JWTs, etc.).
+    #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
+    pub(crate) relay_auth: Vec<(String, String)>,
 
     /// Bind QUIC to a fixed UDP port (for NAT port forwarding).
     #[arg(long, hide = true)]
@@ -512,6 +610,12 @@ pub(crate) enum Command {
         /// Install this specific release tag or version (e.g. v0.60.0 or 0.60.0-rc.1).
         #[arg(long)]
         version: Option<String>,
+        /// Install this release bundle flavor instead of the default installed flavor.
+        #[arg(long, value_enum, conflicts_with = "detect_flavor")]
+        flavor: Option<crate::system::backend::BinaryFlavor>,
+        /// Re-detect the best host backend flavor before selecting the release bundle.
+        #[arg(long, conflicts_with = "flavor")]
+        detect_flavor: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
@@ -632,40 +736,6 @@ pub(crate) enum Command {
     },
     /// Stop running mesh-llm processes.
     Stop,
-    /// Blackboard — post, search, and read messages shared across the mesh.
-    ///
-    /// Post a message:   mesh-llm blackboard "your message here"
-    /// Show feed:        mesh-llm blackboard
-    /// Search:           mesh-llm blackboard --search "query"
-    /// From a peer:      mesh-llm blackboard --from tyler
-    /// MCP server:       mesh-llm client --join <token> blackboard --mcp
-    /// Install skill:    mesh-llm blackboard install-skill
-    ///
-    /// Conventions: prefix messages with QUESTION:, STATUS:, FINDING:, TIP: etc.
-    /// Search picks these up naturally via multi-term OR matching.
-    #[command(name = "blackboard")]
-    Blackboard {
-        /// Message to post (if provided).
-        text: Option<String>,
-        /// Search the blackboard.
-        #[arg(long)]
-        search: Option<String>,
-        /// Filter by author name.
-        #[arg(long)]
-        from: Option<String>,
-        /// Only show items from the last N hours (default: 24).
-        #[arg(long)]
-        since: Option<f64>,
-        /// Max items to show (default: 20).
-        #[arg(long, default_value = "20")]
-        limit: usize,
-        /// Console/API port of the running mesh-llm instance.
-        #[arg(long, default_value = "3131")]
-        port: u16,
-        /// Run as an MCP server over stdio (for agent integration).
-        #[arg(long)]
-        mcp: bool,
-    },
     /// Plugin management.
     Plugin {
         #[command(subcommand)]
@@ -753,6 +823,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Run a CLI command contributed by a configured plugin.
+    #[command(external_subcommand)]
+    ExternalPlugin(Vec<OsString>),
 }
 
 #[derive(Subcommand, Debug)]
@@ -764,6 +837,8 @@ pub(crate) enum PluginCommand {
     },
     /// List auto-registered and configured plugins.
     List,
+    /// Run configured plugin tools as an MCP server over stdio.
+    Mcp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -792,7 +867,7 @@ where
     // Recognized value-taking flags: --log-format, --mesh-discovery-mode, --max-vram,
     // --llama-flavor, --device, --tensor-split, --bind-port, --bind-ip, --max-clients,
     // --port, --console, --swarm-capture, --draft-max, --ctx-size.
-    // Boolean flags: --help-advanced, --auto, --client, --headless, --publish, --blackboard,
+    // Boolean flags: --help-advanced, --auto, --client, --headless, --publish,
     // --plugin, --auto-update, --no-draft, --split, --no-enumerate-host, --listen-all,
     // --no-console, --owner-required.
     let value_taking_flags = [
@@ -822,6 +897,7 @@ where
         "--draft",
         "--bin-dir",
         "--relay",
+        "--relay-auth",
         "--nostr-relay",
         "--config",
         "--owner-key",
@@ -1084,6 +1160,72 @@ mod tests {
     }
 
     #[test]
+    fn normalize_runtime_surface_args_treats_relay_auth_as_value_taking_before_serve() {
+        // Regression: --relay-auth carries a `URL=TOKEN` value, so the
+        // pseudo-subcommand scanner must skip the value and still discover
+        // `serve` (or `client`) as the runtime surface. If --relay-auth is not
+        // in the value-taking list the scanner stops at the token and Clap
+        // sees a malformed command.
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--relay-auth",
+            "https://gated.example/=token",
+            "serve",
+            "--relay",
+            "https://gated.example/",
+            "--auto",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                "mesh-llm",
+                "--relay-auth",
+                "https://gated.example/=token",
+                "--relay",
+                "https://gated.example/",
+                "--auto",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
+
+        // And the resulting argv must actually parse cleanly through Clap so
+        // the relay-auth value reaches `Cli::relay_auth`.
+        let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
+        assert_eq!(
+            cli.relay_auth,
+            vec![("https://gated.example/".to_string(), "token".to_string())],
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_relay_auth_before_client_invocation() {
+        // Same regression but for the `client` surface, including a token
+        // containing `=` (NIP-98-style base64 padding).
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--relay-auth",
+            "https://gated.example/=eyJhbGciOiJFZERTQSJ9.payload==",
+            "client",
+            "--auto",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
+        let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
+        assert!(cli.client, "client surface flag should be set");
+        assert_eq!(
+            cli.relay_auth,
+            vec![(
+                "https://gated.example/".to_string(),
+                "eyJhbGciOiJFZERTQSJ9.payload==".to_string()
+            )],
+        );
+    }
+
+    #[test]
     fn normalize_runtime_surface_args_keeps_non_runtime_subcommands() {
         let normalized = normalize_runtime_surface_args(["mesh-llm", "download", "foo"]);
 
@@ -1320,6 +1462,35 @@ mod tests {
 
         let rendered = err.to_string();
         assert!(rendered.contains("--port"));
+    }
+
+    #[test]
+    fn unknown_top_level_command_is_captured_for_plugin_dispatch() {
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "goose-next",
+            "--model",
+            "auto",
+            "--",
+            "prompt.txt",
+        ]);
+        let cli = Cli::parse_from(normalized.normalized);
+
+        match cli.command.expect("external plugin command expected") {
+            Command::ExternalPlugin(args) => {
+                assert_eq!(
+                    args,
+                    vec![
+                        OsString::from("goose-next"),
+                        OsString::from("--model"),
+                        OsString::from("auto"),
+                        OsString::from("--"),
+                        OsString::from("prompt.txt"),
+                    ]
+                );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]

@@ -1040,8 +1040,7 @@ fn download_hf_package_to_local_sync(
             *total_bytes,
             Some(Arc::clone(&package_scope)),
             index + 1,
-        )
-        .with_context(|| format!("download layer package file: {file_name}"))?;
+        )?;
     }
 
     verify_resolved_hf_package_files(

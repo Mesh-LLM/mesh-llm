@@ -127,22 +127,27 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
             }
             .await;
 
-            if let Err(err) = result {
-                tracing::warn!(
-                    plugin = %plugin_name,
-                    error = %err,
-                    "Plugin connection closed"
-                );
-            }
-
-            {
+            let was_active_runtime = {
                 let mut runtime = runtime.lock().await;
                 if runtime.as_ref().map(|runtime| runtime.generation) == Some(generation) {
                     *runtime = None;
-                    let mut summary = summary.lock().await;
-                    summary.status = "stopped".into();
-                    summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
+                    true
+                } else {
+                    false
                 }
+            };
+
+            if was_active_runtime {
+                if let Err(err) = result {
+                    tracing::warn!(
+                        plugin = %plugin_name,
+                        error = %err,
+                        "Plugin connection closed"
+                    );
+                }
+                let mut summary = summary.lock().await;
+                summary.status = "stopped".into();
+                summary.error = Some(format!("Plugin '{}' disconnected", plugin_name));
             }
 
             let mut pending = pending.lock().await;

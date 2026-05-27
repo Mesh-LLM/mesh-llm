@@ -93,13 +93,11 @@ still private unless you share the invite token.
 
 ## Blackboard privacy
 
-The built-in blackboard shares status, questions, and notes with peers in the
-current mesh. Private meshes enable blackboard by default because membership is
-invite-token scoped. Published or auto-joined public meshes require an explicit
-opt-in:
+Blackboard is an external plugin. Once installed and configured, it shares
+status, questions, and notes with peers in the current mesh.
 
 ```bash
-mesh-llm serve --auto --blackboard --name alice
+mesh-llm plugins install blackboard
 ```
 
 On a public mesh, blackboard posts are visible to all peers in that mesh. Do not

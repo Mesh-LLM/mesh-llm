@@ -1,4 +1,7 @@
-use super::{prepare_binary_stage_connection, restore_prefill_decode_as_decode_message};
+use super::{
+    binary_full_prefill_record_identities, prepare_binary_stage_connection,
+    restore_prefill_decode_as_decode_message,
+};
 use std::{
     io,
     net::{TcpListener, TcpStream},
@@ -7,8 +10,12 @@ use std::{
     time::Duration,
 };
 
+use crate::kv_integration::KvStageIntegration;
 use skippy_protocol::binary::{
     StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
+};
+use skippy_protocol::{
+    LoadMode, PeerConfig, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
 
 #[test]
@@ -76,4 +83,118 @@ fn restore_prefill_decode_as_decode_preserves_chat_metadata() {
     assert_eq!(decode.chat_sampling_metadata.as_deref(), Some(metadata));
     assert!(decode.activation.is_empty());
     assert!(decode.positions.is_empty());
+}
+
+fn prefix_cache_test_config() -> StageConfig {
+    StageConfig {
+        run_id: "run".to_string(),
+        topology_id: "topology".to_string(),
+        model_id: "org/model:Q4_K_M".to_string(),
+        package_ref: None,
+        manifest_sha256: None,
+        source_model_path: None,
+        source_model_sha256: None,
+        source_model_bytes: None,
+        materialized_path: None,
+        materialized_pinned: false,
+        model_path: None,
+        projector_path: None,
+        stage_id: "stage-0".to_string(),
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: 4,
+        ctx_size: 8192,
+        lane_count: 2,
+        n_batch: None,
+        n_ubatch: None,
+        n_gpu_layers: 0,
+        cache_type_k: "f16".to_string(),
+        cache_type_v: "f16".to_string(),
+        flash_attn_type: Default::default(),
+        filter_tensors_on_load: false,
+        selected_device: None,
+        kv_cache: Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::ResidentKv,
+            max_entries: 8,
+            max_bytes: 0,
+            min_tokens: 256,
+            shared_prefix_stride_tokens: 128,
+            shared_prefix_record_limit: 2,
+        }),
+        load_mode: LoadMode::RuntimeSlice,
+        bind_addr: "127.0.0.1:0".to_string(),
+        upstream: None,
+        downstream: Some(PeerConfig {
+            stage_id: "stage-1".to_string(),
+            stage_index: 1,
+            endpoint: "127.0.0.1:0".to_string(),
+        }),
+    }
+}
+
+fn prefill_message() -> StageWireMessage {
+    StageWireMessage {
+        kind: WireMessageKind::PrefillEmbd,
+        pos_start: 0,
+        token_count: 0,
+        state: StageStateHeader::new(WireMessageKind::PrefillEmbd, WireActivationDType::F32),
+        request_id: 11,
+        session_id: 13,
+        sampling: None,
+        chat_sampling_metadata: None,
+        tokens: Vec::new(),
+        positions: Vec::new(),
+        activation: Vec::new(),
+        raw_bytes: Vec::new(),
+    }
+}
+
+#[test]
+fn binary_full_prefill_record_plan_includes_shared_prefix_candidate() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let message = prefill_message();
+    let recorded_tokens = (0..2214).collect::<Vec<_>>();
+    let mut lookup_tokens = recorded_tokens.clone();
+    lookup_tokens.extend(100_000..100_017);
+
+    let record_plan =
+        binary_full_prefill_record_identities(&kv, &config, "session", &message, &recorded_tokens);
+    let base = super::binary_message_base(&config, "session", &message);
+    let lookup_plan = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
+
+    let record_counts = record_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+    let lookup_counts = lookup_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+
+    assert_eq!(record_counts, vec![2214, 2176]);
+    assert!(lookup_counts.contains(&2176));
+
+    let recorded_shared = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("binary full-prefill record plan should include shared grid prefix");
+    let lookup_shared = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("lookup plan should probe shared grid prefix");
+    let recorded_exact = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2214)
+        .expect("binary full-prefill record plan should keep exact first prompt");
+    let lookup_exact = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2231)
+        .expect("lookup plan should probe exact second prompt");
+
+    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
+    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
 }

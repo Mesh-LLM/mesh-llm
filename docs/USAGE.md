@@ -604,6 +604,7 @@ alias = "qwen-vl"
 [[plugin]]
 name    = "blackboard"
 enabled = true
+command = "mesh-llm-plugin-blackboard"
 
 # [[plugin]]
 # name    = "openai-endpoint"

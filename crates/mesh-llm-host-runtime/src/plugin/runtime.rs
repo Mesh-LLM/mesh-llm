@@ -218,6 +218,7 @@ impl ExternalPlugin {
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                 }),
+                Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
             )
             .await?;
         self.parse_initialize_response(generation, response).await
@@ -475,7 +476,31 @@ impl ExternalPlugin {
         arguments_json: &str,
     ) -> Result<ToolCallResult> {
         let response = self
-            .invoke_service(proto::ServiceKind::Operation, tool_name, arguments_json)
+            .invoke_service(
+                proto::ServiceKind::Operation,
+                tool_name,
+                arguments_json,
+                Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
+            )
+            .await?;
+        Ok(ToolCallResult {
+            content_json: response.output_json,
+            is_error: response.is_error,
+        })
+    }
+
+    pub(crate) async fn call_tool_without_timeout(
+        &self,
+        tool_name: &str,
+        arguments_json: &str,
+    ) -> Result<ToolCallResult> {
+        let response = self
+            .invoke_service(
+                proto::ServiceKind::Operation,
+                tool_name,
+                arguments_json,
+                None,
+            )
             .await?;
         Ok(ToolCallResult {
             content_json: response.output_json,
@@ -488,15 +513,17 @@ impl ExternalPlugin {
         kind: proto::ServiceKind,
         service_name: &str,
         input_json: &str,
+        timeout: Option<std::time::Duration>,
     ) -> Result<proto::InvokeServiceResponse> {
         let response = self
-            .request(proto::envelope::Payload::InvokeServiceRequest(
-                proto::InvokeServiceRequest {
+            .request_with_timeout(
+                proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
                     kind: kind as i32,
                     service_name: service_name.to_string(),
                     input_json: input_json.to_string(),
-                },
-            ))
+                }),
+                timeout,
+            )
             .await?;
         match response.payload {
             Some(proto::envelope::Payload::InvokeServiceResponse(resp)) => Ok(resp),
@@ -581,11 +608,23 @@ impl ExternalPlugin {
     }
 
     async fn request(&self, payload: proto::envelope::Payload) -> Result<proto::Envelope> {
+        self.request_with_timeout(
+            payload,
+            Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
+        )
+        .await
+    }
+
+    async fn request_with_timeout(
+        &self,
+        payload: proto::envelope::Payload,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<proto::Envelope> {
         for attempt in 0..2 {
             self.ensure_running().await?;
             let (generation, outbound_tx, pending) = self.runtime_handles().await?;
             match self
-                .request_once(generation, outbound_tx, pending, payload.clone())
+                .request_once(generation, outbound_tx, pending, payload.clone(), timeout)
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -651,6 +690,7 @@ impl ExternalPlugin {
         outbound_tx: mpsc::Sender<proto::Envelope>,
         pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>,
         payload: proto::envelope::Payload,
+        timeout: Option<std::time::Duration>,
     ) -> Result<proto::Envelope> {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
@@ -673,24 +713,31 @@ impl ExternalPlugin {
             bail!("Plugin '{}' is not accepting requests", self.spec.name);
         }
 
-        match tokio::time::timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS), rx).await {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(_)) => {
+        let response = match timeout {
+            Some(timeout) => match tokio::time::timeout(timeout, rx).await {
+                Ok(response) => response,
+                Err(_) => {
+                    pending.lock().await.remove(&request_id);
+                    self.handle_runtime_failure(
+                        Some(generation),
+                        format!("Plugin '{}' timed out", self.spec.name),
+                    )
+                    .await;
+                    bail!("Plugin '{}' timed out", self.spec.name);
+                }
+            },
+            None => rx.await,
+        };
+
+        match response {
+            Ok(resp) => resp,
+            Err(_recv_err) => {
                 self.handle_runtime_failure(
                     Some(generation),
                     format!("Plugin '{}' dropped the response channel", self.spec.name),
                 )
                 .await;
                 bail!("Plugin '{}' dropped the response channel", self.spec.name);
-            }
-            Err(_) => {
-                pending.lock().await.remove(&request_id);
-                self.handle_runtime_failure(
-                    Some(generation),
-                    format!("Plugin '{}' timed out", self.spec.name),
-                )
-                .await;
-                bail!("Plugin '{}' timed out", self.spec.name);
             }
         }
     }

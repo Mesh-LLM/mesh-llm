@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::process::{Command, Stdio};
 
 use crate::{cli::shell, runtime};
 use url::Url;
@@ -11,6 +12,29 @@ const OPENCODE_INSTALL_HINT: &str = "curl -fsSL https://opencode.ai/install | ba
 const MESH_MCP_SERVER_ID: &str = "mesh";
 const MESH_MCP_DISPLAY_NAME: &str = "Mesh LLM";
 const DEFAULT_MESH_MCP_URL: &str = "http://127.0.0.1:3131/mcp";
+
+fn configure_interactive_stdio(command: &mut Command) {
+    #[cfg(unix)]
+    if let Ok(tty) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+    {
+        if let Ok(stdin) = tty.try_clone() {
+            command.stdin(Stdio::from(stdin));
+        }
+        if let Ok(stdout) = tty.try_clone() {
+            command.stdout(Stdio::from(stdout));
+        }
+        command.stderr(Stdio::from(tty));
+        return;
+    }
+
+    command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenCodeLaunchSpec {
@@ -476,11 +500,13 @@ pub(crate) async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
         }
     } else {
         eprintln!("🪿 Launching goose session...");
-        let status = std::process::Command::new("goose")
+        let mut command = Command::new("goose");
+        command
             .arg("session")
             .env("GOOSE_PROVIDER", "mesh")
-            .env("GOOSE_MODEL", &chosen)
-            .status();
+            .env("GOOSE_MODEL", &chosen);
+        configure_interactive_stdio(&mut command);
+        let status = command.status();
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => eprintln!("goose exited with {s}"),
@@ -536,16 +562,17 @@ pub(crate) async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
 
     eprintln!("🚀 Launching Claude Code with {chosen} → {base_url}\n");
-    let status = std::process::Command::new("claude")
-        .args([
-            "--model",
-            &chosen,
-            "--settings",
-            &settings_json,
-            "--mcp-config",
-            &mcp_config_json,
-        ])
-        .status();
+    let mut command = Command::new("claude");
+    command.args([
+        "--model",
+        &chosen,
+        "--settings",
+        &settings_json,
+        "--mcp-config",
+        &mcp_config_json,
+    ]);
+    configure_interactive_stdio(&mut command);
+    let status = command.status();
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => eprintln!("claude exited with {s}"),
@@ -625,14 +652,27 @@ fn load_existing_config(path: &std::path::Path) -> Result<serde_json::Value> {
 
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    let config: serde_json::Value = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {} as JSON", path.display()))?;
+    let config: serde_json::Value = parse_config_content(path, &content)?;
 
     if !config.is_object() {
         anyhow::bail!("Expected {} to contain a JSON object", path.display());
     }
 
     Ok(config)
+}
+
+fn parse_config_content(path: &std::path::Path, content: &str) -> Result<serde_json::Value> {
+    if path.extension().and_then(|ext| ext.to_str()) == Some("jsonc") {
+        json5::from_str(content).with_context(|| {
+            format!(
+                "Failed to parse {} as JSONC-compatible OpenCode config",
+                path.display()
+            )
+        })
+    } else {
+        serde_json::from_str(content)
+            .with_context(|| format!("Failed to parse {} as JSON", path.display()))
+    }
 }
 
 fn provider_map_mut<'a>(
@@ -768,9 +808,10 @@ fn run_pi_with_mesh(
 
     let model_arg = format!("mesh/{chosen}");
     eprintln!("🚀 Launching pi with {chosen} → {base_url}\n");
-    let status = std::process::Command::new("pi")
-        .args(["--model", &model_arg])
-        .status();
+    let mut command = Command::new("pi");
+    command.args(["--model", &model_arg]);
+    configure_interactive_stdio(&mut command);
+    let status = command.status();
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => eprintln!("pi exited with {s}"),
@@ -815,11 +856,13 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
             "🚀 Launching OpenCode with {} → {}\n",
             chosen, target.api_base_url
         );
-        let status = std::process::Command::new("opencode")
+        let mut command = Command::new("opencode");
+        command
             .args(["-m", &spec.model])
             .env(OPENCODE_CONFIG_ENV, &spec.config_content)
-            .env(spec.api_key_env, spec.api_key_value)
-            .status();
+            .env(spec.api_key_env, spec.api_key_value);
+        configure_interactive_stdio(&mut command);
+        let status = command.status();
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => eprintln!("opencode exited with {s}"),
@@ -858,11 +901,7 @@ fn resolve_opencode_config_path_from_home(
         return Ok(json_path);
     }
     if jsonc_path.exists() {
-        anyhow::bail!(
-            "Found {} but mesh-llm only writes opencode.json. Rename or migrate it to {} and rerun `mesh-llm opencode --write`.",
-            jsonc_path.display(),
-            json_path.display()
-        );
+        return Ok(jsonc_path);
     }
 
     Ok(json_path)
@@ -1871,19 +1910,44 @@ GOOSE_PROVIDER: mesh
     }
 
     #[test]
-    fn resolve_opencode_config_path_rejects_jsonc_only_configs() {
+    fn resolve_opencode_config_path_accepts_jsonc_only_configs() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join(".config").join("opencode");
         std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
         let jsonc_path = config_dir.join("opencode.jsonc");
         std::fs::write(&jsonc_path, "{/* comments */}").expect("failed to write jsonc config");
 
-        let err = resolve_opencode_config_path_from_home(temp_dir.path())
-            .expect_err("jsonc-only config should be rejected");
-        let rendered = err.to_string();
+        let resolved =
+            resolve_opencode_config_path_from_home(temp_dir.path()).expect("jsonc should resolve");
 
-        assert!(rendered.contains("only writes opencode.json"));
-        assert!(rendered.contains("Rename or migrate"));
+        assert_eq!(resolved, jsonc_path);
+    }
+
+    #[test]
+    fn opencode_write_accepts_jsonc_config_with_comments_and_trailing_commas() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_path = temp_dir.path().join("opencode.jsonc");
+        std::fs::write(
+            &config_path,
+            r#"{
+              // Existing OpenCode setting
+              "$schema": "https://opencode.ai/config.json",
+              "theme": "opencode",
+            }"#,
+        )
+        .expect("failed to write jsonc config");
+
+        write_config(
+            &config_path,
+            &["Qwen3.5-27B".to_string()],
+            LOCAL_OPENCODE_HOST,
+        )
+        .expect("jsonc config should be updated");
+
+        let content = std::fs::read_to_string(&config_path).expect("failed to read config");
+        let parsed: serde_json::Value = serde_json::from_str(&content).expect("written JSON");
+        assert_eq!(parsed["theme"], "opencode");
+        assert!(parsed["provider"]["mesh"].is_object());
     }
 
     #[test]

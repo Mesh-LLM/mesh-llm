@@ -178,6 +178,59 @@ fn stage0_full_prefill_record_plan_includes_shared_prefix_candidate() {
     assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
 }
 
+#[test]
+fn stage0_chunked_prefill_record_plan_includes_shared_prefix_candidate() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let base = prefix_cache_test_base();
+    let recorded_tokens = (0..2214).collect::<Vec<_>>();
+    let mut lookup_tokens = recorded_tokens.clone();
+    lookup_tokens.extend(100_000..100_017);
+
+    let record_plan = super::prefix_cache::stage0_prefill_record_identities(
+        &kv,
+        &config,
+        &base,
+        0,
+        &recorded_tokens,
+    );
+    let lookup_plan = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
+
+    let record_counts = record_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+    let lookup_counts = lookup_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+
+    assert_eq!(record_counts, vec![2214, 2176]);
+    assert!(lookup_counts.contains(&2176));
+
+    let recorded_shared = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("chunked record plan should include shared grid prefix");
+    let lookup_shared = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("lookup plan should probe shared grid prefix");
+    let recorded_exact = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2214)
+        .expect("chunked record plan should keep exact first prompt");
+    let lookup_exact = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2231)
+        .expect("lookup plan should probe exact second prompt");
+
+    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
+    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+}
+
 struct MultimodalSmokeFixture {
     model_path: PathBuf,
     projector_path: PathBuf,

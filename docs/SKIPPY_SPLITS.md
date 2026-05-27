@@ -39,6 +39,47 @@ Other peers join the mesh normally:
 mesh-llm serve --join <token>
 ```
 
+## Two-node split smoke test
+
+Use the same layer-package model on every serving node. Each node resolves the
+package and downloads only the shared artifacts plus the layer files needed for
+its assigned stage.
+
+```bash
+# node A: starts the private mesh and becomes the coordinator
+mesh-llm serve \
+  --model meshllm/Qwen3-8B-Q4_K_M-layers \
+  --split \
+  --max-vram 5 \
+  --bind-port 7842 \
+  --port 9447 \
+  --console 3232
+
+# node B: joins with the token printed by node A
+mesh-llm serve \
+  --model meshllm/Qwen3-8B-Q4_K_M-layers \
+  --split \
+  --max-vram 5 \
+  --join <token> \
+  --bind-port 7843 \
+  --port 9447 \
+  --console 3232
+```
+
+For hosts with more than one network interface, add `--bind-ip <lan-ip>` on
+each node so the invite token and gossip advertise the routable address.
+
+Once both stages are ready:
+
+```bash
+curl -sS http://127.0.0.1:3232/api/status | jq '{state:.node_state, ready:.llama_ready, peers:(.peers|length), stages:.runtime.stages}'
+curl -sS http://127.0.0.1:9447/v1/models | jq '.data[].id'
+curl -sS http://127.0.0.1:9447/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer mesh' \
+  -d '{"model":"meshllm/Qwen3-8B-Q4_K_M-layers","messages":[{"role":"user","content":"Reply with OK"}],"max_tokens":16}'
+```
+
 ## Use a local GGUF
 
 Direct GGUFs still work:
@@ -99,6 +140,16 @@ materialization:
 
 ```bash
 mesh-llm models certify hf://meshllm/Qwen3-8B-Q4_K_M-layers --package-only --report-out cert.json
+```
+
+Use package-only certification as the rollout preflight for published package
+refs. It should fail before a split model becomes routable when package
+resolution, manifest shape, artifact size/SHA, missing stage files,
+tokenizer/projector sidecars, or local materialization are not clean enough for
+serving. For a local package directory, run the package-local preflight first:
+
+```bash
+skippy-model-package preflight ./model-package --stages 2 --verify-sha256
 ```
 
 Runtime verification additionally checks a running OpenAI-compatible endpoint:

@@ -8,6 +8,7 @@ use crate::cli::models::ModelsCommand;
 use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use crate::inference::skippy::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
+    identity_from_layer_package, is_layer_package_ref, resolve_hf_package_to_local,
 };
 use crate::models::{
     ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter, SearchProgress, SearchSort,
@@ -388,6 +389,15 @@ pub async fn run_model_download(
     json_output: bool,
 ) -> Result<()> {
     let formatter = models_formatter(json_output);
+    if let Some((package_ref, package_dir)) =
+        download_layer_package_for_model_ref(model_ref).await?
+    {
+        if include_draft && !json_output {
+            eprintln!("⚠ Draft download is not available for layer packages");
+        }
+        return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
+    }
+
     let (path, details) = download_model_ref_with_progress_details(model_ref, !json_output).await?;
     if !include_draft {
         return formatter.render_download(model_ref, &path, details.as_ref(), false, None);
@@ -416,6 +426,33 @@ pub async fn run_model_download(
         true,
         draft_out.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
     )
+}
+
+async fn download_layer_package_for_model_ref(
+    model_ref: &str,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    let Some(package_ref) = resolve_download_layer_package_ref(model_ref) else {
+        return Ok(None);
+    };
+    let package_dir = tokio::task::spawn_blocking({
+        let package_ref = package_ref.clone();
+        move || {
+            let identity = identity_from_layer_package(&package_ref)?;
+            resolve_hf_package_to_local(&package_ref, 0, identity.layer_count, true, true)
+                .map(std::path::PathBuf::from)
+        }
+    })
+    .await??;
+    Ok(Some((package_ref, package_dir)))
+}
+
+fn resolve_download_layer_package_ref(model_ref: &str) -> Option<String> {
+    if is_layer_package_ref(model_ref) {
+        return Some(model_ref.to_string());
+    }
+    let _ = remote_catalog::ensure_catalog();
+    remote_catalog::find_layer_package(model_ref)
+        .or_else(|| remote_catalog::find_huggingface_layer_package(model_ref))
 }
 
 pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
@@ -776,7 +813,7 @@ fn map_search_sort(sort: ModelSearchSort) -> SearchSort {
 mod tests {
     use super::{
         build_delete_preview_model, build_installed_rows, parse_cleanup_age,
-        validate_model_certify_options,
+        resolve_download_layer_package_ref, validate_model_certify_options,
     };
     use serial_test::serial;
     use std::ffi::OsString;
@@ -892,6 +929,24 @@ mod tests {
 
         assert!(error.contains("--api-base"), "{error}");
         assert!(error.contains("http"), "{error}");
+    }
+
+    #[test]
+    fn model_download_accepts_explicit_hf_layer_package_ref() {
+        assert_eq!(
+            resolve_download_layer_package_ref("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123"),
+            Some("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn model_download_without_package_mapping_falls_back_to_model_download() {
+        let _catalog = crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+        assert_eq!(
+            resolve_download_layer_package_ref("plain-local-model"),
+            None
+        );
     }
 
     #[test]

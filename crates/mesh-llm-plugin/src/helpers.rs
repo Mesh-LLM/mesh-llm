@@ -560,6 +560,11 @@ impl ToolRouter {
         self.handlers.insert(name, Arc::new(handler));
     }
 
+    pub fn extend(&mut self, mut other: Self) {
+        self.tools.append(&mut other.tools);
+        self.handlers.extend(other.handlers.drain());
+    }
+
     pub fn add_json<TArgs, TResult, F>(&mut self, tool: Tool, handler: F)
     where
         TArgs: DeserializeOwned + Send + 'static,

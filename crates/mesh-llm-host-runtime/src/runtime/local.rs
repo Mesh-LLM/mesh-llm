@@ -3099,12 +3099,7 @@ async fn wait_for_split_stage_source(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let inventory = query_stage_inventory(node, stage_node_id, load).await?;
-        if inventory
-            .available_ranges
-            .iter()
-            .chain(inventory.ready_ranges.iter())
-            .any(|range| range.layer_start <= load.layer_start && range.layer_end >= load.layer_end)
-        {
+        if split_stage_source_is_ready(&inventory, load) {
             tracing::info!(
                 topology_id = %load.topology_id,
                 run_id = %load.run_id,
@@ -3133,6 +3128,44 @@ async fn wait_for_split_stage_source(
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
+}
+
+fn split_stage_source_is_ready(
+    inventory: &skippy::StageLayerInventory,
+    load: &skippy::StageLoadRequest,
+) -> bool {
+    let ready_running_stage = inventory
+        .ready_ranges
+        .iter()
+        .any(|range| split_layer_range_covers(range, load));
+    if ready_running_stage {
+        return true;
+    }
+    if load.load_mode != LoadMode::LayerPackage && !skippy::is_layer_package_ref(&load.package_ref)
+    {
+        return inventory
+            .available_ranges
+            .iter()
+            .any(|range| split_layer_range_covers(range, load));
+    }
+    inventory.preparing_ranges.iter().any(|status| {
+        status.topology_id == load.topology_id
+            && status.run_id == load.run_id
+            && status.stage_id == load.stage_id
+            && status.model_id == load.model_id
+            && status.package_ref == load.package_ref
+            && status.manifest_sha256 == load.manifest_sha256
+            && status.layer_start <= load.layer_start
+            && status.layer_end >= load.layer_end
+            && matches!(
+                status.state,
+                skippy::StagePreparationState::Available | skippy::StagePreparationState::Ready
+            )
+    })
+}
+
+fn split_layer_range_covers(range: &skippy::LayerRange, load: &skippy::StageLoadRequest) -> bool {
+    range.layer_start <= load.layer_start && range.layer_end >= load.layer_end
 }
 
 async fn query_stage_inventory(
@@ -3477,6 +3510,48 @@ mod tests {
             layer_count,
             activation_width: 2048,
             tensor_count: 100,
+        }
+    }
+
+    fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadRequest {
+        skippy::StageLoadRequest {
+            topology_id: "topology-a".to_string(),
+            run_id: "run-a".to_string(),
+            model_id: "model-a".to_string(),
+            backend: "skippy".to_string(),
+            package_ref: match load_mode {
+                LoadMode::LayerPackage => "hf://meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+                LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => {
+                    "gguf:///models/qwen.gguf".to_string()
+                }
+            },
+            manifest_sha256: "a".repeat(64),
+            stage_id: "stage-1".to_string(),
+            stage_index: 1,
+            layer_start: 18,
+            layer_end: 36,
+            model_path: Some("/models/qwen.gguf".to_string()),
+            source_model_bytes: Some(4_900_000_000),
+            projector_path: None,
+            selected_device: None,
+            bind_addr: "127.0.0.1:0".to_string(),
+            activation_width: 4096,
+            wire_dtype: skippy::StageWireDType::F16,
+            ctx_size: 8192,
+            lane_count: 4,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            n_gpu_layers: -1,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: FlashAttentionType::Auto,
+            shutdown_generation: 1,
+            coordinator_term: 1,
+            coordinator_id: None,
+            lease_until_unix_ms: u64::MAX,
+            load_mode,
+            upstream: None,
+            downstream: None,
         }
     }
 
@@ -4308,6 +4383,60 @@ max_tokens = 222
     }
 
     #[test]
+    fn layer_package_stage_source_waits_for_exact_prepare_availability() {
+        let load = stage_load_request(LoadMode::LayerPackage);
+        let mut inventory = skippy::StageLayerInventory {
+            model_id: load.model_id.clone(),
+            package_ref: load.package_ref.clone(),
+            manifest_sha256: load.manifest_sha256.clone(),
+            layer_count: 36,
+            ready_ranges: Vec::new(),
+            available_ranges: vec![skippy::LayerRange {
+                layer_start: 0,
+                layer_end: 36,
+            }],
+            missing_ranges: Vec::new(),
+            preparing_ranges: Vec::new(),
+            source_model_path: Some(
+                "/cache/models--meshllm--Qwen3-8B-Q4_K_M-layers/snapshots/main".to_string(),
+            ),
+            source_model_bytes: Some(4_900_000_000),
+            source_model_kind: skippy::SourceModelKind::LayerPackage,
+        };
+
+        assert!(!split_stage_source_is_ready(&inventory, &load));
+
+        inventory
+            .preparing_ranges
+            .push(test_preparation_status_from_load(&load));
+
+        assert!(split_stage_source_is_ready(&inventory, &load));
+    }
+
+    #[test]
+    fn runtime_slice_stage_source_accepts_inventory_availability() {
+        let load = stage_load_request(LoadMode::RuntimeSlice);
+        let inventory = skippy::StageLayerInventory {
+            model_id: load.model_id.clone(),
+            package_ref: load.package_ref.clone(),
+            manifest_sha256: load.manifest_sha256.clone(),
+            layer_count: 36,
+            ready_ranges: Vec::new(),
+            available_ranges: vec![skippy::LayerRange {
+                layer_start: 0,
+                layer_end: 36,
+            }],
+            missing_ranges: Vec::new(),
+            preparing_ranges: Vec::new(),
+            source_model_path: Some("/models/qwen.gguf".to_string()),
+            source_model_bytes: Some(4_900_000_000),
+            source_model_kind: skippy::SourceModelKind::PlainGguf,
+        };
+
+        assert!(split_stage_source_is_ready(&inventory, &load));
+    }
+
+    #[test]
     fn split_inventory_package_signal_treats_unknown_inventory_as_missing_package() {
         let package = skippy::SkippyPackageIdentity {
             source_model_bytes: 1_000,
@@ -4691,7 +4820,9 @@ max_tokens = 222
         node.set_stage_control_sender(control_tx).await;
 
         let requests = Arc::new(StdMutex::new(Vec::new()));
+        let preparations = Arc::new(StdMutex::new(Vec::<skippy::StagePreparationStatus>::new()));
         let captured_requests = Arc::clone(&requests);
+        let captured_preparations = Arc::clone(&preparations);
         tokio::spawn(async move {
             while let Some(command) = control_rx.recv().await {
                 captured_requests
@@ -4700,18 +4831,30 @@ max_tokens = 222
                     .push(command.request.clone());
                 let response = match &command.request {
                     skippy::StageControlRequest::Prepare(prepare) => {
+                        let status = test_preparation_status_from_load(&prepare.load);
+                        captured_preparations.lock().unwrap().push(status.clone());
                         Ok(skippy::StageControlResponse::PrepareAccepted(
                             skippy::StagePrepareAcceptedResponse {
                                 accepted: true,
-                                status: test_preparation_status_from_load(&prepare.load),
+                                status,
                                 error: None,
                             },
                         ))
                     }
                     skippy::StageControlRequest::Inventory(inventory) => {
-                        Ok(skippy::StageControlResponse::Inventory(
-                            test_inventory_from_request(inventory),
-                        ))
+                        let mut response = test_inventory_from_request(inventory);
+                        response.preparing_ranges = captured_preparations
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|status| {
+                                status.model_id == inventory.model_id
+                                    && status.package_ref == inventory.package_ref
+                                    && status.manifest_sha256 == inventory.manifest_sha256
+                            })
+                            .cloned()
+                            .collect();
+                        Ok(skippy::StageControlResponse::Inventory(response))
                     }
                     skippy::StageControlRequest::Claim(claim) => {
                         Ok(skippy::StageControlResponse::ClaimAccepted(

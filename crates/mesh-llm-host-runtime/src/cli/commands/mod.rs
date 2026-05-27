@@ -1,26 +1,26 @@
+mod agent_cli;
 mod auth;
 mod benchmark;
-mod blackboard;
 mod discover;
 mod download;
 mod gpus;
-mod integrations;
 mod model_package;
 mod models;
 mod plugin;
+mod plugin_cli;
 mod runtime;
 mod update;
 
 use anyhow::Result;
 
+use crate::cli::commands::agent_cli::{run_claude, run_goose, run_opencode, run_pi};
 use crate::cli::commands::benchmark::dispatch_benchmark_command;
-use crate::cli::commands::blackboard::{install_skill, run_blackboard};
 use crate::cli::commands::discover::{DiscoverOptions, run_discover, run_stop};
 use crate::cli::commands::download::dispatch_download_command;
 use crate::cli::commands::gpus::dispatch_gpu_command;
-use crate::cli::commands::integrations::{run_claude, run_goose, run_opencode, run_pi};
 use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::plugin::run_plugin_command;
+use crate::cli::commands::plugin_cli::run_external_plugin_command;
 use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 use crate::cli::commands::update::run_update;
 use crate::cli::{AuthCommand, Cli, Command};
@@ -38,7 +38,6 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Auth { command } => dispatch_auth_command(command),
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
-        Command::Blackboard { .. } => dispatch_blackboard_command(cli, cmd).await,
         _ => dispatch_general_command(cli, cmd).await,
     }
 }
@@ -87,43 +86,12 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Claude { model, port } => run_claude(model.clone(), *port).await,
         Command::Pi { model, host, write } => run_pi(model.clone(), host, *write).await,
         Command::Opencode { model, host, write } => run_opencode(model.clone(), host, *write).await,
-        Command::Blackboard { .. } => dispatch_blackboard_command(cli, cmd).await,
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => dispatch_benchmark_command(command).await,
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
         Command::Auth { command } => dispatch_auth_command(command),
+        Command::ExternalPlugin(args) => run_external_plugin_command(cli, args).await,
     }
-}
-
-async fn dispatch_blackboard_command(cli: &Cli, cmd: &Command) -> Result<()> {
-    let Command::Blackboard {
-        text,
-        search,
-        from,
-        since,
-        limit,
-        port,
-        mcp,
-    } = cmd
-    else {
-        unreachable!("dispatch_blackboard_command called for non-blackboard command");
-    };
-
-    if *mcp {
-        return crate::runtime::run_plugin_mcp(cli).await;
-    }
-    if text.as_deref() == Some("install-skill") {
-        return install_skill();
-    }
-    run_blackboard(
-        text.clone(),
-        search.clone(),
-        from.clone(),
-        *since,
-        *limit,
-        *port,
-    )
-    .await
 }
 
 async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {

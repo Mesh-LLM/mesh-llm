@@ -45,6 +45,16 @@ impl ResolvedSkippyConfig {
         } else {
             self.ensure_embedded_openai_safe(true)?;
         }
+        let options = self.base_model_load_options(telemetry);
+        let stage_config = single_stage_config(&options)?;
+        let family_policy =
+            family_policy_for_model_path(&self.hardware.resolved_model_path, Some(&self.model_id));
+        let kv_cache = self
+            .resolve_stage_kv_cache(family_policy.stage_kv_cache_config_for_stage(&stage_config))?;
+        Ok(options.with_kv_cache(kv_cache))
+    }
+
+    fn base_model_load_options(&self, telemetry: SkippyTelemetryOptions) -> SkippyModelLoadOptions {
         let mut options = SkippyModelLoadOptions::for_direct_gguf(
             self.model_id.clone(),
             self.hardware.resolved_model_path.clone(),
@@ -76,12 +86,7 @@ impl ResolvedSkippyConfig {
                 vram_bytes: None,
             });
         }
-        let stage_config = single_stage_config(&options)?;
-        let family_policy =
-            family_policy_for_model_path(&self.hardware.resolved_model_path, Some(&self.model_id));
-        let kv_cache = self
-            .resolve_stage_kv_cache(family_policy.stage_kv_cache_config_for_stage(&stage_config))?;
-        Ok(options.with_kv_cache(kv_cache))
+        options
     }
 
     pub(crate) fn to_stage_config(
@@ -89,8 +94,8 @@ impl ResolvedSkippyConfig {
         package_identity: Option<SkippyPackageIdentity>,
         load_mode: LoadMode,
     ) -> Result<StageConfig> {
-        let mut load_options =
-            self.build_model_load_options(SkippyTelemetryOptions::off(), true)?;
+        self.ensure_embedded_openai_safe(true)?;
+        let mut load_options = self.base_model_load_options(SkippyTelemetryOptions::off());
         if let Some(package_identity) = package_identity {
             load_options.package_identity = Some(package_identity.clone());
             if self.hardware.stage_layer_end.is_none() {

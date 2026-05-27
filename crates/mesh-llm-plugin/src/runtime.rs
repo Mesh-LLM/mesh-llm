@@ -697,6 +697,14 @@ impl SimplePlugin {
         self
     }
 
+    pub fn extend_operation_router(mut self, router: ToolRouter) -> Self {
+        match &mut self.operation_router {
+            Some(existing) => existing.extend(router),
+            None => self.operation_router = Some(router),
+        }
+        self
+    }
+
     pub fn with_prompt_router(mut self, router: PromptRouter) -> Self {
         self.prompt_router = Some(router);
         self

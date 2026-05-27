@@ -619,8 +619,8 @@ Local burn-in checklist:
 - `cargo test -p openai-frontend --lib`
 - `cargo test -p metrics-server`
 - `cargo check -p mesh-llm`
-- `cargo test -p mesh-llm inference::skippy --lib`
-- `cargo test -p mesh-llm --lib`
+- `cargo test -p mesh-llm-host-runtime --lib inference::skippy`
+- `cargo test -p mesh-llm-host-runtime --lib`
 - metrics-server fixture ingest/finalize/report export
 
 ## Stage Failure Recovery

@@ -734,10 +734,10 @@ mod tests {
                 }),
             }],
             plugins: vec![NodePluginEntry {
-                name: "blackboard".to_string(),
+                name: "demo".to_string(),
                 enabled: Some(true),
                 command: Some("mesh-llm".to_string()),
-                args: vec!["--plugin".to_string(), "blackboard".to_string()],
+                args: vec!["--plugin".to_string(), "demo".to_string()],
             }],
             config_toml: None,
         }
@@ -1719,7 +1719,7 @@ alias = "model-alias"
         assert_eq!(config.models[0].ctx_size, Some(8192));
         assert_eq!(config.models[0].gpu_id.as_deref(), Some("pci:0000:65:00.0"));
         assert_eq!(config.plugins.len(), 1);
-        assert_eq!(config.plugins[0].name, "blackboard");
+        assert_eq!(config.plugins[0].name, "demo");
     }
 
     fn assert_proto_config_roundtrip_matches(
@@ -1969,7 +1969,7 @@ alias = "model-alias"
                 ..Default::default()
             }],
             plugins: vec![PluginConfigEntry {
-                name: "blackboard".to_string(),
+                name: "demo".to_string(),
                 enabled: Some(true),
                 command: Some("mesh-llm".to_string()),
                 args: vec!["--plugin".to_string()],
@@ -1996,7 +1996,7 @@ alias = "model-alias"
             Some("pci:0000:65:00.0")
         );
         assert_eq!(restored.plugins.len(), 1);
-        assert_eq!(restored.plugins[0].name, "blackboard");
+        assert_eq!(restored.plugins[0].name, "demo");
         assert_eq!(restored.plugins[0].enabled, Some(true));
         assert_eq!(restored.plugins[0].command.as_deref(), Some("mesh-llm"));
         assert_eq!(restored.plugins[0].args, vec!["--plugin"]);
