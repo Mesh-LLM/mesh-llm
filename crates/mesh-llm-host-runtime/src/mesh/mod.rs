@@ -5949,7 +5949,32 @@ impl Node {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
-        let response = self.execute_stage_control_request(request).await?;
+        let response = match self.execute_stage_control_request(request.clone()).await {
+            Ok(response) => response,
+            Err(error) => {
+                let crate::inference::skippy::StageControlRequest::Load(load) = request else {
+                    return Err(error);
+                };
+                let error_message = format!("{error:#}");
+                tracing::warn!(
+                    peer = %remote.fmt_short(),
+                    stage_id = %load.stage_id,
+                    "stage load failed: {error_message}"
+                );
+                let mut status = stage_status_from_load(
+                    &load,
+                    crate::inference::skippy::StageRuntimeState::Failed,
+                );
+                status.error = Some(error_message.clone());
+                crate::inference::skippy::StageControlResponse::Ready(
+                    crate::inference::skippy::StageReadyResponse {
+                        accepted: false,
+                        status,
+                        error: Some(error_message),
+                    },
+                )
+            }
+        };
         self.record_stage_control_response(&response).await;
         let status_list_supported = self
             .peer_supports_skippy_subprotocol_feature(
