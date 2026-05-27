@@ -45,6 +45,15 @@ struct UpdateTarget {
     bundle_flavor: backend::BinaryFlavor,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct HostBackendProbe {
+    cuda_blackwell: bool,
+    cuda: bool,
+    rocm: bool,
+    vulkan: bool,
+    metal: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct AutoUpdateOptions {
     pub auto_update: bool,
@@ -56,7 +65,8 @@ pub struct AutoUpdateOptions {
 
 #[derive(Clone, Copy, Debug)]
 pub struct UpdateCommandOptions<'a> {
-    pub llama_flavor: Option<backend::BinaryFlavor>,
+    pub flavor: Option<backend::BinaryFlavor>,
+    pub detect_flavor: bool,
     pub requested_version: Option<&'a str>,
     pub current_version: &'static str,
 }
@@ -148,7 +158,7 @@ pub async fn maybe_auto_update(options: AutoUpdateOptions) -> Result<bool> {
 }
 
 pub async fn run_update_command(options: UpdateCommandOptions<'_>) -> Result<()> {
-    let target = require_update_target(options.llama_flavor)?;
+    let target = require_update_target(options.flavor, options.detect_flavor)?;
     let requested_version = options.requested_version;
     let Some(release) = resolve_release_info(requested_version).await? else {
         bail!("Could not check for a release right now. Try again shortly.");
@@ -272,15 +282,26 @@ fn discover_update_target(llama_flavor: Option<backend::BinaryFlavor>) -> Option
     })
 }
 
-fn require_update_target(llama_flavor: Option<backend::BinaryFlavor>) -> Result<UpdateTarget> {
+fn require_update_target(
+    flavor: Option<backend::BinaryFlavor>,
+    detect_flavor: bool,
+) -> Result<UpdateTarget> {
     if !platform_has_release_assets() {
         bail!(
             "`mesh-llm update` is not supported on this platform. Download the latest release from {RELEASES_URL}."
         );
     }
+    if detect_flavor && flavor.is_some() {
+        bail!("`mesh-llm update --detect-flavor` cannot be combined with `--flavor`.");
+    }
 
     let exe = std::env::current_exe().context("Cannot determine mesh-llm executable path")?;
-    let Some((install_dir, bundle_flavor)) = bundle_install_dir(&exe, llama_flavor) else {
+    let selected_flavor = if detect_flavor {
+        preferred_bundle_flavor_for_current_host()
+    } else {
+        flavor
+    };
+    let Some((install_dir, bundle_flavor)) = bundle_install_dir(&exe, selected_flavor) else {
         bail!(
             "`mesh-llm update` only works for release-bundle installs. Current executable: {}",
             exe.display()
@@ -459,11 +480,262 @@ fn installed_bundle_flavor(
         return Some(flavor);
     }
 
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some(backend::BinaryFlavor::Metal)
-    } else {
-        Some(backend::BinaryFlavor::Cpu)
+    preferred_bundle_flavor_for_current_host()
+}
+
+fn preferred_bundle_flavor_for_current_host() -> Option<backend::BinaryFlavor> {
+    preferred_bundle_flavor_for_platform(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        current_host_backend_probe(),
+    )
+}
+
+fn preferred_bundle_flavor_for_platform(
+    os: &str,
+    arch: &str,
+    probe: HostBackendProbe,
+) -> Option<backend::BinaryFlavor> {
+    // Keep this detection order and the probes below in sync with install.sh.
+    const UPDATE_FLAVOR_PREFERENCE: [backend::BinaryFlavor; 6] = [
+        backend::BinaryFlavor::CudaBlackwell,
+        backend::BinaryFlavor::Cuda,
+        backend::BinaryFlavor::Rocm,
+        backend::BinaryFlavor::Vulkan,
+        backend::BinaryFlavor::Metal,
+        backend::BinaryFlavor::Cpu,
+    ];
+
+    UPDATE_FLAVOR_PREFERENCE
+        .into_iter()
+        .find(|flavor| flavor_supported_for_update(*flavor, os, arch, probe))
+}
+
+fn flavor_supported_for_update(
+    flavor: backend::BinaryFlavor,
+    os: &str,
+    arch: &str,
+    probe: HostBackendProbe,
+) -> bool {
+    let Ok(target) = ReleaseTarget::from_raw(os, arch, flavor) else {
+        return false;
+    };
+    if !target.support_status().is_supported() {
+        return false;
     }
+
+    match flavor {
+        backend::BinaryFlavor::CudaBlackwell => probe.cuda_blackwell,
+        backend::BinaryFlavor::Cuda => probe.cuda,
+        backend::BinaryFlavor::Rocm => probe.rocm,
+        backend::BinaryFlavor::Vulkan => probe.vulkan,
+        backend::BinaryFlavor::Metal => probe.metal,
+        backend::BinaryFlavor::Cpu => true,
+    }
+}
+
+fn current_host_backend_probe() -> HostBackendProbe {
+    HostBackendProbe {
+        cuda_blackwell: probe_cuda_blackwell_backend(),
+        cuda: probe_nvidia_backend(),
+        rocm: probe_rocm_backend(),
+        vulkan: probe_vulkan_backend(),
+        metal: cfg!(target_os = "macos"),
+    }
+}
+
+fn probe_cuda_blackwell_backend() -> bool {
+    nvidia_compute_caps()
+        .iter()
+        .any(|capability| is_blackwell_compute_capability(capability))
+        || nvidia_proc_models()
+            .iter()
+            .any(|model| is_blackwell_nvidia_model(model))
+}
+
+fn probe_nvidia_backend() -> bool {
+    command_exists("nvidia-smi")
+        || command_exists("nvcc")
+        || Path::new("/dev/nvidiactl").exists()
+        || Path::new("/proc/driver/nvidia/gpus").is_dir()
+}
+
+fn nvidia_compute_caps() -> Vec<String> {
+    let Ok(output) = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn is_blackwell_compute_capability(capability: &str) -> bool {
+    let normalized = capability
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    normalized
+        .parse::<u16>()
+        .is_ok_and(|sm| (100..200).contains(&sm))
+}
+
+fn nvidia_proc_models() -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/proc/driver/nvidia/gpus") else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("information"))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|contents| {
+            contents.lines().find_map(|line| {
+                line.strip_prefix("Model:")
+                    .map(str::trim)
+                    .filter(|model| !model.is_empty())
+                    .map(ToString::to_string)
+            })
+        })
+        .collect()
+}
+
+fn is_blackwell_nvidia_model(model: &str) -> bool {
+    const BLACKWELL_MODEL_MARKERS: [&str; 14] = [
+        "BLACKWELL",
+        "GB300",
+        "B300",
+        "GB200",
+        "B200",
+        "B100",
+        "GB10",
+        "RTX 5090",
+        "RTX 5080",
+        "RTX 5070",
+        "RTX 5060",
+        "RTX 5050",
+        "RTX PRO 6000",
+        "THOR",
+    ];
+
+    let upper = model.to_ascii_uppercase();
+    BLACKWELL_MODEL_MARKERS
+        .iter()
+        .any(|marker| upper.contains(marker))
+}
+
+fn probe_rocm_backend() -> bool {
+    command_exists("rocm-smi")
+        || command_exists("rocminfo")
+        || command_exists("hipcc")
+        || env_path_exists("HIP_PATH")
+        || env_path_exists("ROCM_PATH")
+        || windows_program_files_path_exists(&["AMD", "ROCm"])
+        || windows_program_files_path_exists(&["AMD", "HIP"])
+        || Path::new("/opt/rocm/bin/hipcc").is_file()
+}
+
+fn probe_vulkan_backend() -> bool {
+    if command_success("vulkaninfo", &["--summary"]) {
+        return true;
+    }
+
+    command_exists("glslc")
+        && (command_success("pkg-config", &["--exists", "vulkan"])
+            || Path::new("/usr/include/vulkan/vulkan.h").is_file()
+            || Path::new("/usr/local/include/vulkan/vulkan.h").is_file()
+            || std::env::var_os("VULKAN_SDK").is_some_and(|value| !value.is_empty()))
+        || env_path_exists("VULKAN_SDK")
+        || windows_vulkan_sdk_root_exists()
+}
+
+fn env_path_exists(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty() && Path::new(&value).exists())
+}
+
+#[cfg(windows)]
+fn windows_program_files_path_exists(parts: &[&str]) -> bool {
+    std::env::var_os("ProgramFiles").is_some_and(|root| {
+        let mut path = PathBuf::from(root);
+        for part in parts {
+            path.push(part);
+        }
+        path.exists()
+    })
+}
+
+#[cfg(not(windows))]
+fn windows_program_files_path_exists(_parts: &[&str]) -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn windows_vulkan_sdk_root_exists() -> bool {
+    std::env::var_os("ProgramFiles").is_some_and(|root| {
+        let sdk_base = PathBuf::from(root).join("VulkanSDK");
+        sdk_base.read_dir().is_ok_and(|mut entries| {
+            entries.any(|entry| entry.is_ok_and(|entry| entry.path().is_dir()))
+        })
+    })
+}
+
+#[cfg(not(windows))]
+fn windows_vulkan_sdk_root_exists() -> bool {
+    false
+}
+
+fn command_exists(name: &str) -> bool {
+    let path = Path::new(name);
+    if path.components().count() > 1 {
+        return path.is_file();
+    }
+
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| command_exists_in_dir(&dir, name))
+    })
+}
+
+#[cfg(windows)]
+fn command_exists_in_dir(dir: &Path, name: &str) -> bool {
+    let pathext = std::env::var_os("PATHEXT")
+        .map(|value| {
+            value
+                .to_string_lossy()
+                .split(';')
+                .filter(|ext| !ext.is_empty())
+                .map(|ext| ext.trim_start_matches('.').to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec!["exe".to_string(), "bat".to_string(), "cmd".to_string()]);
+    if dir.join(name).is_file() {
+        return true;
+    }
+    pathext
+        .iter()
+        .any(|ext| dir.join(format!("{name}.{ext}")).is_file())
+}
+
+#[cfg(not(windows))]
+fn command_exists_in_dir(dir: &Path, name: &str) -> bool {
+    dir.join(name).is_file()
+}
+
+fn command_success(name: &str, args: &[&str]) -> bool {
+    std::process::Command::new(name)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn release_repo() -> String {
@@ -1492,19 +1764,147 @@ mod tests {
     }
 
     #[test]
-    fn test_bundle_install_dir_uses_requested_or_platform_default_flavor() {
+    fn test_update_flavor_preference_uses_backend_order() {
+        let probe = HostBackendProbe {
+            cuda_blackwell: true,
+            cuda: true,
+            rocm: true,
+            vulkan: true,
+            metal: false,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "x86_64", probe),
+            Some(backend::BinaryFlavor::CudaBlackwell)
+        );
+
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: true,
+            rocm: true,
+            vulkan: true,
+            metal: false,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "x86_64", probe),
+            Some(backend::BinaryFlavor::Cuda)
+        );
+
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: false,
+            rocm: true,
+            vulkan: true,
+            metal: false,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "x86_64", probe),
+            Some(backend::BinaryFlavor::Rocm)
+        );
+
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: false,
+            rocm: false,
+            vulkan: true,
+            metal: false,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "x86_64", probe),
+            Some(backend::BinaryFlavor::Vulkan)
+        );
+    }
+
+    #[test]
+    fn test_update_flavor_preference_filters_by_published_platform() {
+        let probe = HostBackendProbe {
+            cuda_blackwell: true,
+            cuda: true,
+            rocm: true,
+            vulkan: true,
+            metal: true,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("macos", "aarch64", probe),
+            Some(backend::BinaryFlavor::Metal)
+        );
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "aarch64", probe),
+            Some(backend::BinaryFlavor::Cpu)
+        );
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "armv7l", probe),
+            None
+        );
+    }
+
+    #[test]
+    fn test_blackwell_cuda_detection_from_compute_capability() {
+        for capability in ["10.0", "10.3", "12.0", "12.1", "100", "103", "120", "121"] {
+            assert!(
+                is_blackwell_compute_capability(capability),
+                "{capability} should select cuda-blackwell"
+            );
+        }
+        for capability in ["7.5", "8.0", "8.9", "9.0", "75", "80", "89", "90"] {
+            assert!(
+                !is_blackwell_compute_capability(capability),
+                "{capability} should select primary cuda"
+            );
+        }
+    }
+
+    #[test]
+    fn test_blackwell_cuda_detection_from_model_name() {
+        for model in [
+            "NVIDIA B200",
+            "NVIDIA GB200",
+            "NVIDIA GeForce RTX 5090",
+            "NVIDIA RTX PRO 6000 Blackwell",
+            "NVIDIA GB10",
+        ] {
+            assert!(
+                is_blackwell_nvidia_model(model),
+                "{model} should select cuda-blackwell"
+            );
+        }
+        for model in ["NVIDIA H100", "NVIDIA A100", "NVIDIA RTX 4090"] {
+            assert!(
+                !is_blackwell_nvidia_model(model),
+                "{model} should select primary cuda"
+            );
+        }
+    }
+
+    #[test]
+    fn test_update_flavor_preference_falls_back_to_cpu() {
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("windows", "x86_64", HostBackendProbe::default()),
+            Some(backend::BinaryFlavor::Cpu)
+        );
+    }
+
+    #[test]
+    fn test_detect_flavor_rejects_explicit_flavor() {
+        let err = match require_update_target(Some(backend::BinaryFlavor::Vulkan), true) {
+            Ok(_) => panic!("conflicting flavor options should fail before install inspection"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("cannot be combined"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[test]
+    fn test_bundle_install_dir_uses_requested_or_detected_flavor() {
         let dir = temp_dir("bundle-install");
         let exe = dir.join(mesh_binary_name());
         std::fs::write(&exe, b"binary").unwrap();
-        let default_flavor = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            backend::BinaryFlavor::Metal
-        } else {
-            backend::BinaryFlavor::Cpu
-        };
+        let detected_flavor = preferred_bundle_flavor_for_current_host().unwrap();
 
         assert_eq!(
             bundle_install_dir(&exe, None),
-            Some((dir.clone(), default_flavor))
+            Some((dir.clone(), detected_flavor))
         );
         assert_eq!(
             bundle_install_dir(&exe, Some(backend::BinaryFlavor::Vulkan)),

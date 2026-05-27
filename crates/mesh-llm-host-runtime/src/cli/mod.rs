@@ -614,6 +614,12 @@ pub(crate) enum Command {
         /// Install this specific release tag or version (e.g. v0.60.0 or 0.60.0-rc.1).
         #[arg(long)]
         version: Option<String>,
+        /// Install this release bundle flavor instead of the default installed flavor.
+        #[arg(long, value_enum, conflicts_with = "detect_flavor")]
+        flavor: Option<crate::system::backend::BinaryFlavor>,
+        /// Re-detect the best host backend flavor before selecting the release bundle.
+        #[arg(long, conflicts_with = "flavor")]
+        detect_flavor: bool,
     },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
