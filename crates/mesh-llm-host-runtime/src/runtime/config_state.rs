@@ -2,7 +2,7 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::plugin::{MeshConfig, load_config, validate_config};
+use crate::plugin::{ConfigStore, MeshConfig, load_config, validate_config};
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
 /// Mirrors the `ConfigApplyMode` proto enum; kept in the domain layer so
@@ -109,7 +109,7 @@ fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 fn local_config_write_hash(config: &MeshConfig) -> [u8; 32] {
     let bytes = serde_json::to_vec(config)
-        .or_else(|_| toml::to_string(config).map(String::into_bytes))
+        .or_else(|_| crate::plugin::config_to_toml(config).map(String::into_bytes))
         .unwrap_or_default();
     let digest = Sha256::digest(bytes);
     let mut out = [0u8; 32];
@@ -187,12 +187,7 @@ impl ConfigState {
             };
         }
 
-        let toml_str = match toml::to_string(&new_config) {
-            Ok(s) => s,
-            Err(e) => return ApplyResult::PersistError(format!("toml serialization failed: {e}")),
-        };
-
-        if let Err(e) = atomic_write(&self.config_path, toml_str.as_bytes()) {
+        if let Err(e) = ConfigStore::open(self.config_path.clone()).save(&new_config) {
             return ApplyResult::PersistError(format!("failed to write config: {e}"));
         }
 

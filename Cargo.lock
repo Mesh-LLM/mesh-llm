@@ -3714,10 +3714,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-config"
+version = "0.66.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "mesh-llm-types",
+ "serde",
+ "skippy-protocol",
+ "tempfile",
+ "toml",
+ "toml_edit",
+]
+
+[[package]]
+name = "mesh-llm-console-server"
+version = "0.66.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-ui",
+ "tokio",
+]
+
+[[package]]
 name = "mesh-llm-ffi"
 version = "0.66.0"
 dependencies = [
  "mesh-llm-api-server",
+ "mesh-llm-console-server",
  "mesh-llm-host-runtime",
  "mesh-llm-node",
  "thiserror 2.0.18",
@@ -3773,6 +3797,7 @@ dependencies = [
  "mdns-sd",
  "mesh-llm-api-server",
  "mesh-llm-client",
+ "mesh-llm-config",
  "mesh-llm-guardrails",
  "mesh-llm-identity",
  "mesh-llm-node",
@@ -3859,6 +3884,7 @@ name = "mesh-llm-nodejs"
 version = "0.66.0"
 dependencies = [
  "mesh-llm-api-server",
+ "mesh-llm-console-server",
  "mesh-llm-host-runtime",
  "napi",
  "napi-build",
@@ -7717,6 +7743,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.1",
 ]
 

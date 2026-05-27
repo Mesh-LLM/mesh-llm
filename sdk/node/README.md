@@ -66,9 +66,27 @@ In an Electron app, package both:
 
 - `native/<platform>-<arch>/mesh_llm_nodejs.node`
 - the selected `meshllm-native-*` runtime artifact directory
+- optional `console/` assets when using `node.startConsole()`
 
 Then set `MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR` to the packaged artifact
 directory before creating a serving-enabled node.
+
+## Optional Console
+
+Console assets are not embedded in the default native addon. A package that
+includes the built console under `console/` can start the static console server
+without asking the application for a raw path:
+
+```js
+const consoleHandle = await node.startConsole()
+console.log(consoleHandle.url)
+```
+
+For development builds, pass an explicit asset directory:
+
+```js
+await node.startConsole({ assetDir: 'crates/mesh-llm-ui/dist', port: 3131 })
+```
 
 ## Windows
 

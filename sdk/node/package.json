@@ -8,6 +8,7 @@
     "index.js",
     "index.d.ts",
     "native-runtime.js",
+    "console/",
     "native/",
     "README.md"
   ],

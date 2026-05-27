@@ -28,6 +28,8 @@ COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
 COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
 COPY crates/mesh-llm-system/ crates/mesh-llm-system/
 COPY crates/mesh-llm-types/ crates/mesh-llm-types/
+COPY crates/mesh-llm-config/ crates/mesh-llm-config/
+COPY crates/mesh-llm-console-server/ crates/mesh-llm-console-server/
 COPY crates/mesh-llm-host-runtime/ crates/mesh-llm-host-runtime/
 COPY crates/mesh-llm/ crates/mesh-llm/
 COPY crates/mesh-llm-plugin/ crates/mesh-llm-plugin/

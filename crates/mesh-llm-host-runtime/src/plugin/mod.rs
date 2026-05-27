@@ -38,9 +38,11 @@ pub(crate) use self::config::{
 };
 #[allow(unused_imports)]
 pub use self::config::{
-    GpuAssignment, GpuConfig, MeshConfig, ModelConfigEntry, PluginConfigEntry, PluginHostMode,
-    ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path,
-    load_config, resolve_plugins,
+    ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
+    ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelRuntimeKind, PluginConfigEditor,
+    PluginConfigEntry, PluginHostMode, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
+    bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
+    resolve_plugins,
 };
 pub(crate) use self::config::{telemetry_plugin_enabled, validate_config};
 use self::runtime::ExternalPlugin;

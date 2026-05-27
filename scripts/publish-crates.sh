@@ -159,6 +159,11 @@ publish_error_is_429() {
     [[ "$output" == *"status 429 Too Many Requests"* || "$output" == *"published too many new crates"* ]]
 }
 
+publish_error_is_already_uploaded() {
+    local output="$1"
+    [[ "$output" == *"already uploaded"* ]]
+}
+
 print_publish_output() {
     local output="$1"
     if [[ -z "$output" ]]; then
@@ -254,8 +259,7 @@ publish_crate_with_retry() {
             return 0
         fi
         if [[ "$status" == "unknown" ]]; then
-            warn "[${index}/${total}] could not verify ${crate}@${workspace_version} on crates.io; aborting before publish"
-            return 1
+            warn "[${index}/${total}] could not verify ${crate}@${workspace_version} on crates.io; trying cargo publish"
         fi
     fi
 
@@ -270,6 +274,11 @@ publish_crate_with_retry() {
         fi
 
         if run_cargo_publish_once "$crate"; then
+            return 0
+        fi
+
+        if [[ "$dry_run" -eq 0 ]] && publish_error_is_already_uploaded "$last_publish_output"; then
+            log "[${index}/${total}] ${crate}@${workspace_version} already published according to cargo; continuing"
             return 0
         fi
 

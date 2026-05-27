@@ -45,18 +45,12 @@ runs:
         name: ${{ inputs.artifact_name }}
         path: ${{ inputs.artifact_path }}
 
-    - name: Stage mesh-llm binaries
+    - name: Stage mesh-llm binary
       shell: bash
       run: |
         set -euo pipefail
-        staged_dir="$(dirname "${{ inputs.staged_binary_path }}")"
-        mkdir -p "$staged_dir"
+        mkdir -p "$(dirname "${{ inputs.staged_binary_path }}")"
         cp "${{ inputs.artifact_path }}/${{ inputs.binary_name }}" "${{ inputs.staged_binary_path }}"
-        shopt -s nullglob
-        for plugin_bin in "${{ inputs.artifact_path }}"/mesh-llm-plugin-*; do
-          cp "$plugin_bin" "$staged_dir/"
-          chmod +x "$staged_dir/$(basename "$plugin_bin")"
-        done
         chmod +x "${{ inputs.staged_binary_path }}"
         test -x "${{ inputs.staged_binary_path }}"
 
