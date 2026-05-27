@@ -5920,6 +5920,43 @@ impl Node {
         }
     }
 
+    async fn execute_stage_control_request_for_peer(
+        &self,
+        remote: EndpointId,
+        request: crate::inference::skippy::StageControlRequest,
+    ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
+        match self.execute_stage_control_request(request.clone()).await {
+            Ok(response) => Ok(response),
+            Err(error) => Self::stage_control_load_failure_response(remote, request, error),
+        }
+    }
+
+    fn stage_control_load_failure_response(
+        remote: EndpointId,
+        request: crate::inference::skippy::StageControlRequest,
+        error: anyhow::Error,
+    ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
+        let crate::inference::skippy::StageControlRequest::Load(load) = request else {
+            return Err(error);
+        };
+        let error_message = format!("{error:#}");
+        tracing::warn!(
+            peer = %remote.fmt_short(),
+            stage_id = %load.stage_id,
+            "stage load failed: {error_message}"
+        );
+        let mut status =
+            stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Failed);
+        status.error = Some(error_message.clone());
+        Ok(crate::inference::skippy::StageControlResponse::Ready(
+            crate::inference::skippy::StageReadyResponse {
+                accepted: false,
+                status,
+                error: Some(error_message),
+            },
+        ))
+    }
+
     async fn handle_stage_control(
         &self,
         remote: EndpointId,
@@ -5949,7 +5986,9 @@ impl Node {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
-        let response = self.execute_stage_control_request(request).await?;
+        let response = self
+            .execute_stage_control_request_for_peer(remote, request)
+            .await?;
         self.record_stage_control_response(&response).await;
         let status_list_supported = self
             .peer_supports_skippy_subprotocol_feature(
