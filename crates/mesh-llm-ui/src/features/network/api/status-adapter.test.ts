@@ -121,12 +121,8 @@ describe('adaptStatusToDashboard', () => {
   it('accepts additive release attestation fields for self and peers', () => {
     const dashboard = adaptStatusToDashboard(PUBLIC_STATUS_PAYLOAD)
 
-    expect(dashboard.peers[0]).toEqual(
-      expect.objectContaining({ id: '16ce0bb4de', role: 'you' })
-    )
-    expect(dashboard.peers[1]).toEqual(
-      expect.objectContaining({ id: 'aeac0d8e53', owner: 'unsigned' })
-    )
+    expect(dashboard.peers[0]).toEqual(expect.objectContaining({ id: '16ce0bb4de', role: 'you' }))
+    expect(dashboard.peers[1]).toEqual(expect.objectContaining({ id: 'aeac0d8e53', owner: 'unsigned' }))
   })
 
   it('adapts live status into the six-cell dashboard metrics bar', () => {
