@@ -1212,19 +1212,19 @@ mod tests {
     #[test]
     fn test_describe_requested_update() {
         assert_eq!(
-            describe_requested_update("0.60.0", "0.66.0", false),
+            describe_requested_update("0.60.0", "0.68.0", false),
             "Updating"
         );
         assert_eq!(
-            describe_requested_update("0.66.0", "0.66.0", true),
+            describe_requested_update("0.68.0", "0.68.0", true),
             "Reinstalling"
         );
         assert_eq!(
-            describe_requested_update("0.0.1", "0.66.0", true),
+            describe_requested_update("0.0.1", "0.68.0", true),
             "Downgrading"
         );
         assert_eq!(
-            describe_requested_update("999.0.0", "0.66.0", true),
+            describe_requested_update("999.0.0", "0.68.0", true),
             "Installing"
         );
     }
@@ -1455,7 +1455,7 @@ mod tests {
             plugin_requested: false,
             command_is_update: false,
             llama_flavor: None,
-            current_version: "0.66.0",
+            current_version: "0.68.0",
         }));
 
         assert!(!should_attempt_auto_update(AutoUpdateOptions {
@@ -1463,7 +1463,7 @@ mod tests {
             plugin_requested: false,
             command_is_update: false,
             llama_flavor: None,
-            current_version: "0.66.0",
+            current_version: "0.68.0",
         }));
 
         assert!(!should_attempt_auto_update(AutoUpdateOptions {
@@ -1471,7 +1471,7 @@ mod tests {
             plugin_requested: false,
             command_is_update: true,
             llama_flavor: None,
-            current_version: "0.66.0",
+            current_version: "0.68.0",
         }));
     }
 
@@ -1485,7 +1485,7 @@ mod tests {
             plugin_requested: false,
             command_is_update: false,
             llama_flavor: None,
-            current_version: "0.66.0",
+            current_version: "0.68.0",
         }));
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::remove_var(SELF_UPDATE_ATTEMPTED_ENV) };
