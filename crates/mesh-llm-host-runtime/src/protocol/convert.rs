@@ -1149,4 +1149,20 @@ mod tests {
             crate::PeerReleaseAttestationStatus::Invalid
         );
     }
+
+    #[test]
+    fn proto_ann_to_local_preserves_missing_release_attestation_as_none() {
+        let proto = crate::proto::node::PeerAnnouncement {
+            endpoint_id: vec![1; 32],
+            role: crate::proto::node::NodeRole::Worker as i32,
+            ..Default::default()
+        };
+
+        let (_addr, ann) = proto_ann_to_local(&proto).expect("announcement should decode");
+        assert!(ann.release_attestation.is_none());
+        assert_eq!(
+            peer_release_attestation_status(ann.release_attestation.as_ref()),
+            crate::PeerReleaseAttestationStatus::Unsigned
+        );
+    }
 }

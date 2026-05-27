@@ -376,7 +376,7 @@ fn mesh_requirements_release_attestation_roundtrips() {
     let attestation = signed_release_attestation();
 
     let proto = attestation.to_proto();
-    let roundtripped = ReleaseBuildAttestation::from_proto(&proto).unwrap();
+    let roundtripped = ReleaseBuildAttestation::from_proto(&proto);
 
     assert_eq!(roundtripped, attestation);
     assert_eq!(proto.artifact_digest.as_deref(), Some("sha256:deadbeef"));
@@ -519,6 +519,35 @@ fn mesh_requirements_release_attestation_rejects_missing_signer_metadata() {
             ..Default::default()
         }),
         MeshRequirementDecision::Rejected(MeshRequirementRejectReason::BuildProofMissing)
+    );
+}
+
+#[test]
+fn mesh_requirements_release_attestation_rejects_missing_proof_when_required() {
+    let requirements = MeshRequirements {
+        release_attestation: ReleaseAttestationRequirement {
+            required: true,
+            allowed_signer_keys: vec!["trusted-signer".into()],
+        },
+        ..MeshRequirements::unrestricted()
+    };
+    assert_eq!(
+        requirements.evaluate(&MeshRequirementEvaluationInput {
+            release_attestation: PeerReleaseAttestationStatus::Unsigned,
+            ..Default::default()
+        }),
+        MeshRequirementDecision::Rejected(MeshRequirementRejectReason::CertifiedBinaryRequired)
+    );
+}
+
+#[test]
+fn mesh_requirements_release_attestation_allows_missing_proof_for_mixed_version_peers_when_optional() {
+    assert_eq!(
+        MeshRequirements::unrestricted().evaluate(&MeshRequirementEvaluationInput {
+            release_attestation: PeerReleaseAttestationStatus::Unsigned,
+            ..Default::default()
+        }),
+        MeshRequirementDecision::Accepted
     );
 }
 
@@ -714,10 +743,10 @@ fn mesh_requirements_release_attestation_rejects_invalid_signature() {
     let mut attestation = signed_release_attestation();
     attestation.signature[0] ^= 0x01;
 
-    assert_eq!(
-        attestation.verify(),
-        Err(MeshRequirementRejectReason::BuildProofInvalid)
-    );
+    let error = attestation
+        .verify()
+        .expect_err("tampered release attestation signature must fail verification");
+    assert!(error.to_string().contains("signature verification failed"));
 }
 
 #[test]

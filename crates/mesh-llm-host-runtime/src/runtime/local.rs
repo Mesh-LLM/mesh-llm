@@ -3632,6 +3632,7 @@ mod tests {
             served_model_descriptors: Vec::new(),
             served_model_runtime: Vec::new(),
             owner_attestation: None,
+            release_attestation_summary: crate::ReleaseAttestationSummary::default(),
             artifact_transfer_supported: false,
             stage_protocol_generation_supported,
             stage_status_list_supported: false,

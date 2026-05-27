@@ -10,6 +10,8 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $releaseBinDir = Join-Path $repoRoot "target\release"
+$attestationSigningKeyFile = $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE
+$attestationPublicKeyFile = $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -300,9 +302,65 @@ function Assert-MeshBinaryVersion {
     }
 }
 
+function Test-HasValue {
+    param([string]$Value)
+
+    return -not [string]::IsNullOrWhiteSpace($Value)
+}
+
+function Assert-AttestationConfig {
+    if ((Test-HasValue $attestationSigningKeyFile) -and -not (Test-HasValue $attestationPublicKeyFile)) {
+        throw "MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is required when MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is set"
+    }
+
+    if (-not (Test-HasValue $attestationSigningKeyFile) -and (Test-HasValue $attestationPublicKeyFile)) {
+        throw "MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is required when MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is set"
+    }
+}
+
+function Invoke-ReleaseAttestationStamp {
+    param([string]$BinaryPath)
+
+    $inspectJson = $null
+
+    if (-not (Test-HasValue $attestationSigningKeyFile)) {
+        Write-Host "Release attestation: missing (packaged binary left unstamped)"
+        return
+    }
+
+    Push-Location $repoRoot
+    try {
+        & cargo run -q -p xtask -- release-attestation stamp `
+            --binary $BinaryPath `
+            --signing-key-file $attestationSigningKeyFile | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "release-attestation stamp failed for $BinaryPath"
+        }
+
+        $inspectJson = & cargo run -q -p xtask -- release-attestation inspect `
+            --binary $BinaryPath `
+            --public-key-file $attestationPublicKeyFile `
+            --json
+        if ($LASTEXITCODE -ne 0) {
+            throw "release-attestation inspect failed for $BinaryPath"
+        }
+        Write-Host $inspectJson
+        $inspectStatus = ($inspectJson | ConvertFrom-Json).status
+        if ($inspectStatus -ne "valid") {
+            throw "release-attestation inspect reported status '$inspectStatus' for $BinaryPath"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+    }
+}
+
 $Version = Normalize-RecipeArgument $Version @("version")
 $OutputDir = Normalize-RecipeArgument $OutputDir @("output", "output_dir", "outputdir")
 $Flavor = Normalize-RecipeArgument $Flavor @("flavor", "backend")
+
+Assert-AttestationConfig
 
 $releaseFlavor = Get-ReleaseFlavor $Flavor
 $binaryFlavor = Get-BinaryFlavor $Flavor
@@ -334,6 +392,7 @@ try {
     Copy-RuntimeDependencies -BundleDir $bundleDir -BinaryFlavor $binaryFlavor
     Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version -BinaryFlavor $binaryFlavor
 
+    Invoke-ReleaseAttestationStamp -BinaryPath $bundleBinary
     $versionedPath = Join-Path $resolvedOutputDir $versionedAsset
     $stablePath = Join-Path $resolvedOutputDir $stableAsset
 

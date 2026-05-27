@@ -26,7 +26,15 @@ The release-attestation side of mesh requirements is build provenance only:
 certified-build admission is not remote runtime attestation. A signed release
 attestation proves a peer's binary was published by a trusted release signer.
 It does not prove the remote process is actually running unmodified code, nor
-that the host OS or hardware has not been tampered with.
+that the host OS or hardware has not been tampered with. The shipped
+`mesh-llm` executable uses embedded release attestation, and operators can
+verify a stamped packaged binary with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+`valid` means a stamped package, `missing` is normal for unstamped local or dev
+builds, and `invalid` means the bytes changed after packaging. Bare
+`inspect --binary ...` is only sufficient for unstamped binaries that should
+classify as `missing`; stamped packages require `--public-key-file` and
+otherwise report `invalid` with an explicit error. Even `invalid` binaries still
+follow the normal startup path unless mesh policy requires certified builds.
 
 Requirement-aware meshes use signed bootstrap tokens. Unrestricted legacy and
 private meshes still keep the older unsigned invite-token path.

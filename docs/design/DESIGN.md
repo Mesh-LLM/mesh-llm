@@ -135,6 +135,24 @@ Mesh metadata and admission facts are different things:
   process is unmodified official code running with trusted hardware or OS state.
 - Certified-build admission is not remote runtime attestation.
 
+### Release provenance
+
+The shipped `mesh-llm` executable uses embedded release attestation, and the
+release-signing trust root is separate from owner trust. This applies only to
+the packaged `mesh-llm` binary, not SDK, XCFramework, or other native
+artifacts. `missing` is expected for unstamped local and dev builds, `valid`
+means the packaged binary matches a trusted release signer, and `invalid` means
+the bytes changed after packaging. Operators can verify stamped packaged
+binaries with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+Bare `inspect --binary ...` is only sufficient for unstamped binaries that
+should classify as `missing`; stamped binaries require `--public-key-file` and
+otherwise report `invalid` with an explicit error.
+
+This is provenance and admission hardening, not runtime integrity proof. Mesh
+requirements can require a certified build at admission time through
+`require_release_attestation` and `release_signer_keys`, but that does not prove
+the remote process is running unmodified code on trusted hardware or OS state.
+
 Changing mesh requirements creates a new mesh.
 
 ## Bootstrap Proxy

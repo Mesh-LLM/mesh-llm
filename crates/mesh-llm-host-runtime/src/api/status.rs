@@ -3,7 +3,7 @@
 //! Keep these shapes stable; the API layer and collector tests rely on them.
 
 use super::{RuntimeModelPayload, RuntimeProcessPayload};
-use crate::crypto::{OwnershipStatus, OwnershipSummary};
+use crate::crypto::{OwnershipStatus, OwnershipSummary, ReleaseAttestationSummary};
 use crate::mesh::requirements::{MeshRequirementPolicySummary, MeshRequirementRejectionEvent};
 use crate::network::{affinity, metrics};
 use crate::runtime_data;
@@ -341,6 +341,7 @@ pub(crate) struct StatusPayload {
     pub(crate) latest_version: Option<String>,
     pub(crate) node_id: String,
     pub(crate) owner: OwnershipPayload,
+    pub(crate) release_attestation: ReleaseAttestationSummary,
     pub(crate) token: String,
     pub(crate) node_state: NodeState,
     pub(crate) node_status: String,
@@ -404,6 +405,7 @@ pub(crate) struct WakeableNode {
 pub(crate) struct PeerPayload {
     pub(crate) id: String,
     pub(crate) owner: OwnershipPayload,
+    pub(crate) release_attestation: ReleaseAttestationSummary,
     pub(crate) role: String,
     pub(crate) state: NodeState,
     pub(crate) models: Vec<String>,
@@ -932,6 +934,7 @@ pub(super) fn decode_runtime_model_path(path: &str, prefix: &str) -> Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ReleaseAttestationSummary;
 
     fn test_owner_payload() -> OwnershipPayload {
         OwnershipPayload {
@@ -943,6 +946,10 @@ mod tests {
             node_label: None,
             hostname_hint: None,
         }
+    }
+
+    fn test_release_attestation_summary() -> ReleaseAttestationSummary {
+        ReleaseAttestationSummary::default()
     }
 
     #[test]
@@ -967,6 +974,7 @@ mod tests {
         let peer = PeerPayload {
             id: "test-id".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             role: "Worker".to_string(),
             state: NodeState::Standby,
             models: vec![],
@@ -997,6 +1005,7 @@ mod tests {
         let peer = PeerPayload {
             id: "test-id".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             role: "Worker".to_string(),
             state: NodeState::Standby,
             models: vec![],
@@ -1036,6 +1045,7 @@ mod tests {
             latest_version: None,
             node_id: "node-1".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             token: "token-1".to_string(),
             node_state: NodeState::Loading,
             node_status: NodeState::Loading.node_status_alias().to_string(),
@@ -1091,6 +1101,7 @@ mod tests {
             latest_version: None,
             node_id: "node-1".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             token: "token-1".to_string(),
             node_state: NodeState::Serving,
             node_status: NodeState::Serving.node_status_alias().to_string(),
@@ -1146,6 +1157,7 @@ mod tests {
             latest_version: None,
             node_id: "node-1".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             token: "token-1".to_string(),
             node_state: NodeState::Standby,
             node_status: NodeState::Standby.node_status_alias().to_string(),
@@ -1210,6 +1222,7 @@ mod tests {
             latest_version: None,
             node_id: "node-1".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             token: "token-1".to_string(),
             node_state: NodeState::Standby,
             node_status: NodeState::Standby.node_status_alias().to_string(),
@@ -1263,6 +1276,7 @@ mod tests {
         let peer = PeerPayload {
             id: "test-id".to_string(),
             owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
             role: "Host".to_string(),
             state: NodeState::Serving,
             models: vec![],

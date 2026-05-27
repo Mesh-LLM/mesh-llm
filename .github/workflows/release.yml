@@ -26,6 +26,8 @@ permissions:
 env:
   CACHE_NAMESPACE: mesh-llm
   SCCACHE_GHA_ENABLED: "true"
+  MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+  MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
 jobs:
   metadata:
@@ -125,7 +127,11 @@ jobs:
       - name: Build release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c ${{ matrix.build_recipe }}
           just --shell bash --shell-arg -c ${{ matrix.bundle_recipe }} "$RELEASE_TAG" dist
 
@@ -138,10 +144,19 @@ jobs:
 
       - name: Upload Linux smoke binary
         if: matrix.artifact_name == 'release-linux'
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "$tmp_dir"' EXIT
+          tar -xzf dist/mesh-llm-x86_64-unknown-linux-gnu.tar.gz -C "$tmp_dir"
+          cp "$tmp_dir/mesh-bundle/mesh-llm" dist/mesh-llm
+
+      - name: Upload Linux smoke binary artifact
+        if: matrix.artifact_name == 'release-linux'
         uses: actions/upload-artifact@v6
         with:
           name: release-linux-inference-binary
-          path: target/release/mesh-llm
+          path: dist/mesh-llm
           if-no-files-found: error
 
   inference_smoke_tests:
@@ -310,7 +325,11 @@ jobs:
       - name: Build ARM64 CPU release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c release-build-arm64
           just --shell bash --shell-arg -c release-bundle-arm64 "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
@@ -364,7 +383,11 @@ jobs:
       - name: Build CUDA release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c release-build-cuda
           just --shell bash --shell-arg -c release-bundle-cuda "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
@@ -418,7 +441,11 @@ jobs:
       - name: Build CUDA Blackwell release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c release-build-cuda-blackwell
           just --shell bash --shell-arg -c release-bundle-cuda-blackwell "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
@@ -472,7 +499,11 @@ jobs:
       - name: Build ROCm release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c release-build-rocm
           just --shell bash --shell-arg -c release-bundle-rocm "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
@@ -512,7 +543,11 @@ jobs:
       - name: Build Vulkan release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
+          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
           just --shell bash --shell-arg -c release-build-vulkan
           just --shell bash --shell-arg -c release-bundle-vulkan "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
@@ -553,7 +588,11 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_LLM_REQUIRE_SCCACHE: "1"
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE -Value $env:RELEASE_ATTESTATION_SIGNING_KEY -NoNewline
+          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
           just release-build-windows
           just release-bundle-windows "$env:RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
@@ -653,7 +692,11 @@ jobs:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_LLM_REQUIRE_SCCACHE: "1"
           MESH_LLM_WINDOWS_BUILD_JOBS: ${{ matrix.backend == 'cuda' && '1' || '' }}
+          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
+          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
+          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE -Value $env:RELEASE_ATTESTATION_SIGNING_KEY -NoNewline
+          Set-Content -Path $env:MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE -Value $env:RELEASE_ATTESTATION_PUBLIC_KEY -NoNewline
           just ${{ matrix.build_recipe }}
           just ${{ matrix.bundle_recipe }} "$env:RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6

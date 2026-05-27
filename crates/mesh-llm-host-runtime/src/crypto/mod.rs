@@ -1,6 +1,7 @@
 mod keychain;
 mod keystore;
 mod ownership;
+pub(crate) mod release_attestation;
 
 pub use self::keychain::{
     DEFAULT_OWNER_ACCOUNT, KEYCHAIN_SERVICE, OwnerKeychainLoadError,
@@ -21,6 +22,15 @@ pub use self::ownership::{
     load_node_ownership, load_trust_store, save_node_ownership, save_trust_store,
     sign_node_ownership, verify_control_plane_peer_ownership, verify_control_plane_target_node,
     verify_node_ownership,
+};
+pub use self::release_attestation::{
+    EmbeddedReleaseAttestation, LoadedEmbeddedReleaseAttestation,
+    ReleaseAttestationClaims, ReleaseAttestationError, ReleaseAttestationStatus,
+    ReleaseAttestationSummary, ReleaseBuildAttestation, ReleaseSignerTrustStore,
+    TrustedReleaseSigner, default_release_signer_trust_store_path,
+    load_embedded_release_attestation_for_binary, load_release_signer_trust_store,
+    parse_release_signer_public_key, release_signer_key_id, save_release_signer_trust_store,
+    verify_release_attestation,
 };
 pub use mesh_llm_identity::{
     CryptoError, OpenedMessage, OwnerKeypair, SignedEncryptedEnvelope, open_message,

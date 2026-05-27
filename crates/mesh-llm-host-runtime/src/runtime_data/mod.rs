@@ -33,7 +33,7 @@ pub(crate) use self::snapshots::{
 pub(crate) use self::subscriptions::RuntimeDataDirty;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::api_views::{collect_views, mesh_models, status_payload};
     use super::processes::{RuntimeProcessSnapshot, runtime_process_payloads};
     use super::snapshots::{
@@ -48,13 +48,15 @@ mod tests {
         build_ownership_payload,
     };
     use crate::inference::election;
-    use crate::mesh::MeshCatalogEntry;
+    use crate::mesh::{MeshCatalogEntry, NodeRole, PeerInfo};
     use crate::models::LocalModelInventorySnapshot;
     use crate::network::openai::transport::{self, ResponseAdapter};
     use crate::plugin::{
         PluginCapabilityProvider, PluginEndpointSummary, PluginManifestOverview, PluginSummary,
     };
     use crate::runtime::instance::LocalInstanceSnapshot;
+    use crate::{ReleaseAttestationStatus, ReleaseAttestationSummary};
+    use iroh::{EndpointAddr, EndpointId, SecretKey};
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{
@@ -366,6 +368,12 @@ mod tests {
             latest_version: Some("0.68.0".into()),
             node_id: "node-1".into(),
             owner: crate::crypto::OwnershipSummary::default(),
+            release_attestation: ReleaseAttestationSummary {
+                status: ReleaseAttestationStatus::Valid,
+                signer_key_id: Some("ed25519:test-signer".into()),
+                verified: true,
+                ..ReleaseAttestationSummary::default()
+            },
             token: "invite-token".into(),
             is_host: false,
             is_client: false,
@@ -396,6 +404,12 @@ mod tests {
             latest_version: Some("0.68.0".into()),
             node_id: "node-1".into(),
             owner: build_ownership_payload(&crate::crypto::OwnershipSummary::default()),
+            release_attestation: ReleaseAttestationSummary {
+                status: ReleaseAttestationStatus::Valid,
+                signer_key_id: Some("ed25519:test-signer".into()),
+                verified: true,
+                ..ReleaseAttestationSummary::default()
+            },
             token: "invite-token".into(),
             node_state: NodeState::Standby,
             node_status: NodeState::Standby.node_status_alias().into(),
@@ -457,6 +471,132 @@ mod tests {
             serde_json::to_value(&payload).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+
+    pub(crate) fn assert_release_attestation_status_surfaces_in_api_and_runtime_data() {
+        let collector = RuntimeDataCollector::new();
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x33; 32]).public());
+        let peer = PeerInfo {
+            id: peer_id,
+            addr: EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            mesh_id: None,
+            mesh_policy_hash: None,
+            genesis_policy: None,
+            role: NodeRole::Worker,
+            first_joined_mesh_ts: Some(456),
+            models: vec!["Peer-Model".into()],
+            vram_bytes: 32_000_000_000,
+            rtt_ms: Some(7),
+            model_source: None,
+            admitted: true,
+            serving_models: vec!["Peer-Model".into()],
+            hosted_models: vec!["Peer-Model".into()],
+            hosted_models_known: true,
+            available_models: vec!["Peer-Model".into()],
+            requested_models: vec![],
+            explicit_model_interests: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            version: Some("0.66.0".into()),
+            gpu_name: None,
+            hostname: Some("peer.local".into()),
+            is_soc: Some(false),
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            release_attestation_summary: ReleaseAttestationSummary {
+                status: ReleaseAttestationStatus::Invalid,
+                signer_key_id: Some("ed25519:peer-signer".into()),
+                error: Some("release attestation signature verification failed".into()),
+                ..ReleaseAttestationSummary::default()
+            },
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            advertised_model_throughput: vec![],
+            display_rtt: None,
+            propagated_latency: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+        };
+        let hardware = collector.build_hardware_view(HardwareViewInput {
+            gpu_name: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            my_hostname: Some("node.local".into()),
+            my_is_soc: Some(false),
+            my_vram_gb: 24.0,
+            model_size_gb: 8.0,
+            first_joined_mesh_ts: Some(123),
+        });
+        let snapshot = collector.build_status_view(StatusViewInput {
+            version: "0.66.0".into(),
+            latest_version: Some("0.66.0".into()),
+            node_id: "node-1".into(),
+            owner: crate::crypto::OwnershipSummary::default(),
+            release_attestation: ReleaseAttestationSummary {
+                status: ReleaseAttestationStatus::Valid,
+                signer_key_id: Some("ed25519:self-signer".into()),
+                node_version: Some("0.66.0".into()),
+                verified: true,
+                ..ReleaseAttestationSummary::default()
+            },
+            token: "invite-token".into(),
+            is_host: true,
+            is_client: false,
+            llama_ready: true,
+            model_name: "Self-Model".into(),
+            models: vec!["Self-Model".into()],
+            available_models: vec!["Self-Model".into()],
+            requested_models: vec![],
+            serving_models: vec!["Self-Model".into()],
+            hosted_models: vec!["Self-Model".into()],
+            draft_name: None,
+            api_port: 3131,
+            inflight_requests: 1,
+            mesh_id: Some("mesh-1".into()),
+            mesh_name: Some("test-mesh".into()),
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            local_processes: vec![],
+            peers: vec![peer],
+            wakeable_nodes: vec![],
+            routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
+            hardware,
+        });
+
+        assert_eq!(snapshot.release_attestation.status, ReleaseAttestationStatus::Valid);
+        assert_eq!(
+            snapshot.peers[0].release_attestation.status,
+            ReleaseAttestationStatus::Invalid
+        );
+        assert_eq!(snapshot.peers[0].owner.status, "unsigned");
+
+        let payload = status_payload(snapshot);
+        assert_eq!(payload.release_attestation.status, ReleaseAttestationStatus::Valid);
+        assert_eq!(payload.owner.status, "unsigned");
+        assert_eq!(
+            payload.peers[0].release_attestation.status,
+            ReleaseAttestationStatus::Invalid
+        );
+        assert_eq!(
+            payload.peers[0].release_attestation.signer_key_id.as_deref(),
+            Some("ed25519:peer-signer")
+        );
+        assert_eq!(payload.peers[0].owner.status, "unsigned");
     }
 
     #[test]

@@ -1600,6 +1600,7 @@ pub struct PeerInfo {
     pub served_model_descriptors: Vec<ServedModelDescriptor>,
     pub served_model_runtime: Vec<ModelRuntimeDescriptor>,
     pub owner_attestation: Option<SignedNodeOwnership>,
+    pub release_attestation_summary: crate::ReleaseAttestationSummary,
     pub artifact_transfer_supported: bool,
     pub stage_protocol_generation_supported: bool,
     pub stage_status_list_supported: bool,
@@ -1637,7 +1638,7 @@ pub struct MeshCatalogEntry {
 }
 
 impl PeerInfo {
-    fn from_announcement(
+    pub(crate) fn from_announcement(
         id: EndpointId,
         addr: EndpointAddr,
         ann: &PeerAnnouncement,
@@ -1679,6 +1680,10 @@ impl PeerInfo {
             served_model_descriptors: ann.served_model_descriptors.clone(),
             served_model_runtime: ann.served_model_runtime.clone(),
             owner_attestation: ann.owner_attestation.clone(),
+            release_attestation_summary: crate::verify_release_attestation(
+                ann.release_attestation.as_ref(),
+                &crate::ReleaseSignerTrustStore::default(),
+            ),
             artifact_transfer_supported: ann.artifact_transfer_supported,
             stage_protocol_generation_supported: ann.stage_protocol_generation_supported,
             stage_status_list_supported: ann.stage_status_list_supported,
@@ -2209,6 +2214,7 @@ pub struct Node {
     display_name: Arc<Mutex<Option<String>>>,
     owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
     release_attestation: Arc<Mutex<Option<crate::ReleaseBuildAttestation>>>,
+    release_attestation_summary: Arc<Mutex<crate::ReleaseAttestationSummary>>,
     owner_summary: Arc<Mutex<OwnershipSummary>>,
     control_listener: Arc<Mutex<Option<ControlListenerLifecycle>>>,
     trust_store: Arc<Mutex<TrustStore>>,
@@ -3462,6 +3468,10 @@ impl Node {
         self.owner_summary.lock().await.clone()
     }
 
+    pub async fn release_attestation_summary(&self) -> crate::ReleaseAttestationSummary {
+        self.release_attestation_summary.lock().await.clone()
+    }
+
     pub async fn control_endpoint(&self) -> Option<String> {
         let guard = self.control_listener.lock().await;
         guard.as_ref().map(|listener| listener.token.clone())
@@ -3614,6 +3624,9 @@ impl Node {
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
             release_attestation: Arc::new(Mutex::new(None)),
+            release_attestation_summary: Arc::new(Mutex::new(
+                crate::ReleaseAttestationSummary::default(),
+            )),
             owner_summary: Arc::new(Mutex::new(owner_summary)),
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
@@ -3771,6 +3784,9 @@ impl Node {
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(None)),
             release_attestation: Arc::new(Mutex::new(None)),
+            release_attestation_summary: Arc::new(Mutex::new(
+                crate::ReleaseAttestationSummary::default(),
+            )),
             owner_summary: Arc::new(Mutex::new(OwnershipSummary::default())),
             control_listener: Arc::new(Mutex::new(None)),
             trust_store: Arc::new(Mutex::new(TrustStore::default())),
@@ -4685,11 +4701,13 @@ impl Node {
         *self.role.lock().await = role;
     }
 
-    pub async fn set_release_attestation(
+    pub async fn set_release_attestation_report(
         &self,
+        summary: crate::ReleaseAttestationSummary,
         attestation: Option<crate::ReleaseBuildAttestation>,
     ) {
         *self.release_attestation.lock().await = attestation;
+        *self.release_attestation_summary.lock().await = summary;
     }
 
     pub async fn set_models(&self, models: Vec<String>) {

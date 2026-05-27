@@ -57,9 +57,28 @@ export type Ownership = {
   hostname_hint?: string
 }
 
+export type ReleaseAttestationStatus = 'valid' | 'missing' | 'invalid'
+
+export type ReleaseAttestationSummary = {
+  status: ReleaseAttestationStatus
+  signer_key_id?: string
+  node_version?: string
+  build_id?: string
+  commit?: string
+  target_triple?: string
+  artifact_digest?: string
+  issued_at_unix_ms?: number
+  expires_at_unix_ms?: number
+  supported_protocol_generation_min?: number
+  supported_protocol_generation_max?: number
+  error?: string
+  verified: boolean
+}
+
 export type Peer = {
   id: string
   owner?: Ownership
+  release_attestation?: ReleaseAttestationSummary
   role: string
   state: LiveNodeState
   models: string[]
@@ -201,6 +220,7 @@ export type StatusPayload = {
   latest_version?: string | null
   node_id: string
   owner?: Ownership
+  release_attestation?: ReleaseAttestationSummary
   token: string
   node_state: LiveNodeState
   node_status: string

@@ -8,11 +8,13 @@ const PUBLIC_STATUS_PAYLOAD: StatusPayload = {
   node_id: '16ce0bb4de',
   node_state: 'serving',
   model_name: 'Hermes-2-Pro-Mistral-7B-Q4_K_M',
+  release_attestation: { status: 'valid', verified: true, signer_key_id: 'ed25519:self-signer' },
   first_joined_mesh_ts: 1_700_000_000_000,
   peers: [
     {
       id: 'aeac0d8e53',
       owner: { status: 'unsigned', verified: false },
+      release_attestation: { status: 'missing', verified: false },
       role: 'Client',
       state: 'client',
       models: [],
@@ -113,6 +115,17 @@ describe('adaptStatusToDashboard', () => {
     ])
     expect(dashboard.meshNodeSeeds[0]).toEqual(
       expect.objectContaining({ id: '16ce0bb4de', firstJoinedMeshTs: 1_700_000_000_000 })
+    )
+  })
+
+  it('accepts additive release attestation fields for self and peers', () => {
+    const dashboard = adaptStatusToDashboard(PUBLIC_STATUS_PAYLOAD)
+
+    expect(dashboard.peers[0]).toEqual(
+      expect.objectContaining({ id: '16ce0bb4de', role: 'you' })
+    )
+    expect(dashboard.peers[1]).toEqual(
+      expect.objectContaining({ id: 'aeac0d8e53', owner: 'unsigned' })
     )
   })
 

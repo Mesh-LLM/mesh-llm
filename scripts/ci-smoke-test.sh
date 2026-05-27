@@ -17,6 +17,34 @@ API_PORT="${MESH_CI_API_PORT:-9337}"
 CONSOLE_PORT="${MESH_CI_CONSOLE_PORT:-3131}"
 MAX_WAIT="${MESH_CI_MAX_WAIT:-180}"
 LOG="${MESH_CI_LOG:-/tmp/mesh-llm-ci.log}"
+ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
+ATTESTATION_EXPECTED_STATUS="${MESH_RELEASE_ATTESTATION_EXPECTED_STATUS:-valid}"
+SMOKE_STATE_DIR="$(mktemp -d /tmp/mesh-llm-smoke-state.XXXXXX)"
+SMOKE_CONFIG_PATH="$SMOKE_STATE_DIR/config.toml"
+SMOKE_RUNTIME_ROOT="$SMOKE_STATE_DIR/runtime"
+
+inspect_release_attestation() {
+    if [[ -z "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+        echo "Release attestation inspect skipped (set MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE to verify stamped binaries)"
+        return 0
+    fi
+
+    local inspect_json
+    local inspect_status
+    inspect_json="$(cargo run -q -p xtask -- release-attestation inspect --binary "$MESH_LLM" --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" --json)"
+    echo "Release attestation inspect: $inspect_json"
+    inspect_status="$(printf '%s' "$inspect_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+    if [[ "$inspect_status" != "$ATTESTATION_EXPECTED_STATUS" ]]; then
+        echo "Unexpected embedded release-attestation status: expected $ATTESTATION_EXPECTED_STATUS, got $inspect_status" >&2
+        exit 1
+    fi
+}
+
+runtime_release_attestation_status() {
+    curl -sf "http://127.0.0.1:${CONSOLE_PORT}/api/status" 2>/dev/null |
+        python3 -c 'import json,sys; print(json.load(sys.stdin).get("release_attestation", {}).get("status", ""))' 2>/dev/null ||
+        echo ""
+}
 
 echo "=== CI Skippy Smoke Test ==="
 echo "  mesh-llm:  $MESH_LLM"
@@ -38,6 +66,8 @@ if [[ ! -f "$MODEL" ]]; then
     exit 1
 fi
 
+inspect_release_attestation
+
 ARGS=(
     --log-format json
     serve
@@ -53,7 +83,8 @@ if [[ -n "$MMPROJ" ]]; then
     ARGS+=(--mmproj "$MMPROJ")
 fi
 
-"$MESH_LLM" "${ARGS[@]}" >"$LOG" 2>&1 &
+env MESH_LLM_CONFIG="$SMOKE_CONFIG_PATH" MESH_LLM_RUNTIME_ROOT="$SMOKE_RUNTIME_ROOT" \
+    "$MESH_LLM" "${ARGS[@]}" >"$LOG" 2>&1 &
 MESH_PID=$!
 
 cleanup() {
@@ -66,6 +97,7 @@ cleanup() {
     echo "--- mesh-llm log tail ---"
     tail -100 "$LOG" 2>/dev/null || true
     echo "--- end log ---"
+    rm -rf "$SMOKE_STATE_DIR"
 }
 trap cleanup EXIT
 
@@ -121,6 +153,13 @@ for i in $(seq 1 60); do
     fi
     sleep 1
 done
+
+RUNTIME_ATTESTATION_STATUS="$(runtime_release_attestation_status)"
+echo "Runtime release attestation status: ${RUNTIME_ATTESTATION_STATUS:-unknown}"
+if [[ -n "$ATTESTATION_PUBLIC_KEY_FILE" && "$RUNTIME_ATTESTATION_STATUS" != "$ATTESTATION_EXPECTED_STATUS" ]]; then
+    echo "Unexpected runtime release-attestation status: expected $ATTESTATION_EXPECTED_STATUS, got ${RUNTIME_ATTESTATION_STATUS:-<empty>}" >&2
+    exit 1
+fi
 
 BASE_URL="http://127.0.0.1:${API_PORT}/v1"
 
@@ -193,7 +232,8 @@ if [[ -n "$MMPROJ" ]]; then
     HEADLESS_ARGS+=(--mmproj "$MMPROJ")
 fi
 
-"$MESH_LLM" "${HEADLESS_ARGS[@]}" >"$HEADLESS_LOG" 2>&1 &
+env MESH_LLM_CONFIG="$SMOKE_CONFIG_PATH" MESH_LLM_RUNTIME_ROOT="$SMOKE_RUNTIME_ROOT" \
+    "$MESH_LLM" "${HEADLESS_ARGS[@]}" >"$HEADLESS_LOG" 2>&1 &
 HEADLESS_PID=$!
 
 headless_cleanup() {
@@ -225,5 +265,16 @@ for i in $(seq 1 "$MAX_WAIT"); do
     fi
     sleep 1
 done
+
+HEADLESS_ATTESTATION_STATUS="$({
+    curl -sf "http://127.0.0.1:${HEADLESS_CONSOLE_PORT}/api/status" 2>/dev/null |
+        python3 -c 'import json,sys; print(json.load(sys.stdin).get("release_attestation", {}).get("status", ""))' 2>/dev/null ||
+        echo ""
+})"
+echo "Headless runtime release attestation status: ${HEADLESS_ATTESTATION_STATUS:-unknown}"
+if [[ -n "$ATTESTATION_PUBLIC_KEY_FILE" && "$HEADLESS_ATTESTATION_STATUS" != "$ATTESTATION_EXPECTED_STATUS" ]]; then
+    echo "Unexpected headless runtime release-attestation status: expected $ATTESTATION_EXPECTED_STATUS, got ${HEADLESS_ATTESTATION_STATUS:-<empty>}" >&2
+    exit 1
+fi
 
 echo "Skippy smoke passed"

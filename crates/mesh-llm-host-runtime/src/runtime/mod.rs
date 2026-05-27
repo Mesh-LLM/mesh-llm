@@ -13,6 +13,8 @@ pub(crate) mod survey;
 pub(crate) mod wakeable;
 
 pub(crate) use self::capacity::runtime_model_required_bytes;
+#[cfg(test)]
+pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
     model_fits_runtime_capacity,
@@ -5460,41 +5462,57 @@ async fn store_benchmark_metrics(
 
 #[expect(
     clippy::cognitive_complexity,
-    reason = "release attestation loading logs valid and invalid sidecar states before advertising the result"
+    reason = "release attestation loading logs missing, valid, and invalid embedded states before advertising the result"
 )]
 async fn attach_local_release_attestation(node: &mesh::Node) -> Result<()> {
     let loaded = match release_attestation::load_for_current_binary() {
-        Ok(Some(loaded)) => loaded,
-        Ok(None) => {
-            tracing::info!("no release attestation sidecar found for local binary");
-            return Ok(());
-        }
+        Ok(loaded) => loaded,
         Err(error) => {
             tracing::warn!(
                 error = %error,
-                "failed to load local release attestation sidecar; continuing without advertising one"
+                "failed to load local embedded release attestation; continuing without advertising one"
             );
             return Ok(());
         }
     };
-    let attestation_hash = loaded.attestation.canonical_hash_hex().ok();
-    let is_valid = loaded.attestation.verify().is_ok();
-    if is_valid {
-        tracing::info!(
-            path = %loaded.path.display(),
-            signer_key_id = %loaded.attestation.signer_key_id,
-            attestation_hash = attestation_hash.as_deref().unwrap_or("unknown"),
-            "loaded local release attestation"
-        );
-    } else {
+    node.set_release_attestation_report(loaded.summary.clone(), loaded.attestation.clone())
+        .await;
+    match loaded.summary.status {
+        crate::ReleaseAttestationStatus::Missing => {
+            tracing::info!(
+                path = %loaded.binary_path.display(),
+                "no embedded release attestation found for local binary"
+            );
+            return Ok(());
+        }
+        crate::ReleaseAttestationStatus::Valid => {}
+        crate::ReleaseAttestationStatus::Invalid => {
+            tracing::warn!(
+                path = %loaded.binary_path.display(),
+                error = %loaded.summary.error.as_deref().unwrap_or("unknown release attestation error"),
+                "local binary has an invalid embedded release attestation; continuing without advertising one"
+            );
+            return Ok(());
+        }
+    }
+    let Some(attestation) = loaded.attestation else {
         tracing::warn!(
-            path = %loaded.path.display(),
-            signer_key_id = %loaded.attestation.signer_key_id,
+            path = %loaded.binary_path.display(),
+            "embedded release attestation verified but no release attestation payload was produced"
+        );
+        return Ok(());
+    };
+    let attestation_hash = attestation.canonical_hash_hex().ok();
+    if loaded.summary.verified {
+        tracing::info!(
+            path = %loaded.binary_path.display(),
+            signer_key_id = %attestation.signer_key_id,
             attestation_hash = attestation_hash.as_deref().unwrap_or("unknown"),
-            "loaded local release attestation with invalid shape; peers may reject it"
+            "loaded local embedded release attestation"
         );
     }
-    node.set_release_attestation(Some(loaded.attestation)).await;
+    node.set_release_attestation_report(loaded.summary, Some(attestation))
+        .await;
     Ok(())
 }
 

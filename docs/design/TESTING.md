@@ -127,6 +127,9 @@ mesh-llm serve --join <signed-bootstrap-token>
 - Legacy unrestricted meshes still accept the older unsigned invite-token path,
   while requirement-aware meshes require signed bootstrap tokens.
 
+- For release smoke, always inspect the packaged `mesh-llm` executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`, never the raw `target/release/mesh-llm` path. Packaged release archives can report `valid`, unstamped local or dev builds report `missing`, and a binary mutated after download reports `invalid`, but default startup still allows it because this is provenance and admission hardening, not runtime integrity proof. Bare `inspect --binary ...` is only sufficient for unstamped binaries that should classify as `missing`; stamped release binaries require `--public-key-file` and otherwise report `invalid` with an explicit error.
+- Smoke and release evidence should come from the packaged archive contents, not raw release output, because the release pipeline now sources publishable binaries from extracted packaged archives.
+
 ### 0d. Terminal dashboard smoke
 
 The pretty dashboard uses raw mode and the alternate screen when both stdin and stderr are interactive TTYs and `TERM` supports a real terminal. It should leave native terminal text selection available and fall back to line-oriented pretty output when stdin is not a TTY, stderr is not a TTY, or `TERM` is empty / `dumb`.

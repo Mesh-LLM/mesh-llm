@@ -1,9 +1,14 @@
 use ed25519_dalek::{Signer, SigningKey};
+use getrandom::fill as fill_random;
+use mesh_llm_system::embedded_release_footer::{
+    EmbeddedReleaseFooterStatus, EmbeddedReleasePayloadSummary, EmbeddedReleasePayloadVerifier,
+    read_embedded_release_footer, stamp_embedded_release_payload, strip_embedded_release_footer,
+    verify_embedded_release_footer,
+};
 use serde::Deserialize;
 use std::collections::BTreeSet;
 use std::error::Error;
-use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,11 +17,12 @@ type DynError = Box<dyn Error>;
 type DynResult<T> = Result<T, DynError>;
 
 const RELEASE_BUILD_ATTESTATION_VERSION: u32 = 1;
-const RELEASE_BUILD_ATTESTATION_DOMAIN_TAG: &[u8] = b"mesh-llm-release-attestation-v1:";
+const RELEASE_SIGNING_PRIVATE_KEY_KIND: &str = "mesh-llm-release-signing-private-key-v1";
+const RELEASE_SIGNING_PUBLIC_KEY_KIND: &str = "mesh-llm-release-signing-public-key-v1";
 const ED25519_SIGNATURE_ALGORITHM: &str = "ed25519";
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
-struct ReleaseBuildAttestation {
+struct ReleaseBuildAttestationClaims {
     version: u32,
     node_version: String,
     build_id: String,
@@ -24,22 +30,53 @@ struct ReleaseBuildAttestation {
     target_triple: String,
     supported_protocol_generation_min: Option<u32>,
     supported_protocol_generation_max: Option<u32>,
-    artifact_digest: Option<String>,
-    signer_key_id: String,
-    signature_algorithm: String,
-    signature: Vec<u8>,
+    artifact_digest: String,
 }
 
-impl ReleaseBuildAttestation {
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct EmbeddedReleaseAttestation {
+    version: u32,
+    signer_key_id: String,
+    signature_algorithm: String,
+    signed_payload_hex: String,
+    signature_hex: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct ReleaseSigningPrivateKeyFile {
+    kind: String,
+    version: u32,
+    algorithm: String,
+    signer_key_id: String,
+    seed_hex: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct ReleaseSigningPublicKeyFile {
+    kind: String,
+    version: u32,
+    algorithm: String,
+    signer_key_id: String,
+    public_key_hex: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ReleaseAttestationInspectSummary {
+    status: String,
+    version: Option<u32>,
+    signer_key_id: Option<String>,
+    artifact_digest: Option<String>,
+    error: Option<String>,
+}
+
+impl ReleaseBuildAttestationClaims {
     fn validate(&self) -> DynResult<()> {
         if self.version != RELEASE_BUILD_ATTESTATION_VERSION
             || self.node_version.trim().is_empty()
             || self.build_id.trim().is_empty()
             || self.commit.trim().is_empty()
             || self.target_triple.trim().is_empty()
-            || self.signer_key_id.trim().is_empty()
-            || self.signature_algorithm.trim().is_empty()
-            || self.signature.is_empty()
+            || self.artifact_digest.trim().is_empty()
         {
             return Err("invalid release build attestation shape".into());
         }
@@ -50,50 +87,218 @@ impl ReleaseBuildAttestation {
         {
             return Err("invalid release build attestation protocol bounds".into());
         }
+        if !self.artifact_digest.starts_with("sha256:") {
+            return Err("release build attestation artifact digest must start with sha256:".into());
+        }
         Ok(())
     }
 
-    fn canonical_bytes(&self) -> DynResult<Vec<u8>> {
+    fn payload_bytes(&self) -> DynResult<Vec<u8>> {
         self.validate()?;
-        let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(RELEASE_BUILD_ATTESTATION_DOMAIN_TAG);
-        buf.extend_from_slice(&self.version.to_le_bytes());
-        write_string(&mut buf, self.node_version.trim());
-        write_string(&mut buf, self.build_id.trim());
-        write_string(&mut buf, self.commit.trim());
-        write_string(&mut buf, self.target_triple.trim());
-        write_optional_u32(&mut buf, self.supported_protocol_generation_min);
-        write_optional_u32(&mut buf, self.supported_protocol_generation_max);
-        write_optional_string(&mut buf, self.artifact_digest.as_deref());
-        write_string(&mut buf, self.signer_key_id.trim());
-        write_string(&mut buf, self.signature_algorithm.trim());
-        Ok(buf)
+        Ok(serde_json::to_vec(self)?)
+    }
+}
+
+impl EmbeddedReleaseAttestation {
+    fn validate(&self) -> DynResult<()> {
+        if self.version != RELEASE_BUILD_ATTESTATION_VERSION
+            || self.signer_key_id.trim().is_empty()
+            || self.signature_algorithm.trim().is_empty()
+            || self.signed_payload_hex.trim().is_empty()
+            || self.signature_hex.trim().is_empty()
+        {
+            return Err("invalid embedded release attestation shape".into());
+        }
+        if self.signature_algorithm.trim() != ED25519_SIGNATURE_ALGORITHM {
+            return Err("invalid embedded release attestation signature algorithm".into());
+        }
+        parse_release_signer_public_key(self.signer_key_id.trim())?;
+        if self.signature_bytes()?.len() != 64 {
+            return Err("invalid embedded release attestation signature shape".into());
+        }
+        let _ = self.signed_payload_bytes()?;
+        Ok(())
+    }
+
+    fn signed_payload_bytes(&self) -> DynResult<Vec<u8>> {
+        Ok(hex::decode(self.signed_payload_hex.trim())?)
+    }
+
+    fn signature_bytes(&self) -> DynResult<Vec<u8>> {
+        Ok(hex::decode(self.signature_hex.trim())?)
+    }
+
+    fn claims(&self) -> DynResult<ReleaseBuildAttestationClaims> {
+        let claims: ReleaseBuildAttestationClaims =
+            serde_json::from_slice(&self.signed_payload_bytes()?)?;
+        claims.validate()?;
+        Ok(claims)
     }
 
     fn canonical_hash_hex(&self) -> DynResult<String> {
         use sha2::{Digest, Sha256};
 
-        Ok(hex::encode(Sha256::digest(self.canonical_bytes()?)))
+        self.validate()?;
+        Ok(hex::encode(Sha256::digest(serde_json::to_vec(self)?)))
     }
 
-    fn verify(&self) -> DynResult<()> {
+    fn verify_with_public_key(
+        &self,
+        supplied_public_key: &ed25519_dalek::VerifyingKey,
+    ) -> DynResult<ReleaseBuildAttestationClaims> {
         self.validate()?;
-        if self.signature_algorithm.trim() != ED25519_SIGNATURE_ALGORITHM
-            || self.signature.len() != 64
-        {
-            return Err("invalid release build attestation signature shape".into());
+        let embedded_signer_public_key =
+            parse_release_signer_public_key(self.signer_key_id.trim())?;
+        if embedded_signer_public_key != *supplied_public_key {
+            return Err("supplied public key does not match embedded signer_key_id".into());
         }
-        let signer_public_key = parse_release_signer_public_key(self.signer_key_id.trim())?;
+        let signature_bytes = self.signature_bytes()?;
         let signature = ed25519_dalek::Signature::from_bytes(
-            &self
-                .signature
+            &signature_bytes
                 .as_slice()
                 .try_into()
-                .map_err(|_| "invalid release build attestation signature length")?,
+                .map_err(|_| "invalid embedded release attestation signature length")?,
         );
-        signer_public_key.verify_strict(&self.canonical_bytes()?, &signature)?;
+        let signed_payload_bytes = self.signed_payload_bytes()?;
+        supplied_public_key.verify_strict(&signed_payload_bytes, &signature)?;
+        let claims = self.claims()?;
+        claims.validate()?;
+        Ok(claims)
+    }
+}
+
+impl ReleaseSigningPrivateKeyFile {
+    fn from_signing_key(signing_key: &SigningKey) -> Self {
+        Self {
+            kind: RELEASE_SIGNING_PRIVATE_KEY_KIND.to_string(),
+            version: RELEASE_BUILD_ATTESTATION_VERSION,
+            algorithm: ED25519_SIGNATURE_ALGORITHM.to_string(),
+            signer_key_id: release_signer_key_id(&signing_key.verifying_key()),
+            seed_hex: hex::encode(signing_key.as_bytes()),
+        }
+    }
+
+    fn validate(&self) -> DynResult<()> {
+        if self.kind != RELEASE_SIGNING_PRIVATE_KEY_KIND
+            || self.version != RELEASE_BUILD_ATTESTATION_VERSION
+            || self.algorithm != ED25519_SIGNATURE_ALGORITHM
+            || self.signer_key_id.trim().is_empty()
+            || self.seed_hex.trim().is_empty()
+        {
+            return Err("invalid release signing private key file".into());
+        }
+        let signing_key = signing_key_from_seed_hex(&self.seed_hex)?;
+        ensure_eq(
+            &release_signer_key_id(&signing_key.verifying_key()),
+            self.signer_key_id.trim(),
+            "release signing private key signer_key_id",
+        )?;
         Ok(())
     }
+
+    fn signing_key(&self) -> DynResult<SigningKey> {
+        self.validate()?;
+        signing_key_from_seed_hex(&self.seed_hex)
+    }
+}
+
+impl ReleaseSigningPublicKeyFile {
+    fn from_verifying_key(verifying_key: &ed25519_dalek::VerifyingKey) -> Self {
+        Self {
+            kind: RELEASE_SIGNING_PUBLIC_KEY_KIND.to_string(),
+            version: RELEASE_BUILD_ATTESTATION_VERSION,
+            algorithm: ED25519_SIGNATURE_ALGORITHM.to_string(),
+            signer_key_id: release_signer_key_id(verifying_key),
+            public_key_hex: hex::encode(verifying_key.as_bytes()),
+        }
+    }
+
+    fn validate(&self) -> DynResult<()> {
+        if self.kind != RELEASE_SIGNING_PUBLIC_KEY_KIND
+            || self.version != RELEASE_BUILD_ATTESTATION_VERSION
+            || self.algorithm != ED25519_SIGNATURE_ALGORITHM
+            || self.signer_key_id.trim().is_empty()
+            || self.public_key_hex.trim().is_empty()
+        {
+            return Err("invalid release signing public key file".into());
+        }
+        let public_key = parse_release_signer_public_key(self.signer_key_id.trim())?;
+        ensure_eq(
+            &hex::encode(public_key.as_bytes()),
+            self.public_key_hex.trim(),
+            "release signing public key hex",
+        )?;
+        Ok(())
+    }
+
+    fn verifying_key(&self) -> DynResult<ed25519_dalek::VerifyingKey> {
+        self.validate()?;
+        parse_release_signer_public_key(self.signer_key_id.trim())
+    }
+}
+
+struct XtaskReleasePayloadVerifier {
+    supplied_public_key: ed25519_dalek::VerifyingKey,
+}
+
+impl EmbeddedReleasePayloadVerifier for XtaskReleasePayloadVerifier {
+    type Error = String;
+
+    fn verify_payload(
+        &self,
+        payload_bytes: &[u8],
+    ) -> Result<EmbeddedReleasePayloadSummary, Self::Error> {
+        let attestation: EmbeddedReleaseAttestation =
+            serde_json::from_slice(payload_bytes).map_err(|error| error.to_string())?;
+        let claims = attestation
+            .verify_with_public_key(&self.supplied_public_key)
+            .map_err(|error| error.to_string())?;
+        Ok(EmbeddedReleasePayloadSummary {
+            artifact_digest: claims.artifact_digest,
+        })
+    }
+}
+
+#[derive(Default)]
+struct GenerateKeypairArgs {
+    private_key_out: Option<PathBuf>,
+    public_key_out: Option<PathBuf>,
+}
+
+#[derive(Default)]
+struct StampArgs {
+    binary: Option<PathBuf>,
+    signing_key_file: Option<PathBuf>,
+    node_version: Option<String>,
+    build_id: Option<String>,
+    commit: Option<String>,
+    target_triple: Option<String>,
+    protocol_min: Option<u32>,
+    protocol_max: Option<u32>,
+}
+
+#[derive(Default)]
+struct InspectArgs {
+    binary: Option<PathBuf>,
+    public_key_file: Option<PathBuf>,
+    json: bool,
+}
+
+fn release_signer_key_id(verifying_key: &ed25519_dalek::VerifyingKey) -> String {
+    format!("ed25519:{}", hex::encode(verifying_key.as_bytes()))
+}
+
+fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> DynResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    Ok(())
+}
+
+fn print_json<T: serde::Serialize>(value: &T) -> DynResult<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
 }
 
 fn main() {
@@ -116,6 +321,11 @@ fn run() -> DynResult<()> {
             println!("repo consistency checks passed: ci-crate-lists");
             Ok(())
         }
+        [command, scope, rest @ ..]
+            if command == "release-attestation" && scope == "generate-keypair" =>
+        {
+            generate_release_attestation_keypair(rest)
+        }
         [command, scope, rest @ ..] if command == "release-attestation" && scope == "stamp" => {
             stamp_release_attestation(rest)
         }
@@ -125,52 +335,55 @@ fn run() -> DynResult<()> {
             inspect_release_attestation(rest)
         }
         _ => Err(
-            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-seed-hex <64-hex> [--output <path>] [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--input <path>]"
+            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
                 .to_string()
                 .into(),
         ),
     }
 }
 
-#[derive(Default)]
-struct StampArgs {
-    binary: Option<PathBuf>,
-    output: Option<PathBuf>,
-    signing_seed_hex: Option<String>,
-    node_version: Option<String>,
-    build_id: Option<String>,
-    commit: Option<String>,
-    target_triple: Option<String>,
-    protocol_min: Option<u32>,
-    protocol_max: Option<u32>,
-}
-
-#[derive(Default)]
-struct InspectArgs {
-    binary: Option<PathBuf>,
-    input: Option<PathBuf>,
+fn generate_release_attestation_keypair(args: &[String]) -> DynResult<()> {
+    let parsed = parse_generate_keypair_args(args)?;
+    let private_key_out = parsed
+        .private_key_out
+        .ok_or("--private-key-out is required")?;
+    let public_key_out = parsed
+        .public_key_out
+        .ok_or("--public-key-out is required")?;
+    let mut seed = [0u8; 32];
+    fill_random(&mut seed).map_err(|error| error.to_string())?;
+    let signing_key = SigningKey::from_bytes(&seed);
+    let private_key_file = ReleaseSigningPrivateKeyFile::from_signing_key(&signing_key);
+    let public_key_file =
+        ReleaseSigningPublicKeyFile::from_verifying_key(&signing_key.verifying_key());
+    write_json_file(&private_key_out, &private_key_file)?;
+    write_json_file(&public_key_out, &public_key_file)?;
+    print_json(&serde_json::json!({
+        "private_key_file": private_key_out,
+        "public_key_file": public_key_out,
+        "signer_key_id": private_key_file.signer_key_id,
+        "public_key_hex": public_key_file.public_key_hex,
+    }))
 }
 
 fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
     let parsed = parse_stamp_args(args)?;
     let binary = parsed.binary.ok_or("--binary is required")?;
-    let output = parsed
-        .output
-        .unwrap_or_else(|| sibling_attestation_path(&binary));
-    let signing_seed_hex = parsed
-        .signing_seed_hex
-        .ok_or("--signing-seed-hex is required")?;
-    let signing_key = signing_key_from_seed_hex(&signing_seed_hex)?;
+    let signing_key_file = parsed
+        .signing_key_file
+        .ok_or("--signing-key-file is required")?;
+    let signing_key = load_release_signing_key_file(&signing_key_file)?.signing_key()?;
     let verifying_key = signing_key.verifying_key();
-    let signer_key_id = format!("ed25519:{}", hex::encode(verifying_key.as_bytes()));
-    let artifact_digest = sha256_file(&binary)?;
+    let binary_bytes = fs::read(&binary)?;
+    let base_binary_bytes = strip_embedded_release_footer(&binary_bytes)?.to_vec();
+    let artifact_digest = format!("sha256:{}", sha256_bytes(&base_binary_bytes));
     let node_version = match parsed.node_version {
         Some(version) => version,
         None => default_node_version()?,
     };
 
-    let mut attestation = ReleaseBuildAttestation {
-        version: 1,
+    let claims = ReleaseBuildAttestationClaims {
+        version: RELEASE_BUILD_ATTESTATION_VERSION,
         node_version,
         build_id: parsed
             .build_id
@@ -179,70 +392,146 @@ fn stamp_release_attestation(args: &[String]) -> DynResult<()> {
         target_triple: parsed.target_triple.unwrap_or_else(default_target_triple),
         supported_protocol_generation_min: parsed.protocol_min,
         supported_protocol_generation_max: parsed.protocol_max,
-        artifact_digest: Some(format!("sha256:{artifact_digest}")),
-        signer_key_id,
-        signature_algorithm: "ed25519".to_string(),
-        signature: vec![0; 64],
+        artifact_digest,
     };
-    let signature = signing_key.sign(
-        &attestation
-            .canonical_bytes()
-            .map_err(|reason| format!("invalid attestation bytes: {reason:?}"))?,
-    );
-    attestation.signature = signature.to_bytes().to_vec();
-    attestation
-        .validate()
-        .map_err(|reason| format!("invalid attestation: {reason:?}"))?;
+    let signed_payload_bytes = claims.payload_bytes()?;
+    let signature = signing_key.sign(&signed_payload_bytes);
+    let attestation = EmbeddedReleaseAttestation {
+        version: RELEASE_BUILD_ATTESTATION_VERSION,
+        signer_key_id: release_signer_key_id(&verifying_key),
+        signature_algorithm: ED25519_SIGNATURE_ALGORITHM.to_string(),
+        signed_payload_hex: hex::encode(&signed_payload_bytes),
+        signature_hex: hex::encode(signature.to_bytes()),
+    };
+    attestation.validate()?;
+    let payload_bytes = serde_json::to_vec(&attestation)?;
+    let stamped_bytes = stamp_embedded_release_payload(&binary_bytes, &payload_bytes)?;
+    fs::write(&binary, stamped_bytes)?;
 
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&output, serde_json::to_vec_pretty(&attestation)?)?;
-
-    let summary = serde_json::json!({
+    print_json(&serde_json::json!({
         "binary": binary,
-        "attestation_path": output,
-        "node_version": attestation.node_version,
-        "build_id": attestation.build_id,
-        "commit": attestation.commit,
-        "target_triple": attestation.target_triple,
-        "supported_protocol_generation_min": attestation.supported_protocol_generation_min,
-        "supported_protocol_generation_max": attestation.supported_protocol_generation_max,
-        "artifact_digest": attestation.artifact_digest,
+        "version": claims.version,
+        "node_version": claims.node_version,
+        "build_id": claims.build_id,
+        "commit": claims.commit,
+        "target_triple": claims.target_triple,
+        "supported_protocol_generation_min": claims.supported_protocol_generation_min,
+        "supported_protocol_generation_max": claims.supported_protocol_generation_max,
+        "artifact_digest": claims.artifact_digest,
         "signer_key_id": attestation.signer_key_id,
-        "signer_public_key_hex": hex::encode(verifying_key.as_bytes()),
-        "attestation_hash": attestation
-            .canonical_hash_hex()
-            .map_err(|reason| format!("invalid attestation hash: {reason:?}"))?,
-    });
-    println!("{}", serde_json::to_string_pretty(&summary)?);
-    Ok(())
+        "attestation_hash": attestation.canonical_hash_hex()?,
+    }))
 }
 
 fn inspect_release_attestation(args: &[String]) -> DynResult<()> {
     let parsed = parse_inspect_args(args)?;
-    let binary = parsed.binary.ok_or("--binary is required")?;
-    let input = parsed
-        .input
-        .unwrap_or_else(|| sibling_attestation_path(&binary));
-    let attestation: ReleaseBuildAttestation = serde_json::from_slice(&fs::read(&input)?)?;
-    let summary = serde_json::json!({
-        "binary": binary,
-        "attestation_path": input,
-        "valid": attestation.verify().is_ok(),
-        "node_version": attestation.node_version,
-        "build_id": attestation.build_id,
-        "commit": attestation.commit,
-        "target_triple": attestation.target_triple,
-        "supported_protocol_generation_min": attestation.supported_protocol_generation_min,
-        "supported_protocol_generation_max": attestation.supported_protocol_generation_max,
-        "artifact_digest": attestation.artifact_digest,
-        "signer_key_id": attestation.signer_key_id,
-        "signature_len": attestation.signature.len(),
-        "attestation_hash": attestation.canonical_hash_hex().ok(),
-    });
-    println!("{}", serde_json::to_string_pretty(&summary)?);
-    Ok(())
+    let summary = inspect_release_attestation_summary(&parsed)?;
+    let _emit_json = parsed.json;
+    print_json(&summary)
+}
+
+fn inspect_release_attestation_summary(
+    parsed: &InspectArgs,
+) -> DynResult<ReleaseAttestationInspectSummary> {
+    let binary = parsed.binary.as_ref().ok_or("--binary is required")?;
+    let binary_bytes = fs::read(binary)?;
+
+    let footer = match read_embedded_release_footer(&binary_bytes) {
+        Ok(footer) => footer,
+        Err(error) => {
+            return Ok(ReleaseAttestationInspectSummary {
+                status: EmbeddedReleaseFooterStatus::Invalid.as_str().to_string(),
+                version: None,
+                signer_key_id: None,
+                artifact_digest: None,
+                error: Some(error.to_string()),
+            });
+        }
+    };
+
+    let Some(footer) = footer else {
+        return Ok(ReleaseAttestationInspectSummary {
+            status: EmbeddedReleaseFooterStatus::Missing.as_str().to_string(),
+            version: None,
+            signer_key_id: None,
+            artifact_digest: None,
+            error: None,
+        });
+    };
+
+    let attestation =
+        match serde_json::from_slice::<EmbeddedReleaseAttestation>(footer.payload_bytes) {
+            Ok(attestation) => attestation,
+            Err(error) => {
+                return Ok(ReleaseAttestationInspectSummary {
+                    status: EmbeddedReleaseFooterStatus::Invalid.as_str().to_string(),
+                    version: None,
+                    signer_key_id: None,
+                    artifact_digest: None,
+                    error: Some(format!(
+                        "embedded release attestation payload is invalid JSON: {error}"
+                    )),
+                });
+            }
+        };
+
+    let claims = attestation.claims().ok();
+    let version = claims
+        .as_ref()
+        .map(|claims| claims.version)
+        .or(Some(attestation.version));
+    let signer_key_id = Some(attestation.signer_key_id.clone());
+    let artifact_digest = claims.as_ref().map(|claims| claims.artifact_digest.clone());
+
+    let public_key_file = match parsed.public_key_file.as_ref() {
+        Some(path) => path,
+        None => {
+            return Ok(ReleaseAttestationInspectSummary {
+                status: EmbeddedReleaseFooterStatus::Invalid.as_str().to_string(),
+                version,
+                signer_key_id,
+                artifact_digest,
+                error: Some(
+                    "--public-key-file is required when an embedded release attestation is present"
+                        .to_string(),
+                ),
+            });
+        }
+    };
+    let supplied_public_key =
+        load_release_signing_public_key_file(public_key_file)?.verifying_key()?;
+    let verification = verify_embedded_release_footer(
+        &binary_bytes,
+        &XtaskReleasePayloadVerifier {
+            supplied_public_key,
+        },
+    );
+
+    Ok(ReleaseAttestationInspectSummary {
+        status: verification.status.as_str().to_string(),
+        version,
+        signer_key_id,
+        artifact_digest,
+        error: (verification.status == EmbeddedReleaseFooterStatus::Invalid)
+            .then_some(verification.error)
+            .flatten(),
+    })
+}
+
+fn parse_generate_keypair_args(args: &[String]) -> DynResult<GenerateKeypairArgs> {
+    let mut parsed = GenerateKeypairArgs::default();
+    let mut iter = args.iter();
+    while let Some(flag) = iter.next() {
+        let value = iter
+            .next()
+            .ok_or_else(|| format!("missing value for {flag}"))?;
+        match flag.as_str() {
+            "--private-key-out" => parsed.private_key_out = Some(PathBuf::from(value)),
+            "--public-key-out" => parsed.public_key_out = Some(PathBuf::from(value)),
+            _ => return Err(format!("unknown flag for generate-keypair: {flag}").into()),
+        }
+    }
+    Ok(parsed)
 }
 
 fn parse_stamp_args(args: &[String]) -> DynResult<StampArgs> {
@@ -254,8 +543,7 @@ fn parse_stamp_args(args: &[String]) -> DynResult<StampArgs> {
             .ok_or_else(|| format!("missing value for {flag}"))?;
         match flag.as_str() {
             "--binary" => parsed.binary = Some(PathBuf::from(value)),
-            "--output" => parsed.output = Some(PathBuf::from(value)),
-            "--signing-seed-hex" => parsed.signing_seed_hex = Some(value.clone()),
+            "--signing-key-file" => parsed.signing_key_file = Some(PathBuf::from(value)),
             "--node-version" => parsed.node_version = Some(value.clone()),
             "--build-id" => parsed.build_id = Some(value.clone()),
             "--commit" => parsed.commit = Some(value.clone()),
@@ -272,49 +560,50 @@ fn parse_inspect_args(args: &[String]) -> DynResult<InspectArgs> {
     let mut parsed = InspectArgs::default();
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
-        let value = iter
-            .next()
-            .ok_or_else(|| format!("missing value for {flag}"))?;
         match flag.as_str() {
-            "--binary" => parsed.binary = Some(PathBuf::from(value)),
-            "--input" => parsed.input = Some(PathBuf::from(value)),
+            "--json" => parsed.json = true,
+            "--binary" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| format!("missing value for {flag}"))?;
+                parsed.binary = Some(PathBuf::from(value));
+            }
+            "--public-key-file" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| format!("missing value for {flag}"))?;
+                parsed.public_key_file = Some(PathBuf::from(value));
+            }
             _ => return Err(format!("unknown flag for inspect: {flag}").into()),
         }
     }
     Ok(parsed)
 }
 
-fn sibling_attestation_path(binary: &Path) -> PathBuf {
-    let file_name = binary
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("mesh-llm");
-    binary.with_file_name(format!("{file_name}.attestation.json"))
+fn load_release_signing_key_file(path: &Path) -> DynResult<ReleaseSigningPrivateKeyFile> {
+    let key_file: ReleaseSigningPrivateKeyFile = serde_json::from_slice(&fs::read(path)?)?;
+    key_file.validate()?;
+    Ok(key_file)
+}
+
+fn load_release_signing_public_key_file(path: &Path) -> DynResult<ReleaseSigningPublicKeyFile> {
+    let key_file: ReleaseSigningPublicKeyFile = serde_json::from_slice(&fs::read(path)?)?;
+    key_file.validate()?;
+    Ok(key_file)
 }
 
 fn signing_key_from_seed_hex(seed_hex: &str) -> DynResult<SigningKey> {
     let seed = hex::decode(seed_hex)?;
     let seed: [u8; 32] = seed
         .try_into()
-        .map_err(|_| "--signing-seed-hex must decode to exactly 32 bytes")?;
+        .map_err(|_| "release signing seed must decode to exactly 32 bytes")?;
     Ok(SigningKey::from_bytes(&seed))
 }
 
-fn sha256_file(path: &Path) -> DynResult<String> {
+fn sha256_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
 
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    loop {
-        let len = reader.read(&mut buf)?;
-        if len == 0 {
-            break;
-        }
-        hasher.update(&buf[..len]);
-    }
-    Ok(hex::encode(hasher.finalize()))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn parse_release_signer_public_key(signer_key_id: &str) -> DynResult<ed25519_dalek::VerifyingKey> {
@@ -326,35 +615,6 @@ fn parse_release_signer_public_key(signer_key_id: &str) -> DynResult<ed25519_dal
         .try_into()
         .map_err(|_| "release signer key id must contain a 32-byte public key")?;
     Ok(ed25519_dalek::VerifyingKey::from_bytes(&bytes)?)
-}
-
-fn write_string(buf: &mut Vec<u8>, value: &str) {
-    write_bytes(buf, value.as_bytes());
-}
-
-fn write_optional_string(buf: &mut Vec<u8>, value: Option<&str>) {
-    match value {
-        Some(value) => {
-            buf.push(1);
-            write_string(buf, value.trim());
-        }
-        None => buf.push(0),
-    }
-}
-
-fn write_optional_u32(buf: &mut Vec<u8>, value: Option<u32>) {
-    match value {
-        Some(value) => {
-            buf.push(1);
-            buf.extend_from_slice(&value.to_le_bytes());
-        }
-        None => buf.push(0),
-    }
-}
-
-fn write_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    buf.extend_from_slice(bytes);
 }
 
 fn default_build_id(binary: &Path, artifact_digest: &str) -> String {
@@ -1362,4 +1622,183 @@ fn ensure_contains_normalized(haystack: &str, needle: &str, context: &str) -> Dy
 
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_signing_key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn write_test_keypair(dir: &Path, seed: u8) -> DynResult<(PathBuf, PathBuf)> {
+        let signing_key = test_signing_key(seed);
+        let private_key_path = dir.join("release-key");
+        let public_key_path = dir.join("release-key.pub");
+        write_json_file(
+            &private_key_path,
+            &ReleaseSigningPrivateKeyFile::from_signing_key(&signing_key),
+        )?;
+        write_json_file(
+            &public_key_path,
+            &ReleaseSigningPublicKeyFile::from_verifying_key(&signing_key.verifying_key()),
+        )?;
+        Ok((private_key_path, public_key_path))
+    }
+
+    fn make_temp_dir(label: &str) -> DynResult<PathBuf> {
+        let dir = unique_temp_dir(label);
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    #[test]
+    fn release_signing_key_files_round_trip() -> DynResult<()> {
+        let signing_key = test_signing_key(7);
+        let private_key_file = ReleaseSigningPrivateKeyFile::from_signing_key(&signing_key);
+        let public_key_file =
+            ReleaseSigningPublicKeyFile::from_verifying_key(&signing_key.verifying_key());
+
+        let loaded_signing_key = private_key_file.signing_key()?;
+        let loaded_public_key = public_key_file.verifying_key()?;
+        assert_eq!(loaded_signing_key.as_bytes(), signing_key.as_bytes());
+        assert_eq!(
+            loaded_public_key.as_bytes(),
+            signing_key.verifying_key().as_bytes()
+        );
+        assert_eq!(
+            private_key_file.signer_key_id,
+            public_key_file.signer_key_id
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn release_attestation_parse_rejects_old_sidecar_flags() {
+        assert!(
+            parse_stamp_args(&[
+                "--binary".to_string(),
+                "mesh-llm".to_string(),
+                "--signing-seed-hex".to_string(),
+                "00".repeat(32),
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_inspect_args(&[
+                "--binary".to_string(),
+                "mesh-llm".to_string(),
+                "--input".to_string(),
+                "mesh-llm.attestation.json".to_string(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn release_attestation_inspect_reports_missing_without_public_key() -> DynResult<()> {
+        let dir = make_temp_dir("xtask-attestation-missing")?;
+        let binary_path = dir.join("mesh-llm");
+        fs::write(&binary_path, b"plain release binary")?;
+
+        let summary = inspect_release_attestation_summary(&InspectArgs {
+            binary: Some(binary_path),
+            public_key_file: None,
+            json: true,
+        })?;
+        assert_eq!(summary.status, "missing");
+        assert_eq!(summary.version, None);
+        assert_eq!(summary.signer_key_id, None);
+        assert_eq!(summary.artifact_digest, None);
+        assert_eq!(summary.error, None);
+        Ok(())
+    }
+
+    #[test]
+    fn release_attestation_stamp_and_inspect_round_trip() -> DynResult<()> {
+        let dir = make_temp_dir("xtask-attestation-valid")?;
+        let binary_path = dir.join("mesh-llm");
+        fs::write(&binary_path, b"release-binary-v1")?;
+        let (private_key_path, public_key_path) = write_test_keypair(&dir, 11)?;
+
+        stamp_release_attestation(&[
+            "--binary".to_string(),
+            binary_path.display().to_string(),
+            "--signing-key-file".to_string(),
+            private_key_path.display().to_string(),
+            "--node-version".to_string(),
+            "9.9.9".to_string(),
+            "--build-id".to_string(),
+            "build-123".to_string(),
+            "--commit".to_string(),
+            "abcdef".to_string(),
+            "--target-triple".to_string(),
+            "x86_64-unknown-linux-gnu".to_string(),
+        ])?;
+
+        let summary = inspect_release_attestation_summary(&InspectArgs {
+            binary: Some(binary_path.clone()),
+            public_key_file: Some(public_key_path),
+            json: true,
+        })?;
+        assert_eq!(summary.status, "valid");
+        assert_eq!(summary.version, Some(1));
+        assert!(
+            summary
+                .signer_key_id
+                .as_deref()
+                .is_some_and(|value| value.starts_with("ed25519:"))
+        );
+        assert!(
+            summary
+                .artifact_digest
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+
+        let binary_bytes = fs::read(binary_path)?;
+        let footer = read_embedded_release_footer(&binary_bytes)?
+            .expect("stamped binary should contain embedded footer");
+        let embedded: EmbeddedReleaseAttestation = serde_json::from_slice(footer.payload_bytes)?;
+        let claims = embedded.claims()?;
+        assert_eq!(claims.node_version, "9.9.9");
+        assert_eq!(claims.build_id, "build-123");
+        assert_eq!(claims.commit, "abcdef");
+        Ok(())
+    }
+
+    #[test]
+    fn release_attestation_inspect_reports_invalid_after_tamper() -> DynResult<()> {
+        let dir = make_temp_dir("xtask-attestation-invalid")?;
+        let binary_path = dir.join("mesh-llm");
+        fs::write(&binary_path, b"release-binary-v1")?;
+        let (private_key_path, public_key_path) = write_test_keypair(&dir, 13)?;
+
+        stamp_release_attestation(&[
+            "--binary".to_string(),
+            binary_path.display().to_string(),
+            "--signing-key-file".to_string(),
+            private_key_path.display().to_string(),
+        ])?;
+
+        let mut tampered = fs::read(&binary_path)?;
+        tampered[0] ^= 0x01;
+        fs::write(&binary_path, tampered)?;
+
+        let summary = inspect_release_attestation_summary(&InspectArgs {
+            binary: Some(binary_path),
+            public_key_file: Some(public_key_path),
+            json: true,
+        })?;
+        assert_eq!(summary.status, "invalid");
+        assert!(
+            summary
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("artifact digest mismatch"))
+        );
+        assert!(summary.artifact_digest.is_some());
+        Ok(())
+    }
 }

@@ -22,7 +22,17 @@ This owner-identity attestation is separate from release attestation.
 Certified-build admission is not remote runtime attestation: it proves that a
 release attestation was signed by a trusted release signer, not that the remote
 machine is running unmodified official code with trusted hardware or OS state.
-Mesh requirements are also immutable on the wire: changing mesh requirements creates a new mesh, because the requirement-aware mesh id is derived from the canonical hash of the signed genesis policy.
+The release-signing trust root is separate from owner trust, and the embedded
+release attestation applies only to the shipped `mesh-llm` executable, not SDK,
+XCFramework, or other native artifacts. Verify stamped packaged binaries with
+`cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`. `missing`
+is normal for unstamped local and dev builds, `valid` means the packaged binary
+matches a trusted release signer, and `invalid` means the bytes changed after
+packaging. Bare `inspect --binary ...` is only sufficient for unstamped
+binaries that should classify as `missing`; stamped binaries require
+`--public-key-file` and otherwise report `invalid` with an explicit error. A
+post-download mutation can make a stamped binary `invalid`, but default startup
+still allows it. Mesh requirements are also immutable on the wire: changing mesh requirements creates a new mesh, because the requirement-aware mesh id is derived from the canonical hash of the signed genesis policy.
 
 Today mesh-llm has two separate identity concepts:
 

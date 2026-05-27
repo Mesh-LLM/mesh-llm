@@ -27,7 +27,19 @@ The release bundle is now a single `mesh-llm` runtime binary. External
 just bundle
 ```
 
-This creates `/tmp/mesh-bundle.tar.gz` containing `mesh-llm`.
+This creates `/tmp/mesh-bundle.tar.gz` containing the packaged `mesh-llm`
+executable. That packaged binary is the release-attestation source of truth.
+Local and dev builds from `just build` stay unstamped by default, so `missing`
+is expected there.
+
+Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
+`valid` means the packaged binary matches a trusted release signer, `missing`
+means an unstamped build, and `invalid` means the bytes changed after packaging.
+Bare `inspect --binary ...` is only sufficient for unstamped binaries that
+should classify as `missing`; a stamped package requires `--public-key-file` and
+otherwise reports `invalid` with an explicit error. A post-download mutation can
+turn a stamped binary `invalid`, but default startup still allows it because this
+is provenance and admission hardening, not runtime integrity proof.
 
 Platform release archives are created with:
 

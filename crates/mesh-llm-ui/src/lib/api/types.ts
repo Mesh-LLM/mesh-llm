@@ -60,6 +60,24 @@ export enum LatencySource {
   UNKNOWN = 'unknown'
 }
 
+export type ReleaseAttestationStatus = 'valid' | 'missing' | 'invalid'
+
+export interface ReleaseAttestationSummary {
+  status: ReleaseAttestationStatus
+  signer_key_id?: string
+  node_version?: string
+  build_id?: string
+  commit?: string
+  target_triple?: string
+  artifact_digest?: string
+  issued_at_unix_ms?: number
+  expires_at_unix_ms?: number
+  supported_protocol_generation_min?: number
+  supported_protocol_generation_max?: number
+  error?: string
+  verified: boolean
+}
+
 export interface PeerInfo {
   node_id?: string
   id?: string
@@ -84,6 +102,7 @@ export interface PeerInfo {
   tok_per_sec?: number
   hardware_label?: string
   owner?: string | { status?: string; verified?: boolean; name?: string; display_name?: string }
+  release_attestation?: ReleaseAttestationSummary
   gpus?: GpuInfo[]
   first_joined_mesh_ts?: number
 }
@@ -128,6 +147,7 @@ export interface StatusPayload {
   inflight_requests?: number
   mesh_id?: string
   owner?: PeerInfo['owner']
+  release_attestation?: ReleaseAttestationSummary
   nostr_discovery?: boolean
   publication_state?: MeshPublicationState
   first_joined_mesh_ts?: number

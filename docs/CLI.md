@@ -332,6 +332,32 @@ Switches:
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 
 
+### `release-attestation inspect`
+
+Use this to inspect the embedded release attestation on the packaged `mesh-llm` executable.
+
+Usage:
+
+```bash
+cargo run -p xtask -- release-attestation inspect --binary /path/to/mesh-bundle/mesh-llm --public-key-file /path/to/release-signing-public-key.json
+```
+
+Switches:
+
+- `--binary <PATH>`: packaged `mesh-llm` executable to inspect.
+- `--public-key-file <PATH>`: release-signing trust root required to validate an embedded stamped binary.
+- `--json`: machine-readable output.
+
+The command reports `missing`, `valid`, or `invalid`. It applies only to the
+shipped executable, not SDK, XCFramework, or other native artifacts. Local and
+dev builds are unstamped by default, so `missing` is normal there. A
+post-download mutation can turn a stamped binary `invalid`, but the default
+startup path still allows it because this is provenance and admission
+hardening, not runtime integrity proof. Bare `inspect --binary ...` is only
+enough to classify an unstamped binary as `missing`; if an embedded attestation
+is present, the command requires `--public-key-file` and otherwise reports
+`invalid` with an explicit error.
+
 ### `gpus`
 
 Use this to inspect local GPU identity and capacity, including per-device VRAM, unified-memory state, and cached benchmark-derived bandwidth when present.

@@ -570,6 +570,10 @@ impl Node {
         if ann.experts_summary.is_some() {
             existing.experts_summary = ann.experts_summary.clone();
         }
+        existing.release_attestation_summary = crate::verify_release_attestation(
+            ann.release_attestation.as_ref(),
+            &crate::ReleaseSignerTrustStore::default(),
+        );
         let updated_peer = existing.clone();
         let changed = peer_meaningfully_changed(&old_peer, &updated_peer)
             || Self::peer_hardware_changed(&old_peer, &updated_peer);

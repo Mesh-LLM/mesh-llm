@@ -6,7 +6,9 @@ publish = false
 
 [dependencies]
 ed25519-dalek = { version = "=3.0.0-pre.7", features = ["rand_core"] }
+getrandom = "0.3"
 hex = "0.4"
+mesh-llm-system = { path = "../../crates/mesh-llm-system" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

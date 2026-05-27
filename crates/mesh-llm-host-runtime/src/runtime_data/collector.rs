@@ -356,6 +356,7 @@ impl RuntimeDataCollector {
             latest_version: input.latest_version,
             node_id: input.node_id,
             owner: build_ownership_payload(&input.owner),
+            release_attestation: input.release_attestation,
             token: input.token,
             node_state: derivation.node_state,
             node_status: derivation.node_status,
@@ -1032,6 +1033,7 @@ fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
     PeerPayload {
         id: peer.id.fmt_short().to_string(),
         owner: build_ownership_payload(&peer.owner_summary),
+        release_attestation: peer.release_attestation_summary.clone(),
         role: match peer.role {
             mesh::NodeRole::Worker => "Worker".into(),
             mesh::NodeRole::Host { .. } => "Host".into(),

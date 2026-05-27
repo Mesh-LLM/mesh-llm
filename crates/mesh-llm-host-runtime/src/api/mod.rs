@@ -899,6 +899,7 @@ impl MeshApi {
                 latest_version,
                 node_id,
                 owner: node.owner_summary().await,
+                release_attestation: node.release_attestation_summary().await,
                 token,
                 is_host: runtime_status.is_host,
                 is_client,

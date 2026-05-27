@@ -148,6 +148,17 @@ Source builds require `just`, `cmake`, Rust, and Node.js 24 + npm. CUDA builds
 need `nvcc`, ROCm builds need ROCm/HIP, and Vulkan builds need Vulkan dev files
 plus `glslc`.
 
+The shipped `mesh-llm` executable uses embedded release attestation for
+provenance and admission hardening only. It does not apply to SDK, XCFramework,
+or other native artifacts, and it is not a runtime integrity proof. Verify a
+stamped packaged executable with `cargo run -p xtask -- release-attestation inspect --binary <path-to-packaged-mesh-llm> --public-key-file <release-signing-public-key.json>`.
+A packaged release binary reports `valid`, an unstamped local or dev build
+reports `missing`, and a binary that changed after packaging reports `invalid`.
+Bare `inspect --binary ...` is only enough to classify an unstamped binary as
+`missing`; stamped binaries require `--public-key-file` and otherwise report
+`invalid` with an explicit error. Post-download mutation can flip a stamped
+binary to `invalid`, but default startup still allows it.
+
 ## Documentation hub
 
 | Doc | Use it for |

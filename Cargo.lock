@@ -9708,7 +9708,9 @@ name = "xtask"
 version = "0.68.0"
 dependencies = [
  "ed25519-dalek",
+ "getrandom 0.3.4",
  "hex",
+ "mesh-llm-system",
  "serde",
  "serde_json",
  "sha2 0.10.9",

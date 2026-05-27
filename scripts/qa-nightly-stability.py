@@ -55,6 +55,18 @@ class ProbeResult(NamedTuple):
     tok_per_sec: float | None = None
 
 
+class AttestationResult(NamedTuple):
+    status: str
+    ok: bool
+    binary: str | None
+    expected_status: str | None
+    version: int | None = None
+    signer_key_id: str | None = None
+    artifact_digest: str | None = None
+    error: str | None = None
+    elapsed_ms: int = 0
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -102,6 +114,8 @@ def build_plan(
     agent_smokes: list[str],
     skip_streaming: bool,
     timeout: float,
+    mesh_binary: str | None,
+    release_attestation_expected_status: str | None,
 ) -> dict[str, Any]:
     specs = build_command_specs(
         base_url=base_url,
@@ -131,6 +145,15 @@ def build_plan(
         }
         for spec in specs
     )
+    if mesh_binary:
+        steps.append(
+            {
+                "name": "release-attestation-inspect",
+                "binary": mesh_binary,
+                "expected_status": release_attestation_expected_status,
+                "output": str(output_dir / "release-attestation.json"),
+            }
+        )
     return {
         "name": "nightly-stability",
         "endpoint": normalize_v1_base(base_url),
@@ -141,6 +164,7 @@ def build_plan(
             "manifest.json",
             "commands.jsonl",
             "results.jsonl",
+            "release-attestation.json",
             "summary.json",
             "summary.md",
             "logs/",
@@ -630,6 +654,7 @@ def write_evidence(
     plan: dict[str, Any],
     results: list[CommandResult],
     probe_results: list[ProbeResult] | None = None,
+    attestation_result: AttestationResult | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = dict(plan)
@@ -637,10 +662,14 @@ def write_evidence(
     _write_json(output_dir / "manifest.json", manifest)
     _write_jsonl(output_dir / "commands.jsonl", [result._asdict() for result in results])
     _write_jsonl(output_dir / "results.jsonl", [result._asdict() for result in (probe_results or [])])
-    summary = summarize_evidence(results, probe_results or [])
+    _write_json(
+        output_dir / "release-attestation.json",
+        (attestation_result or default_attestation_result())._asdict(),
+    )
+    summary = summarize_evidence(results, probe_results or [], attestation_result)
     _write_json(output_dir / "summary.json", summary)
     (output_dir / "summary.md").write_text(
-        render_summary_markdown(summary, results, probe_results or []),
+        render_summary_markdown(summary, results, probe_results or [], attestation_result),
         encoding="utf-8",
     )
 
@@ -676,23 +705,49 @@ def summarize_probe_results(results: Iterable[ProbeResult]) -> dict[str, Any]:
     }
 
 
+def default_attestation_result() -> AttestationResult:
+    return AttestationResult(
+        status="not_configured",
+        ok=True,
+        binary=None,
+        expected_status=None,
+    )
+
+
+def summarize_attestation_result(result: AttestationResult | None) -> dict[str, Any]:
+    attestation = result or default_attestation_result()
+    return {
+        "ok": attestation.ok,
+        "total": 1,
+        "passed": 1 if attestation.ok and attestation.status != "not_configured" else 0,
+        "failed": 0 if attestation.ok else 1,
+        "prereq": 1 if attestation.status == "not_configured" else 0,
+        "elapsed_ms": attestation.elapsed_ms,
+        "status": attestation.status,
+    }
+
+
 def summarize_evidence(
     command_results: Iterable[CommandResult],
     probe_results: Iterable[ProbeResult],
+    attestation_result: AttestationResult | None = None,
 ) -> dict[str, Any]:
     commands = summarize_results(command_results)
     probes = summarize_probe_results(probe_results)
-    failed = commands["failed"] + probes["failed"]
-    total = commands["total"] + probes["total"]
+    attestation = summarize_attestation_result(attestation_result)
+    failed = commands["failed"] + probes["failed"] + attestation["failed"]
+    total = commands["total"] + probes["total"] + attestation["total"]
     return {
         "ok": failed == 0,
         "total": total,
-        "passed": commands["passed"] + probes["passed"],
+        "passed": commands["passed"] + probes["passed"] + attestation["passed"],
         "failed": failed,
-        "prereq": commands["prereq"] + probes["prereq"],
-        "elapsed_ms": commands["elapsed_ms"] + probes["elapsed_ms"],
+        "prereq": commands["prereq"] + probes["prereq"] + attestation["prereq"],
+        "elapsed_ms": commands["elapsed_ms"] + probes["elapsed_ms"] + attestation["elapsed_ms"],
         "commands": commands,
         "probes": probes,
+        "attestation": attestation,
+        "release_attestation": (attestation_result or default_attestation_result())._asdict(),
     }
 
 
@@ -700,9 +755,11 @@ def render_summary_markdown(
     summary: dict[str, Any],
     results: Iterable[CommandResult],
     probe_results: Iterable[ProbeResult],
+    attestation_result: AttestationResult | None,
 ) -> str:
     commands = summary.get("commands", {})
     probes = summary.get("probes", {})
+    attestation = attestation_result or default_attestation_result()
     lines = [
         "# Nightly Stability Summary",
         "",
@@ -717,6 +774,17 @@ def render_summary_markdown(
         "|---|---:|---:|---:|---:|",
         _summary_timing_row("OpenAI surface probes", probes),
         _summary_timing_row("Command probes", commands),
+        _summary_timing_row("Release attestation", summary.get("attestation", {})),
+        "",
+        "## Release Attestation",
+        "",
+        f"- Status: `{attestation.status}`",
+        f"- Expected: `{attestation.expected_status or ''}`",
+        f"- Binary: `{attestation.binary or ''}`",
+        f"- Version: `{attestation.version or ''}`",
+        f"- Signer: `{attestation.signer_key_id or ''}`",
+        f"- Artifact digest: `{attestation.artifact_digest or ''}`",
+        f"- Error: `{attestation.error or ''}`",
         "",
         "## OpenAI Surface Probes",
         "",
@@ -779,9 +847,77 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated optional agent CLI smokes: opencode,pi,goose.",
     )
     parser.add_argument("--output-dir", default=os.environ.get("MESH_STABILITY_OUTPUT_DIR", DEFAULT_OUTPUT_DIR))
+    parser.add_argument("--mesh-binary", default=os.environ.get("MESH_STABILITY_MESH_BINARY"))
+    parser.add_argument(
+        "--release-attestation-public-key-file",
+        default=os.environ.get("MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"),
+    )
+    parser.add_argument(
+        "--release-attestation-expected-status",
+        default=os.environ.get("MESH_STABILITY_RELEASE_ATTESTATION_EXPECTED_STATUS", "valid"),
+    )
     parser.add_argument("--skip-streaming", action="store_true")
     parser.add_argument("--print-plan", action="store_true")
     return parser.parse_args()
+
+
+def inspect_release_attestation(
+    binary: str | None,
+    public_key_file: str | None,
+    expected_status: str | None,
+) -> AttestationResult:
+    if not binary:
+        return default_attestation_result()
+
+    command = [
+        "cargo",
+        "run",
+        "-q",
+        "-p",
+        "xtask",
+        "--",
+        "release-attestation",
+        "inspect",
+        "--binary",
+        binary,
+        "--json",
+    ]
+    if public_key_file:
+        command.extend(["--public-key-file", public_key_file])
+
+    started = time.monotonic()
+    process = subprocess.run(
+        command,
+        cwd=repo_root(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    if process.returncode != 0:
+        return AttestationResult(
+            status="command_failed",
+            ok=False,
+            binary=binary,
+            expected_status=expected_status,
+            error=process.stderr.strip() or process.stdout.strip() or "xtask inspect failed",
+            elapsed_ms=elapsed_ms,
+        )
+
+    payload = json.loads(process.stdout)
+    status = str(payload.get("status", "invalid"))
+    return AttestationResult(
+        status=status,
+        ok=status == expected_status,
+        binary=binary,
+        expected_status=expected_status,
+        version=payload.get("version"),
+        signer_key_id=payload.get("signer_key_id"),
+        artifact_digest=payload.get("artifact_digest"),
+        error=payload.get("error"),
+        elapsed_ms=elapsed_ms,
+    )
 
 
 def default_base_url() -> str:
@@ -809,10 +945,17 @@ def main() -> int:
             agent_smokes=agent_smokes,
             skip_streaming=args.skip_streaming,
             timeout=args.timeout,
+            mesh_binary=args.mesh_binary,
+            release_attestation_expected_status=args.release_attestation_expected_status,
         )
         if args.print_plan:
             print(json.dumps(plan, indent=2, sort_keys=True))
             return 0
+        attestation_result = inspect_release_attestation(
+            binary=args.mesh_binary,
+            public_key_file=args.release_attestation_public_key_file,
+            expected_status=args.release_attestation_expected_status,
+        )
         specs = build_command_specs(
             base_url=args.base_url,
             models=models,
@@ -830,9 +973,9 @@ def main() -> int:
             include_streaming=not args.skip_streaming,
         )
         results = run_commands(specs, output_dir)
-        write_evidence(output_dir, plan, results, probe_results)
-        summary = summarize_evidence(results, probe_results)
-        print_human_summary(output_dir, summary, results, probe_results)
+        write_evidence(output_dir, plan, results, probe_results, attestation_result)
+        summary = summarize_evidence(results, probe_results, attestation_result)
+        print_human_summary(output_dir, summary, results, probe_results, attestation_result)
         return 0 if summary["ok"] else 1
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -844,9 +987,17 @@ def print_human_summary(
     summary: dict[str, Any],
     results: Iterable[CommandResult],
     probe_results: Iterable[ProbeResult],
+    attestation_result: AttestationResult | None,
 ) -> None:
     print(f"nightly stability: {summary['passed']}/{summary['total']} steps passed", flush=True)
     print(f"results: {output_dir}", flush=True)
+    attestation = attestation_result or default_attestation_result()
+    print(
+        "release attestation: "
+        f"status={attestation.status} expected={attestation.expected_status or '-'} "
+        f"binary={attestation.binary or '-'}",
+        flush=True,
+    )
     for result in probe_results:
         status = "PASS" if result.ok else "FAIL"
         tok_str = f" tok/s={result.tok_per_sec:.1f}" if result.tok_per_sec is not None else ""

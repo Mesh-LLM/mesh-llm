@@ -375,3 +375,38 @@ fn mesh_requirements_certified_binary_required_event_text() {
 fn mesh_requirements_rejection_events_do_not_expose_tokens() {
     api::tests::assert_mesh_requirements_rejection_events_do_not_expose_tokens();
 }
+
+#[test]
+fn release_attestation_status_surfaces_in_api_and_runtime_data() {
+    runtime_data::tests::assert_release_attestation_status_surfaces_in_api_and_runtime_data();
+}
+
+#[test]
+fn release_attestation_policy_accepts_trusted_signer() {
+    mesh::tests::assert_mesh_requirements_outbound_admits_compliant_peer_after_requirements_pass();
+}
+
+#[test]
+fn release_attestation_policy_accepts_trusted_signer_with_compatible_different_peer_version() {
+    mesh::requirements::tests::assert_mesh_requirements_accept_trusted_signer_with_compatible_peer_version();
+}
+
+#[test]
+fn release_attestation_policy_rejects_missing_status() {
+    mesh::tests::assert_mesh_requirements_inbound_rejects_before_topology_announcement();
+}
+
+#[test]
+fn release_attestation_policy_rejects_invalid_signature() {
+    mesh::tests::assert_mesh_requirements_add_peer_rejects_invalid_release_attestation_signature();
+}
+
+#[test]
+fn release_attestation_reports_missing_for_unstamped_binary() {
+    runtime::assert_release_attestation_reports_missing_for_unstamped_binary();
+}
+
+#[test]
+fn mixed_version_peer_ignores_missing_release_attestation() {
+    protocol::tests::assert_mixed_version_peer_ignores_missing_release_attestation();
+}

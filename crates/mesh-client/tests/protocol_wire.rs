@@ -181,6 +181,22 @@ fn mesh_requirements_release_attestation_proto() -> ReleaseBuildAttestation {
     }
 }
 
+fn sparse_release_attestation_proto() -> ReleaseBuildAttestation {
+    ReleaseBuildAttestation {
+        version: 1,
+        node_version: "0.65.1".into(),
+        build_id: "build-legacy".into(),
+        commit: "abcdef123456".into(),
+        target_triple: "aarch64-apple-darwin".into(),
+        supported_protocol_generation_min: None,
+        supported_protocol_generation_max: None,
+        artifact_digest: None,
+        signer_key_id: "signer-a".into(),
+        signature_algorithm: "ed25519".into(),
+        signature: vec![0x7F; 64],
+    }
+}
+
 #[test]
 fn gossip_frame_roundtrip() {
     let frame = make_valid_gossip_frame();
@@ -262,6 +278,32 @@ fn mesh_requirements_gossip_roundtrip_preserves_policy_and_attestation_fields() 
             .map(|attestation| attestation.signer_key_id.as_str()),
         Some("signer-a")
     );
+}
+
+#[test]
+fn mesh_requirements_release_attestation_roundtrip_preserves_sparse_optional_fields() {
+    let attestation = sparse_release_attestation_proto();
+    let encoded = attestation.encode_to_vec();
+    let decoded = ReleaseBuildAttestation::decode(encoded.as_slice())
+        .expect("sparse release attestation protobuf should roundtrip");
+
+    assert_eq!(decoded.supported_protocol_generation_min, None);
+    assert_eq!(decoded.supported_protocol_generation_max, None);
+    assert_eq!(decoded.artifact_digest, None);
+    assert_eq!(decoded.signature, vec![0x7F; 64]);
+}
+
+#[test]
+fn mesh_requirements_release_attestation_roundtrip_preserves_invalid_signature_bytes() {
+    let mut attestation = mesh_requirements_release_attestation_proto();
+    attestation.signature[0] ^= 0x01;
+
+    let encoded = attestation.encode_to_vec();
+    let decoded = ReleaseBuildAttestation::decode(encoded.as_slice())
+        .expect("invalid release attestation protobuf should still roundtrip");
+
+    assert_eq!(decoded.signature, attestation.signature);
+    assert_eq!(decoded.signer_key_id, "signer-a");
 }
 
 #[test]

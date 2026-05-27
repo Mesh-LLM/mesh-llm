@@ -4,6 +4,8 @@ use semver::{BuildMetadata, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::crypto::{ReleaseBuildAttestation, parse_release_signer_public_key};
+
 fn current_time_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -17,8 +19,6 @@ const SIGNED_MESH_GENESIS_POLICY_VERSION: u32 = 1;
 const SIGNED_MESH_GENESIS_POLICY_DOMAIN_TAG: &[u8] = b"mesh-llm-signed-genesis-policy-v1:";
 const SIGNED_BOOTSTRAP_TOKEN_VERSION: u32 = 1;
 const SIGNED_BOOTSTRAP_TOKEN_DOMAIN_TAG: &[u8] = b"mesh-llm-bootstrap-token-v1:";
-const RELEASE_BUILD_ATTESTATION_VERSION: u32 = 1;
-const RELEASE_BUILD_ATTESTATION_DOMAIN_TAG: &[u8] = b"mesh-llm-release-attestation-v1:";
 const DIRECT_NODE_ADMISSION_PROOF_VERSION: u32 = 1;
 const DIRECT_NODE_ADMISSION_PROOF_DOMAIN_TAG: &[u8] = b"mesh-llm-direct-node-admission-proof-v1:";
 const ED25519_SIGNATURE_ALGORITHM: &str = "ed25519";
@@ -50,21 +50,6 @@ pub struct SignedBootstrapToken {
     pub genesis_policy: MeshGenesisPolicy,
     pub expires_at_unix_ms: Option<u64>,
     pub origin_sign_public_key: Vec<u8>,
-    pub signature_algorithm: String,
-    pub signature: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ReleaseBuildAttestation {
-    pub version: u32,
-    pub node_version: String,
-    pub build_id: String,
-    pub commit: String,
-    pub target_triple: String,
-    pub supported_protocol_generation_min: Option<u32>,
-    pub supported_protocol_generation_max: Option<u32>,
-    pub artifact_digest: Option<String>,
-    pub signer_key_id: String,
     pub signature_algorithm: String,
     pub signature: Vec<u8>,
 }
@@ -550,15 +535,8 @@ impl MeshRequirements {
                 }
                 PeerReleaseAttestationStatus::Present {
                     signer_key,
-                    attested_version,
+                    attested_version: _,
                 } => {
-                    if let Some(attested) = attested_version.as_deref()
-                        && attested != crate::VERSION
-                    {
-                        return MeshRequirementDecision::Rejected(
-                            MeshRequirementRejectReason::BuildProofInvalid,
-                        );
-                    }
                     if !normalized_release_attestation
                         .allowed_signer_keys
                         .is_empty()
@@ -1019,105 +997,6 @@ impl SignedBootstrapToken {
     }
 }
 
-impl ReleaseBuildAttestation {
-    pub fn to_proto(&self) -> proto_node::ReleaseBuildAttestation {
-        proto_node::ReleaseBuildAttestation {
-            version: self.version,
-            node_version: self.node_version.clone(),
-            build_id: self.build_id.clone(),
-            commit: self.commit.clone(),
-            target_triple: self.target_triple.clone(),
-            supported_protocol_generation_min: self.supported_protocol_generation_min,
-            supported_protocol_generation_max: self.supported_protocol_generation_max,
-            artifact_digest: self.artifact_digest.clone(),
-            signer_key_id: self.signer_key_id.clone(),
-            signature_algorithm: self.signature_algorithm.clone(),
-            signature: self.signature.clone(),
-        }
-    }
-
-    pub fn from_proto(
-        value: &proto_node::ReleaseBuildAttestation,
-    ) -> Result<Self, MeshRequirementRejectReason> {
-        Ok(Self {
-            version: value.version,
-            node_version: value.node_version.clone(),
-            build_id: value.build_id.clone(),
-            commit: value.commit.clone(),
-            target_triple: value.target_triple.clone(),
-            supported_protocol_generation_min: value.supported_protocol_generation_min,
-            supported_protocol_generation_max: value.supported_protocol_generation_max,
-            artifact_digest: value.artifact_digest.clone(),
-            signer_key_id: value.signer_key_id.clone(),
-            signature_algorithm: value.signature_algorithm.clone(),
-            signature: value.signature.clone(),
-        })
-    }
-
-    pub fn validate(&self) -> Result<(), MeshRequirementRejectReason> {
-        if self.version != RELEASE_BUILD_ATTESTATION_VERSION
-            || self.node_version.trim().is_empty()
-            || self.build_id.trim().is_empty()
-            || self.commit.trim().is_empty()
-            || self.target_triple.trim().is_empty()
-            || self.signer_key_id.trim().is_empty()
-            || self.signature_algorithm.trim().is_empty()
-            || self.signature.is_empty()
-        {
-            return Err(MeshRequirementRejectReason::BuildProofInvalid);
-        }
-        if let (Some(min), Some(max)) = (
-            self.supported_protocol_generation_min,
-            self.supported_protocol_generation_max,
-        ) && min > max
-        {
-            return Err(MeshRequirementRejectReason::BuildProofInvalid);
-        }
-        Ok(())
-    }
-
-    pub fn canonical_bytes(&self) -> Result<Vec<u8>, MeshRequirementRejectReason> {
-        self.validate()?;
-        let mut buf = Vec::with_capacity(256);
-        buf.extend_from_slice(RELEASE_BUILD_ATTESTATION_DOMAIN_TAG);
-        buf.extend_from_slice(&self.version.to_le_bytes());
-        write_string(&mut buf, self.node_version.trim());
-        write_string(&mut buf, self.build_id.trim());
-        write_string(&mut buf, self.commit.trim());
-        write_string(&mut buf, self.target_triple.trim());
-        write_optional_u32(&mut buf, self.supported_protocol_generation_min);
-        write_optional_u32(&mut buf, self.supported_protocol_generation_max);
-        write_optional_string(&mut buf, self.artifact_digest.as_deref());
-        write_string(&mut buf, self.signer_key_id.trim());
-        write_string(&mut buf, self.signature_algorithm.trim());
-        Ok(buf)
-    }
-
-    pub fn canonical_hash_hex(&self) -> Result<String, MeshRequirementRejectReason> {
-        Ok(hex::encode(Sha256::digest(self.canonical_bytes()?)))
-    }
-
-    pub fn verify(&self) -> Result<(), MeshRequirementRejectReason> {
-        self.validate()?;
-        if self.signature_algorithm.trim() != ED25519_SIGNATURE_ALGORITHM
-            || self.signature.len() != 64
-        {
-            return Err(MeshRequirementRejectReason::BuildProofInvalid);
-        }
-        let signer_public_key = parse_release_signer_public_key(self.signer_key_id.trim())?;
-        let signature = ed25519_dalek::Signature::from_bytes(
-            &self
-                .signature
-                .as_slice()
-                .try_into()
-                .map_err(|_| MeshRequirementRejectReason::BuildProofInvalid)?,
-        );
-        signer_public_key
-            .verify_strict(&self.canonical_bytes()?, &signature)
-            .map_err(|_| MeshRequirementRejectReason::BuildProofInvalid)
-    }
-}
-
 impl DirectNodeAdmissionProof {
     pub fn to_proto(&self) -> proto_node::DirectNodeAdmissionProof {
         proto_node::DirectNodeAdmissionProof {
@@ -1261,20 +1140,6 @@ fn parse_node_version(raw: &str) -> Result<Version, MeshRequirementRejectReason>
     }
     let normalized = normalized.strip_prefix(['v', 'V']).unwrap_or(normalized);
     Version::parse(normalized).map_err(|_| MeshRequirementRejectReason::NodeVersionMalformed)
-}
-
-fn parse_release_signer_public_key(
-    signer_key_id: &str,
-) -> Result<ed25519_dalek::VerifyingKey, MeshRequirementRejectReason> {
-    let encoded = signer_key_id
-        .strip_prefix("ed25519:")
-        .ok_or(MeshRequirementRejectReason::BuildProofInvalid)?;
-    let bytes = hex::decode(encoded).map_err(|_| MeshRequirementRejectReason::BuildProofInvalid)?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| MeshRequirementRejectReason::BuildProofInvalid)?;
-    ed25519_dalek::VerifyingKey::from_bytes(&bytes)
-        .map_err(|_| MeshRequirementRejectReason::BuildProofInvalid)
 }
 
 fn version_precedence_cmp(left: &Version, right: &Version) -> std::cmp::Ordering {
@@ -1711,6 +1576,36 @@ pub(crate) mod tests {
                 release_attestation: PeerReleaseAttestationStatus::Present {
                     signer_key: Some("trusted-signer".into()),
                     attested_version: Some(crate::VERSION.to_string()),
+                },
+                ..Default::default()
+            }),
+            MeshRequirementDecision::Accepted
+        );
+    }
+
+    pub(crate) fn assert_mesh_requirements_accept_trusted_signer_with_compatible_peer_version() {
+        let constrained = MeshRequirements {
+            node_version: NodeVersionBounds {
+                min: Some("0.65.0".into()),
+                max: Some("0.65.9".into()),
+            },
+            protocol_generation: ProtocolGenerationBounds {
+                min: Some(1),
+                max: Some(1),
+            },
+            release_attestation: ReleaseAttestationRequirement {
+                required: true,
+                allowed_signer_keys: vec!["trusted-signer".into()],
+            },
+        };
+
+        assert_eq!(
+            constrained.evaluate(&MeshRequirementEvaluationInput {
+                advertised_node_version: Some("0.65.4".into()),
+                negotiated_protocol_generation: Some(1),
+                release_attestation: PeerReleaseAttestationStatus::Present {
+                    signer_key: Some("trusted-signer".into()),
+                    attested_version: Some("0.65.4".into()),
                 },
                 ..Default::default()
             }),

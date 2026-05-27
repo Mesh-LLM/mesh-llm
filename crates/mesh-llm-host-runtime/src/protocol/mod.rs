@@ -904,6 +904,7 @@ alias = "model-alias"
             served_model_descriptors: vec![],
             served_model_runtime: vec![],
             owner_attestation: None,
+            release_attestation_summary: crate::ReleaseAttestationSummary::default(),
             artifact_transfer_supported: false,
             stage_protocol_generation_supported: false,
             stage_status_list_supported: false,
@@ -1395,6 +1396,34 @@ alias = "model-alias"
         assert_eq!(roundtripped.claim.owner_id, "owner-abc");
         assert_eq!(roundtripped.claim.cert_id, "cert-123");
         assert_eq!(roundtripped.claim.node_label.as_deref(), Some("studio"));
+    }
+
+    pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
+        let proto = crate::proto::node::PeerAnnouncement {
+            endpoint_id: vec![1; 32],
+            role: crate::proto::node::NodeRole::Worker as i32,
+            version: Some("0.66.0".into()),
+            ..Default::default()
+        };
+
+        let (_addr, ann) = proto_ann_to_local(&proto).expect("announcement should decode");
+        assert!(ann.release_attestation.is_none());
+
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xBC; 32]).public());
+        let peer = crate::mesh::PeerInfo::from_announcement(
+            peer_id,
+            iroh::EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            &ann,
+            crate::crypto::OwnershipSummary::default(),
+        );
+        assert_eq!(
+            peer.release_attestation_summary.status,
+            crate::ReleaseAttestationStatus::Missing
+        );
+        assert!(!peer.release_attestation_summary.verified);
     }
 
     #[test]

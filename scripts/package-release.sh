@@ -9,6 +9,8 @@ trap 'rm -rf "$_STAGING_DIR"' EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RELEASE_BIN_DIR="$REPO_ROOT/target/release"
+ATTESTATION_SIGNING_KEY_FILE="${MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE:-}"
+ATTESTATION_PUBLIC_KEY_FILE="${MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE:-}"
 
 python_bin() {
     if command -v python3 >/dev/null 2>&1; then
@@ -132,6 +134,49 @@ elif archive_kind == "zip":
 else:
     raise SystemExit(f"unsupported archive kind: {archive_kind}")
 PY
+}
+
+validate_attestation_env() {
+    if [[ -n "$ATTESTATION_SIGNING_KEY_FILE" && -z "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+        echo "MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is required when MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is set" >&2
+        exit 1
+    fi
+    if [[ -z "$ATTESTATION_SIGNING_KEY_FILE" && -n "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+        echo "MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is required when MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is set" >&2
+        exit 1
+    fi
+}
+
+stamp_bundle_binary() {
+    local binary_path="$1"
+    local inspect_json
+    local inspect_status
+    local py
+
+    if [[ -z "$ATTESTATION_SIGNING_KEY_FILE" ]]; then
+        echo "Release attestation: missing (packaged binary left unstamped)"
+        return 0
+    fi
+
+    py="$(python_bin)"
+
+    inspect_json="$(
+        cd "$REPO_ROOT"
+        cargo run -q -p xtask -- release-attestation stamp \
+            --binary "$binary_path" \
+            --signing-key-file "$ATTESTATION_SIGNING_KEY_FILE" \
+            >/dev/null
+        cargo run -q -p xtask -- release-attestation inspect \
+            --binary "$binary_path" \
+            --public-key-file "$ATTESTATION_PUBLIC_KEY_FILE" \
+            --json
+    )"
+    printf '%s\n' "$inspect_json"
+    inspect_status="$(printf '%s' "$inspect_json" | "$py" -c 'import json,sys; print(json.load(sys.stdin)["status"])')"
+    if [[ "$inspect_status" != "valid" ]]; then
+        echo "release-attestation inspect reported status '$inspect_status' for $binary_path" >&2
+        exit 1
+    fi
 }
 
 normalized_release_platform() {
@@ -402,7 +447,10 @@ main() {
     local output_dir="${2:-dist}"
     local os_name
     local bundle_dir
+    local bundle_binary
     local versioned_asset
+
+    validate_attestation_env
 
     if ! resolve_release_target; then
         release_target_error_message >&2
@@ -418,15 +466,15 @@ main() {
     bundle_dir="$_STAGING_DIR/mesh-bundle"
     mkdir -p "$bundle_dir"
 
-    cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_dir/$(bundle_bin_name mesh-llm)"
-    verify_mesh_binary_version "$bundle_dir/$(bundle_bin_name mesh-llm)" "$version"
+bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
+    cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_binary"
 
-    if [[ "$os_name" == "Darwin" ]]; then
-        for bin in "$bundle_dir/$(bundle_bin_name mesh-llm)"; do
-            [[ -f "$bin" ]] || continue
-            install_name_tool -add_rpath @executable_path/ "$bin" 2>/dev/null || true
-        done
+
+    if [[ "$os_name" == "Darwin" && -f "$bundle_binary" ]]; then
+        install_name_tool -add_rpath @executable_path/ "$bundle_binary" 2>/dev/null || true
     fi
+
+    stamp_bundle_binary "$bundle_binary"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
