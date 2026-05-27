@@ -16,11 +16,11 @@ use mesh_client::protocol::{
     owner_control_rejection_envelope,
 };
 use mesh_llm::{
-    crypto::OwnerKeypair, BootstrapStatus, DirectPeerProofStatus, MeshGenesisPolicy,
-    MeshRequirementDecision, MeshRequirementEvaluationInput, MeshRequirementRejectReason,
-    MeshRequirements, NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,
+    BootstrapStatus, DirectPeerProofStatus, MeshGenesisPolicy, MeshRequirementDecision,
+    MeshRequirementEvaluationInput, MeshRequirementRejectReason, MeshRequirements,
+    NodeVersionBounds, PeerReleaseAttestationStatus, ProtocolGenerationBounds,
     ReleaseAttestationRequirement, ReleaseBuildAttestation, SignedBootstrapToken,
-    SignedMeshGenesisPolicy,
+    SignedMeshGenesisPolicy, crypto::OwnerKeypair,
 };
 
 fn test_release_signing_key() -> OwnerKeypair {

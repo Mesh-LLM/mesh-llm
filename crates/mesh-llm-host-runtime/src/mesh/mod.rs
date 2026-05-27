@@ -26,9 +26,9 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, watch};
 
 use self::requirements::{
-    evaluate_direct_peer_admission, peer_release_attestation_status, DirectPeerProofStatus,
-    MeshRequirementDecision, MeshRequirementPolicySummary, MeshRequirementRejectReason,
-    MeshRequirementRejectionEvent, MeshRequirementRejectionSource,
+    DirectPeerProofStatus, MeshRequirementDecision, MeshRequirementPolicySummary,
+    MeshRequirementRejectReason, MeshRequirementRejectionEvent, MeshRequirementRejectionSource,
+    evaluate_direct_peer_admission, peer_release_attestation_status,
 };
 use crate::crypto::{
     DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipStatus, OwnershipSummary, SignedNodeOwnership,
@@ -3903,18 +3903,15 @@ impl Node {
                 "requirement-aware meshes require an owner identity so the genesis policy and bootstrap token can be signed"
             )
         })?;
-        if let Ok(serialized) = std::fs::read(mesh_genesis_policy_path()) {
-            if let Ok(existing) =
+        if let Ok(serialized) = std::fs::read(mesh_genesis_policy_path())
+            && let Ok(existing) =
                 serde_json::from_slice::<crate::SignedMeshGenesisPolicy>(&serialized)
-            {
-                if existing.verify().is_ok()
-                    && existing.policy.origin_owner_id == owner.owner_id()
-                    && existing.policy.requirements == self.local_mesh_requirements
-                    && existing.origin_sign_public_key == owner.verifying_key().as_bytes().to_vec()
-                {
-                    return Ok(existing);
-                }
-            }
+            && existing.verify().is_ok()
+            && existing.policy.origin_owner_id == owner.owner_id()
+            && existing.policy.requirements == self.local_mesh_requirements
+            && existing.origin_sign_public_key == owner.verifying_key().as_bytes().to_vec()
+        {
+            return Ok(existing);
         }
 
         let signed = crate::SignedMeshGenesisPolicy::sign(
@@ -4163,23 +4160,20 @@ impl Node {
             bootstrap: crate::BootstrapStatus::NotChecked,
         };
 
-        if let Some(active_policy) = active_policy.as_ref() {
-            if active_policy
+        if let Some(active_policy) = active_policy.as_ref()
+            && active_policy
                 .policy
                 .requirements
                 .release_attestation
                 .required
-            {
-                if let MeshRequirementDecision::Rejected(
-                    reason @ (MeshRequirementRejectReason::CertifiedBinaryRequired
-                    | MeshRequirementRejectReason::BuildProofInvalid
-                    | MeshRequirementRejectReason::ReleaseSignerUntrusted
-                    | MeshRequirementRejectReason::BuildProofMissing),
-                ) = active_policy.policy.evaluate(&input)
-                {
-                    return Err(reason);
-                }
-            }
+            && let MeshRequirementDecision::Rejected(
+                reason @ (MeshRequirementRejectReason::CertifiedBinaryRequired
+                | MeshRequirementRejectReason::BuildProofInvalid
+                | MeshRequirementRejectReason::ReleaseSignerUntrusted
+                | MeshRequirementRejectReason::BuildProofMissing),
+            ) = active_policy.policy.evaluate(&input)
+        {
+            return Err(reason);
         }
 
         match evaluate_direct_peer_admission(
@@ -5105,15 +5099,15 @@ impl Node {
     /// Set the mesh identity. If None was set, adopts the given ID (from gossip).
     /// If already set, ignores (originator's ID wins).
     pub async fn set_mesh_id(&self, id: String) {
-        if let Some(policy_hash) = self.mesh_policy_hash.lock().await.clone() {
-            if policy_hash != id {
-                tracing::warn!(
-                    "ignoring conflicting mesh ID '{}' for requirement-aware mesh {}",
-                    id,
-                    policy_hash
-                );
-                return;
-            }
+        if let Some(policy_hash) = self.mesh_policy_hash.lock().await.clone()
+            && policy_hash != id
+        {
+            tracing::warn!(
+                "ignoring conflicting mesh ID '{}' for requirement-aware mesh {}",
+                id,
+                policy_hash
+            );
+            return;
         }
         let mut current = self.mesh_id.lock().await;
         if current.is_none() {

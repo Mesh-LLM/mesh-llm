@@ -313,32 +313,31 @@ impl Node {
             if let Some(ref their_id) = ann.mesh_id {
                 self.set_mesh_id(their_id.clone()).await;
             }
-            if !context.direct_peer_requirements_validated {
-                if let Err(reason) = self
+            if !context.direct_peer_requirements_validated
+                && let Err(reason) = self
                     .validate_direct_peer_requirements(
                         remote,
                         ann,
                         context.negotiated_protocol_generation,
                     )
                     .await
-                {
-                    self.record_mesh_requirement_rejection(
-                        super::requirements::MeshRequirementRejectionSource::Gossip,
-                        Some(remote),
-                        reason.clone(),
-                    )
-                    .await;
-                    self.state
-                        .lock()
-                        .await
-                        .requirement_rejected_peers
-                        .insert(remote);
-                    anyhow::bail!(
-                        "peer {} rejected by mesh requirements: {}",
-                        remote.fmt_short(),
-                        reason.code()
-                    );
-                }
+            {
+                self.record_mesh_requirement_rejection(
+                    super::requirements::MeshRequirementRejectionSource::Gossip,
+                    Some(remote),
+                    reason.clone(),
+                )
+                .await;
+                self.state
+                    .lock()
+                    .await
+                    .requirement_rejected_peers
+                    .insert(remote);
+                anyhow::bail!(
+                    "peer {} rejected by mesh requirements: {}",
+                    remote.fmt_short(),
+                    reason.code()
+                );
             }
             self.merge_remote_demand(&ann.model_demand);
             self.add_peer_after_direct_requirements_validated(remote, addr.clone(), ann)

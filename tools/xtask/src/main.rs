@@ -46,10 +46,9 @@ impl ReleaseBuildAttestation {
         if let (Some(min), Some(max)) = (
             self.supported_protocol_generation_min,
             self.supported_protocol_generation_max,
-        ) {
-            if min > max {
-                return Err("invalid release build attestation protocol bounds".into());
-            }
+        ) && min > max
+        {
+            return Err("invalid release build attestation protocol bounds".into());
         }
         Ok(())
     }

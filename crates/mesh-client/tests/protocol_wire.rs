@@ -197,7 +197,7 @@ fn gossip_frame_roundtrip() {
 #[test]
 fn mesh_requirements_missing_optional_fields_remain_legacy_compatible() {
     let frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0x44; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0x55; 32],
@@ -223,7 +223,7 @@ fn mesh_requirements_missing_optional_fields_remain_legacy_compatible() {
 #[test]
 fn mesh_requirements_gossip_roundtrip_preserves_policy_and_attestation_fields() {
     let frame = GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0x44; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0x55; 32],

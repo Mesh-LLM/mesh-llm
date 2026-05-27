@@ -930,10 +930,12 @@ pub(crate) fn assert_mesh_requirements_rejection_events_do_not_expose_tokens() {
             )
             .unwrap();
             let mut token = crate::SignedBootstrapToken::sign(
-                vec![serde_json::to_vec(
-                    &mesh::Node::decode_invite_token(&node.invite_token().await).unwrap(),
-                )
-                .unwrap()],
+                vec![
+                    serde_json::to_vec(
+                        &mesh::Node::decode_invite_token(&node.invite_token().await).unwrap(),
+                    )
+                    .unwrap(),
+                ],
                 &signed_policy,
                 Some(1),
                 &owner,
@@ -955,8 +957,10 @@ pub(crate) fn assert_mesh_requirements_rejection_events_do_not_expose_tokens() {
             let payload = serde_json::to_value(state.status().await).unwrap();
             let payload_text = payload.to_string();
             assert!(!payload_text.contains(&invite_token));
-            assert!(!payload_text
-                .contains(&base64::engine::general_purpose::STANDARD.encode(&token.signature)));
+            assert!(
+                !payload_text
+                    .contains(&base64::engine::general_purpose::STANDARD.encode(&token.signature))
+            );
         });
 }
 

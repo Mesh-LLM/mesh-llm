@@ -5548,11 +5548,13 @@ async fn test_on_demand_transitive_peer_connection_completes_gossip() -> Result<
     assert!(bridge.peers().await.iter().any(|peer| peer.id == host.id()));
 
     client.sync_from_peer_for_tests(&bridge).await;
-    assert!(client
-        .peers()
-        .await
-        .iter()
-        .any(|peer| peer.id == bridge.id()));
+    assert!(
+        client
+            .peers()
+            .await
+            .iter()
+            .any(|peer| peer.id == bridge.id())
+    );
 
     {
         let state = client.state.lock().await;
@@ -5982,7 +5984,7 @@ async fn expect_no_route_table_response(requester: &Node, target: &Node) -> Resu
     send.write_all(&[STREAM_ROUTE_REQUEST]).await?;
     let request = RouteTableRequest {
         requester_id: requester.id().as_bytes().to_vec(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     };
     write_len_prefixed(&mut send, &request.encode_to_vec()).await?;
     send.finish()?;
@@ -6383,8 +6385,8 @@ pub(crate) fn assert_requirement_aware_mesh_without_attestation_rejects_stale_di
     });
 }
 
-pub(crate) fn assert_requirement_aware_mesh_without_attestation_rejects_sender_mismatch_direct_proof(
-) {
+pub(crate) fn assert_requirement_aware_mesh_without_attestation_rejects_sender_mismatch_direct_proof()
+ {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
         let node = make_test_node(super::NodeRole::Worker)
@@ -6749,11 +6751,13 @@ pub(crate) fn assert_mesh_requirements_transitive_gossip_never_admits_peer_witho
         assert!(bridge.peers().await.iter().any(|peer| peer.id == host.id()));
 
         client.sync_from_peer_for_tests(&bridge).await;
-        assert!(client
-            .peers()
-            .await
-            .iter()
-            .any(|peer| peer.id == bridge.id()));
+        assert!(
+            client
+                .peers()
+                .await
+                .iter()
+                .any(|peer| peer.id == bridge.id())
+        );
 
         let peers = client.state.lock().await.peers.clone();
         assert!(
@@ -6893,8 +6897,8 @@ pub(crate) fn assert_mesh_requirements_join_rejects_invalid_bootstrap_token() {
     });
 }
 
-pub(crate) fn assert_mesh_requirements_join_accepts_matching_bootstrap_before_policy_state_installed(
-) {
+pub(crate) fn assert_mesh_requirements_join_accepts_matching_bootstrap_before_policy_state_installed()
+ {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
         let trusted_signer = test_release_signer_key_id(9);

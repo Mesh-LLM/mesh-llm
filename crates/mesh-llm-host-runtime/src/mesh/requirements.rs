@@ -205,12 +205,8 @@ impl MeshRequirementRejectReason {
     pub const fn message(&self) -> &'static str {
         match self {
             Self::OriginOwnerMissing => "the mesh genesis policy is missing its origin owner id.",
-            Self::NodeVersionBoundsInvalid => {
-                "the mesh node-version requirement range is invalid."
-            }
-            Self::NodeVersionMalformed => {
-                "the peer advertised a malformed mesh-llm node version."
-            }
+            Self::NodeVersionBoundsInvalid => "the mesh node-version requirement range is invalid.",
+            Self::NodeVersionMalformed => "the peer advertised a malformed mesh-llm node version.",
             Self::NodeVersionBelowMinimum => {
                 "the peer mesh-llm version is below this mesh's minimum allowed version."
             }
@@ -235,9 +231,7 @@ impl MeshRequirementRejectReason {
             Self::BuildProofMissing => {
                 "the peer's certified build proof is missing required signer metadata."
             }
-            Self::BuildProofInvalid => {
-                "the peer's certified build proof could not be verified."
-            }
+            Self::BuildProofInvalid => "the peer's certified build proof could not be verified.",
             Self::ReleaseSignerUntrusted => {
                 "the peer's certified build proof was signed by an untrusted release signer."
             }
@@ -247,12 +241,8 @@ impl MeshRequirementRejectReason {
             Self::MeshPolicyMismatch => {
                 "the peer or bootstrap token advertised a different mesh policy than this mesh requires."
             }
-            Self::BootstrapTokenInvalid => {
-                "the bootstrap token is invalid for this mesh."
-            }
-            Self::BootstrapTokenExpired => {
-                "the bootstrap token has expired for this mesh."
-            }
+            Self::BootstrapTokenInvalid => "the bootstrap token is invalid for this mesh.",
+            Self::BootstrapTokenExpired => "the bootstrap token has expired for this mesh.",
             Self::DirectProofMissing => {
                 "the peer did not provide the required direct admission proof."
             }
@@ -497,19 +487,19 @@ impl MeshRequirements {
                 Ok(version) => version,
                 Err(reason) => return MeshRequirementDecision::Rejected(reason),
             };
-            if let Some(min) = normalized_node_version.min.as_ref() {
-                if version_precedence_cmp(&version, min).is_lt() {
-                    return MeshRequirementDecision::Rejected(
-                        MeshRequirementRejectReason::NodeVersionBelowMinimum,
-                    );
-                }
+            if let Some(min) = normalized_node_version.min.as_ref()
+                && version_precedence_cmp(&version, min).is_lt()
+            {
+                return MeshRequirementDecision::Rejected(
+                    MeshRequirementRejectReason::NodeVersionBelowMinimum,
+                );
             }
-            if let Some(max) = normalized_node_version.max.as_ref() {
-                if version_precedence_cmp(&version, max).is_gt() {
-                    return MeshRequirementDecision::Rejected(
-                        MeshRequirementRejectReason::NodeVersionAboveMaximum,
-                    );
-                }
+            if let Some(max) = normalized_node_version.max.as_ref()
+                && version_precedence_cmp(&version, max).is_gt()
+            {
+                return MeshRequirementDecision::Rejected(
+                    MeshRequirementRejectReason::NodeVersionAboveMaximum,
+                );
             }
         }
 
@@ -526,19 +516,19 @@ impl MeshRequirements {
                     );
                 }
             };
-            if let Some(min) = normalized_protocol_generation.min {
-                if protocol_generation < min {
-                    return MeshRequirementDecision::Rejected(
-                        MeshRequirementRejectReason::ProtocolGenerationBelowMinimum,
-                    );
-                }
+            if let Some(min) = normalized_protocol_generation.min
+                && protocol_generation < min
+            {
+                return MeshRequirementDecision::Rejected(
+                    MeshRequirementRejectReason::ProtocolGenerationBelowMinimum,
+                );
             }
-            if let Some(max) = normalized_protocol_generation.max {
-                if protocol_generation > max {
-                    return MeshRequirementDecision::Rejected(
-                        MeshRequirementRejectReason::ProtocolGenerationAboveMaximum,
-                    );
-                }
+            if let Some(max) = normalized_protocol_generation.max
+                && protocol_generation > max
+            {
+                return MeshRequirementDecision::Rejected(
+                    MeshRequirementRejectReason::ProtocolGenerationAboveMaximum,
+                );
             }
         }
 
@@ -562,12 +552,12 @@ impl MeshRequirements {
                     signer_key,
                     attested_version,
                 } => {
-                    if let Some(attested) = attested_version.as_deref() {
-                        if attested != crate::VERSION {
-                            return MeshRequirementDecision::Rejected(
-                                MeshRequirementRejectReason::BuildProofInvalid,
-                            );
-                        }
+                    if let Some(attested) = attested_version.as_deref()
+                        && attested != crate::VERSION
+                    {
+                        return MeshRequirementDecision::Rejected(
+                            MeshRequirementRejectReason::BuildProofInvalid,
+                        );
                     }
                     if !normalized_release_attestation
                         .allowed_signer_keys
@@ -666,10 +656,10 @@ impl NodeVersionBounds {
     pub fn normalized(&self) -> Result<NormalizedNodeVersionBounds, MeshRequirementRejectReason> {
         let min = self.min.as_deref().map(parse_node_version).transpose()?;
         let max = self.max.as_deref().map(parse_node_version).transpose()?;
-        if let (Some(min), Some(max)) = (&min, &max) {
-            if version_precedence_cmp(min, max).is_gt() {
-                return Err(MeshRequirementRejectReason::NodeVersionBoundsInvalid);
-            }
+        if let (Some(min), Some(max)) = (&min, &max)
+            && version_precedence_cmp(min, max).is_gt()
+        {
+            return Err(MeshRequirementRejectReason::NodeVersionBoundsInvalid);
         }
         Ok(NormalizedNodeVersionBounds { min, max })
     }
@@ -693,10 +683,10 @@ impl ProtocolGenerationBounds {
     pub fn normalized(
         &self,
     ) -> Result<NormalizedProtocolGenerationBounds, MeshRequirementRejectReason> {
-        if let (Some(min), Some(max)) = (self.min, self.max) {
-            if min > max {
-                return Err(MeshRequirementRejectReason::ProtocolGenerationBoundsInvalid);
-            }
+        if let (Some(min), Some(max)) = (self.min, self.max)
+            && min > max
+        {
+            return Err(MeshRequirementRejectReason::ProtocolGenerationBoundsInvalid);
         }
         Ok(NormalizedProtocolGenerationBounds {
             min: self.min,
@@ -1079,10 +1069,9 @@ impl ReleaseBuildAttestation {
         if let (Some(min), Some(max)) = (
             self.supported_protocol_generation_min,
             self.supported_protocol_generation_max,
-        ) {
-            if min > max {
-                return Err(MeshRequirementRejectReason::BuildProofInvalid);
-            }
+        ) && min > max
+        {
+            return Err(MeshRequirementRejectReason::BuildProofInvalid);
         }
         Ok(())
     }
@@ -1436,11 +1425,13 @@ pub(crate) mod tests {
         )
         .expect("signed policy should validate");
         let mut token = SignedBootstrapToken::sign(
-            vec![serde_json::to_vec(&serde_json::json!({
-                "id": hex::encode([1u8; 32]),
-                "addrs": []
-            }))
-            .expect("json should serialize")],
+            vec![
+                serde_json::to_vec(&serde_json::json!({
+                    "id": hex::encode([1u8; 32]),
+                    "addrs": []
+                }))
+                .expect("json should serialize"),
+            ],
             &signed_policy,
             Some(1_717_171_717_000 + 60_000),
             &owner,
@@ -1468,11 +1459,13 @@ pub(crate) mod tests {
         )
         .expect("signed policy should validate");
         let token = SignedBootstrapToken::sign(
-            vec![serde_json::to_vec(&serde_json::json!({
-                "id": hex::encode([2u8; 32]),
-                "addrs": []
-            }))
-            .expect("json should serialize")],
+            vec![
+                serde_json::to_vec(&serde_json::json!({
+                    "id": hex::encode([2u8; 32]),
+                    "addrs": []
+                }))
+                .expect("json should serialize"),
+            ],
             &signed_policy,
             Some(1_717_171_717_000 + 5),
             &owner,
@@ -1498,11 +1491,13 @@ pub(crate) mod tests {
         )
         .expect("signed policy should validate");
         let mut token = SignedBootstrapToken::sign(
-            vec![serde_json::to_vec(&serde_json::json!({
-                "id": hex::encode([3u8; 32]),
-                "addrs": []
-            }))
-            .expect("json should serialize")],
+            vec![
+                serde_json::to_vec(&serde_json::json!({
+                    "id": hex::encode([3u8; 32]),
+                    "addrs": []
+                }))
+                .expect("json should serialize"),
+            ],
             &signed_policy,
             Some(1_717_171_717_000 + 60_000),
             &owner,
@@ -1763,7 +1758,7 @@ pub(crate) mod tests {
             (
                 MeshRequirementRejectReason::BootstrapTokenExpired,
                 "bootstrap_token_expired",
-                "the bootstrap token has expired for this mesh."
+                "the bootstrap token has expired for this mesh.",
             ),
             (
                 MeshRequirementRejectReason::NodeVersionBelowMinimum,
