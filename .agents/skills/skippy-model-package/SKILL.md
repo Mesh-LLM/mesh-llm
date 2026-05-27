@@ -33,11 +33,16 @@ Useful current checks in this repo:
 ```bash
 cargo test -p skippy-runtime --lib
 cargo test -p skippy-topology --lib
-cargo test -p mesh-llm inference::skippy --lib
+cargo test -p mesh-llm-host-runtime --lib inference::skippy
 ```
 
-If standalone slicer/package CLI crates are imported later, prefer those
-repo-native commands over ad hoc scripts.
+For a published layer package, prefer package-local diagnostics before a live
+split smoke:
+
+```bash
+cargo test -p skippy-model-package --bin skippy-model-package
+skippy-model-package preflight <package-dir> --stages 2
+```
 
 ## Cache Policy
 

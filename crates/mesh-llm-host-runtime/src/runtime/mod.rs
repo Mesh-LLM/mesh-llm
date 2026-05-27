@@ -5196,9 +5196,14 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     let config = plugin::load_config(cli.config.as_deref())?;
     let owner_config = owner_runtime_config(cli, &config)?;
     let swarm_capture = configure_plugin_mcp_swarm_capture(cli)?;
+    let relay_auths: std::collections::HashMap<String, String> =
+        cli.relay_auth.iter().cloned().collect();
     let (node, _channels) = mesh::Node::start(
         NodeRole::Client,
-        &cli.relay,
+        mesh::RelayConfig {
+            urls: &cli.relay,
+            auths: &relay_auths,
+        },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
             port: cli.bind_port,
@@ -5369,9 +5374,14 @@ async fn start_run_auto_node_and_plugins(
         emit_configuration_ui_read_only_hint();
     }
     let max_vram = if cli.client { Some(0.0) } else { cli.max_vram };
+    let relay_auths: std::collections::HashMap<String, String> =
+        cli.relay_auth.iter().cloned().collect();
     let (node, channels) = mesh::Node::start(
         role,
-        &cli.relay,
+        mesh::RelayConfig {
+            urls: &cli.relay,
+            auths: &relay_auths,
+        },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
             port: cli.bind_port,

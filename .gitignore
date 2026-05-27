@@ -20,6 +20,9 @@ __pycache__/
 .venv/
 .pytest_cache/
 dist/MeshLLMFFI.xcframework.zip
+dist/native-sdk/
+dist/native-sdk-static/
+dist/llama-stage-static/
 sdk/kotlin/src/main/kotlin/uniffi/
 sdk/kotlin/example/example-jvm/src/main/kotlin/uniffi/
 sdk/node/native/

@@ -676,6 +676,18 @@ jobs:
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
       timeout_minutes: 20
 
+  two_node_split_smoke:
+    needs: [changes, linux_cpu_artifact]
+    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact')) && needs.changes.outputs.docs_only != 'true' }}
+    uses: ./.github/workflows/scripted-binary-smoke.yml
+    with:
+      artifact_name: ci-linux-inference-binaries
+      artifact_path: ci-artifacts/linux
+      staged_binary_path: target/debug/mesh-llm
+      model_cache_scope: two-node-split-smoke-model
+      smoke_script: scripts/ci-two-node-split-smoke.sh
+      timeout_minutes: 25
+
   native_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
     if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && needs.changes.outputs.sdk_smoke_required == 'true' && needs.changes.outputs.docs_only != 'true' }}
