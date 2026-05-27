@@ -4820,7 +4820,9 @@ max_tokens = 222
         node.set_stage_control_sender(control_tx).await;
 
         let requests = Arc::new(StdMutex::new(Vec::new()));
+        let preparations = Arc::new(StdMutex::new(Vec::<skippy::StagePreparationStatus>::new()));
         let captured_requests = Arc::clone(&requests);
+        let captured_preparations = Arc::clone(&preparations);
         tokio::spawn(async move {
             while let Some(command) = control_rx.recv().await {
                 captured_requests
@@ -4829,18 +4831,30 @@ max_tokens = 222
                     .push(command.request.clone());
                 let response = match &command.request {
                     skippy::StageControlRequest::Prepare(prepare) => {
+                        let status = test_preparation_status_from_load(&prepare.load);
+                        captured_preparations.lock().unwrap().push(status.clone());
                         Ok(skippy::StageControlResponse::PrepareAccepted(
                             skippy::StagePrepareAcceptedResponse {
                                 accepted: true,
-                                status: test_preparation_status_from_load(&prepare.load),
+                                status,
                                 error: None,
                             },
                         ))
                     }
                     skippy::StageControlRequest::Inventory(inventory) => {
-                        Ok(skippy::StageControlResponse::Inventory(
-                            test_inventory_from_request(inventory),
-                        ))
+                        let mut response = test_inventory_from_request(inventory);
+                        response.preparing_ranges = captured_preparations
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|status| {
+                                status.model_id == inventory.model_id
+                                    && status.package_ref == inventory.package_ref
+                                    && status.manifest_sha256 == inventory.manifest_sha256
+                            })
+                            .cloned()
+                            .collect();
+                        Ok(skippy::StageControlResponse::Inventory(response))
                     }
                     skippy::StageControlRequest::Claim(claim) => {
                         Ok(skippy::StageControlResponse::ClaimAccepted(
