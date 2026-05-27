@@ -34,13 +34,13 @@ Run cargo commands serially:
 cargo check -p mesh-llm
 cargo test -p skippy-server --lib
 cargo test -p skippy-protocol --lib
-cargo test -p mesh-llm inference::skippy --lib
+cargo test -p mesh-llm-host-runtime --lib inference::skippy
 ```
 
 For lifecycle/status changes, also run:
 
 ```bash
-cargo test -p mesh-llm --lib
+cargo test -p mesh-llm-host-runtime --lib
 ```
 
 ## Rules
