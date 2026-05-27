@@ -954,7 +954,8 @@ pub(crate) fn mesh_config_to_proto(
         })
         .collect();
     let mesh_requirements = {
-        let runtime_requirements = config.mesh_requirements.to_mesh_requirements();
+        let runtime_requirements =
+            crate::plugin::mesh_requirements_config_to_runtime(&config.mesh_requirements);
         if runtime_requirements == crate::MeshRequirements::unrestricted() {
             None
         } else {

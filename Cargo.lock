@@ -3828,6 +3828,7 @@ dependencies = [
  "anyhow",
  "dirs",
  "mesh-llm-types",
+ "semver",
  "serde",
  "skippy-protocol",
  "tempfile",

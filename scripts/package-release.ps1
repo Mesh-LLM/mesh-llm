@@ -353,8 +353,6 @@ function Invoke-ReleaseAttestationStamp {
         Pop-Location
     }
 }
-    }
-}
 
 $Version = Normalize-RecipeArgument $Version @("version")
 $OutputDir = Normalize-RecipeArgument $OutputDir @("output", "output_dir", "outputdir")

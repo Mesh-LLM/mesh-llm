@@ -33,6 +33,8 @@ use tokio::sync::Mutex;
 use crate::plugin::stapler;
 use crate::plugin::{self, PluginEndpointSummary, PluginManager, PluginRpcBridge, RpcResult};
 
+use axum::Router;
+
 #[derive(Clone)]
 enum ToolTarget {
     Plugin {
@@ -1487,6 +1489,33 @@ mod proto_error {
         }
     }
 }
+
+pub(crate) async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> {
+    use rmcp::transport::streamable_http_server::{StreamableHttpService, session::local::LocalSessionManager};
+
+    let service = StreamableHttpService::new(
+        move || Ok(PluginMcpServer::new(plugin_manager.clone(), Default::default())),
+        Arc::new(LocalSessionManager::default()),
+        Default::default(),
+    );
+    let router = Router::new().nest_service("/mcp", service);
+
+    let bind_addr = std::env::var("MESH_MCP_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3040);
+
+    let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{bind_addr}"))
+        .await
+        .context("failed to bind MCP server address")?;
+    let addr = listener.local_addr()?;
+    tracing::info!(%addr, "MCP plugin server listening");
+
+    axum::serve(listener, router)
+        .await
+        .context("MCP server exited")
+}
+
 
 #[cfg(test)]
 mod tests {

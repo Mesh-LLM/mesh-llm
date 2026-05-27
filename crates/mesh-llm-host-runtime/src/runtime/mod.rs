@@ -5404,7 +5404,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     let resolved_plugins = load_resolved_plugins(cli)?;
     let config = plugin::load_config(cli.config.as_deref())?;
     let owner_config = owner_runtime_config(cli, &config)?;
-    let swarm_capture = configure_plugin_mcp_swarm_capture(cli)?;
+    let swarm_capture = configure_swarm_capture(cli)?;
     let relay_auths: std::collections::HashMap<String, String> =
         cli.relay_auth.iter().cloned().collect();
     let (node, _channels) = mesh::Node::start(

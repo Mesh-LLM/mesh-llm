@@ -1226,12 +1226,13 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn assert_mesh_requirements_policy_canonical_hash_is_stable() {
-        let (policy, local_input) = MeshGenesisPolicy::for_local_node(
+        let (policy, mut local_input) = MeshGenesisPolicy::for_local_node(
             "owner-123",
             1_717_171_717_000,
             restricted_requirements(),
         )
         .expect("policy should validate");
+        local_input.advertised_node_version = Some("0.66.0".into());
 
         let first = policy.canonical_hash_hex().expect("hash should compute");
         let second = policy
