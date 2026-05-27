@@ -67,8 +67,8 @@ impl PluginStore {
         let metadata_path = self.metadata_path(name);
         let contents = fs::read(&metadata_path)
             .with_context(|| format!("read plugin metadata {}", metadata_path.display()))?;
-        Ok(serde_json::from_slice(&contents)
-            .with_context(|| format!("parse plugin metadata {}", metadata_path.display()))?)
+        serde_json::from_slice(&contents)
+            .with_context(|| format!("parse plugin metadata {}", metadata_path.display()))
     }
 
     pub fn list(&self) -> Result<Vec<InstalledPluginMetadata>> {
