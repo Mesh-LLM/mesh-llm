@@ -245,19 +245,37 @@ pub fn pack_for_tool_result_turn(
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
-    // Forward the tail of the conversation that includes tool_call + tool
-    // result messages. Walk backwards to find the assistant message that
-    // proposed the tool call(s), then include everything from there forward.
+    // Forward the tail of the conversation that includes the current user turn,
+    // assistant tool_call messages, and their tool results. Tool-call chains
+    // can span multiple assistant/tool pairs; starting at the message before
+    // the last assistant tool_call can leave a leading `tool` message, which
+    // many chat templates reject.
     let all = session.all_messages();
     let mut start_idx = all.len().saturating_sub(10); // default: last 10
 
-    // Try to find the assistant tool_call message that triggered these results
-    for (i, msg) in all.iter().enumerate().rev() {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        if role == "assistant" && msg.get("tool_calls").is_some() {
-            // Include one user message before the tool_call for context
-            start_idx = i.saturating_sub(1);
-            break;
+    // Prefer the nearest user message before the latest tool result so the
+    // reducer sees a valid user -> assistant(tool_calls) -> tool chain.
+    let latest_tool_user_idx = all
+        .iter()
+        .rposition(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("tool"))
+        .and_then(|last_tool_idx| {
+            all[..=last_tool_idx]
+                .iter()
+                .rposition(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+        });
+
+    if let Some(user_idx) = latest_tool_user_idx {
+        start_idx = user_idx;
+    } else {
+        // Fall back to the last assistant tool_call message. This keeps the
+        // message sequence syntactically valid even if no user message is
+        // present in malformed input.
+        for (i, msg) in all.iter().enumerate().rev() {
+            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            if role == "assistant" && msg.get("tool_calls").is_some() {
+                start_idx = i;
+                break;
+            }
         }
     }
 
@@ -287,6 +305,23 @@ mod tests {
     }
     fn assistant_msg(text: &str) -> Value {
         json!({"role": "assistant", "content": text})
+    }
+    fn assistant_tool_msg(id: &str, name: &str, arguments: Value) -> Value {
+        json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments.to_string(),
+                },
+            }],
+        })
+    }
+    fn tool_result_msg(id: &str, text: &str) -> Value {
+        json!({"role": "tool", "tool_call_id": id, "content": text})
     }
     fn tools_two() -> Value {
         json!([
@@ -431,6 +466,56 @@ mod tests {
         );
         let last = packed.messages.last().unwrap();
         assert_eq!(last.get("content").and_then(|c| c.as_str()), Some("final"));
+    }
+
+    #[test]
+    fn tool_result_reducer_context_keeps_chained_tool_messages_valid() {
+        let s = session_with(
+            &[
+                user_msg("What is the weather today?"),
+                assistant_tool_msg(
+                    "call_search",
+                    "web_search",
+                    json!({"query": "weather Sydney today"}),
+                ),
+                tool_result_msg("call_search", "Search results include BOM and Weatherzone."),
+                assistant_tool_msg(
+                    "call_fetch",
+                    "web_fetch",
+                    json!({"url": "https://www.bom.gov.au/location/sydney"}),
+                ),
+                tool_result_msg("call_fetch", "BOM page content..."),
+            ],
+            Some(tools_two()),
+        );
+
+        let (messages, tools) = pack_for_tool_result_turn(&s, true);
+        let roles: Vec<&str> = messages
+            .iter()
+            .filter_map(|m| m.get("role").and_then(|r| r.as_str()))
+            .collect();
+
+        assert_eq!(
+            roles,
+            vec!["system", "user", "assistant", "tool", "assistant", "tool"],
+            "tool-result reducer context must not start with a bare tool message",
+        );
+        assert_eq!(
+            messages[1].get("content").and_then(|c| c.as_str()),
+            Some("What is the weather today?"),
+        );
+        assert!(
+            messages[2].get("tool_calls").is_some(),
+            "first tool result must retain its preceding assistant tool_call",
+        );
+        assert!(
+            messages[4].get("tool_calls").is_some(),
+            "latest tool result must retain its preceding assistant tool_call",
+        );
+        assert!(
+            tools.is_some(),
+            "tool-result reducer should still receive native tool schemas",
+        );
     }
 
     #[test]
