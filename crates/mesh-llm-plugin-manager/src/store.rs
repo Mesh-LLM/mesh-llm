@@ -71,6 +71,14 @@ impl PluginStore {
             .with_context(|| format!("parse plugin metadata {}", metadata_path.display()))
     }
 
+    pub fn load_optional(&self, name: &str) -> Result<Option<InstalledPluginMetadata>> {
+        validate_plugin_name(name)?;
+        if !self.metadata_path(name).exists() {
+            return Ok(None);
+        }
+        self.load(name).map(Some)
+    }
+
     pub fn list(&self) -> Result<Vec<InstalledPluginMetadata>> {
         if !self.root.exists() {
             return Ok(Vec::new());
@@ -203,6 +211,20 @@ mod tests {
         let disabled = store.set_enabled("blackboard", false).unwrap();
         assert!(!disabled.enabled);
         assert!(!store.load("blackboard").unwrap().enabled);
+    }
+
+    #[test]
+    fn load_optional_distinguishes_missing_metadata() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+
+        assert!(store.load_optional("blackboard").unwrap().is_none());
+
+        store.save(&metadata("blackboard")).unwrap();
+        assert_eq!(
+            store.load_optional("blackboard").unwrap().unwrap().name,
+            "blackboard"
+        );
     }
 
     #[test]
