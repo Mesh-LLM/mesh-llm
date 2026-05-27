@@ -185,12 +185,11 @@ fn capability_from_gguf_meta(
         return Some(capability);
     }
 
-    if !meta.architecture.trim().is_empty() {
-        if let Some(capability) =
+    if !meta.architecture.trim().is_empty()
+        && let Some(capability) =
             infer_family_capability(&meta.architecture, meta.layer_count, meta.embedding_size)
-        {
-            return Some(capability);
-        }
+    {
+        return Some(capability);
     }
 
     None

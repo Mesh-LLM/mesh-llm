@@ -67,10 +67,10 @@ pub async fn list_quants(client: &HFClient, repo: &str) -> Result<Vec<Discovered
     let mut gguf_files: Vec<(String, u64)> = Vec::new();
     while let Some(entry) = stream.next().await {
         let entry = entry.context("read repo tree entry")?;
-        if let RepoTreeEntry::File { path, size, .. } = entry {
-            if path.ends_with(".gguf") {
-                gguf_files.push((path, size));
-            }
+        if let RepoTreeEntry::File { path, size, .. } = entry
+            && path.ends_with(".gguf")
+        {
+            gguf_files.push((path, size));
         }
     }
 
@@ -153,10 +153,9 @@ pub async fn resolve(
         // Verify it's shard 00001.
         if shard.part != "00001" {
             // Reconstruct the -00001- path.
-            let first = matched
+            matched
                 .first_file
-                .replace(&format!("-{}-of-", shard.part), "-00001-of-");
-            first
+                .replace(&format!("-{}-of-", shard.part), "-00001-of-")
         } else {
             matched.first_file.clone()
         }

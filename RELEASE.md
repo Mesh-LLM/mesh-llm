@@ -109,11 +109,19 @@ The chain currently publishes:
 6. `model-artifact`
 7. `model-hf`
 8. `mesh-llm-client`
-9. `mesh-llm-node`
-10. `mesh-llm-api-server`
+9. `mesh-llm-api-client`
+10. `mesh-llm-node`
+11. `mesh-llm-api-server`
 
 Run the dry-run before cutting a GA tag after changing SDK crate manifests or
 workspace-internal SDK dependencies. On the first release that introduces a
 new internal SDK crate, the dry-run validates packages whose registry
 dependencies already exist and reports downstream packages that will be fully
 verified during the real sequential publish after their upstream crates land.
+
+If crates.io rate-limits the non-prerelease publish chain after some crates
+have already uploaded, rerun `scripts/publish-crates.sh` for the same checked
+out release tag instead of recutting the GitHub release or moving the tag. The
+script checks crates.io before each real publish, skips crate versions that are
+already visible, and retries HTTP 429 new-crate rate-limit responses using the
+retry time from crates.io when one is provided.

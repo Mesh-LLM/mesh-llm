@@ -1097,10 +1097,10 @@ pub fn score_mesh(mesh: &DiscoveredMesh, _now_secs: u64, last_mesh_id: Option<&s
     }
 
     // Sticky preference: strong bonus for the mesh we were last on
-    if let (Some(last_id), Some(mesh_id)) = (last_mesh_id, &mesh.listing.mesh_id) {
-        if last_id == mesh_id {
-            score += 500; // strong preference, not infinite — dead/degraded mesh loses on other factors
-        }
+    if let (Some(last_id), Some(mesh_id)) = (last_mesh_id, &mesh.listing.mesh_id)
+        && last_id == mesh_id
+    {
+        score += 500; // strong preference, not infinite — dead/degraded mesh loses on other factors
     }
 
     // Capacity: prefer meshes that aren't full
@@ -1318,7 +1318,7 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
 
     let primary = on_disk_fit
         .or(any_fit)
-        .map(|(name, _)| name.to_string())
+        .map(|(name, _)| catalog_ref(name))
         .unwrap_or_else(|| catalog_ref("Qwen3-4B-Q4_K_M"));
 
     vec![primary]

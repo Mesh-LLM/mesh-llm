@@ -223,10 +223,10 @@ pub async fn run_model_certify(
     .await?;
     let report_json = serde_json::to_string_pretty(&report)?;
     if let Some(path) = report_out {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, format!("{report_json}\n"))?;
     }

@@ -535,21 +535,20 @@ fn classify_tool_call_value(
         };
     }
 
-    if let Some(forced_name) = prepared.state.request_contract.forced_tool_name() {
-        if parsed_calls
+    if let Some(forced_name) = prepared.state.request_contract.forced_tool_name()
+        && parsed_calls
             .iter()
             .any(|tool_call| tool_call.name != forced_name)
-        {
-            return ClassifiedGuardrailResponse {
-                category: GuardrailResponseCategory::UnknownTool,
-                parser_stage,
-                visible_content: None,
-                tool_calls: Some(normalized_tool_calls(&parsed_calls)),
-                synthetic_text: None,
-                structured_payload: None,
-                finish_reason,
-            };
-        }
+    {
+        return ClassifiedGuardrailResponse {
+            category: GuardrailResponseCategory::UnknownTool,
+            parser_stage,
+            visible_content: None,
+            tool_calls: Some(normalized_tool_calls(&parsed_calls)),
+            synthetic_text: None,
+            structured_payload: None,
+            finish_reason,
+        };
     }
 
     if matches!(

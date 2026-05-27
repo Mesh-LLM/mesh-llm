@@ -353,15 +353,14 @@ impl NativeLogAggregator {
         }
 
         if let Some(layer_index) = parse_layer_assign_index(s) {
-            if self.layer_assign_progress.total.is_none() {
-                if let Some(total) = self
+            if self.layer_assign_progress.total.is_none()
+                && let Some(total) = self
                     .metadata_highlights
                     .block_count
                     .as_deref()
                     .and_then(|s| s.parse::<usize>().ok())
-                {
-                    self.layer_assign_progress.set_total(total);
-                }
+            {
+                self.layer_assign_progress.set_total(total);
             }
             let new_completed = layer_index + 1;
             if new_completed > self.layer_assign_progress.completed {
@@ -675,10 +674,10 @@ unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_
     }
 
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
-    if let Ok(mut guard) = native_log_file().lock() {
-        if let Some(writer) = guard.as_mut() {
-            let _ = writer.write_all(bytes);
-        }
+    if let Ok(mut guard) = native_log_file().lock()
+        && let Some(writer) = guard.as_mut()
+    {
+        let _ = writer.write_all(bytes);
     }
 
     // Also send aggregated messages through the channel when runtime forwarding is enabled.
@@ -691,13 +690,12 @@ unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_
             Ok(mut aggregator) => aggregator.process_line(text_str.trim()),
             _ => Vec::new(),
         };
-        if let Some(tx) = NATIVE_LOG_FILTERED_TX.get() {
-            if let Ok(guard) = tx.lock() {
-                if let Some(ref sender) = *guard {
-                    for event in events {
-                        let _ = sender.send(event);
-                    }
-                }
+        if let Some(tx) = NATIVE_LOG_FILTERED_TX.get()
+            && let Ok(guard) = tx.lock()
+            && let Some(ref sender) = *guard
+        {
+            for event in events {
+                let _ = sender.send(event);
             }
         }
     }

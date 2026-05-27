@@ -164,6 +164,52 @@ workflows or lab jobs. The job summary includes the timing snapshot from
 artifacts. It is intentionally evidence-producing and non-required: failed
 nightlies should guide stabilization work, not block unrelated pull requests.
 
+### 0f. KV/tool-loop stability certification
+
+Run the KV/tool-loop certification probe when changing Skippy KV slot cleanup,
+prefix-cache lookup, agent tool-loop behavior, or any runtime path related to
+issues where repeated tool calls eventually hit `llama_decode failed` or low
+same-prefix cache reuse.
+
+```bash
+scripts/qa-kv-tool-loop-stability.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
+  --attempts 5 \
+  --pressure-turns 8 \
+  --timeout 180 \
+  --min-cached-tokens 2048 \
+  --suffix-prefill-limit 256 \
+  --native-log ~/.mesh-llm/runtime/<pid>/logs/skippy-native.log \
+  --output-dir target/kv-tool-loop-stability/local
+```
+
+- the probe attaches to an existing `/v1/chat/completions` endpoint; it does
+  not start nodes, load models, join a mesh, or change routing policy
+- each attempt runs a growing non-streaming tool-result conversation with a
+  long stable system prefix, repeated pressure turns, a second forced tool
+  call, and final recall of both deterministic tool facts
+- `same_prefix_cache` warms the same long prefix with one tail and measures a
+  different tail; `exact_prefix_cache` verifies the identical-body cache path
+  still works
+- `--min-cached-tokens 2048` matches the known Qwen 3B reproduction shape where
+  healthy same-prefix reuse is near the shared prefix, not the 256-token floor
+- `--native-log` scans Skippy native logs for `failed to find a memory slot`,
+  `llama_decode failed`, and proactive eviction errors appended after the
+  certification starts, so stale failures in long-lived logs do not fail a
+  clean run
+- every run writes `manifest.json`, `results.jsonl`, `summary.json`,
+  `summary.md`, and sanitized transcript JSONL under `transcripts/`; the
+  transcript directory is reset at run start to keep repeated `latest` runs
+  auditable
+- `--print-plan` is side-effect-free and emits the exact models, thresholds,
+  runtime options, checks, and evidence files that would be produced
+
+This certification is deliberately a lab/release-confidence check, not a
+required PR gate. Use it to prove KV/cache stability on a real direct-model
+endpoint after local unit tests and before relying on agent workloads such as
+Goose, Pi, or OpenCode for broad smoke coverage.
+
 ## Single-model permutations
 
 ### 1. Solo (single node)

@@ -112,10 +112,10 @@ impl Serialize for ModelConfigEntry {
         if let Some(value) = &self.ctx_size {
             state.serialize_field("ctx_size", value)?;
         }
-        if self.gpu_id_from_legacy_shim {
-            if let Some(value) = &self.gpu_id {
-                state.serialize_field("gpu_id", value)?;
-            }
+        if self.gpu_id_from_legacy_shim
+            && let Some(value) = &self.gpu_id
+        {
+            state.serialize_field("gpu_id", value)?;
         }
         if let Some(value) = &self.parallel {
             state.serialize_field("parallel", value)?;

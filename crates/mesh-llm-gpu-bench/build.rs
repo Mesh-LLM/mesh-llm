@@ -1,4 +1,9 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=MESH_LLM_GPU_BENCH_RUST_ONLY");
+    if std::env::var_os("MESH_LLM_GPU_BENCH_RUST_ONLY").is_some() {
+        return;
+    }
+
     if target_os_is("macos") {
         build_metal();
     }

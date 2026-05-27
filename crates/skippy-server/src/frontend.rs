@@ -1774,11 +1774,12 @@ impl ChatOutputStreamParser {
         if let Some(delta) = suffix_delta(parsed.content.as_deref(), &mut self.emitted_content) {
             events.push(GenerationStreamEvent::Delta(delta));
         }
-        if !is_partial && !self.emitted_tool_calls {
-            if let Some(tool_calls) = parsed.tool_calls {
-                self.emitted_tool_calls = true;
-                events.push(GenerationStreamEvent::ToolCalls(tool_calls));
-            }
+        if !is_partial
+            && !self.emitted_tool_calls
+            && let Some(tool_calls) = parsed.tool_calls
+        {
+            self.emitted_tool_calls = true;
+            events.push(GenerationStreamEvent::ToolCalls(tool_calls));
         }
         Ok(events)
     }

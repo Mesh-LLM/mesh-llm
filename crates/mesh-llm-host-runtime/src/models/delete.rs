@@ -191,11 +191,12 @@ pub fn collect_delete_paths(resolved_paths: &[PathBuf]) -> Result<Vec<PathBuf>> 
     }
 
     let primary_path = &resolved_paths[0];
-    if let Some(record) = usage::load_model_usage_record_for_path(primary_path) {
-        if record.mesh_managed && !record.managed_paths.is_empty() {
-            for p in &record.managed_paths {
-                to_delete.insert(normalize_path(p));
-            }
+    if let Some(record) = usage::load_model_usage_record_for_path(primary_path)
+        && record.mesh_managed
+        && !record.managed_paths.is_empty()
+    {
+        for p in &record.managed_paths {
+            to_delete.insert(normalize_path(p));
         }
     }
 
@@ -232,13 +233,13 @@ pub async fn delete_model_by_identifier(identifier: &str) -> Result<DeleteResult
             std::fs::remove_file(path).with_context(|| format!("Remove {}", path.display()))?;
             deleted_paths.push(path.clone());
 
-            if let Some(metadata_path) = gguf_metadata_cache_path(path) {
-                if metadata_path.exists() {
-                    std::fs::remove_file(&metadata_path).with_context(|| {
-                        format!("Remove metadata cache {}", metadata_path.display())
-                    })?;
-                    removed_metadata_files += 1;
-                }
+            if let Some(metadata_path) = gguf_metadata_cache_path(path)
+                && metadata_path.exists()
+            {
+                std::fs::remove_file(&metadata_path).with_context(|| {
+                    format!("Remove metadata cache {}", metadata_path.display())
+                })?;
+                removed_metadata_files += 1;
             }
 
             prune_empty_ancestors(path, &huggingface_hub_cache_dir());

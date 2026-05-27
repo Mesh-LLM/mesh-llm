@@ -725,14 +725,14 @@ async fn fetch_model_context_lengths(
 ) -> std::collections::HashMap<String, Option<u32>> {
     let mut context_map = std::collections::HashMap::new();
 
-    if let Ok(resp) = client.get(management_models_url).send().await {
-        if let Ok(body) = resp.json::<serde_json::Value>().await {
-            for model in body["mesh_models"].as_array().unwrap_or(&vec![]) {
-                let name = model["name"].as_str().map(String::from);
-                let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
-                if let Some(n) = name {
-                    context_map.insert(n, ctx_len);
-                }
+    if let Ok(resp) = client.get(management_models_url).send().await
+        && let Ok(body) = resp.json::<serde_json::Value>().await
+    {
+        for model in body["mesh_models"].as_array().unwrap_or(&vec![]) {
+            let name = model["name"].as_str().map(String::from);
+            let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
+            if let Some(n) = name {
+                context_map.insert(n, ctx_len);
             }
         }
     }
@@ -774,18 +774,18 @@ async fn write_opencode_config_to_path(
 
     // Merge schema if needed (for display in ordered format)
     let mut merged_config = existing_config.clone();
-    if merged_config.get("$schema").is_none() {
-        if let Some(schema) = config_value.get("$schema") {
-            merged_config
-                .as_object_mut()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Expected {} to contain a JSON object",
-                        config_path.display()
-                    )
-                })?
-                .insert("$schema".to_string(), schema.clone());
-        }
+    if merged_config.get("$schema").is_none()
+        && let Some(schema) = config_value.get("$schema")
+    {
+        merged_config
+            .as_object_mut()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Expected {} to contain a JSON object",
+                    config_path.display()
+                )
+            })?
+            .insert("$schema".to_string(), schema.clone());
     }
 
     merge_mesh_provider(&mut merged_config, mesh_provider.clone(), config_path)?;

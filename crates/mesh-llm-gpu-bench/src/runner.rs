@@ -1,5 +1,12 @@
 use crate::BenchmarkOutput;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+#[cfg(any(
+    not(target_os = "macos"),
+    not(feature = "cuda"),
+    not(feature = "hip"),
+    not(feature = "intel")
+))]
+use anyhow::anyhow;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,11 +81,11 @@ pub fn parse_benchmark_output(stdout: &[u8]) -> Option<Vec<BenchmarkOutput>> {
             None
         }
         Err(err) => {
-            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(stdout) {
-                if let Some(msg) = val.get("error").and_then(|v| v.as_str()) {
-                    tracing::warn!("benchmark reported error: {msg}");
-                    return None;
-                }
+            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(stdout)
+                && let Some(msg) = val.get("error").and_then(|v| v.as_str())
+            {
+                tracing::warn!("benchmark reported error: {msg}");
+                return None;
             }
             tracing::warn!("failed to parse benchmark output: {err}");
             None

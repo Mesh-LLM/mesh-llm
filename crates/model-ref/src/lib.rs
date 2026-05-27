@@ -101,10 +101,10 @@ pub fn quant_selector_from_gguf_file(file: &str) -> Option<String> {
         return None;
     }
 
-    if let Some((prefix, _)) = file.split_once('/') {
-        if is_quant_like_selector(prefix) {
-            return Some(prefix.to_string());
-        }
+    if let Some((prefix, _)) = file.split_once('/')
+        && is_quant_like_selector(prefix)
+    {
+        return Some(prefix.to_string());
     }
 
     let basename = Path::new(file).file_name()?.to_str()?;

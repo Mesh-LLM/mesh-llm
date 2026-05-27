@@ -178,21 +178,21 @@ pub(crate) fn required_stage_package_artifacts(
             .pointer("/shared/metadata")
             .context("manifest missing shared metadata")?,
     )?;
-    if selection.include_embeddings {
-        if let Some(embeddings) = manifest.pointer("/shared/embeddings") {
-            push_manifest_artifact(
-                &mut out,
-                &mut seen,
-                package_ref,
-                manifest_sha256,
-                embeddings,
-            )?;
-        }
+    if selection.include_embeddings
+        && let Some(embeddings) = manifest.pointer("/shared/embeddings")
+    {
+        push_manifest_artifact(
+            &mut out,
+            &mut seen,
+            package_ref,
+            manifest_sha256,
+            embeddings,
+        )?;
     }
-    if selection.include_output {
-        if let Some(output) = manifest.pointer("/shared/output") {
-            push_manifest_artifact(&mut out, &mut seen, package_ref, manifest_sha256, output)?;
-        }
+    if selection.include_output
+        && let Some(output) = manifest.pointer("/shared/output")
+    {
+        push_manifest_artifact(&mut out, &mut seen, package_ref, manifest_sha256, output)?;
     }
     if let Some(layers) = manifest.get("layers").and_then(Value::as_array) {
         for (index, layer) in layers.iter().enumerate() {
@@ -205,17 +205,11 @@ pub(crate) fn required_stage_package_artifacts(
             }
         }
     }
-    if selection.include_projectors {
-        if let Some(projectors) = manifest.get("projectors").and_then(Value::as_array) {
-            for projector in projectors {
-                push_manifest_artifact(
-                    &mut out,
-                    &mut seen,
-                    package_ref,
-                    manifest_sha256,
-                    projector,
-                )?;
-            }
+    if selection.include_projectors
+        && let Some(projectors) = manifest.get("projectors").and_then(Value::as_array)
+    {
+        for projector in projectors {
+            push_manifest_artifact(&mut out, &mut seen, package_ref, manifest_sha256, projector)?;
         }
     }
     Ok(out)
@@ -250,15 +244,13 @@ pub(crate) fn local_artifact_satisfies(
     if !metadata.is_file() {
         return Ok(false);
     }
-    if let Some(expected_size) = request.expected_size {
-        if metadata.len() != expected_size {
-            return Ok(false);
-        }
+    if let Some(expected_size) = request.expected_size
+        && metadata.len() != expected_size
+    {
+        return Ok(false);
     }
-    if verify_sha {
-        if let Some(expected_sha) = request.expected_sha256.as_deref() {
-            return Ok(file_sha256_hex(&path)?.eq_ignore_ascii_case(expected_sha));
-        }
+    if verify_sha && let Some(expected_sha) = request.expected_sha256.as_deref() {
+        return Ok(file_sha256_hex(&path)?.eq_ignore_ascii_case(expected_sha));
     }
     Ok(true)
 }

@@ -109,10 +109,10 @@ fn validate_object_schema(object: &Map<String, Value>) -> Result<(), Unsupported
             }
         }
     }
-    if let Some(additional_properties) = object.get("additionalProperties") {
-        if !additional_properties.is_boolean() {
-            return Err(UnsupportedStructuredSchema);
-        }
+    if let Some(additional_properties) = object.get("additionalProperties")
+        && !additional_properties.is_boolean()
+    {
+        return Err(UnsupportedStructuredSchema);
     }
     if let Some(properties) = properties {
         for schema in properties.values() {

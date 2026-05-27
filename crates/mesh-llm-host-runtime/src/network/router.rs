@@ -732,10 +732,10 @@ fn is_single_digit_b_name(name: &str) -> bool {
             continue;
         }
         // And the byte after that must not be another digit (avoid BF16-like continuations)
-        if let Some(&after) = bytes.get(i + 2) {
-            if after.is_ascii_digit() {
-                continue;
-            }
+        if let Some(&after) = bytes.get(i + 2)
+            && after.is_ascii_digit()
+        {
+            continue;
         }
         return true;
     }
