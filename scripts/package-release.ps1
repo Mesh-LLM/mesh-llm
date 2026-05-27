@@ -10,9 +10,7 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $releaseBinDir = Join-Path $repoRoot "target\release"
-$bundledPluginBins = @(
-    "mesh-llm-plugin-blackboard"
-)
+$bundledPluginBins = @()
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 

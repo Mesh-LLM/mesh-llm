@@ -266,10 +266,6 @@ bundle output="/tmp/mesh-bundle.tar.gz":
     BUNDLE="$DIR/mesh-bundle"
     mkdir -p "$BUNDLE"
     cp {{ mesh_bin }} "$BUNDLE/"
-    for plugin in blackboard; do
-        bin="target/release/mesh-llm-plugin-$plugin"
-        [ -f "$bin" ] && cp "$bin" "$BUNDLE/"
-    done
     # Fix rpaths for portability
     for bin in "$BUNDLE"/*; do
         [ -f "$bin" ] || continue

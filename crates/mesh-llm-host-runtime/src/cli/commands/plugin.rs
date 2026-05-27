@@ -6,12 +6,6 @@ use crate::runtime;
 
 pub(crate) async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Result<()> {
     match command {
-        PluginCommand::Install { name } if name == plugin::BLACKBOARD_PLUGIN_ID => {
-            eprintln!("Blackboard is auto-registered by mesh-llm. Nothing to install.");
-            eprintln!(
-                "Disable it with [[plugin]] name = \"blackboard\" enabled = false in the config if needed."
-            );
-        }
         PluginCommand::Install { name } if name == plugin::BLOBSTORE_PLUGIN_ID => {
             eprintln!("Blobstore is auto-registered by mesh-llm. Nothing to install.");
             eprintln!(
@@ -43,6 +37,7 @@ pub(crate) async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Re
                 );
             }
         }
+        PluginCommand::Mcp => runtime::run_plugin_mcp(cli).await?,
     }
     Ok(())
 }

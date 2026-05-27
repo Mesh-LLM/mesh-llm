@@ -56,7 +56,7 @@ MeshLLM is primarily a Rust project. The main crate is organized by ownership:
 - `mesh`: peer membership, gossip, routing tables, node identity, QUIC endpoint behavior, and peer state.
 - `models`: model catalog, Hugging Face resolution and downloads, GGUF metadata, capabilities, inventory, and search.
 - `network`: OpenAI ingress proxying, request routing, tunnels, affinity, Nostr discovery, and endpoint rewriting.
-- `plugin` and `plugins`: plugin hosting, transport, MCP bridge support, built-in blackboard behavior, and external backend integration.
+- `plugin` and `plugins`: plugin hosting, transport, MCP bridge support, external blackboard integration, and external backend integration.
 - `protocol`: wire protocol types, protobuf encoding/decoding, stream IDs, and compatibility boundaries.
 - `runtime`: startup flows, local runtime coordination, instance management, wakeable capacity, and process/runtime orchestration.
 - `system`: hardware detection, GPU benchmarking, self-update, and platform-specific concerns.

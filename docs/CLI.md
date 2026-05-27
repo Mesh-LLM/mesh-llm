@@ -83,10 +83,7 @@ Runtime switches:
 - `--publish`: publish your mesh for discovery.
 - `--mesh-name <MESH_NAME>`: friendly mesh name in discovery.
 - `--region <REGION>`: region hint for discovery.
-- `--blackboard`: enable blackboard on public meshes. Private meshes enable
-  blackboard by default; public mesh posts are visible to all peers in that
-  mesh.
-- `--name <NAME>`: your blackboard display name.
+- `--name <NAME>`: display name for this node.
 - `--max-vram <MAX_VRAM>`: cap VRAM used for planning and fit decisions.
 - `--llama-flavor <LLAMA_FLAVOR>`: force backend binary flavor (`cpu|cuda|rocm|vulkan|metal`).
 - `--config <CONFIG>`: explicit config file path. The file applies on future
@@ -450,15 +447,16 @@ Use this to stop local `mesh-llm` instances tracked in the runtime root.
 
 ### `blackboard`
 
-Use this to post/search/read shared mesh notes, or to run blackboard as MCP over stdio.
+Use this external plugin command to post/search/read shared mesh notes after
+installing and configuring the blackboard plugin.
 
 Usage:
 
 ```bash
+mesh-llm plugins install blackboard
 mesh-llm blackboard
 mesh-llm blackboard "STATUS: testing gguf resolution"
 mesh-llm blackboard --search "gemma"
-mesh-llm blackboard --mcp
 ```
 
 Switches:
@@ -468,7 +466,6 @@ Switches:
 - `--since <SINCE>`: last N hours.
 - `--limit <LIMIT>`: max rows (default `20`).
 - `--port <PORT>`: target management/API port (default `3131`).
-- `--mcp`: run as MCP server over stdio.
 
 ### `plugin`
 
@@ -477,7 +474,8 @@ Use this to inspect plugin status or run plugin compatibility shims.
 Subcommands:
 
 - `plugin list`: list auto-registered/configured plugins.
-- `plugin install <NAME>`: old install workflow shim.
+- `plugin install <NAME>`: compatibility shim for older install workflows.
+- `plugin mcp`: run configured plugin tools as an MCP server over stdio.
 
 
 ### `auth`

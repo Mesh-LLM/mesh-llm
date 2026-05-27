@@ -294,8 +294,8 @@ jobs:
 
       # Keep the debug binary build and smoke always-on: smoke coverage still
       # exercises the built mesh-llm binary even when the unit-test set shrinks.
-      - name: Build mesh-llm binaries (debug)
-        run: cargo build -p mesh-llm -p mesh-llm-plugin-blackboard
+      - name: Build mesh-llm binary (debug)
+        run: cargo build -p mesh-llm
 
       - name: Unit tests
         if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') }}
@@ -340,9 +340,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ci-linux-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/mesh-llm-plugin-blackboard
+          path: target/debug/mesh-llm
           if-no-files-found: error
           retention-days: 1
 
@@ -546,8 +544,8 @@ jobs:
       - name: Build patched llama.cpp ABI libraries
         if: steps.llama_cache.outputs.cache-hit != 'true'
         run: scripts/build-llama.sh
-      - name: Build mesh-llm binaries (debug)
-        run: cargo build -p mesh-llm -p mesh-llm-plugin-blackboard
+      - name: Build mesh-llm binary (debug)
+        run: cargo build -p mesh-llm
       - name: Unit tests
         if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') }}
         env:
@@ -574,9 +572,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ci-macos-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/mesh-llm-plugin-blackboard
+          path: target/debug/mesh-llm
           if-no-files-found: error
           retention-days: 1
 

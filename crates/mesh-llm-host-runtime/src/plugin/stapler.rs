@@ -157,9 +157,9 @@ mod tests {
             request_schema_json: None,
             response_schema_json: None,
         };
-        let route = http_binding_route("blackboard", &manifest).unwrap();
+        let route = http_binding_route("demo", &manifest).unwrap();
         assert_eq!(route.method, "GET");
-        assert_eq!(route.route_path, "/api/plugins/blackboard/http/feed");
+        assert_eq!(route.route_path, "/api/plugins/demo/http/feed");
         assert_eq!(route.operation_name.as_deref(), Some("feed"));
     }
 }

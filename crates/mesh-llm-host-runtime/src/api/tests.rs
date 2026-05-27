@@ -2,7 +2,7 @@ use super::*;
 use crate::api::status::decode_runtime_model_path;
 use crate::crypto::{OwnerKeypair, default_keystore_path, save_keystore};
 use crate::plugin;
-use crate::plugins::{blackboard, blobstore};
+use crate::plugins::blobstore;
 use base64::Engine;
 use mesh_client::proto::node::{
     ConfigApplyMode, NodeConfigSnapshot, OwnerControlApplyConfigRequest,
@@ -1692,23 +1692,7 @@ struct BlobstoreApiTestBridge {
     store: blobstore::BlobStore,
 }
 
-#[derive(Clone)]
-struct BlackboardApiTestBridge {
-    plugin_name: String,
-    store: blackboard::BlackboardStore,
-}
-
 impl BlobstoreApiTestBridge {
-    fn error_response(message: impl Into<String>) -> plugin::proto::ErrorResponse {
-        plugin::proto::ErrorResponse {
-            code: ErrorCode::INTERNAL_ERROR.0,
-            message: message.into(),
-            data_json: String::new(),
-        }
-    }
-}
-
-impl BlackboardApiTestBridge {
     fn error_response(message: impl Into<String>) -> plugin::proto::ErrorResponse {
         plugin::proto::ErrorResponse {
             code: ErrorCode::INTERNAL_ERROR.0,
@@ -1792,103 +1776,6 @@ impl plugin::PluginRpcBridge for BlobstoreApiTestBridge {
     }
 }
 
-impl plugin::PluginRpcBridge for BlackboardApiTestBridge {
-    fn handle_request(
-        &self,
-        plugin_name: String,
-        method: String,
-        params_json: String,
-    ) -> plugin::BridgeFuture<Result<plugin::RpcResult, plugin::proto::ErrorResponse>> {
-        let expected_plugin_name = self.plugin_name.clone();
-        let store = self.store.clone();
-        Box::pin(async move {
-            if plugin_name != expected_plugin_name {
-                return Err(Self::error_response(format!(
-                    "Unsupported test plugin '{}'",
-                    plugin_name
-                )));
-            }
-            if method != "tools/call" {
-                return Err(Self::error_response(format!(
-                    "Unsupported method '{}'",
-                    method
-                )));
-            }
-
-            let request: mesh_llm_plugin::OperationRequest = serde_json::from_str(&params_json)
-                .map_err(|err| Self::error_response(err.to_string()))?;
-            let result_json = match request.name.as_str() {
-                "feed" => {
-                    let request: blackboard::FeedRequest =
-                        serde_json::from_value(request.arguments)
-                            .map_err(|err| Self::error_response(err.to_string()))?;
-                    let response = store
-                        .feed(request.since, request.from.as_deref(), request.limit)
-                        .await;
-                    serde_json::to_string(&rmcp::model::CallToolResult::structured(
-                        serde_json::to_value(response)
-                            .map_err(|err| Self::error_response(err.to_string()))?,
-                    ))
-                    .map_err(|err| Self::error_response(err.to_string()))?
-                }
-                "search" => {
-                    let request: blackboard::SearchRequest =
-                        serde_json::from_value(request.arguments)
-                            .map_err(|err| Self::error_response(err.to_string()))?;
-                    let mut response = store.search(&request.query, request.since).await;
-                    response.truncate(request.limit.max(1));
-                    serde_json::to_string(&rmcp::model::CallToolResult::structured(
-                        serde_json::to_value(response)
-                            .map_err(|err| Self::error_response(err.to_string()))?,
-                    ))
-                    .map_err(|err| Self::error_response(err.to_string()))?
-                }
-                "post" => {
-                    let request: blackboard::PostRequest =
-                        serde_json::from_value(request.arguments)
-                            .map_err(|err| Self::error_response(err.to_string()))?;
-                    let item = blackboard::BlackboardItem::new(
-                        if request.from.trim().is_empty() {
-                            "mcp".into()
-                        } else {
-                            request.from
-                        },
-                        if request.peer_id.trim().is_empty() {
-                            "mcp".into()
-                        } else {
-                            request.peer_id
-                        },
-                        request.text,
-                    );
-                    let response = store.post(item).await.map_err(Self::error_response)?;
-                    serde_json::to_string(&rmcp::model::CallToolResult::structured(
-                        serde_json::to_value(response)
-                            .map_err(|err| Self::error_response(err.to_string()))?,
-                    ))
-                    .map_err(|err| Self::error_response(err.to_string()))?
-                }
-                _ => {
-                    return Err(Self::error_response(format!(
-                        "Unsupported blackboard tool '{}'",
-                        request.name
-                    )));
-                }
-            };
-
-            Ok(plugin::RpcResult { result_json })
-        })
-    }
-
-    fn handle_notification(
-        &self,
-        _plugin_name: String,
-        _method: String,
-        _params_json: String,
-    ) -> plugin::BridgeFuture<()> {
-        Box::pin(async {})
-    }
-}
-
 fn temp_blobstore_root(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "mesh-llm-api-server-{name}-{}",
@@ -1915,29 +1802,6 @@ async fn build_blobstore_api_plugin_manager() -> (plugin::PluginManager, std::pa
         .set_test_manifests(manifests.into_iter().collect())
         .await;
     (plugin_manager, root)
-}
-
-async fn build_blackboard_api_plugin_manager() -> plugin::PluginManager {
-    let plugin_name = "blackboard";
-    let bridge = BlackboardApiTestBridge {
-        plugin_name: plugin_name.into(),
-        store: blackboard::BlackboardStore::new(true),
-    };
-    let plugin_manager = plugin::PluginManager::for_test_bridge(&[plugin_name], Arc::new(bridge));
-    let mut manifests = HashMap::new();
-    manifests.insert(
-        plugin_name.to_string(),
-        mesh_llm_plugin::plugin_manifest![
-            mesh_llm_plugin::capability(blackboard::BLACKBOARD_CHANNEL),
-            mesh_llm_plugin::http_get("/feed", "feed"),
-            mesh_llm_plugin::http_get("/search", "search"),
-            mesh_llm_plugin::http_post("/post", "post"),
-        ],
-    );
-    plugin_manager
-        .set_test_manifests(manifests.into_iter().collect())
-        .await;
-    plugin_manager
 }
 
 async fn spawn_capturing_upstream(
@@ -2053,7 +1917,7 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
     let addr = listener.local_addr().unwrap();
     let body = br#"{"text":"fragmented"}"#;
     let headers = format!(
-        "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        "POST /api/plugins/demo/http/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         body.len()
     );
 
@@ -2081,7 +1945,7 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
     client.await.unwrap();
     let request = server.await.unwrap();
     assert_eq!(request.method, "POST");
-    assert_eq!(request.path, "/api/blackboard/post");
+    assert_eq!(request.path, "/api/plugins/demo/http/post");
     assert_eq!(http_body_text(&request.raw), "{\"text\":\"fragmented\"}");
 }
 
@@ -3577,57 +3441,6 @@ async fn test_api_objects_routes_through_object_store_capability() {
 }
 
 #[tokio::test]
-async fn test_api_blackboard_routes_through_blackboard_capability() {
-    let plugin_manager = build_blackboard_api_plugin_manager().await;
-    let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
-
-    let (post_addr, post_handle) = spawn_management_test_server(state.clone()).await;
-    let post_body = json!({ "text": "hello integration blackboard" }).to_string();
-    let post_request = format!(
-        "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        post_body.len(),
-        post_body
-    );
-    let post_response = send_management_request(post_addr, post_request).await;
-    assert!(post_response.starts_with("HTTP/1.1 200"));
-    let posted = json_body(&post_response);
-    assert_eq!(posted["text"], "hello integration blackboard");
-    post_handle.abort();
-
-    let (feed_addr, feed_handle) = spawn_management_test_server(state.clone()).await;
-    let feed_response = send_management_request(
-        feed_addr,
-        "GET /api/blackboard/feed?limit=5 HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
-    )
-    .await;
-    assert!(feed_response.starts_with("HTTP/1.1 200"));
-    let feed = json_body(&feed_response);
-    let feed_items = feed.as_array().cloned().unwrap_or_default();
-    assert!(
-        feed_items
-            .iter()
-            .any(|item| item["text"] == "hello integration blackboard")
-    );
-    feed_handle.abort();
-
-    let (search_addr, search_handle) = spawn_management_test_server(state).await;
-    let search_response = send_management_request(
-        search_addr,
-        "GET /api/blackboard/search?q=integration HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
-    )
-    .await;
-    assert!(search_response.starts_with("HTTP/1.1 200"));
-    let search = json_body(&search_response);
-    let search_items = search.as_array().cloned().unwrap_or_default();
-    assert!(
-        search_items
-            .iter()
-            .any(|item| item["text"] == "hello integration blackboard")
-    );
-    search_handle.abort();
-}
-
-#[tokio::test]
 async fn test_api_chat_smoke_for_image_request() {
     let (upstream_port, upstream_rx, upstream_handle) =
         spawn_capturing_upstream(r#"{"ok":true}"#).await;
@@ -4050,7 +3863,7 @@ fn headless_status_command_works_against_management_api() {
 }
 
 #[test]
-fn headless_blackboard_status_still_reads_api_status() {
+fn headless_mode_still_reads_api_status() {
     assert!(
         !is_ui_only_route("/api/status"),
         "/api/status must be accessible in headless mode"

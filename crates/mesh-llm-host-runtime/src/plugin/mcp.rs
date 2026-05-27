@@ -1395,12 +1395,7 @@ fn operation_result_to_call_tool_result(result: plugin::ToolCallResult) -> CallT
 }
 
 fn tool_aliases(plugin_name: &str, tool_name: &str) -> Vec<String> {
-    let canonical = canonical_name(plugin_name, tool_name);
-    let mut names = vec![canonical];
-    if plugin_name == plugin::BLACKBOARD_PLUGIN_ID {
-        names.push(format!("blackboard_{tool_name}"));
-    }
-    names
+    vec![canonical_name(plugin_name, tool_name)]
 }
 
 fn canonical_name(plugin_name: &str, local_name: &str) -> String {
