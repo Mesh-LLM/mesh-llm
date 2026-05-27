@@ -21,9 +21,17 @@ pub(super) fn heartbeat_failure_policy_for_peer(
     let _ = peer;
     HeartbeatFailurePolicy {
         allow_recent_inbound_grace: true,
-        // Relay-only peers are more prone to transient timeouts (relay hiccups,
-        // higher base RTT). Give them an extra cycle before declaring death.
-        failure_threshold: if is_relay_only { 3 } else { 2 },
+        // Relay-only peers are far more prone to transient timeouts.
+        // Observed behaviour: a Sydney<->Sydney relay-only path (mini's VPN
+        // extension blocking the LAN UDP hole-punch) can spike from 200ms
+        // to 10s+ RTT during a single relay hiccup. With 60s heartbeat
+        // intervals, two such cycles is ~2min — not enough grace for the
+        // public mesh's relay to recover. Five cycles = 5min grace, which
+        // covers the typical iroh relay path-renegotiation window.
+        //
+        // Direct paths stay at 2 — when the LAN/internet path is up at
+        // all, two consecutive cycles of silence is a real failure signal.
+        failure_threshold: if is_relay_only { 5 } else { 2 },
     }
 }
 
@@ -229,6 +237,53 @@ pub(super) fn selected_path_snapshot(conn: &Connection) -> RelayPathSnapshot {
         }
     }
     RelayPathSnapshot::default()
+}
+
+/// Does this connection only have relay (non-IP) paths available?
+///
+/// Robust to the mid-failure case where `selected_path_snapshot` returns
+/// `Unknown` because no path is currently selected (e.g. the heartbeat is
+/// timing out and the connection is between selections). The original
+/// failure-policy lookup used `selected_path_snapshot().kind == Relay`,
+/// which returned `false` exactly when we most needed it (during a
+/// failure), forcing relay-only peers onto the stricter direct threshold.
+///
+/// Inspect every advertised path: if *none* of them is IP, treat the
+/// connection as relay-only for failure-tolerance purposes.
+pub(super) fn is_relay_only_connection(conn: &Connection) -> bool {
+    is_relay_only_path_set(conn.paths().iter().map(|p| p.is_ip()))
+}
+
+/// Shape of `is_relay_only_connection` extracted for testability — takes
+/// the `is_ip()` flag for each path. See above for rationale.
+pub(super) fn is_relay_only_path_set<I: IntoIterator<Item = bool>>(path_is_ip_flags: I) -> bool {
+    let mut iter = path_is_ip_flags.into_iter();
+    let Some(first) = iter.next() else {
+        // No path info at all — be lenient (likely a brand-new or
+        // already-failing connection). Treat as relay-only so we don't
+        // prematurely declare the peer dead before the path negotiator
+        // has had a chance to settle.
+        return true;
+    };
+    !first && !iter.any(|is_ip| is_ip)
+}
+
+/// Classify a peer as relay-only for failure-tolerance purposes.
+///
+/// `had_relay_only_connection` is `Some(true)` when we hold a live
+/// `Connection` and `is_relay_only_connection` returned true,
+/// `Some(false)` when we hold a Connection with at least one IP path,
+/// and `None` when no Connection object is present at all (cleanly
+/// closed, QUIC idle-expired, never opened).
+///
+/// When Connection is gone (`None`) we default to STRICT (not
+/// relay-only). The lenient threshold exists to absorb mid-flap path
+/// renegotiation, which only happens while iroh still holds the
+/// Connection. Once the Connection is gone, a previously-direct peer
+/// should not silently inherit the lenient grace and keep stale model
+/// routes alive an extra few minutes.
+pub(super) fn classify_relay_only_for_policy(had_relay_only_connection: Option<bool>) -> bool {
+    had_relay_only_connection.unwrap_or(false)
 }
 
 pub(super) fn relay_reconnect_reason(
@@ -739,10 +794,16 @@ impl Node {
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
     ) {
         if let Some(previous_failures) = fail_counts.remove(&peer_id) {
+            // Show the actual threshold this peer was being judged
+            // against, not a hardcoded "/2". Relay-only peers get a
+            // higher threshold (see heartbeat_failure_policy_for_peer),
+            // so "(was 3/5)" reads correctly instead of misleading "3/2".
+            let (_, failure_policy) = self.heartbeat_failure_context(peer_id).await;
             super::emit_mesh_info(format!(
-                "💚 Heartbeat: {} recovered (was {}/2)",
+                "💚 Heartbeat: {} recovered (was {}/{})",
                 peer_id.fmt_short(),
-                previous_failures
+                previous_failures,
+                failure_policy.failure_threshold,
             ));
             self.state.lock().await.dead_peers.remove(&peer_id);
         }
@@ -781,10 +842,21 @@ impl Node {
                 state.connections.get(&peer_id).cloned(),
             )
         };
-        let is_relay_only = conn
-            .as_ref()
-            .map(|conn| selected_path_snapshot(conn).kind == SelectedPathKind::Relay)
-            .unwrap_or(false);
+        // Use is_relay_only_connection (looks at all advertised paths)
+        // rather than selected_path_snapshot, because at failure time the
+        // selected path is often Unknown — and the original check
+        // (`selected == Relay`) returned false in that case, defeating the
+        // relay-only grace threshold. See is_relay_only_connection doc.
+        //
+        // When we don't hold a Connection object at all (cleanly closed,
+        // QUIC idle-expired), default to STRICT via
+        // classify_relay_only_for_policy. The lenient threshold exists to
+        // absorb mid-flap path-renegotiation, which only happens while
+        // iroh still owns the Connection. Once Connection is gone, a
+        // previously-direct peer should not silently inherit the 5-min
+        // relay grace and keep stale model routes alive an extra 3 min.
+        let is_relay_only =
+            classify_relay_only_for_policy(conn.as_ref().map(is_relay_only_connection));
         let policy = self
             .heartbeat_failure_policy(peer.as_ref(), is_relay_only)
             .await;
