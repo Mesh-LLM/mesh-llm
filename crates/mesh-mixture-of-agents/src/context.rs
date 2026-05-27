@@ -16,6 +16,8 @@ use crate::session::Session;
 use crate::worker::WorkerRole;
 use serde_json::{Value, json};
 
+const TOOL_RESULT_CONTEXT_WINDOW: usize = 10;
+
 /// Packed context ready to send to a worker.
 pub struct PackedContext {
     pub messages: Vec<Value>,
@@ -251,36 +253,46 @@ pub fn pack_for_tool_result_turn(
     // the last assistant tool_call can leave a leading `tool` message, which
     // many chat templates reject.
     let all = session.all_messages();
-    let mut start_idx = all.len().saturating_sub(10); // default: last 10
+    let mut start_idx = all.len().saturating_sub(TOOL_RESULT_CONTEXT_WINDOW);
 
     // Prefer the nearest user message before the latest tool result so the
     // reducer sees a valid user -> assistant(tool_calls) -> tool chain.
     let latest_tool_user_idx = all
         .iter()
-        .rposition(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("tool"))
+        .rposition(|msg| message_role(msg) == "tool")
         .and_then(|last_tool_idx| {
             all[..=last_tool_idx]
                 .iter()
-                .rposition(|msg| msg.get("role").and_then(|r| r.as_str()) == Some("user"))
+                .rposition(|msg| message_role(msg) == "user")
         });
 
-    if let Some(user_idx) = latest_tool_user_idx {
-        start_idx = user_idx;
-    } else {
+    if latest_tool_user_idx.is_none() {
         // Fall back to the last assistant tool_call message. This keeps the
         // message sequence syntactically valid even if no user message is
         // present in malformed input.
         for (i, msg) in all.iter().enumerate().rev() {
-            let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if role == "assistant" && msg.get("tool_calls").is_some() {
+            if message_role(msg) == "assistant" && msg.get("tool_calls").is_some() {
                 start_idx = i;
                 break;
             }
         }
     }
 
+    start_idx = valid_tool_result_start_idx(&all, start_idx);
+    let prefix_user_idx = latest_tool_user_idx
+        .filter(|user_idx| *user_idx < start_idx)
+        .filter(|_| {
+            !all[start_idx..]
+                .iter()
+                .any(|msg| message_role(msg) == "user")
+        });
+
+    if let Some(user_idx) = prefix_user_idx {
+        messages.push(all[user_idx].clone());
+    }
+
     for msg in &all[start_idx..] {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        let role = message_role(msg);
         if role != "system" && !role.is_empty() {
             messages.push(msg.clone());
         }
@@ -289,6 +301,34 @@ pub fn pack_for_tool_result_turn(
     let tools = session.tools().cloned();
 
     (messages, tools)
+}
+
+fn message_role(msg: &Value) -> &str {
+    msg.get("role").and_then(|r| r.as_str()).unwrap_or("")
+}
+
+fn valid_tool_result_start_idx(all: &[Value], start_idx: usize) -> usize {
+    let Some(first_non_system_idx) = all
+        .iter()
+        .enumerate()
+        .skip(start_idx)
+        .find_map(|(idx, msg)| (message_role(msg) != "system").then_some(idx))
+    else {
+        return start_idx;
+    };
+
+    if message_role(&all[first_non_system_idx]) != "tool" {
+        return start_idx;
+    }
+
+    all[..first_non_system_idx]
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(idx, msg)| {
+            (message_role(msg) == "assistant" && msg.get("tool_calls").is_some()).then_some(idx)
+        })
+        .unwrap_or(start_idx)
 }
 
 #[cfg(test)]
@@ -334,6 +374,28 @@ mod tests {
                 "name": "web_search",
                 "description": "Search the web",
                 "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}
+            }},
+        ])
+    }
+    fn weather_tools() -> Value {
+        json!([
+            {"type": "function", "function": {
+                "name": "web_search",
+                "description": "Search the web",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"]
+                }
+            }},
+            {"type": "function", "function": {
+                "name": "web_fetch",
+                "description": "Fetch a URL",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"url": {"type": "string"}},
+                    "required": ["url"]
+                }
             }},
         ])
     }
@@ -486,7 +548,7 @@ mod tests {
                 ),
                 tool_result_msg("call_fetch", "BOM page content..."),
             ],
-            Some(tools_two()),
+            Some(weather_tools()),
         );
 
         let (messages, tools) = pack_for_tool_result_turn(&s, true);
@@ -515,6 +577,45 @@ mod tests {
         assert!(
             tools.is_some(),
             "tool-result reducer should still receive native tool schemas",
+        );
+    }
+
+    #[test]
+    fn tool_result_reducer_context_keeps_long_tool_chains_bounded() {
+        let mut messages = vec![user_msg("Run the tool chain")];
+        for idx in 0..12 {
+            let id = format!("call_{idx}");
+            messages.push(assistant_tool_msg(
+                &id,
+                "web_fetch",
+                json!({"url": format!("https://example.com/{idx}")}),
+            ));
+            messages.push(tool_result_msg(&id, &format!("result {idx}")));
+        }
+
+        let s = session_with(&messages, Some(weather_tools()));
+        let (packed, _tools) = pack_for_tool_result_turn(&s, true);
+        let roles: Vec<&str> = packed
+            .iter()
+            .filter_map(|m| m.get("role").and_then(|r| r.as_str()))
+            .collect();
+
+        assert_eq!(
+            roles[0], "system",
+            "packed context should keep the MoA system preamble",
+        );
+        assert_eq!(
+            roles[1], "user",
+            "long bounded context should still include the original user query",
+        );
+        assert!(
+            packed.len() <= TOOL_RESULT_CONTEXT_WINDOW + 2,
+            "expected system + user prefix + bounded recent tail, got {} messages",
+            packed.len(),
+        );
+        assert_ne!(
+            roles[2], "tool",
+            "bounded recent tail must not start with a bare tool message",
         );
     }
 
