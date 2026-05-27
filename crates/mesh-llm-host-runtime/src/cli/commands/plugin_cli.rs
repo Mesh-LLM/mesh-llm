@@ -93,11 +93,7 @@ fn resolve_required_cli_plugin(cli: &Cli, command: &str) -> Result<plugin::Exter
     if let Some(spec) = resolve_configured_cli_plugin(cli, command)? {
         return Ok(spec);
     }
-    bail!(
-        "Unknown command '{command}'. To provide it from a plugin, add \
-         [[plugin]] name = \"{command}\" command = \"mesh-llm-plugin-{command}\" \
-         to your mesh-llm config."
-    );
+    bail!("Unknown command '{command}'. Run `mesh-llm --help` to see available commands.");
 }
 
 fn resolve_configured_cli_plugin(
