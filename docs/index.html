@@ -341,25 +341,19 @@
             <span class="cmd">mesh-llm</span> serve \<br>
             &nbsp;&nbsp;<span class="flag">--model</span> <span class="val">meshllm/Qwen3-8B-Q4_K_M-layers</span> \<br>
             &nbsp;&nbsp;<span class="flag">--split</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--bind-port</span> <span class="val">7842</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--port</span> <span class="val">9447</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--console</span> <span class="val">3232</span><br><br>
+            &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span><br><br>
             <span class="comment"># Node B: worker. Use the token from node A.</span><br>
             <span class="cmd">mesh-llm</span> serve \<br>
             &nbsp;&nbsp;<span class="flag">--model</span> <span class="val">meshllm/Qwen3-8B-Q4_K_M-layers</span> \<br>
             &nbsp;&nbsp;<span class="flag">--split</span> \<br>
             &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--join</span> <span class="val">&lt;token&gt;</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--bind-port</span> <span class="val">7843</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--port</span> <span class="val">9447</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--console</span> <span class="val">3232</span><br><br>
+            &nbsp;&nbsp;<span class="flag">--join</span> <span class="val">&lt;token&gt;</span><br><br>
             <span class="comment"># Verify from node A</span><br>
-            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:9447/v1/models</span><br>
-            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:3232/api/status</span>
+            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:9337/v1/models</span><br>
+            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:3131/api/status</span>
         </div>
 
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:1rem;">On multi-interface hosts, add <code>--bind-ip &lt;lan-ip&gt;</code> on each node so peers advertise a reachable address. If planning says the model needs more memory, increase <code>--max-vram</code> or use a smaller context/model.</p>
+        <p style="font-size:0.82rem; color:var(--text2); margin-top:1rem;">Defaults are API <code>:9337</code> and console <code>:3131</code>. On multi-interface hosts, add <code>--bind-ip &lt;lan-ip&gt;</code> so peers advertise a reachable address. If planning says the model needs more memory, increase <code>--max-vram</code> or use a smaller context/model.</p>
     </section>
 
     <section id="blackboard">
