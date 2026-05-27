@@ -1,21 +1,21 @@
 use super::{
-    PluginSummary, BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID,
+    BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID, PluginSummary,
     TELEMETRY_PLUGIN_ID,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 #[allow(unused_imports)]
 pub use mesh_llm_config::{
-    config_path, config_to_toml, load_config, parse_config_toml, validate_config, AdvancedConfig,
-    AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigEditor, ConfigStore, FlashAttentionType,
-    GpuAssignment, GpuConfig, HardwareConfig, IntegerOrString, LocalServingNodeConfig, MeshConfig,
-    ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelFitConfig,
-    ModelRuntimeKind, MultimodalConfig, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry,
-    PrefixCacheConfig, ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig,
-    ReservedObjectConfig, SkippyConfig, SpeculativeConfig, StringOrStringList, TelemetryConfig,
-    TelemetryMetricsConfig, TensorSplitConfig, ThroughputConfig,
+    AdvancedConfig, AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigEditor, ConfigStore,
+    FlashAttentionType, GpuAssignment, GpuConfig, HardwareConfig, IntegerOrString,
+    LocalServingNodeConfig, MeshConfig, ModelConfigDefaults, ModelConfigEditor, ModelConfigEntry,
+    ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind, MultimodalConfig, OwnerControlConfig,
+    PluginConfigEditor, PluginConfigEntry, PrefixCacheConfig, ReasoningBudget, ReasoningEnabled,
+    RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig, SpeculativeConfig,
+    StringOrStringList, TelemetryConfig, TelemetryMetricsConfig, TensorSplitConfig,
+    ThroughputConfig, config_path, config_to_toml, load_config, parse_config_toml, validate_config,
 };
 use mesh_llm_plugin::MeshVisibility;
-use mesh_llm_plugin_manager::{default_store_root, InstalledPluginMetadata, PluginStore};
+use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -596,9 +596,10 @@ advertise_addr = "0.0.0.0:18443"
         .unwrap();
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("owner_control.advertise_addr must not use an unspecified IP address"));
+        assert!(
+            err.to_string()
+                .contains("owner_control.advertise_addr must not use an unspecified IP address")
+        );
     }
 
     #[test]
@@ -612,9 +613,10 @@ advertise_addr = "127.0.0.1:0"
         .unwrap();
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("owner_control.advertise_addr must use a concrete port"));
+        assert!(
+            err.to_string()
+                .contains("owner_control.advertise_addr must use a concrete port")
+        );
     }
 
     #[test]
@@ -755,9 +757,10 @@ device = "CUDA1"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].hardware.device must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].hardware.device must not be empty when set")
+        );
     }
 
     #[test]
@@ -796,9 +799,11 @@ gpu_layers = 2147483648
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].hardware.device must not be set when gpu.assignment = \"auto\""));
+        assert!(
+            err.to_string().contains(
+                "models[0].hardware.device must not be set when gpu.assignment = \"auto\""
+            )
+        );
     }
 
     #[test]
@@ -1014,9 +1019,10 @@ flash_attention = "enabled"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.cache_type_k must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.cache_type_k must not be empty when set")
+        );
     }
 
     #[test]
@@ -1030,9 +1036,10 @@ flash_attention = "enabled"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.cache_type_v must not be empty when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.cache_type_v must not be empty when set")
+        );
     }
 
     #[test]
@@ -1046,9 +1053,10 @@ flash_attention = "enabled"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.batch must be at least 1 when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.batch must be at least 1 when set")
+        );
     }
 
     #[test]
@@ -1062,9 +1070,10 @@ flash_attention = "enabled"
         };
 
         let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("models[0].model_fit.ubatch must be at least 1 when set"));
+        assert!(
+            err.to_string()
+                .contains("models[0].model_fit.ubatch must be at least 1 when set")
+        );
     }
 
     #[test]
