@@ -2350,6 +2350,18 @@ async fn request_management_json(state: MeshApi, path: &str) -> serde_json::Valu
     json_body(&response)
 }
 
+fn response_header<'a>(response: &'a str, name: &str) -> Option<&'a str> {
+    response
+        .split("\r\n\r\n")
+        .next()
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| {
+            let (header_name, value) = line.split_once(':')?;
+            header_name.eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+}
+
 fn assert_runtime_status_payload(status_body: &serde_json::Value) {
     assert_eq!(status_body["model_name"], json!("collector-model"));
     assert_eq!(status_body["llama_ready"], json!(true));
@@ -2527,6 +2539,60 @@ async fn runtime_data_api_routes_remain_payload_stable() {
         request_management_json(state, "/api/plugins/collector-plugin/manifest").await;
     assert_eq!(manifest_body["capabilities"], json!(["chat"]));
     assert_eq!(manifest_body["endpoints"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn management_mcp_endpoint_initializes_streamable_http_session() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "mesh-api-test",
+                "version": "0.1.0"
+            }
+        }
+    })
+    .to_string();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /mcp HTTP/1.1\r\n\
+                 Host: localhost\r\n\
+                 Accept: application/json, text/event-stream\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let response =
+        read_until_contains(&mut stream, b"\"serverInfo\"", Duration::from_secs(2)).await;
+    let response = String::from_utf8(response).unwrap();
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "unexpected MCP response: {response}"
+    );
+    assert_eq!(
+        response_header(&response, "content-type"),
+        Some("text/event-stream")
+    );
+    assert!(
+        response_header(&response, "mcp-session-id").is_some(),
+        "MCP initialize response should include a session id: {response}"
+    );
+    assert!(response.contains("\"serverInfo\""));
+    handle.abort();
 }
 
 #[tokio::test]

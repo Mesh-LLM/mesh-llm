@@ -26,6 +26,7 @@
 //!   POST /api/chat      — proxy to chat completions API
 //!   POST /api/responses — proxy to responses API
 //!   POST /api/objects   — upload a request-scoped media object
+//!   POST /mcp           — streamable HTTP MCP endpoint for all mesh plugin tools
 //!   GET  /              — embedded web dashboard
 //!
 //! The dashboard is mostly read-only — shows status, topology, and models.
@@ -177,6 +178,7 @@ impl MeshApi {
             runtime_status.primary_model = Some(model_name.clone());
             true
         });
+        let mcp_http = plugin::mcp::PluginMcpHttpEndpoint::new(plugin_manager.clone());
         let initial_runtime_data_views = runtime_data::collect_views(&runtime_data_collector);
         let _ = (
             initial_runtime_data_views
@@ -208,6 +210,7 @@ impl MeshApi {
             inner: Arc::new(Mutex::new(ApiInner {
                 node,
                 plugin_manager,
+                mcp_http,
                 affinity_router,
                 runtime_data_collector,
                 runtime_data_producer,

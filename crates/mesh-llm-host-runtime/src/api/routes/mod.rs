@@ -1,5 +1,6 @@
 mod chat;
 mod discover;
+mod mcp;
 mod mesh_hook;
 mod model_interests;
 mod model_targets;
@@ -64,6 +65,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
             match (method, path_only) {
                 ("GET", "/api/discover") => {
                     discover::handle(stream, state).await?;
+                    Ok(true)
+                }
+                ("GET" | "POST" | "DELETE", "/mcp") => {
+                    mcp::handle(stream, state, raw_request).await?;
                     Ok(true)
                 }
                 ("GET", "/api/status")
