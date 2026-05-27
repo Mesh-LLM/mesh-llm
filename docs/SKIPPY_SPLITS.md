@@ -142,6 +142,16 @@ materialization:
 mesh-llm models certify hf://meshllm/Qwen3-8B-Q4_K_M-layers --package-only --report-out cert.json
 ```
 
+Use package-only certification as the rollout preflight for published package
+refs. It should fail before a split model becomes routable when package
+resolution, manifest shape, artifact size/SHA, missing stage files,
+tokenizer/projector sidecars, or local materialization are not clean enough for
+serving. For a local package directory, run the package-local preflight first:
+
+```bash
+skippy-model-package preflight ./model-package --stages 2 --verify-sha256
+```
+
 Runtime verification additionally checks a running OpenAI-compatible endpoint:
 
 ```bash

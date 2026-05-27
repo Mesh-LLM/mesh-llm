@@ -17,6 +17,8 @@ use sha2::{Digest, Sha256};
 use skippy_ffi::TensorRole;
 use skippy_runtime::{ModelInfo, TensorInfo, write_gguf_from_parts};
 
+mod preflight;
+
 #[derive(Debug, Parser)]
 #[command(name = "skippy-model-package")]
 #[command(about = "Inspect, plan, write, and validate skippy model packages")]
@@ -81,6 +83,13 @@ enum Command {
     ValidatePackage {
         full: PathBuf,
         package: PathBuf,
+    },
+    Preflight {
+        package: PathBuf,
+        #[arg(long)]
+        stages: Option<usize>,
+        #[arg(long)]
+        verify_sha256: bool,
     },
 }
 
@@ -379,6 +388,11 @@ fn main() -> Result<()> {
         ),
         Command::Validate { full, slices } => validate(full, slices),
         Command::ValidatePackage { full, package } => validate_package(full, package),
+        Command::Preflight {
+            package,
+            stages,
+            verify_sha256,
+        } => run_preflight(package, stages, verify_sha256),
     }
 }
 
@@ -944,6 +958,21 @@ fn validate_package(full: PathBuf, package: PathBuf) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&output)?);
     if !valid {
         bail!("package validation failed");
+    }
+    Ok(())
+}
+
+fn run_preflight(package: PathBuf, stages: Option<usize>, verify_sha256: bool) -> Result<()> {
+    let report = preflight::preflight_package(
+        &package,
+        &preflight::PackagePreflightOptions {
+            stages,
+            verify_sha256,
+        },
+    );
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if !report.valid {
+        bail!("package preflight failed");
     }
     Ok(())
 }
