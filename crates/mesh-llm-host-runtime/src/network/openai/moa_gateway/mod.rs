@@ -14,6 +14,7 @@ use crate::inference::election;
 use crate::mesh;
 use crate::network::openai::transport as proxy;
 use mesh_mixture_of_agents as moa;
+use progress::ProgressContinuation;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -137,7 +138,16 @@ fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
     result
 }
 
+mod progress;
+
 /// Run a turn through the gateway and write the response with x-moa-* headers.
+///
+/// Streaming MoA turns are handed off to [`progress::run_moa_turn_with_progress`],
+/// which sends HTTP headers immediately and drips `reasoning_content` /
+/// `response.reasoning_text.delta` heartbeats into the thinking pane
+/// while the arbiter waits; non-streaming turns and the synchronous SSE
+/// path stay here so the post-hoc `x-moa-*` observability headers can
+/// be derived from the finished `TurnResult`.
 /// Caller has already validated the request and built the config.
 async fn run_moa_turn(
     tcp_stream: TcpStream,
@@ -151,6 +161,26 @@ async fn run_moa_turn(
         .unwrap_or(false);
     let mut moa_body = body_json;
     moa_body.as_object_mut().map(|o| o.remove("stream"));
+
+    // Streaming MoA: the arbiter takes ~3s before any content can be
+    // emitted. Send response headers immediately and drip progress
+    // text into `reasoning_content` so the chat UI's "thinking" pane
+    // shows live activity instead of a stalled spinner.
+    //
+    // Trade-off: HTTP headers must precede the body, so this path
+    // loses the post-hoc `x-moa-*` observability headers (the
+    // result-derived ones). Worth it for the live feel.
+    if was_streaming
+        && matches!(
+            response_adapter,
+            proxy::ResponseAdapter::None
+                | proxy::ResponseAdapter::OpenAiChatCompletionsStream
+                | proxy::ResponseAdapter::OpenAiResponsesStream
+        )
+    {
+        progress::run_moa_turn_with_progress(tcp_stream, moa_body, config, response_adapter).await;
+        return;
+    }
 
     let moa_result = moa::handle_turn(config, &moa_body).await;
     let extra_headers = build_moa_headers(&moa_result);
@@ -182,7 +212,9 @@ async fn run_moa_turn(
 /// status to the body's failure signal instead means *all* error-shaped
 /// MoA responses get a non-200 status, regardless of which sub-flow
 /// produced them.
-fn is_moa_failure_body(body: &serde_json::Value) -> bool {
+pub(in crate::network::openai::moa_gateway) fn is_moa_failure_body(
+    body: &serde_json::Value,
+) -> bool {
     if body.get("error").is_some() {
         return true;
     }
@@ -718,18 +750,42 @@ fn parse_quic_http_response(response: &[u8]) -> Result<serde_json::Value, String
 /// `extra_headers` are emitted alongside the standard SSE response headers
 /// (used to attach `x-moa-*` observability headers).
 async fn send_moa_as_sse(
-    mut stream: TcpStream,
+    stream: TcpStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
+    send_moa_as_sse_inner(stream, response, extra_headers, false).await
+}
+
+/// Write the standard SSE response header block, with optional
+/// per-response extra headers (used for `x-moa-*` observability).
+pub(in crate::network::openai::moa_gateway) async fn write_sse_response_headers(
+    stream: &mut TcpStream,
+    extra_headers: &[(&str, String)],
+) -> std::io::Result<()> {
     let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: text/event-stream\r\n\
+         Transfer-Encoding: chunked\r\n\
+         Cache-Control: no-cache\r\n\
+         Connection: close\r\n",
     );
     for (name, value) in extra_headers {
         crate::network::openai::transport::append_safe_header(&mut header, name, value);
     }
     header.push_str("\r\n");
-    stream.write_all(header.as_bytes()).await?;
+    stream.write_all(header.as_bytes()).await
+}
+
+pub(in crate::network::openai::moa_gateway) async fn send_moa_as_sse_inner(
+    mut stream: TcpStream,
+    response: &serde_json::Value,
+    extra_headers: &[(&str, String)],
+    header_already_sent: bool,
+) -> std::io::Result<()> {
+    if !header_already_sent {
+        write_sse_response_headers(&mut stream, extra_headers).await?;
+    }
 
     let id = response
         .get("id")
@@ -764,8 +820,12 @@ async fn send_moa_as_sse(
         "send_moa_as_sse received a failure body; should have routed to 502"
     );
 
-    let delta = if let Some(ref tcs) = tool_calls {
-        serde_json::json!({
+    // Tool-call payloads are structured JSON — they must remain
+    // atomic so harness parsers (Goose, OpenCode) see a single
+    // well-formed tool_call object. Only the assistant *text* path
+    // benefits from pseudo-streaming.
+    if let Some(ref tcs) = tool_calls {
+        let delta = serde_json::json!({
             "role": "assistant",
             "tool_calls": tcs.iter().enumerate().map(|(i, tc)| {
                 serde_json::json!({
@@ -775,24 +835,58 @@ async fn send_moa_as_sse(
                     "function": tc.get("function").cloned().unwrap_or(serde_json::json!({})),
                 })
             }).collect::<Vec<_>>()
-        })
+        });
+        let chunk = serde_json::json!({
+            "id": id,
+            "object": "chat.completion.chunk",
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": delta,
+                "finish_reason": null,
+            }]
+        });
+        let data = format!("data: {}\n\n", chunk);
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
     } else {
-        serde_json::json!({ "role": "assistant", "content": content })
-    };
-
-    let chunk = serde_json::json!({
-        "id": id,
-        "object": "chat.completion.chunk",
-        "model": model,
-        "choices": [{
-            "index": 0,
-            "delta": delta,
-            "finish_reason": null,
-        }]
-    });
-    let data = format!("data: {}\n\n", chunk);
-    let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
-    stream.write_all(framed.as_bytes()).await?;
+        // Text path: split content into chunks for pseudo-streaming.
+        // First chunk carries `role: "assistant"`; continuation chunks
+        // carry only `content` (matches OpenAI streaming convention).
+        let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
+        let chunk_delay = MOA_STREAM_CHUNK_DELAY;
+        let inter_chunk_delay = if pieces.len() > 1 {
+            Some(chunk_delay)
+        } else {
+            None
+        };
+        for (idx, piece) in pieces.iter().enumerate() {
+            let delta = if idx == 0 {
+                serde_json::json!({ "role": "assistant", "content": piece })
+            } else {
+                serde_json::json!({ "content": piece })
+            };
+            let chunk = serde_json::json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "delta": delta,
+                    "finish_reason": null,
+                }]
+            });
+            let data = format!("data: {}\n\n", chunk);
+            let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+            stream.write_all(framed.as_bytes()).await?;
+            stream.flush().await?;
+            if let Some(delay) = inter_chunk_delay
+                && idx + 1 < pieces.len()
+            {
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
 
     let stop = serde_json::json!({
         "id": id,
@@ -823,6 +917,104 @@ fn strip_think_from_content(text: &str) -> String {
     moa::strip_thinking(text)
 }
 
+/// Number of chunks to split MoA winner content into when emitting
+/// pseudo-streaming SSE. Tuned for "feels live" — ~25 chunks over a
+/// buffered response of any reasonable length lets the chat UI paint
+/// progressively instead of jumping from spinner to wall-of-text.
+const MOA_STREAM_CHUNKS: usize = 25;
+
+/// Minimum content length (bytes) before pseudo-streaming kicks in.
+/// Below this, the one-shot delta is fine and chunking just adds
+/// scheduler noise. Checked against `content.len()` which is byte
+/// length; the threshold is loose so the byte/char distinction
+/// doesn't matter for non-ASCII (200 bytes ≥ 50 multi-byte chars,
+/// well above the noise floor).
+const MOA_STREAM_MIN_BYTES: usize = 200;
+
+/// Delay between pseudo-stream chunks. Total animation budget for a
+/// 25-chunk response is ~500ms, which feels live without artificially
+/// slowing down agents that just want to read the whole reply.
+const MOA_STREAM_CHUNK_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Split `content` into roughly `target_chunks` pieces along whitespace
+/// or UTF-8 char boundaries. The returned slices, concatenated in order,
+/// always reconstruct the original input exactly (no characters lost,
+/// no separators inserted). Returns a single-element vector when
+/// chunking is not worth the overhead (short content, target ≤ 1, or
+/// content too short to split meaningfully).
+fn chunk_content_for_streaming(content: &str, target_chunks: usize) -> Vec<&str> {
+    if target_chunks <= 1
+        || content.len() < MOA_STREAM_MIN_BYTES
+        || content.chars().count() < target_chunks * 2
+    {
+        return vec![content];
+    }
+
+    // Walk char boundaries to compute desired cut points by char index,
+    // then snap forward to the next whitespace boundary so we don't
+    // split mid-word. If no whitespace exists (CJK, code blob, long
+    // hash), fall through to the char-boundary cut.
+    let total_chars = content.chars().count();
+    let chars_per_chunk = total_chars / target_chunks;
+    if chars_per_chunk == 0 {
+        return vec![content];
+    }
+
+    let mut chunks = Vec::with_capacity(target_chunks);
+    let mut cut_start = 0usize;
+    let mut chars_since_last = 0usize;
+
+    for (byte_idx, ch) in content.char_indices() {
+        chars_since_last += 1;
+        // Once we've passed the per-chunk char target, try to snap
+        // forward to the next whitespace char so we cut on a word
+        // boundary. If we're already on whitespace, cut here.
+        if chars_since_last >= chars_per_chunk && ch.is_whitespace() {
+            // Cut *after* the whitespace so the leading-space
+            // boundary lives with the preceding chunk (matches how
+            // word-by-word streaming reads).
+            let cut_end = byte_idx + ch.len_utf8();
+            if cut_end > cut_start {
+                chunks.push(&content[cut_start..cut_end]);
+                cut_start = cut_end;
+                chars_since_last = 0;
+            }
+            if chunks.len() + 1 >= target_chunks {
+                break;
+            }
+        }
+    }
+
+    if cut_start < content.len() {
+        chunks.push(&content[cut_start..]);
+    }
+
+    // If we ended up with one chunk (no whitespace found), fall back
+    // to a strict char-count split. Common for CJK or code-only output.
+    if chunks.len() == 1 && total_chars >= target_chunks * 2 {
+        chunks.clear();
+        let mut cut_start = 0usize;
+        let mut chars_since_last = 0usize;
+        for (byte_idx, ch) in content.char_indices() {
+            chars_since_last += 1;
+            if chars_since_last >= chars_per_chunk {
+                let cut_end = byte_idx + ch.len_utf8();
+                chunks.push(&content[cut_start..cut_end]);
+                cut_start = cut_end;
+                chars_since_last = 0;
+                if chunks.len() + 1 >= target_chunks {
+                    break;
+                }
+            }
+        }
+        if cut_start < content.len() {
+            chunks.push(&content[cut_start..]);
+        }
+    }
+
+    chunks
+}
+
 /// Emit the MoA response as a one-shot OpenAI Responses-API SSE stream
 /// so callers that hit `/v1/responses` with `stream:true` (the chat UI)
 /// get event shapes their parser understands.
@@ -834,18 +1026,23 @@ fn strip_think_from_content(text: &str) -> String {
 /// so we don't bother with incremental delta streaming — it would only
 /// make the UI's spinner-to-text transition smoother.
 async fn send_moa_as_responses_sse(
-    mut stream: TcpStream,
+    stream: TcpStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
 ) -> std::io::Result<()> {
-    let mut header = String::from(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-cache\r\nConnection: close\r\n",
-    );
-    for (name, value) in extra_headers {
-        crate::network::openai::transport::append_safe_header(&mut header, name, value);
+    send_moa_as_responses_sse_inner(stream, response, extra_headers, false, None).await
+}
+
+pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_inner(
+    mut stream: TcpStream,
+    response: &serde_json::Value,
+    extra_headers: &[(&str, String)],
+    header_already_sent: bool,
+    continuation: Option<ProgressContinuation>,
+) -> std::io::Result<()> {
+    if !header_already_sent {
+        write_sse_response_headers(&mut stream, extra_headers).await?;
     }
-    header.push_str("\r\n");
-    stream.write_all(header.as_bytes()).await?;
 
     let response_id = response
         .get("id")
@@ -869,43 +1066,90 @@ async fn send_moa_as_responses_sse(
         .get("usage")
         .map(openai_frontend::responses::chat_usage_to_responses_usage);
     let item_id = format!("msg_moa_{}", short_id_from_response(response));
-    let created_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+
+    // On the progress path, reuse the timestamp the early
+    // `response.created` event already put on the wire, and start
+    // sequence_number from where progress left off. Otherwise this
+    // is a standalone Responses stream; compute a fresh created_at
+    // and start the sequence counter at the conventional zero.
+    let (created_at, mut sequence_number) = match continuation {
+        Some(c) => (c.created_at, c.next_sequence_number),
+        None => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            (now, 0)
+        }
+    };
 
     use openai_frontend::responses as resp;
 
-    // The created/completed events must share the same `response.id`
-    // so clients can correlate the stream by id. Overwrite the
-    // auto-generated `resp_{created_at}` placeholder with the MoA
-    // response id we'll also use on the completed event.
-    let mut created = resp::responses_stream_created_event(&model, created_at);
-    if let Some(obj) = created
-        .get_mut("response")
-        .and_then(serde_json::Value::as_object_mut)
-    {
-        obj.insert(
-            "id".to_string(),
-            serde_json::Value::String(response_id.clone()),
-        );
+    // `response.created` must come before any delta events. When the
+    // progress path is driving us (continuation is Some), it already
+    // emitted `response.created` up front with the correct id and
+    // sequence_number=0 — emitting again would produce two `created`
+    // events for the same stream with mismatched timestamps and a
+    // duplicate sequence_number.
+    if continuation.is_none() {
+        let mut created =
+            resp::responses_stream_created_event_with_sequence(&model, created_at, sequence_number);
+        sequence_number = sequence_number.saturating_add(1);
+        if let Some(obj) = created
+            .get_mut("response")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            obj.insert(
+                "id".to_string(),
+                serde_json::Value::String(response_id.clone()),
+            );
+        }
+        let data = format!("data: {created}\n\n");
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
+        stream.flush().await?;
     }
 
-    let events = [
-        created,
-        resp::responses_stream_delta_event(&item_id, &content),
-        resp::responses_stream_text_done_event(&item_id, &content),
-        resp::responses_stream_completed_event(
-            &response_id,
-            created_at,
-            &model,
+    let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
+    let chunk_delay = MOA_STREAM_CHUNK_DELAY;
+    let inter_chunk_delay = if pieces.len() > 1 {
+        Some(chunk_delay)
+    } else {
+        None
+    };
+    for (idx, piece) in pieces.iter().enumerate() {
+        let delta_event = resp::responses_stream_delta_event_with_logprobs_and_sequence(
             &item_id,
-            &content,
-            usage,
-        ),
-    ];
+            piece,
+            None,
+            sequence_number,
+        );
+        sequence_number = sequence_number.saturating_add(1);
+        let data = format!("data: {}\n\n", delta_event);
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
+        stream.flush().await?;
+        if let Some(delay) = inter_chunk_delay
+            && idx + 1 < pieces.len()
+        {
+            tokio::time::sleep(delay).await;
+        }
+    }
 
-    for event in &events {
+    let text_done =
+        resp::responses_stream_text_done_event_with_sequence(&item_id, &content, sequence_number);
+    sequence_number = sequence_number.saturating_add(1);
+    let completed = resp::responses_stream_completed_event_with_sequence(
+        &response_id,
+        created_at,
+        &model,
+        &item_id,
+        &content,
+        usage,
+        sequence_number,
+    );
+    let tail = [text_done, completed];
+    for event in &tail {
         let data = format!("data: {}\n\n", event);
         let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
         stream.write_all(framed.as_bytes()).await?;
@@ -1474,5 +1718,236 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "x"}}],
         });
         assert_eq!(effective_enable_thinking_for_moa(&body), Some(false));
+    }
+
+    // ── chunk_content_for_streaming ────────────────────────────────
+
+    #[test]
+    fn chunk_helper_empty_input_returns_single_empty_chunk() {
+        // Empty input still returns a one-element vec (`vec![""]`), not
+        // an empty slice — the SSE writer expects to always emit at
+        // least one delta event so it can attach role/finish metadata.
+        assert_eq!(chunk_content_for_streaming("", 25), vec![""]);
+    }
+
+    #[test]
+    fn chunk_helper_short_input_returns_single_chunk() {
+        // Below MOA_STREAM_MIN_BYTES — chunking overhead not worth it.
+        let s = "hello world this is short";
+        let out = chunk_content_for_streaming(s, 25);
+        assert_eq!(out, vec![s]);
+    }
+
+    #[test]
+    fn chunk_helper_target_one_returns_single_chunk() {
+        let s = "x".repeat(500);
+        let out = chunk_content_for_streaming(&s, 1);
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn chunk_helper_long_text_splits_on_word_boundaries() {
+        // 400+ chars of normal English prose.
+        let s = "The quick brown fox jumps over the lazy dog. ".repeat(10);
+        let out = chunk_content_for_streaming(&s, 10);
+        assert!(out.len() > 1, "expected multiple chunks; got {}", out.len());
+        assert!(
+            out.len() <= 11,
+            "expected at most ~10 chunks; got {}",
+            out.len()
+        );
+        // Reconstruction is exact: no bytes lost or added.
+        let reconstructed: String = out.iter().copied().collect();
+        assert_eq!(reconstructed, s);
+        // Word boundaries: each non-final chunk ends in whitespace.
+        for chunk in &out[..out.len() - 1] {
+            assert!(
+                chunk
+                    .chars()
+                    .last()
+                    .map(|c| c.is_whitespace())
+                    .unwrap_or(false),
+                "non-final chunk should end on whitespace: {:?}",
+                chunk
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_helper_preserves_utf8_boundaries_for_cjk() {
+        // No whitespace, multi-byte chars. Should still split cleanly
+        // along char boundaries (no panic, exact reconstruction).
+        let s = "中文测试内容".repeat(60); // 360 chars, all 3-byte UTF-8
+        assert!(s.len() >= MOA_STREAM_MIN_BYTES);
+        let out = chunk_content_for_streaming(&s, 10);
+        assert!(out.len() > 1, "CJK should still chunk; got {}", out.len());
+        let reconstructed: String = out.iter().copied().collect();
+        assert_eq!(reconstructed, s);
+        // Each chunk is valid UTF-8 (trivially, since &str by construction).
+        for chunk in &out {
+            assert!(std::str::from_utf8(chunk.as_bytes()).is_ok());
+        }
+    }
+
+    #[test]
+    fn chunk_helper_handles_text_with_no_whitespace_fallback() {
+        // A long URL/hash — no whitespace to snap to. Helper should
+        // fall through to char-boundary splitting.
+        let s = "a".repeat(600);
+        let out = chunk_content_for_streaming(&s, 10);
+        assert!(
+            out.len() > 1,
+            "expected fallback chunking; got {}",
+            out.len()
+        );
+        let reconstructed: String = out.iter().copied().collect();
+        assert_eq!(reconstructed, s);
+    }
+
+    async fn capture_chat_sse_body(response: serde_json::Value) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept");
+            send_moa_as_sse(socket, &response, &[]).await.expect("sse");
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        use tokio::io::AsyncReadExt;
+        let mut bytes = Vec::new();
+        client.read_to_end(&mut bytes).await.expect("read");
+        server.await.expect("server task");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    fn count_delta_events_with_content(raw: &str) -> usize {
+        let mut count = 0;
+        for line in raw.lines() {
+            let Some(payload) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if payload.trim() == "[DONE]" {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            if v.pointer("/choices/0/delta/content")
+                .and_then(|c| c.as_str())
+                .filter(|s| !s.is_empty())
+                .is_some()
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    #[tokio::test]
+    async fn chat_sse_emits_multiple_deltas_for_long_content() {
+        // ≥ MOA_STREAM_MIN_BYTES of word-spaced English → must split.
+        let long_content = "Hello world. ".repeat(40);
+        let response = serde_json::json!({
+            "id": "chatcmpl-moa-chunky",
+            "object": "chat.completion",
+            "model": "mesh",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": long_content },
+                "finish_reason": "stop"
+            }]
+        });
+        // The real MOA_STREAM_CHUNK_DELAY (20ms) × ~25 chunks adds
+        // ~500ms to test runtime — acceptable since this is the only
+        // chunked-delay test on the chat path.
+        let raw = capture_chat_sse_body(response).await;
+        let n = count_delta_events_with_content(&raw);
+        assert!(
+            n > 1,
+            "expected multiple content delta events; got {n}\nraw: {raw}"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_sse_tool_calls_remain_atomic() {
+        // Tool-call payloads must NOT be chunked — harness parsers
+        // (Goose, OpenCode) need a single well-formed tool_call object.
+        let response = serde_json::json!({
+            "id": "chatcmpl-moa-tool",
+            "object": "chat.completion",
+            "model": "mesh",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "read", "arguments": "{\"path\":\"/x\"}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }]
+        });
+        let raw = capture_chat_sse_body(response).await;
+        // Count delta events with tool_calls.
+        let mut tool_deltas = 0;
+        for line in raw.lines() {
+            let Some(payload) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if payload.trim() == "[DONE]" {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            if v.pointer("/choices/0/delta/tool_calls").is_some() {
+                tool_deltas += 1;
+            }
+        }
+        assert_eq!(
+            tool_deltas, 1,
+            "tool_calls must arrive as exactly one atomic delta; got {tool_deltas}\nraw: {raw}"
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_sse_emits_multiple_deltas_for_long_content() {
+        let long_content = "Hello world. ".repeat(40);
+        let response = serde_json::json!({
+            "id": "chatcmpl-moa-resp-chunky",
+            "object": "chat.completion",
+            "model": "mesh",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": long_content },
+                "finish_reason": "stop"
+            }]
+        });
+        // ~500ms test runtime acceptable (MOA_STREAM_CHUNK_DELAY × N).
+        let raw = capture_responses_sse_body(response).await;
+        // Count response.output_text.delta events.
+        let mut delta_count = 0;
+        for line in raw.lines() {
+            let Some(payload) = line.strip_prefix("data: ") else {
+                continue;
+            };
+            if payload.trim() == "[DONE]" {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
+                continue;
+            };
+            if v.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta") {
+                delta_count += 1;
+            }
+        }
+        assert!(
+            delta_count > 1,
+            "expected multiple output_text.delta events; got {delta_count}\nraw: {raw}"
+        );
     }
 }

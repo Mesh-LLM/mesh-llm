@@ -1938,7 +1938,9 @@ alias = "model-alias"
     }
     #[test]
     fn config_sync_full_config_roundtrip() {
-        use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry, PluginConfigEntry};
+        use crate::plugin::{
+            GpuAssignment, GpuConfig, HardwareConfig, ModelConfigEntry, PluginConfigEntry,
+        };
         let config = crate::plugin::MeshConfig {
             version: Some(1),
             gpu: GpuConfig {
@@ -1953,13 +1955,17 @@ alias = "model-alias"
                 model: "Qwen3-8B.gguf".to_string(),
                 mmproj: Some("mm.gguf".to_string()),
                 ctx_size: Some(8192),
-                gpu_id: Some("pci:0000:65:00.0".to_string()),
+                gpu_id: None,
                 parallel: None,
                 cache_type_k: None,
                 cache_type_v: None,
                 batch: None,
                 ubatch: None,
                 flash_attention: None,
+                hardware: Some(HardwareConfig {
+                    device: Some("pci:0000:65:00.0".to_string()),
+                    ..Default::default()
+                }),
                 ..Default::default()
             }],
             plugins: vec![PluginConfigEntry {
@@ -1982,6 +1988,13 @@ alias = "model-alias"
             restored.models[0].gpu_id.as_deref(),
             Some("pci:0000:65:00.0")
         );
+        assert_eq!(
+            restored.models[0]
+                .hardware
+                .as_ref()
+                .and_then(|hardware| hardware.device.as_deref()),
+            Some("pci:0000:65:00.0")
+        );
         assert_eq!(restored.plugins.len(), 1);
         assert_eq!(restored.plugins[0].name, "demo");
         assert_eq!(restored.plugins[0].enabled, Some(true));
@@ -2000,30 +2013,37 @@ alias = "model-alias"
 
     #[test]
     fn config_sync_config_toml_roundtrips_additive_defaults_sections() {
-        let mut config = crate::plugin::MeshConfig {
+        use crate::plugin::{
+            ModelConfigDefaults, ModelFitConfig, RequestDefaultsConfig, ThroughputConfig,
+        };
+        let config = crate::plugin::MeshConfig {
             version: Some(1),
+            defaults: Some(ModelConfigDefaults {
+                throughput: Some(ThroughputConfig {
+                    parallel: Some(6),
+                    ..Default::default()
+                }),
+                model_fit: Some(ModelFitConfig {
+                    flash_attention: Some(skippy_protocol::FlashAttentionType::Disabled),
+                    ..Default::default()
+                }),
+                request_defaults: Some(RequestDefaultsConfig {
+                    reasoning_format: Some("deepseek".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
-        config.extra = toml::from_str(
-            r#"[defaults.throughput]
-parallel = 6
-
-[defaults.model_fit]
-flash_attention = "disabled"
-
-[defaults.request_defaults]
-reasoning_format = "qwen"
-"#,
-        )
-        .expect("parse additive defaults table");
 
         let snapshot = mesh_config_to_proto(&config);
+        let config_toml = snapshot
+            .config_toml
+            .as_deref()
+            .expect("config TOML should serialize");
         assert!(
-            snapshot
-                .config_toml
-                .as_deref()
-                .is_some_and(|toml| toml.contains("[defaults.model_fit]")),
-            "config TOML should carry additive defaults sections"
+            config_toml.contains("parallel") && config_toml.contains("reasoning_format"),
+            "config TOML should carry additive defaults values: {config_toml}"
         );
 
         let restored = proto_config_to_mesh(&snapshot);
@@ -2058,7 +2078,7 @@ reasoning_format = "qwen"
                         .and_then(|defaults| defaults.request_defaults.as_ref())
                         .and_then(|request_defaults| request_defaults.reasoning_format.as_deref())
                 }),
-            Some("qwen")
+            Some("deepseek")
         );
     }
 

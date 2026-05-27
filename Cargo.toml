@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/mesh-llm",
+    "crates/mesh-llm-config",
     "crates/mesh-llm-gpu-bench",
     "crates/mesh-llm-host-runtime",
     "crates/mesh-llm-identity",
@@ -9,6 +10,7 @@ members = [
     "crates/mesh-llm-guardrails",
     "crates/mesh-llm-system",
     "crates/mesh-llm-types",
+    "crates/mesh-llm-console-server",
     "crates/mesh-llm-ui",
     "crates/mesh-llm-plugin",
     "crates/mesh-client",

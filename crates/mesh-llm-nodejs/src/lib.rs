@@ -27,6 +27,33 @@ pub struct Node {
 }
 
 #[napi]
+pub struct ConsoleHandle {
+    inner: Arc<Mutex<Option<mesh_llm_console_server::ConsoleServerHandle>>>,
+    url: String,
+}
+
+#[napi]
+impl ConsoleHandle {
+    #[napi(getter)]
+    pub fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    #[napi]
+    pub async fn stop(&self) -> Result<()> {
+        let handle = self
+            .inner
+            .lock()
+            .map_err(|error| Error::from_reason(error.to_string()))?
+            .take();
+        if let Some(handle) = handle {
+            handle.stop().await;
+        }
+        Ok(())
+    }
+}
+
+#[napi]
 impl Node {
     #[napi(factory)]
     pub fn create(
@@ -371,6 +398,34 @@ impl Node {
             )
             .await
             .map_err(to_napi_error)
+    }
+
+    #[napi(js_name = "startConsole")]
+    pub async fn start_console(
+        &self,
+        asset_dir: String,
+        port: Option<u32>,
+        listen_all: Option<bool>,
+    ) -> Result<ConsoleHandle> {
+        let port = port
+            .map(u16::try_from)
+            .transpose()
+            .map_err(|_| Error::from_reason("console port must be between 0 and 65535"))?
+            .unwrap_or(0);
+        let handle = mesh_llm_console_server::start_file_console(
+            mesh_llm_console_server::ConsoleServerOptions {
+                asset_dir: asset_dir.into(),
+                port,
+                listen_all: listen_all.unwrap_or(false),
+            },
+        )
+        .await
+        .map_err(|error| Error::from_reason(error.to_string()))?;
+        let url = handle.url().to_string();
+        Ok(ConsoleHandle {
+            inner: Arc::new(Mutex::new(Some(handle))),
+            url,
+        })
     }
 }
 

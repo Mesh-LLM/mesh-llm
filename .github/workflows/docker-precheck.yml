@@ -68,6 +68,8 @@ jobs:
             crates/mesh-llm-routing/ \
             crates/mesh-llm-guardrails/ \
             crates/mesh-llm-types/ \
+            crates/mesh-llm-config/ \
+            crates/mesh-llm-console-server/ \
             crates/mesh-llm-plugin/ \
             crates/mesh-client/ \
             crates/mesh-llm-api-client/ \

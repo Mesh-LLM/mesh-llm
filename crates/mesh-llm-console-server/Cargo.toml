@@ -1,0 +1,12 @@
+[package]
+name = "mesh-llm-console-server"
+version.workspace = true
+edition = "2021"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mesh-llm-ui = { path = "../mesh-llm-ui", default-features = false }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
