@@ -11,7 +11,9 @@ use anyhow::Result;
 use skippy_protocol::LoadMode;
 use tokio::sync::Mutex;
 
-use crate::inference::skippy::materialization::{inspect_stage_package, is_layer_package_ref};
+use crate::inference::skippy::materialization::{
+    inspect_stage_package, is_layer_package_ref, resolve_stage_load_package,
+};
 
 use super::{
     SourceModelKind, StageInventoryRequest, StageLoadRequest, StagePackagePrefetcher,
@@ -129,12 +131,10 @@ pub(super) async fn run_stage_prepare_task(
         Err(error) => {
             let mut status =
                 preparation_status_from_load(&load, StagePreparationState::Failed, None);
-            status.error = Some(match peer_prefetch_error {
-                Some(prefetch_error) => {
-                    format!("{error}; peer artifact prefetch failed: {prefetch_error}")
-                }
-                None => error.to_string(),
-            });
+            status.error = Some(format_stage_prepare_error(
+                &error,
+                peer_prefetch_error.as_deref(),
+            ));
             status
         }
     };
@@ -161,14 +161,25 @@ async fn prefetch_stage_package_if_needed(
     match prefetcher.prefetch_stage_package(request).await {
         Ok(()) => None,
         Err(error) => {
+            let error_message = format!("{error:#}");
             tracing::debug!(
                 topology_id = %load.topology_id,
                 run_id = %load.run_id,
                 stage_id = %load.stage_id,
-                "peer artifact prefetch failed, falling back to local/HF resolver: {error}"
+                "peer artifact prefetch failed, falling back to local/HF resolver: {error_message}"
             );
-            Some(error.to_string())
+            Some(error_message)
         }
+    }
+}
+
+fn format_stage_prepare_error(error: &anyhow::Error, peer_prefetch_error: Option<&str>) -> String {
+    let message = format!("{error:#}");
+    match peer_prefetch_error {
+        Some(prefetch_error) => {
+            format!("{message}; peer artifact prefetch failed: {prefetch_error}")
+        }
+        None => message,
     }
 }
 
@@ -178,9 +189,12 @@ struct PrepareSourceResult {
 
 async fn prepare_stage_source(load: &StageLoadRequest) -> Result<PrepareSourceResult> {
     if load.load_mode == LoadMode::LayerPackage || is_layer_package_ref(&load.package_ref) {
-        let info = inspect_stage_package(&load.package_ref)?;
+        let load = load.clone();
+        let package = tokio::task::spawn_blocking(move || resolve_stage_load_package(&load))
+            .await??
+            .ok_or_else(|| anyhow::anyhow!("layer package load did not resolve a package"))?;
         return Ok(PrepareSourceResult {
-            bytes_total: info.source_model_bytes,
+            bytes_total: package.source_model_bytes,
         });
     }
 
@@ -227,4 +241,33 @@ async fn update_preparation(
     }
     preparations.insert(key.to_string(), status);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+
+    use super::format_stage_prepare_error;
+
+    #[test]
+    fn stage_prepare_error_preserves_source_chain() {
+        let error = anyhow!("No locks available (os error 77)")
+            .context("download layer package file: shared/embeddings.gguf");
+
+        let message = format_stage_prepare_error(&error, None);
+
+        assert!(message.contains("download layer package file: shared/embeddings.gguf"));
+        assert!(message.contains("No locks available (os error 77)"));
+    }
+
+    #[test]
+    fn stage_prepare_error_includes_prefetch_source_chain() {
+        let error = anyhow!("No locks available (os error 77)")
+            .context("download layer package file: shared/embeddings.gguf");
+
+        let message = format_stage_prepare_error(&error, Some("peer refused package"));
+
+        assert!(message.contains("No locks available (os error 77)"));
+        assert!(message.contains("peer artifact prefetch failed: peer refused package"));
+    }
 }

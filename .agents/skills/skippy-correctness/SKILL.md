@@ -33,8 +33,8 @@ Current mesh-level checks:
 ```bash
 cargo test -p skippy-runtime --lib
 cargo test -p skippy-server --lib
-cargo test -p mesh-llm inference::skippy --lib
-cargo test -p mesh-llm --lib
+cargo test -p mesh-llm-host-runtime --lib inference::skippy
+cargo test -p mesh-llm-host-runtime --lib
 ```
 
 If `skippy-correctness` is imported later, prefer that harness for model-backed

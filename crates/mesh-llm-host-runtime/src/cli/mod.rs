@@ -8,6 +8,97 @@ use crate::cli::runtime::RuntimeCommand;
 use crate::crypto::TrustPolicy;
 use crate::network::discovery::MeshDiscoveryMode;
 
+/// Parse a `URL=TOKEN` pair for `--relay-auth`. Splits on the first `=` only,
+/// so tokens may contain `=` (base64 padding, JWTs).
+///
+/// Error messages must never include the token portion of the input —
+/// `--relay-auth` carries bearer credentials, and a parse failure could
+/// otherwise leak them into terminal output, logs, and bug reports. The URL
+/// is safe to echo back (it's the public identity of the relay).
+fn parse_relay_auth_pair(s: &str) -> Result<(String, String), String> {
+    let Some((url, token)) = s.split_once('=') else {
+        return Err("expected URL=TOKEN, no '=' separator found (token redacted)".to_string());
+    };
+    if url.is_empty() {
+        return Err("expected URL=TOKEN, got empty URL (token redacted)".to_string());
+    }
+    if token.is_empty() {
+        return Err(format!(
+            "expected URL=TOKEN, got empty token for URL {url:?}"
+        ));
+    }
+    Ok((url.to_string(), token.to_string()))
+}
+
+#[cfg(test)]
+mod relay_auth_parser_tests {
+    use super::parse_relay_auth_pair;
+
+    #[test]
+    fn parses_simple_pair() {
+        let (url, token) = parse_relay_auth_pair("https://r.example/=abc123").unwrap();
+        assert_eq!(url, "https://r.example/");
+        assert_eq!(token, "abc123");
+    }
+
+    #[test]
+    fn preserves_equals_in_token() {
+        // Base64-padded tokens and NIP-98-style payloads often contain `=`.
+        let (_, token) = parse_relay_auth_pair("https://r/=eyJhbGciOiJFZERTQSJ9.payload==")
+            .expect("token with '=' must parse");
+        assert_eq!(token, "eyJhbGciOiJFZERTQSJ9.payload==");
+    }
+
+    #[test]
+    fn rejects_missing_separator() {
+        assert!(parse_relay_auth_pair("no-separator").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_url() {
+        assert!(parse_relay_auth_pair("=token").is_err());
+    }
+
+    #[test]
+    fn rejects_empty_token() {
+        assert!(parse_relay_auth_pair("https://r/=").is_err());
+    }
+
+    #[test]
+    fn parser_errors_never_leak_token_portion() {
+        // --relay-auth carries bearer credentials; if parsing fails, the
+        // token portion of the input must never appear in the error
+        // message (which lands in terminal output, logs, and bug reports).
+        // The URL is safe to echo back — it's the public identity of the
+        // relay — but everything after the first `=` is secret.
+        let secret_token = "super-secret-bearer-token-xyz-12345";
+
+        // Case 1: no `=` separator. Whole input is treated as a malformed
+        // URL-or-token blob; we cannot tell which it is, so redact both.
+        let err = parse_relay_auth_pair(secret_token).expect_err("should fail");
+        assert!(
+            !err.contains(secret_token),
+            "missing-separator error must not echo the input: {err}"
+        );
+
+        // Case 2: empty URL (`=token`). URL is empty, the token portion is
+        // the secret — must not appear.
+        let err = parse_relay_auth_pair(&format!("={secret_token}")).expect_err("should fail");
+        assert!(
+            !err.contains(secret_token),
+            "empty-URL error must not echo the token: {err}"
+        );
+
+        // Case 3: empty token (`URL=`). Token is empty, no secret to leak;
+        // the URL is fine to include and helps the user diagnose.
+        let err = parse_relay_auth_pair("https://r.example/=").expect_err("should fail");
+        assert!(
+            err.contains("https://r.example/"),
+            "empty-token error should name the URL: {err}"
+        );
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum TrustCommand {
     /// Add an owner to the local trust store allowlist.
@@ -409,6 +500,17 @@ pub(crate) struct Cli {
     /// Override iroh relay URLs.
     #[arg(long, hide = true)]
     pub(crate) relay: Vec<String>,
+
+    /// Per-relay bearer token for gated iroh relays, formatted as
+    /// `URL=TOKEN`. Repeatable. The token is sent as
+    /// `Authorization: Bearer <TOKEN>` on the WebSocket upgrade to the
+    /// matching `--relay` URL. Relays not listed here register without
+    /// authentication (the correct behavior for public relays).
+    ///
+    /// Splits on the first `=` only, so tokens may contain `=` (base64
+    /// padding, JWTs, etc.).
+    #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
+    pub(crate) relay_auth: Vec<(String, String)>,
 
     /// Bind QUIC to a fixed UDP port (for NAT port forwarding).
     #[arg(long, hide = true)]
@@ -820,6 +922,7 @@ where
         "--draft",
         "--bin-dir",
         "--relay",
+        "--relay-auth",
         "--nostr-relay",
         "--config",
         "--owner-key",
@@ -1078,6 +1181,72 @@ mod tests {
                 .into_iter()
                 .map(OsString::from)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_treats_relay_auth_as_value_taking_before_serve() {
+        // Regression: --relay-auth carries a `URL=TOKEN` value, so the
+        // pseudo-subcommand scanner must skip the value and still discover
+        // `serve` (or `client`) as the runtime surface. If --relay-auth is not
+        // in the value-taking list the scanner stops at the token and Clap
+        // sees a malformed command.
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--relay-auth",
+            "https://gated.example/=token",
+            "serve",
+            "--relay",
+            "https://gated.example/",
+            "--auto",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
+        assert_eq!(
+            normalized.normalized,
+            vec![
+                "mesh-llm",
+                "--relay-auth",
+                "https://gated.example/=token",
+                "--relay",
+                "https://gated.example/",
+                "--auto",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
+
+        // And the resulting argv must actually parse cleanly through Clap so
+        // the relay-auth value reaches `Cli::relay_auth`.
+        let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
+        assert_eq!(
+            cli.relay_auth,
+            vec![("https://gated.example/".to_string(), "token".to_string())],
+        );
+    }
+
+    #[test]
+    fn normalize_runtime_surface_args_relay_auth_before_client_invocation() {
+        // Same regression but for the `client` surface, including a token
+        // containing `=` (NIP-98-style base64 padding).
+        let normalized = normalize_runtime_surface_args([
+            "mesh-llm",
+            "--relay-auth",
+            "https://gated.example/=eyJhbGciOiJFZERTQSJ9.payload==",
+            "client",
+            "--auto",
+        ]);
+
+        assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
+        let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
+        assert!(cli.client, "client surface flag should be set");
+        assert_eq!(
+            cli.relay_auth,
+            vec![(
+                "https://gated.example/".to_string(),
+                "eyJhbGciOiJFZERTQSJ9.payload==".to_string()
+            )],
         );
     }
 

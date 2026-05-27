@@ -58,6 +58,7 @@
         <div class="links">
             <a href="#install">Quick start</a>
             <a href="#models">Models</a>
+            <a href="#splits">Splits</a>
             <a href="#agents">Agents</a>
             <a href="#blackboard">Blackboard</a>
             <a href="#features">Features</a>
@@ -328,6 +329,31 @@
         </table>
         </div>
         <p style="font-size:0.75rem; color:var(--text3); margin-top:0.8rem;">Full catalog: <code>mesh-llm download</code> · Not in the catalog? Use a HuggingFace URL — any GGUF works.</p>
+    </section>
+
+    <section id="splits">
+        <div class="section-tag">Split serving</div>
+        <h2>Run one model across two nodes</h2>
+        <p class="section-lead">Use a published layer package and start every serving node with the same model id. The coordinator picks layer ranges; each node downloads the shared artifacts and layer files it needs for its assigned stage.</p>
+
+        <div class="code-block">
+            <span class="comment"># Node A: coordinator. Copy the printed token.</span><br>
+            <span class="cmd">mesh-llm</span> serve \<br>
+            &nbsp;&nbsp;<span class="flag">--model</span> <span class="val">meshllm/Qwen3-8B-Q4_K_M-layers</span> \<br>
+            &nbsp;&nbsp;<span class="flag">--split</span> \<br>
+            &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span><br><br>
+            <span class="comment"># Node B: worker. Use the token from node A.</span><br>
+            <span class="cmd">mesh-llm</span> serve \<br>
+            &nbsp;&nbsp;<span class="flag">--model</span> <span class="val">meshllm/Qwen3-8B-Q4_K_M-layers</span> \<br>
+            &nbsp;&nbsp;<span class="flag">--split</span> \<br>
+            &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span> \<br>
+            &nbsp;&nbsp;<span class="flag">--join</span> <span class="val">&lt;token&gt;</span><br><br>
+            <span class="comment"># Verify from node A</span><br>
+            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:9337/v1/models</span><br>
+            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:3131/api/status</span>
+        </div>
+
+        <p style="font-size:0.82rem; color:var(--text2); margin-top:1rem;">Defaults are API <code>:9337</code> and console <code>:3131</code>. On multi-interface hosts, add <code>--bind-ip &lt;lan-ip&gt;</code> so peers advertise a reachable address. If planning says the model needs more memory, increase <code>--max-vram</code> or use a smaller context/model.</p>
     </section>
 
     <section id="blackboard">

@@ -215,7 +215,7 @@ Goose, Pi, or OpenCode for broad smoke coverage.
 ### 1. Solo (single node)
 
 ```bash
-mesh-llm serve --model Qwen2.5-3B --console
+mesh-llm serve --model Qwen2.5-3B --console 3131
 ```
 
 - API on `:9337`, console on `:3131`
@@ -251,16 +251,58 @@ mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
 ### 3. Two GPU nodes, forced split
 
 ```bash
-# host with --split
-mesh-llm serve --model Qwen2.5-32B --bind-port 7842 --split
-# worker joins
-mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
+# node A (coordinator)
+mesh-llm serve \
+  --model meshllm/Qwen3-8B-Q4_K_M-layers \
+  --split \
+  --max-vram 5 \
+  --bind-port 7842 \
+  --port 9447 \
+  --console 3232
+
+# node B (worker)
+mesh-llm serve \
+  --model meshllm/Qwen3-8B-Q4_K_M-layers \
+  --split \
+  --max-vram 5 \
+  --join <TOKEN> \
+  --bind-port 7843 \
+  --port 9447 \
+  --console 3232
 ```
 
 - `--split` forces staged execution even when the model fits on the host
-- Embedded runtime assigns two participating stage routes
+- Use a published layer package (`*-layers`) so each node downloads only the
+  shared artifacts and layer files assigned to its stage.
+- Embedded runtime assigns participating stage routes
 - Stage placement is proportional to available VRAM (e.g. `0.67,0.33`)
-- Draft model auto-detected and used
+- If `--max-vram` is too low, planning should fail before startup with the
+  required memory estimate. In lab testing, `3` GB was too low for this Qwen3
+  8B package at the default context, while `5` GB per node reached readiness.
+- Wait for `/api/status` on the coordinator to show `node_state="serving"`,
+  `llama_ready=true`, a ready runtime stage, and one peer.
+- `GET /v1/models` should list the full layer-package model id.
+- A short `/v1/chat/completions` request should return an OpenAI-shaped
+  response from the layer-package model.
+
+> **CI coverage:** `two_node_split_smoke` runs
+> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary and a
+> tiny GGUF. It starts two serving nodes, waits for a topology with stages on
+> two distinct nodes, checks `/v1/models`, and sends a short
+> `/v1/chat/completions` request through stage 0.
+>
+> Other nearby CI coverage:
+>
+> - `scripts/ci-two-node-client-serving-smoke.sh` — two nodes, but only tests
+>   `client` -> `serve` routing. The model is held entirely on one node.
+> - `scripts/skippy-ci-smoke.sh` — exercises 3-stage layer splits via
+>   `skippy-correctness chain`, but all stages run on `127.0.0.1` in a single
+>   runner. It validates the staged-runtime ABI, not mesh-llm node-to-node
+>   split serving over QUIC.
+>
+> Use real flags only: `--split`, `--max-vram`, `--join`, `--bind-port`,
+> `--port`, `--console`. There is no `--layer-range` flag — layer placement
+> is decided by the runtime from advertised VRAM, not pinned by CLI.
 
 #### Multi-interface Docker/Linux bind-IP validation
 
@@ -304,7 +346,7 @@ mesh-llm client --join <TOKEN> --port 9555
 
 ```bash
 # node A: seeds mesh with two models, serves 3B
-mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console
+mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console 3131
 # node B: joins, auto-assigned to GLM (needed, on disk)
 mesh-llm serve --join <TOKEN>
 ```
@@ -359,7 +401,7 @@ mesh-llm unload GLM-4.7-Flash-Q4_K_M
 
 ```bash
 # Running node
-mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console
+mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console 3131
 
 # Operator surface
 mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
@@ -731,10 +773,10 @@ Without this, both processes share `~/.mesh-llm/key` and appear as the same node
 
 ```bash
 # Terminal 1: host with --split
-mesh-llm serve --model Qwen2.5-3B --port 9337 --split --console
+mesh-llm serve --model Qwen2.5-3B --port 9337 --console 3131 --split
 
 # Terminal 2: worker with ephemeral key
-MESH_LLM_EPHEMERAL_KEY=1 mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 9338 --split --max-vram 1
+MESH_LLM_EPHEMERAL_KEY=1 mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 9338 --console 3145 --split --max-vram 1
 ```
 
 - Host starts solo, then re-elects with split when worker joins
