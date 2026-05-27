@@ -2957,6 +2957,30 @@ fn is_relay_only_path_set_classifies_correctly() {
 }
 
 #[test]
+fn classify_relay_only_defaults_to_strict_when_no_connection() {
+    use crate::mesh::heartbeat::classify_relay_only_for_policy;
+    // No Connection object at all (cleanly closed, QUIC idle-expired,
+    // never opened): must default to STRICT, not lenient. Otherwise a
+    // previously-direct peer that simply disconnected would silently
+    // inherit the 5-min relay grace and keep stale model routes alive
+    // an extra 3 min beyond what direct policy intends.
+    assert!(
+        !classify_relay_only_for_policy(None),
+        "no Connection object must default to strict (not relay-only)"
+    );
+    // With a Connection: pass through whatever is_relay_only_connection
+    // observed (i.e., classify by the connection's actual paths).
+    assert!(
+        classify_relay_only_for_policy(Some(true)),
+        "a relay-only connection must keep its lenient classification"
+    );
+    assert!(
+        !classify_relay_only_for_policy(Some(false)),
+        "a connection with IP paths must remain strict (direct)"
+    );
+}
+
+#[test]
 fn direct_peers_use_strict_heartbeat_threshold() {
     let peer = make_test_peer_info(make_test_endpoint_id(13));
     let local_descriptors = vec![];
