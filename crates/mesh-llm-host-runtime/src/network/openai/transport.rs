@@ -4268,8 +4268,7 @@ pub async fn send_json_with_status_and_headers(
 }
 
 pub async fn send_400(mut stream: TcpStream, msg: &str) -> std::io::Result<()> {
-    let body = serde_json::to_vec(&serde_json::json!({ "error": msg }))
-        .expect("serializing JSON error response should not fail");
+    let body = openai_error_body(400, msg);
     let headers = format!(
         "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         body.len()
@@ -4282,13 +4281,20 @@ pub async fn send_400(mut stream: TcpStream, msg: &str) -> std::io::Result<()> {
 
 pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io::Result<()> {
     let status = match code {
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        413 => "Payload Too Large",
         422 => "Unprocessable Content",
         429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
         _ => "Bad Request",
     };
-    let body = serde_json::json!({"error": msg}).to_string();
+    let body = openai_error_body(code, msg);
     let retry_after = if code == 429 {
         "Retry-After: 5\r\n"
     } else {
@@ -4297,7 +4303,7 @@ pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io:
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\n\r\n{}",
         body.len(),
-        body
+        String::from_utf8_lossy(&body)
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -4310,15 +4316,57 @@ pub async fn send_503(stream: TcpStream, reason: &str) -> std::io::Result<()> {
 }
 
 async fn send_503_inner(mut stream: TcpStream, reason: &str) -> std::io::Result<()> {
-    let body = serde_json::json!({"error": reason}).to_string();
+    let body = openai_error_body(503, reason);
     let resp = format!(
         "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
         body.len(),
-        body
+        String::from_utf8_lossy(&body)
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+fn openai_error_body(status_code: u16, message: &str) -> Vec<u8> {
+    let status =
+        http::StatusCode::from_u16(status_code).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
+    let kind = openai_error_kind_for_status(status_code);
+    let error = openai_frontend::OpenAiError::from_kind(status, kind, message)
+        .with_code(openai_error_code_for_status(status_code));
+    serde_json::to_vec(&error.body()).expect("serializing JSON error response should not fail")
+}
+
+const fn openai_error_kind_for_status(status_code: u16) -> openai_frontend::OpenAiErrorKind {
+    match status_code {
+        401 => openai_frontend::OpenAiErrorKind::Authentication,
+        403 => openai_frontend::OpenAiErrorKind::Permission,
+        404 => openai_frontend::OpenAiErrorKind::NotFound,
+        413 => openai_frontend::OpenAiErrorKind::PayloadTooLarge,
+        429 => openai_frontend::OpenAiErrorKind::RateLimit,
+        500 => openai_frontend::OpenAiErrorKind::Internal,
+        502 => openai_frontend::OpenAiErrorKind::ServiceUnavailable,
+        503 => openai_frontend::OpenAiErrorKind::ServiceUnavailable,
+        504 => openai_frontend::OpenAiErrorKind::Timeout,
+        _ => openai_frontend::OpenAiErrorKind::InvalidRequest,
+    }
+}
+
+const fn openai_error_code_for_status(status_code: u16) -> &'static str {
+    match status_code {
+        400 => "bad_request",
+        401 => "invalid_api_key",
+        403 => "permission_denied",
+        404 => "model_not_found",
+        409 => "conflict",
+        413 => "payload_too_large",
+        422 => "unprocessable_content",
+        429 => "rate_limit_exceeded",
+        500 => "internal_server_error",
+        502 => "service_unavailable",
+        503 => "service_unavailable",
+        504 => "timeout",
+        _ => "invalid_request",
+    }
 }
 
 /// Pipeline-aware HTTP proxy for local targets.
@@ -4498,6 +4546,7 @@ async fn relay_pipeline_non_streaming_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
     use tokio::net::TcpListener;
 
     // ── Header-name validation ──────────────────────────────────────
@@ -5728,36 +5777,63 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_error_429_includes_retry_after() {
-        use tokio::io::AsyncReadExt;
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            super::send_error(stream, 429, "model not available")
-                .await
-                .unwrap();
-        });
-
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let mut buf = vec![0u8; 4096];
-        let mut total = 0;
-        loop {
-            let n = client.read(&mut buf[total..]).await.unwrap();
-            if n == 0 {
-                break;
-            }
-            total += n;
-        }
-        let response = String::from_utf8_lossy(&buf[..total]);
+        let response = capture_proxy_error_response(|stream| async move {
+            super::send_error(stream, 429, "model not available").await
+        })
+        .await;
+        let body = response_json_body(&response);
 
         assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
         assert!(response.contains("Retry-After: 5\r\n"));
-        assert!(response.contains("model not available"));
+        assert_eq!(body["error"]["message"], "model not available");
+        assert_eq!(body["error"]["type"], "rate_limit_error");
+        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
+    }
 
+    #[tokio::test]
+    async fn test_send_503_uses_openai_error_shape() {
+        let response = capture_proxy_error_response(|stream| async move {
+            super::send_503(stream, "skippy ABI call failed: Unsupported").await
+        })
+        .await;
+        let body = response_json_body(&response);
+
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert_eq!(
+            body["error"]["message"],
+            "skippy ABI call failed: Unsupported"
+        );
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "service_unavailable");
+    }
+
+    async fn capture_proxy_error_response<F, Fut>(send: F) -> String
+    where
+        F: FnOnce(tokio::net::TcpStream) -> Fut + Send + 'static,
+        Fut: Future<Output = std::io::Result<()>> + Send + 'static,
+    {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            send(stream).await.unwrap();
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
         server.await.unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    fn response_json_body(response: &str) -> serde_json::Value {
+        let body_start = response
+            .find("\r\n\r\n")
+            .map(|index| index + 4)
+            .expect("response contains header terminator");
+        serde_json::from_str(&response[body_start..]).unwrap()
     }
 
     #[test]
