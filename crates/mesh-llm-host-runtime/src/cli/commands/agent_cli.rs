@@ -791,10 +791,10 @@ fn merge_context_lengths(
         for process in processes {
             let name = process["name"].as_str().map(String::from);
             let ctx_len = process["context_length"].as_u64().map(|v| v as u32);
-            if let Some(n) = name {
-                if ctx_len.is_some() {
-                    context_map.insert(n, ctx_len);
-                }
+            if let Some(n) = name
+                && ctx_len.is_some()
+            {
+                context_map.insert(n, ctx_len);
             }
         }
     }
