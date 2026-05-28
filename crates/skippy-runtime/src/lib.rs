@@ -3501,11 +3501,10 @@ mod tests {
         ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
         LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
         NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status,
-        TensorRole, flush_native_log_writer, format_skippy_error, parse_cache_type,
-        parse_layer_assign_index, redirect_native_logs_to_file, register_filtered_native_logs,
-        restore_native_logs, set_filtered_native_logs_enabled, unregister_filtered_native_logs,
-        write_native_log,
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status, TensorRole,
+        flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
+        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
+        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
     };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -4185,8 +4184,14 @@ mod tests {
             !err.contains("skippy ABI call failed"),
             "error format must not contain the old ABI envelope prefix: {err}"
         );
-        assert!(err.contains("RuntimeError"), "error must contain the status variant");
-        assert!(err.contains("something broke"), "error must contain the message");
+        assert!(
+            err.contains("RuntimeError"),
+            "error must contain the status variant"
+        );
+        assert!(
+            err.contains("something broke"),
+            "error must contain the message"
+        );
     }
 
     #[test]
@@ -4231,11 +4236,7 @@ mod tests {
         // Send deliberately malformed JSON — the C++ catch blocks
         // should clear chat sampling and return success instead of
         // surfacing the parse error as a fatal status.
-        let result = session.configure_chat_sampling(
-            "this is not valid json",
-            0,
-            Some(&sampling),
-        );
+        let result = session.configure_chat_sampling("this is not valid json", 0, Some(&sampling));
         assert!(
             result.is_ok(),
             "configure_chat_sampling should return Ok even with bad metadata: {result:?}"
