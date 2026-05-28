@@ -51,6 +51,37 @@ struct ToolRef {
     tool: rmcp::model::Tool,
 }
 
+fn normalize_tool_schema(mut tool: rmcp::model::Tool) -> rmcp::model::Tool {
+    tool.input_schema = Arc::new(normalize_input_schema((*tool.input_schema).clone()));
+    if tool
+        .output_schema
+        .as_deref()
+        .is_some_and(|schema| schema.get("type").and_then(Value::as_str) != Some("object"))
+    {
+        tool.output_schema = None;
+    }
+    tool
+}
+
+fn normalize_input_schema(
+    mut schema: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if schema.get("type").and_then(Value::as_str) == Some("object") {
+        return schema;
+    }
+    if schema.contains_key("properties") {
+        schema.insert("type".to_string(), serde_json::json!("object"));
+        return schema;
+    }
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": true,
+    })
+    .as_object()
+    .cloned()
+    .expect("object schema")
+}
+
 #[derive(Clone)]
 enum PromptTarget {
     Plugin {
@@ -601,7 +632,7 @@ impl PluginMcpServer {
                                 plugin_name: plugin_name.clone(),
                                 tool_name: raw_name.clone(),
                             },
-                            tool: stapler::operation(mcp_name, operation),
+                            tool: normalize_tool_schema(stapler::operation(mcp_name, operation)),
                         },
                     );
                 }
@@ -624,7 +655,7 @@ impl PluginMcpServer {
             for tool in listed {
                 let raw_name = tool.name.to_string();
                 let canonical_name = endpoint.canonical_name(&raw_name);
-                let mut namespaced = tool.clone();
+                let mut namespaced = normalize_tool_schema(tool.clone());
                 namespaced.name = canonical_name.clone().into();
                 tools.insert(
                     canonical_name,
@@ -807,7 +838,11 @@ impl ServerHandler for PluginMcpServer {
                     .unwrap_or_else(|| serde_json::json!({}));
                 let result = self
                     .plugin_manager
-                    .invoke_operation(plugin_name, tool_name, &arguments.to_string())
+                    .invoke_operation_without_timeout(
+                        plugin_name,
+                        tool_name,
+                        &arguments.to_string(),
+                    )
                     .await
                     .map_err(internal_error)?;
                 Ok(operation_result_to_call_tool_result(result))
@@ -1471,6 +1506,38 @@ mod tests {
     };
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn normalize_tool_schema_makes_empty_input_schema_object() {
+        let mut tool = Tool::new("bad", "Bad schema", Arc::new(Default::default()));
+        tool.output_schema = Some(Arc::new(
+            json!({
+                "type": "array",
+                "items": { "type": "string" }
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+        ));
+
+        let normalized = normalize_tool_schema(tool);
+
+        assert_eq!(
+            normalized.input_schema.get("type").and_then(Value::as_str),
+            Some("object")
+        );
+        assert_eq!(
+            normalized
+                .input_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            normalized.output_schema.is_none(),
+            "non-object output schemas should be omitted for strict MCP clients"
+        );
+    }
 
     struct NoopBridge;
 
