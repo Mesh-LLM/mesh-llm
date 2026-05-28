@@ -3436,6 +3436,14 @@ pub fn write_gguf_from_parts(
     ensure_ok(status, error)
 }
 
+fn format_skippy_error(status: Status, message: &str) -> String {
+    if message.is_empty() {
+        format!("{:?}", status)
+    } else {
+        format!("{:?}: {}", status, message)
+    }
+}
+
 fn ensure_ok(status: Status, error: *mut RawError) -> Result<()> {
     if status == Status::Ok {
         free_error(error);
@@ -3443,11 +3451,7 @@ fn ensure_ok(status: Status, error: *mut RawError) -> Result<()> {
     } else {
         let message = error_message(error);
         free_error(error);
-        if message.is_empty() {
-            Err(anyhow!("skippy ABI call failed: {:?}", status))
-        } else {
-            Err(anyhow!("skippy ABI call failed: {:?}: {}", status, message))
-        }
+        Err(anyhow!("{}", format_skippy_error(status, &message)))
     }
 }
 
@@ -3497,10 +3501,10 @@ mod tests {
         ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
         LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
         NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, StageModel, TensorRole, flush_native_log_writer,
-        parse_cache_type, parse_layer_assign_index, redirect_native_logs_to_file,
-        register_filtered_native_logs, restore_native_logs, set_filtered_native_logs_enabled,
-        unregister_filtered_native_logs, write_native_log,
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status, TensorRole,
+        flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
+        redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
+        set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
     };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -4171,5 +4175,72 @@ mod tests {
             "expected layers 100% at final layer, got {:?}",
             pcts
         );
+    }
+
+    #[test]
+    fn format_skippy_error_omits_abi_envelope() {
+        let err = format_skippy_error(Status::RuntimeError, "something broke");
+        assert!(
+            !err.contains("skippy ABI call failed"),
+            "error format must not contain the old ABI envelope prefix: {err}"
+        );
+        assert!(
+            err.contains("RuntimeError"),
+            "error must contain the status variant"
+        );
+        assert!(
+            err.contains("something broke"),
+            "error must contain the message"
+        );
+    }
+
+    #[test]
+    fn format_skippy_error_works_without_message() {
+        let err = format_skippy_error(Status::Unsupported, "");
+        assert!(!err.contains("skippy ABI call failed"));
+        assert!(err.contains("Unsupported"));
+    }
+
+    #[test]
+    fn format_skippy_error_covers_all_status_variants() {
+        for status in [
+            Status::Error,
+            Status::InvalidArgument,
+            Status::Unsupported,
+            Status::BufferTooSmall,
+            Status::IoError,
+            Status::ModelError,
+            Status::RuntimeError,
+        ] {
+            let err = format_skippy_error(status, "test");
+            assert!(
+                !err.contains("skippy ABI call failed"),
+                "error must not contain ABI envelope for {status:?}: {err}"
+            );
+            assert!(err.contains("test"));
+        }
+    }
+
+    #[test]
+    fn configure_chat_sampling_survives_bad_metadata_json() -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let mut session = model.create_session()?;
+        let sampling = SamplingConfig {
+            temperature: 0.0,
+            ..Default::default()
+        };
+        // Send deliberately malformed JSON — the C++ catch blocks
+        // should clear chat sampling and return success instead of
+        // surfacing the parse error as a fatal status.
+        let result = session.configure_chat_sampling("this is not valid json", 0, Some(&sampling));
+        assert!(
+            result.is_ok(),
+            "configure_chat_sampling should return Ok even with bad metadata: {result:?}"
+        );
+        Ok(())
     }
 }

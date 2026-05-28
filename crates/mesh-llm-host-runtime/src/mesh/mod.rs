@@ -4310,6 +4310,17 @@ impl Node {
                 }
                 self.broadcast_plugin_bulk_frame(&frame, None).await
             }
+            crate::plugin::PluginMeshEvent::OpenStream {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let response = self
+                    .open_outbound_plugin_mesh_stream(plugin_id, request)
+                    .await;
+                let _ = response_tx.send(response);
+                Ok(())
+            }
         }
     }
 
@@ -5665,6 +5676,23 @@ impl Node {
         });
     }
 
+    fn spawn_plugin_mesh_stream(
+        &self,
+        remote: EndpointId,
+        send: iroh::endpoint::SendStream,
+        recv: iroh::endpoint::RecvStream,
+    ) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = node.handle_plugin_mesh_stream(remote, send, recv).await {
+                tracing::debug!(
+                    "Plugin mesh stream error from {}: {error}",
+                    remote.fmt_short()
+                );
+            }
+        });
+    }
+
     fn spawn_subprotocol_stream(
         &self,
         remote: EndpointId,
@@ -5940,6 +5968,7 @@ impl Node {
             STREAM_PEER_LEAVING => self.spawn_peer_leaving_stream(remote, recv),
             STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv),
             STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv),
+            STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv),
             STREAM_SUBPROTOCOL => self.spawn_subprotocol_stream(remote, send, recv),
             other => tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short()),
         }
@@ -9104,6 +9133,7 @@ fn ensure_private_node_key_file(path: &std::path::Path) -> Result<()> {
 mod artifact_transfer_io;
 mod gossip;
 mod heartbeat;
+mod plugin_streams;
 pub use gossip::backfill_legacy_descriptors;
 #[allow(unused_imports)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};

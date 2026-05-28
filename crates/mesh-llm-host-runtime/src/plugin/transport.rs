@@ -91,6 +91,20 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         })
                                         .await;
                                 }
+                                Some(super::proto::envelope::Payload::OpenMeshStreamRequest(request)) => {
+                                    let plugin_id = if plugin_id_from_env.is_empty() {
+                                        plugin_name.clone()
+                                    } else {
+                                        plugin_id_from_env
+                                    };
+                                    forward_plugin_mesh_stream_request(
+                                        plugin_id,
+                                        request_id,
+                                        request,
+                                        mesh_tx.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
                                         plugin_name.clone(),
@@ -193,6 +207,17 @@ impl LocalListener {
         #[cfg(windows)]
         {
             "pipe"
+        }
+    }
+
+    pub(crate) fn transport_kind(&self) -> i32 {
+        #[cfg(unix)]
+        {
+            super::proto::StreamTransportKind::StreamUnixSocket as i32
+        }
+        #[cfg(windows)]
+        {
+            super::proto::StreamTransportKind::StreamNamedPipe as i32
         }
     }
 }
@@ -380,6 +405,53 @@ fn forward_plugin_request(
                 message: "No active MCP bridge".into(),
                 data_json: String::new(),
             }),
+        };
+
+        let _ = outbound_tx
+            .send(super::proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: plugin_name,
+                request_id,
+                payload: Some(payload),
+            })
+            .await;
+    });
+}
+
+fn forward_plugin_mesh_stream_request(
+    plugin_name: String,
+    request_id: u64,
+    request: super::proto::OpenMeshStreamRequest,
+    mesh_tx: mpsc::Sender<PluginMeshEvent>,
+    outbound_tx: mpsc::Sender<super::proto::Envelope>,
+) {
+    tokio::spawn(async move {
+        let (response_tx, response_rx) = oneshot::channel();
+        let response = if mesh_tx
+            .send(PluginMeshEvent::OpenStream {
+                plugin_id: plugin_name.clone(),
+                request,
+                response_tx,
+            })
+            .await
+            .is_ok()
+        {
+            response_rx.await.map_err(|_| super::proto::ErrorResponse {
+                code: ErrorCode::INTERNAL_ERROR.0,
+                message: "Mesh stream broker dropped the response".into(),
+                data_json: String::new(),
+            })
+        } else {
+            Err(super::proto::ErrorResponse {
+                code: ErrorCode::INTERNAL_ERROR.0,
+                message: "Mesh stream broker is unavailable".into(),
+                data_json: String::new(),
+            })
+        };
+
+        let payload = match response {
+            Ok(Ok(response)) => super::proto::envelope::Payload::OpenMeshStreamResponse(response),
+            Ok(Err(error)) | Err(error) => super::proto::envelope::Payload::ErrorResponse(error),
         };
 
         let _ = outbound_tx

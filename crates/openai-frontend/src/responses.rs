@@ -1135,6 +1135,7 @@ pub struct ResponseSseState {
     pub usage: Option<Value>,
     pub created_emitted: bool,
     pub output_item_emitted: bool,
+    pub failed: bool,
 }
 
 impl ResponseSseState {
@@ -1150,6 +1151,7 @@ impl ResponseSseState {
             usage: None,
             created_emitted: false,
             output_item_emitted: false,
+            failed: false,
         }
     }
 

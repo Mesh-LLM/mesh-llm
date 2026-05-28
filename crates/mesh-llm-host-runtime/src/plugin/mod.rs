@@ -52,9 +52,12 @@ use self::support::{format_args_for_log, format_slice_for_log, format_tool_names
 use self::transport::unix_socket_path;
 #[cfg(all(test, windows))]
 use self::transport::windows_pipe_name;
-use self::transport::{LocalStream, connect_side_stream, make_instance_id};
+pub(crate) use self::transport::{
+    LocalListener, LocalStream, bind_local_listener, connect_side_stream, make_instance_id,
+};
 #[cfg(test)]
 use mesh_llm_plugin::MeshVisibility;
+use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 pub const FLASH_MOE_PLUGIN_ID: &str = "flash-moe";
@@ -68,7 +71,7 @@ const HEALTH_CHECK_INTERVAL_SECS: u64 = 15;
 const ENDPOINT_STARTUP_GRACE_SECS: u64 = 30;
 const ENDPOINT_FAILURE_THRESHOLD: u32 = 2;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum PluginMeshEvent {
     Channel {
         plugin_id: String,
@@ -77,6 +80,11 @@ pub enum PluginMeshEvent {
     BulkTransfer {
         plugin_id: String,
         message: proto::BulkTransferMessage,
+    },
+    OpenStream {
+        plugin_id: String,
+        request: proto::OpenMeshStreamRequest,
+        response_tx: oneshot::Sender<Result<proto::OpenMeshStreamResponse, proto::ErrorResponse>>,
     },
 }
 

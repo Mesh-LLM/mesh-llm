@@ -116,7 +116,7 @@ index 60d53fc4..a9e4c2de 100644
  enum skippy_status skippy_apply_chat_template(
          struct skippy_model * model,
          const struct llama_chat_message * messages,
-@@ -135,3 +220,146 @@ enum skippy_status skippy_apply_chat_template(
+@@ -135,3 +220,148 @@ enum skippy_status skippy_apply_chat_template(
      }
      return skippy_common_success(out_error);
  }
@@ -190,7 +190,8 @@ index 60d53fc4..a9e4c2de 100644
 +        const bool parse_tool_calls = !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 +        metadata = skippy_common_chat_metadata_json(params, inputs.reasoning_format, parse_tool_calls).dump();
 +    } catch (const std::exception & e) {
-+        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, e.what());
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++            ("failed to apply chat template: " + std::string(e.what())).c_str());
 +        return SKIPPY_STATUS_UNSUPPORTED;
 +    } catch (...) {
 +        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "failed to apply chat template");
@@ -249,7 +250,8 @@ index 60d53fc4..a9e4c2de 100644
 +        common_chat_msg msg = common_chat_parse(generated_text, is_partial, params);
 +        output = common_chat_msgs_to_json_oaicompat({ msg }).at(0).dump();
 +    } catch (const std::exception & e) {
-+        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, e.what());
++        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
++            ("failed to parse chat response: " + std::string(e.what())).c_str());
 +        return SKIPPY_STATUS_UNSUPPORTED;
 +    } catch (...) {
 +        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "failed to parse chat response");

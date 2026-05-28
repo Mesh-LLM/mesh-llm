@@ -178,7 +178,9 @@ fn map_upstream_kind(status_code: u16, upstream_type: &str) -> OpenAiErrorKind {
         (403, _) => OpenAiErrorKind::Permission,
         (404, _) => OpenAiErrorKind::NotFound,
         (429, _) => OpenAiErrorKind::RateLimit,
+        (502, _) => OpenAiErrorKind::ServiceUnavailable,
         (503, _) => OpenAiErrorKind::ServiceUnavailable,
+        (504, _) => OpenAiErrorKind::Timeout,
         _ => OpenAiErrorKind::Internal,
     }
 }

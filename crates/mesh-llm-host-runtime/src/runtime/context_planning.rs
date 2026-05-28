@@ -26,8 +26,7 @@ const MIN_AUTO_CONTEXT_LENGTH: u32 = 512;
 /// requests (~14k tokens each — OpenCode system prompt plus tools
 /// plus a tool-result follow-up) need ~45k cells in the shared 32k
 /// pool; llama's `find_slot` fails on the third request and skippy
-/// surfaces it as an HTTP 502 with body `skippy ABI call failed:
-/// RuntimeError: llama_decode failed`.
+/// surfaces it as an HTTP 502 with body `RuntimeError: llama_decode failed`.
 ///
 /// 4 is the same conservative ceiling llama-server uses for the
 /// same `kv_unified = true` reason. Operators who know their

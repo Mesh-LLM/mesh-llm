@@ -214,6 +214,9 @@ async fn responses(
                 let mut state_machine = body_state
                     .lock()
                     .expect("responses stream state lock poisoned");
+                if state_machine.failed {
+                    return stream::iter(out.into_iter().map(Ok::<_, Infallible>));
+                }
                 match item {
                     Ok(chunk) => {
                         if !state_machine.created_emitted {
@@ -280,6 +283,7 @@ async fn responses(
                         }
                     }
                     Err(error) => {
+                        state_machine.failed = true;
                         out.push(
                             Event::default()
                                 .event("error")
@@ -295,6 +299,9 @@ async fn responses(
                     .lock()
                     .expect("responses stream state lock poisoned");
                 let mut out = Vec::new();
+                if state_machine.failed {
+                    return out;
+                }
                 if !state_machine.created_emitted {
                     let sequence_number = state_machine.next_sequence_number();
                     out.push(
@@ -913,6 +920,19 @@ mod tests {
     }
 
     #[test]
+    fn upstream_error_body_maps_legacy_string_error_shape() {
+        let body = br#"{"error":"skippy ABI call failed: Unsupported"}"#;
+        let mapped = map_upstream_error_body(503, body).unwrap();
+        let value: Value = serde_json::from_slice(&mapped).unwrap();
+        assert_eq!(
+            value["error"]["message"],
+            "skippy ABI call failed: Unsupported"
+        );
+        assert_eq!(value["error"]["type"], "server_error");
+        assert_eq!(value["error"]["code"], "service_unavailable");
+    }
+
+    #[test]
     fn already_openai_error_passthrough_is_detected() {
         let value = json!({
             "error": {
@@ -1143,6 +1163,26 @@ mod tests {
         let body = response_body_text(response).await;
         assert!(body.contains(r#""error":{"#));
         assert!(body.contains(r#""code":"service_unavailable""#));
+        assert!(body.contains("data: [DONE]"));
+    }
+
+    #[tokio::test]
+    async fn responses_stream_frames_backend_errors_without_completed_tail() {
+        let response = post_json(
+            "/v1/responses",
+            json!({
+                "model": "stream-error",
+                "input": "hi",
+                "stream": true
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_body_text(response).await;
+        assert!(body.contains("event: error"));
+        assert!(body.contains(r#""message":"stream backend failed""#));
+        assert!(body.contains(r#""code":"service_unavailable""#));
+        assert!(!body.contains("event: response.completed"));
         assert!(body.contains("data: [DONE]"));
     }
 

@@ -26,6 +26,7 @@ pub(crate) const STREAM_PEER_DOWN: u8 = 0x06;
 pub(crate) const STREAM_PEER_LEAVING: u8 = 0x07;
 pub(crate) const STREAM_PLUGIN_CHANNEL: u8 = 0x08;
 pub(crate) const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
+pub(crate) const STREAM_PLUGIN_MESH_STREAM: u8 = 0x0a;
 /// Reserved legacy mesh-plane config subscription stream ID.
 ///
 /// Config and inventory control now live exclusively on `mesh-llm-control/1`;

@@ -30,8 +30,8 @@ pub use helpers::{
     structured_tool_result, task, text_resource,
 };
 pub use io::{
-    LocalListener, LocalStream, bind_side_stream, connect_from_env, read_envelope,
-    send_bulk_transfer_message, send_channel_message, write_envelope,
+    LocalListener, LocalStream, bind_side_stream, connect_from_env, connect_side_stream,
+    read_envelope, send_bulk_transfer_message, send_channel_message, write_envelope,
 };
 pub mod http {
     pub use crate::dsl::http::{delete, get, patch, post, put};

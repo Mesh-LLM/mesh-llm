@@ -3103,6 +3103,7 @@ fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
         STREAM_PEER_LEAVING,
         STREAM_PLUGIN_CHANNEL,
         STREAM_PLUGIN_BULK_TRANSFER,
+        STREAM_PLUGIN_MESH_STREAM,
     ] {
         assert!(
             !stream_allowed_before_admission(stream_type),
@@ -3151,6 +3152,7 @@ fn passive_route_table_request_does_not_admit_peer() {
         STREAM_PEER_LEAVING,
         STREAM_PLUGIN_CHANNEL,
         STREAM_PLUGIN_BULK_TRANSFER,
+        STREAM_PLUGIN_MESH_STREAM,
     ] {
         assert!(
             !stream_allowed_before_admission(gated),
