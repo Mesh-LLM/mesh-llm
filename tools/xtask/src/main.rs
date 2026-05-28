@@ -876,6 +876,10 @@ fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) -> DynResult<
         .stable_asset
         .clone()
         .ok_or("linux/aarch64/cpu stable asset missing")?;
+    let linux_arm64_cuda_asset = fixture_row(rows, "linux", "aarch64", "cuda")?
+        .stable_asset
+        .clone()
+        .ok_or("linux/aarch64/cuda stable asset missing")?;
     let macos_arm64_asset = fixture_row(rows, "macos", "aarch64", "metal")?
         .stable_asset
         .clone()
@@ -945,6 +949,36 @@ fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) -> DynResult<
             &format!("{} asset parity", case.label),
         )?;
     }
+
+    let orin_envs = [
+        ("MESH_LLM_TEST_UNAME_S", "Linux"),
+        ("MESH_LLM_TEST_UNAME_M", "aarch64"),
+        ("MESH_LLM_TEST_TEGRA_MODEL", "NVIDIA Jetson AGX Orin"),
+    ];
+    let recommended = sourced_script_stdout(
+        repo_root,
+        "install.sh",
+        "recommended_flavor",
+        &orin_envs,
+        &[],
+    )?;
+    ensure_eq(
+        "cuda",
+        &recommended,
+        "Linux/aarch64 Orin recommended flavor",
+    )?;
+    let actual_cuda_asset = sourced_script_stdout(
+        repo_root,
+        "install.sh",
+        "asset_name \"$2\"",
+        &orin_envs,
+        &["cuda"],
+    )?;
+    ensure_eq(
+        linux_arm64_cuda_asset.as_str(),
+        &actual_cuda_asset,
+        "Linux/aarch64 Orin CUDA asset parity",
+    )?;
 
     let arm_fixture = fixture_row(rows, "linux", "arm", "cpu")?;
     let arm_envs = [
@@ -1256,9 +1290,19 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         "README Linux ARM64 asset note",
     )?;
     ensure_contains(
+        &readme,
+        "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz",
+        "README Linux ARM64 CUDA asset note",
+    )?;
+    ensure_contains(
         &release,
         "mesh-llm-aarch64-unknown-linux-gnu.tar.gz",
         "RELEASE Linux ARM64 asset note",
+    )?;
+    ensure_contains(
+        &release,
+        "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz",
+        "RELEASE Linux ARM64 CUDA asset note",
     )?;
     ensure_contains_normalized(
         &readme,
@@ -1282,8 +1326,13 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &release_workflow,
-        "name: release-linux-arm64-cuda",
-        "release workflow ARM64 CUDA artifact",
+        "name: release-linux-aarch64-cuda",
+        "release workflow aarch64 CUDA artifact",
+    )?;
+    ensure_contains(
+        &release_workflow,
+        "- build_linux_aarch64_cuda",
+        "release workflow aarch64 CUDA publish need",
     )?;
     ensure_contains(
         &release_workflow,
@@ -1312,13 +1361,13 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &justfile,
-        "release-build-arm64-cuda",
-        "Justfile ARM64 CUDA build recipe",
+        "release-build-aarch64-cuda",
+        "Justfile aarch64 CUDA build recipe",
     )?;
     ensure_contains(
         &justfile,
-        "release-bundle-arm64-cuda",
-        "Justfile ARM64 CUDA bundle recipe",
+        "release-bundle-aarch64-cuda",
+        "Justfile aarch64 CUDA bundle recipe",
     )?;
     ensure_contains(
         &justfile,

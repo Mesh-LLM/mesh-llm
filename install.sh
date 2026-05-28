@@ -172,7 +172,38 @@ probe_nvidia() {
     command -v nvidia-smi >/dev/null 2>&1 ||
         command -v nvcc >/dev/null 2>&1 ||
         [[ -e /dev/nvidiactl ]] ||
-        [[ -d /proc/driver/nvidia/gpus ]]
+        [[ -d /proc/driver/nvidia/gpus ]] ||
+        probe_tegra_nvidia
+}
+
+tegra_model_text() {
+    if [[ -n "${MESH_LLM_TEST_TEGRA_MODEL:-}" ]]; then
+        printf '%s\n' "$MESH_LLM_TEST_TEGRA_MODEL"
+        return 0
+    fi
+
+    local path
+    for path in \
+        /proc/device-tree/model \
+        /proc/device-tree/compatible \
+        /sys/firmware/devicetree/base/model \
+        /sys/firmware/devicetree/base/compatible; do
+        [[ -r "$path" ]] || continue
+        tr '\0' '\n' <"$path" 2>/dev/null || true
+        printf '\n'
+    done
+}
+
+probe_tegra_nvidia() {
+    local model
+    model="$(tegra_model_text | tr '[:lower:]' '[:upper:]')"
+    case "$model" in
+        *JETSON*|*TEGRA*|*ORIN*|*NVGPU*|*THOR*)
+            return 0
+            ;;
+    esac
+
+    [[ -e /dev/nvhost-gpu ]] || [[ -e /dev/nvhost-ctrl-gpu ]]
 }
 
 normalize_cuda_sm() {
@@ -294,7 +325,7 @@ recommended_flavor() {
             echo "metal"
             ;;
         Linux/aarch64)
-            if probe_tegra; then
+            if probe_nvidia; then
                 echo "cuda"
             else
                 echo "cpu"

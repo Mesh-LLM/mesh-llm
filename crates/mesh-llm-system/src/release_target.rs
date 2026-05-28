@@ -285,6 +285,8 @@ mod tests {
     fn release_target_arm64_aliases_have_identical_linux_assets() {
         let arm64 = ReleaseTarget::from_raw("linux", "arm64", BinaryFlavor::Cpu).unwrap();
         let aarch64 = ReleaseTarget::from_raw("linux", "aarch64", BinaryFlavor::Cpu).unwrap();
+        let cuda_arm64 = ReleaseTarget::from_raw("linux", "arm64", BinaryFlavor::Cuda).unwrap();
+        let cuda_aarch64 = ReleaseTarget::from_raw("linux", "aarch64", BinaryFlavor::Cuda).unwrap();
 
         assert_eq!(arm64.support_status(), aarch64.support_status());
         assert_eq!(arm64.stable_asset_name(), aarch64.stable_asset_name());
@@ -295,6 +297,15 @@ mod tests {
         assert_eq!(
             arm64.stable_asset_name(),
             Some("mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string())
+        );
+        assert_eq!(cuda_arm64.support_status(), cuda_aarch64.support_status());
+        assert_eq!(
+            cuda_arm64.stable_asset_name(),
+            cuda_aarch64.stable_asset_name()
+        );
+        assert_eq!(
+            cuda_arm64.stable_asset_name(),
+            Some("mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz".to_string())
         );
     }
 

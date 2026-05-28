@@ -339,7 +339,7 @@ jobs:
           if-no-files-found: error
 
   build_linux_aarch64_cuda:
-    name: Build Linux ARM64 CUDA
+    name: Build Linux aarch64 CUDA
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
@@ -378,11 +378,11 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: |
-          just --shell bash --shell-arg -c release-build-arm64-cuda
-          just --shell bash --shell-arg -c release-bundle-arm64-cuda "$RELEASE_TAG" dist
+          just --shell bash --shell-arg -c release-build-aarch64-cuda
+          just --shell bash --shell-arg -c release-bundle-aarch64-cuda "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
-          name: release-linux-arm64-cuda
+          name: release-linux-aarch64-cuda
           path: dist/*
           if-no-files-found: error
 

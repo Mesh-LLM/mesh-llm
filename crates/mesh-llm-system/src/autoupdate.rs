@@ -558,26 +558,11 @@ fn probe_nvidia_backend() -> bool {
         || command_exists("nvcc")
         || Path::new("/dev/nvidiactl").exists()
         || Path::new("/proc/driver/nvidia/gpus").is_dir()
-        || probe_tegra_backend()
-}
-
-/// Detect NVIDIA Tegra / Jetson SoC accelerators (Orin AGX, Orin NX, Xavier, etc.).
-/// These expose an integrated NVIDIA GPU but have no nvidia-smi or /dev/nvidiactl — only a
-/// device-tree model string containing "tegra" or "jetson".
-fn probe_tegra_backend() -> bool {
-    let dt_model = Path::new("/proc/device-tree/model");
-    if !dt_model.exists() {
-        return false;
-    }
-    std::fs::read_to_string(dt_model)
-        .map(|s| is_tegra_model(&s))
-        .unwrap_or(false)
-}
-
-/// Check whether a device-tree model string identifies an NVIDIA Tegra/Jetson SoC.
-fn is_tegra_model(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    lower.contains("tegra") || lower.contains("jetson")
+        || Path::new("/dev/nvhost-gpu").exists()
+        || Path::new("/dev/nvhost-ctrl-gpu").exists()
+        || nvidia_device_tree_models()
+            .iter()
+            .any(|model| is_tegra_nvidia_model(model))
 }
 
 fn nvidia_compute_caps() -> Vec<String> {
@@ -627,6 +612,34 @@ fn nvidia_proc_models() -> Vec<String> {
             })
         })
         .collect()
+}
+
+fn nvidia_device_tree_models() -> Vec<String> {
+    [
+        "/proc/device-tree/model",
+        "/proc/device-tree/compatible",
+        "/sys/firmware/devicetree/base/model",
+        "/sys/firmware/devicetree/base/compatible",
+    ]
+    .iter()
+    .filter_map(|path| std::fs::read(path).ok())
+    .map(|bytes| {
+        String::from_utf8_lossy(&bytes)
+            .replace('\0', "\n")
+            .trim()
+            .to_string()
+    })
+    .filter(|model| !model.is_empty())
+    .collect()
+}
+
+fn is_tegra_nvidia_model(model: &str) -> bool {
+    const TEGRA_MODEL_MARKERS: [&str; 5] = ["JETSON", "TEGRA", "ORIN", "NVGPU", "THOR"];
+
+    let upper = model.to_ascii_uppercase();
+    TEGRA_MODEL_MARKERS
+        .iter()
+        .any(|marker| upper.contains(marker))
 }
 
 fn is_blackwell_nvidia_model(model: &str) -> bool {
@@ -1901,6 +1914,18 @@ mod tests {
             preferred_bundle_flavor_for_platform("linux", "aarch64", probe),
             Some(backend::BinaryFlavor::Cuda)
         );
+
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: false,
+            rocm: true,
+            vulkan: true,
+            metal: true,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "aarch64", probe),
+            Some(backend::BinaryFlavor::Cpu)
+        );
         assert_eq!(
             preferred_bundle_flavor_for_platform("linux", "armv7l", probe),
             None
@@ -1946,6 +1971,24 @@ mod tests {
     }
 
     #[test]
+    fn test_tegra_nvidia_detection_from_model_name() {
+        for model in [
+            "NVIDIA Jetson AGX Orin",
+            "Orin (nvgpu)",
+            "nvidia,tegra234",
+            "Jetson Thor",
+        ] {
+            assert!(is_tegra_nvidia_model(model), "{model} should select cuda");
+        }
+        for model in ["Raspberry Pi 5", "Apple M4", "AMD Radeon"] {
+            assert!(
+                !is_tegra_nvidia_model(model),
+                "{model} should not select cuda"
+            );
+        }
+    }
+
+    #[test]
     fn test_update_flavor_preference_falls_back_to_cpu() {
         assert_eq!(
             preferred_bundle_flavor_for_platform("windows", "x86_64", HostBackendProbe::default()),
@@ -1985,38 +2028,38 @@ mod tests {
     }
 
     #[test]
-    fn test_is_tegra_model_positive_orin_agx() {
-        assert!(is_tegra_model("NVIDIA Jetson AGX Orin Developer Kit"));
+    fn test_is_tegra_nvidia_model_positive_orin_agx() {
+        assert!(is_tegra_nvidia_model("NVIDIA Jetson AGX Orin Developer Kit"));
     }
 
     #[test]
-    fn test_is_tegra_model_positive_orin_nano() {
-        assert!(is_tegra_model("NVIDIA Jetson Orin Nano Developer Kit"));
+    fn test_is_tegra_nvidia_model_positive_orin_nano() {
+        assert!(is_tegra_nvidia_model("NVIDIA Jetson Orin Nano Developer Kit"));
     }
 
     #[test]
-    fn test_is_tegra_model_positive_xavier() {
-        assert!(is_tegra_model("NVIDIA Jetson Xavier NX"));
+    fn test_is_tegra_nvidia_model_positive_xavier() {
+        assert!(is_tegra_nvidia_model("NVIDIA Jetson Xavier NX"));
     }
 
     #[test]
-    fn test_is_tegra_model_positive_lowercase() {
-        assert!(is_tegra_model("nvidia tegra234"));
+    fn test_is_tegra_nvidia_model_positive_lowercase() {
+        assert!(is_tegra_nvidia_model("nvidia tegra234"));
     }
 
     #[test]
-    fn test_is_tegra_model_negative_raspberry_pi() {
-        assert!(!is_tegra_model("Raspberry Pi 4 Model B Rev 1.5"));
+    fn test_is_tegra_nvidia_model_negative_raspberry_pi() {
+        assert!(!is_tegra_nvidia_model("Raspberry Pi 4 Model B Rev 1.5"));
     }
 
     #[test]
-    fn test_is_tegra_model_negative_amd() {
-        assert!(!is_tegra_model("AMD EPYC Server"));
+    fn test_is_tegra_nvidia_model_negative_amd() {
+        assert!(!is_tegra_nvidia_model("AMD EPYC Server"));
     }
 
     #[test]
-    fn test_is_tegra_model_empty() {
-        assert!(!is_tegra_model(""));
+    fn test_is_tegra_nvidia_model_empty() {
+        assert!(!is_tegra_nvidia_model(""));
     }
 
     #[test]

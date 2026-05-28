@@ -131,10 +131,12 @@ llama.cpp parity queue.
 ## Install and build notes
 
 Tagged releases publish macOS bundles plus Linux CPU, Linux ARM64 CPU, Linux
-CUDA, Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows CPU, Windows
-CUDA, Windows ROCm, and Windows Vulkan bundles. Metal is macOS-only. The Linux
-ARM64 artifact is `mesh-llm-aarch64-unknown-linux-gnu.tar.gz`; in install and
-release contexts, `arm64` and `aarch64` mean the same 64-bit ARM target.
+ARM64 CUDA, Linux CUDA, Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows
+CPU, Windows CUDA, Windows ROCm, and Windows Vulkan bundles. Metal is
+macOS-only. The Linux ARM64 CPU artifact is
+`mesh-llm-aarch64-unknown-linux-gnu.tar.gz`; the Linux ARM64 CUDA artifact is
+`mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz`. In install and release
+contexts, `arm64` and `aarch64` mean the same 64-bit ARM target.
 
 Build from source with `just`:
 

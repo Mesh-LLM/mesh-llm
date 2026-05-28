@@ -31,9 +31,9 @@ Release bundles install the `mesh-llm` host binary plus the flavor-specific
 native runtime libraries it embeds. Normal serving runs inside the `mesh-llm`
 host process, which loads the Skippy/llama.cpp stage runtime directly.
 
-Published bundle flavors include macOS, Linux CPU, Linux ARM64 CPU, Linux CUDA,
-Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows CPU, Windows CUDA,
-Windows ROCm, and Windows Vulkan. Metal remains macOS-only.
+Published bundle flavors include macOS, Linux CPU, Linux ARM64 CPU, Linux ARM64
+CUDA, Linux CUDA, Linux CUDA Blackwell, Linux ROCm, Linux Vulkan, Windows CPU,
+Windows CUDA, Windows ROCm, and Windows Vulkan. Metal remains macOS-only.
 
 If you keep more than one flavor in the same `bin` directory, choose one explicitly:
 
