@@ -321,7 +321,7 @@ index eec2c8b4..94355b60 100644
      }
      if (session->signal_history.size() > static_cast<size_t>(n_past)) {
          session->signal_history.resize(static_cast<size_t>(n_past));
-@@ -1457,6 +1686,48 @@ enum skippy_status skippy_session_sample_current(
+@@ -1457,6 +1686,46 @@ enum skippy_status skippy_session_sample_current(
      return skippy_success(out_error);
  }
  
@@ -357,12 +357,10 @@ index eec2c8b4..94355b60 100644
 +        }
 +    } catch (const std::exception & e) {
 +        skippy_clear_chat_sampling(session);
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, e.what());
-+        return SKIPPY_STATUS_UNSUPPORTED;
++        return skippy_success(out_error);
 +    } catch (...) {
 +        skippy_clear_chat_sampling(session);
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "failed to configure chat sampling");
-+        return SKIPPY_STATUS_UNSUPPORTED;
++        return skippy_success(out_error);
 +    }
 +    return skippy_success(out_error);
 +}
