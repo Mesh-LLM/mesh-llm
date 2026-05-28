@@ -845,11 +845,14 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
     let result = if write {
         write_opencode_config(&client, &models, &chosen, &target).await
     } else {
-        let spec = build_opencode_launch_spec_with_mcp(
+        let context_lengths =
+            fetch_model_context_lengths(&client, &target.management_models_url).await;
+        let spec = build_opencode_launch_spec_with_limits(
             &models,
             &chosen,
             &target.api_base_url,
             &target.mcp_url,
+            &context_lengths,
         );
 
         eprintln!(
@@ -948,10 +951,10 @@ fn merge_context_lengths(
         for process in processes {
             let name = process["name"].as_str().map(String::from);
             let ctx_len = process["context_length"].as_u64().map(|v| v as u32);
-            if let Some(n) = name
-                && ctx_len.is_some()
-            {
-                context_map.insert(n, ctx_len);
+            if ctx_len.is_some() {
+                if let Some(n) = name {
+                    context_map.insert(n, ctx_len);
+                }
             }
         }
     }
