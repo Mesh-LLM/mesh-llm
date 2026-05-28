@@ -138,6 +138,7 @@ fn normalize_opencode_host(host: &str) -> Result<OpenCodeTarget> {
     normalize_mesh_host_with_label(host, "OpenCode host")
 }
 
+#[cfg(test)]
 fn build_opencode_launch_spec(
     model_names: &[String],
     resolved_model: &str,
@@ -693,7 +694,14 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
     let result = if write {
         write_opencode_config(&client, &models, &chosen, &target).await
     } else {
-        let spec = build_opencode_launch_spec(&models, &chosen, &target.api_base_url);
+        let context_lengths =
+            fetch_model_context_lengths(&client, &target.management_models_url).await;
+        let spec = build_opencode_launch_spec_with_limits(
+            &models,
+            &chosen,
+            &target.api_base_url,
+            &context_lengths,
+        );
 
         eprintln!(
             "🚀 Launching OpenCode with {} → {}\n",
@@ -791,10 +799,10 @@ fn merge_context_lengths(
         for process in processes {
             let name = process["name"].as_str().map(String::from);
             let ctx_len = process["context_length"].as_u64().map(|v| v as u32);
-            if let Some(n) = name
-                && ctx_len.is_some()
-            {
-                context_map.insert(n, ctx_len);
+            if ctx_len.is_some() {
+                if let Some(n) = name {
+                    context_map.insert(n, ctx_len);
+                }
             }
         }
     }
@@ -848,18 +856,18 @@ async fn write_opencode_config_to_path(
 
     // Merge schema if needed (for display in ordered format)
     let mut merged_config = existing_config.clone();
-    if merged_config.get("$schema").is_none()
-        && let Some(schema) = config_value.get("$schema")
-    {
-        merged_config
-            .as_object_mut()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Expected {} to contain a JSON object",
-                    config_path.display()
-                )
-            })?
-            .insert("$schema".to_string(), schema.clone());
+    if merged_config.get("$schema").is_none() {
+        if let Some(schema) = config_value.get("$schema") {
+            merged_config
+                .as_object_mut()
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Expected {} to contain a JSON object",
+                        config_path.display()
+                    )
+                })?
+                .insert("$schema".to_string(), schema.clone());
+        }
     }
 
     merge_mesh_provider(&mut merged_config, mesh_provider.clone(), config_path)?;
