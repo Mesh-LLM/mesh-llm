@@ -8,6 +8,8 @@ const OPENCODE_PROVIDER_ID: &str = "mesh";
 const OPENCODE_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const OPENCODE_API_KEY_VALUE: &str = "dummy";
 const OPENCODE_INSTALL_HINT: &str = "curl -fsSL https://opencode.ai/install | bash";
+const OPENCODE_DEFAULT_CONTEXT_LIMIT: u32 = 32_768;
+const OPENCODE_OUTPUT_LIMIT: u32 = 4_096;
 const MESH_MCP_SERVER_ID: &str = "mesh";
 const MESH_MCP_DISPLAY_NAME: &str = "Mesh LLM";
 const DEFAULT_MESH_MCP_URL: &str = "http://127.0.0.1:3131/mcp";
@@ -310,13 +312,15 @@ fn build_opencode_launch_spec_with_limits(
         let mut model_obj = serde_json::Map::new();
         model_obj.insert("name".to_string(), serde_json::json!(model));
 
-        if let Some(&Some(ctx_len)) = context_lengths.get(model) {
-            let limit = serde_json::json!({
-                "context": ctx_len,
-                "output": ctx_len,
-            });
-            model_obj.insert("limit".to_string(), limit);
-        }
+        let ctx_len = context_lengths
+            .get(model)
+            .and_then(|ctx_len| *ctx_len)
+            .unwrap_or(OPENCODE_DEFAULT_CONTEXT_LIMIT);
+        let limit = serde_json::json!({
+            "context": ctx_len,
+            "output": OPENCODE_OUTPUT_LIMIT.min(ctx_len),
+        });
+        model_obj.insert("limit".to_string(), limit);
 
         models.insert(model.clone(), serde_json::Value::Object(model_obj));
     }
@@ -852,31 +856,36 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
     let result = if write {
         write_opencode_config(&client, &models, &chosen, &target).await
     } else {
-        write_opencode_config(&client, &models, &chosen, &target).await?;
-        let spec = build_opencode_launch_spec_with_mcp(
-            &models,
-            &chosen,
-            &target.api_base_url,
-            &target.mcp_url,
-        );
+        match write_opencode_config(&client, &models, &chosen, &target).await {
+            Ok(()) => {
+                let spec = build_opencode_launch_spec_with_mcp(
+                    &models,
+                    &chosen,
+                    &target.api_base_url,
+                    &target.mcp_url,
+                );
 
-        eprintln!(
-            "🚀 Launching OpenCode with {} → {}\n",
-            chosen, target.api_base_url
-        );
-        let mut command = Command::new("opencode");
-        configure_opencode_launch_command(&mut command, &spec);
-        let status = command.status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => eprintln!("opencode exited with {s}"),
-            Err(_) => {
-                for line in opencode_missing_binary_guidance(&chosen, &target.input, &spec) {
-                    eprintln!("{line}");
+                eprintln!(
+                    "🚀 Launching OpenCode with {} → {}\n",
+                    chosen, target.api_base_url
+                );
+                let mut command = Command::new("opencode");
+                configure_opencode_launch_command(&mut command, &spec);
+                let status = command.status();
+                match status {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => eprintln!("opencode exited with {s}"),
+                    Err(_) => {
+                        for line in opencode_missing_binary_guidance(&chosen, &target.input, &spec)
+                        {
+                            eprintln!("{line}");
+                        }
+                    }
                 }
+                Ok(())
             }
+            Err(error) => Err(error),
         }
-        Ok(())
     };
 
     cleanup_mesh_child(&mut mesh_child);
@@ -1079,9 +1088,10 @@ pub(crate) fn build_mesh_provider_spec_for_test(
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_MESH_MCP_URL, OPENCODE_INSTALL_HINT, build_mesh_provider_spec_for_test,
-        build_opencode_launch_spec, build_opencode_launch_spec_with_limits,
-        build_pi_provider_config, build_pi_provider_config_with_limits, cleanup_mesh_child,
+        DEFAULT_MESH_MCP_URL, OPENCODE_DEFAULT_CONTEXT_LIMIT, OPENCODE_INSTALL_HINT,
+        OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
+        build_opencode_launch_spec_with_limits, build_pi_provider_config,
+        build_pi_provider_config_with_limits, cleanup_mesh_child,
         configure_opencode_launch_command, merge_context_lengths, merge_goose_mcp_config,
         mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
         pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
@@ -1825,7 +1835,7 @@ GOOSE_PROVIDER: mesh
         );
         assert_eq!(
             config["provider"]["mesh"]["models"]["Qwen3.5-27B"]["limit"]["output"],
-            262144
+            OPENCODE_OUTPUT_LIMIT
         );
 
         assert_eq!(
@@ -1838,16 +1848,20 @@ GOOSE_PROVIDER: mesh
         );
         assert_eq!(
             config["provider"]["mesh"]["models"]["Gemma-7B"]["limit"]["output"],
-            8192
+            OPENCODE_OUTPUT_LIMIT
         );
 
         assert_eq!(
             config["provider"]["mesh"]["models"]["Llama-3B"]["name"],
             "Llama-3B"
         );
-        assert!(
-            config["provider"]["mesh"]["models"]["Llama-3B"]["limit"].is_null(),
-            "model with None context_length should not have limit field"
+        assert_eq!(
+            config["provider"]["mesh"]["models"]["Llama-3B"]["limit"]["context"],
+            OPENCODE_DEFAULT_CONTEXT_LIMIT
+        );
+        assert_eq!(
+            config["provider"]["mesh"]["models"]["Llama-3B"]["limit"]["output"],
+            OPENCODE_OUTPUT_LIMIT
         );
     }
 
