@@ -13,6 +13,255 @@ The work should land in this order:
 4. Validate the architecture with one real inference provider plugin before broadening the surface area further.
 5. Add crypto as a host-owned service surface only after the rest of the plugin surfaces are stable.
 
+## Plugin Manager, Catalog, And Blackboard Extraction
+
+The plugin architecture should grow a first-class plugin management layer before
+third-party plugins become a normal user workflow.
+
+Create a new workspace crate:
+
+```text
+crates/mesh-llm-plugin-manager
+```
+
+This crate owns plugin package management and should not print directly. It
+should expose structured progress and status events that the host CLI renders in
+the existing `mesh-llm` style.
+
+The manager crate should own:
+
+- parsing plugin install references
+- resolving bare plugin names through the public catalog
+- resolving GitHub releases
+- selecting native release assets for the local OS and CPU architecture
+- downloading release assets
+- extracting and validating plugin archives
+- recording installed plugin metadata
+- updating installed plugins
+- enabling, disabling, and deleting installed plugins
+- startup compatibility metadata used by the host to diagnose load failures
+
+`mesh-llm-host-runtime` should own the CLI command shape, human output, JSON
+output where supported, and host startup integration.
+
+### CLI Surface
+
+Initial commands:
+
+```bash
+mesh-llm plugins install <ref>
+mesh-llm plugins update <plugin>
+mesh-llm plugins enable <plugin>
+mesh-llm plugins disable <plugin>
+mesh-llm plugins delete <plugin>
+mesh-llm plugins list
+mesh-llm plugins info <plugin>
+mesh-llm plugins search [query]
+```
+
+Supported install references:
+
+```bash
+mesh-llm plugins install https://github.com/mesh-llm/cool-plugin
+mesh-llm plugins install mesh-llm/cool-plugin
+mesh-llm plugins install mesh-llm/cool-plugin@1.1.0
+mesh-llm plugins install https://github.com/mesh-llm/cool-plugin@1.1.0
+mesh-llm plugins install cool-plugin
+```
+
+Bare names resolve through the catalog. Explicit GitHub URLs and `owner/repo`
+references bypass catalog lookup.
+
+CLI output should match other mesh commands:
+
+- emoji-led status lines
+- indeterminate progress while resolving catalog entries, GitHub releases, and
+  updates
+- progress bars for bounded downloads
+- concise success, skip, and failure summaries
+- machine-readable JSON output where plugin commands expose it
+
+### Native GitHub Release Packages
+
+Plugins are native binaries distributed through GitHub Releases. Release asset
+selection is OS and CPU architecture only. Plugin packages must not introduce
+GPU backend flavor suffixes such as CUDA, ROCm, Vulkan, Metal, or CPU.
+
+Versioned assets use:
+
+```text
+<plugin-name>-<version>-<target-triple>.<archive-ext>
+```
+
+Stable latest aliases may use:
+
+```text
+<plugin-name>-<target-triple>.<archive-ext>
+```
+
+Supported targets:
+
+| Platform | Target triple | Archive |
+|---|---|---|
+| macOS Apple Silicon | `aarch64-apple-darwin` | `.tar.gz` |
+| macOS Intel | `x86_64-apple-darwin` | `.tar.gz` |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
+
+Archives should be rooted under one plugin directory and contain at least
+`plugin.toml` plus the native executable. Windows executables use `.exe`.
+
+Install selection:
+
+1. Parse the install reference.
+2. Resolve through the catalog if the reference is a bare plugin name.
+3. Resolve the requested GitHub release.
+4. Detect the local target triple.
+5. Prefer a versioned asset for the target triple.
+6. Fall back to the stable alias for the target triple.
+7. Fail clearly if no compatible asset exists.
+
+Installed metadata should include:
+
+- plugin name
+- source repository
+- installed version
+- target triple
+- downloaded asset name
+- install path
+- enabled or disabled state
+- last observed plugin protocol version
+- last startup status
+- last startup error
+
+### Hugging Face Catalog Dataset
+
+Create the public Hugging Face Dataset as part of the implementation plan. The
+suggested dataset is:
+
+```text
+meshllm/plugin-catalog
+```
+
+The dataset is metadata only. GitHub releases remain the source of native plugin
+archives for install and update.
+
+The canonical file is `plugins.jsonl`, with one plugin per line:
+
+```json
+{"name":"blackboard","description":"Shared mesh blackboard for agent status, findings, questions, answers, and searchable coordination notes.","github_url":"https://github.com/mesh-llm/blackboard","author_email":"maintainers@meshllm.cloud","author_name":"Mesh LLM"}
+```
+
+Required fields:
+
+- `name`
+- `description`
+- `github_url`
+- `author_email`
+- `author_name`
+
+Catalog rules:
+
+- `name` must be unique
+- `name` should match the plugin manifest ID and release asset prefix
+- unknown extra fields are ignored for forward compatibility
+- catalog lookup never downloads binaries from Hugging Face
+- the manager should support a configurable catalog repo for tests and private
+  catalogs
+- tests should use local `plugins.jsonl` fixtures rather than the live dataset
+
+The first catalog entry should be `blackboard`, backed by the GitHub repository
+`mesh-llm/blackboard`.
+
+### Startup Compatibility
+
+The plugin protocol is versioned. Normal mesh startup should never auto-update
+plugins or block on network plugin checks.
+
+Startup behavior:
+
+1. Load installed plugin metadata.
+2. Skip disabled plugins.
+3. Preflight obvious local failures such as missing binaries or wrong target triples.
+4. Start enabled plugins.
+5. Send an initialize request with host protocol and version information.
+6. Validate plugin identity, plugin version, protocol compatibility, capabilities,
+   and manifest.
+7. Register compatible plugins.
+8. Mark incompatible optional plugins as `incompatible` and exclude their
+   capabilities, routes, endpoints, and MCP contributions.
+9. Fail startup only when a required plugin is incompatible or unavailable.
+
+The recovery path for an incompatible plugin should be explicit:
+
+```text
+mesh-llm plugins update <plugin>
+```
+
+The host should eventually move from strict protocol equality to negotiated
+compatibility ranges, for example:
+
+```text
+host protocol: 2
+plugin supports: 1..=2
+selected protocol: 2
+```
+
+### Blackboard As The First External Plugin
+
+Use the plugin transport and capability-routing work from
+`/Users/jdumay/.codex/worktrees/4d86/mesh-llm` as the base for extracting
+blackboard.
+
+Create the external first-party plugin repository at:
+
+```text
+~/code/mesh-blackboard
+```
+
+The upstream GitHub repository should be:
+
+```text
+mesh-llm/blackboard
+```
+
+Keep the plugin identity stable:
+
+- plugin/catalog name: `blackboard`
+- manifest ID: `blackboard`
+- release asset prefix: `blackboard`
+- GitHub repository: `mesh-llm/blackboard`
+
+Move the blackboard implementation out of
+`crates/mesh-llm-host-runtime/src/plugins/blackboard` and into the external repo.
+The host runtime should retain only generic plugin hosting, capability routing,
+and compatibility aliases.
+
+Compatibility requirements:
+
+- keep `/api/blackboard/*` as legacy aliases onto blackboard plugin
+  capability/HTTP bindings while users migrate
+- keep `mesh-llm blackboard ...` as a compatibility CLI shim if needed
+- if blackboard is not installed, print a direct install hint:
+  `mesh-llm plugins install blackboard`
+- blackboard remains optional by default and must not block core mesh startup
+  unless explicitly configured as required
+
+Blackboard should be the first end-to-end validation plugin for:
+
+- catalog install
+- GitHub release install
+- update
+- enable
+- disable
+- delete
+- startup compatibility diagnostics
+- capability-backed routes
+- MCP projection
+- legacy API and CLI compatibility
+
 ## Proposed Sequence
 
 ### Phase 1: Protocol And Manifest

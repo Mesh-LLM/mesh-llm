@@ -21,6 +21,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-console-server"
   "mesh-llm-ui"
   "mesh-llm-plugin"
+  "mesh-llm-plugin-manager"
   "mesh-llm-client"
   "mesh-mixture-of-agents"
   "mesh-llm-api-client"

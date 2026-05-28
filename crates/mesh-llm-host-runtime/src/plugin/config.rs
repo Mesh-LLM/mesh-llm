@@ -15,7 +15,9 @@ pub use mesh_llm_config::{
     ThroughputConfig, config_path, config_to_toml, load_config, parse_config_toml, validate_config,
 };
 use mesh_llm_plugin::MeshVisibility;
+use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 const FLASH_MOE_INSTALL_HINT: &str = "Install Flash-MoE separately and set \
                                      `command` to its infer binary, or set \
@@ -54,7 +56,7 @@ pub(crate) fn telemetry_plugin_enabled(config: &MeshConfig) -> bool {
 
 pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Result<ResolvedPlugins> {
     let mut externals = Vec::new();
-    let inactive = Vec::new();
+    let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
     let mut openai_endpoint_enabled = false;
@@ -122,6 +124,8 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         });
     }
 
+    append_installed_plugins(&mut externals, &mut inactive, &mut names);
+
     if telemetry_enabled {
         externals.insert(0, telemetry_plugin_spec()?);
     }
@@ -141,6 +145,113 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         externals,
         inactive,
     })
+}
+
+fn append_installed_plugins(
+    externals: &mut Vec<ExternalPluginSpec>,
+    inactive: &mut Vec<PluginSummary>,
+    names: &mut BTreeMap<String, ()>,
+) {
+    #[cfg(test)]
+    if std::env::var_os("MESH_LLM_PLUGIN_DIR").is_none() {
+        return;
+    }
+
+    let Ok(root) = default_store_root() else {
+        return;
+    };
+    let store = PluginStore::new(root);
+    let installed = match store.list() {
+        Ok(installed) => installed,
+        Err(error) => {
+            inactive.push(installed_store_error_summary(error));
+            return;
+        }
+    };
+
+    for metadata in installed {
+        if names.contains_key(&metadata.name) {
+            continue;
+        }
+        names.insert(metadata.name.clone(), ());
+        if !metadata.enabled {
+            inactive.push(disabled_installed_plugin_summary(&metadata));
+            continue;
+        }
+        let command = installed_plugin_command(&metadata);
+        if !command.exists() {
+            inactive.push(missing_installed_plugin_summary(&metadata, &command));
+            continue;
+        }
+        let spec = ExternalPluginSpec {
+            name: metadata.name.clone(),
+            command: command.display().to_string(),
+            args: Vec::new(),
+            url: None,
+            env: BTreeMap::new(),
+        };
+        externals.push(spec);
+    }
+}
+
+fn installed_plugin_command(metadata: &InstalledPluginMetadata) -> PathBuf {
+    metadata.executable_path()
+}
+
+fn disabled_installed_plugin_summary(metadata: &InstalledPluginMetadata) -> PluginSummary {
+    installed_plugin_summary(metadata, "disabled", metadata.last_error.clone())
+}
+
+fn missing_installed_plugin_summary(
+    metadata: &InstalledPluginMetadata,
+    command: &Path,
+) -> PluginSummary {
+    installed_plugin_summary(
+        metadata,
+        "error",
+        Some(format!(
+            "installed plugin executable is missing: {}",
+            command.display()
+        )),
+    )
+}
+
+fn installed_store_error_summary(error: anyhow::Error) -> PluginSummary {
+    PluginSummary {
+        name: "installed-plugins".to_string(),
+        kind: "installed".to_string(),
+        enabled: false,
+        status: "error".to_string(),
+        pid: None,
+        version: None,
+        capabilities: Vec::new(),
+        command: None,
+        args: Vec::new(),
+        tools: Vec::new(),
+        manifest: None,
+        error: Some(error.to_string()),
+    }
+}
+
+fn installed_plugin_summary(
+    metadata: &InstalledPluginMetadata,
+    status: &str,
+    error: Option<String>,
+) -> PluginSummary {
+    PluginSummary {
+        name: metadata.name.clone(),
+        kind: "installed".to_string(),
+        enabled: metadata.enabled,
+        status: status.to_string(),
+        pid: None,
+        version: Some(metadata.installed_version.clone()),
+        capabilities: Vec::new(),
+        command: Some(installed_plugin_command(metadata).display().to_string()),
+        args: Vec::new(),
+        tools: Vec::new(),
+        manifest: None,
+        error,
+    }
 }
 
 pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {

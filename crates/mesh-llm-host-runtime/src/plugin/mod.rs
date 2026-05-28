@@ -254,7 +254,7 @@ impl PluginManager {
         let rpc_bridge = Arc::new(Mutex::new(None));
         let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
-        let plugins = Self::load_external_plugins(
+        let (plugins, failed_plugins) = Self::load_external_plugins(
             specs,
             host_mode,
             mesh_tx,
@@ -262,11 +262,11 @@ impl PluginManager {
             rpc_bridge.clone(),
             &runtime_data,
         )
-        .await?;
+        .await;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
                 plugins,
-                inactive: Self::inactive_plugins(specs),
+                inactive: Self::inactive_plugins(specs, failed_plugins),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 runtime_data,
                 rpc_bridge,
@@ -297,20 +297,35 @@ impl PluginManager {
     }
 
     fn log_startup_plan(specs: &ResolvedPlugins) {
+        Self::log_inactive_plugins(&specs.inactive);
         if specs.externals.is_empty() {
             tracing::info!("Plugin manager: no plugins enabled");
             return;
         }
 
-        let names = specs
-            .externals
+        Self::log_enabled_plugins(&specs.externals);
+    }
+
+    fn log_inactive_plugins(inactive: &[PluginSummary]) {
+        for summary in inactive {
+            tracing::warn!(
+                plugin = %summary.name,
+                status = %summary.status,
+                error = %summary.error.as_deref().unwrap_or(""),
+                "Plugin inactive at startup"
+            );
+        }
+    }
+
+    fn log_enabled_plugins(externals: &[ExternalPluginSpec]) {
+        let names = externals
             .iter()
             .map(|spec| spec.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         tracing::info!(
             "Plugin manager: loading {} plugin(s): {}",
-            specs.externals.len(),
+            externals.len(),
             names
         );
     }
@@ -333,10 +348,11 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
-    ) -> Result<BTreeMap<String, ExternalPlugin>> {
+    ) -> (BTreeMap<String, ExternalPlugin>, Vec<PluginSummary>) {
         let mut plugins = BTreeMap::new();
+        let mut failed = Vec::new();
         for spec in &specs.externals {
-            let plugin = Self::load_external_plugin(
+            match Self::load_external_plugin(
                 spec,
                 host_mode,
                 mesh_tx.clone(),
@@ -344,10 +360,17 @@ impl PluginManager {
                 rpc_bridge.clone(),
                 runtime_data,
             )
-            .await?;
-            plugins.insert(spec.name.clone(), plugin);
+            .await
+            {
+                Ok(plugin) => {
+                    plugins.insert(spec.name.clone(), plugin);
+                }
+                Err(error) => {
+                    failed.push(Self::plugin_load_failure_summary(spec, &error));
+                }
+            }
         }
-        Ok(plugins)
+        (plugins, failed)
     }
 
     async fn load_external_plugin(
@@ -393,11 +416,42 @@ impl PluginManager {
         Ok(plugin)
     }
 
-    fn inactive_plugins(specs: &ResolvedPlugins) -> BTreeMap<String, PluginSummary> {
+    fn plugin_load_failure_summary(
+        spec: &ExternalPluginSpec,
+        error: &anyhow::Error,
+    ) -> PluginSummary {
+        tracing::warn!(
+            plugin = %spec.name,
+            command = %spec.command,
+            args = %format_args_for_log(&spec.args),
+            error = %error,
+            "Plugin disabled after load failure"
+        );
+        PluginSummary {
+            name: spec.name.clone(),
+            kind: "external".to_string(),
+            enabled: false,
+            status: "error".to_string(),
+            pid: None,
+            version: None,
+            capabilities: Vec::new(),
+            command: Some(spec.command.clone()),
+            args: spec.args.clone(),
+            tools: Vec::new(),
+            manifest: None,
+            error: Some(error.to_string()),
+        }
+    }
+
+    fn inactive_plugins(
+        specs: &ResolvedPlugins,
+        failed_plugins: Vec<PluginSummary>,
+    ) -> BTreeMap<String, PluginSummary> {
         specs
             .inactive
             .iter()
             .cloned()
+            .chain(failed_plugins)
             .map(|summary| (summary.name.clone(), summary))
             .collect()
     }
@@ -2165,6 +2219,32 @@ mod tests {
         assert_eq!(resolved.externals[1].name, "demo");
         assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plugin_load_failure_becomes_inactive_summary() {
+        let specs = ResolvedPlugins {
+            externals: vec![ExternalPluginSpec {
+                name: "broken".into(),
+                command: "mesh-llm-definitely-missing-plugin-binary".into(),
+                args: vec!["--stdio".into()],
+                url: None,
+                env: BTreeMap::new(),
+            }],
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("broken plugin should not stop manager startup");
+        let summaries = manager.list().await;
+        manager.shutdown().await;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "broken");
+        assert_eq!(summaries[0].status, "error");
+        assert!(!summaries[0].error.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]

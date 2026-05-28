@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
+use mesh_llm_plugin_manager::{PluginStore, default_store_root};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -93,11 +94,10 @@ fn resolve_required_cli_plugin(cli: &Cli, command: &str) -> Result<plugin::Exter
     if let Some(spec) = resolve_configured_cli_plugin(cli, command)? {
         return Ok(spec);
     }
-    bail!(
-        "Unknown command '{command}'. To provide it from a plugin, add \
-         [[plugin]] name = \"{command}\" command = \"mesh-llm-plugin-{command}\" \
-         to your mesh-llm config."
-    );
+    if let Some(spec) = resolve_installed_cli_plugin(command)? {
+        return Ok(spec);
+    }
+    bail!("Unknown command '{command}'. Run `mesh-llm --help` to see available commands.");
 }
 
 fn resolve_configured_cli_plugin(
@@ -120,7 +120,40 @@ fn resolve_configured_cli_plugin(
         return Ok(Some(spec));
     }
 
+    if let Some(spec) = resolve_installed_cli_plugin(command)? {
+        return Ok(Some(spec));
+    }
+
     plugin::bundled_cli_plugin_spec(command)
+}
+
+fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::ExternalPluginSpec>> {
+    let root = match default_store_root() {
+        Ok(root) => root,
+        Err(_) => return Ok(None),
+    };
+    let store = PluginStore::new(root);
+    let Some(metadata) = store.load_optional(command)? else {
+        return Ok(None);
+    };
+    if !metadata.enabled {
+        return Ok(None);
+    }
+    let executable = metadata.executable_path();
+    if !executable.exists() {
+        bail!(
+            "Plugin command '{}' is installed but not runnable: missing executable {}",
+            metadata.name,
+            executable.display()
+        );
+    }
+    Ok(Some(plugin::ExternalPluginSpec {
+        name: metadata.name,
+        command: executable.display().to_string(),
+        args: Vec::new(),
+        url: None,
+        env: Default::default(),
+    }))
 }
 
 fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
@@ -181,4 +214,99 @@ fn handle_structured_result(command: &str, value: serde_json::Value) -> Result<(
         bail!("Plugin command '{command}' exited with status {code}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{env, ffi::OsString, path::PathBuf};
+
+    use clap::Parser;
+    use mesh_llm_plugin_manager::InstalledPluginMetadata;
+    use serial_test::serial;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &std::path::Path) -> Self {
+            let previous = env::var(key).ok();
+            unsafe { env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe { env::set_var(self.key, value) },
+                None => unsafe { env::remove_var(self.key) },
+            }
+        }
+    }
+
+    fn cli_with_missing_config(temp: &TempDir) -> Cli {
+        Cli::parse_from(vec![
+            OsString::from("mesh-llm"),
+            OsString::from("--config"),
+            temp.path().join("missing-config.toml").into_os_string(),
+        ])
+    }
+
+    fn installed_metadata(name: &str, install_path: PathBuf) -> InstalledPluginMetadata {
+        InstalledPluginMetadata {
+            name: name.to_string(),
+            source_repository: "https://github.com/mesh-llm/demo".to_string(),
+            installed_version: "v1.0.0".to_string(),
+            target_triple: "test-target".to_string(),
+            downloaded_asset_name: "demo.tar.gz".to_string(),
+            install_path,
+            enabled: true,
+            last_protocol_version: None,
+            last_status: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn resolves_installed_cli_plugin_when_not_configured() {
+        let temp = TempDir::new().unwrap();
+        let _plugin_dir = EnvGuard::set("MESH_LLM_PLUGIN_DIR", temp.path());
+        let install_path = temp.path().join("installed").join("demo");
+        std::fs::create_dir_all(&install_path).unwrap();
+        let executable = install_path.join(format!("demo{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&executable, "").unwrap();
+        PluginStore::new(temp.path())
+            .save(&installed_metadata("demo", install_path))
+            .unwrap();
+
+        let spec = resolve_required_cli_plugin(&cli_with_missing_config(&temp), "demo")
+            .expect("installed plugin should resolve");
+
+        assert_eq!(spec.name, "demo");
+        assert_eq!(spec.command, executable.display().to_string());
+        assert!(spec.args.is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn installed_cli_plugin_missing_executable_is_reported() {
+        let temp = TempDir::new().unwrap();
+        let _plugin_dir = EnvGuard::set("MESH_LLM_PLUGIN_DIR", temp.path());
+        let install_path = temp.path().join("installed").join("demo");
+        std::fs::create_dir_all(&install_path).unwrap();
+        PluginStore::new(temp.path())
+            .save(&installed_metadata("demo", install_path))
+            .unwrap();
+
+        let err = resolve_required_cli_plugin(&cli_with_missing_config(&temp), "demo")
+            .expect_err("missing executable should be reported");
+
+        assert!(err.to_string().contains("installed but not runnable"));
+    }
 }

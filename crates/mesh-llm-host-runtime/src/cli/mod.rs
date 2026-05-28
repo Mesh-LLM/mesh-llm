@@ -737,6 +737,7 @@ pub(crate) enum Command {
     /// Stop running mesh-llm processes.
     Stop,
     /// Plugin management.
+    #[command(name = "plugins", alias = "plugin")]
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
@@ -830,12 +831,42 @@ pub(crate) enum Command {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum PluginCommand {
-    /// Compatibility shim for the old install workflow.
+    /// Install a native plugin from the catalog or a GitHub repository.
     Install {
+        /// Plugin catalog name, GitHub owner/repo, or GitHub URL.
+        reference: String,
+    },
+    /// Update an installed native plugin.
+    Update {
         /// Plugin name.
         name: String,
     },
-    /// List auto-registered and configured plugins.
+    /// Enable an installed native plugin.
+    Enable {
+        /// Plugin name.
+        name: String,
+    },
+    /// Disable an installed native plugin.
+    Disable {
+        /// Plugin name.
+        name: String,
+    },
+    /// Delete an installed native plugin.
+    Delete {
+        /// Plugin name.
+        name: String,
+    },
+    /// Show installed plugin details.
+    Info {
+        /// Plugin name.
+        name: String,
+    },
+    /// Search the plugin catalog.
+    Search {
+        /// Optional search query.
+        query: Option<String>,
+    },
+    /// List installed, auto-registered, and configured plugins.
     List,
 }
 

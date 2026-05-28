@@ -75,6 +75,178 @@ This means:
 
 There is no separate top-level `services` section in the preferred DSL.
 
+## GitHub Native Package Releases
+
+Third-party plugins may be installed from GitHub repositories.
+
+Supported install references:
+
+```bash
+mesh-llm plugins install https://github.com/mesh-llm/cool-plugin
+mesh-llm plugins install mesh-llm/cool-plugin
+mesh-llm plugins install mesh-llm/cool-plugin@1.1.0
+mesh-llm plugins install https://github.com/mesh-llm/cool-plugin@1.1.0
+```
+
+If the reference omits a version, the installer resolves the latest compatible
+GitHub release. If the reference includes `@<version>`, the installer resolves
+that release or tag. Installers should accept both `1.1.0` and `v1.1.0` when
+matching a versioned release.
+
+Plugins are distributed as native binary archives. Unlike the main `mesh-llm`
+runtime bundles, plugin archives do not carry GPU backend flavors. The release
+asset name is selected only by plugin name, version, operating system, and CPU
+architecture.
+
+Versioned asset names use:
+
+```text
+<plugin-name>-<version>-<target-triple>.<archive-ext>
+```
+
+Stable alias asset names may also be published for latest-release installs:
+
+```text
+<plugin-name>-<target-triple>.<archive-ext>
+```
+
+For a plugin named `cool-plugin`, a `v1.1.0` release may publish:
+
+```text
+cool-plugin-v1.1.0-aarch64-apple-darwin.tar.gz
+cool-plugin-v1.1.0-x86_64-apple-darwin.tar.gz
+cool-plugin-v1.1.0-x86_64-unknown-linux-gnu.tar.gz
+cool-plugin-v1.1.0-aarch64-unknown-linux-gnu.tar.gz
+cool-plugin-v1.1.0-x86_64-pc-windows-msvc.zip
+cool-plugin-v1.1.0-aarch64-pc-windows-msvc.zip
+```
+
+The installer should also tolerate the same names without a leading `v` in the
+version segment when the release tag itself omits `v`:
+
+```text
+cool-plugin-1.1.0-aarch64-apple-darwin.tar.gz
+```
+
+Supported target triples:
+
+| Platform | Target triple | Archive |
+|---|---|---|
+| macOS Apple Silicon | `aarch64-apple-darwin` | `.tar.gz` |
+| macOS Intel | `x86_64-apple-darwin` | `.tar.gz` |
+| Linux x86_64 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
+| Linux ARM64 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` | `.zip` |
+| Windows ARM64 | `aarch64-pc-windows-msvc` | `.zip` |
+
+Archive contents should be rooted under one directory named after the plugin:
+
+```text
+cool-plugin/
+  plugin.toml
+  cool-plugin
+  README.md
+  LICENSE
+```
+
+On Windows, the executable should use `.exe`:
+
+```text
+cool-plugin/
+  plugin.toml
+  cool-plugin.exe
+```
+
+Only `plugin.toml` and the native executable are required. Documentation and
+license files are optional but recommended.
+
+Install selection should follow this order:
+
+1. Parse the owner, repository, and optional version from the install reference.
+2. Resolve the requested GitHub release.
+3. Detect the local target triple.
+4. Prefer a versioned asset matching the release tag and local target triple.
+5. Fall back to the stable alias for the same target triple.
+6. Fail clearly if no compatible asset exists.
+
+Installed plugin metadata should record:
+
+- source repository
+- installed version
+- target triple
+- downloaded asset name
+- install path
+- enabled or disabled state
+
+The lifecycle commands operate on that metadata:
+
+```bash
+mesh-llm plugins update cool-plugin
+mesh-llm plugins enable cool-plugin
+mesh-llm plugins disable cool-plugin
+mesh-llm plugins delete cool-plugin
+```
+
+`update` re-resolves the source repository, selects the newest compatible
+release asset for the local target triple, and replaces the installed archive
+only when a newer compatible version exists.
+
+`enable` marks an installed plugin loadable by the host. `disable` keeps the
+plugin installed but prevents host startup from launching it. `delete` removes
+the installed archive, extracted files, and local plugin metadata.
+
+## Hugging Face Plugin Catalog
+
+`mesh-llm` may use a simple Hugging Face Dataset as the public plugin catalog.
+
+The catalog is metadata only. It helps users discover plugin GitHub
+repositories, but GitHub releases remain the source of native plugin archives
+for installs and updates.
+
+The canonical catalog file is `plugins.jsonl`. Each line describes one plugin:
+
+```json
+{"name":"cool-plugin","description":"Example plugin for mesh-llm.","github_url":"https://github.com/mesh-llm/cool-plugin","author_email":"dev@example.com","author_name":"Mesh LLM"}
+```
+
+Required fields:
+
+| Field | Meaning |
+|---|---|
+| `name` | Unique plugin name. This should match the plugin manifest ID and GitHub release asset prefix. |
+| `description` | Short human-readable plugin description. |
+| `github_url` | GitHub repository URL used for install and update resolution. |
+| `author_email` | Plugin author or maintainer email. |
+| `author_name` | Plugin author or maintainer display name. |
+
+Catalog rules:
+
+- one plugin per JSONL line
+- `name` must be unique within the catalog
+- unknown extra fields are ignored for forward compatibility
+- catalog lookup never downloads native binaries from Hugging Face
+- installing a catalog result uses its `github_url` and then follows the GitHub
+  native package release flow
+
+The initial public catalog entry should be `blackboard`:
+
+```json
+{"name":"blackboard","description":"Shared mesh blackboard for agent status, findings, questions, answers, and searchable coordination notes.","github_url":"https://github.com/mesh-llm/blackboard","author_email":"maintainers@meshllm.cloud","author_name":"Mesh LLM"}
+```
+
+The CLI may resolve a bare plugin name through the catalog:
+
+```bash
+mesh-llm plugins install cool-plugin
+```
+
+Explicit GitHub references bypass catalog lookup:
+
+```bash
+mesh-llm plugins install mesh-llm/cool-plugin
+mesh-llm plugins install https://github.com/mesh-llm/cool-plugin
+```
+
 ## Core Principles
 
 ### 1. Bundled Plugins Are Allowed

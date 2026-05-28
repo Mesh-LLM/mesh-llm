@@ -89,14 +89,7 @@ jobs:
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
             nodejs_release:
-              - 'crates/**'
-              - 'scripts/build-windows.ps1'
-              - 'scripts/install-windows-sdk.ps1'
-              - 'third_party/llama.cpp/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'Justfile'
-              - '.github/cache-version.txt'
+              - 'crates/mesh-llm-nodejs/**'
             windows_cpu:
               - 'crates/mesh-llm-nodejs/**'
               - 'crates/skippy-ffi/**'
