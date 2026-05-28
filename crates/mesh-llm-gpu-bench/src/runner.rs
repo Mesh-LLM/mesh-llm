@@ -42,7 +42,11 @@ pub fn runner_for(
     }
 
     if os == "linux" || os == "windows" {
-        if gpu_upper.contains("NVIDIA") {
+        if gpu_upper.contains("NVIDIA")
+            || gpu_upper.contains("ORIN")
+            || gpu_upper.contains("NVGPU")
+            || gpu_upper.contains("TEGRA")
+        {
             return Some(BenchmarkRunner {
                 backend: BenchmarkBackend::Cuda,
             });

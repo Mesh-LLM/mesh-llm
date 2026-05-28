@@ -194,7 +194,7 @@ If you add a new Rust crate, build script, or test directory, update `.github/ac
 GPU bandwidth benchmarks are launched through the `mesh-llm` binary itself rather than standalone benchmark executables. The public command remains:
 
 ```bash
-mesh-llm gpus benchmark
+mesh-llm gpus detect
 ```
 
 Internally, mesh-llm runs a hidden `benchmark` subcommand in a narrow subprocess boundary so native backend hangs and stdout capture stay isolated from the main process.

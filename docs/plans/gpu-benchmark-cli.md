@@ -1,8 +1,8 @@
-# Plan: add `mesh-llm gpu benchmark`
+# Plan: add `mesh-llm gpus detect`
 
 ## Goal
 
-Add a CLI command at `mesh-llm gpu benchmark` that forces a fresh benchmark run on the current platform and rewrites `~/.mesh-llm/benchmark-fingerprint.json`.
+Add a CLI command at `mesh-llm gpus detect` (originally proposed as `mesh-llm gpu benchmark`) that forces a fresh benchmark run on the current platform and rewrites `~/.mesh-llm/benchmark-fingerprint.json`.
 
 ## Proposed approach
 
@@ -11,13 +11,13 @@ Add a CLI command at `mesh-llm gpu benchmark` that forces a fresh benchmark run 
 Update the existing GPU command from a bare top-level variant into a real subcommand surface.
 
 - Today, `crates/mesh-llm-host-runtime/src/cli/mod.rs` defines `Command::Gpus` as a bare variant with the alias `gpu`.
-- Change that to a subcommand-bearing variant so `mesh-llm gpu benchmark` becomes valid.
+- Change that to a subcommand-bearing variant so `mesh-llm gpus detect` becomes valid.
 - Add a new `GpuCommand` enum for GPU-specific actions.
 
 Expected command shape:
 
 - `mesh-llm gpus` — keep existing GPU inspection behavior
-- `mesh-llm gpu benchmark` — force rerun benchmark and rewrite cache
+- `mesh-llm gpus detect` — force rerun benchmark and rewrite cache
 
 Optional compatibility decision during implementation:
 
@@ -35,13 +35,13 @@ Optional compatibility decision during implementation:
 ### `crates/mesh-llm-host-runtime/src/cli/commands/mod.rs`
 
 - Change dispatch from direct `run_gpus()` invocation to a GPU command dispatcher.
-- Route `gpu benchmark` to a dedicated handler.
+- Route `gpus detect` to a dedicated handler.
 
 ### `crates/mesh-llm-host-runtime/src/cli/commands/gpus.rs`
 
 - Keep `run_gpus()` for the current read-only inspection path.
 - Add something like `dispatch_gpu_command()`.
-- Add `run_gpu_benchmark()` to perform the forced benchmark flow and print a short result summary.
+- Add `run_gpu_benchmark()` (called by `detect`) to perform the forced benchmark flow and print a short result summary.
 
 ### `crates/mesh-llm-system/src/benchmark.rs`
 
@@ -63,7 +63,7 @@ Preferred direction: extract a dedicated helper rather than overloading `run_or_
 
 ## Desired CLI behavior
 
-`mesh-llm gpu benchmark` should:
+`mesh-llm gpus detect` should:
 
 1. Survey current hardware.
 2. Exit cleanly with a clear message if no GPUs are present.
@@ -78,7 +78,7 @@ Preferred direction: extract a dedicated helper rather than overloading `run_or_
 ## Important constraints
 
 - Keep `mesh-llm gpus` read-only.
-- Do not silently reuse the cache for `gpu benchmark`.
+- Do not silently reuse the cache for `gpus detect`.
 - Reuse existing benchmark binary discovery and parsing logic.
 - Preserve current atomic write behavior using the temp-file-plus-rename path.
 - Surface soft failures clearly to the user.
@@ -125,8 +125,8 @@ Add or extend tests in `crates/mesh-llm-system/src/benchmark.rs` to cover:
 Verify manually or with command-level tests that:
 
 - `mesh-llm gpus` still shows current GPU inspection output
-- `mesh-llm gpu benchmark` is accepted by clap
-- `mesh-llm gpu benchmark` rewrites the fingerprint file even when one already exists
+- `mesh-llm gpus detect` is accepted by clap
+- `mesh-llm gpus detect` rewrites the fingerprint file even when one already exists
 - error cases produce clear output
 
 ### Regression checks
@@ -136,4 +136,4 @@ Verify manually or with command-level tests that:
 
 ## Summary
 
-This should be implemented as a small CLI expansion plus a focused benchmark helper in `system/benchmark.rs`. The key design requirement is that `mesh-llm gpu benchmark` must bypass cache reuse and always regenerate and rewrite `benchmark-fingerprint.json`, while the existing `mesh-llm gpus` path remains a read-only inspector of cached data.
+This should be implemented as a small CLI expansion plus a focused benchmark helper in `system/benchmark.rs`. The key design requirement is that `mesh-llm gpus detect` must bypass cache reuse and always regenerate and rewrite `benchmark-fingerprint.json`, while the existing `mesh-llm gpus` path remains a read-only inspector of cached data.

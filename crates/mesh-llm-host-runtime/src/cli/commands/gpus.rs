@@ -10,7 +10,7 @@ use crate::system::{
 
 pub(crate) fn dispatch_gpu_command(json_output: bool, command: Option<&GpuCommand>) -> Result<()> {
     match command {
-        Some(GpuCommand::Benchmark { json }) => run_gpu_benchmark(json_output || *json),
+        Some(GpuCommand::Detect { json }) => run_gpu_benchmark(json_output || *json),
         None => run_gpus(json_output),
     }
 }

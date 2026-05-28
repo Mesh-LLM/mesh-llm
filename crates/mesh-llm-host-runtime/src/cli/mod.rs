@@ -297,8 +297,8 @@ pub(crate) enum AuthCommand {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum GpuCommand {
-    /// Force a fresh local GPU benchmark and rewrite the cached fingerprint.
-    Benchmark {
+    /// Detect and benchmark local GPUs, rewriting the cached fingerprint.
+    Detect {
         /// Print machine-readable JSON output.
         #[arg(long)]
         json: bool,
@@ -1477,29 +1477,27 @@ mod tests {
     }
 
     #[test]
-    fn gpu_benchmark_subcommand_parses() {
-        let cli = Cli::parse_from(["mesh-llm", "gpu", "benchmark"]);
-
-        match cli.command.expect("gpu command expected") {
-            Command::Gpus {
+    fn gpu_detect_subcommand_parses() {
+        let cli = Cli::parse_from(["mesh-llm", "gpu", "detect"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Gpus {
                 json: false,
-                command: Some(GpuCommand::Benchmark { json: false }),
-            } => {}
-            other => panic!("unexpected command: {other:?}"),
-        }
+                command: Some(GpuCommand::Detect { json: false }),
+            })
+        ));
     }
 
     #[test]
-    fn gpu_benchmark_subcommand_accepts_json_flag() {
-        let cli = Cli::parse_from(["mesh-llm", "gpu", "benchmark", "--json"]);
-
-        match cli.command.expect("gpu command expected") {
-            Command::Gpus {
+    fn gpu_detect_subcommand_accepts_json_flag() {
+        let cli = Cli::parse_from(["mesh-llm", "gpu", "detect", "--json"]);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Gpus {
                 json: false,
-                command: Some(GpuCommand::Benchmark { json: true }),
-            } => {}
-            other => panic!("unexpected command: {other:?}"),
-        }
+                command: Some(GpuCommand::Detect { json: true }),
+            })
+        ));
     }
 
     #[test]

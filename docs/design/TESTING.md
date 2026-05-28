@@ -7,7 +7,7 @@
 ```bash
 mesh-llm gpus
 mesh-llm gpus --json | jq .
-mesh-llm gpu benchmark --json | jq .
+mesh-llm gpus detect --json | jq .
 ```
 
 - Prints local runtime-selectable GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
