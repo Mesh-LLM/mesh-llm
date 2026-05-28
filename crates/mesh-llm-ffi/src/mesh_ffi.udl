@@ -40,6 +40,20 @@ enum FfiError {
     "ModelManagementFailed",
     "ServingFailed",
     "ServingUnsupported",
+    "ConsoleFailed",
+};
+
+dictionary ConsoleOptionsNative {
+    string asset_dir;
+    u16? port;
+    boolean listen_all;
+};
+
+interface ConsoleHandle {
+    string url();
+
+    [Throws=FfiError]
+    void stop();
 };
 
 interface MeshClientHandle {
@@ -136,6 +150,9 @@ interface MeshNodeHandle {
 
     [Throws=FfiError]
     void set_device_policy(DevicePolicy policy);
+
+    [Throws=FfiError]
+    ConsoleHandle start_console(ConsoleOptionsNative options);
 };
 
 callback interface EventListener {

@@ -23,7 +23,7 @@ Useful current checks:
 
 ```bash
 cargo test -p skippy-server --lib
-cargo test -p mesh-llm inference::skippy --lib
+cargo test -p mesh-llm-host-runtime --lib inference::skippy
 ```
 
 When benchmark harnesses are imported, keep reporting separate from request-path

@@ -73,6 +73,8 @@ jobs:
             sdk:
               - 'crates/mesh-llm-api-client/**'
               - 'crates/mesh-llm-api-server/**'
+              - 'crates/mesh-llm-config/**'
+              - 'crates/mesh-llm-console-server/**'
               - 'crates/mesh-llm-ffi/**'
               - 'crates/mesh-llm-nodejs/**'
               - 'crates/mesh-client/**'
@@ -87,14 +89,7 @@ jobs:
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
             nodejs_release:
-              - 'crates/**'
-              - 'scripts/build-windows.ps1'
-              - 'scripts/install-windows-sdk.ps1'
-              - 'third_party/llama.cpp/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'Justfile'
-              - '.github/cache-version.txt'
+              - 'crates/mesh-llm-nodejs/**'
             windows_cpu:
               - 'crates/mesh-llm-nodejs/**'
               - 'crates/skippy-ffi/**'
@@ -240,21 +235,19 @@ jobs:
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
 
-      - name: Build mesh-llm binaries (debug)
-        run: cargo build -p mesh-llm -p mesh-llm-plugin-blackboard
+      - name: Build mesh-llm binary (debug)
+        run: cargo build -p mesh-llm --bin mesh-llm
 
       - name: CLI smoke test
         run: |
           target/debug/mesh-llm --log-format json --version
           target/debug/mesh-llm --log-format json --help | head -5
 
-      - name: Upload Linux inference binaries
+      - name: Upload Linux inference binary
         uses: actions/upload-artifact@v6
         with:
           name: ci-linux-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/mesh-llm-plugin-blackboard
+          path: target/debug/mesh-llm
           if-no-files-found: error
           retention-days: 1
 
@@ -502,14 +495,14 @@ jobs:
         run: scripts/build-llama.sh
 
       - name: SDK and API crate tests
-        if: ${{ matrix.group == 'sdk-api' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs')) }}
+        if: ${{ matrix.group == 'sdk-api' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-config') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-console-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs')) }}
         run: |
           should_test() {
             local crate="$1"
             [ "$ALL_RUST" = "true" ] || jq -e --arg crate "$crate" 'index($crate) != null' <<<"$AFFECTED" >/dev/null
           }
 
-          for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-ffi mesh-llm-nodejs; do
+          for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do
             if should_test "$c"; then
               cargo test -p "$c"
             else
@@ -596,8 +589,8 @@ jobs:
         with:
           name: ci-linux-inference-binaries
           path: target/debug
-      - name: Make mesh-llm binaries executable
-        run: chmod +x target/debug/mesh-llm target/debug/mesh-llm-plugin-* 2>/dev/null || chmod +x target/debug/mesh-llm
+      - name: Make mesh-llm executable
+        run: chmod +x target/debug/mesh-llm
       - name: Client-auto boot test
         run: scripts/ci-client-auto-test.sh target/debug/mesh-llm
 
@@ -675,6 +668,18 @@ jobs:
       model_cache_scope: two-node-smoke-model
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
       timeout_minutes: 20
+
+  two_node_split_smoke:
+    needs: [changes, linux_cpu_artifact]
+    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.linux_inference_artifact_required == 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'skippy-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact')) && needs.changes.outputs.docs_only != 'true' }}
+    uses: ./.github/workflows/scripted-binary-smoke.yml
+    with:
+      artifact_name: ci-linux-inference-binaries
+      artifact_path: ci-artifacts/linux
+      staged_binary_path: target/debug/mesh-llm
+      model_cache_scope: two-node-split-smoke-model
+      smoke_script: scripts/ci-two-node-split-smoke.sh
+      timeout_minutes: 25
 
   native_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -788,19 +793,17 @@ jobs:
       - name: Build patched llama.cpp ABI libraries
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
-      - name: Build mesh-llm binaries (debug)
-        run: cargo build -p mesh-llm -p mesh-llm-plugin-blackboard
+      - name: Build mesh-llm binary (debug)
+        run: cargo build -p mesh-llm --bin mesh-llm
       - name: CLI smoke test
         run: |
           target/debug/mesh-llm --log-format json --version
           target/debug/mesh-llm --log-format json --help | head -5
-      - name: Upload macOS inference binaries
+      - name: Upload macOS inference binary
         uses: actions/upload-artifact@v6
         with:
           name: ci-macos-inference-binaries
-          path: |
-            target/debug/mesh-llm
-            target/debug/mesh-llm-plugin-blackboard
+          path: target/debug/mesh-llm
           if-no-files-found: error
           retention-days: 1
 

@@ -68,6 +68,12 @@ pub(crate) trait ModelsFormatter: SearchFormatter {
         include_draft: bool,
         draft: Option<(&str, &Path)>,
     ) -> Result<()>;
+    fn render_layer_package_download(
+        &self,
+        model_ref: &str,
+        package_ref: &str,
+        path: &Path,
+    ) -> Result<()>;
     fn render_updates_status(&self, repo: Option<&str>, all: bool, check: bool) -> Result<()>;
     fn render_delete_preview(&self, resolved: &CliResolvedModel) -> Result<()>;
     fn render_delete_result(&self, result: &CliDeleteResult) -> Result<()>;

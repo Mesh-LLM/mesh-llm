@@ -27,6 +27,13 @@ pub struct InstalledPluginMetadata {
     pub last_error: Option<String>,
 }
 
+impl InstalledPluginMetadata {
+    pub fn executable_path(&self) -> PathBuf {
+        self.install_path
+            .join(format!("{}{}", self.name, std::env::consts::EXE_SUFFIX))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PluginStore {
     root: PathBuf,
@@ -63,12 +70,25 @@ impl PluginStore {
     }
 
     pub fn load(&self, name: &str) -> Result<InstalledPluginMetadata> {
+        self.try_load(name)?
+            .with_context(|| format!("plugin '{name}' is not installed"))
+    }
+
+    pub fn try_load(&self, name: &str) -> Result<Option<InstalledPluginMetadata>> {
         validate_plugin_name(name)?;
         let metadata_path = self.metadata_path(name);
+        if !metadata_path.exists() {
+            return Ok(None);
+        }
         let contents = fs::read(&metadata_path)
             .with_context(|| format!("read plugin metadata {}", metadata_path.display()))?;
-        Ok(serde_json::from_slice(&contents)
-            .with_context(|| format!("parse plugin metadata {}", metadata_path.display()))?)
+        Ok(Some(serde_json::from_slice(&contents).with_context(
+            || format!("parse plugin metadata {}", metadata_path.display()),
+        )?))
+    }
+
+    pub fn load_optional(&self, name: &str) -> Result<Option<InstalledPluginMetadata>> {
+        self.try_load(name)
     }
 
     pub fn list(&self) -> Result<Vec<InstalledPluginMetadata>> {
@@ -203,6 +223,20 @@ mod tests {
         let disabled = store.set_enabled("blackboard", false).unwrap();
         assert!(!disabled.enabled);
         assert!(!store.load("blackboard").unwrap().enabled);
+    }
+
+    #[test]
+    fn load_optional_distinguishes_missing_metadata() {
+        let temp = TempDir::new().unwrap();
+        let store = PluginStore::new(temp.path());
+
+        assert!(store.load_optional("blackboard").unwrap().is_none());
+
+        store.save(&metadata("blackboard")).unwrap();
+        assert_eq!(
+            store.load_optional("blackboard").unwrap().unwrap().name,
+            "blackboard"
+        );
     }
 
     #[test]

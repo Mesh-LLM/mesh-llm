@@ -123,7 +123,5 @@ LLAMA_WORKDIR="$LLAMA_DIR" \
 echo "Building UI..."
 MESH_LLM_BUILD_PROFILE=release "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
 
-echo "Building mesh-llm and bundled CLI plugins..."
-(cd "$REPO_ROOT" && cargo build --release --locked \
-    -p mesh-llm \
-    -p mesh-llm-plugin-blackboard)
+echo "Building mesh-llm..."
+(cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm)

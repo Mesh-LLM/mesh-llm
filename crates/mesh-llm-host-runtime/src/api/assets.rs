@@ -3,7 +3,14 @@ use tokio::net::TcpStream;
 
 pub(super) async fn respond_console_index(stream: &mut TcpStream) -> anyhow::Result<bool> {
     if let Some(asset) = mesh_llm_ui::index() {
-        respond_bytes(stream, 200, "OK", asset.content_type, asset.contents).await?;
+        respond_bytes(
+            stream,
+            200,
+            "OK",
+            asset.content_type,
+            asset.contents.as_ref(),
+        )
+        .await?;
         return Ok(true);
     }
     Ok(false)
@@ -26,7 +33,7 @@ pub(super) async fn respond_console_asset(
         "OK",
         asset.content_type,
         asset.cache_control,
-        asset.contents,
+        asset.contents.as_ref(),
     )
     .await?;
     Ok(true)

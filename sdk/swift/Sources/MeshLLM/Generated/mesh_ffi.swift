@@ -425,6 +425,22 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
+    typealias FfiType = UInt16
+    typealias SwiftType = UInt16
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt16 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -534,6 +550,131 @@ fileprivate struct FfiConverterString: FfiConverter {
         writeBytes(&buf, value.utf8)
     }
 }
+
+
+
+
+public protocol ConsoleHandleProtocol: AnyObject, Sendable {
+
+    func stop() throws
+
+    func url()  -> String
+
+}
+open class ConsoleHandle: ConsoleHandleProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_meshllm_ffi_fn_clone_consolehandle(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_meshllm_ffi_fn_free_consolehandle(handle, $0) }
+    }
+
+
+
+
+open func stop()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_method_consolehandle_stop(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
+open func url() -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+    uniffi_meshllm_ffi_fn_method_consolehandle_url(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConsoleHandle: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = ConsoleHandle
+
+    public static func lift(_ handle: UInt64) throws -> ConsoleHandle {
+        return ConsoleHandle(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: ConsoleHandle) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConsoleHandle {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: ConsoleHandle, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConsoleHandle_lift(_ handle: UInt64) throws -> ConsoleHandle {
+    return try FfiConverterTypeConsoleHandle.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConsoleHandle_lower(_ value: ConsoleHandle) -> UInt64 {
+    return FfiConverterTypeConsoleHandle.lower(value)
+}
+
+
 
 
 
@@ -765,6 +906,8 @@ public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
 
     func start() throws
 
+    func startConsole(options: ConsoleOptionsNative) throws  -> ConsoleHandle
+
     func status()  -> ClientStatus
 
     func stop() throws
@@ -990,6 +1133,15 @@ open func start()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) 
             self.uniffiCloneHandle(),$0
     )
 }
+}
+
+open func startConsole(options: ConsoleOptionsNative)throws  -> ConsoleHandle  {
+    return try  FfiConverterTypeConsoleHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_start_console(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeConsoleOptionsNative_lower(options),$0
+    )
+})
 }
 
 open func status() -> ClientStatus  {
@@ -1349,6 +1501,64 @@ public func FfiConverterTypeClientStatus_lift(_ buf: RustBuffer) throws -> Clien
 #endif
 public func FfiConverterTypeClientStatus_lower(_ value: ClientStatus) -> RustBuffer {
     return FfiConverterTypeClientStatus.lower(value)
+}
+
+
+public struct ConsoleOptionsNative: Equatable, Hashable {
+    public var assetDir: String
+    public var port: UInt16?
+    public var listenAll: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(assetDir: String, port: UInt16?, listenAll: Bool) {
+        self.assetDir = assetDir
+        self.port = port
+        self.listenAll = listenAll
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension ConsoleOptionsNative: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeConsoleOptionsNative: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ConsoleOptionsNative {
+        return
+            try ConsoleOptionsNative(
+                assetDir: FfiConverterString.read(from: &buf),
+                port: FfiConverterOptionUInt16.read(from: &buf),
+                listenAll: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ConsoleOptionsNative, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.assetDir, into: &buf)
+        FfiConverterOptionUInt16.write(value.port, into: &buf)
+        FfiConverterBool.write(value.listenAll, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConsoleOptionsNative_lift(_ buf: RustBuffer) throws -> ConsoleOptionsNative {
+    return try FfiConverterTypeConsoleOptionsNative.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeConsoleOptionsNative_lower(_ value: ConsoleOptionsNative) -> RustBuffer {
+    return FfiConverterTypeConsoleOptionsNative.lower(value)
 }
 
 
@@ -2835,6 +3045,8 @@ public enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedErro
 
     case ServingUnsupported(message: String)
 
+    case ConsoleFailed(message: String)
+
 
 
 
@@ -2912,6 +3124,10 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             message: try FfiConverterString.read(from: &buf)
         )
 
+        case 13: return .ConsoleFailed(
+            message: try FfiConverterString.read(from: &buf)
+        )
+
 
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -2947,6 +3163,8 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
             writeInt(&buf, Int32(11))
         case .ServingUnsupported(_ /* message is ignored*/):
             writeInt(&buf, Int32(12))
+        case .ConsoleFailed(_ /* message is ignored*/):
+            writeInt(&buf, Int32(13))
 
 
         }
@@ -3421,6 +3639,30 @@ public func FfiConverterCallbackInterfaceEventListener_lower(_ v: EventListener)
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionUInt16: FfiConverterRustBuffer {
+    typealias SwiftType = UInt16?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterUInt16.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterUInt16.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionUInt32: FfiConverterRustBuffer {
     typealias SwiftType = UInt32?
 
@@ -3794,6 +4036,12 @@ private let initializationResult: InitializationResult = {
     if (uniffi_meshllm_ffi_checksum_func_generate_owner_keypair_hex() != 63994) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_stop() != 13931) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_consolehandle_url() != 15682) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_meshllm_ffi_checksum_method_meshclienthandle_cancel() != 60947) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3873,6 +4121,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start() != 22769) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_console() != 35615) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_status() != 44385) {

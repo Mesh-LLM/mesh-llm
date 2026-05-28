@@ -40,10 +40,7 @@ function Prepare-Llama {
     $llamaParent = Split-Path -Parent $llamaDir
     New-Item -ItemType Directory -Force -Path $llamaParent | Out-Null
     if (-not (Test-Path (Join-Path $llamaDir ".git"))) {
-        if (Test-Path $llamaDir) {
-            Remove-Item -Recurse -Force $llamaDir
-        }
-        Invoke-NativeCommand "git" @("clone", "--filter=blob:none", $upstreamUrl, $llamaDir)
+        Invoke-GitCloneWithRetry $upstreamUrl $llamaDir
     }
 
     Push-Location $llamaDir
@@ -55,7 +52,7 @@ function Prepare-Llama {
         } catch {
         }
         Invoke-NativeCommand "git" @("remote", "set-url", "origin", $upstreamUrl)
-        Invoke-NativeCommand "git" @("fetch", "origin", "master", "--tags")
+        Invoke-NativeCommandWithRetry "git" @("fetch", "origin", "master", "--tags") "fetch llama.cpp"
         Invoke-NativeCommand "git" @("-c", "advice.detachedHead=false", "checkout", "--detach", "--quiet", $targetSha)
         Invoke-NativeCommand "git" @("reset", "--hard", "--quiet", $targetSha)
         Invoke-NativeCommand "git" @("clean", "-fdx", "-e", "build/")
@@ -337,6 +334,64 @@ function Invoke-NativeCommand {
     if ($LASTEXITCODE -ne 0) {
         $argString = if ($Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
         throw "Command failed with exit code ${LASTEXITCODE}: $Command$argString"
+    }
+}
+
+function Invoke-NativeCommandWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Command,
+        [string[]]$Arguments = @(),
+        [string]$Description = "command",
+        [int]$MaxAttempts = $(if ($env:LLAMA_GIT_MAX_ATTEMPTS) { [int]$env:LLAMA_GIT_MAX_ATTEMPTS } else { 4 }),
+        [int]$DelaySeconds = $(if ($env:LLAMA_GIT_RETRY_DELAY_SECONDS) { [int]$env:LLAMA_GIT_RETRY_DELAY_SECONDS } else { 10 })
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        & $Command @Arguments
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+
+        if ($attempt -eq $MaxAttempts) {
+            $argString = if ($Arguments.Count -gt 0) { " " + ($Arguments -join " ") } else { "" }
+            throw "Command failed with exit code ${LASTEXITCODE}: $Command$argString"
+        }
+
+        Write-Warning "$Description failed (attempt $attempt/$MaxAttempts); retrying in ${DelaySeconds}s"
+        Start-Sleep -Seconds $DelaySeconds
+        $DelaySeconds = $DelaySeconds * 2
+    }
+}
+
+function Invoke-GitCloneWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryUrl,
+        [Parameter(Mandatory = $true)]
+        [string]$Destination
+    )
+
+    $maxAttempts = if ($env:LLAMA_GIT_MAX_ATTEMPTS) { [int]$env:LLAMA_GIT_MAX_ATTEMPTS } else { 4 }
+    $delaySeconds = if ($env:LLAMA_GIT_RETRY_DELAY_SECONDS) { [int]$env:LLAMA_GIT_RETRY_DELAY_SECONDS } else { 10 }
+
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        if (Test-Path $Destination) {
+            Remove-Item -Recurse -Force $Destination
+        }
+
+        & git clone --filter=blob:none $RepositoryUrl $Destination
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+
+        if ($attempt -eq $maxAttempts) {
+            throw "Command failed with exit code ${LASTEXITCODE}: git clone --filter=blob:none $RepositoryUrl $Destination"
+        }
+
+        Write-Warning "llama.cpp clone failed (attempt $attempt/$maxAttempts); retrying in ${delaySeconds}s"
+        Start-Sleep -Seconds $delaySeconds
+        $delaySeconds = $delaySeconds * 2
     }
 }
 
@@ -1016,29 +1071,25 @@ Invoke-InRepo {
         }
     }
 
-    Write-Host "Building mesh-llm and bundled CLI plugins..."
+    Write-Host "Building mesh-llm..."
     $env:LLAMA_STAGE_BUILD_DIR = $buildDir
     $cargoFeatureArgs = @()
-    $meshPackages = @(
-        "-p", "mesh-llm",
-        "-p", "mesh-llm-plugin-blackboard"
-    )
     switch ($backendName) {
         "cuda" { $cargoFeatureArgs = @("--features", "gpu-bench-cuda") }
         "rocm" { $cargoFeatureArgs = @("--features", "gpu-bench-hip") }
     }
     switch ($buildProfile) {
         "dev" {
-            Invoke-NativeCommand "cargo" (@("build") + $meshPackages + $cargoFeatureArgs)
-            Write-Host "Mesh binaries: target\debug\mesh-llm.exe, target\debug\mesh-llm-plugin-blackboard.exe"
+            Invoke-NativeCommand "cargo" (@("build", "-p", "mesh-llm", "--bin", "mesh-llm") + $cargoFeatureArgs)
+            Write-Host "Mesh binary: target\debug\mesh-llm.exe"
         }
         "debug" {
-            Invoke-NativeCommand "cargo" (@("build") + $meshPackages + $cargoFeatureArgs)
-            Write-Host "Mesh binaries: target\debug\mesh-llm.exe, target\debug\mesh-llm-plugin-blackboard.exe"
+            Invoke-NativeCommand "cargo" (@("build", "-p", "mesh-llm", "--bin", "mesh-llm") + $cargoFeatureArgs)
+            Write-Host "Mesh binary: target\debug\mesh-llm.exe"
         }
         "release" {
-            Invoke-NativeCommand "cargo" (@("build", "--release", "--locked") + $meshPackages + $cargoFeatureArgs)
-            Write-Host "Mesh binaries: target\release\mesh-llm.exe, target\release\mesh-llm-plugin-blackboard.exe"
+            Invoke-NativeCommand "cargo" (@("build", "--release", "--locked", "-p", "mesh-llm") + $cargoFeatureArgs)
+            Write-Host "Mesh binary: target\release\mesh-llm.exe"
         }
         default {
             throw "Unsupported MESH_LLM_BUILD_PROFILE/BuildProfile '$buildProfile'. Expected debug, dev, or release."

@@ -31,6 +31,12 @@ fn fake_package_identity(layer_count: u32) -> SkippyPackageIdentity {
     }
 }
 
+fn fake_hf_package_identity(layer_count: u32) -> SkippyPackageIdentity {
+    let mut package = fake_package_identity(layer_count);
+    package.package_ref = "hf://meshllm/Qwen3-8B-Q4_K_M-layers".to_string();
+    package
+}
+
 fn parse_config(toml: &str) -> MeshConfig {
     toml::from_str(toml).expect("config should parse")
 }
@@ -685,6 +691,32 @@ draft_max_tokens = 8
         openai.wire_dtype,
         skippy_protocol::binary::WireActivationDType::Q8
     );
+}
+
+#[test]
+fn layer_package_translation_does_not_treat_hf_ref_as_direct_gguf() {
+    let config = MeshConfig::default();
+    let package_ref = "hf://meshllm/Qwen3-8B-Q4_K_M-layers";
+    let resolved = resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &config,
+        model_id: "meshllm/Qwen3-8B-Q4_K_M-layers",
+        model_path: Path::new(package_ref),
+        model_bytes: 5 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+    })
+    .unwrap();
+
+    let options = resolved
+        .to_embedded_runtime_options(
+            &SkippyTelemetryOptions::off(),
+            Some(fake_hf_package_identity(36)),
+            LoadMode::LayerPackage,
+        )
+        .unwrap();
+
+    assert_eq!(options.config.load_mode, LoadMode::LayerPackage);
+    assert_eq!(options.config.model_path.as_deref(), Some(package_ref));
 }
 
 #[test]

@@ -32,11 +32,21 @@ impl ChatHookOutcome {
             actions: vec![ChatHookAction::InjectText { text: text.into() }],
         }
     }
+
+    pub fn injected_with_consumed_media(text: impl Into<String>, media: ChatMediaRef) -> Self {
+        Self {
+            actions: vec![
+                ChatHookAction::ConsumeMedia { media },
+                ChatHookAction::InjectText { text: text.into() },
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatHookAction {
     InjectText { text: String },
+    ConsumeMedia { media: ChatMediaRef },
     None,
 }
 
@@ -63,6 +73,8 @@ pub struct ChatMediaRef {
     pub kind: ChatMediaKind,
     pub url: String,
     pub user_text: String,
+    pub message_index: usize,
+    pub part_index: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,11 +194,14 @@ pub fn inject_text_into_chat_messages(messages: &mut Vec<ChatMessage>, text: imp
     }
 }
 
-fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &ChatHookOutcome) {
+pub fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &ChatHookOutcome) {
     for action in &outcome.actions {
         match action {
             ChatHookAction::InjectText { text } => {
                 inject_text_into_chat_messages(&mut request.messages, text.clone());
+            }
+            ChatHookAction::ConsumeMedia { media } => {
+                consume_chat_media(&mut request.messages, media);
             }
             ChatHookAction::None => {}
         }
@@ -196,9 +211,10 @@ fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &ChatHo
 pub fn first_chat_media(messages: &[ChatMessage]) -> Option<ChatMediaRef> {
     messages
         .iter()
+        .enumerate()
         .rev()
-        .find(|message| message.role == "user")
-        .and_then(media_from_message)
+        .find(|(_, message)| message.role == "user")
+        .and_then(|(message_index, message)| media_from_message(message_index, message))
 }
 
 fn inject_text_into_message(message: &mut ChatMessage, text: String) {
@@ -223,7 +239,7 @@ fn inject_text_into_message(message: &mut ChatMessage, text: String) {
     }
 }
 
-fn media_from_message(message: &ChatMessage) -> Option<ChatMediaRef> {
+fn media_from_message(message_index: usize, message: &ChatMessage) -> Option<ChatMediaRef> {
     let parts = match message.content.as_ref()? {
         MessageContent::Parts(parts) => parts,
         MessageContent::Text(_) | MessageContent::Other(_) => return None,
@@ -234,15 +250,20 @@ fn media_from_message(message: &ChatMessage) -> Option<ChatMediaRef> {
         .filter_map(|part| part.text.as_deref())
         .collect::<Vec<_>>()
         .join("\n");
-    for part in parts {
-        if let Some(media) = media_from_part(part, &user_text) {
+    for (part_index, part) in parts.iter().enumerate() {
+        if let Some(media) = media_from_part(message_index, part_index, part, &user_text) {
             return Some(media);
         }
     }
     None
 }
 
-fn media_from_part(part: &MessageContentPart, user_text: &str) -> Option<ChatMediaRef> {
+fn media_from_part(
+    message_index: usize,
+    part_index: usize,
+    part: &MessageContentPart,
+    user_text: &str,
+) -> Option<ChatMediaRef> {
     let kind = match part.content_type.as_str() {
         "image_url" | "input_image" | "image" => ChatMediaKind::Image,
         "input_audio" | "audio" | "audio_url" => ChatMediaKind::Audio,
@@ -254,11 +275,53 @@ fn media_from_part(part: &MessageContentPart, user_text: &str) -> Option<ChatMed
         kind,
         url,
         user_text: user_text.to_string(),
+        message_index,
+        part_index,
     })
 }
 
+fn consume_chat_media(messages: &mut [ChatMessage], media: &ChatMediaRef) -> bool {
+    let Some(message) = messages.get_mut(media.message_index) else {
+        return false;
+    };
+    consume_message_media(message, media)
+}
+
+fn consume_message_media(message: &mut ChatMessage, media: &ChatMediaRef) -> bool {
+    if message.role != "user" {
+        return false;
+    }
+    let Some(MessageContent::Parts(parts)) = message.content.as_mut() else {
+        return false;
+    };
+    let Some(part) = parts.get(media.part_index) else {
+        return false;
+    };
+    if !media_part_matches(part, media) {
+        return false;
+    }
+    parts.remove(media.part_index);
+    true
+}
+
+fn media_part_matches(part: &MessageContentPart, media: &ChatMediaRef) -> bool {
+    media_from_part(media.message_index, media.part_index, part, "")
+        .is_some_and(|candidate| candidate.kind == media.kind && candidate.url == media.url)
+}
+
 fn media_url(part: &MessageContentPart) -> Option<String> {
-    for key in ["image_url", "input_image", "image", "audio", "video", "url"] {
+    for key in [
+        "image_url",
+        "input_image",
+        "image",
+        "input_audio",
+        "audio",
+        "audio_url",
+        "input_video",
+        "video",
+        "video_url",
+        "url",
+    ] {
         if let Some(value) = part.extra.get(key) {
             if let Some(url) = value.as_str() {
                 return Some(url.to_string());
@@ -266,9 +329,73 @@ fn media_url(part: &MessageContentPart) -> Option<String> {
             if let Some(url) = value.get("url").and_then(Value::as_str) {
                 return Some(url.to_string());
             }
+            if let Some(data_url) = inline_media_data_url(key, value) {
+                return Some(data_url);
+            }
         }
     }
     None
+}
+
+fn inline_media_data_url(container_key: &str, value: &Value) -> Option<String> {
+    let data = value.get("data").and_then(Value::as_str)?;
+    if data.trim_start().starts_with("data:") {
+        return Some(data.to_string());
+    }
+    let mime_type = value
+        .get("mime_type")
+        .or_else(|| value.get("media_type"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| {
+            value
+                .get("format")
+                .and_then(Value::as_str)
+                .and_then(|format| mime_type_from_format(container_key, format))
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| default_media_mime_type(container_key).to_string());
+    Some(format!("data:{mime_type};base64,{data}"))
+}
+
+fn mime_type_from_format(container_key: &str, format: &str) -> Option<&'static str> {
+    let format = format.trim().trim_start_matches('.').to_ascii_lowercase();
+    match format.as_str() {
+        "wav" => Some("audio/wav"),
+        "mp3" => Some("audio/mpeg"),
+        "flac" => Some("audio/flac"),
+        "ogg" | "opus" => Some("audio/ogg"),
+        "webm" if is_audio_container(container_key) => Some("audio/webm"),
+        "webm" => Some("video/webm"),
+        "m4a" | "mp4" if is_audio_container(container_key) => Some("audio/mp4"),
+        "mp4" => Some("video/mp4"),
+        "mpeg" | "mpga" if is_audio_container(container_key) => Some("audio/mpeg"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+fn default_media_mime_type(container_key: &str) -> &'static str {
+    if is_audio_container(container_key) {
+        "audio/wav"
+    } else if is_video_container(container_key) {
+        "video/mp4"
+    } else {
+        "image/png"
+    }
+}
+
+fn is_audio_container(container_key: &str) -> bool {
+    matches!(container_key, "input_audio" | "audio" | "audio_url")
+}
+
+fn is_video_container(container_key: &str) -> bool {
+    matches!(container_key, "input_video" | "video" | "video_url")
 }
 
 #[cfg(test)]
@@ -324,6 +451,22 @@ mod tests {
         }
     }
 
+    struct MediaRescueHook;
+
+    #[async_trait]
+    impl OpenAiHookPolicy for MediaRescueHook {
+        async fn before_chat_completion(
+            &self,
+            request: &mut ChatCompletionRequest,
+        ) -> OpenAiResult<ChatHookOutcome> {
+            let media = first_chat_media(&request.messages).expect("media");
+            Ok(ChatHookOutcome::injected_with_consumed_media(
+                "[Audio context: hello]\n\n",
+                media,
+            ))
+        }
+    }
+
     #[test]
     fn chat_mesh_hooks_enabled_reads_extra_flag() {
         let mut request: ChatCompletionRequest = serde_json::from_value(json!({
@@ -359,6 +502,57 @@ mod tests {
         assert_eq!(media.kind, ChatMediaKind::Image);
         assert_eq!(media.url, "data:image/png;base64,abc");
         assert_eq!(media.user_text, "what is this?");
+        assert_eq!(media.message_index, 0);
+        assert_eq!(media.part_index, 1);
+    }
+
+    #[test]
+    fn first_chat_media_extracts_audio_url_and_user_text() {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "please transcribe this"},
+                    {"type": "audio_url", "audio_url": {"url": "data:audio/wav;base64,abc"}}
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let media = first_chat_media(&request.messages).expect("media");
+
+        assert_eq!(media.kind, ChatMediaKind::Audio);
+        assert_eq!(media.url, "data:audio/wav;base64,abc");
+        assert_eq!(media.user_text, "please transcribe this");
+        assert_eq!(media.message_index, 0);
+        assert_eq!(media.part_index, 1);
+    }
+
+    #[test]
+    fn first_chat_media_extracts_inline_input_audio_data() {
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what does this say?"},
+                    {"type": "input_audio", "input_audio": {
+                        "data": "YWJj",
+                        "format": "wav"
+                    }}
+                ]
+            }]
+        }))
+        .unwrap();
+
+        let media = first_chat_media(&request.messages).expect("media");
+
+        assert_eq!(media.kind, ChatMediaKind::Audio);
+        assert_eq!(media.url, "data:audio/wav;base64,YWJj");
+        assert_eq!(media.user_text, "what does this say?");
+        assert_eq!(media.message_index, 0);
+        assert_eq!(media.part_index, 1);
     }
 
     #[test]
@@ -429,6 +623,96 @@ mod tests {
         assert_eq!(
             seen.messages[0].content,
             Some(MessageContent::Text("[hint]\noriginal".to_string()))
+        );
+    }
+
+    #[tokio::test]
+    async fn hooked_backend_consumes_rescued_audio_media_before_forwarding() {
+        let backend = Arc::new(RecordingBackend {
+            seen: Mutex::new(None),
+        });
+        let hooked = HookedOpenAiBackend::new(backend.clone(), Arc::new(MediaRescueHook));
+        let request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "please transcribe this"},
+                    {"type": "input_audio", "input_audio": {
+                        "data": "YWJj",
+                        "format": "wav"
+                    }}
+                ]
+            }],
+            "mesh_hooks": true
+        }))
+        .unwrap();
+
+        hooked.chat_completion(request).await.unwrap();
+
+        let seen = backend.seen.lock().unwrap().clone().unwrap();
+        assert_eq!(first_chat_media(&seen.messages), None);
+        assert_eq!(
+            seen.messages[0].content,
+            Some(MessageContent::Parts(vec![
+                MessageContentPart {
+                    content_type: "text".to_string(),
+                    text: Some("[Audio context: hello]\n\n".to_string()),
+                    extra: Default::default(),
+                },
+                MessageContentPart {
+                    content_type: "text".to_string(),
+                    text: Some("please transcribe this".to_string()),
+                    extra: Default::default(),
+                },
+            ]))
+        );
+    }
+
+    #[test]
+    fn consumed_media_action_removes_only_matching_media_part() {
+        let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what is here?"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                    {"type": "input_audio", "input_audio": {"url": "data:audio/wav;base64,def"}}
+                ]
+            }],
+            "mesh_hooks": true
+        }))
+        .unwrap();
+        let media = ChatMediaRef {
+            kind: ChatMediaKind::Audio,
+            url: "data:audio/wav;base64,def".to_string(),
+            user_text: "what is here?".to_string(),
+            message_index: 0,
+            part_index: 2,
+        };
+
+        apply_chat_hook_outcome(
+            &mut request,
+            &ChatHookOutcome::injected_with_consumed_media("[Audio context: beep]\n\n", media),
+        );
+
+        let Some(MessageContent::Parts(parts)) = &request.messages[0].content else {
+            panic!("expected multipart content");
+        };
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|part| part.content_type == "input_audio")
+                .count(),
+            0
+        );
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|part| part.content_type == "image_url")
+                .count(),
+            1
         );
     }
 }

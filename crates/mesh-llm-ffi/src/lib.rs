@@ -11,8 +11,8 @@ use mesh_llm_api_server::{
 #[cfg(feature = "embedded-runtime")]
 use mesh_llm_host_runtime::sdk::{EmbeddedChatMessage, EmbeddedServingController};
 use std::future::Future;
-use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 uniffi::setup_scaffolding!("mesh_ffi");
@@ -61,6 +61,8 @@ pub enum FfiError {
     ServingFailed(String),
     #[error("serving is unsupported by this node: {0}")]
     ServingUnsupported(String),
+    #[error("console failed: {0}")]
+    ConsoleFailed(String),
 }
 
 #[derive(uniffi::Record)]
@@ -73,6 +75,13 @@ pub struct ModelNative {
 pub struct ClientStatus {
     pub connected: bool,
     pub peer_count: u64,
+}
+
+#[derive(uniffi::Record)]
+pub struct ConsoleOptionsNative {
+    pub asset_dir: String,
+    pub port: Option<u16>,
+    pub listen_all: bool,
 }
 
 #[derive(uniffi::Record)]
@@ -348,6 +357,12 @@ pub struct MeshNodeHandle {
     local_serving: Option<Arc<EmbeddedServingController>>,
 }
 
+#[derive(uniffi::Object)]
+pub struct ConsoleHandle {
+    inner: Mutex<Option<mesh_llm_console_server::ConsoleServerHandle>>,
+    url: String,
+}
+
 /// Generate a fresh owner keypair, returning its hex-encoded form.
 ///
 /// Callers should persist this value on first run and pass it back to
@@ -534,6 +549,25 @@ impl MeshClientHandle {
         block_on(async {
             self.client.lock().await.cancel(RequestId(request_id));
         });
+    }
+}
+
+#[uniffi::export]
+impl ConsoleHandle {
+    pub fn url(&self) -> String {
+        self.url.clone()
+    }
+
+    pub fn stop(&self) -> Result<(), FfiError> {
+        let handle = self
+            .inner
+            .lock()
+            .map_err(|error| FfiError::ConsoleFailed(error.to_string()))?
+            .take();
+        if let Some(handle) = handle {
+            block_on(handle.stop());
+        }
+        Ok(())
     }
 }
 
@@ -802,6 +836,25 @@ impl MeshNodeHandle {
 
     pub fn set_device_policy(&self, policy: DevicePolicy) -> Result<(), FfiError> {
         block_on(self.node.serving().set_device_policy(policy.into())).map_err(map_serving_error)
+    }
+
+    pub fn start_console(
+        &self,
+        options: ConsoleOptionsNative,
+    ) -> Result<Arc<ConsoleHandle>, FfiError> {
+        let handle = block_on(mesh_llm_console_server::start_file_console(
+            mesh_llm_console_server::ConsoleServerOptions {
+                asset_dir: options.asset_dir.into(),
+                port: options.port.unwrap_or(0),
+                listen_all: options.listen_all,
+            },
+        ))
+        .map_err(|error| FfiError::ConsoleFailed(error.to_string()))?;
+        let url = handle.url().to_string();
+        Ok(Arc::new(ConsoleHandle {
+            inner: Mutex::new(Some(handle)),
+            url,
+        }))
     }
 }
 

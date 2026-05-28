@@ -87,6 +87,20 @@ class Client {
   }
 }
 
+class Console {
+  constructor(handle) {
+    this._handle = handle
+  }
+
+  get url() {
+    return this._handle.url
+  }
+
+  stop() {
+    return this._handle.stop()
+  }
+}
+
 class Node {
   constructor(handle) {
     this._handle = handle
@@ -120,6 +134,16 @@ class Node {
 
   async status() {
     return parse(await this._handle.statusJson())
+  }
+
+  async startConsole(options = {}) {
+    const assetDir = options.assetDir || defaultConsoleAssetDir()
+    const handle = await this._handle.startConsole(
+      assetDir,
+      options.port == null ? null : options.port,
+      options.listenAll === true
+    )
+    return new Console(handle)
   }
 }
 
@@ -201,8 +225,13 @@ function parse(json) {
   return JSON.parse(json)
 }
 
+function defaultConsoleAssetDir() {
+  return path.join(__dirname, 'console')
+}
+
 module.exports = {
   Client,
+  Console,
   Node,
   generateOwnerKeypairHex: native.generateOwnerKeypairHex,
   resolveNativeRuntime,

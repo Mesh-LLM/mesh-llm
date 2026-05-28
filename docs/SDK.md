@@ -25,8 +25,8 @@ Add the Rust SDK crate:
 
 ```toml
 [dependencies]
-mesh-llm-api-client = "0.66.0" # connect to an existing mesh
-mesh-llm-api-server = "0.66.0"
+mesh-llm-api-client = "0.68.0" # connect to an existing mesh
+mesh-llm-api-server = "0.68.0"
 ```
 
 For client-only mesh inference, depend on `mesh-llm-api-client`. For model
@@ -42,7 +42,7 @@ Add the repo Swift package from a tagged release:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.66.0"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.68.0"),
 ],
 targets: [
     .target(
@@ -95,7 +95,7 @@ Install the Node package in a Node.js or Electron app:
 ```json
 {
   "dependencies": {
-    "@meshllm/sdk": "0.66.0"
+    "@meshllm/sdk": "0.68.0"
   }
 }
 ```
@@ -473,10 +473,10 @@ one runtime crate for each target:
 
 ```toml
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-meshllm-native-darwin-aarch64-metal = "0.66.0"
+meshllm-native-darwin-aarch64-metal = "0.68.0"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
-meshllm-native-linux-x86-64-cpu = "0.66.0"
+meshllm-native-linux-x86-64-cpu = "0.68.0"
 ```
 
 Because all runtime crates share `links = "meshllm_native_runtime"`, Cargo

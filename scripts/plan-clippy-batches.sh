@@ -12,6 +12,7 @@ set -euo pipefail
 
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-config"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
   "mesh-llm-identity"
@@ -20,9 +21,9 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-guardrails"
   "mesh-llm-system"
   "mesh-llm-types"
+  "mesh-llm-console-server"
   "mesh-llm-ui"
   "mesh-llm-plugin"
-  "mesh-llm-plugin-blackboard"
   "mesh-llm-plugin-manager"
   "mesh-llm-client"
   "mesh-llm-api-client"
@@ -131,6 +132,7 @@ weights = {
     "model-artifact": 4,
     "model-hf": 4,
     "model-resolver": 3,
+    "mesh-llm-config": 2,
     "mesh-llm-api-client": 1,
     "mesh-llm-api-server": 3,
     "mesh-llm-gpu-bench": 3,
@@ -140,6 +142,7 @@ weights = {
     "mesh-llm-routing": 2,
     "mesh-llm-protocol": 2,
     "mesh-llm-types": 2,
+    "mesh-llm-console-server": 2,
     "mesh-llm-ui": 2,
     "mesh-llm-plugin": 2,
     "mesh-llm-plugin-manager": 1,

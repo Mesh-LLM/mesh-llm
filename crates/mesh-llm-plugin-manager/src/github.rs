@@ -87,10 +87,10 @@ impl GitHubReleaseClient {
         if !status.is_success() {
             bail!("GitHub release request failed: {status} {url}");
         }
-        Ok(response
+        response
             .json::<GitHubRelease>()
             .await
-            .with_context(|| format!("decode GitHub release {url}"))?)
+            .with_context(|| format!("decode GitHub release {url}"))
     }
 }
 

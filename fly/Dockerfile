@@ -38,6 +38,8 @@ COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
 COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
 COPY crates/mesh-llm-system/ crates/mesh-llm-system/
 COPY crates/mesh-llm-types/ crates/mesh-llm-types/
+COPY crates/mesh-llm-config/ crates/mesh-llm-config/
+COPY crates/mesh-llm-console-server/ crates/mesh-llm-console-server/
 COPY crates/mesh-llm-host-runtime/Cargo.toml crates/mesh-llm-host-runtime/Cargo.toml
 COPY crates/mesh-llm/Cargo.toml crates/mesh-llm/Cargo.toml
 COPY crates/mesh-llm/build.rs crates/mesh-llm/build.rs
@@ -47,9 +49,11 @@ COPY crates/mesh-llm-host-runtime/ crates/mesh-llm-host-runtime/
 COPY crates/mesh-llm/ crates/mesh-llm/
 COPY crates/mesh-llm-plugin/ crates/mesh-llm-plugin/
 COPY crates/mesh-client/ crates/mesh-client/
-COPY crates/mesh-api/ crates/mesh-api/
-COPY crates/mesh-host-core/ crates/mesh-host-core/
-COPY crates/mesh-api-ffi/ crates/mesh-api-ffi/
+COPY crates/mesh-llm-api-client/ crates/mesh-llm-api-client/
+COPY crates/mesh-llm-api-server/ crates/mesh-llm-api-server/
+COPY crates/mesh-llm-node/ crates/mesh-llm-node/
+COPY crates/mesh-llm-ffi/ crates/mesh-llm-ffi/
+COPY crates/mesh-llm-nodejs/ crates/mesh-llm-nodejs/
 COPY crates/mesh-llm-test-harness/ crates/mesh-llm-test-harness/
 COPY crates/model-ref/ crates/model-ref/
 COPY crates/model-artifact/ crates/model-artifact/

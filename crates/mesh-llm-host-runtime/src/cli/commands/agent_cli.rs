@@ -9,6 +9,9 @@ const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
 const OPENCODE_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const OPENCODE_API_KEY_VALUE: &str = "dummy";
 const OPENCODE_INSTALL_HINT: &str = "curl -fsSL https://opencode.ai/install | bash";
+const MESH_MCP_SERVER_ID: &str = "mesh";
+const MESH_MCP_DISPLAY_NAME: &str = "Mesh LLM";
+const DEFAULT_MESH_MCP_URL: &str = "http://127.0.0.1:3131/mcp";
 
 fn configure_interactive_stdio(command: &mut Command) {
     #[cfg(unix)]
@@ -49,8 +52,124 @@ struct OpenCodeTarget {
     api_base_url: String,
     api_models_url: String,
     management_models_url: String,
+    mcp_url: String,
     auto_start_local_mesh: bool,
     local_port: Option<u16>,
+}
+
+fn mesh_mcp_opencode_config(mcp_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "remote",
+        "url": mcp_url,
+        "enabled": true,
+        "timeout": 300000,
+    })
+}
+
+fn mesh_mcp_claude_config_json(mcp_url: &str) -> Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "mcpServers": {
+            MESH_MCP_SERVER_ID: {
+                "type": "http",
+                "url": mcp_url,
+            }
+        }
+    }))
+    .context("serialize Claude MCP config")
+}
+
+fn mesh_mcp_goose_extension(mcp_url: &str) -> Result<serde_yaml::Value> {
+    serde_yaml::to_value(serde_json::json!({
+        "enabled": true,
+        "type": "streamable_http",
+        "name": MESH_MCP_DISPLAY_NAME,
+        "description": "Expose mesh-llm plugin MCP tools.",
+        "uri": mcp_url,
+        "timeout": 300,
+        "bundled": null,
+        "available_tools": [],
+    }))
+    .context("build Goose MCP extension config")
+}
+
+fn yaml_key(key: &str) -> serde_yaml::Value {
+    serde_yaml::Value::String(key.to_string())
+}
+
+fn empty_yaml_mapping() -> serde_yaml::Value {
+    serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+}
+
+fn ensure_yaml_mapping<'a>(
+    parent: &'a mut serde_yaml::Mapping,
+    key: &str,
+    path: &std::path::Path,
+) -> Result<&'a mut serde_yaml::Mapping> {
+    let key_value = yaml_key(key);
+    parent
+        .entry(key_value.clone())
+        .or_insert_with(empty_yaml_mapping);
+    parent
+        .get_mut(&key_value)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Expected '{}' in {} to be a YAML mapping",
+                key,
+                path.display()
+            )
+        })
+}
+
+fn read_goose_config(path: &std::path::Path) -> Result<serde_yaml::Value> {
+    if !path.exists() {
+        return Ok(empty_yaml_mapping());
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(empty_yaml_mapping());
+    }
+    let value: serde_yaml::Value = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse {} as YAML", path.display()))?;
+    if value.as_mapping().is_none() {
+        anyhow::bail!("Expected {} to contain a YAML mapping", path.display());
+    }
+    Ok(value)
+}
+
+fn merge_goose_mcp_config(
+    config: &mut serde_yaml::Value,
+    mcp_url: &str,
+    path: &std::path::Path,
+) -> Result<()> {
+    let root = config
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("Expected {} to contain a YAML mapping", path.display()))?;
+    let extensions = ensure_yaml_mapping(root, "extensions", path)?;
+    extensions.insert(
+        yaml_key(MESH_MCP_SERVER_ID),
+        mesh_mcp_goose_extension(mcp_url)?,
+    );
+    Ok(())
+}
+
+fn write_goose_mcp_config_to_path(path: &std::path::Path, mcp_url: &str) -> Result<()> {
+    std::fs::create_dir_all(path.parent().expect("Goose config path must have parent"))?;
+    let mut config = read_goose_config(path)?;
+    merge_goose_mcp_config(&mut config, mcp_url, path)?;
+    std::fs::write(path, serde_yaml::to_string(&config)?)?;
+    eprintln!("✅ Wrote mesh MCP extension to {}", path.display());
+    Ok(())
+}
+
+fn write_goose_mcp_config(mcp_url: &str) -> Result<()> {
+    let config_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".config")
+        .join("goose")
+        .join("config.yaml");
+    write_goose_mcp_config_to_path(&config_path, mcp_url)
 }
 
 fn is_loopback_or_localhost(host: &str) -> bool {
@@ -122,6 +241,9 @@ fn normalize_mesh_host_with_label(host: &str, label: &str) -> Result<OpenCodeTar
     }
     management.set_path("/api/models");
 
+    let mut mcp = management.clone();
+    mcp.set_path("/mcp");
+
     let auto_start_local_mesh = is_local_host && parsed.scheme() == "http";
 
     Ok(OpenCodeTarget {
@@ -129,6 +251,7 @@ fn normalize_mesh_host_with_label(host: &str, label: &str) -> Result<OpenCodeTar
         api_base_url: api_base.to_string(),
         api_models_url: api_models.to_string(),
         management_models_url: management.to_string(),
+        mcp_url: mcp.to_string(),
         auto_start_local_mesh,
         local_port: api_base.port_or_known_default(),
     })
@@ -138,15 +261,31 @@ fn normalize_opencode_host(host: &str) -> Result<OpenCodeTarget> {
     normalize_mesh_host_with_label(host, "OpenCode host")
 }
 
+#[cfg(test)]
 fn build_opencode_launch_spec(
     model_names: &[String],
     resolved_model: &str,
     api_base_url: &str,
 ) -> OpenCodeLaunchSpec {
+    build_opencode_launch_spec_with_mcp(
+        model_names,
+        resolved_model,
+        api_base_url,
+        DEFAULT_MESH_MCP_URL,
+    )
+}
+
+fn build_opencode_launch_spec_with_mcp(
+    model_names: &[String],
+    resolved_model: &str,
+    api_base_url: &str,
+    mcp_url: &str,
+) -> OpenCodeLaunchSpec {
     build_opencode_launch_spec_with_limits(
         model_names,
         resolved_model,
         api_base_url,
+        mcp_url,
         &std::collections::HashMap::new(),
     )
 }
@@ -155,6 +294,7 @@ fn build_opencode_launch_spec_with_limits(
     model_names: &[String],
     resolved_model: &str,
     api_base_url: &str,
+    mcp_url: &str,
     context_lengths: &std::collections::HashMap<String, Option<u32>>,
 ) -> OpenCodeLaunchSpec {
     let mut models = serde_json::Map::new();
@@ -192,6 +332,9 @@ fn build_opencode_launch_spec_with_limits(
         "$schema": "https://opencode.ai/config.json",
         "provider": {
             OPENCODE_PROVIDER_ID: serde_json::Value::Object(mesh_provider),
+        },
+        "mcp": {
+            MESH_MCP_SERVER_ID: mesh_mcp_opencode_config(mcp_url),
         }
     });
 
@@ -339,6 +482,7 @@ pub(crate) async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
     let provider_path = goose_config_dir.join("mesh.json");
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
     eprintln!("✅ Wrote {}", provider_path.display());
+    write_goose_mcp_config(DEFAULT_MESH_MCP_URL)?;
 
     let goose_app = std::path::Path::new("/Applications/Goose.app");
     if goose_app.exists() {
@@ -415,10 +559,18 @@ pub(crate) async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
         "terminalProgressBarEnabled": false
     });
     let settings_json = serde_json::to_string(&settings)?;
+    let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
 
     eprintln!("🚀 Launching Claude Code with {chosen} → {base_url}\n");
     let mut command = Command::new("claude");
-    command.args(["--model", &chosen, "--settings", &settings_json]);
+    command.args([
+        "--model",
+        &chosen,
+        "--settings",
+        &settings_json,
+        "--mcp-config",
+        &mcp_config_json,
+    ]);
     configure_interactive_stdio(&mut command);
     let status = command.status();
     match status {
@@ -693,7 +845,12 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
     let result = if write {
         write_opencode_config(&client, &models, &chosen, &target).await
     } else {
-        let spec = build_opencode_launch_spec(&models, &chosen, &target.api_base_url);
+        let spec = build_opencode_launch_spec_with_mcp(
+            &models,
+            &chosen,
+            &target.api_base_url,
+            &target.mcp_url,
+        );
 
         eprintln!(
             "🚀 Launching OpenCode with {} → {}\n",
@@ -806,10 +963,12 @@ async fn write_opencode_config_to_path(
         model_names,
         resolved_model,
         &target.api_base_url,
+        &target.mcp_url,
         &context_lengths,
     );
     let config_value: serde_json::Value = serde_json::from_str(&spec.config_content)?;
     let mesh_provider = config_value["provider"]["mesh"].clone();
+    let mesh_mcp = config_value["mcp"]["mesh"].clone();
 
     // Merge schema if needed (for display in ordered format)
     let mut merged_config = existing_config.clone();
@@ -828,6 +987,7 @@ async fn write_opencode_config_to_path(
     }
 
     merge_mesh_provider(&mut merged_config, mesh_provider.clone(), config_path)?;
+    merge_provider(&mut merged_config, "mcp", "mesh", mesh_mcp, config_path)?;
 
     let formatted_json = serde_json::to_string_pretty(&merged_config)?;
     std::fs::write(config_path, &formatted_json)?;
@@ -880,9 +1040,10 @@ pub(crate) fn build_mesh_provider_spec_for_test(
 #[cfg(test)]
 mod tests {
     use super::{
-        OPENCODE_INSTALL_HINT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
-        build_opencode_launch_spec_with_limits, build_pi_provider_config,
-        build_pi_provider_config_with_limits, cleanup_mesh_child, normalize_opencode_host,
+        DEFAULT_MESH_MCP_URL, OPENCODE_INSTALL_HINT, build_mesh_provider_spec_for_test,
+        build_opencode_launch_spec, build_opencode_launch_spec_with_limits,
+        build_pi_provider_config, build_pi_provider_config_with_limits, cleanup_mesh_child,
+        merge_goose_mcp_config, mesh_mcp_claude_config_json, normalize_opencode_host,
         opencode_missing_binary_guidance, pi_missing_binary_guidance,
         resolve_opencode_config_path_from_home, write_opencode_config_for_test,
         write_pi_config_for_test, write_pi_config_to_path,
@@ -946,6 +1107,58 @@ mod tests {
                 .as_object()
                 .map(|m| m.len()),
             Some(2)
+        );
+        assert_eq!(config["mcp"]["mesh"]["type"], "remote");
+        assert_eq!(config["mcp"]["mesh"]["enabled"], true);
+        assert_eq!(config["mcp"]["mesh"]["url"], DEFAULT_MESH_MCP_URL);
+    }
+
+    #[test]
+    fn claude_mcp_config_points_at_mesh_mcp_http_endpoint() {
+        let config = mesh_mcp_claude_config_json("http://127.0.0.1:3131/mcp").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
+
+        assert_eq!(
+            parsed["mcpServers"]["mesh"]["type"],
+            serde_json::json!("http")
+        );
+        assert_eq!(
+            parsed["mcpServers"]["mesh"]["url"],
+            serde_json::json!("http://127.0.0.1:3131/mcp")
+        );
+    }
+
+    #[test]
+    fn goose_mcp_merge_preserves_existing_extensions() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+extensions:
+  developer:
+    enabled: true
+GOOSE_PROVIDER: mesh
+"#,
+        )
+        .unwrap();
+        let path = std::path::Path::new("/tmp/goose/config.yaml");
+
+        merge_goose_mcp_config(&mut config, "http://127.0.0.1:3131/mcp", path).unwrap();
+        let extensions = config
+            .get("extensions")
+            .and_then(serde_yaml::Value::as_mapping)
+            .unwrap();
+
+        assert!(extensions.contains_key("developer"));
+        let mesh = extensions
+            .get("mesh")
+            .and_then(serde_yaml::Value::as_mapping)
+            .unwrap();
+        assert_eq!(
+            mesh.get("type").and_then(serde_yaml::Value::as_str),
+            Some("streamable_http")
+        );
+        assert_eq!(
+            mesh.get("uri").and_then(serde_yaml::Value::as_str),
+            Some("http://127.0.0.1:3131/mcp")
         );
     }
 
@@ -1516,6 +1729,7 @@ mod tests {
             &models,
             "Qwen3.5-27B",
             "http://127.0.0.1:9337/v1",
+            DEFAULT_MESH_MCP_URL,
             &context_lengths,
         );
         let config: serde_json::Value =

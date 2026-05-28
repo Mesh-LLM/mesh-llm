@@ -10,9 +10,6 @@ $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $scriptDir ".."))
 $releaseBinDir = Join-Path $repoRoot "target\release"
-$bundledPluginBins = @(
-    "mesh-llm-plugin-blackboard"
-)
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -187,9 +184,6 @@ New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
 try {
     Copy-Item $meshBinary -Destination (Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)) -Force
-    foreach ($pluginBin in $bundledPluginBins) {
-        Copy-Item (Join-Path $releaseBinDir "$pluginBin.exe") -Destination (Join-Path $bundleDir "$pluginBin.exe") -Force
-    }
     $versionedPath = Join-Path $resolvedOutputDir $versionedAsset
     $stablePath = Join-Path $resolvedOutputDir $stableAsset
 

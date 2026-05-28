@@ -20,7 +20,7 @@ use crate::cli::commands::download::dispatch_download_command;
 use crate::cli::commands::gpus::dispatch_gpu_command;
 use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::plugin::run_plugin_command;
-use crate::cli::commands::plugin_cli::{run_external_plugin_command, run_named_plugin_command};
+use crate::cli::commands::plugin_cli::run_external_plugin_command;
 use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 use crate::cli::commands::update::run_update;
 use crate::cli::{AuthCommand, Cli, Command};
@@ -38,7 +38,6 @@ async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Auth { command } => dispatch_auth_command(command),
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
-        Command::Blackboard { .. } => dispatch_blackboard_command(cli, cmd).await,
         _ => dispatch_general_command(cli, cmd).await,
     }
 }
@@ -87,64 +86,12 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Claude { model, port } => run_claude(model.clone(), *port).await,
         Command::Pi { model, host, write } => run_pi(model.clone(), host, *write).await,
         Command::Opencode { model, host, write } => run_opencode(model.clone(), host, *write).await,
-        Command::Blackboard { .. } => dispatch_blackboard_command(cli, cmd).await,
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => dispatch_benchmark_command(command).await,
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
         Command::Auth { command } => dispatch_auth_command(command),
         Command::ExternalPlugin(args) => run_external_plugin_command(cli, args).await,
     }
-}
-
-async fn dispatch_blackboard_command(cli: &Cli, cmd: &Command) -> Result<()> {
-    let Command::Blackboard {
-        text,
-        search,
-        from,
-        since,
-        limit,
-        port,
-        mcp,
-    } = cmd
-    else {
-        unreachable!("dispatch_blackboard_command called for non-blackboard command");
-    };
-
-    if *mcp {
-        return crate::runtime::run_plugin_mcp(cli).await;
-    }
-    run_named_plugin_command(
-        cli,
-        crate::plugin::BLACKBOARD_PLUGIN_ID,
-        blackboard_plugin_args(text, search, from, *since, *limit, *port),
-    )
-    .await
-}
-
-fn blackboard_plugin_args(
-    text: &Option<String>,
-    search: &Option<String>,
-    from: &Option<String>,
-    since: Option<f64>,
-    limit: usize,
-    port: u16,
-) -> Vec<String> {
-    let mut args = Vec::new();
-    if let Some(text) = text {
-        args.push(text.clone());
-    }
-    if let Some(search) = search {
-        args.extend(["--search".to_string(), search.clone()]);
-    }
-    if let Some(from) = from {
-        args.extend(["--from".to_string(), from.clone()]);
-    }
-    if let Some(since) = since {
-        args.extend(["--since".to_string(), since.to_string()]);
-    }
-    args.extend(["--limit".to_string(), limit.to_string()]);
-    args.extend(["--port".to_string(), port.to_string()]);
-    args
 }
 
 async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {

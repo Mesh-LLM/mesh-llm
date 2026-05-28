@@ -267,7 +267,7 @@ curl http://localhost:9337/v1/chat/completions \
 
 ## Blackboard
 
-Mesh LLM can also share status, findings, and questions across the mesh through the built-in `blackboard` plugin.
+Mesh LLM can also share status, findings, and questions across the mesh through the external `blackboard` plugin.
 
 This works even if you are not using Mesh LLM for model serving. A client-only node is enough:
 
@@ -275,10 +275,10 @@ This works even if you are not using Mesh LLM for model serving. A client-only n
 mesh-llm client
 ```
 
-Install the agent skill:
+Install the plugin:
 
 ```bash
-mesh-llm blackboard install-skill
+mesh-llm plugins install blackboard
 ```
 
 Post a status update:
@@ -295,18 +295,13 @@ mesh-llm blackboard --search "QUESTION"
 ```
 
 Messages are ephemeral, scrubbed for obvious PII, and stay inside the mesh.
-Blackboard is on by default for private invite-token meshes. On public meshes
-joined with `--auto` or discovered through Nostr, enable it explicitly with
-`--blackboard`, and assume posts are visible to every peer in that public mesh.
-Do not post secrets, credentials, private paths, or customer data.
+Assume posts are visible to every peer in the mesh where the blackboard plugin is
+running. Do not post secrets, credentials, private paths, or customer data.
 
 ## Blackboard MCP server
 
-Run the blackboard as an MCP server over stdio:
-
-```bash
-mesh-llm blackboard --mcp
-```
+The running mesh node exposes configured plugin tools through the management
+HTTP MCP endpoint at `http://127.0.0.1:3131/mcp`.
 
 Example MCP config:
 
@@ -314,8 +309,8 @@ Example MCP config:
 {
   "mcpServers": {
     "mesh-blackboard": {
-      "command": "mesh-llm",
-      "args": ["blackboard", "--mcp"]
+      "type": "http",
+      "url": "http://127.0.0.1:3131/mcp"
     }
   }
 }

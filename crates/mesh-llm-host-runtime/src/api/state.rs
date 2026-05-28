@@ -183,6 +183,7 @@ pub struct MeshApi {
 pub(super) struct ApiInner {
     pub(super) node: mesh::Node,
     pub(super) plugin_manager: plugin::PluginManager,
+    pub(super) mcp_http: plugin::mcp::PluginMcpHttpEndpoint,
     pub(super) affinity_router: affinity::AffinityRouter,
     pub(super) runtime_data_collector: runtime_data::RuntimeDataCollector,
     pub(super) runtime_data_producer: runtime_data::RuntimeDataProducer,

@@ -11,8 +11,18 @@ use crate::plugin;
 use crate::proto::node::{GossipFrame, NodeRole, PeerAnnouncement, RouteTableRequest};
 use serial_test::serial;
 use skippy_protocol::proto::stage as skippy_stage_proto;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::watch;
+
+/// Empty per-relay auth map for tests that don't exercise gated relays.
+///
+/// Bound to a local before being passed by reference so the borrow lives
+/// for the full duration of any async call — cleaner than `&HashMap::new()`
+/// at the call site, and future-proofs the call against the callee
+/// holding the reference across an internal `.await`.
+fn empty_relay_auths() -> HashMap<String, String> {
+    HashMap::new()
+}
 
 #[test]
 fn quic_bind_addr_uses_explicit_port_on_all_platforms() {
@@ -1129,7 +1139,8 @@ async fn control_plane_listener_starts_with_owner() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
 
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    let auths = empty_relay_auths();
+    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
         .await?;
 
     let endpoint = node
@@ -1154,7 +1165,8 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
     let advertised_addr = std::net::SocketAddr::from(([203, 0, 113, 10], 18443));
 
-    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr), None)
+    let auths = empty_relay_auths();
+    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr), None, &auths)
         .await?;
 
     let endpoint = node
@@ -1178,11 +1190,13 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
 async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
 
+    let auths = empty_relay_auths();
     node.maybe_start_control_listener(
         secret_key,
         Some("127.0.0.1:7447".parse().unwrap()),
         None,
         None,
+        &auths,
     )
     .await?;
 
@@ -1194,7 +1208,8 @@ async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
 async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    let auths = empty_relay_auths();
+    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
         .await?;
     let endpoint = Node::decode_invite_token(
         &node
@@ -1224,7 +1239,8 @@ async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()
 async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    let auths = empty_relay_auths();
+    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
         .await?;
     let control_endpoint = node
         .control_endpoint()
@@ -1260,7 +1276,8 @@ async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> 
 async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    node.maybe_start_control_listener(secret_key, None, None, None)
+    let auths = empty_relay_auths();
+    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
         .await?;
     let endpoint = Node::decode_invite_token(
         &node
@@ -2914,7 +2931,11 @@ fn stale_dispatcher_cannot_remove_replacement_connection() {
 }
 
 #[test]
-fn relay_only_peers_get_extra_heartbeat_cycle() {
+fn relay_only_peers_get_extra_heartbeat_grace() {
+    // Relay-only peers get a higher failure threshold so transient
+    // relay path-renegotiation (which can spike RTT to 10s+) doesn't
+    // prematurely declare them dead and cause MoA reducer fallback.
+    // See heartbeat_failure_policy_for_peer for the rationale.
     let peer = make_test_peer_info(make_test_endpoint_id(12));
     let local_descriptors = vec![];
     let local_runtime = vec![];
@@ -2925,8 +2946,70 @@ fn relay_only_peers_get_extra_heartbeat_cycle() {
         policy,
         HeartbeatFailurePolicy {
             allow_recent_inbound_grace: true,
-            failure_threshold: 3,
-        }
+            failure_threshold: 5,
+        },
+        "relay-only peers must have a noticeably higher grace than direct \
+         (60s heartbeats × 5 = 5 min)"
+    );
+}
+
+#[test]
+fn is_relay_only_path_set_classifies_correctly() {
+    use crate::mesh::heartbeat::is_relay_only_path_set;
+    // Empty path set: be lenient (treat as relay-only). The connection
+    // is brand-new or mid-failure; we don't want to declare the peer
+    // dead prematurely.
+    assert!(
+        is_relay_only_path_set(std::iter::empty::<bool>()),
+        "empty path set must default to relay-only (lenient)"
+    );
+    // All paths are non-IP (relay): relay-only.
+    assert!(is_relay_only_path_set([false]));
+    assert!(is_relay_only_path_set([false, false, false]));
+    // Any IP path means NOT relay-only.
+    assert!(!is_relay_only_path_set([true]));
+    assert!(!is_relay_only_path_set([true, false]));
+    assert!(!is_relay_only_path_set([false, true]));
+    assert!(!is_relay_only_path_set([true, true, true]));
+}
+
+#[test]
+fn classify_relay_only_defaults_to_strict_when_no_connection() {
+    use crate::mesh::heartbeat::classify_relay_only_for_policy;
+    // No Connection object at all (cleanly closed, QUIC idle-expired,
+    // never opened): must default to STRICT, not lenient. Otherwise a
+    // previously-direct peer that simply disconnected would silently
+    // inherit the 5-min relay grace and keep stale model routes alive
+    // an extra 3 min beyond what direct policy intends.
+    assert!(
+        !classify_relay_only_for_policy(None),
+        "no Connection object must default to strict (not relay-only)"
+    );
+    // With a Connection: pass through whatever is_relay_only_connection
+    // observed (i.e., classify by the connection's actual paths).
+    assert!(
+        classify_relay_only_for_policy(Some(true)),
+        "a relay-only connection must keep its lenient classification"
+    );
+    assert!(
+        !classify_relay_only_for_policy(Some(false)),
+        "a connection with IP paths must remain strict (direct)"
+    );
+}
+
+#[test]
+fn direct_peers_use_strict_heartbeat_threshold() {
+    let peer = make_test_peer_info(make_test_endpoint_id(13));
+    let local_descriptors = vec![];
+    let local_runtime = vec![];
+
+    let policy =
+        heartbeat_failure_policy_for_peer(&local_descriptors, &local_runtime, &peer, false);
+
+    assert_eq!(
+        policy.failure_threshold, 2,
+        "direct paths stay at 2 misses — when the network is up at all, \
+         two consecutive cycles of silence is a real failure signal"
     );
 }
 
@@ -5380,7 +5463,8 @@ async fn start_owner_control_test_server(
     *node.owner_attestation.lock().await = Some(ownership);
     *node.owner_summary.lock().await = owner_summary;
     *node.trust_store.lock().await = trust_store;
-    node.maybe_start_control_listener(secret_key.clone(), None, None, None)
+    let auths = empty_relay_auths();
+    node.maybe_start_control_listener(secret_key.clone(), None, None, None, &auths)
         .await?;
     Ok((node, secret_key, config_path))
 }

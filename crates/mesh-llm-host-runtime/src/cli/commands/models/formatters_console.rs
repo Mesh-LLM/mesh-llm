@@ -405,6 +405,19 @@ impl ModelsFormatter for ConsoleFormatter {
         Ok(())
     }
 
+    fn render_layer_package_download(
+        &self,
+        model_ref: &str,
+        package_ref: &str,
+        path: &std::path::Path,
+    ) -> Result<()> {
+        println!("✅ Downloaded layer package");
+        println!("   requested: {model_ref}");
+        println!("   package: {package_ref}");
+        println!("   {}", path.display());
+        Ok(())
+    }
+
     fn render_updates_status(&self, _repo: Option<&str>, _all: bool, _check: bool) -> Result<()> {
         Ok(())
     }

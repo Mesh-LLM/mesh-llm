@@ -38,9 +38,11 @@ pub(crate) use self::config::{
 };
 #[allow(unused_imports)]
 pub use self::config::{
-    GpuAssignment, GpuConfig, MeshConfig, ModelConfigEntry, PluginConfigEntry, PluginHostMode,
-    ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path,
-    load_config, resolve_plugins,
+    ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
+    ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelRuntimeKind, PluginConfigEditor,
+    PluginConfigEntry, PluginHostMode, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
+    bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
+    resolve_plugins,
 };
 pub(crate) use self::config::{telemetry_plugin_enabled, validate_config};
 use self::runtime::ExternalPlugin;
@@ -57,14 +59,11 @@ pub(crate) use self::transport::{
 use mesh_llm_plugin::MeshVisibility;
 use tokio::sync::oneshot;
 
-pub const BLACKBOARD_PLUGIN_ID: &str = "blackboard";
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 pub const FLASH_MOE_PLUGIN_ID: &str = "flash-moe";
 pub const OPENAI_ENDPOINT_PLUGIN_ID: &str = "openai-endpoint";
 pub const TELEMETRY_PLUGIN_ID: &str = "telemetry";
 pub const TELEMETRY_CAPABILITY: &str = "telemetry.metrics.v1";
-#[allow(dead_code)]
-pub const BLACKBOARD_CAPABILITY: &str = "blackboard.v1";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -263,7 +262,7 @@ impl PluginManager {
         let rpc_bridge = Arc::new(Mutex::new(None));
         let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
-        let plugins = Self::load_external_plugins(
+        let (plugins, failed_plugins) = Self::load_external_plugins(
             specs,
             host_mode,
             mesh_tx,
@@ -271,11 +270,11 @@ impl PluginManager {
             rpc_bridge.clone(),
             &runtime_data,
         )
-        .await?;
+        .await;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
                 plugins,
-                inactive: Self::inactive_plugins(specs),
+                inactive: Self::inactive_plugins(specs, failed_plugins),
                 endpoint_health: Arc::new(Mutex::new(BTreeMap::new())),
                 runtime_data,
                 rpc_bridge,
@@ -306,20 +305,35 @@ impl PluginManager {
     }
 
     fn log_startup_plan(specs: &ResolvedPlugins) {
+        Self::log_inactive_plugins(&specs.inactive);
         if specs.externals.is_empty() {
             tracing::info!("Plugin manager: no plugins enabled");
             return;
         }
 
-        let names = specs
-            .externals
+        Self::log_enabled_plugins(&specs.externals);
+    }
+
+    fn log_inactive_plugins(inactive: &[PluginSummary]) {
+        for summary in inactive {
+            tracing::warn!(
+                plugin = %summary.name,
+                status = %summary.status,
+                error = %summary.error.as_deref().unwrap_or(""),
+                "Plugin inactive at startup"
+            );
+        }
+    }
+
+    fn log_enabled_plugins(externals: &[ExternalPluginSpec]) {
+        let names = externals
             .iter()
             .map(|spec| spec.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         tracing::info!(
             "Plugin manager: loading {} plugin(s): {}",
-            specs.externals.len(),
+            externals.len(),
             names
         );
     }
@@ -342,10 +356,11 @@ impl PluginManager {
         instance_id: String,
         rpc_bridge: Arc<Mutex<Option<Arc<dyn PluginRpcBridge>>>>,
         runtime_data: &RuntimeDataCollector,
-    ) -> Result<BTreeMap<String, ExternalPlugin>> {
+    ) -> (BTreeMap<String, ExternalPlugin>, Vec<PluginSummary>) {
         let mut plugins = BTreeMap::new();
+        let mut failed = Vec::new();
         for spec in &specs.externals {
-            let plugin = Self::load_external_plugin(
+            match Self::load_external_plugin(
                 spec,
                 host_mode,
                 mesh_tx.clone(),
@@ -353,10 +368,17 @@ impl PluginManager {
                 rpc_bridge.clone(),
                 runtime_data,
             )
-            .await?;
-            plugins.insert(spec.name.clone(), plugin);
+            .await
+            {
+                Ok(plugin) => {
+                    plugins.insert(spec.name.clone(), plugin);
+                }
+                Err(error) => {
+                    failed.push(Self::plugin_load_failure_summary(spec, &error));
+                }
+            }
         }
-        Ok(plugins)
+        (plugins, failed)
     }
 
     async fn load_external_plugin(
@@ -402,11 +424,42 @@ impl PluginManager {
         Ok(plugin)
     }
 
-    fn inactive_plugins(specs: &ResolvedPlugins) -> BTreeMap<String, PluginSummary> {
+    fn plugin_load_failure_summary(
+        spec: &ExternalPluginSpec,
+        error: &anyhow::Error,
+    ) -> PluginSummary {
+        tracing::warn!(
+            plugin = %spec.name,
+            command = %spec.command,
+            args = %format_args_for_log(&spec.args),
+            error = %error,
+            "Plugin disabled after load failure"
+        );
+        PluginSummary {
+            name: spec.name.clone(),
+            kind: "external".to_string(),
+            enabled: false,
+            status: "error".to_string(),
+            pid: None,
+            version: None,
+            capabilities: Vec::new(),
+            command: Some(spec.command.clone()),
+            args: spec.args.clone(),
+            tools: Vec::new(),
+            manifest: None,
+            error: Some(error.to_string()),
+        }
+    }
+
+    fn inactive_plugins(
+        specs: &ResolvedPlugins,
+        failed_plugins: Vec<PluginSummary>,
+    ) -> BTreeMap<String, PluginSummary> {
         specs
             .inactive
             .iter()
             .cloned()
+            .chain(failed_plugins)
             .map(|summary| (summary.name.clone(), summary))
             .collect()
     }
@@ -1873,32 +1926,34 @@ mod tests {
     }
 
     #[test]
-    fn resolves_default_blackboard_plugin() {
+    fn resolves_default_builtin_plugins() {
         let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
     #[test]
-    fn blackboard_can_be_disabled() {
+    fn external_plugin_can_be_configured() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
-                name: BLACKBOARD_PLUGIN_ID.into(),
-                enabled: Some(false),
-                command: None,
-                args: Vec::new(),
+                name: "demo".into(),
+                enabled: Some(true),
+                command: Some("mesh-llm-plugin-demo".into()),
+                args: vec!["--stdio".into()],
                 url: None,
             }],
             defaults: None,
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals.len(), 3);
         assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, "demo");
+        assert_eq!(resolved.externals[1].command, "mesh-llm-plugin-demo");
+        assert_eq!(resolved.externals[1].args, ["--stdio"]);
+        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
@@ -1916,22 +1971,20 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
     #[test]
     fn telemetry_plugin_is_opt_out_builtin() {
         let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.externals[1].args.contains(&"--plugin".to_string()));
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        assert!(resolved.externals[0].args.contains(&"--plugin".to_string()));
         assert!(
-            resolved.externals[1]
+            resolved.externals[0]
                 .args
                 .contains(&TELEMETRY_PLUGIN_ID.to_string())
         );
@@ -1949,9 +2002,8 @@ mod tests {
         };
 
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
     }
 
     #[test]
@@ -1986,12 +2038,11 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 4);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, OPENAI_ENDPOINT_PLUGIN_ID);
-        assert_eq!(resolved.externals[3].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[2];
+        assert_eq!(resolved.externals.len(), 3);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, OPENAI_ENDPOINT_PLUGIN_ID);
+        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
+        let spec = &resolved.externals[1];
         assert!(spec.args.contains(&"openai-endpoint".to_string()));
         assert_eq!(spec.url.as_deref(), Some("http://gpu-box:8000/v1"));
     }
@@ -2010,13 +2061,12 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 4);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, OPENAI_ENDPOINT_PLUGIN_ID);
-        assert_eq!(resolved.externals[3].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 3);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, OPENAI_ENDPOINT_PLUGIN_ID);
+        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
         // Verify the spec args dispatch to the right plugin binary
-        let spec = &resolved.externals[2];
+        let spec = &resolved.externals[1];
         assert!(spec.args.contains(&"--plugin".to_string()));
         assert!(spec.args.contains(&"openai-endpoint".to_string()));
     }
@@ -2058,12 +2108,11 @@ mod tests {
 
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
 
-        assert_eq!(resolved.externals.len(), 4);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, FLASH_MOE_PLUGIN_ID);
-        assert_eq!(resolved.externals[3].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[2];
+        assert_eq!(resolved.externals.len(), 3);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, FLASH_MOE_PLUGIN_ID);
+        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
+        let spec = &resolved.externals[1];
         assert!(spec.args.contains(&"--plugin".to_string()));
         assert!(spec.args.contains(&FLASH_MOE_PLUGIN_ID.to_string()));
         assert_eq!(
@@ -2145,7 +2194,7 @@ mod tests {
     }
 
     #[test]
-    fn blackboard_is_resolved_on_public_meshes() {
+    fn default_builtins_are_resolved_on_public_meshes() {
         let resolved = resolve_plugins(
             &MeshConfig::default(),
             PluginHostMode {
@@ -2153,10 +2202,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
@@ -2174,12 +2222,37 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 4);
-        assert_eq!(resolved.externals[0].name, BLACKBOARD_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, "demo");
-        assert_eq!(resolved.externals[3].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 3);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, "demo");
+        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
+    }
+
+    #[tokio::test]
+    async fn plugin_load_failure_becomes_inactive_summary() {
+        let specs = ResolvedPlugins {
+            externals: vec![ExternalPluginSpec {
+                name: "broken".into(),
+                command: "mesh-llm-definitely-missing-plugin-binary".into(),
+                args: vec!["--stdio".into()],
+                url: None,
+                env: BTreeMap::new(),
+            }],
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("broken plugin should not stop manager startup");
+        let summaries = manager.list().await;
+        manager.shutdown().await;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "broken");
+        assert_eq!(summaries[0].status, "error");
+        assert!(!summaries[0].error.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]

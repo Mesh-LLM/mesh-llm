@@ -188,6 +188,20 @@ impl ModelsFormatter for JsonFormatter {
         print_json(payload)
     }
 
+    fn render_layer_package_download(
+        &self,
+        model_ref: &str,
+        package_ref: &str,
+        path: &Path,
+    ) -> Result<()> {
+        print_json(json!({
+            "requested_ref": model_ref,
+            "type": "layer_package",
+            "package_ref": package_ref,
+            "path": path,
+        }))
+    }
+
     fn render_updates_status(&self, repo: Option<&str>, all: bool, check: bool) -> Result<()> {
         print_json(json!({
             "status": "ok",

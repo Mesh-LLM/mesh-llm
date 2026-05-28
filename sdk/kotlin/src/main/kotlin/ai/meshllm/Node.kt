@@ -9,6 +9,7 @@ import uniffi.mesh_ffi.ChatMessageNative
 import uniffi.mesh_ffi.ChatRequestNative
 import uniffi.mesh_ffi.ClientEvent
 import uniffi.mesh_ffi.ClientStatus
+import uniffi.mesh_ffi.ConsoleOptionsNative
 import uniffi.mesh_ffi.EventListener as FfiEventListener
 import uniffi.mesh_ffi.MeshClientHandleInterface
 import uniffi.mesh_ffi.MeshNodeHandleInterface
@@ -21,6 +22,7 @@ import uniffi.mesh_ffi.createNode as ffiCreateNode
 import uniffi.mesh_ffi.discoverPublicMeshes as ffiDiscoverPublicMeshes
 
 typealias CapabilityLevel = uniffi.mesh_ffi.CapabilityLevel
+typealias ConsoleHandle = uniffi.mesh_ffi.ConsoleHandleInterface
 typealias CleanupPolicy = uniffi.mesh_ffi.CleanupPolicy
 typealias CleanupResult = uniffi.mesh_ffi.CleanupResult
 typealias DeleteModelOptions = uniffi.mesh_ffi.DeleteModelOptions
@@ -62,6 +64,12 @@ data class Status(val connected: Boolean, val peerCount: ULong)
 
 @JvmInline
 value class RequestId(val value: String)
+
+data class ConsoleOptions(
+    val assetDir: String,
+    val port: UShort? = null,
+    val listenAll: Boolean = false,
+)
 
 sealed class Event {
     object Connecting : Event()
@@ -197,6 +205,17 @@ class Node(private val handle: MeshNodeHandleInterface) {
     suspend fun reconnect(): Unit = withContext(Dispatchers.IO) { handle.reconnect() }
 
     suspend fun status(): Status = withContext(Dispatchers.IO) { handle.status().toStatus() }
+
+    suspend fun startConsole(options: ConsoleOptions): ConsoleHandle =
+        withContext(Dispatchers.IO) {
+            handle.startConsole(
+                ConsoleOptionsNative(
+                    assetDir = options.assetDir,
+                    port = options.port,
+                    listenAll = options.listenAll,
+                )
+            )
+        }
 
     class Inference(private val handle: MeshNodeHandleInterface) {
         suspend fun listModels(): List<Model> =

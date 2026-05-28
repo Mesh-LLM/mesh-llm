@@ -22,6 +22,18 @@ public struct RequestId: Sendable {
     public let value: String
 }
 
+public struct ConsoleOptions: Sendable {
+    public let assetDirectory: URL
+    public let port: UInt16?
+    public let listenAll: Bool
+
+    public init(assetDirectory: URL, port: UInt16? = nil, listenAll: Bool = false) {
+        self.assetDirectory = assetDirectory
+        self.port = port
+        self.listenAll = listenAll
+    }
+}
+
 public enum Event: Sendable {
     case connecting
     case joined(nodeId: String)
@@ -64,6 +76,25 @@ public struct ResponsesRequest: Sendable {
 
 #if canImport(MeshLLMFFI)
 public typealias MeshError = FfiError
+
+public final class Console: @unchecked Sendable {
+    private let handle: ConsoleHandle
+
+    public var url: String {
+        handle.url()
+    }
+
+    fileprivate init(handle: ConsoleHandle) {
+        self.handle = handle
+    }
+
+    public func stop() async throws {
+        let handle = self.handle
+        try await runBlocking {
+            try handle.stop()
+        }
+    }
+}
 
 public final class Client: @unchecked Sendable {
     private let handle: MeshClientHandle
@@ -276,6 +307,20 @@ public final class Node: @unchecked Sendable {
             handle.status()
         }
         return Status(connected: status.connected, peerCount: Int(clamping: status.peerCount))
+    }
+
+    public func startConsole(_ options: ConsoleOptions) async throws -> Console {
+        let handle = self.handle
+        let console = try await runBlocking {
+            try handle.startConsole(
+                options: ConsoleOptionsNative(
+                    assetDir: options.assetDirectory.path,
+                    port: options.port,
+                    listenAll: options.listenAll
+                )
+            )
+        }
+        return Console(handle: console)
     }
 
     public final class Inference: @unchecked Sendable {

@@ -25,17 +25,31 @@ pub fn extract_plugin_archive(
     }
 
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
+    validate_plugin_root(&extracted_root, plugin_name)?;
     let final_dir = install_dir.join(plugin_name);
-    if final_dir.exists() {
-        fs::remove_dir_all(&final_dir)
-            .with_context(|| format!("remove previous plugin install {}", final_dir.display()))?;
-    }
     fs::create_dir_all(install_dir)
         .with_context(|| format!("create plugin install dir {}", install_dir.display()))?;
-    fs::rename(&extracted_root, &final_dir)
-        .or_else(|_| copy_dir_and_remove(&extracted_root, &final_dir))?;
-    validate_installed_plugin(&final_dir, plugin_name)?;
+    replace_plugin_dir(&extracted_root, &final_dir, plugin_name)?;
     Ok(final_dir)
+}
+
+fn replace_plugin_dir(from: &Path, to: &Path, plugin_name: &str) -> Result<()> {
+    if to.exists() {
+        let backup_parent = tempfile::Builder::new()
+            .prefix(&format!("{plugin_name}-previous-"))
+            .tempdir_in(to.parent().unwrap_or_else(|| Path::new(".")))
+            .with_context(|| format!("create plugin install backup for {}", to.display()))?;
+        let backup_dir = backup_parent.path().join(plugin_name);
+        move_dir(to, &backup_dir)
+            .with_context(|| format!("backup previous plugin install {}", to.display()))?;
+        if let Err(error) = move_dir(from, to) {
+            let _ = move_dir(&backup_dir, to);
+            return Err(error).with_context(|| format!("replace plugin install {}", to.display()));
+        }
+    } else {
+        move_dir(from, to).with_context(|| format!("install plugin to {}", to.display()))?;
+    }
+    Ok(())
 }
 
 fn extract_tar_gz(archive_path: &Path, destination: &Path) -> Result<()> {
@@ -100,7 +114,7 @@ fn find_plugin_root(staging: &Path, plugin_name: &str) -> Result<PathBuf> {
     }
 }
 
-fn validate_installed_plugin(plugin_dir: &Path, plugin_name: &str) -> Result<()> {
+fn validate_plugin_root(plugin_dir: &Path, plugin_name: &str) -> Result<()> {
     if !plugin_dir.join("plugin.toml").exists() {
         bail!("installed plugin is missing plugin.toml");
     }
@@ -121,6 +135,10 @@ fn copy_dir_and_remove(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
+fn move_dir(from: &Path, to: &Path) -> Result<()> {
+    fs::rename(from, to).or_else(|_| copy_dir_and_remove(from, to))
+}
+
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     fs::create_dir_all(to).with_context(|| format!("create directory {}", to.display()))?;
     for entry in fs::read_dir(from).with_context(|| format!("read directory {}", from.display()))? {
@@ -136,4 +154,61 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use flate2::{Compression, write::GzEncoder};
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn write_tar_gz(archive_path: &Path, plugin_name: &str, files: &[(&str, &[u8])]) -> Result<()> {
+        let archive_file = fs::File::create(archive_path)?;
+        let encoder = GzEncoder::new(archive_file, Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (relative_path, contents) in files {
+            let path = format!("{plugin_name}/{relative_path}");
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, path, *contents)?;
+        }
+        archive.finish()?;
+        archive.into_inner()?.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_archive_does_not_remove_existing_install() {
+        let temp = TempDir::new().unwrap();
+        let install_dir = temp.path().join("installed");
+        let existing = install_dir.join("demo");
+        fs::create_dir_all(&existing).unwrap();
+        fs::write(existing.join("old-version.txt"), "keep me").unwrap();
+        fs::write(existing.join("plugin.toml"), "name = \"demo\"").unwrap();
+        fs::write(
+            existing.join(format!("demo{}", std::env::consts::EXE_SUFFIX)),
+            "",
+        )
+        .unwrap();
+
+        let archive_path = temp.path().join("demo.tar.gz");
+        write_tar_gz(
+            &archive_path,
+            "demo",
+            &[("plugin.toml", b"name = \"demo\"")],
+        )
+        .unwrap();
+
+        let err = extract_plugin_archive(&archive_path, ArchiveExt::TarGz, "demo", &install_dir)
+            .expect_err("archive without executable should fail validation");
+
+        assert!(err.to_string().contains("missing executable"));
+        assert_eq!(
+            fs::read_to_string(existing.join("old-version.txt")).unwrap(),
+            "keep me"
+        );
+    }
 }
