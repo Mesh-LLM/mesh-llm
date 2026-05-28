@@ -892,6 +892,7 @@ async fn install_latest_bundle(
         download_url(&release_asset_url(&release.tag, asset_name), &archive).await?;
         extract_bundle_archive(&archive, &extracted)?;
         let staged_files = collect_bundle_files(&extracted, expected_flavor)?;
+        verify_staged_mesh_binary_version(&extracted, &release.version)?;
         finish_bundle_install(
             exe,
             install_dir,
@@ -1091,6 +1092,34 @@ fn collect_bundle_files(
     );
     files.sort_by_key(|name| (name == &mesh_binary_name(), name.clone()));
     Ok(files)
+}
+
+fn verify_staged_mesh_binary_version(extracted: &Path, expected_version: &str) -> Result<()> {
+    let binary = extracted.join(mesh_binary_name());
+    let output = std::process::Command::new(&binary)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("Failed to run staged binary {}", binary.display()))?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "Staged binary {} failed --version with status {}",
+        binary.display(),
+        output.status
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let actual_version = stdout
+        .split_whitespace()
+        .last()
+        .context("Staged binary --version output was empty")?;
+    anyhow::ensure!(
+        actual_version == expected_version,
+        "Downloaded release v{} contains mesh-llm v{}; refusing to install mismatched bundle.",
+        expected_version,
+        actual_version
+    );
+    Ok(())
 }
 
 #[cfg(not(windows))]
@@ -1714,6 +1743,27 @@ mod tests {
         let path = dir.join("mesh-llm");
         std::fs::write(&path, b"binary").unwrap();
         assert!(path_is_writable(&path));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_staged_binary_version_must_match_release() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("self-update-version-check");
+        let binary = dir.join(mesh_binary_name());
+        std::fs::write(&binary, "#!/bin/sh\necho 'mesh-llm 0.68.0'\n").unwrap();
+        let mut permissions = std::fs::metadata(&binary).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&binary, permissions).unwrap();
+
+        verify_staged_mesh_binary_version(&dir, "0.68.0").unwrap();
+        let err = verify_staged_mesh_binary_version(&dir, "0.69.0").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("contains mesh-llm v0.68.0; refusing to install")
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -116,6 +116,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake ninja lld
 
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
       - name: Build release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -183,6 +189,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install cmake ninja lld
 
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
       - name: Package native SDK runtime
         run: |
           scripts/package-native-sdk.sh \
@@ -222,6 +234,12 @@ jobs:
 
       - name: Install macOS dependencies
         run: brew install cmake ninja lld
+
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
 
       - name: Build SwiftPM binary artifact
         run: |
@@ -284,6 +302,11 @@ jobs:
       - uses: taiki-e/install-action@just
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl lld
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build ARM64 CPU release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -331,6 +354,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build CUDA release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -378,6 +406,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build CUDA Blackwell release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -425,6 +458,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build ROCm release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -460,6 +498,11 @@ jobs:
       - uses: taiki-e/install-action@just
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl glslc libvulkan-dev spirv-headers lld
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build Vulkan release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -493,6 +536,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build Windows CPU release bundle
         shell: pwsh
         env:
@@ -554,6 +603,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Cache Windows SDK installers
         if: ${{ matrix.backend != 'cuda' }}
         uses: actions/cache@v5
@@ -624,6 +679,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'workflow_dispatch'
+
       - name: Download release artifacts
         uses: actions/download-artifact@v7
         with:
@@ -651,14 +709,15 @@ jobs:
             echo "Release tag already exists: $RELEASE_TAG" >&2
             exit 1
           fi
+          scripts/release-version.sh "$RELEASE_TAG"
           cp generated-swift-manifest/Package.swift Package.swift
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Package.swift
-          if git diff --cached --quiet -- Package.swift; then
-            echo "Package.swift already matches generated SwiftPM manifest"
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml tools/*/Cargo.toml sdk/kotlin/build.gradle.kts Package.swift
+          if git diff --cached --quiet; then
+            echo "Release source files already match $RELEASE_TAG"
           else
-            git commit -m "$RELEASE_TAG: prepare Swift package manifest"
+            git commit -m "$RELEASE_TAG: prepare release source"
           fi
           git tag "$RELEASE_TAG"
           git push origin "refs/tags/$RELEASE_TAG"
