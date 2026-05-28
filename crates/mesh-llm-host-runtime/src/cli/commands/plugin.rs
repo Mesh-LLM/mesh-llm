@@ -37,7 +37,6 @@ pub(crate) async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Re
                 );
             }
         }
-        PluginCommand::Mcp => runtime::run_plugin_mcp(cli).await?,
     }
     Ok(())
 }

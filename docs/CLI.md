@@ -475,7 +475,6 @@ Subcommands:
 
 - `plugin list`: list auto-registered/configured plugins.
 - `plugin install <NAME>`: compatibility shim for older install workflows.
-- `plugin mcp`: run configured plugin tools as an MCP server over stdio.
 
 
 ### `auth`

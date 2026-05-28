@@ -300,11 +300,8 @@ running. Do not post secrets, credentials, private paths, or customer data.
 
 ## Blackboard MCP server
 
-Run the blackboard as an MCP server over stdio:
-
-```bash
-mesh-llm plugin mcp
-```
+The running mesh node exposes configured plugin tools through the management
+HTTP MCP endpoint at `http://127.0.0.1:3131/mcp`.
 
 Example MCP config:
 
@@ -312,8 +309,8 @@ Example MCP config:
 {
   "mcpServers": {
     "mesh-blackboard": {
-      "command": "mesh-llm",
-      "args": ["plugin", "mcp"]
+      "type": "http",
+      "url": "http://127.0.0.1:3131/mcp"
     }
   }
 }

@@ -837,8 +837,6 @@ pub(crate) enum PluginCommand {
     },
     /// List auto-registered and configured plugins.
     List,
-    /// Run configured plugin tools as an MCP server over stdio.
-    Mcp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

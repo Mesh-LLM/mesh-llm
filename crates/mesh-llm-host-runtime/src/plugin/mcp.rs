@@ -17,7 +17,7 @@ use rmcp::{
     transport::streamable_http_server::{
         StreamableHttpService, session::local::LocalSessionManager,
     },
-    transport::{StreamableHttpClientTransport, TokioChildProcess, io::stdio},
+    transport::{StreamableHttpClientTransport, TokioChildProcess},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1319,23 +1319,6 @@ impl ServerHandler for PluginMcpServer {
             "Running plugins are aggregated into one MCP server. Tool and prompt names are namespaced as <plugin>.<name> to avoid collisions.",
         )
     }
-}
-
-pub async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> {
-    let bridge = ActiveBridge::default();
-    plugin_manager
-        .set_rpc_bridge(Some(Arc::new(bridge.clone())))
-        .await;
-
-    let result = async {
-        let server = PluginMcpServer::new(plugin_manager.clone(), bridge);
-        server.serve(stdio()).await?.waiting().await?;
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-
-    plugin_manager.set_rpc_bridge(None).await;
-    result
 }
 
 #[derive(Clone)]
