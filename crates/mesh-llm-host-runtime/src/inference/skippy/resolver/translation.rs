@@ -45,7 +45,16 @@ impl ResolvedSkippyConfig {
         } else {
             self.ensure_embedded_openai_safe(true)?;
         }
-        let options = self.base_model_load_options(telemetry);
+        let mut options = self.base_model_load_options(telemetry);
+        // Pre-compute the package identity so single_stage_config skips the
+        // SHA-256 hash. Without this the same hash runs again in
+        // SkippyModelHandle::load_with_hooks, doubling I/O (issue #717).
+        if options.package_identity.is_none() {
+            options.package_identity = Some(synthetic_direct_gguf_package(
+                &options.model_id,
+                &options.model_path,
+            )?);
+        }
         let stage_config = single_stage_config(&options)?;
         let family_policy =
             family_policy_for_model_path(&self.hardware.resolved_model_path, Some(&self.model_id));
