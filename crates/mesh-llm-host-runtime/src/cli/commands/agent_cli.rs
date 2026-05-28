@@ -965,10 +965,8 @@ fn merge_context_lengths(
         for process in processes {
             let name = process["name"].as_str().map(String::from);
             let ctx_len = process["context_length"].as_u64().map(|v| v as u32);
-            if ctx_len.is_some() {
-                if let Some(n) = name {
-                    context_map.insert(n, ctx_len);
-                }
+            if let (Some(n), Some(ctx_len)) = (name, ctx_len) {
+                context_map.insert(n, Some(ctx_len));
             }
         }
     }
@@ -1024,18 +1022,19 @@ async fn write_opencode_config_to_path(
 
     // Merge schema if needed (for display in ordered format)
     let mut merged_config = existing_config.clone();
-    if merged_config.get("$schema").is_none() {
-        if let Some(schema) = config_value.get("$schema") {
-            merged_config
-                .as_object_mut()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Expected {} to contain a JSON object",
-                        config_path.display()
-                    )
-                })?
-                .insert("$schema".to_string(), schema.clone());
-        }
+    let schema = config_value
+        .get("$schema")
+        .filter(|_| merged_config.get("$schema").is_none());
+    if let Some(schema) = schema {
+        merged_config
+            .as_object_mut()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Expected {} to contain a JSON object",
+                    config_path.display()
+                )
+            })?
+            .insert("$schema".to_string(), schema.clone());
     }
 
     merge_mesh_provider(&mut merged_config, mesh_provider.clone(), config_path)?;
