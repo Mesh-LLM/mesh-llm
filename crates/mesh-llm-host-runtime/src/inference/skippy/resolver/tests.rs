@@ -286,6 +286,10 @@ fn assert_defaults_full_surface_resolution(omitted: &ResolvedSkippyConfig) {
     assert_eq!(single_stage.ctx_size, 8192);
     assert_eq!(single_stage.n_batch, Some(512));
     assert_eq!(single_stage.n_ubatch, Some(128));
+    assert!(
+        single_stage.package_identity.is_some(),
+        "single-stage load should preserve precomputed package identity"
+    );
 }
 
 #[test]
