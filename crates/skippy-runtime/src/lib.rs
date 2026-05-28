@@ -3444,9 +3444,9 @@ fn ensure_ok(status: Status, error: *mut RawError) -> Result<()> {
         let message = error_message(error);
         free_error(error);
         if message.is_empty() {
-            Err(anyhow!("skippy ABI call failed: {:?}", status))
+            Err(anyhow!("{:?}", status))
         } else {
-            Err(anyhow!("skippy ABI call failed: {:?}: {}", status, message))
+            Err(anyhow!("{:?}: {}", status, message))
         }
     }
 }
