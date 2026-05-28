@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use prost::Message;
 #[cfg(unix)]
 use std::path::PathBuf;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::{PROTOCOL_VERSION, proto};
 
@@ -15,7 +15,30 @@ pub enum LocalStream {
     PipeServer(tokio::net::windows::named_pipe::NamedPipeServer),
 }
 
+pub type LocalReadHalf = Box<dyn AsyncRead + Send + Unpin>;
+pub type LocalWriteHalf = Box<dyn AsyncWrite + Send + Unpin>;
+
 impl LocalStream {
+    pub fn into_split(self) -> (LocalReadHalf, LocalWriteHalf) {
+        match self {
+            #[cfg(unix)]
+            LocalStream::Unix(stream) => {
+                let (read, write) = stream.into_split();
+                (Box::new(read), Box::new(write))
+            }
+            #[cfg(windows)]
+            LocalStream::PipeClient(stream) => {
+                let (read, write) = tokio::io::split(stream);
+                (Box::new(read), Box::new(write))
+            }
+            #[cfg(windows)]
+            LocalStream::PipeServer(stream) => {
+                let (read, write) = tokio::io::split(stream);
+                (Box::new(read), Box::new(write))
+            }
+        }
+    }
+
     async fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
         match self {
             #[cfg(unix)]
@@ -183,12 +206,38 @@ pub async fn bind_side_stream(plugin_id: &str, stream_id: &str) -> Result<LocalL
     }
 }
 
+pub async fn write_envelope_to<W>(stream: &mut W, envelope: &proto::Envelope) -> Result<()>
+where
+    W: AsyncWrite + Unpin + ?Sized,
+{
+    let mut body = Vec::new();
+    envelope.encode(&mut body)?;
+    stream.write_all(&(body.len() as u32).to_le_bytes()).await?;
+    stream.write_all(&body).await?;
+    Ok(())
+}
+
 pub async fn write_envelope(stream: &mut LocalStream, envelope: &proto::Envelope) -> Result<()> {
     let mut body = Vec::new();
     envelope.encode(&mut body)?;
     stream.write_all(&(body.len() as u32).to_le_bytes()).await?;
     stream.write_all(&body).await?;
     Ok(())
+}
+
+pub async fn read_envelope_from<R>(stream: &mut R) -> Result<proto::Envelope>
+where
+    R: AsyncRead + Unpin + ?Sized,
+{
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await?;
+    let len = u32::from_le_bytes(len_buf) as usize;
+    if len > 16 * 1024 * 1024 {
+        bail!("Plugin frame too large");
+    }
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).await?;
+    Ok(proto::Envelope::decode(body.as_slice())?)
 }
 
 pub async fn read_envelope(stream: &mut LocalStream) -> Result<proto::Envelope> {

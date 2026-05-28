@@ -1,31 +1,52 @@
 use anyhow::{Result, bail};
 use serde::Serialize;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::{
     PROTOCOL_VERSION,
     helpers::{channel_message, json_channel_message},
-    io::{
-        LocalStream, connect_side_stream, read_envelope, send_bulk_transfer_message,
-        send_channel_message, write_envelope,
-    },
+    io::{LocalStream, connect_side_stream},
     proto,
 };
 
 static NEXT_HOST_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+const PLUGIN_ORIGINATED_REQUEST_BIT: u64 = 1 << 63;
+
+pub(crate) type PendingHostResponses =
+    Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>;
 
 pub struct PluginContext<'a> {
-    pub(crate) stream: &'a mut LocalStream,
-    pub(crate) plugin_id: &'a str,
+    pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
+    pub(crate) pending_host_responses: PendingHostResponses,
+    pub(crate) plugin_id: String,
+    pub(crate) _marker: PhantomData<&'a mut ()>,
 }
 
 impl<'a> PluginContext<'a> {
+    pub(crate) fn new(
+        plugin_id: String,
+        outbound_tx: mpsc::Sender<proto::Envelope>,
+        pending_host_responses: PendingHostResponses,
+    ) -> Self {
+        Self {
+            outbound_tx,
+            pending_host_responses,
+            plugin_id,
+            _marker: PhantomData,
+        }
+    }
+
     pub async fn send_channel(&mut self, message: proto::ChannelMessage) -> Result<()> {
         self.send_channel_message(message).await
     }
 
     pub async fn send_channel_message(&mut self, message: proto::ChannelMessage) -> Result<()> {
-        send_channel_message(self.stream, self.plugin_id, message).await
+        self.send_payload(proto::envelope::Payload::ChannelMessage(message), 0)
+            .await
     }
 
     pub async fn send_text_channel(
@@ -69,26 +90,20 @@ impl<'a> PluginContext<'a> {
         &mut self,
         message: proto::BulkTransferMessage,
     ) -> Result<()> {
-        send_bulk_transfer_message(self.stream, self.plugin_id, message).await
+        self.send_payload(proto::envelope::Payload::BulkTransferMessage(message), 0)
+            .await
     }
 
     pub async fn notify_host<P>(&mut self, method: &str, params: P) -> Result<()>
     where
         P: Serialize,
     {
-        write_envelope(
-            self.stream,
-            &proto::Envelope {
-                protocol_version: PROTOCOL_VERSION,
-                plugin_id: self.plugin_id.to_string(),
-                request_id: 0,
-                payload: Some(proto::envelope::Payload::RpcNotification(
-                    proto::RpcNotification {
-                        method: method.to_string(),
-                        params_json: serde_json::to_string(&params)?,
-                    },
-                )),
-            },
+        self.send_payload(
+            proto::envelope::Payload::RpcNotification(proto::RpcNotification {
+                method: method.to_string(),
+                params_json: serde_json::to_string(&params)?,
+            }),
+            0,
         )
         .await
     }
@@ -97,26 +112,25 @@ impl<'a> PluginContext<'a> {
         &mut self,
         request: proto::OpenMeshStreamRequest,
     ) -> Result<proto::OpenMeshStreamResponse> {
-        let request_id = NEXT_HOST_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        write_envelope(
-            self.stream,
-            &proto::Envelope {
-                protocol_version: PROTOCOL_VERSION,
-                plugin_id: self.plugin_id.to_string(),
-                request_id,
-                payload: Some(proto::envelope::Payload::OpenMeshStreamRequest(request)),
-            },
-        )
-        .await?;
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        self.pending_host_responses
+            .lock()
+            .await
+            .insert(request_id, tx);
 
-        let response = read_envelope(self.stream).await?;
-        if response.request_id != request_id {
-            bail!(
-                "Received host response id {} while waiting for {}",
-                response.request_id,
-                request_id
-            );
+        if let Err(err) = self
+            .send_payload(
+                proto::envelope::Payload::OpenMeshStreamRequest(request),
+                request_id,
+            )
+            .await
+        {
+            self.pending_host_responses.lock().await.remove(&request_id);
+            return Err(err);
         }
+
+        let response = rx.await??;
         match response.payload {
             Some(proto::envelope::Payload::OpenMeshStreamResponse(response)) => Ok(response),
             Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
@@ -143,4 +157,20 @@ impl<'a> PluginContext<'a> {
             .ok_or_else(|| anyhow::anyhow!("Host accepted mesh stream without an endpoint"))?;
         connect_side_stream(endpoint, response.transport_kind).await
     }
+
+    async fn send_payload(&self, payload: proto::envelope::Payload, request_id: u64) -> Result<()> {
+        self.outbound_tx
+            .send(proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: self.plugin_id.clone(),
+                request_id,
+                payload: Some(payload),
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("plugin host connection is closed"))
+    }
+}
+
+pub(crate) fn next_host_request_id() -> u64 {
+    PLUGIN_ORIGINATED_REQUEST_BIT | NEXT_HOST_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }

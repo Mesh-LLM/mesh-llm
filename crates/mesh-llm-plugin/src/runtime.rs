@@ -8,21 +8,26 @@ use rmcp::model::{
     SubscribeRequestParams, UnsubscribeRequestParams,
 };
 use serde::de::DeserializeOwned;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use tokio::sync::{Mutex, RwLock, mpsc};
+
 use crate::{
     PROTOCOL_VERSION,
-    context::PluginContext,
+    context::{PendingHostResponses, PluginContext},
     error::{PluginError, PluginResult, PluginRpcResult},
     helpers::{
         CompletionRouter, PromptRouter, ResourceRouter, TaskRouter, ToolCallRequest, ToolRouter,
         json_response, parse_get_prompt_request, parse_read_resource_request, parse_rpc_params,
         parse_tool_call_request,
     },
-    io::{LocalStream, connect_from_env, read_envelope, write_envelope},
+    io::{
+        LocalReadHalf, LocalStream, LocalWriteHalf, connect_from_env, read_envelope_from,
+        write_envelope_to,
+    },
     proto,
 };
 use serde::{Deserialize, Serialize};
@@ -630,6 +635,7 @@ pub trait Plugin: Send {
     }
 }
 
+#[derive(Clone)]
 pub struct SimplePlugin {
     metadata: PluginMetadata,
     operation_router: Option<ToolRouter>,
@@ -953,6 +959,7 @@ impl InternalRpcPluginBuilder {
     }
 }
 
+#[derive(Clone)]
 pub struct InternalRpcPlugin {
     plugin: SimplePlugin,
     rpc_handlers: BTreeMap<String, RpcMethodHandler>,
@@ -1334,105 +1341,193 @@ impl Plugin for SimplePlugin {
 
 pub struct PluginRuntime;
 
+struct RuntimeState<P> {
+    plugin: Arc<RwLock<P>>,
+    plugin_id: String,
+    outbound_tx: mpsc::Sender<proto::Envelope>,
+    pending_host_responses: PendingHostResponses,
+}
+
 impl PluginRuntime {
-    pub async fn run<P: Plugin>(plugin: P) -> Result<()> {
+    pub async fn run<P: Plugin + Clone + Sync + 'static>(plugin: P) -> Result<()> {
         let stream = connect_from_env().await?;
         Self::run_with_stream(plugin, stream).await
     }
 
-    pub async fn run_with_stream<P: Plugin>(mut plugin: P, mut stream: LocalStream) -> Result<()> {
+    pub async fn run_with_stream<P: Plugin + Clone + Sync + 'static>(
+        plugin: P,
+        stream: LocalStream,
+    ) -> Result<()> {
+        let plugin_id = plugin.plugin_id().to_string();
+        let (read, write) = stream.into_split();
+        let (outbound_tx, outbound_rx) = mpsc::channel(256);
+        let writer = tokio::spawn(Self::write_loop(write, outbound_rx));
+        let state = Arc::new(RuntimeState {
+            plugin: Arc::new(RwLock::new(plugin)),
+            plugin_id,
+            outbound_tx,
+            pending_host_responses: Arc::new(Mutex::new(HashMap::new())),
+        });
+
+        match Self::read_loop(state, read).await {
+            Ok(()) => Ok(writer.await??),
+            Err(err) => {
+                writer.abort();
+                Err(err)
+            }
+        }
+    }
+
+    async fn read_loop<P: Plugin + Clone + Sync + 'static>(
+        state: Arc<RuntimeState<P>>,
+        mut read: LocalReadHalf,
+    ) -> Result<()> {
         loop {
-            let envelope = read_envelope(&mut stream).await?;
-            if !Self::handle_envelope(&mut plugin, &mut stream, envelope).await? {
+            let envelope = read_envelope_from(&mut *read).await?;
+            if Self::complete_pending_host_response(&state, &envelope).await {
+                continue;
+            }
+            if !Self::handle_envelope(state.clone(), envelope).await? {
                 break;
             }
         }
-
         Ok(())
     }
 
-    async fn handle_envelope<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
+    async fn write_loop(
+        mut write: LocalWriteHalf,
+        mut outbound_rx: mpsc::Receiver<proto::Envelope>,
+    ) -> Result<()> {
+        while let Some(envelope) = outbound_rx.recv().await {
+            write_envelope_to(&mut *write, &envelope).await?;
+        }
+        Ok(())
+    }
+
+    async fn complete_pending_host_response<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
+        envelope: &proto::Envelope,
+    ) -> bool {
+        let Some(sender) = state
+            .pending_host_responses
+            .lock()
+            .await
+            .remove(&envelope.request_id)
+        else {
+            return false;
+        };
+        let _ = sender.send(Ok(envelope.clone()));
+        true
+    }
+
+    async fn handle_envelope<P: Plugin + Clone + Sync + 'static>(
+        state: Arc<RuntimeState<P>>,
         envelope: proto::Envelope,
     ) -> Result<bool> {
         let request_id = envelope.request_id;
-        let plugin_id = plugin.plugin_id().to_string();
         let Some(payload) = envelope.payload else {
             return Ok(true);
         };
 
         match payload {
             proto::envelope::Payload::InitializeRequest(request) => {
-                Self::handle_initialize(plugin, stream, &plugin_id, request_id, request).await
+                Self::handle_initialize(state, request_id, request).await
             }
-            proto::envelope::Payload::HealthRequest(_) => {
-                Self::handle_health(plugin, stream, &plugin_id, request_id).await
-            }
+            proto::envelope::Payload::HealthRequest(_) => Self::handle_health(state, request_id),
             proto::envelope::Payload::ShutdownRequest(_) => {
                 Self::write_payload(
-                    stream,
-                    &plugin_id,
+                    &state,
                     request_id,
                     proto::envelope::Payload::ShutdownResponse(proto::ShutdownResponse {}),
                 )
                 .await?;
                 Ok(false)
             }
-            proto::envelope::Payload::RpcRequest(request) => {
-                Self::handle_rpc(plugin, stream, &plugin_id, request_id, request).await
-            }
-            proto::envelope::Payload::InvokeServiceRequest(request) => {
-                Self::handle_invoke_service(plugin, stream, &plugin_id, request_id, request).await
-            }
-            proto::envelope::Payload::OpenStreamRequest(request) => {
-                Self::handle_open_stream(plugin, stream, &plugin_id, request_id, request).await
-            }
-            proto::envelope::Payload::RpcNotification(notification) => {
-                Self::handle_rpc_notification(plugin, stream, &plugin_id, notification).await
-            }
-            proto::envelope::Payload::ChannelMessage(message) => {
-                Self::handle_channel_message(plugin, stream, &plugin_id, message).await
-            }
-            proto::envelope::Payload::BulkTransferMessage(message) => {
-                Self::handle_bulk_transfer_message(plugin, stream, &plugin_id, message).await
-            }
-            proto::envelope::Payload::MeshEvent(event) => {
-                Self::handle_mesh_event(plugin, stream, &plugin_id, event).await
-            }
-            proto::envelope::Payload::CancelStreamNotification(notification) => {
-                Self::handle_cancel_stream(plugin, stream, &plugin_id, notification).await
-            }
-            proto::envelope::Payload::CloseStreamNotification(notification) => {
-                Self::handle_close_stream(plugin, stream, &plugin_id, notification).await
-            }
-            proto::envelope::Payload::StreamError(error) => {
-                Self::handle_stream_error(plugin, stream, &plugin_id, error).await
-            }
-            proto::envelope::Payload::ErrorResponse(error) => {
-                Self::handle_host_error(plugin, stream, &plugin_id, error).await
-            }
-            _ => Ok(true),
+            payload => Self::spawn_payload_handler(state, request_id, payload),
         }
     }
 
-    async fn handle_initialize<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    fn spawn_payload_handler<P: Plugin + Clone + Sync + 'static>(
+        state: Arc<RuntimeState<P>>,
+        request_id: u64,
+        payload: proto::envelope::Payload,
+    ) -> Result<bool> {
+        tokio::spawn(async move {
+            let _ = Self::handle_payload(state, request_id, payload).await;
+        });
+        Ok(true)
+    }
+
+    async fn handle_payload<P: Plugin + Clone + Sync>(
+        state: Arc<RuntimeState<P>>,
+        request_id: u64,
+        payload: proto::envelope::Payload,
+    ) -> Result<()> {
+        match payload {
+            proto::envelope::Payload::RpcRequest(request) => {
+                let payload = Self::rpc_payload(&state, request).await;
+                Self::write_payload(&state, request_id, payload).await
+            }
+            proto::envelope::Payload::InvokeServiceRequest(request) => {
+                let payload = Self::invoke_service_payload(&state, request).await;
+                Self::write_payload(&state, request_id, payload).await
+            }
+            proto::envelope::Payload::OpenStreamRequest(request) => {
+                let payload = Self::open_stream_payload(&state, request).await;
+                Self::write_payload(&state, request_id, payload).await
+            }
+            proto::envelope::Payload::RpcNotification(notification) => {
+                Self::handle_rpc_notification(&state, notification)
+                    .await
+                    .map(|_| ())
+            }
+            proto::envelope::Payload::ChannelMessage(message) => {
+                Self::handle_channel_message(&state, message)
+                    .await
+                    .map(|_| ())
+            }
+            proto::envelope::Payload::BulkTransferMessage(message) => {
+                Self::handle_bulk_transfer_message(&state, message)
+                    .await
+                    .map(|_| ())
+            }
+            proto::envelope::Payload::MeshEvent(event) => {
+                Self::handle_mesh_event(&state, event).await.map(|_| ())
+            }
+            proto::envelope::Payload::CancelStreamNotification(notification) => {
+                Self::handle_cancel_stream(&state, notification)
+                    .await
+                    .map(|_| ())
+            }
+            proto::envelope::Payload::CloseStreamNotification(notification) => {
+                Self::handle_close_stream(&state, notification)
+                    .await
+                    .map(|_| ())
+            }
+            proto::envelope::Payload::StreamError(error) => {
+                Self::handle_stream_error(&state, error).await.map(|_| ())
+            }
+            proto::envelope::Payload::ErrorResponse(error) => {
+                Self::handle_host_error(&state, error).await.map(|_| ())
+            }
+            _ => Ok(()),
+        }?;
+        Ok(())
+    }
+
+    async fn handle_initialize<P: Plugin + Clone + Sync>(
+        state: Arc<RuntimeState<P>>,
         request_id: u64,
         request: proto::InitializeRequest,
     ) -> Result<bool> {
-        let init_result = {
-            let mut context = PluginContext { stream, plugin_id };
-            plugin
-                .initialize(PluginInitializeRequest::from(request), &mut context)
-                .await
-        };
+        let mut plugin = state.plugin.write().await;
+        let mut context = Self::context(&state);
+        let init_result = plugin
+            .initialize(PluginInitializeRequest::from(request), &mut context)
+            .await;
         if let Err(err) = init_result {
             Self::write_payload(
-                stream,
-                plugin_id,
+                &state,
                 request_id,
                 proto::envelope::Payload::ErrorResponse(err.into_error_response()),
             )
@@ -1441,11 +1536,10 @@ impl PluginRuntime {
         }
 
         Self::write_payload(
-            stream,
-            plugin_id,
+            &state,
             request_id,
             proto::envelope::Payload::InitializeResponse(proto::InitializeResponse {
-                plugin_id: plugin_id.to_string(),
+                plugin_id: state.plugin_id.clone(),
                 plugin_protocol_version: PROTOCOL_VERSION,
                 plugin_version: plugin.plugin_version(),
                 server_info_json: serde_json::to_string(&plugin.server_info())?,
@@ -1455,206 +1549,188 @@ impl PluginRuntime {
         )
         .await?;
 
-        let mut context = PluginContext { stream, plugin_id };
+        let mut context = Self::context(&state);
         plugin.on_initialized(&mut context).await?;
         Ok(true)
     }
 
-    async fn handle_health<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    fn handle_health<P: Plugin + Clone + Sync + 'static>(
+        state: Arc<RuntimeState<P>>,
         request_id: u64,
     ) -> Result<bool> {
-        let detail = {
-            let mut context = PluginContext { stream, plugin_id };
-            plugin.health(&mut context).await?
-        };
-        Self::write_payload(
-            stream,
-            plugin_id,
-            request_id,
-            proto::envelope::Payload::HealthResponse(proto::HealthResponse {
-                status: proto::health_response::Status::Ok as i32,
-                detail,
-            }),
-        )
-        .await?;
-        Ok(true)
-    }
-
-    async fn handle_rpc<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
-        request_id: u64,
-        request: proto::RpcRequest,
-    ) -> Result<bool> {
-        let payload = {
-            let mut context = PluginContext { stream, plugin_id };
-            match plugin.handle_rpc(request, &mut context).await {
-                Ok(payload) => payload,
-                Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
-            }
-        };
-        Self::write_payload(stream, plugin_id, request_id, payload).await?;
-        Ok(true)
-    }
-
-    async fn handle_invoke_service<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
-        request_id: u64,
-        request: proto::InvokeServiceRequest,
-    ) -> Result<bool> {
-        let payload = {
-            let mut context = PluginContext { stream, plugin_id };
-            match plugin.invoke_service(request, &mut context).await {
-                Ok(Some(response)) => proto::envelope::Payload::InvokeServiceResponse(response),
-                Ok(None) => proto::envelope::Payload::ErrorResponse(
-                    PluginError::method_not_found("Unsupported service invocation")
+        tokio::spawn(async move {
+            let mut plugin = Self::plugin_for_request(&state).await;
+            let mut context = Self::context(&state);
+            let payload = match plugin.health(&mut context).await {
+                Ok(detail) => proto::envelope::Payload::HealthResponse(proto::HealthResponse {
+                    status: proto::health_response::Status::Ok as i32,
+                    detail,
+                }),
+                Err(err) => proto::envelope::Payload::ErrorResponse(
+                    PluginError::internal(format!("health check failed: {err}"))
                         .into_error_response(),
                 ),
-                Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
-            }
-        };
-        Self::write_payload(stream, plugin_id, request_id, payload).await?;
+            };
+            let _ = Self::write_payload(&state, request_id, payload).await;
+        });
         Ok(true)
     }
 
-    async fn handle_open_stream<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
-        request_id: u64,
-        request: proto::OpenStreamRequest,
-    ) -> Result<bool> {
-        let payload = {
-            let mut context = PluginContext { stream, plugin_id };
-            match plugin.open_stream(request, &mut context).await {
-                Ok(Some(response)) => proto::envelope::Payload::OpenStreamResponse(response),
-                Ok(None) => proto::envelope::Payload::ErrorResponse(
-                    PluginError::method_not_found(
-                        "Unsupported stream control message 'open_stream'",
-                    )
+    async fn plugin_for_request<P: Plugin + Clone + Sync>(state: &RuntimeState<P>) -> P {
+        state.plugin.read().await.clone()
+    }
+
+    async fn rpc_payload<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
+        request: proto::RpcRequest,
+    ) -> proto::envelope::Payload {
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
+        match plugin.handle_rpc(request, &mut context).await {
+            Ok(payload) => payload,
+            Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
+        }
+    }
+
+    async fn invoke_service_payload<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
+        request: proto::InvokeServiceRequest,
+    ) -> proto::envelope::Payload {
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
+        match plugin.invoke_service(request, &mut context).await {
+            Ok(Some(response)) => proto::envelope::Payload::InvokeServiceResponse(response),
+            Ok(None) => proto::envelope::Payload::ErrorResponse(
+                PluginError::method_not_found("Unsupported service invocation")
                     .into_error_response(),
-                ),
-                Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
-            }
-        };
-        Self::write_payload(stream, plugin_id, request_id, payload).await?;
-        Ok(true)
+            ),
+            Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
+        }
     }
 
-    async fn handle_rpc_notification<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn open_stream_payload<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
+        request: proto::OpenStreamRequest,
+    ) -> proto::envelope::Payload {
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
+        match plugin.open_stream(request, &mut context).await {
+            Ok(Some(response)) => proto::envelope::Payload::OpenStreamResponse(response),
+            Ok(None) => proto::envelope::Payload::ErrorResponse(
+                PluginError::method_not_found("Unsupported stream control message 'open_stream'")
+                    .into_error_response(),
+            ),
+            Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
+        }
+    }
+
+    async fn handle_rpc_notification<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         notification: proto::RpcNotification,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin
             .on_rpc_notification(notification, &mut context)
             .await?;
         Ok(true)
     }
 
-    async fn handle_channel_message<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_channel_message<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         message: proto::ChannelMessage,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin.on_channel_message(message, &mut context).await?;
         Ok(true)
     }
 
-    async fn handle_bulk_transfer_message<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_bulk_transfer_message<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         message: proto::BulkTransferMessage,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin
             .on_bulk_transfer_message(message, &mut context)
             .await?;
         Ok(true)
     }
 
-    async fn handle_mesh_event<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_mesh_event<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         event: proto::MeshEvent,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin.on_mesh_event(event, &mut context).await?;
         Ok(true)
     }
 
-    async fn handle_cancel_stream<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_cancel_stream<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         notification: proto::CancelStreamNotification,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin.on_cancel_stream(notification, &mut context).await?;
         Ok(true)
     }
 
-    async fn handle_close_stream<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_close_stream<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         notification: proto::CloseStreamNotification,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin.on_close_stream(notification, &mut context).await?;
         Ok(true)
     }
 
-    async fn handle_stream_error<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_stream_error<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         error: proto::StreamError,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin.on_stream_error(error, &mut context).await?;
         Ok(true)
     }
 
-    async fn handle_host_error<P: Plugin>(
-        plugin: &mut P,
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    async fn handle_host_error<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         error: proto::ErrorResponse,
     ) -> Result<bool> {
-        let mut context = PluginContext { stream, plugin_id };
+        let mut plugin = Self::plugin_for_request(state).await;
+        let mut context = Self::context(state);
         plugin.on_host_error(error, &mut context).await?;
         Ok(true)
     }
 
-    async fn write_payload(
-        stream: &mut LocalStream,
-        plugin_id: &str,
+    fn context<P: Plugin + Clone + Sync>(state: &RuntimeState<P>) -> PluginContext<'static> {
+        PluginContext::new(
+            state.plugin_id.clone(),
+            state.outbound_tx.clone(),
+            state.pending_host_responses.clone(),
+        )
+    }
+
+    async fn write_payload<P: Plugin + Clone + Sync>(
+        state: &RuntimeState<P>,
         request_id: u64,
         payload: proto::envelope::Payload,
     ) -> Result<()> {
-        write_envelope(
-            stream,
-            &proto::Envelope {
+        state
+            .outbound_tx
+            .send(proto::Envelope {
                 protocol_version: PROTOCOL_VERSION,
-                plugin_id: plugin_id.to_string(),
+                plugin_id: state.plugin_id.clone(),
                 request_id,
                 payload: Some(payload),
-            },
-        )
-        .await
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("plugin host connection is closed"))
     }
 }
 
@@ -1687,10 +1763,13 @@ fn normalize_call_tool_output(result: &CallToolResult) -> PluginResult<String> {
 mod tests {
     use super::*;
     use crate::{mcp, plugin, plugin_server_info};
+    use crate::{read_envelope, write_envelope};
     use rmcp::model::{
         ArgumentInfo, PromptMessage, PromptMessageContent, PromptMessageRole, Reference,
     };
     use serde_json::json;
+    use tokio::sync::{Barrier, Notify};
+    use tokio::time::{Duration, timeout};
 
     #[derive(Clone, Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
     struct DemoArgs {
@@ -1698,16 +1777,13 @@ mod tests {
         message: String,
     }
 
-    async fn disconnected_stream() -> LocalStream {
-        #[cfg(unix)]
-        {
-            let (client, _server) = tokio::net::UnixStream::pair().unwrap();
-            LocalStream::Unix(client)
-        }
-        #[cfg(windows)]
-        {
-            panic!("runtime tests are only implemented for unix");
-        }
+    fn test_context() -> PluginContext<'static> {
+        let (outbound_tx, _outbound_rx) = mpsc::channel(8);
+        PluginContext::new(
+            "demo".into(),
+            outbound_tx,
+            Arc::new(Mutex::new(HashMap::new())),
+        )
     }
 
     #[tokio::test]
@@ -1747,11 +1823,7 @@ mod tests {
             ],
         };
 
-        let mut stream = disconnected_stream().await;
-        let mut context = PluginContext {
-            stream: &mut stream,
-            plugin_id: "demo",
-        };
+        let mut context = test_context();
 
         let op = plugin
             .invoke_service(
@@ -1830,5 +1902,162 @@ mod tests {
             completion_result.completion.values,
             vec![String::from("alpha")]
         );
+    }
+
+    #[tokio::test]
+    async fn health_request_returns_while_operation_is_running() {
+        let started = Arc::new(Notify::new());
+        let started_for_tool = started.clone();
+        let plugin = plugin! {
+            metadata: PluginMetadata::new(
+                "demo",
+                "1.0.0",
+                plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+            ),
+            mcp: [
+                mcp::tool("slow")
+                    .description("Slow operation")
+                    .input::<DemoArgs>()
+                    .handle(move |_args, _context| {
+                        let started = started_for_tool.clone();
+                        Box::pin(async move {
+                            started.notify_one();
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            Ok(json!({ "done": true }))
+                        })
+                    }),
+            ],
+        };
+
+        #[cfg(unix)]
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        #[cfg(not(unix))]
+        panic!("runtime stream tests are only implemented for unix");
+
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        write_envelope(
+            &mut host_stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".into(),
+                request_id: 1,
+                payload: Some(proto::envelope::Payload::InvokeServiceRequest(
+                    proto::InvokeServiceRequest {
+                        kind: proto::ServiceKind::Operation as i32,
+                        service_name: "slow".into(),
+                        input_json: "{}".into(),
+                    },
+                )),
+            },
+        )
+        .await
+        .unwrap();
+
+        started.notified().await;
+        write_envelope(
+            &mut host_stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".into(),
+                request_id: 2,
+                payload: Some(proto::envelope::Payload::HealthRequest(
+                    proto::HealthRequest {},
+                )),
+            },
+        )
+        .await
+        .unwrap();
+
+        let health = timeout(Duration::from_millis(150), read_envelope(&mut host_stream))
+            .await
+            .expect("health response should not wait for slow operation")
+            .unwrap();
+        assert_eq!(health.request_id, 2);
+        assert!(matches!(
+            health.payload,
+            Some(proto::envelope::Payload::HealthResponse(_))
+        ));
+
+        let invoke = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+            .await
+            .expect("slow operation should still complete")
+            .unwrap();
+        assert_eq!(invoke.request_id, 1);
+
+        runtime.abort();
+    }
+
+    #[tokio::test]
+    async fn invokes_service_requests_concurrently() {
+        let barrier = Arc::new(Barrier::new(2));
+        let barrier_for_tool = barrier.clone();
+        let plugin = plugin! {
+            metadata: PluginMetadata::new(
+                "demo",
+                "1.0.0",
+                plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+            ),
+            mcp: [
+                mcp::tool("barrier")
+                    .description("Waits for another request")
+                    .input::<DemoArgs>()
+                    .handle(move |_args, _context| {
+                        let barrier = barrier_for_tool.clone();
+                        Box::pin(async move {
+                            barrier.wait().await;
+                            Ok(json!({ "done": true }))
+                        })
+                    }),
+            ],
+        };
+
+        #[cfg(unix)]
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        #[cfg(not(unix))]
+        panic!("runtime stream tests are only implemented for unix");
+
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+
+        for request_id in [1, 2] {
+            write_envelope(
+                &mut host_stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    plugin_id: "demo".into(),
+                    request_id,
+                    payload: Some(proto::envelope::Payload::InvokeServiceRequest(
+                        proto::InvokeServiceRequest {
+                            kind: proto::ServiceKind::Operation as i32,
+                            service_name: "barrier".into(),
+                            input_json: "{}".into(),
+                        },
+                    )),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let first = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+            .await
+            .expect("first invoke response should not block behind another request")
+            .unwrap();
+        let second = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+            .await
+            .expect("second invoke response should not block behind another request")
+            .unwrap();
+        let mut request_ids = vec![first.request_id, second.request_id];
+        request_ids.sort_unstable();
+        assert_eq!(request_ids, vec![1, 2]);
+
+        runtime.abort();
     }
 }

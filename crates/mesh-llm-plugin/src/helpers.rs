@@ -533,6 +533,7 @@ type ToolHandler = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct ToolRouter {
     tools: Vec<Tool>,
     handlers: HashMap<String, ToolHandler>,
@@ -636,6 +637,7 @@ type PromptHandler = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct PromptRouter {
     prompts: Vec<Prompt>,
     handlers: HashMap<String, PromptHandler>,
@@ -689,6 +691,7 @@ impl Default for PromptRouter {
     }
 }
 
+#[derive(Clone)]
 enum ResourceReadMatcher {
     Exact(String),
     Prefix(String),
@@ -712,6 +715,7 @@ type ResourceHandler = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct ResourceRouter {
     resources: Vec<Resource>,
     resource_templates: Vec<ResourceTemplate>,
@@ -797,6 +801,7 @@ impl Default for ResourceRouter {
     }
 }
 
+#[derive(Clone)]
 enum CompletionMatcher {
     PromptArgument {
         prompt_name: String,
@@ -841,6 +846,7 @@ type CompletionHandler = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct CompletionRouter {
     handlers: Vec<(CompletionMatcher, CompletionHandler)>,
 }
@@ -1008,6 +1014,7 @@ type TaskCancelHandler = Arc<
         + Sync,
 >;
 
+#[derive(Clone)]
 pub struct TaskRouter {
     list_handler: Option<TaskListHandler>,
     info_handler: Option<TaskInfoHandler>,
