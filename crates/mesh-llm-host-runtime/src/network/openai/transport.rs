@@ -114,6 +114,8 @@ enum RouteAttemptResult {
     ClientDisconnected,
 }
 
+const REMOTE_UNCOMMITTED_RETRIES: usize = 1;
+
 fn route_attempt_result_label(result: &RouteAttemptResult) -> &'static str {
     match result {
         RouteAttemptResult::Delivered { .. } => "delivered",
@@ -3055,7 +3057,7 @@ async fn route_mesh_request_attempts(
     for (idx, target_host) in target_hosts.iter().enumerate() {
         state.attempts += 1;
         let attempt_started = Instant::now();
-        let attempt_result = route_remote_attempt(
+        let attempt_result = route_remote_attempt_with_retry(
             node,
             &mut tcp_stream,
             *target_host,
@@ -3447,7 +3449,7 @@ async fn route_attempt_for_target(
             .await
         }
         election::InferenceTarget::Remote(host_id) => {
-            route_remote_attempt(
+            route_remote_attempt_with_retry(
                 node,
                 tcp_stream,
                 *host_id,
@@ -3459,6 +3461,53 @@ async fn route_attempt_for_target(
         }
         election::InferenceTarget::None => RouteAttemptResult::RetryableUnavailable,
     }
+}
+
+async fn route_remote_attempt_with_retry(
+    node: &mesh::Node,
+    tcp_stream: &mut TcpStream,
+    host_id: iroh::EndpointId,
+    prefetched: &[u8],
+    retry_context_overflow: bool,
+    response_adapter: ResponseAdapter,
+) -> RouteAttemptResult {
+    let mut result = route_remote_attempt(
+        node,
+        tcp_stream,
+        host_id,
+        prefetched,
+        retry_context_overflow,
+        response_adapter,
+    )
+    .await;
+    for retry in 1..=REMOTE_UNCOMMITTED_RETRIES {
+        if !should_retry_uncommitted_remote_attempt(result) {
+            return result;
+        }
+        tracing::warn!(
+            host = %host_id.fmt_short(),
+            retry,
+            outcome = route_attempt_result_label(&result),
+            "API proxy: retrying remote target on fresh tunnel before committing response"
+        );
+        result = route_remote_attempt(
+            node,
+            tcp_stream,
+            host_id,
+            prefetched,
+            retry_context_overflow,
+            response_adapter,
+        )
+        .await;
+    }
+    result
+}
+
+fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
+    matches!(
+        result,
+        RouteAttemptResult::RetryableTimeout | RouteAttemptResult::RetryableUnavailable
+    )
 }
 
 pub async fn route_model_request(
@@ -5087,6 +5136,28 @@ mod tests {
             target_health_outcome_for_attempt(&RouteAttemptResult::RetryableTimeout),
             TargetHealthOutcome::Timeout
         );
+    }
+
+    #[test]
+    fn test_remote_retry_policy_only_retries_uncommitted_failures() {
+        assert!(should_retry_uncommitted_remote_attempt(
+            RouteAttemptResult::RetryableUnavailable
+        ));
+        assert!(should_retry_uncommitted_remote_attempt(
+            RouteAttemptResult::RetryableTimeout
+        ));
+        assert!(!should_retry_uncommitted_remote_attempt(
+            RouteAttemptResult::RetryableContextOverflow
+        ));
+        assert!(!should_retry_uncommitted_remote_attempt(
+            RouteAttemptResult::ClientDisconnected
+        ));
+        assert!(!should_retry_uncommitted_remote_attempt(
+            RouteAttemptResult::Delivered {
+                status_code: 200,
+                completion_tokens: None,
+            }
+        ));
     }
 
     #[test]
