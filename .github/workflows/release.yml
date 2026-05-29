@@ -392,7 +392,7 @@ jobs:
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
-      image: nvidia/cuda:13.1.2-devel-ubuntu24.04
+      image: nvidia/cuda:12.9.2-devel-ubuntu24.04
     env:
       LLAMA_STAGE_BACKEND: cuda
     steps:
@@ -661,7 +661,7 @@ jobs:
       # pulls latest = CUDA 13.2, which deterministically crashes sccache
       # on nvcc output (see mozilla/sccache#2470). CI pins to the same
       # version via Jimver/cuda-toolkit; mirror that here.
-      WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '13.1.2' }}
+      WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.9.2' }}
     strategy:
       fail-fast: false
       matrix:
