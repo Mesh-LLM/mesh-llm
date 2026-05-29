@@ -63,7 +63,7 @@ flavor_suffix() {
         ""|cpu|metal)
             printf '\n'
             ;;
-        cuda|cuda-blackwell)
+        cuda)
             # When MESH_CUDA_VERSION is set (CI matrix), include major version.
             if [[ -n "${MESH_CUDA_VERSION:-}" ]]; then
                 local major="${MESH_CUDA_VERSION%%.*}"
@@ -234,7 +234,7 @@ supported_release_flavors() {
             printf 'metal\n'
             ;;
         linux/x86_64)
-            printf 'cpu cuda cuda-blackwell rocm vulkan\n'
+            printf 'cpu cuda rocm vulkan\n'
             ;;
         linux/aarch64)
             printf 'cpu cuda\n'

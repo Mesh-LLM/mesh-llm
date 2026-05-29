@@ -168,22 +168,13 @@ llama-build: llama-prepare
 release-build-windows:
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cpu -BuildProfile release
 
-# Build a Linux CUDA release artifact (primary lane).
+# Build a Linux CUDA release artifact.
 # SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
 release-build-cuda:
     @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda \
-      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90'; else echo '75;80;86;87;89;90'; fi)"
-
-# Build a Linux CUDA release artifact (Blackwell lane).
-# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
-release-build-cuda-blackwell:
-    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda \
-      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90;100;120'; fi)"
+      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90'; fi)"
 
 release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
-    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}" -BuildProfile release
-
-release-build-cuda-blackwell-windows cuda_arch="75;80;86;87;89;90;100;120":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}" -BuildProfile release
 
 # Build a Linux ROCm ABI release artifact with an explicit architecture list.
@@ -316,14 +307,8 @@ release-bundle-windows version output="dist":
 release-bundle-cuda version output="dist":
     MESH_RELEASE_FLAVOR=cuda scripts/package-release.sh "{{ version }}" "{{ output }}"
 
-release-bundle-cuda-blackwell version output="dist":
-    MESH_RELEASE_FLAVOR=cuda-blackwell scripts/package-release.sh "{{ version }}" "{{ output }}"
-
 release-bundle-cuda-windows version output="dist":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version "{{version}}" -OutputDir "{{output}}" -Flavor cuda
-
-release-bundle-cuda-blackwell-windows version output="dist":
-    @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-release.ps1 -Version "{{version}}" -OutputDir "{{output}}" -Flavor cuda-blackwell
 
 # Create Linux ROCm release archive(s).
 release-bundle-rocm version output="dist":

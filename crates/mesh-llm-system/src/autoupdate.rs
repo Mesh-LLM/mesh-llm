@@ -47,7 +47,6 @@ struct UpdateTarget {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct HostBackendProbe {
-    cuda_blackwell: bool,
     cuda: bool,
     rocm: bool,
     vulkan: bool,
@@ -503,8 +502,7 @@ fn preferred_bundle_flavor_for_platform(
     probe: HostBackendProbe,
 ) -> Option<backend::BinaryFlavor> {
     // Keep this detection order and the probes below in sync with install.sh.
-    const UPDATE_FLAVOR_PREFERENCE: [backend::BinaryFlavor; 6] = [
-        backend::BinaryFlavor::CudaBlackwell,
+    const UPDATE_FLAVOR_PREFERENCE: [backend::BinaryFlavor; 5] = [
         backend::BinaryFlavor::Cuda,
         backend::BinaryFlavor::Rocm,
         backend::BinaryFlavor::Vulkan,
@@ -531,7 +529,6 @@ fn flavor_supported_for_update(
     }
 
     match flavor {
-        backend::BinaryFlavor::CudaBlackwell => probe.cuda_blackwell,
         backend::BinaryFlavor::Cuda => probe.cuda,
         backend::BinaryFlavor::Rocm => probe.rocm,
         backend::BinaryFlavor::Vulkan => probe.vulkan,
@@ -542,21 +539,11 @@ fn flavor_supported_for_update(
 
 fn current_host_backend_probe() -> HostBackendProbe {
     HostBackendProbe {
-        cuda_blackwell: probe_cuda_blackwell_backend(),
         cuda: probe_nvidia_backend(),
         rocm: probe_rocm_backend(),
         vulkan: probe_vulkan_backend(),
         metal: cfg!(target_os = "macos"),
     }
-}
-
-fn probe_cuda_blackwell_backend() -> bool {
-    nvidia_compute_caps()
-        .iter()
-        .any(|capability| is_blackwell_compute_capability(capability))
-        || nvidia_proc_models()
-            .iter()
-            .any(|model| is_blackwell_nvidia_model(model))
 }
 
 fn probe_nvidia_backend() -> bool {
@@ -571,25 +558,7 @@ fn probe_nvidia_backend() -> bool {
             .any(|model| is_tegra_nvidia_model(model))
 }
 
-fn nvidia_compute_caps() -> Vec<String> {
-    let Ok(output) = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=compute_cap", "--format=csv,noheader"])
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
-
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
+#[cfg(test)]
 fn is_blackwell_compute_capability(capability: &str) -> bool {
     let normalized = capability
         .chars()
@@ -598,26 +567,6 @@ fn is_blackwell_compute_capability(capability: &str) -> bool {
     normalized
         .parse::<u16>()
         .is_ok_and(|sm| (100..200).contains(&sm))
-}
-
-fn nvidia_proc_models() -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir("/proc/driver/nvidia/gpus") else {
-        return Vec::new();
-    };
-
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path().join("information"))
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .filter_map(|contents| {
-            contents.lines().find_map(|line| {
-                line.strip_prefix("Model:")
-                    .map(str::trim)
-                    .filter(|model| !model.is_empty())
-                    .map(ToString::to_string)
-            })
-        })
-        .collect()
 }
 
 fn nvidia_device_tree_models() -> Vec<String> {
@@ -648,6 +597,7 @@ fn is_tegra_nvidia_model(model: &str) -> bool {
         .any(|marker| upper.contains(marker))
 }
 
+#[cfg(test)]
 fn is_blackwell_nvidia_model(model: &str) -> bool {
     const BLACKWELL_MODEL_MARKERS: [&str; 14] = [
         "BLACKWELL",
@@ -1855,19 +1805,6 @@ mod tests {
     #[test]
     fn test_update_flavor_preference_uses_backend_order() {
         let probe = HostBackendProbe {
-            cuda_blackwell: true,
-            cuda: true,
-            rocm: true,
-            vulkan: true,
-            metal: false,
-        };
-        assert_eq!(
-            preferred_bundle_flavor_for_platform("linux", "x86_64", probe),
-            Some(backend::BinaryFlavor::CudaBlackwell)
-        );
-
-        let probe = HostBackendProbe {
-            cuda_blackwell: false,
             cuda: true,
             rocm: true,
             vulkan: true,
@@ -1879,7 +1816,6 @@ mod tests {
         );
 
         let probe = HostBackendProbe {
-            cuda_blackwell: false,
             cuda: false,
             rocm: true,
             vulkan: true,
@@ -1891,7 +1827,6 @@ mod tests {
         );
 
         let probe = HostBackendProbe {
-            cuda_blackwell: false,
             cuda: false,
             rocm: false,
             vulkan: true,
@@ -1906,7 +1841,6 @@ mod tests {
     #[test]
     fn test_update_flavor_preference_filters_by_published_platform() {
         let probe = HostBackendProbe {
-            cuda_blackwell: true,
             cuda: true,
             rocm: true,
             vulkan: true,
@@ -1922,7 +1856,6 @@ mod tests {
         );
 
         let probe = HostBackendProbe {
-            cuda_blackwell: false,
             cuda: false,
             rocm: true,
             vulkan: true,
@@ -1943,7 +1876,7 @@ mod tests {
         for capability in ["10.0", "10.3", "12.0", "12.1", "100", "103", "120", "121"] {
             assert!(
                 is_blackwell_compute_capability(capability),
-                "{capability} should select cuda-blackwell"
+                "{capability} requires CUDA 13.x"
             );
         }
         for capability in ["7.5", "8.0", "8.9", "9.0", "75", "80", "89", "90"] {
@@ -1965,7 +1898,7 @@ mod tests {
         ] {
             assert!(
                 is_blackwell_nvidia_model(model),
-                "{model} should select cuda-blackwell"
+                "{model} requires CUDA 13.x"
             );
         }
         for model in ["NVIDIA H100", "NVIDIA A100", "NVIDIA RTX 4090"] {
@@ -2072,7 +2005,6 @@ mod tests {
     fn test_tegra_selects_cuda_on_linux_aarch64() {
         // Simulate a Tegra/Jetson probe: cuda=true (set by tegra), everything else false.
         let probe = HostBackendProbe {
-            cuda_blackwell: false,
             cuda: true,
             rocm: false,
             vulkan: false,
@@ -2086,40 +2018,9 @@ mod tests {
     }
 
     #[test]
-    fn test_tegra_cuda_not_blackwell() {
-        // Tegra SoCs are not Blackwell — cuda is true, cuda_blackwell is false.
-        let probe = HostBackendProbe {
-            cuda_blackwell: false,
-            cuda: true,
-            rocm: false,
-            vulkan: false,
-            metal: false,
-        };
-        assert!(
-            !flavor_supported_for_update(
-                backend::BinaryFlavor::CudaBlackwell,
-                "linux",
-                "aarch64",
-                probe
-            ),
-            "Tegra should NOT select Blackwell"
-        );
-        assert!(
-            flavor_supported_for_update(
-                backend::BinaryFlavor::Cuda,
-                "linux",
-                "aarch64",
-                probe
-            ),
-            "Tegra MUST select standard CUDA"
-        );
-    }
-
-    #[test]
     fn test_tegra_falls_back_to_cpu_when_cuda_unsupported() {
         // If the release has no CUDA asset for aarch64, CPU is the fallback.
         let probe = HostBackendProbe {
-            cuda_blackwell: false,
             cuda: true,
             rocm: false,
             vulkan: false,

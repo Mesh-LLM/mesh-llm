@@ -454,68 +454,7 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  build_linux_cuda_blackwell:
-    name: Build Linux CUDA Blackwell (${{ matrix.cuda_version }})
-    needs: metadata
-    if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    strategy:
-      fail-fast: false
-      matrix:
-        cuda_version: ['12.9.2', '13.1.2']
-    container:
-      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
-    env:
-      LLAMA_STAGE_BACKEND: cuda
-      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
-    steps:
-      - name: Install base packages
-        run: |
-          for attempt in 1 2 3; do
-            apt-get -o Acquire::Retries=5 update &&
-              DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y --fix-missing ca-certificates curl git cmake ninja-build pkg-config libssl-dev libdbus-1-dev python3 build-essential lld &&
-              break
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 10))
-          done
-          rm -rf /var/lib/apt/lists/*
-      - uses: actions/checkout@v5
-      - name: Trust checkout directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: |
-            .github/cache-version.txt
-            crates/mesh-llm-ui/pnpm-lock.yaml
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@just
-      - name: Prepare dispatched release version
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-        run: scripts/release-version.sh "$RELEASE_TAG"
-      - name: Build CUDA Blackwell release bundle
-        env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
-          RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
-          RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
-        run: |
-          printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
-          printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-cuda-blackwell
-          just --shell bash --shell-arg -c release-bundle-cuda-blackwell "$RELEASE_TAG" dist
-      - uses: actions/upload-artifact@v6
-        with:
-          name: release-linux-cuda-blackwell-${{ matrix.cuda_version }}
-          path: dist/*
-          if-no-files-found: error
+
 
   build_linux_rocm:
     name: Build Linux ROCm
@@ -779,12 +718,11 @@ jobs:
       - build_linux_arm64
       - build_linux_aarch64_cuda
       - build_linux_cuda
-      - build_linux_cuda_blackwell
       - build_linux_rocm
       - build_linux_vulkan
       - build_windows_cpu
       - build_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_cuda_blackwell.result == 'success' || needs.build_linux_cuda_blackwell.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
+    if: ${{ always() && needs.metadata.result == 'success' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5

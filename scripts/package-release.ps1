@@ -75,8 +75,7 @@ function Get-BinaryFlavor {
 
     # The "release flavor" (outer archive name) and the "binary flavor"
     # (inner executable suffix / runtime BinaryFlavor lookup) are not
-    # always the same. hip archives contain -rocm binaries, while
-    # cuda-blackwell keeps its distinct runtime flavor suffix.
+    # always the same. hip archives contain -rocm binaries.
     if ($RequestedFlavor) {
         switch ($RequestedFlavor.ToLowerInvariant()) {
             "hip" { return "rocm" }
@@ -364,8 +363,8 @@ $releaseFlavor = Get-ReleaseFlavor $Flavor
 $binaryFlavor = Get-BinaryFlavor $Flavor
 $targetTriple = "x86_64-pc-windows-msvc"
 $archiveExt = "zip"
-# Outer archive names use the release flavor (e.g. cuda-blackwell); inner
-# binary names use the binary flavor (e.g. cuda) so the runtime finds them.
+# Outer archive names use the release flavor; inner
+# binary names use the binary flavor so the runtime finds them.
 $stableAsset = New-ReleaseAssetName -Prefix "mesh-llm" -TargetTriple $targetTriple -ArchiveExt $archiveExt -BinaryFlavor $releaseFlavor
 $versionedAsset = New-ReleaseAssetName -Prefix "mesh-llm-$Version" -TargetTriple $targetTriple -ArchiveExt $archiveExt -BinaryFlavor $releaseFlavor
 

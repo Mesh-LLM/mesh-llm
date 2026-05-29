@@ -232,31 +232,6 @@ nvidia_model_is_blackwell() {
     esac
 }
 
-probe_cuda_blackwell() {
-    if command -v nvidia-smi >/dev/null 2>&1; then
-        local raw
-        while IFS= read -r raw; do
-            if is_blackwell_cuda_sm "$raw"; then
-                return 0
-            fi
-        done < <(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null || true)
-    fi
-
-    if [[ -d /proc/driver/nvidia/gpus ]]; then
-        local info
-        for info in /proc/driver/nvidia/gpus/*/information; do
-            [[ -f "$info" ]] || continue
-            local model
-            model="$(sed -n 's/^Model:[[:space:]]*//p' "$info" | head -n 1)"
-            if [[ -n "$model" ]] && nvidia_model_is_blackwell "$model"; then
-                return 0
-            fi
-        done
-    fi
-
-    return 1
-}
-
 probe_rocm() {
     command -v rocm-smi >/dev/null 2>&1 ||
         command -v rocminfo >/dev/null 2>&1 ||
@@ -299,7 +274,7 @@ supported_flavors() {
             echo "cuda cpu"
             ;;
         Linux/x86_64)
-            echo "cuda-blackwell cuda rocm vulkan cpu"
+            echo "cuda rocm vulkan cpu"
             ;;
         *)
                 platform_error_message >&2
@@ -314,9 +289,7 @@ supported_flavors() {
     esac
 }
 
-# Keep this detection order and the probes above (probe_nvidia, probe_cuda_blackwell,
-# probe_rocm, probe_vulkan, probe_tegra) in sync with the Rust updater flavor
-# selection in crates/mesh-llm-system/src/autoupdate.rs.
+# Keep this detection order and the probes above (probe_nvidia, probe_rocm, probe_vulkan, probe_tegra) in sync with the Rust updater flavor selection in crates/mesh-llm-system/src/autoupdate.rs.
 recommended_flavor() {
     case "$(platform_support_status)" in
         supported)
@@ -332,9 +305,7 @@ recommended_flavor() {
             fi
             ;;
         Linux/x86_64)
-            if probe_cuda_blackwell; then
-                echo "cuda-blackwell"
-            elif probe_nvidia; then
+            if probe_nvidia; then
                 echo "cuda"
             elif probe_rocm; then
                 echo "rocm"
@@ -369,9 +340,7 @@ recommendation_reason() {
                 echo "NVIDIA tooling or devices were detected."
             fi
             ;;
-        cuda-blackwell)
-            echo "Blackwell NVIDIA hardware was detected."
-            ;;
+
         rocm)
             echo "ROCm/HIP tooling was detected."
             ;;
@@ -505,12 +474,12 @@ asset_name() {
         Linux/x86_64)
             case "$flavor" in
                 cpu) echo "mesh-llm-x86_64-unknown-linux-gnu.tar.gz" ;;
-                cuda|cuda-blackwell)
+                cuda)
                     local cuda_major="$(detect_cuda_major)"
                     if [[ -n "$cuda_major" ]]; then
-                        echo "mesh-llm-x86_64-unknown-linux-gnu-${flavor}-${cuda_major}.tar.gz"
+                        echo "mesh-llm-x86_64-unknown-linux-gnu-cuda-${cuda_major}.tar.gz"
                     else
-                        echo "mesh-llm-x86_64-unknown-linux-gnu-${flavor}.tar.gz"
+                        echo "mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz"
                     fi
                     ;;
                 rocm) echo "mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz" ;;
