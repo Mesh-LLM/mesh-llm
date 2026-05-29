@@ -23,8 +23,8 @@ pub(crate) use self::metrics::{
     RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot,
 };
 pub(crate) use self::processes::{
-    remove_runtime_process_snapshot, runtime_process_payloads, upsert_runtime_process_snapshot,
-    RuntimeProcessSnapshot,
+    RuntimeProcessSnapshot, remove_runtime_process_snapshot, runtime_process_payloads,
+    upsert_runtime_process_snapshot,
 };
 pub(crate) use self::producers::{RuntimeDataProducer, RuntimeDataSource};
 pub(crate) use self::snapshots::{
@@ -35,18 +35,18 @@ pub(crate) use self::subscriptions::RuntimeDataDirty;
 #[cfg(test)]
 mod tests {
     use super::api_views::{collect_views, mesh_models, status_payload};
-    use super::processes::{runtime_process_payloads, RuntimeProcessSnapshot};
+    use super::processes::{RuntimeProcessSnapshot, runtime_process_payloads};
     use super::snapshots::{
         HardwareViewInput, ModelViewInput, PluginDataKey, PluginEndpointKey, StatusViewInput,
     };
     use super::subscriptions::{RuntimeDataDirty, RuntimeDataVersion};
     use super::{RuntimeDataCollector, RuntimeDataSource};
     use super::{RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot};
-    use crate::api::status::{
-        build_gpus, build_ownership_payload, LocalInstance, NodeState, RuntimeStatusPayload,
-        StatusPayload,
-    };
     use crate::api::RuntimeProcessPayload;
+    use crate::api::status::{
+        LocalInstance, NodeState, RuntimeStatusPayload, StatusPayload, build_gpus,
+        build_ownership_payload,
+    };
     use crate::inference::election;
     use crate::mesh::MeshCatalogEntry;
     use crate::models::LocalModelInventorySnapshot;
@@ -58,8 +58,8 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     };
     use std::{collections::HashMap, collections::HashSet};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -107,17 +107,21 @@ mod tests {
                 .as_ref(),
             Some(&plugin_endpoint_key)
         );
-        assert!(producer
-            .snapshots()
-            .runtime_status
-            .local_processes
-            .is_empty());
+        assert!(
+            producer
+                .snapshots()
+                .runtime_status
+                .local_processes
+                .is_empty()
+        );
         assert!(clone.snapshots().local_instances.instances.is_empty());
-        assert!(producer
-            .collector()
-            .plugin_data_snapshot()
-            .entries
-            .is_empty());
+        assert!(
+            producer
+                .collector()
+                .plugin_data_snapshot()
+                .entries
+                .is_empty()
+        );
     }
 
     #[test]
@@ -125,10 +129,12 @@ mod tests {
         let collector = RuntimeDataCollector::new();
         let views = collect_views(&collector);
 
-        assert!(collector
-            .runtime_status_snapshot()
-            .local_processes
-            .is_empty());
+        assert!(
+            collector
+                .runtime_status_snapshot()
+                .local_processes
+                .is_empty()
+        );
         assert!(collector.local_instances_snapshot().instances.is_empty());
         assert!(collector.plugin_data_snapshot().entries.is_empty());
         assert!(collector.plugin_endpoints_snapshot().entries.is_empty());
@@ -337,7 +343,7 @@ mod tests {
         collector.replace_local_instances_snapshot(vec![LocalInstanceSnapshot {
             pid: 111,
             api_port: Some(3131),
-            version: Some("0.66.0".into()),
+            version: Some("0.68.0".into()),
             started_at_unix: 456,
             runtime_dir: PathBuf::from("/tmp/runtime-1"),
             is_self: true,
@@ -356,8 +362,8 @@ mod tests {
             first_joined_mesh_ts: Some(123),
         });
         let snapshot = collector.build_status_view(StatusViewInput {
-            version: "0.66.0".into(),
-            latest_version: Some("0.66.0".into()),
+            version: "0.68.0".into(),
+            latest_version: Some("0.68.0".into()),
             node_id: "node-1".into(),
             owner: crate::crypto::OwnershipSummary::default(),
             token: "invite-token".into(),
@@ -386,8 +392,8 @@ mod tests {
 
         let payload = status_payload(snapshot);
         let expected = StatusPayload {
-            version: "0.66.0".into(),
-            latest_version: Some("0.66.0".into()),
+            version: "0.68.0".into(),
+            latest_version: Some("0.68.0".into()),
             node_id: "node-1".into(),
             owner: build_ownership_payload(&crate::crypto::OwnershipSummary::default()),
             token: "invite-token".into(),
@@ -398,6 +404,7 @@ mod tests {
             llama_ready: false,
             runtime: RuntimeStatusPayload {
                 backend: None,
+                openai_guardrails: None,
                 models: vec![],
                 stages: vec![],
             },
@@ -417,7 +424,7 @@ mod tests {
             local_instances: vec![LocalInstance {
                 pid: 111,
                 api_port: Some(3131),
-                version: Some("0.66.0".into()),
+                version: Some("0.68.0".into()),
                 started_at_unix: 456,
                 runtime_dir: "/tmp/runtime-1".into(),
                 is_self: true,
@@ -540,6 +547,7 @@ mod tests {
             capabilities_known: true,
             capabilities: crate::models::ModelCapabilities::default(),
             topology: None,
+            metadata: None,
         };
 
         let snapshot = collector.build_model_view(ModelViewInput {
@@ -588,6 +596,7 @@ mod tests {
             capabilities_known: false,
             capabilities: crate::models::ModelCapabilities::default(),
             topology: None,
+            metadata: None,
         };
 
         let snapshot = collector.build_model_view(ModelViewInput {
@@ -639,6 +648,7 @@ mod tests {
                 ..Default::default()
             },
             topology: None,
+            metadata: None,
         };
 
         let snapshot = collector.build_model_view(ModelViewInput {
@@ -715,10 +725,12 @@ mod tests {
         assert_eq!(scan_count.load(Ordering::SeqCst), 1);
         assert_eq!(first_snapshot, second_snapshot);
         assert_eq!(collector.local_inventory_snapshot(), first_snapshot);
-        assert!(collector
-            .local_inventory_snapshot()
-            .model_names
-            .contains("Qwen3-8B"));
+        assert!(
+            collector
+                .local_inventory_snapshot()
+                .model_names
+                .contains("Qwen3-8B")
+        );
     }
 
     #[test]
@@ -1137,9 +1149,11 @@ mod tests {
                 .map(|endpoint| endpoint.address.as_deref()),
             Some(Some("http://127.0.0.1:9000/mcp"))
         );
-        assert!(collector
-            .plugin_endpoint_snapshot("alpha", "embed")
-            .is_none());
+        assert!(
+            collector
+                .plugin_endpoint_snapshot("alpha", "embed")
+                .is_none()
+        );
         assert!(collector.plugin_endpoint_snapshot("beta", "chat").is_none());
     }
 
@@ -1251,9 +1265,11 @@ mod tests {
         assert!(alpha_snapshot.providers.is_empty());
         assert!(alpha_snapshot.payloads.is_empty());
         assert!(alpha_snapshot.endpoints.is_empty());
-        assert!(collector
-            .plugin_endpoint_snapshot("alpha", "chat")
-            .is_none());
+        assert!(
+            collector
+                .plugin_endpoint_snapshot("alpha", "chat")
+                .is_none()
+        );
 
         let beta_snapshot = collector.plugin_snapshot("beta");
         assert_eq!(
@@ -1269,9 +1285,11 @@ mod tests {
         );
         assert_eq!(beta_snapshot.endpoints.len(), 1);
         assert_eq!(beta_snapshot.endpoints[0].endpoint_id, "embed");
-        assert!(collector
-            .plugin_endpoint_snapshot("beta", "embed")
-            .is_some());
+        assert!(
+            collector
+                .plugin_endpoint_snapshot("beta", "embed")
+                .is_some()
+        );
 
         let all = collector.plugins_snapshot();
         assert_eq!(

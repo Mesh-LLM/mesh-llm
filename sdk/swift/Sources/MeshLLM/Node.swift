@@ -514,7 +514,7 @@ public final class Node: @unchecked Sendable {
 
 private func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global().async(flags: .inheritQoS) {
             do {
                 continuation.resume(returning: try work())
             } catch {
@@ -526,7 +526,7 @@ private func runBlocking<T>(_ work: @escaping () throws -> T) async throws -> T 
 
 private func runNonThrowing<T>(_ work: @escaping () -> T) async -> T {
     await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global().async(flags: .inheritQoS) {
             continuation.resume(returning: work())
         }
     }
@@ -534,7 +534,7 @@ private func runNonThrowing<T>(_ work: @escaping () -> T) async -> T {
 
 private func runBlocking<T>(_ work: @escaping () -> T) async -> T {
     await withCheckedContinuation { continuation in
-        DispatchQueue.global(qos: .userInitiated).async {
+        DispatchQueue.global().async(flags: .inheritQoS) {
             continuation.resume(returning: work())
         }
     }

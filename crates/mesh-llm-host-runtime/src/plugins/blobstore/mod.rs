@@ -1,8 +1,8 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use base64::Engine;
 use mesh_llm_plugin::{
-    capability, json_response, json_schema_operation, parse_rpc_params, InternalRpcPluginBuilder,
-    OperationRouter, PluginError, PluginMetadata, PluginResult, PluginRuntime,
+    InternalRpcPluginBuilder, OperationRouter, PluginError, PluginMetadata, PluginResult,
+    PluginRuntime, capability, json_response, json_schema_operation, parse_rpc_params,
 };
 use rand::RngExt;
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
@@ -745,9 +745,11 @@ mod tests {
                 request_id: Some("req_other".into()),
             })
             .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Blob token does not belong to the requested completion"));
+        assert!(
+            error
+                .to_string()
+                .contains("Blob token does not belong to the requested completion")
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

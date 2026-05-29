@@ -149,10 +149,10 @@ fn cached_snapshot_has_requested_layers(
         if !metadata.is_file() {
             return Ok(false);
         }
-        if let Some(expected_bytes) = manifest_artifact_bytes(layer) {
-            if metadata.len() != expected_bytes {
-                return Ok(false);
-            }
+        if let Some(expected_bytes) = manifest_artifact_bytes(layer)
+            && metadata.len() != expected_bytes
+        {
+            return Ok(false);
         }
     }
     Ok(true)

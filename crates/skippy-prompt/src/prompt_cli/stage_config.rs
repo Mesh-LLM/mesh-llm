@@ -144,8 +144,8 @@ fn prompt_stage_cache_max_bytes(
     stage: &LocalStage,
     hf_package_ref: bool,
 ) -> Result<u64> {
-    if let Some(meta) = prompt_cache_meta(args, stage, hf_package_ref)? {
-        if let Some(bytes) = estimate_prompt_stage_cache_max_bytes(
+    if let Some(meta) = prompt_cache_meta(args, stage, hf_package_ref)?
+        && let Some(bytes) = estimate_prompt_stage_cache_max_bytes(
             stage.layer_start,
             stage.layer_end,
             args.ctx_size,
@@ -156,7 +156,6 @@ fn prompt_stage_cache_max_bytes(
         ) {
             return Ok(bytes);
         }
-    }
 
     estimate_prompt_stage_cache_max_bytes_from_width(
         stage.layer_start,

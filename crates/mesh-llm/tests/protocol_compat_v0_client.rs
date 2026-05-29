@@ -5,8 +5,8 @@
 //! All assertions run against the public API of `mesh-client::protocol`.
 
 use mesh_client::protocol::{
-    protocol_from_alpn, ControlProtocol, ALPN_CONTROL_V1, ALPN_V0, ALPN_V1, STREAM_CONFIG_PUSH,
-    STREAM_CONFIG_SUBSCRIBE,
+    ALPN_CONTROL_V1, ALPN_V0, ALPN_V1, ControlProtocol, STREAM_CONFIG_PUSH,
+    STREAM_CONFIG_SUBSCRIBE, protocol_from_alpn,
 };
 use mesh_client::{
     ConfigTransportSelection, ControlPlaneBootstrapOptions, ControlPlaneRetryPolicy,

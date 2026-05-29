@@ -36,14 +36,18 @@ fn affinity_forget_removes_entry() {
     let candidates = vec![InferenceTarget::Remote(id_a)];
 
     router.learn_target(model, prefix_hash, &target);
-    assert!(router
-        .lookup_target(model, prefix_hash, &candidates)
-        .is_some());
+    assert!(
+        router
+            .lookup_target(model, prefix_hash, &candidates)
+            .is_some()
+    );
 
     router.forget_target(model, prefix_hash, &target);
-    assert!(router
-        .lookup_target(model, prefix_hash, &candidates)
-        .is_none());
+    assert!(
+        router
+            .lookup_target(model, prefix_hash, &candidates)
+            .is_none()
+    );
 }
 
 #[test]

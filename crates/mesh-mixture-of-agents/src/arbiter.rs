@@ -243,19 +243,20 @@ pub fn try_early_decision(
     // Two workers saying "Paris" and "Berlin" must not be treated as
     // consensus. Find the largest cluster of content-similar answers
     // and only early-exit if it's ≥2 workers AND a majority of answers.
-    if answers.len() >= 2 && tool_proposals.is_empty() {
-        if let Some((cluster_size, best)) = largest_agreeing_cluster(&answers) {
-            let majority = cluster_size * 2 >= answers.len();
-            if majority && best.confidence >= 0.5 {
-                tracing::info!(
-                    "moa: early exit — {}/{} workers agree on answer (conf={:.2}), {} still pending",
-                    cluster_size,
-                    answers.len(),
-                    best.confidence,
-                    remaining,
-                );
-                return Some(Decision::Answer(best.payload.clone()));
-            }
+    if answers.len() >= 2
+        && tool_proposals.is_empty()
+        && let Some((cluster_size, best)) = largest_agreeing_cluster(&answers)
+    {
+        let majority = cluster_size * 2 >= answers.len();
+        if majority && best.confidence >= 0.5 {
+            tracing::info!(
+                "moa: early exit — {}/{} workers agree on answer (conf={:.2}), {} still pending",
+                cluster_size,
+                answers.len(),
+                best.confidence,
+                remaining,
+            );
+            return Some(Decision::Answer(best.payload.clone()));
         }
     }
 

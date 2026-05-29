@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use prost::Message;
 #[cfg(unix)]
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::{proto, PROTOCOL_VERSION};
+use crate::{PROTOCOL_VERSION, proto};
 
 pub enum LocalStream {
     #[cfg(unix)]
@@ -131,6 +131,26 @@ pub async fn connect_from_env() -> Result<LocalStream> {
             tokio::net::windows::named_pipe::ClientOptions::new().open(&endpoint)?,
         )),
         _ => bail!("Unsupported plugin transport '{transport}'"),
+    }
+}
+
+pub async fn connect_side_stream(endpoint: &str, transport_kind: i32) -> Result<LocalStream> {
+    match proto::StreamTransportKind::try_from(transport_kind)
+        .unwrap_or(proto::StreamTransportKind::Unspecified)
+    {
+        #[cfg(unix)]
+        proto::StreamTransportKind::StreamUnixSocket => Ok(LocalStream::Unix(
+            tokio::net::UnixStream::connect(endpoint)
+                .await
+                .with_context(|| format!("Failed to connect side stream socket {endpoint}"))?,
+        )),
+        #[cfg(windows)]
+        proto::StreamTransportKind::StreamNamedPipe => Ok(LocalStream::PipeClient(
+            tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(endpoint)
+                .with_context(|| format!("Failed to connect side stream pipe {endpoint}"))?,
+        )),
+        _ => bail!("Unsupported side stream transport kind '{transport_kind}'"),
     }
 }
 

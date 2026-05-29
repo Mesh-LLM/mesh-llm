@@ -33,15 +33,22 @@ pub fn gpu_facts() -> anyhow::Result<Vec<GpuFacts>> {
         return result.map_err(anyhow::Error::msg);
     }
 
+    let mut facts = gpu_facts_from_backend_devices(skippy_runtime::backend_devices()?);
+    if !facts.is_empty() {
+        super::enrichers::enrich_gpu_facts(&mut facts);
+    }
+
+    Ok(facts)
+}
+
+fn gpu_facts_from_backend_devices(
+    backend_devices: Vec<skippy_runtime::BackendDevice>,
+) -> Vec<GpuFacts> {
     let mut accelerator_index = 0usize;
     let mut facts = Vec::new();
 
-    for device in skippy_runtime::backend_devices()? {
-        if !matches!(
-            device.device_type,
-            skippy_runtime::BackendDeviceType::Gpu
-                | skippy_runtime::BackendDeviceType::IntegratedGpu
-        ) {
+    for device in backend_devices {
+        if !is_runtime_accelerator(&device) {
             continue;
         }
 
@@ -94,10 +101,87 @@ pub fn gpu_facts() -> anyhow::Result<Vec<GpuFacts>> {
         });
     }
 
-    if facts.is_empty() {
-        facts = super::enrichers::discover_gpu_facts();
-    }
-    super::enrichers::enrich_gpu_facts(&mut facts);
+    facts
+}
 
-    Ok(facts)
+fn is_runtime_accelerator(device: &skippy_runtime::BackendDevice) -> bool {
+    match device.device_type {
+        skippy_runtime::BackendDeviceType::Gpu
+        | skippy_runtime::BackendDeviceType::IntegratedGpu => true,
+        skippy_runtime::BackendDeviceType::Accelerator => {
+            device.memory_total > 0 || looks_like_known_gpu_backend(device)
+        }
+        skippy_runtime::BackendDeviceType::Cpu | skippy_runtime::BackendDeviceType::Meta => false,
+    }
+}
+
+fn looks_like_known_gpu_backend(device: &skippy_runtime::BackendDevice) -> bool {
+    let text = format!(
+        "{} {}",
+        device.name,
+        device.description.as_deref().unwrap_or_default()
+    )
+    .to_ascii_uppercase();
+    [
+        "CUDA", "HIP", "ROCM", "VULKAN", "SYCL", "METAL", "MTL", "GPU",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skippy_runtime::{BackendDevice, BackendDeviceType};
+
+    fn backend_device(
+        name: &str,
+        device_type: BackendDeviceType,
+        memory_total: u64,
+    ) -> BackendDevice {
+        BackendDevice {
+            name: name.to_string(),
+            description: Some(name.to_string()),
+            device_id: None,
+            memory_free: memory_total,
+            memory_total,
+            device_type,
+            caps: 0,
+        }
+    }
+
+    #[test]
+    fn empty_backend_inventory_does_not_synthesize_platform_gpu_facts() {
+        assert!(gpu_facts_from_backend_devices(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn cpu_backend_inventory_does_not_synthesize_platform_gpu_facts() {
+        let facts = gpu_facts_from_backend_devices(vec![backend_device(
+            "CPU",
+            BackendDeviceType::Cpu,
+            64 * 1024 * 1024 * 1024,
+        )]);
+
+        assert!(facts.is_empty());
+    }
+
+    #[test]
+    fn hip_backend_device_is_runtime_selectable_gpu_fact() {
+        let facts = gpu_facts_from_backend_devices(vec![BackendDevice {
+            name: "HIP0".to_string(),
+            description: Some("AMD Instinct MI300X".to_string()),
+            device_id: Some("0000:65:00.0".to_string()),
+            memory_free: 200_000_000_000,
+            memory_total: 206_158_430_208,
+            device_type: BackendDeviceType::Accelerator,
+            caps: 0,
+        }]);
+
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].display_name, "AMD Instinct MI300X");
+        assert_eq!(facts[0].backend_device.as_deref(), Some("HIP0"));
+        assert_eq!(facts[0].vram_bytes, 206_158_430_208);
+        assert_eq!(facts[0].stable_id.as_deref(), Some("pci:0000:65:00.0"));
+    }
 }

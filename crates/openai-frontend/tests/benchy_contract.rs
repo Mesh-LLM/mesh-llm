@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::{
@@ -8,15 +8,21 @@ use axum::{
 use futures_util::stream;
 use http_body_util::BodyExt;
 use openai_frontend::{
-    messages_to_plain_prompt, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
-    ChatCompletionStream, CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream,
-    FinishReason, ModelObject, OpenAiBackend, OpenAiError, OpenAiRequestContext, OpenAiResult,
-    Usage,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
+    CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, FinishReason,
+    GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy, ModelObject, OpenAiBackend, OpenAiError,
+    OpenAiFrontendConfig, OpenAiRequestContext, OpenAiResult, Usage, messages_to_plain_prompt,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 struct BenchyBackend;
+
+#[derive(Default)]
+struct GuardedBenchyBackend {
+    seen_chat_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    seen_stream_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+}
 
 const BENCHY_MODEL_ID: &str = "org/repo:Q4_K_M";
 
@@ -93,6 +99,67 @@ impl OpenAiBackend for BenchyBackend {
                 FinishReason::Length,
             )),
         ])))
+    }
+}
+
+#[async_trait]
+impl OpenAiBackend for GuardedBenchyBackend {
+    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+        Ok(vec![ModelObject::new(BENCHY_MODEL_ID)])
+    }
+
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        ensure_model(&request.model)?;
+        self.seen_chat_requests
+            .lock()
+            .unwrap()
+            .push(request.clone());
+        Ok(ChatCompletionResponse::new(
+            request.model,
+            r#"lookup[ARGS]{"city":"Sydney"}"#,
+            Usage::new(9, 2),
+        ))
+    }
+
+    async fn chat_completion_stream(
+        &self,
+        request: ChatCompletionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionStream> {
+        ensure_model(&request.model)?;
+        self.seen_stream_requests
+            .lock()
+            .unwrap()
+            .push(request.clone());
+        let model = request.model;
+        Ok(Box::pin(stream::iter(vec![
+            Ok(ChatCompletionChunk::delta(model.clone(), "lookup")),
+            Ok(ChatCompletionChunk::delta(model.clone(), "[ARGS]")),
+            Ok(ChatCompletionChunk::delta(
+                model.clone(),
+                r#"{"city":"Sydney"}"#,
+            )),
+            Ok(ChatCompletionChunk::usage(model.clone(), Usage::new(9, 2))),
+            Ok(ChatCompletionChunk::done_with_reason(
+                model,
+                FinishReason::Stop,
+            )),
+        ])))
+    }
+
+    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+        unreachable!("guarded benchy backend test only calls chat")
+    }
+
+    async fn completion_stream(
+        &self,
+        _request: CompletionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<CompletionStream> {
+        unreachable!("guarded benchy backend test only calls chat")
     }
 }
 
@@ -182,17 +249,20 @@ async fn benchy_stream_chat_contract_has_role_content_usage_and_done() {
 
     let data = sse_data(response_text(response).await);
     assert_eq!(data.last().unwrap(), "[DONE]");
-    assert!(data
-        .iter()
-        .any(|line| line.contains(r#""role":"assistant""#)));
+    assert!(
+        data.iter()
+            .any(|line| line.contains(r#""role":"assistant""#))
+    );
     assert!(data.iter().any(|line| line.contains(r#""content":"tok""#)));
     assert!(data.iter().any(|line| line.contains(r#""content":"en""#)));
-    assert!(data
-        .iter()
-        .any(|line| line.contains(r#""finish_reason":"length""#)));
-    assert!(data
-        .iter()
-        .any(|line| line.contains(r#""total_tokens":11"#)));
+    assert!(
+        data.iter()
+            .any(|line| line.contains(r#""finish_reason":"length""#))
+    );
+    assert!(
+        data.iter()
+            .any(|line| line.contains(r#""total_tokens":11"#))
+    );
 }
 
 #[tokio::test]
@@ -216,6 +286,98 @@ async fn benchy_stream_chat_omits_usage_without_stream_option() {
 }
 
 #[tokio::test]
+async fn guarded_benchy_non_stream_chat_rescues_tool_call_text() {
+    let backend = Arc::new(GuardedBenchyBackend::default());
+
+    let response = request_with_app(
+        guarded_backend_app(backend.clone()),
+        "POST",
+        "/v1/chat/completions",
+        json!({
+            "model": BENCHY_MODEL_ID,
+            "messages": [{"role": "user", "content": "weather"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+            "tool_choice": "auto"
+        }),
+        Some("guarded-benchy-chat"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-request-id"], "guarded-benchy-chat");
+
+    let body = response_json(response).await;
+    assert!(body["choices"][0]["message"]["content"].is_null());
+    assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
+    assert_eq!(
+        body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+        "lookup"
+    );
+    assert_eq!(
+        body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+        "{\"city\":\"Sydney\"}"
+    );
+    assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
+
+    let seen_requests = backend.seen_chat_requests.lock().unwrap();
+    assert_eq!(seen_requests.len(), 1);
+    let seen_tools = seen_requests[0]
+        .tools
+        .as_ref()
+        .and_then(Value::as_array)
+        .cloned()
+        .expect("guarded backend should receive tools");
+    assert_eq!(seen_tools[0]["function"]["name"], "lookup");
+    assert_eq!(seen_tools[1]["function"]["name"], "_mesh_respond");
+}
+
+#[tokio::test]
+async fn guarded_benchy_stream_chat_bypasses_guardrails_and_preserves_sse_framing() {
+    let backend = Arc::new(GuardedBenchyBackend::default());
+
+    let response = request_with_app(
+        guarded_backend_app(backend.clone()),
+        "POST",
+        "/v1/chat/completions",
+        json!({
+            "model": BENCHY_MODEL_ID,
+            "messages": [{"role": "user", "content": "weather"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+            "tool_choice": "auto",
+            "stream": true,
+            "stream_options": {"include_usage": true}
+        }),
+        Some("guarded-benchy-stream"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-request-id"], "guarded-benchy-stream");
+    assert_eq!(
+        response.headers()["content-type"].to_str().unwrap(),
+        "text/event-stream"
+    );
+
+    let text = response_text(response).await;
+    assert!(text.contains(r#""role":"assistant""#));
+    assert!(text.contains(r#""content":"lookup""#));
+    assert!(text.contains(r#""content":"[ARGS]""#));
+    assert!(text.contains(r#""content":"{\"city\":\"Sydney\"}""#));
+    assert!(text.contains(r#""total_tokens":11"#));
+    assert!(text.contains("data: [DONE]"));
+    assert!(!text.contains("\"tool_calls\":"));
+
+    let seen_requests = backend.seen_stream_requests.lock().unwrap();
+    assert_eq!(seen_requests.len(), 1);
+    let seen_tools = seen_requests[0]
+        .tools
+        .as_ref()
+        .and_then(Value::as_array)
+        .cloned()
+        .expect("stream backend should receive tools");
+    assert_eq!(seen_tools.len(), 1);
+    assert_eq!(seen_tools[0]["function"]["name"], "lookup");
+}
+
+#[tokio::test]
 async fn legacy_completions_surface_stays_available_for_other_clients() {
     let response = request(
         "POST",
@@ -236,22 +398,51 @@ async fn legacy_completions_surface_stays_available_for_other_clients() {
 }
 
 async fn request(method: &str, path: &str, value: Value) -> axum::response::Response {
-    let app = openai_frontend::router_for(Arc::new(BenchyBackend));
+    request_with_app(
+        openai_frontend::router_for(Arc::new(BenchyBackend)),
+        method,
+        path,
+        value,
+        None,
+    )
+    .await
+}
+
+fn guarded_backend_app(backend: Arc<GuardedBenchyBackend>) -> axum::Router {
+    let guarded = Arc::new(GuardedOpenAiBackend::new(
+        backend,
+        GuardrailPolicy {
+            mode: GuardrailMode::Enforce,
+            apply_to_all_models: true,
+            ..GuardrailPolicy::default()
+        },
+    ));
+    openai_frontend::router_for_with_config(
+        guarded,
+        OpenAiFrontendConfig::default().without_backend_timeout(),
+    )
+}
+
+async fn request_with_app(
+    app: axum::Router,
+    method: &str,
+    path: &str,
+    value: Value,
+    request_id: Option<&str>,
+) -> axum::response::Response {
     let body = if value.is_null() {
         Body::empty()
     } else {
         Body::from(value.to_string())
     };
-    app.oneshot(
-        Request::builder()
-            .method(method)
-            .uri(path)
-            .header("content-type", "application/json")
-            .body(body)
-            .unwrap(),
-    )
-    .await
-    .unwrap()
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header("content-type", "application/json");
+    if let Some(request_id) = request_id {
+        builder = builder.header("x-request-id", request_id);
+    }
+    app.oneshot(builder.body(body).unwrap()).await.unwrap()
 }
 
 async fn response_json(response: axum::response::Response) -> Value {

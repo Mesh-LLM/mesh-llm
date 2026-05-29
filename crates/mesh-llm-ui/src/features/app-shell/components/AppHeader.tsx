@@ -16,6 +16,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { TooltipContent, TooltipRoot, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { env } from '@/lib/env'
 import type { TopSection } from '@/features/app-shell/lib/routes'
 
 const DOCS_URL = 'https://docs.anarchai.org'
@@ -154,7 +155,7 @@ export function AppHeader({
           </NavigationMenuList>
         </NavigationMenu>
         <div className="ml-auto flex items-center gap-2">
-          {import.meta.env.DEV && (
+          {env.isDevelopment && (
             <Button
               variant="secondary"
               size="sm"
@@ -280,7 +281,7 @@ export function AppHeader({
                 </a>
               </div>
               <div className="text-xs text-muted-foreground pt-1">
-                Agents can gossip too — <code className="text-[0.9em]">mesh-llm blackboard install-skill</code>{' '}
+                Blackboard now ships as an external plugin.{' '}
                 <a
                   href={`${DOCS_URL}/#blackboard`}
                   target="_blank"

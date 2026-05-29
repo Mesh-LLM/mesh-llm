@@ -1,5 +1,5 @@
-use super::{proto, ToolSummary};
-use anyhow::{anyhow, Context, Result};
+use super::{ToolSummary, proto};
+use anyhow::{Context, Result, anyhow};
 use rmcp::model::ServerInfo;
 use serde::Serialize;
 

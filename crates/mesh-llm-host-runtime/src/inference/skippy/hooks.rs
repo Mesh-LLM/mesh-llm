@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use openai_frontend::{
-    chat_mesh_hooks_enabled, first_chat_media, inject_text_into_chat_messages,
-    ChatCompletionRequest, ChatHookAction, ChatHookOutcome, ChatMediaKind, GenerationHookSignals,
-    OpenAiHookPolicy, OpenAiResult, PrefillHookSignals,
+    ChatCompletionRequest, ChatHookOutcome, ChatMediaKind, GenerationHookSignals, OpenAiHookPolicy,
+    OpenAiResult, PrefillHookSignals, chat_mesh_hooks_enabled, first_chat_media,
 };
 use serde_json::Value;
 
@@ -61,7 +60,7 @@ impl OpenAiHookPolicy for MeshAutoHookPolicy {
             .executor
             .handle_image(trigger, &request.model, &media.url, &media.user_text)
             .await;
-        Ok(virtual_hook_response_to_outcome(&response))
+        Ok(virtual_media_hook_response_to_outcome(&response, media))
     }
 
     async fn after_prefill(
@@ -290,14 +289,28 @@ fn media_trigger(kind: ChatMediaKind) -> &'static str {
 }
 
 fn virtual_hook_response_to_outcome(response: &Value) -> ChatHookOutcome {
-    match response.get("action").and_then(Value::as_str) {
-        Some("inject") => response
-            .get("text")
-            .and_then(Value::as_str)
-            .map(ChatHookOutcome::injected)
-            .unwrap_or_else(ChatHookOutcome::none),
-        _ => ChatHookOutcome::none(),
+    virtual_hook_injected_text(response)
+        .map(ChatHookOutcome::injected)
+        .unwrap_or_else(ChatHookOutcome::none)
+}
+
+fn virtual_media_hook_response_to_outcome(
+    response: &Value,
+    media: openai_frontend::ChatMediaRef,
+) -> ChatHookOutcome {
+    virtual_hook_injected_text(response)
+        .map(|text| ChatHookOutcome::injected_with_consumed_media(text, media))
+        .unwrap_or_else(ChatHookOutcome::none)
+}
+
+fn virtual_hook_injected_text(response: &Value) -> Option<&str> {
+    if response.get("action").and_then(Value::as_str) != Some("inject") {
+        return None;
     }
+    response
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|text| !text.is_empty())
 }
 
 fn chat_messages_as_values(messages: &[openai_frontend::ChatMessage]) -> Vec<Value> {
@@ -313,22 +326,11 @@ fn mid_generation_signals_should_fire(signals: &GenerationHookSignals) -> bool {
     sustained_entropy || signals.repetition_count >= MID_GENERATION_REPETITION_THRESHOLD
 }
 
-fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &ChatHookOutcome) {
-    for action in &outcome.actions {
-        match action {
-            ChatHookAction::InjectText { text } => {
-                inject_text_into_chat_messages(&mut request.messages, text.clone());
-            }
-            ChatHookAction::None => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use openai_frontend::{MessageContent, MessageContentPart};
+    use openai_frontend::{MessageContent, MessageContentPart, apply_chat_hook_outcome};
     use serde_json::json;
 
     use super::*;
@@ -439,6 +441,21 @@ mod tests {
                 "content": [
                     {"type": "text", "text": "what is this?"},
                     {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+                ]
+            }],
+            "mesh_hooks": mesh_hooks
+        }))
+        .unwrap()
+    }
+
+    fn audio_request(mesh_hooks: bool) -> ChatCompletionRequest {
+        serde_json::from_value(json!({
+            "model": "auto",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "please transcribe this"},
+                    {"type": "input_audio", "input_audio": {"url": "data:audio/wav;base64,abc"}}
                 ]
             }],
             "mesh_hooks": mesh_hooks
@@ -572,7 +589,19 @@ mod tests {
 
         let outcome = policy.before_chat_completion(&mut request).await.unwrap();
 
-        assert_eq!(outcome, ChatHookOutcome::injected("[media fallback]\n\n"));
+        assert_eq!(
+            outcome,
+            ChatHookOutcome::injected_with_consumed_media(
+                "[media fallback]\n\n",
+                openai_frontend::ChatMediaRef {
+                    kind: ChatMediaKind::Image,
+                    url: "data:image/png;base64,abc".to_string(),
+                    user_text: "what is this?".to_string(),
+                    message_index: 0,
+                    part_index: 1,
+                }
+            )
+        );
         assert_eq!(
             executor.calls(),
             vec![RecordedHookCall::Image {
@@ -580,6 +609,37 @@ mod tests {
                 model: "auto".to_string(),
                 media_url: "data:image/png;base64,abc".to_string(),
                 user_text: "what is this?".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn media_fallback_hook_calls_audio_trigger_and_injects() {
+        let (policy, executor) = policy_with_recorder(HookDebugConfig::default());
+        let mut request = audio_request(true);
+
+        let outcome = policy.before_chat_completion(&mut request).await.unwrap();
+
+        assert_eq!(
+            outcome,
+            ChatHookOutcome::injected_with_consumed_media(
+                "[media fallback]\n\n",
+                openai_frontend::ChatMediaRef {
+                    kind: ChatMediaKind::Audio,
+                    url: "data:audio/wav;base64,abc".to_string(),
+                    user_text: "please transcribe this".to_string(),
+                    message_index: 0,
+                    part_index: 1,
+                }
+            )
+        );
+        assert_eq!(
+            executor.calls(),
+            vec![RecordedHookCall::Image {
+                trigger: "audio_no_support".to_string(),
+                model: "auto".to_string(),
+                media_url: "data:audio/wav;base64,abc".to_string(),
+                user_text: "please transcribe this".to_string(),
             }]
         );
     }

@@ -2,7 +2,7 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-use crate::plugin::{load_config, validate_config, MeshConfig};
+use crate::plugin::{ConfigStore, MeshConfig, load_config, validate_config};
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
 /// Mirrors the `ConfigApplyMode` proto enum; kept in the domain layer so
@@ -109,7 +109,7 @@ fn atomic_write(target: &Path, contents: &[u8]) -> std::io::Result<()> {
 
 fn local_config_write_hash(config: &MeshConfig) -> [u8; 32] {
     let bytes = serde_json::to_vec(config)
-        .or_else(|_| toml::to_string(config).map(String::into_bytes))
+        .or_else(|_| crate::plugin::config_to_toml(config).map(String::into_bytes))
         .unwrap_or_default();
     let digest = Sha256::digest(bytes);
     let mut out = [0u8; 32];
@@ -187,12 +187,7 @@ impl ConfigState {
             };
         }
 
-        let toml_str = match toml::to_string(&new_config) {
-            Ok(s) => s,
-            Err(e) => return ApplyResult::PersistError(format!("toml serialization failed: {e}")),
-        };
-
-        if let Err(e) = atomic_write(&self.config_path, toml_str.as_bytes()) {
+        if let Err(e) = ConfigStore::open(self.config_path.clone()).save(&new_config) {
             return ApplyResult::PersistError(format!("failed to write config: {e}"));
         }
 
@@ -250,8 +245,10 @@ mod tests {
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![],
             plugins: vec![],
+            extra: Default::default(),
         }
     }
 
@@ -420,6 +417,84 @@ alias = "model-alias"
     }
 
     #[test]
+    fn config_sync_state_apply_preserves_additive_defaults_sections() {
+        let dir = test_dir();
+        let config_path = dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"version = 1
+
+[defaults.throughput]
+parallel = 2
+
+[defaults.model_fit]
+flash_attention = "auto"
+
+[defaults.request_defaults]
+reasoning_format = "deepseek"
+"#,
+        )
+        .expect("write baseline config");
+
+        let mut state = ConfigState::load(&config_path).expect("load baseline config");
+        let mut config = minimal_valid_config();
+        config.extra = toml::from_str(
+            r#"[defaults.throughput]
+parallel = 6
+
+[defaults.model_fit]
+flash_attention = "disabled"
+
+[defaults.request_defaults]
+reasoning_format = "qwen"
+"#,
+        )
+        .expect("parse additive defaults table");
+
+        let result = state.apply(config, 0);
+        match result {
+            ApplyResult::Applied {
+                revision,
+                apply_mode,
+                ..
+            } => {
+                assert_eq!(revision, 1);
+                assert_eq!(apply_mode, ConfigApplyMode::Staged);
+            }
+            other => panic!("expected additive defaults to be written, got {other:?}"),
+        }
+
+        let written = std::fs::read_to_string(&config_path).expect("read written config");
+        let written: toml::Value = toml::from_str(&written).expect("written TOML parses");
+        assert_eq!(
+            written
+                .get("defaults")
+                .and_then(|defaults| defaults.get("throughput"))
+                .and_then(|throughput| throughput.get("parallel"))
+                .and_then(toml::Value::as_integer),
+            Some(6)
+        );
+        assert_eq!(
+            written
+                .get("defaults")
+                .and_then(|defaults| defaults.get("model_fit"))
+                .and_then(|model_fit| model_fit.get("flash_attention"))
+                .and_then(toml::Value::as_str),
+            Some("disabled")
+        );
+        assert_eq!(
+            written
+                .get("defaults")
+                .and_then(|defaults| defaults.get("request_defaults"))
+                .and_then(|request_defaults| request_defaults.get("reasoning_format"))
+                .and_then(toml::Value::as_str),
+            Some("qwen")
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn config_sync_state_conflict() {
         let dir = test_dir();
         let config_path = dir.join("config.toml");
@@ -484,6 +559,7 @@ alias = "model-alias"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![crate::plugin::ModelConfigEntry {
                 model: model.to_string(),
                 mmproj: None,
@@ -498,6 +574,7 @@ alias = "model-alias"
                 ..Default::default()
             }],
             plugins: vec![],
+            extra: Default::default(),
         };
 
         assert_eq!(state.revision(), 0);
@@ -527,6 +604,7 @@ alias = "model-alias"
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![crate::plugin::ModelConfigEntry {
                 model: "test.gguf".to_string(),
                 mmproj: None,
@@ -541,6 +619,7 @@ alias = "model-alias"
                 ..Default::default()
             }],
             plugins: vec![],
+            extra: Default::default(),
         };
         state.apply(config_with_model, 0);
         let new_hash = *state.config_hash();
@@ -683,6 +762,7 @@ temperature = 0.2
             owner_control: Default::default(),
             telemetry: Default::default(),
             defaults: None,
+            runtime: Default::default(),
             models: vec![crate::plugin::ModelConfigEntry {
                 model: "noop-test.gguf".to_string(),
                 mmproj: None,
@@ -697,6 +777,7 @@ temperature = 0.2
                 ..Default::default()
             }],
             plugins: vec![],
+            extra: Default::default(),
         };
 
         let r1 = state.apply(config_with_model.clone(), 0);

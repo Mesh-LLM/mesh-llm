@@ -6,16 +6,16 @@
 use crate::inference::election;
 use crate::mesh;
 use crate::network::affinity::{
-    prepare_remote_targets_for_request, AffinityRouter, PreparedTargets, TargetSelection,
+    AffinityRouter, PreparedTargets, TargetSelection, prepare_remote_targets_for_request,
 };
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::{
-    normalize_chat_completion_json_body, ChatStreamNormalizationState,
+    ChatStreamNormalizationState, normalize_chat_completion_json_body,
 };
 use crate::network::router;
 use crate::network::target_health::TargetHealthOutcome;
 use crate::plugin;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 // moa imports relocated into moa_gateway.rs (sole user after merge)
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -62,11 +62,13 @@ pub struct BufferedHttpRequest {
     pub raw: Vec<u8>,
     pub method: String,
     pub path: String,
+    pub client_path: String,
     pub body_json: Option<serde_json::Value>,
     body_json_attempted: bool,
     body_bytes: Option<Vec<u8>>,
     pub body_len_bytes: usize,
     pub completion_tokens: Option<u32>,
+    pub stream: Option<bool>,
     pub model_name: Option<String>,
     pub request_object_request_ids: Vec<String>,
     pub response_adapter: ResponseAdapter,
@@ -334,12 +336,14 @@ async fn read_http_request_with_limits(
     Ok(BufferedHttpRequest {
         raw,
         method: parsed.method,
+        client_path: parsed.path,
         path: rewrite.request_path,
         body_json: rewrite.body_json,
         body_json_attempted: requires_json_transform,
         body_bytes,
         body_len_bytes,
         completion_tokens,
+        stream: metadata.as_ref().and_then(|value| value.stream),
         model_name,
         request_object_request_ids: rewrite.request_object_request_ids,
         response_adapter,
@@ -2692,12 +2696,12 @@ fn rewrite_http_request_target(
     let mut rebuilt = format!("{method} {new_path} {version}\r\n");
     let mut saw_host = false;
     for line in lines {
-        if let Some((name, _value)) = line.split_once(':') {
-            if name.eq_ignore_ascii_case("host") {
-                rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
-                saw_host = true;
-                continue;
-            }
+        if let Some((name, _value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("host")
+        {
+            rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+            saw_host = true;
+            continue;
         }
         rebuilt.push_str(line);
         rebuilt.push_str("\r\n");
@@ -2735,6 +2739,17 @@ pub(crate) fn capabilities_for_model(
         .unwrap_or_else(|| crate::models::installed_model_capabilities(model))
 }
 
+pub(crate) fn descriptor_metadata_for_model<'a>(
+    model: &str,
+    descriptors: &'a [mesh::ServedModelDescriptor],
+) -> Option<&'a mesh::ServedModelMetadata> {
+    descriptor_for_model(descriptors, model).and_then(|descriptor| descriptor.metadata.as_ref())
+}
+
+fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
+    &request.client_path
+}
+
 // ── Model-aware tunnel routing ──
 
 /// The common request-handling path used by idle proxy, passive proxy, and bootstrap proxy.
@@ -2750,6 +2765,7 @@ pub async fn handle_mesh_request(
     affinity: AffinityRouter,
 ) {
     let mut tcp_stream = tcp_stream;
+    let source_addr = tcp_stream.peer_addr().ok();
     let plugin_manager = node.plugin_manager().await;
     let mut request =
         match read_http_request_with_plugin_manager(&mut tcp_stream, plugin_manager.as_ref()).await
@@ -2760,12 +2776,26 @@ pub async fn handle_mesh_request(
                 return;
             }
         };
+    if node.swarm_capture_enabled() {
+        node.capture_http_request(crate::mesh::HttpCaptureEvent {
+            event: "openai_ingress_http_request",
+            source_addr,
+            method: &request.method,
+            path: capture_path_for_request(&request),
+            body_len_bytes: request.body_len_bytes,
+            model_name: request.model_name.as_deref(),
+            completion_tokens: request.completion_tokens,
+            stream: request.stream,
+        });
+    }
 
     // Handle /v1/models
     if is_models_list_request(&request.method, &request.path) {
         let served = node.models_being_served().await;
-        let descriptors = node.served_model_descriptors().await;
-        let _ = send_models_list_with_descriptors(tcp_stream, &served, &descriptors).await;
+        let descriptors = node.all_served_model_descriptors().await;
+        let runtimes = node.all_model_runtime_descriptors().await;
+        let _ =
+            send_models_list_with_descriptors(tcp_stream, &served, &descriptors, &runtimes).await;
         return;
     }
 
@@ -2826,7 +2856,7 @@ async fn build_mesh_request_plan(
     affinity: &AffinityRouter,
 ) -> std::result::Result<MeshRequestPlan, MeshRequestFailure> {
     let served = node.models_being_served().await;
-    let descriptors = node.served_model_descriptors().await;
+    let descriptors = node.all_served_model_descriptors().await;
     rewrite_public_model_alias(request, &served, &descriptors);
 
     let is_auto_request =
@@ -2850,10 +2880,8 @@ async fn build_mesh_request_plan(
     if is_auto_request {
         inject_mesh_hooks_flag(&mut request.raw, true);
     }
-    if track_demand {
-        if let Some(name) = effective_model.as_deref() {
-            node.record_request(name);
-        }
+    if track_demand && let Some(name) = effective_model.as_deref() {
+        node.record_request(name);
     }
 
     let resolved_hosts = match resolve_mesh_target_hosts(node, effective_model.as_deref()).await {
@@ -2889,10 +2917,10 @@ async fn build_mesh_request_plan(
 }
 
 fn rewrite_effective_model(request: &mut BufferedHttpRequest, effective_model: Option<&str>) {
-    if let Some(name) = effective_model {
-        if request.model_name.as_deref() != Some(name) {
-            rewrite_model_field(request, name);
-        }
+    if let Some(name) = effective_model
+        && request.model_name.as_deref() != Some(name)
+    {
+        rewrite_model_field(request, name);
     }
 }
 
@@ -3221,10 +3249,9 @@ fn forget_mesh_cached_target(
         effective_model,
         prepared.learn_prefix_hash,
         prepared.cached_target.as_ref(),
-    ) {
-        if cached_target == failed_target {
-            affinity.forget_target(name, prefix_hash, failed_target);
-        }
+    ) && cached_target == failed_target
+    {
+        affinity.forget_target(name, prefix_hash, failed_target);
     }
 }
 
@@ -3307,6 +3334,8 @@ async fn resolve_auto_model_request(
             router::RoutingCandidate {
                 name: name.as_str(),
                 caps,
+                parameter_count_b: descriptor_metadata_for_model(name, descriptors)
+                    .and_then(|metadata| metadata.parameter_count_b),
                 tps_hint,
                 throughput_samples,
             }
@@ -3571,7 +3600,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
                     state.attempts,
                     result,
                     &target,
-                )
+                );
             }
         }
     }
@@ -3698,10 +3727,10 @@ fn handle_delivered_route_model_attempt(
     state: &RouteModelState,
     affinity: &AffinityRouter,
 ) -> RouteModelDisposition {
-    if should_learn_affinity(status_code) {
-        if let Some(prefix_hash) = selection.learn_prefix_hash {
-            affinity.learn_target(model, prefix_hash, target);
-        }
+    if should_learn_affinity(status_code)
+        && let Some(prefix_hash) = selection.learn_prefix_hash
+    {
+        affinity.learn_target(model, prefix_hash, target);
     }
     node.record_routed_request(
         Some(model),
@@ -3768,10 +3797,9 @@ fn forget_selected_route_model_target(
     if let (Some(prefix_hash), Some(cached_target)) = (
         selection.learn_prefix_hash,
         selection.cached_target.as_ref(),
-    ) {
-        if cached_target == target {
-            affinity.forget_target(model, prefix_hash, target);
-        }
+    ) && cached_target == target
+    {
+        affinity.forget_target(model, prefix_hash, target);
     }
 }
 
@@ -3942,11 +3970,13 @@ pub async fn send_models_list_with_descriptors(
     mut stream: TcpStream,
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
+    runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> std::io::Result<()> {
-    let body = models_list_json(models, descriptors).to_string();
+    let body = models_list_json(models, descriptors, runtimes).to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        body
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -3956,6 +3986,7 @@ pub async fn send_models_list_with_descriptors(
 fn models_list_json(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
+    runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> serde_json::Value {
     let mut seen = std::collections::HashSet::new();
     let data: Vec<serde_json::Value> = models
@@ -3988,7 +4019,7 @@ fn models_list_json(
             } else {
                 public_id.clone()
             };
-            Some(serde_json::json!({
+            let mut model = serde_json::json!({
                 "id": public_id,
                 "display_name": display_name,
                 "object": "model",
@@ -3998,11 +4029,82 @@ fn models_list_json(
                 "vision_status": capabilities.vision_status(),
                 "audio_status": capabilities.audio_status(),
                 "reasoning_status": capabilities.reasoning_status(),
-            }))
+            });
+            if let Some(metadata) = model_metadata_json(m, descriptor, runtimes)
+                && let Some(object) = model.as_object_mut()
+            {
+                object.insert("metadata".to_string(), metadata);
+            }
+            Some(model)
         })
         .collect();
 
     serde_json::json!({ "object": "list", "data": data })
+}
+
+fn model_metadata_json(
+    model_name: &str,
+    descriptor: Option<&mesh::ServedModelDescriptor>,
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+) -> Option<serde_json::Value> {
+    let mut metadata = serde_json::Map::new();
+    let descriptor_metadata = descriptor.and_then(|descriptor| descriptor.metadata.as_ref());
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.architecture.as_ref()) {
+        metadata.insert("architecture".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_size.as_ref()) {
+        metadata.insert("parameter_size".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_count_b)
+        && value.is_finite()
+    {
+        metadata.insert("parameter_count_b".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.quant.as_ref()) {
+        metadata.insert("quant".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = runtime_context_length_for_model(model_name, runtimes) {
+        metadata.insert("context_length".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.native_context_length) {
+        metadata.insert(
+            "native_context_length".to_string(),
+            serde_json::json!(value),
+        );
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.tokenizer.as_ref()) {
+        metadata.insert("tokenizer".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.layer_count) {
+        metadata.insert("layer_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.embedding_size) {
+        metadata.insert("embedding_size".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.head_count) {
+        metadata.insert("head_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.kv_head_count) {
+        metadata.insert("kv_head_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.expert_count) {
+        metadata.insert("expert_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.active_expert_count) {
+        metadata.insert("active_expert_count".to_string(), serde_json::json!(value));
+    }
+    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
+}
+
+fn runtime_context_length_for_model(
+    model_name: &str,
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+) -> Option<u32> {
+    runtimes
+        .iter()
+        .filter(|runtime| runtime.model_name == model_name)
+        .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length)
+        .max()
 }
 
 pub fn rewrite_public_model_alias(
@@ -4053,12 +4155,11 @@ fn public_model_id(model_name: &str, descriptor: Option<&mesh::ServedModelDescri
     // local models), and finally the internal model_name (which
     // always carries the quant suffix our resolver knows how to
     // route).
-    if let Some(descriptor) = descriptor {
-        if descriptor_can_produce_lossless_id(&descriptor.identity) {
-            if let Some(id) = public_model_id_from_identity(&descriptor.identity) {
-                return id;
-            }
-        }
+    if let Some(descriptor) = descriptor
+        && descriptor_can_produce_lossless_id(&descriptor.identity)
+        && let Some(id) = public_model_id_from_identity(&descriptor.identity)
+    {
+        return id;
     }
 
     if let Some(id) = public_model_id_from_local_path(model_name) {
@@ -4251,8 +4352,7 @@ pub async fn send_json_with_status_and_headers(
 }
 
 pub async fn send_400(mut stream: TcpStream, msg: &str) -> std::io::Result<()> {
-    let body = serde_json::to_vec(&serde_json::json!({ "error": msg }))
-        .expect("serializing JSON error response should not fail");
+    let body = openai_error_body(400, msg);
     let headers = format!(
         "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         body.len()
@@ -4265,13 +4365,20 @@ pub async fn send_400(mut stream: TcpStream, msg: &str) -> std::io::Result<()> {
 
 pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io::Result<()> {
     let status = match code {
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        413 => "Payload Too Large",
         422 => "Unprocessable Content",
         429 => "Too Many Requests",
+        500 => "Internal Server Error",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
         _ => "Bad Request",
     };
-    let body = serde_json::json!({"error": msg}).to_string();
+    let body = openai_error_body(code, msg);
     let retry_after = if code == 429 {
         "Retry-After: 5\r\n"
     } else {
@@ -4279,7 +4386,8 @@ pub async fn send_error(mut stream: TcpStream, code: u16, msg: &str) -> std::io:
     };
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        String::from_utf8_lossy(&body)
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
@@ -4292,14 +4400,57 @@ pub async fn send_503(stream: TcpStream, reason: &str) -> std::io::Result<()> {
 }
 
 async fn send_503_inner(mut stream: TcpStream, reason: &str) -> std::io::Result<()> {
-    let body = serde_json::json!({"error": reason}).to_string();
+    let body = openai_error_body(503, reason);
     let resp = format!(
         "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        body.len(), body
+        body.len(),
+        String::from_utf8_lossy(&body)
     );
     stream.write_all(resp.as_bytes()).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+fn openai_error_body(status_code: u16, message: &str) -> Vec<u8> {
+    let status =
+        http::StatusCode::from_u16(status_code).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
+    let kind = openai_error_kind_for_status(status_code);
+    let error = openai_frontend::OpenAiError::from_kind(status, kind, message)
+        .with_code(openai_error_code_for_status(status_code));
+    serde_json::to_vec(&error.body()).expect("serializing JSON error response should not fail")
+}
+
+const fn openai_error_kind_for_status(status_code: u16) -> openai_frontend::OpenAiErrorKind {
+    match status_code {
+        401 => openai_frontend::OpenAiErrorKind::Authentication,
+        403 => openai_frontend::OpenAiErrorKind::Permission,
+        404 => openai_frontend::OpenAiErrorKind::NotFound,
+        413 => openai_frontend::OpenAiErrorKind::PayloadTooLarge,
+        429 => openai_frontend::OpenAiErrorKind::RateLimit,
+        500 => openai_frontend::OpenAiErrorKind::Internal,
+        502 => openai_frontend::OpenAiErrorKind::ServiceUnavailable,
+        503 => openai_frontend::OpenAiErrorKind::ServiceUnavailable,
+        504 => openai_frontend::OpenAiErrorKind::Timeout,
+        _ => openai_frontend::OpenAiErrorKind::InvalidRequest,
+    }
+}
+
+const fn openai_error_code_for_status(status_code: u16) -> &'static str {
+    match status_code {
+        400 => "bad_request",
+        401 => "invalid_api_key",
+        403 => "permission_denied",
+        404 => "model_not_found",
+        409 => "conflict",
+        413 => "payload_too_large",
+        422 => "unprocessable_content",
+        429 => "rate_limit_exceeded",
+        500 => "internal_server_error",
+        502 => "service_unavailable",
+        503 => "service_unavailable",
+        504 => "timeout",
+        _ => "invalid_request",
+    }
 }
 
 /// Pipeline-aware HTTP proxy for local targets.
@@ -4479,6 +4630,7 @@ async fn relay_pipeline_non_streaming_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
     use tokio::net::TcpListener;
 
     // ── Header-name validation ──────────────────────────────────────
@@ -4608,7 +4760,7 @@ mod tests {
         let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![hf_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(
             body["data"][0]["id"],
@@ -4659,7 +4811,7 @@ mod tests {
         };
         let descriptors = vec![descriptor];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
         let public_id = body["data"][0]["id"].as_str().unwrap_or_default();
 
         // The public ID must NOT silently drop the quant suffix that the
@@ -4682,7 +4834,7 @@ mod tests {
         let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![catalog_model_ref_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(
             body["data"][0]["id"],
@@ -4695,10 +4847,53 @@ mod tests {
         let models = vec!["smollm2-a".to_string()];
         let descriptors = vec![local_gguf_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(body["data"][0]["id"], "smollm2-a");
         assert_eq!(body["data"][0]["display_name"], "smollm2-a");
+    }
+
+    #[test]
+    fn models_list_reports_model_metadata() {
+        let models = vec!["Qwen3-32B-Q4_K_M".to_string()];
+        let mut descriptor = local_gguf_descriptor(&models[0]);
+        descriptor.metadata = Some(mesh::ServedModelMetadata {
+            architecture: Some("qwen3".to_string()),
+            parameter_size: Some("32B".to_string()),
+            parameter_count_b: Some(32.0),
+            quant: Some("Q4_K_M".to_string()),
+            native_context_length: Some(32_768),
+            tokenizer: Some("gpt2".to_string()),
+            layer_count: Some(64),
+            embedding_size: Some(5120),
+            head_count: Some(40),
+            kv_head_count: Some(8),
+            expert_count: Some(128),
+            active_expert_count: Some(8),
+        });
+        let runtimes = vec![mesh::ModelRuntimeDescriptor {
+            model_name: models[0].clone(),
+            identity_hash: None,
+            context_length: Some(65_536),
+            ready: true,
+        }];
+
+        let body = models_list_json(&models, &[descriptor], &runtimes);
+        let metadata = &body["data"][0]["metadata"];
+
+        assert_eq!(metadata["architecture"], "qwen3");
+        assert_eq!(metadata["parameter_size"], "32B");
+        assert_eq!(metadata["parameter_count_b"], 32.0);
+        assert_eq!(metadata["quant"], "Q4_K_M");
+        assert_eq!(metadata["context_length"], 65_536);
+        assert_eq!(metadata["native_context_length"], 32_768);
+        assert_eq!(metadata["tokenizer"], "gpt2");
+        assert_eq!(metadata["layer_count"], 64);
+        assert_eq!(metadata["embedding_size"], 5120);
+        assert_eq!(metadata["head_count"], 40);
+        assert_eq!(metadata["kv_head_count"], 8);
+        assert_eq!(metadata["expert_count"], 128);
+        assert_eq!(metadata["active_expert_count"], 8);
     }
 
     #[test]
@@ -4709,7 +4904,7 @@ mod tests {
             crate::models::ModelCapabilities::default(),
         )];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(body["data"][0]["capabilities"], serde_json::json!(["text"]));
         assert_eq!(body["data"][0]["vision_status"], "none");
@@ -4721,7 +4916,7 @@ mod tests {
         let models = vec!["Qwen3VL-2B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![local_gguf_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
         let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
 
         assert!(capabilities.iter().any(|cap| cap == "multimodal"));
@@ -4742,7 +4937,7 @@ mod tests {
             },
         )];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
         let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
 
         assert!(capabilities.iter().any(|cap| cap == "multimodal"));
@@ -4770,12 +4965,14 @@ mod tests {
             raw,
             method: "POST".to_string(),
             path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
             body_json: Some(body),
             body_json_attempted: true,
             body_bytes: Some(body_bytes),
             body_len_bytes: 0,
             completion_tokens: None,
             model_name: Some("tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M".to_string()),
+            stream: None,
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
         };
@@ -5449,6 +5646,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_read_http_request_preserves_client_path_for_responses_capture() {
+        let body = br#"{"model":"qwen","stream":true,"input":"hello"}"#;
+        let request = format!(
+            "POST /v1/responses?foo=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        );
+
+        let request = read_request_from_parts(vec![request.into_bytes()]).await;
+
+        assert_eq!(request.path, "/v1/chat/completions?foo=1");
+        assert_eq!(request.client_path, "/v1/responses?foo=1");
+    }
+
+    #[test]
+    fn test_capture_path_for_request_uses_client_path() {
+        let request = BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".to_string(),
+            path: "/v1/chat/completions?foo=1".to_string(),
+            client_path: "/v1/responses?foo=1".to_string(),
+            body_json: None,
+            body_json_attempted: false,
+            body_bytes: None,
+            body_len_bytes: 0,
+            completion_tokens: None,
+            stream: None,
+            model_name: Some("qwen".to_string()),
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::OpenAiResponsesStream,
+        };
+
+        assert_eq!(capture_path_for_request(&request), "/v1/responses?foo=1");
+    }
+
+    #[tokio::test]
     async fn test_read_http_request_large_body_over_32k() {
         let large = "x".repeat(40_000);
         let body = serde_json::json!({
@@ -5671,36 +5904,63 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_error_429_includes_retry_after() {
-        use tokio::io::AsyncReadExt;
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            super::send_error(stream, 429, "model not available")
-                .await
-                .unwrap();
-        });
-
-        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let mut buf = vec![0u8; 4096];
-        let mut total = 0;
-        loop {
-            let n = client.read(&mut buf[total..]).await.unwrap();
-            if n == 0 {
-                break;
-            }
-            total += n;
-        }
-        let response = String::from_utf8_lossy(&buf[..total]);
+        let response = capture_proxy_error_response(|stream| async move {
+            super::send_error(stream, 429, "model not available").await
+        })
+        .await;
+        let body = response_json_body(&response);
 
         assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
         assert!(response.contains("Retry-After: 5\r\n"));
-        assert!(response.contains("model not available"));
+        assert_eq!(body["error"]["message"], "model not available");
+        assert_eq!(body["error"]["type"], "rate_limit_error");
+        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
+    }
 
+    #[tokio::test]
+    async fn test_send_503_uses_openai_error_shape() {
+        let response = capture_proxy_error_response(|stream| async move {
+            super::send_503(stream, "skippy ABI call failed: Unsupported").await
+        })
+        .await;
+        let body = response_json_body(&response);
+
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert_eq!(
+            body["error"]["message"],
+            "skippy ABI call failed: Unsupported"
+        );
+        assert_eq!(body["error"]["type"], "server_error");
+        assert_eq!(body["error"]["code"], "service_unavailable");
+    }
+
+    async fn capture_proxy_error_response<F, Fut>(send: F) -> String
+    where
+        F: FnOnce(tokio::net::TcpStream) -> Fut + Send + 'static,
+        Fut: Future<Output = std::io::Result<()>> + Send + 'static,
+    {
+        use tokio::io::AsyncReadExt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            send(stream).await.unwrap();
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
         server.await.unwrap();
+        String::from_utf8(output).unwrap()
+    }
+
+    fn response_json_body(response: &str) -> serde_json::Value {
+        let body_start = response
+            .find("\r\n\r\n")
+            .map(|index| index + 4)
+            .expect("response contains header terminator");
+        serde_json::from_str(&response[body_start..]).unwrap()
     }
 
     #[test]
@@ -5743,12 +6003,14 @@ mod tests {
             raw: b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 45\r\n\r\n{\"model\":\"auto\",\"messages\":[],\"mesh_hooks\":true}".to_vec(),
             method: "POST".to_string(),
             path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
             body_json: None,
             body_json_attempted: false,
             body_bytes: None,
             body_len_bytes: 45,
             completion_tokens: None,
             model_name: Some("auto".to_string()),
+            stream: None,
             request_object_request_ids: Vec::new(),
             response_adapter: ResponseAdapter::None,
         };

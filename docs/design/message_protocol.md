@@ -113,7 +113,7 @@ Each `PeerAnnouncement` describes one node's state. Fields:
 | `available_model_sizes` | File sizes in bytes per model name |
 | `serialized_addr` | JSON-serialized `EndpointAddr` for peer discovery |
 
-These GPU telemetry fields are additive and optional. Older peers continue to interoperate by ignoring unknown `/1` protobuf fields, and the richer hardware reporting does not replace the existing model-metadata flow. For clarity, `gpu_mem_bandwidth_gbps` values are serialized in GB/s (gigabytes/sec), matching benchmark output and CLI formatting; only the field name still carries the older `gbps` suffix for backward compatibility. ROCm `rocm-smi --showmeminfo` and Intel `xpu-smi` discovery expose used-memory counters rather than a true reserved/system-memory value, so `gpu_reserved_bytes` is intentionally omitted for those backends.
+These GPU telemetry fields are additive and optional. Older peers continue to interoperate by ignoring unknown `/1` protobuf fields, and the richer hardware reporting does not replace the existing model-metadata flow. For the shipped Skippy-enabled binary, GPU telemetry represents devices the embedded backend reports as runtime-selectable; platform probes are not a fallback source for advertised GPU count or usable capacity when Skippy reports no backend GPU. For clarity, `gpu_mem_bandwidth_gbps` values are serialized in GB/s (gigabytes/sec), matching benchmark output and CLI formatting; only the field name still carries the older `gbps` suffix for backward compatibility. ROCm `rocm-smi --showmeminfo` and Intel `xpu-smi` discovery expose used-memory counters rather than a true reserved/system-memory value, so `gpu_reserved_bytes` is intentionally omitted for those backends.
 
 #### ExpertsSummary
 

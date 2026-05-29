@@ -261,6 +261,45 @@ fn legacy_descriptor_from_identity(
         capabilities_known: false,
         capabilities: crate::models::ModelCapabilities::default(),
         topology: None,
+        metadata: None,
+    }
+}
+
+fn local_model_metadata_to_proto(
+    metadata: &crate::mesh::ServedModelMetadata,
+) -> crate::proto::node::ServedModelMetadata {
+    crate::proto::node::ServedModelMetadata {
+        architecture: metadata.architecture.clone(),
+        parameter_size: metadata.parameter_size.clone(),
+        parameter_count_b: metadata.parameter_count_b,
+        quant: metadata.quant.clone(),
+        native_context_length: metadata.native_context_length,
+        tokenizer: metadata.tokenizer.clone(),
+        layer_count: metadata.layer_count,
+        embedding_size: metadata.embedding_size,
+        head_count: metadata.head_count,
+        kv_head_count: metadata.kv_head_count,
+        expert_count: metadata.expert_count,
+        active_expert_count: metadata.active_expert_count,
+    }
+}
+
+fn proto_model_metadata_to_local(
+    metadata: &crate::proto::node::ServedModelMetadata,
+) -> crate::mesh::ServedModelMetadata {
+    crate::mesh::ServedModelMetadata {
+        architecture: metadata.architecture.clone(),
+        parameter_size: metadata.parameter_size.clone(),
+        parameter_count_b: metadata.parameter_count_b,
+        quant: metadata.quant.clone(),
+        native_context_length: metadata.native_context_length,
+        tokenizer: metadata.tokenizer.clone(),
+        layer_count: metadata.layer_count,
+        embedding_size: metadata.embedding_size,
+        head_count: metadata.head_count,
+        kv_head_count: metadata.kv_head_count,
+        expert_count: metadata.expert_count,
+        active_expert_count: metadata.active_expert_count,
     }
 }
 
@@ -552,6 +591,10 @@ pub(crate) fn local_ann_to_proto_ann(
                         }),
                 }
             }),
+            metadata: descriptor
+                .metadata
+                .as_ref()
+                .map(local_model_metadata_to_proto),
         })
         .collect();
     let served_model_runtime = ann
@@ -631,7 +674,7 @@ pub(crate) fn build_gossip_frame(
     let peers: Vec<crate::proto::node::PeerAnnouncement> =
         anns.iter().map(local_ann_to_proto_ann).collect();
     crate::proto::node::GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: sender_id.as_bytes().to_vec(),
         peers,
     }
@@ -765,6 +808,10 @@ pub(crate) fn proto_ann_to_local(
                                     }),
                                 }
                             }),
+                            metadata: descriptor
+                                .metadata
+                                .as_ref()
+                                .map(proto_model_metadata_to_local),
                         }
                     })
                     .collect();
@@ -820,7 +867,7 @@ pub(crate) fn routing_table_to_proto(table: &RoutingTable) -> crate::proto::node
     crate::proto::node::RouteTable {
         entries,
         mesh_id: table.mesh_id.clone(),
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
     }
 }
 
@@ -867,7 +914,7 @@ pub(crate) fn mesh_config_to_proto(
         gpu: Some(crate::proto::node::NodeGpuConfig { assignment }),
         models,
         plugins,
-        config_toml: toml::to_string(config).ok(),
+        config_toml: crate::plugin::config_to_toml(config).ok(),
     }
 }
 
@@ -898,7 +945,7 @@ fn full_config_toml_to_mesh(
         return Ok(None);
     };
 
-    let mut parsed = toml::from_str::<crate::plugin::MeshConfig>(config_toml)
+    let mut parsed = crate::plugin::parse_config_toml(config_toml)
         .context("invalid full config_toml payload")?;
     if parsed.version.is_none() {
         parsed.version = Some(snapshot.version);
@@ -967,8 +1014,10 @@ fn legacy_proto_config_to_mesh(
         owner_control: Default::default(),
         telemetry: Default::default(),
         defaults: None,
+        runtime: Default::default(),
         models,
         plugins,
+        extra: Default::default(),
     }
 }
 

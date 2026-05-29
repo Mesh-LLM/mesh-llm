@@ -77,13 +77,13 @@ Runtime switches:
   multi-interface hosts where Docker/CNI bridge addresses overlap across nodes.
 - `--bind-port <PORT>`: bind mesh QUIC to a fixed UDP port, usually paired
   with `--bind-ip` for firewall or NAT rules.
+- `--swarm-capture <DIR>`: write passive local mesh membership and connection
+  diagnostics as JSONL. See [SWARM_CAPTURE.md](SWARM_CAPTURE.md) for the full
+  debug-capture workflow.
 - `--publish`: publish your mesh for discovery.
 - `--mesh-name <MESH_NAME>`: friendly mesh name in discovery.
 - `--region <REGION>`: region hint for discovery.
-- `--blackboard`: enable blackboard on public meshes. Private meshes enable
-  blackboard by default; public mesh posts are visible to all peers in that
-  mesh.
-- `--name <NAME>`: your blackboard display name.
+- `--name <NAME>`: display name for this node.
 - `--max-vram <MAX_VRAM>`: cap VRAM used for planning and fit decisions.
 - `--llama-flavor <LLAMA_FLAVOR>`: force backend binary flavor (`cpu|cuda|rocm|vulkan|metal`).
 - `--config <CONFIG>`: explicit config file path. The file applies on future
@@ -93,6 +93,10 @@ Runtime switches:
 - `--node-label <NODE_LABEL>`: attach a human label to this runtime node certificate.
 - `--trust-policy <TRUST_POLICY>`: override peer ownership trust policy.
 - `--trust-owner <TRUST_OWNER>`: add trusted owner IDs on top of the local trust store.
+- `--mesh-guardrails <MODE>`: server-side mesh guardrail mode for hosted
+  Skippy backends (`disabled`, `metrics`, or `enforce`; default `disabled`).
+  This controls `GuardrailPolicy.mode`; request-level `mesh_guardrails` flags
+  cannot upgrade a disabled server.
 
 Config file semantics:
 
@@ -359,6 +363,40 @@ Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
 
+### `runtime guardrails`
+
+Use this to switch mesh guardrail mode on a running local runtime without
+restarting it. The command updates the server-side shared guardrail policy used
+by hosted Skippy backends and future runtime-loaded/replacement models.
+
+Usage:
+
+```bash
+mesh-llm runtime guardrails --mode metrics --port 3131
+mesh-llm runtime guardrails --mode enforce --port 3131 --json
+```
+
+Switches:
+
+- `--mode <MODE>`: `disabled`, `metrics`, or `enforce`.
+- `--port <PORT>`: target management/API port (default `3131`).
+- `--json`: machine-readable response with `mode`, `updated_models`, and the
+  current `status` payload.
+
+Equivalent REST call:
+
+```bash
+curl -s -X POST localhost:3131/api/runtime/mesh-guardrails \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"metrics"}' | jq .
+```
+
+Verify the active posture through `/api/status`:
+
+```bash
+curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
+```
+
 ### `discover`
 
 Use this to discover meshes via Nostr and optionally select one automatically.
@@ -390,6 +428,16 @@ Switches:
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--port <PORT>`: mesh-llm API port (default `9337`).
 
+### `pi`
+
+Use this to launch Pi already wired to mesh-llm’s OpenAI-compatible endpoint.
+
+Switches:
+
+- `--model <MODEL>`: model id from `/v1/models`.
+- `--host <HOST|HOST:PORT|URL>`: Pi target host or URL (default `127.0.0.1:9337`).
+- `--write`: write the mesh provider config without launching Pi.
+
 ### `opencode`
 
 Use this to launch OpenCode already wired to mesh-llm’s OpenAI-compatible endpoint.
@@ -402,6 +450,30 @@ Switches:
 - `--host <HOST|HOST:PORT|URL>`: OpenCode target host or URL (default `127.0.0.1:9337`). Bare host forms assume `http`, default inference port `9337`, and default management port `3131`.
 - `--write`: write a merged `~/.config/opencode/opencode.json` that preserves unrelated root keys and sibling providers. If only `opencode.jsonc` exists, mesh-llm errors and tells you to rename or migrate it to `opencode.json` first.
 
+### `skills`
+
+Use this to install Agent Skills exposed by installed mesh plugins.
+
+Usage:
+
+```bash
+mesh-llm skills install
+mesh-llm skills install --agent goose --agent codex
+mesh-llm skills install --all --dry-run
+```
+
+By default, the installer writes only to detected agents. Plugin packages expose
+skills by shipping `skills/<name>/SKILL.md` under the plugin archive root.
+Agent launch commands (`goose`, `pi`, `opencode`, and `claude`) install
+available plugin skills for that agent before starting the session.
+
+Switches:
+
+- `--agent <AGENT>`: install to a specific agent (`goose`, `pi`, `codex`, `opencode`, `claude`); repeatable.
+- `--all`: install to every supported target location even if the agent is not detected.
+- `--dry-run`: print planned writes without changing files.
+- `--force`: overwrite an existing user-owned skill directory with the same name.
+
 ### `stop`
 
 Use this to stop local `mesh-llm` instances tracked in the runtime root.
@@ -409,15 +481,16 @@ Use this to stop local `mesh-llm` instances tracked in the runtime root.
 
 ### `blackboard`
 
-Use this to post/search/read shared mesh notes, or to run blackboard as MCP over stdio.
+Use this external plugin command to post/search/read shared mesh notes after
+installing and configuring the blackboard plugin.
 
 Usage:
 
 ```bash
+mesh-llm plugins install blackboard
 mesh-llm blackboard
 mesh-llm blackboard "STATUS: testing gguf resolution"
 mesh-llm blackboard --search "gemma"
-mesh-llm blackboard --mcp
 ```
 
 Switches:
@@ -427,7 +500,6 @@ Switches:
 - `--since <SINCE>`: last N hours.
 - `--limit <LIMIT>`: max rows (default `20`).
 - `--port <PORT>`: target management/API port (default `3131`).
-- `--mcp`: run as MCP server over stdio.
 
 ### `plugin`
 
@@ -436,7 +508,7 @@ Use this to inspect plugin status or run plugin compatibility shims.
 Subcommands:
 
 - `plugin list`: list auto-registered/configured plugins.
-- `plugin install <NAME>`: old install workflow shim.
+- `plugin install <NAME>`: compatibility shim for older install workflows.
 
 
 ### `auth`

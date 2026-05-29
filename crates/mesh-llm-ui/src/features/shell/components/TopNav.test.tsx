@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TopNav } from '@/features/shell/components/TopNav'
 import { DataModeProvider } from '@/lib/data-mode'
+import { env } from '@/lib/env'
 import type { DataMode } from '@/lib/data-mode'
 
 function installClipboard(writeText: (text: string) => Promise<void>) {
@@ -65,6 +66,7 @@ async function waitForHoverDelay() {
 
 describe('TopNav', () => {
   beforeEach(() => {
+    env.isDevelopment = true
     installPointerCaptureShim()
   })
 
@@ -205,8 +207,7 @@ describe('TopNav', () => {
           label: 'Client-only join command',
           value: 'mesh-llm client --join invite-token-123',
           prefix: '$'
-        },
-        { label: 'Blackboard skill command', value: 'mesh-llm blackboard install-skill', prefix: '$' }
+        }
       ],
       joinLinks: [
         { href: 'https://docs.meshllm.cloud/', label: 'Setup' },
@@ -252,8 +253,7 @@ describe('TopNav', () => {
           prefix: '$',
           hint: 'This command becomes available after the backend issues a live invite token.',
           disabled: true
-        },
-        { label: 'Blackboard skill command', value: 'mesh-llm blackboard install-skill', prefix: '$' }
+        }
       ]
     })
 
@@ -267,7 +267,7 @@ describe('TopNav', () => {
     expect(screen.getByRole('button', { name: 'Copy Invite token' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Copy Auto join and serve command' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Copy Client-only join command' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Copy Blackboard skill command' })).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Copy Blackboard skill command' })).not.toBeInTheDocument()
   })
 
   it('shows the playground trigger only when the dev flag is enabled', async () => {
@@ -300,7 +300,7 @@ describe('TopNav', () => {
   })
 
   it('hides development-only navigation controls outside dev mode', async () => {
-    vi.stubEnv('DEV', false)
+    env.isDevelopment = false
     const user = userEvent.setup()
 
     renderTopNav({ onOpenDeveloperPlayground: vi.fn(), showDeveloperPlayground: true })

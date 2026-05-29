@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 pub use mesh_llm_gpu_bench::BenchmarkOutput;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -180,14 +180,14 @@ fn per_gpu_names(hw: &HardwareSurvey) -> Vec<String> {
         }
 
         // Handle summarized "N× name" form (e.g., "8× NVIDIA A100").
-        if let Some((count_str, name)) = part_trimmed.split_once('×') {
-            if let Ok(count) = count_str.trim().parse::<usize>() {
-                let name_trimmed = name.trim();
-                for _ in 0..count {
-                    names.push(name_trimmed.to_string());
-                }
-                continue;
+        if let Some((count_str, name)) = part_trimmed.split_once('×')
+            && let Ok(count) = count_str.trim().parse::<usize>()
+        {
+            let name_trimmed = name.trim();
+            for _ in 0..count {
+                names.push(name_trimmed.to_string());
             }
+            continue;
         }
 
         // Fallback: treat as a single GPU name.
@@ -336,30 +336,30 @@ pub fn run_or_load(
     let path = fingerprint_path();
 
     // Cache-hit path
-    if let Some(ref cached) = load_fingerprint(&path) {
-        if !hardware_changed(cached, hw) {
-            let mem_bandwidth: Vec<f64> = cached.gpus.iter().map(|g| g.p90_gbps).collect();
-            let compute_tflops_fp32 = cached
-                .gpus
-                .iter()
-                .map(|g| g.compute_tflops_fp32)
-                .collect::<Option<Vec<f64>>>();
-            let compute_tflops_fp16 = cached
-                .gpus
-                .iter()
-                .map(|g| g.compute_tflops_fp16)
-                .collect::<Option<Vec<f64>>>();
-            let result = BenchmarkResult {
-                mem_bandwidth_gbps: mem_bandwidth,
-                compute_tflops_fp32,
-                compute_tflops_fp16,
-            };
-            tracing::info!(
-                "Using cached bandwidth fingerprint: {} GPUs",
-                result.mem_bandwidth_gbps.len()
-            );
-            return Some(result);
-        }
+    if let Some(ref cached) = load_fingerprint(&path)
+        && !hardware_changed(cached, hw)
+    {
+        let mem_bandwidth: Vec<f64> = cached.gpus.iter().map(|g| g.p90_gbps).collect();
+        let compute_tflops_fp32 = cached
+            .gpus
+            .iter()
+            .map(|g| g.compute_tflops_fp32)
+            .collect::<Option<Vec<f64>>>();
+        let compute_tflops_fp16 = cached
+            .gpus
+            .iter()
+            .map(|g| g.compute_tflops_fp16)
+            .collect::<Option<Vec<f64>>>();
+        let result = BenchmarkResult {
+            mem_bandwidth_gbps: mem_bandwidth,
+            compute_tflops_fp32,
+            compute_tflops_fp16,
+        };
+        tracing::info!(
+            "Using cached bandwidth fingerprint: {} GPUs",
+            result.mem_bandwidth_gbps.len()
+        );
+        return Some(result);
     }
 
     tracing::info!("Hardware changed or no cache — running memory bandwidth benchmark");
@@ -529,9 +529,11 @@ mod tests {
     }
 
     fn with_benchmark_child_override<T>(path: &Path, f: impl FnOnce() -> T) -> T {
-        std::env::set_var(BENCHMARK_CHILD_ENV, path);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(BENCHMARK_CHILD_ENV, path) };
         let result = f();
-        std::env::remove_var(BENCHMARK_CHILD_ENV);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var(BENCHMARK_CHILD_ENV) };
         result
     }
 

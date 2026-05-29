@@ -113,6 +113,29 @@ uvx --from git+https://github.com/eugr/llama-benchy llama-benchy \
 Use `BASE_URL` if the OpenAI frontend is hosted elsewhere. The base URL should
 include `/v1`.
 
+## Guardrail Corpus Companion
+
+Use the guardrail corpus runner when you need reliability evidence for the same
+OpenAI surface, not throughput numbers:
+
+```bash
+mesh-llm runtime guardrails --mode metrics --port 3131
+curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
+```
+
+```bash
+python3 scripts/run-openai-guardrail-corpus.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --model meta-llama/Llama-3.2-1B-Instruct:Q4_K_M \
+  --guardrail-mode metrics \
+  --trials 20 \
+  --out .sisyphus/evidence/openai-guardrail-corpus.json
+```
+
+That run keeps its JSON under `.sisyphus/evidence/`. Use
+`scripts/run-llama-benchy-openai.sh` for benchmark throughput once the guardrail
+mode is active server-side.
+
 ## Caveats
 
 - Benchy reports both TTFR and end-to-end TTFT. Our chat stream emits an

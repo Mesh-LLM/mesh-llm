@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use mesh_llm_types::models::capabilities::{merge_config_signals, merge_name_signals};
 pub use mesh_llm_types::models::capabilities::{CapabilityLevel, ModelCapabilities};
-use model_artifact::{resolve_model_artifact_ref, ModelFormat, ResolvedModelArtifact};
+use mesh_llm_types::models::capabilities::{merge_config_signals, merge_name_signals};
+use model_artifact::{ModelFormat, ResolvedModelArtifact, resolve_model_artifact_ref};
 use model_hf::HfModelRepository;
 use model_ref::{format_model_ref, normalize_gguf_distribution_id, quant_selector_from_gguf_file};
 use serde::Deserialize;
@@ -788,9 +788,11 @@ mod tests {
         std::fs::write(&layer, b"layer").unwrap();
 
         let installed = scan_installed_models(&temp);
-        assert!(installed
-            .iter()
-            .all(|model| model.model_ref == "meshllm/Qwen-layers"));
+        assert!(
+            installed
+                .iter()
+                .all(|model| model.model_ref == "meshllm/Qwen-layers")
+        );
         assert_eq!(installed.len(), 2);
 
         let _ = std::fs::remove_dir_all(temp);
@@ -800,9 +802,11 @@ mod tests {
     fn recommended_models_include_capabilities() {
         let recommended = recommended_models();
         assert!(!recommended.is_empty());
-        assert!(recommended
-            .iter()
-            .any(|model| model.id == "Qwen3-4B-Q4_K_M"));
+        assert!(
+            recommended
+                .iter()
+                .any(|model| model.id == "Qwen3-4B-Q4_K_M")
+        );
     }
 
     #[test]
@@ -883,10 +887,12 @@ mod tests {
         assert_eq!(downloaded.model_ref, "org/repo-GGUF:Q4_K_M");
         assert_eq!(downloaded.primary_path.as_deref(), Some(model.as_path()));
         assert_eq!(downloaded.paths, vec![model]);
-        assert!(downloaded
-            .details
-            .as_ref()
-            .is_some_and(|details| details.installed));
+        assert!(
+            downloaded
+                .details
+                .as_ref()
+                .is_some_and(|details| details.installed)
+        );
 
         let _ = std::fs::remove_dir_all(temp);
     }

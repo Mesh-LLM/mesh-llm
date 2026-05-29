@@ -1,4 +1,4 @@
-use meshllm_ffi::{create_node, ClientEvent, EventListener, FfiError};
+use meshllm_ffi::{ClientEvent, EventListener, FfiError, create_node};
 
 struct MockListener;
 

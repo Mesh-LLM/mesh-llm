@@ -20,12 +20,11 @@ pub(crate) fn operation(exposed_name: String, manifest: &proto::OperationManifes
     if let Some(title) = &manifest.title {
         operation = operation.with_title(title.clone());
     }
-    if let Some(output_schema_json) = &manifest.output_schema_json {
-        if let Ok(schema) = serde_json::from_str::<serde_json::Value>(output_schema_json) {
-            if let Some(schema) = schema.as_object() {
-                operation.output_schema = Some(Arc::new(schema.clone()));
-            }
-        }
+    if let Some(output_schema_json) = &manifest.output_schema_json
+        && let Ok(schema) = serde_json::from_str::<serde_json::Value>(output_schema_json)
+        && let Some(schema) = schema.as_object()
+    {
+        operation.output_schema = Some(Arc::new(schema.clone()));
     }
     operation
 }
@@ -158,9 +157,9 @@ mod tests {
             request_schema_json: None,
             response_schema_json: None,
         };
-        let route = http_binding_route("blackboard", &manifest).unwrap();
+        let route = http_binding_route("demo", &manifest).unwrap();
         assert_eq!(route.method, "GET");
-        assert_eq!(route.route_path, "/api/plugins/blackboard/http/feed");
+        assert_eq!(route.route_path, "/api/plugins/demo/http/feed");
         assert_eq!(route.operation_name.as_deref(), Some("feed"));
     }
 }

@@ -10,6 +10,7 @@ use crossterm::{
 #[cfg(test)]
 use ratatui::backend::TestBackend;
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     buffer::Buffer,
     layout::{Alignment, Constraint, Direction, Flex, Layout, Rect},
@@ -19,17 +20,16 @@ use ratatui::{
         Block, BorderType, Cell, Clear as RatatuiClear, HighlightSpacing, Padding, Paragraph, Row,
         Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget, Table, TableState, Widget,
     },
-    Frame, Terminal,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeSet, VecDeque};
 use std::fmt::Write as FmtWrite;
 use std::future::Future;
 use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, OnceLock, RwLock,
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::time::{self, Duration, Instant, MissedTickBehavior};
 
@@ -873,10 +873,10 @@ impl OutputEvent {
                 if let Some(capacity_gb) = capacity_gb {
                     line.push_str(&format!(" ({capacity_gb:.1}GB capacity)"));
                 }
-                if let Some(models_on_disk) = models_on_disk {
-                    if !models_on_disk.is_empty() {
-                        line.push_str(&format!(" models={}", models_on_disk.join(", ")));
-                    }
+                if let Some(models_on_disk) = models_on_disk
+                    && !models_on_disk.is_empty()
+                {
+                    line.push_str(&format!(" models={}", models_on_disk.join(", ")));
                 }
                 line
             }
@@ -951,7 +951,9 @@ impl OutputEvent {
             } => {
                 let msg = match model {
                     Some(model) => {
-                        format!("llama-server failed to start for {model} on port {http_port}: {detail}")
+                        format!(
+                            "llama-server failed to start for {model} on port {http_port}: {detail}"
+                        )
                     }
                     None => format!("llama-server failed to start on port {http_port}: {detail}"),
                 };
@@ -2136,29 +2138,29 @@ impl DashboardState {
         let llama_component =
             self.startup_component_for_truthful_status(TruthfulStartupStatusKey::LlamaServer);
 
-        if let Some(webserver) = &mut self.webserver {
-            if let Some(key) = Self::truthful_startup_key_for_endpoint(&webserver.label) {
-                webserver.status = Self::truthful_runtime_status_for_component(
-                    match key {
-                        TruthfulStartupStatusKey::Console => &console_component,
-                        TruthfulStartupStatusKey::Api => &api_component,
-                        TruthfulStartupStatusKey::LlamaServer => &llama_component,
-                    },
-                    &webserver.status,
-                );
-            }
+        if let Some(webserver) = &mut self.webserver
+            && let Some(key) = Self::truthful_startup_key_for_endpoint(&webserver.label)
+        {
+            webserver.status = Self::truthful_runtime_status_for_component(
+                match key {
+                    TruthfulStartupStatusKey::Console => &console_component,
+                    TruthfulStartupStatusKey::Api => &api_component,
+                    TruthfulStartupStatusKey::LlamaServer => &llama_component,
+                },
+                &webserver.status,
+            );
         }
-        if let Some(api) = &mut self.api {
-            if let Some(key) = Self::truthful_startup_key_for_endpoint(&api.label) {
-                api.status = Self::truthful_runtime_status_for_component(
-                    match key {
-                        TruthfulStartupStatusKey::Console => &console_component,
-                        TruthfulStartupStatusKey::Api => &api_component,
-                        TruthfulStartupStatusKey::LlamaServer => &llama_component,
-                    },
-                    &api.status,
-                );
-            }
+        if let Some(api) = &mut self.api
+            && let Some(key) = Self::truthful_startup_key_for_endpoint(&api.label)
+        {
+            api.status = Self::truthful_runtime_status_for_component(
+                match key {
+                    TruthfulStartupStatusKey::Console => &console_component,
+                    TruthfulStartupStatusKey::Api => &api_component,
+                    TruthfulStartupStatusKey::LlamaServer => &llama_component,
+                },
+                &api.status,
+            );
         }
         let ready_llama_process_rows = self.ready_llama_process_rows.clone();
         for row in &mut self.llama_process_rows {
@@ -2462,13 +2464,13 @@ impl DashboardState {
             return None;
         }
 
-        if let Some(progress) = self.model_progress.as_ref() {
-            if let Some(ratio) = model_download_progress_ratio(progress) {
-                return Some(LoadingProgressState {
-                    ratio,
-                    detail: loading_progress_detail(model_progress_detail(progress), ratio, None),
-                });
-            }
+        if let Some(progress) = self.model_progress.as_ref()
+            && let Some(ratio) = model_download_progress_ratio(progress)
+        {
+            return Some(LoadingProgressState {
+                ratio,
+                detail: loading_progress_detail(model_progress_detail(progress), ratio, None),
+            });
         }
 
         if let Some(progress) = self.startup_progress.as_ref() {
@@ -5514,18 +5516,24 @@ impl Widget for TuiModelCardWidget<'_> {
         if inner.height == 0 || inner.width == 0 {
             return;
         }
-        let [name_row, summary_top, summary_bottom, divider, ctx_row, slots_row] =
-            Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ])
-                .areas(inner);
+        let [
+            name_row,
+            summary_top,
+            summary_bottom,
+            divider,
+            ctx_row,
+            slots_row,
+        ] = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .areas(inner);
 
         render_tui_model_name_row(
             buf,
@@ -8547,19 +8555,16 @@ impl OutputManager {
                                     } else if matches!(mode, LogFormat::Pretty)
                                         && worker_prompt_active.load(Ordering::Acquire)
                                         && formatter.writes_ready_prompt()
-                                    {
-                                        if let Err(err) = write_prompt() {
+                                        && let Err(err) = write_prompt() {
                                             tracing::warn!("interactive prompt write failed: {err}");
                                         }
-                                    }
                                 }
                                 OutputCommand::ActivateReadyPrompt => {
                                     worker_prompt_active.store(true, Ordering::Release);
-                                    if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt() {
-                                        if let Err(err) = write_prompt() {
+                                    if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt()
+                                        && let Err(err) = write_prompt() {
                                             tracing::warn!("interactive prompt write failed: {err}");
                                         }
-                                    }
                                 }
                                 OutputCommand::Flush(response) => {
                                     let flush_result = if formatter.is_interactive_dashboard() {
@@ -9855,20 +9860,24 @@ mod tests {
             fixture.state.request_history.accepted_request_buckets.len(),
             PRETTY_DASHBOARD_REQUEST_MAX_WINDOW_SECS as usize
         );
-        assert!(fixture
-            .state
-            .mesh_events
-            .front()
-            .expect("expected oldest retained event")
-            .summary
-            .contains("event-5"));
-        assert!(fixture
-            .state
-            .mesh_events
-            .back()
-            .expect("expected newest retained event")
-            .summary
-            .contains("event-1004"));
+        assert!(
+            fixture
+                .state
+                .mesh_events
+                .front()
+                .expect("expected oldest retained event")
+                .summary
+                .contains("event-5")
+        );
+        assert!(
+            fixture
+                .state
+                .mesh_events
+                .back()
+                .expect("expected newest retained event")
+                .summary
+                .contains("event-1004")
+        );
     }
 
     #[test]
@@ -12368,9 +12377,11 @@ mod tests {
             progress.ratio < 1.0,
             "startup progress must not jump to 100%"
         );
-        assert!(progress
-            .detail
-            .contains("starting llama-server for Qwen2.5"));
+        assert!(
+            progress
+                .detail
+                .contains("starting llama-server for Qwen2.5")
+        );
         assert!(
             rendered.contains("Mesh Events"),
             "startup progress should stay in the dashboard instead of taking over the frame: {rendered}"
@@ -12513,7 +12524,7 @@ mod tests {
         );
 
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         assert_eq!(
@@ -12581,7 +12592,7 @@ mod tests {
 
         let mut failed = DashboardState::default();
         failed.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         failed.reduce(DashboardAction::OutputEvent(OutputEvent::Error {
@@ -12602,7 +12613,7 @@ mod tests {
     fn startup_lifecycle_keeps_runtime_ready_as_final_edge() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::NodeIdentity {
@@ -12661,7 +12672,7 @@ mod tests {
     fn endpoint_rows_remain_starting_until_ready_events() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::SnapshotUpdated(DashboardSnapshot {
@@ -12714,10 +12725,12 @@ mod tests {
             log_path: None,
         }));
 
-        assert!(state
-            .webserver_rows
-            .iter()
-            .all(|row| row.status == RuntimeStatus::Ready));
+        assert!(
+            state
+                .webserver_rows
+                .iter()
+                .all(|row| row.status == RuntimeStatus::Ready)
+        );
         assert_eq!(state.llama_process_rows[0].status, RuntimeStatus::Ready);
     }
 
@@ -12726,7 +12739,7 @@ mod tests {
         let mut formatter = InteractiveDashboardFormatter::default();
         for event in [
             OutputEvent::Startup {
-                version: "v0.66.0".to_string(),
+                version: "v0.68.0".to_string(),
                 message: None,
             },
             OutputEvent::NodeIdentity {
@@ -12774,11 +12787,13 @@ mod tests {
             rendered.contains("Mesh Events"),
             "late attach should render the main dashboard now that the loading screen is gone"
         );
-        assert!(formatter
-            .state
-            .startup_history
-            .iter()
-            .any(|event| event.summary.contains("llama-server starting: port=9338")));
+        assert!(
+            formatter
+                .state
+                .startup_history
+                .iter()
+                .any(|event| event.summary.contains("llama-server starting: port=9338"))
+        );
     }
 
     #[test]
@@ -12786,7 +12801,7 @@ mod tests {
         let mut formatter = InteractiveDashboardFormatter::default();
         for event in [
             OutputEvent::Startup {
-                version: "v0.66.0".to_string(),
+                version: "v0.68.0".to_string(),
                 message: None,
             },
             OutputEvent::NodeIdentity {
@@ -12846,7 +12861,7 @@ mod tests {
         let mut formatter = InteractiveDashboardFormatter::default();
         for event in [
             OutputEvent::Startup {
-                version: "v0.66.0".to_string(),
+                version: "v0.68.0".to_string(),
                 message: None,
             },
             OutputEvent::LlamaStarting {
@@ -12882,16 +12897,18 @@ mod tests {
             "expected failed lifecycle in {rendered}"
         );
         assert!(dashboard.contains("llama-server=failed  model readiness=failed"));
-        assert!(formatter.state.startup_history.iter().any(|event| event
-            .summary
-            .contains("llama-server exited before becoming healthy")));
+        assert!(formatter.state.startup_history.iter().any(|event| {
+            event
+                .summary
+                .contains("llama-server exited before becoming healthy")
+        }));
     }
 
     #[test]
     fn llama_startup_failures_mark_components_failed() {
         let mut llama_failed = DashboardState::default();
         llama_failed.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         llama_failed.reduce(DashboardAction::OutputEvent(OutputEvent::ModelQueued {
@@ -12947,7 +12964,7 @@ mod tests {
     fn discovery_and_join_failures_mark_startup_mesh_component_failed() {
         let mut discovery_failed = DashboardState::default();
         discovery_failed.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         discovery_failed.reduce(DashboardAction::OutputEvent(
@@ -12975,7 +12992,7 @@ mod tests {
 
         let mut join_failed = DashboardState::default();
         join_failed.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         join_failed.reduce(DashboardAction::OutputEvent(OutputEvent::WaitingForPeers {
@@ -13004,7 +13021,7 @@ mod tests {
     fn post_ready_peer_churn_does_not_reopen_startup_failure() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::DiscoveryJoined {
@@ -13074,7 +13091,7 @@ mod tests {
     fn generic_error_after_runtime_ready_does_not_reopen_startup_failure() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::ApiReady {
@@ -13117,7 +13134,7 @@ mod tests {
             160, 32,
         )));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::LaunchPlan {
@@ -13186,14 +13203,18 @@ mod tests {
             plan: sample_launch_plan(),
         }));
 
-        assert!(state
-            .llama_process_rows
-            .iter()
-            .all(|row| row.status == RuntimeStatus::Loading));
-        assert!(state
-            .webserver_rows
-            .iter()
-            .all(|row| row.status == RuntimeStatus::NotReady));
+        assert!(
+            state
+                .llama_process_rows
+                .iter()
+                .all(|row| row.status == RuntimeStatus::Loading)
+        );
+        assert!(
+            state
+                .webserver_rows
+                .iter()
+                .all(|row| row.status == RuntimeStatus::NotReady)
+        );
         assert_eq!(state.loaded_model_rows[0].status, RuntimeStatus::Loading);
         state.reduce(DashboardAction::OutputEvent(OutputEvent::LlamaStarting {
             model: Some("Planned-Model".to_string()),
@@ -13298,14 +13319,18 @@ mod tests {
         assert_eq!(state.llama_process_rows.len(), 1);
         assert_eq!(state.webserver_rows.len(), 2);
         assert_eq!(state.loaded_model_rows.len(), 1);
-        assert!(state
-            .llama_process_rows
-            .iter()
-            .all(|row| row.status == RuntimeStatus::Loading));
-        assert!(state
-            .webserver_rows
-            .iter()
-            .all(|row| row.status == RuntimeStatus::NotReady));
+        assert!(
+            state
+                .llama_process_rows
+                .iter()
+                .all(|row| row.status == RuntimeStatus::Loading)
+        );
+        assert!(
+            state
+                .webserver_rows
+                .iter()
+                .all(|row| row.status == RuntimeStatus::NotReady)
+        );
         assert_eq!(state.loaded_model_rows[0].status, RuntimeStatus::Loading);
         state.reduce(DashboardAction::SnapshotUpdated(
             DashboardSnapshot::default(),
@@ -13474,7 +13499,7 @@ mod tests {
     fn ready_llama_process_row_stays_ready_when_another_model_starts() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: Some("starting multi-model runtime".to_string()),
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::LlamaStarting {
@@ -13532,7 +13557,7 @@ mod tests {
     fn ready_llama_process_row_survives_lagging_startup_snapshot() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: Some("starting multi-model runtime".to_string()),
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::LlamaStarting {
@@ -13658,7 +13683,7 @@ mod tests {
     fn raw_snapshot_ready_row_reconciles_with_canonical_loading_row() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::LaunchPlan {
@@ -13975,7 +14000,7 @@ mod tests {
     fn startup_failure_summary_sanitizes_multiline_detail() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(
@@ -14000,8 +14025,10 @@ tail line"
 
         let tui_summary =
             spans_plain_text(&startup_lifecycle_summary_line(&state.startup_lifecycle, 160).spans);
-        assert!(tui_summary
-            .contains("failure=llama-server exited See /tmp/skippy-native.log: tail line"));
+        assert!(
+            tui_summary
+                .contains("failure=llama-server exited See /tmp/skippy-native.log: tail line")
+        );
         assert!(!tui_summary.contains('\n'));
 
         let title = join_token_panel_right_title(&state);
@@ -14096,7 +14123,7 @@ tail line"
 
         for event in [
             OutputEvent::Startup {
-                version: "v0.66.0".to_string(),
+                version: "v0.68.0".to_string(),
                 message: None,
             },
             OutputEvent::LlamaStarting {
@@ -14127,7 +14154,7 @@ tail line"
     fn shutdown_suppresses_late_ready_render() {
         let mut state = DashboardState::default();
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::ApiStarting {
@@ -15244,8 +15271,10 @@ tail line"
             })
             .expect("warning render should succeed");
 
-        assert!(dashboard
-            .contains("model=Qwen3-32B port=9337: llama-server process exited unexpectedly"));
+        assert!(
+            dashboard
+                .contains("model=Qwen3-32B port=9337: llama-server process exited unexpectedly")
+        );
         assert!(!dashboard.contains("⚠️ model=Qwen3-32B port=9337"));
 
         let dashboard = formatter
@@ -15353,8 +15382,11 @@ tail line"
             .expect("passive mode render should succeed");
 
         assert!(dashboard.contains("Running models"));
-        assert!(dashboard
-            .contains("standby   starting   capacity=24.0GB   models=Qwen2.5-32B, GLM-4.7-Flash"));
+        assert!(
+            dashboard.contains(
+                "standby   starting   capacity=24.0GB   models=Qwen2.5-32B, GLM-4.7-Flash"
+            )
+        );
         assert!(dashboard.contains("No matching model on disk — running as standby GPU node."));
         assert!(dashboard.contains("No matching model on disk — running as standby GPU node. Proxying requests to other nodes. Will activate when needed. (24.0GB capacity) models=Qwen2.5-32B, GLM-4.7-Flash"));
         assert!(!dashboard.contains('💤'));
@@ -15767,15 +15799,21 @@ tail line"
         assert!(dashboard.contains("ctx=8192"));
         assert!(dashboard.contains("│              logs=/Users/ndizazzo/.mesh-llm/runtime/3845607/logs/llama-server-8001-with-a-very-long-name.log"));
         assert!(dashboard.contains("│ Qwen3.6-35B-A3B-UD-Q4_K_XL-with-extra-routing-suffix   ready   port=38373   role=host"));
-        assert!(dashboard
-            .lines()
-            .any(|line| line.starts_with("┌ Running llama.cpp instances ")));
-        assert!(dashboard
-            .lines()
-            .any(|line| line.starts_with("┌ Running models ")));
-        assert!(dashboard
-            .lines()
-            .any(|line| line.starts_with("┌ Mesh events (latest 8) ")));
+        assert!(
+            dashboard
+                .lines()
+                .any(|line| line.starts_with("┌ Running llama.cpp instances "))
+        );
+        assert!(
+            dashboard
+                .lines()
+                .any(|line| line.starts_with("┌ Running models "))
+        );
+        assert!(
+            dashboard
+                .lines()
+                .any(|line| line.starts_with("┌ Mesh events (latest 8) "))
+        );
     }
 
     #[test]
@@ -16049,7 +16087,7 @@ tail line"
         let mut state = DashboardState::default();
 
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
 
@@ -16069,7 +16107,7 @@ tail line"
         let mut state = DashboardState::default();
 
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::ApiStarting {
@@ -16096,7 +16134,7 @@ tail line"
         let mut state = DashboardState::default();
 
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::ModelLoaded {
@@ -16153,7 +16191,7 @@ tail line"
         let mut state = DashboardState::default();
 
         state.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
-            version: "v0.66.0".to_string(),
+            version: "v0.68.0".to_string(),
             message: None,
         }));
         state.reduce(DashboardAction::OutputEvent(OutputEvent::ModelLoaded {

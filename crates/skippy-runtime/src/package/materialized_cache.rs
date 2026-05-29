@@ -10,7 +10,7 @@ use std::os::fd::AsRawFd;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use super::{file_fingerprint, PackagePart, PackageStageRequest};
+use super::{PackagePart, PackageStageRequest, file_fingerprint};
 
 const RECORD_SCHEMA_VERSION: u32 = 1;
 

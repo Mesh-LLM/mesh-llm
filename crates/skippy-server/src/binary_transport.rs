@@ -4,8 +4,9 @@ use std::{
     io,
     net::{IpAddr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -16,26 +17,26 @@ use crate::{
     config::validate_config,
     frontend::{self, EmbeddedOpenAiArgs},
     kv_integration::{KvStageIntegration, PrefillKvIdentity},
-    runtime_state::{load_runtime, RuntimeSessionStats, RuntimeState},
-    telemetry::{lifecycle_attrs, now_unix_nanos, Telemetry},
+    runtime_state::{RuntimeSessionStats, RuntimeState, load_runtime},
+    telemetry::{Telemetry, lifecycle_attrs, now_unix_nanos},
 };
-use anyhow::{anyhow, bail, Context, Result};
-use serde_json::{json, Value};
+use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
 use skippy_metrics::{attr, metric};
 use skippy_protocol::{
+    MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
+        STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
+        STAGE_WIRE_FIXED_HEADER_BYTES, StageReplyStats, StageSamplingConfig, StageStateHeader,
+        StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
         activation_frame_flags_from_state_flags, read_stage_message, recv_reply, send_ready,
         send_reply_ack, send_reply_ack_with_stats, send_reply_predicted_tokens_with_stats,
-        send_reply_predicted_with_stats, state_flags, StageReplyStats, StageSamplingConfig,
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
-        STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-        STAGE_WIRE_FIXED_HEADER_BYTES,
+        send_reply_predicted_with_stats, state_flags,
     },
-    MessageBase, StageConfig, StageTopology, SCHEMA_VERSION,
 };
 use skippy_runtime::{
-    ActivationDesc, ActivationFrame, LogitBias, RuntimeActivationDType, RuntimeActivationLayout,
-    SamplingConfig, MAX_LOGIT_BIAS,
+    ActivationDesc, ActivationFrame, LogitBias, MAX_LOGIT_BIAS, RuntimeActivationDType,
+    RuntimeActivationLayout, SamplingConfig,
 };
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
@@ -45,10 +46,10 @@ mod socket;
 mod wire;
 
 pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_message_timed};
-pub use self::options::{parse_wire_dtype, BinaryStageOptions, EmbeddedOpenAiStageOptions};
+pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions, parse_wire_dtype};
 use self::socket::*;
-pub(crate) use self::wire::write_stage_message_conditioned;
 pub use self::wire::WireCondition;
+pub(crate) use self::wire::write_stage_message_conditioned;
 
 static BINARY_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -256,6 +257,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
                 downstream_wire_condition,
                 telemetry: openai_telemetry,
                 hook_policy: None,
+                openai_guardrails: Some(frontend::OpenAiGuardrailsConfig::disabled_for_skippy()),
             })
             .await
             {
@@ -683,29 +685,28 @@ fn handle_binary_connection(
                 &token_ids,
             );
             control_stats.merge(local.stats);
-            if local.hit {
-                if let Some(downstream) = downstream.as_mut() {
-                    write_stage_message_conditioned(
-                        &mut *downstream,
-                        &message,
-                        wire_dtype,
-                        downstream_wire_condition,
-                    )
-                    .context("forward prefix cache control")?;
-                    let reply =
-                        recv_reply(&mut *downstream).context("prefix cache downstream ACK")?;
-                    if reply.kind != WireReplyKind::Ack {
-                        bail!("prefix cache control expected downstream ACK");
-                    }
-                    let downstream_missed = message.kind == WireMessageKind::TryRestorePrefill
-                        && (reply.stats.kv_lookup_misses > 0
-                            || reply.stats.kv_lookup_errors > 0
-                            || reply.stats.kv_lookup_hits == 0);
-                    control_stats.merge(reply.stats);
-                    if downstream_missed {
-                        let mut runtime = runtime.lock().expect("runtime lock poisoned");
-                        let _ = runtime.drop_session_timed(&session_key);
-                    }
+            if local.hit
+                && let Some(downstream) = downstream.as_mut()
+            {
+                write_stage_message_conditioned(
+                    &mut *downstream,
+                    &message,
+                    wire_dtype,
+                    downstream_wire_condition,
+                )
+                .context("forward prefix cache control")?;
+                let reply = recv_reply(&mut *downstream).context("prefix cache downstream ACK")?;
+                if reply.kind != WireReplyKind::Ack {
+                    bail!("prefix cache control expected downstream ACK");
+                }
+                let downstream_missed = message.kind == WireMessageKind::TryRestorePrefill
+                    && (reply.stats.kv_lookup_misses > 0
+                        || reply.stats.kv_lookup_errors > 0
+                        || reply.stats.kv_lookup_hits == 0);
+                control_stats.merge(reply.stats);
+                if downstream_missed {
+                    let mut runtime = runtime.lock().expect("runtime lock poisoned");
+                    let _ = runtime.drop_session_timed(&session_key);
                 }
             }
             let mut attrs = binary_message_attrs(config, session_id, &message);
@@ -927,29 +928,28 @@ fn handle_binary_connection(
                     &tokens,
                 );
                 drop(runtime);
-                if let Some(kv) = kv {
-                    if config.downstream.is_some() {
-                        let base = binary_message_base(config, &session_key, &message);
-                        if let Some(activation) = kv.record_resident_activation(
-                            config,
-                            &base,
-                            0,
-                            &tokens,
-                            activation_width,
-                            &output,
-                        ) {
-                            record.recorded_activations =
-                                record.recorded_activations.saturating_add(1);
-                            record.recorded_activation_bytes = record
-                                .recorded_activation_bytes
-                                .saturating_add(activation.payload_bytes as u64);
-                            record.evicted_activation_entries = record
-                                .evicted_activation_entries
-                                .saturating_add(activation.evicted_entries);
-                            record.evicted_activation_bytes = record
-                                .evicted_activation_bytes
-                                .saturating_add(activation.evicted_bytes);
-                        }
+                if let Some(kv) = kv
+                    && config.downstream.is_some()
+                {
+                    let base = binary_message_base(config, &session_key, &message);
+                    if let Some(activation) = kv.record_resident_activation(
+                        config,
+                        &base,
+                        0,
+                        &tokens,
+                        activation_width,
+                        &output,
+                    ) {
+                        record.recorded_activations = record.recorded_activations.saturating_add(1);
+                        record.recorded_activation_bytes = record
+                            .recorded_activation_bytes
+                            .saturating_add(activation.payload_bytes as u64);
+                        record.evicted_activation_entries = record
+                            .evicted_activation_entries
+                            .saturating_add(activation.evicted_entries);
+                        record.evicted_activation_bytes = record
+                            .evicted_activation_bytes
+                            .saturating_add(activation.evicted_bytes);
                     }
                 }
                 record
@@ -2516,40 +2516,39 @@ fn maybe_record_binary_prefill(
             }
         }
     }
-    if config.downstream.is_some() {
-        if let Some(output) = output {
-            if let Some(record) = kv.record_resident_activation(
-                config,
-                &base,
-                token_start,
-                token_ids,
-                activation_width,
-                output,
-            ) {
-                result.recorded_activations = result.recorded_activations.saturating_add(1);
-                result.recorded_activation_bytes = result
-                    .recorded_activation_bytes
-                    .saturating_add(record.payload_bytes as u64);
-                result.evicted_activation_entries = result
-                    .evicted_activation_entries
-                    .saturating_add(record.evicted_entries);
-                result.evicted_activation_bytes = result
-                    .evicted_activation_bytes
-                    .saturating_add(record.evicted_bytes);
-                attrs.insert(
-                    "skippy.activation_cache.recorded_page_id".to_string(),
-                    json!(record.page_id),
-                );
-                attrs.insert(
-                    "skippy.activation_cache.entries".to_string(),
-                    json!(record.entries),
-                );
-                attrs.insert(
-                    "skippy.activation_cache.resident_bytes".to_string(),
-                    json!(record.resident_bytes),
-                );
-            }
-        }
+    if config.downstream.is_some()
+        && let Some(output) = output
+        && let Some(record) = kv.record_resident_activation(
+            config,
+            &base,
+            token_start,
+            token_ids,
+            activation_width,
+            output,
+        )
+    {
+        result.recorded_activations = result.recorded_activations.saturating_add(1);
+        result.recorded_activation_bytes = result
+            .recorded_activation_bytes
+            .saturating_add(record.payload_bytes as u64);
+        result.evicted_activation_entries = result
+            .evicted_activation_entries
+            .saturating_add(record.evicted_entries);
+        result.evicted_activation_bytes = result
+            .evicted_activation_bytes
+            .saturating_add(record.evicted_bytes);
+        attrs.insert(
+            "skippy.activation_cache.recorded_page_id".to_string(),
+            json!(record.page_id),
+        );
+        attrs.insert(
+            "skippy.activation_cache.entries".to_string(),
+            json!(record.entries),
+        );
+        attrs.insert(
+            "skippy.activation_cache.resident_bytes".to_string(),
+            json!(record.resident_bytes),
+        );
     }
     attrs.insert(
         "skippy.kv.record_ms".to_string(),
@@ -2625,57 +2624,81 @@ fn maybe_record_binary_full_prefill(
     if !kv.should_record() || token_ids.is_empty() {
         return result;
     }
-    let base = binary_message_base(config, session_id, message);
-    let identity = kv.prefill_identity(config, &base, 0, token_ids);
+    let identities =
+        binary_full_prefill_record_identities(kv, config, session_id, message, token_ids);
     let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());
-    attrs.insert("skippy.kv.record_candidates".to_string(), json!(1));
+    attrs.insert(
+        "skippy.kv.record_candidates".to_string(),
+        json!(identities.len()),
+    );
     attrs.insert(
         "skippy.kv.decision".to_string(),
         json!("full_prefill_record"),
     );
     let started = Instant::now();
-    match kv.record_exact_state(runtime, session_id, &identity) {
-        Ok(Some(record)) => {
-            result.recorded_pages = 1;
-            result.recorded_tokens = record.token_count as u64;
-            result.evicted_entries = record.evicted_entries;
-            result.evicted_tokens = record.evicted_logical_bytes;
-            attrs.insert(
-                "skippy.exact_cache.recorded_page_id".to_string(),
-                json!(record.page_id),
-            );
-            attrs.insert(
-                "skippy.exact_cache.payload_kind".to_string(),
-                json!(record.payload_kind.to_string()),
-            );
-            attrs.insert(
-                "skippy.exact_cache.logical_bytes".to_string(),
-                json!(record.logical_bytes),
-            );
-            attrs.insert(
-                "skippy.exact_cache.physical_bytes".to_string(),
-                json!(record.physical_bytes),
-            );
-            attrs.insert(
-                "skippy.exact_cache.entries".to_string(),
-                json!(record.entries),
-            );
+    for identity in identities {
+        let token_count_usize = usize::try_from(identity.identity.token_count)
+            .unwrap_or(usize::MAX)
+            .min(token_ids.len());
+        if token_count_usize == token_ids.len() {
+            match kv.record_exact_state(runtime, session_id, &identity) {
+                Ok(Some(record)) => {
+                    result.recorded_pages = result.recorded_pages.saturating_add(1);
+                    result.recorded_tokens = result
+                        .recorded_tokens
+                        .saturating_add(record.token_count as u64);
+                    result.evicted_entries = result
+                        .evicted_entries
+                        .saturating_add(record.evicted_entries);
+                    result.evicted_tokens = result
+                        .evicted_tokens
+                        .saturating_add(record.evicted_logical_bytes);
+                    attrs.insert(
+                        "skippy.exact_cache.recorded_page_id".to_string(),
+                        json!(record.page_id),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.payload_kind".to_string(),
+                        json!(record.payload_kind.to_string()),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.logical_bytes".to_string(),
+                        json!(record.logical_bytes),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.physical_bytes".to_string(),
+                        json!(record.physical_bytes),
+                    );
+                    attrs.insert(
+                        "skippy.exact_cache.entries".to_string(),
+                        json!(record.entries),
+                    );
+                    continue;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    attrs.insert(
+                        "skippy.exact_cache.record_error".to_string(),
+                        json!(error.to_string()),
+                    );
+                }
+            }
         }
-        Ok(None) => {}
-        Err(error) => {
-            attrs.insert(
-                "skippy.exact_cache.record_error".to_string(),
-                json!(error.to_string()),
-            );
-        }
-    }
-    if result.recorded_pages == 0 {
-        match kv.record_resident_prefix(runtime, session_id, &identity, token_ids) {
+        match kv.record_resident_prefix(
+            runtime,
+            session_id,
+            &identity,
+            &token_ids[..token_count_usize],
+        ) {
             Ok(Some(record)) => {
-                result.recorded_pages = 1;
-                result.recorded_tokens = record.token_count as u64;
-                result.evicted_entries = record.evicted_entries;
-                result.evicted_tokens = record.evicted_tokens;
+                result.recorded_pages = result.recorded_pages.saturating_add(1);
+                result.recorded_tokens = result
+                    .recorded_tokens
+                    .saturating_add(record.token_count as u64);
+                result.evicted_entries = result
+                    .evicted_entries
+                    .saturating_add(record.evicted_entries);
+                result.evicted_tokens = result.evicted_tokens.saturating_add(record.evicted_tokens);
                 attrs.insert(
                     "skippy.kv.recorded_page_id".to_string(),
                     json!(record.page_id),
@@ -2691,6 +2714,7 @@ fn maybe_record_binary_full_prefill(
                     "skippy.kv.record_error".to_string(),
                     json!(error.to_string()),
                 );
+                break;
             }
         }
     }
@@ -2708,6 +2732,17 @@ fn maybe_record_binary_full_prefill(
     );
     telemetry.emit("stage.binary_kv_record_decision", attrs);
     result
+}
+
+fn binary_full_prefill_record_identities(
+    kv: &KvStageIntegration,
+    config: &StageConfig,
+    session_id: &str,
+    message: &StageWireMessage,
+    token_ids: &[i32],
+) -> Vec<PrefillKvIdentity> {
+    let base = binary_message_base(config, session_id, message);
+    kv.record_identities(config, &base, 0, token_ids)
 }
 
 #[derive(Default)]
@@ -3252,14 +3287,13 @@ fn upstream_layer_range(
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
 ) -> (i32, i32) {
-    if let Some(topology) = topology {
-        if let Some(stage) = topology
+    if let Some(topology) = topology
+        && let Some(stage) = topology
             .stages
             .iter()
             .find(|stage| stage.stage_index as i32 == message.state.source_stage_index)
-        {
-            return (stage.layer_start as i32, stage.layer_end as i32);
-        }
+    {
+        return (stage.layer_start as i32, stage.layer_end as i32);
     }
     (0, config.layer_start as i32)
 }

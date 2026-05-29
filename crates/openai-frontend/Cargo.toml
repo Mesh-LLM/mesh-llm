@@ -9,6 +9,7 @@ async-trait = "0.1"
 axum = "0.8"
 futures-core = "0.3"
 futures-util = "0.3"
+mesh-llm-guardrails = { path = "../mesh-llm-guardrails" }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["time"] }

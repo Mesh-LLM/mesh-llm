@@ -1,4 +1,4 @@
-use meshllm_ffi::{create_node, FfiError};
+use meshllm_ffi::{FfiError, create_node};
 
 #[test]
 fn invalid_invite_token_returns_ffi_error() {

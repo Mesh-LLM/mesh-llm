@@ -154,6 +154,25 @@ function Require-File {
     }
 }
 
+function Assert-MeshBinaryVersion {
+    param(
+        [string]$Path,
+        [string]$ExpectedVersion
+    )
+
+    $expected = $ExpectedVersion.TrimStart("v")
+    $output = & $Path --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release binary failed --version with exit code ${LASTEXITCODE}: $Path"
+    }
+
+    $parts = "$output".Trim() -split '\s+'
+    $actual = if ($parts.Count -gt 0) { $parts[$parts.Count - 1] } else { "" }
+    if ($actual -ne $expected) {
+        throw "Release binary version mismatch: expected $expected, got ${actual}. Binary: $Path. Output: $output"
+    }
+}
+
 $Version = Normalize-RecipeArgument $Version @("version")
 $OutputDir = Normalize-RecipeArgument $OutputDir @("output", "output_dir", "outputdir")
 $Flavor = Normalize-RecipeArgument $Flavor @("flavor", "backend")
@@ -183,7 +202,10 @@ $bundleDir = Join-Path $stagingRoot "mesh-bundle"
 New-Item -ItemType Directory -Path $bundleDir -Force | Out-Null
 
 try {
-    Copy-Item $meshBinary -Destination (Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)) -Force
+    $bundleBinary = Join-Path $bundleDir (Get-BundleBinaryName "mesh-llm" $binaryFlavor)
+    Copy-Item $meshBinary -Destination $bundleBinary -Force
+    Assert-MeshBinaryVersion -Path $bundleBinary -ExpectedVersion $Version
+
     $versionedPath = Join-Path $resolvedOutputDir $versionedAsset
     $stablePath = Join-Path $resolvedOutputDir $stableAsset
 

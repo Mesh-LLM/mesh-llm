@@ -64,30 +64,38 @@ The outer archive filename distinguishes the lanes:
 
 Both archives contain the same `mesh-llm` runtime binary name. The outer
 archive filename distinguishes the CUDA lane, and the embedded runtime
-uses the selected bundle's ABI libraries. Match `--llama-flavor` to the
-bundle you installed:
+uses the selected bundle's ABI libraries. Use `mesh-llm update --flavor`
+when you want to choose a specific update bundle:
 
-- `--llama-flavor cuda` for the primary CUDA lane
-- `--llama-flavor cuda-blackwell` for the Blackwell lane
+- `mesh-llm update --flavor cuda` for the primary CUDA lane
+- `mesh-llm update --flavor cuda-blackwell` for the Blackwell lane
 
 ## Installer behavior
 
-`install.sh` exposes both as flavor strings:
+`install.sh` exposes both as flavor strings and uses the same selection
+order as `mesh-llm update`:
+
+```text
+cuda-blackwell on detected Blackwell NVIDIA hardware, otherwise cuda,
+then rocm, vulkan, metal, and cpu fallback where those release targets exist.
+```
 
 ```bash
-# primary (default NVIDIA recommendation)
+# primary CUDA on pre-Blackwell NVIDIA hosts
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
 
-# explicit Blackwell
+# explicit Blackwell, or automatic on detected Blackwell NVIDIA hosts
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh \
   | MESH_LLM_INSTALL_FLAVOR=cuda-blackwell bash
 ```
 
-The auto-detection path (`recommended_flavor`) does NOT pick
-`cuda-blackwell` on its own; the primary lane is always the safe
-recommendation. Users on Blackwell must opt in explicitly until a
-future change teaches the installer to probe
-`nvidia-smi --query-gpu=compute_cap`.
+The auto-detection path checks `nvidia-smi --query-gpu=compute_cap`
+first and falls back to `/proc/driver/nvidia/gpus/*/information` model
+names when `nvidia-smi` cannot report compute capability.
+
+`mesh-llm update --detect-flavor` uses the same detection path when you
+want an existing install to move to the best currently detected release
+bundle.
 
 ## Building locally
 

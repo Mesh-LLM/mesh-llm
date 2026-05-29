@@ -1,44 +1,263 @@
-use anyhow::Result;
+use std::io::Write;
 
+use anyhow::Result;
+use mesh_llm_plugin_manager::{
+    PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
+    default_store_root, install_plugin, update_plugin,
+};
+use reqwest::Client;
+
+use crate::cli::terminal_progress::{SpinnerHandle, clear_stderr_line, start_spinner};
 use crate::cli::{Cli, PluginCommand};
-use crate::plugin;
 use crate::runtime;
 
 pub(crate) async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Result<()> {
     match command {
-        PluginCommand::Install { name } if name == plugin::BLACKBOARD_PLUGIN_ID => {
-            eprintln!("Blackboard is auto-registered by mesh-llm. Nothing to install.");
-            eprintln!("Disable it with [[plugin]] name = \"blackboard\" enabled = false in the config if needed.");
+        PluginCommand::Install { reference } => install(reference).await?,
+        PluginCommand::Update { name } => update(name).await?,
+        PluginCommand::Enable { name } => set_enabled(name, true)?,
+        PluginCommand::Disable { name } => set_enabled(name, false)?,
+        PluginCommand::Delete { name } => delete(name)?,
+        PluginCommand::Info { name } => info(name)?,
+        PluginCommand::Search { query } => search(query.as_deref()).await?,
+        PluginCommand::List => list(cli)?,
+    }
+    Ok(())
+}
+
+async fn install(reference: &str) -> Result<()> {
+    let options = PluginInstallOptions::from_env()?;
+    let mut progress = CliPluginProgress::default();
+    let outcome = install_plugin(reference, &options, &mut progress).await?;
+    progress.finish();
+    if outcome.changed {
+        eprintln!(
+            "✅ Installed {} {}",
+            outcome.metadata.name, outcome.metadata.installed_version
+        );
+    }
+    Ok(())
+}
+
+async fn update(name: &str) -> Result<()> {
+    let options = PluginInstallOptions::from_env()?;
+    let mut progress = CliPluginProgress::default();
+    let outcome = update_plugin(name, &options, &mut progress).await?;
+    progress.finish();
+    if outcome.changed {
+        eprintln!(
+            "✅ Updated {} to {}",
+            outcome.metadata.name, outcome.metadata.installed_version
+        );
+    }
+    Ok(())
+}
+
+fn set_enabled(name: &str, enabled: bool) -> Result<()> {
+    let store = PluginStore::new(default_store_root()?);
+    let metadata = store.set_enabled(name, enabled)?;
+    if metadata.enabled {
+        eprintln!("✅ Enabled {}", metadata.name);
+    } else {
+        eprintln!("⏸️  Disabled {}", metadata.name);
+    }
+    Ok(())
+}
+
+fn delete(name: &str) -> Result<()> {
+    let store = PluginStore::new(default_store_root()?);
+    store.delete(name)?;
+    eprintln!("🗑️  Deleted {name}");
+    Ok(())
+}
+
+fn info(name: &str) -> Result<()> {
+    let store = PluginStore::new(default_store_root()?);
+    let metadata = store.load(name)?;
+    println!("name\t{}", metadata.name);
+    println!("version\t{}", metadata.installed_version);
+    println!("enabled\t{}", metadata.enabled);
+    println!("source\t{}", metadata.source_repository);
+    println!("target\t{}", metadata.target_triple);
+    println!("asset\t{}", metadata.downloaded_asset_name);
+    println!("path\t{}", metadata.install_path.display());
+    if let Some(protocol) = metadata.last_protocol_version {
+        println!("protocol\t{protocol}");
+    }
+    if let Some(status) = metadata.last_status {
+        println!("status\t{status}");
+    }
+    if let Some(error) = metadata.last_error {
+        println!("error\t{error}");
+    }
+    Ok(())
+}
+
+async fn search(query: Option<&str>) -> Result<()> {
+    let options = PluginInstallOptions::from_env()?;
+    let mut spinner = start_spinner("Searching plugin catalog");
+    let catalog = PluginCatalog::fetch(&Client::new(), &options.catalog_url).await;
+    spinner.finish();
+    let catalog = catalog?;
+    let hits = catalog.search(query);
+    if hits.is_empty() {
+        eprintln!("🔎 No plugins found");
+        return Ok(());
+    }
+    for entry in hits {
+        println!(
+            "{}\t{}\t{}\t{} <{}>",
+            entry.name, entry.description, entry.github_url, entry.author_name, entry.author_email
+        );
+    }
+    Ok(())
+}
+
+fn list(cli: &Cli) -> Result<()> {
+    let store = PluginStore::new(default_store_root()?);
+    for metadata in store.list()? {
+        let state = if metadata.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        println!(
+            "{}\tversion={}\tstate={}\tsource={}",
+            metadata.name, metadata.installed_version, state, metadata.source_repository
+        );
+    }
+
+    let resolved = runtime::load_resolved_plugins(cli)?;
+    for spec in resolved.externals {
+        println!(
+            "{}\tkind=runtime\tcommand={}\targs={}",
+            spec.name,
+            spec.command,
+            spec.args.join(" ")
+        );
+    }
+    for summary in resolved.inactive {
+        println!(
+            "{}\tkind={}\tstate={}\terror={}",
+            summary.name,
+            summary.kind,
+            summary.status,
+            summary.error.unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct CliPluginProgress {
+    spinner: Option<SpinnerHandle>,
+    active_download: Option<String>,
+    last_percent: Option<u64>,
+}
+
+impl CliPluginProgress {
+    fn finish(&mut self) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.finish();
         }
-        PluginCommand::Install { name } if name == plugin::BLOBSTORE_PLUGIN_ID => {
-            eprintln!("Blobstore is auto-registered by mesh-llm. Nothing to install.");
-            eprintln!("Disable it with [[plugin]] name = \"blobstore\" enabled = false in the config if needed.");
+        if self.active_download.take().is_some() {
+            let _ = clear_stderr_line();
         }
-        PluginCommand::Install { name } if name == plugin::TELEMETRY_PLUGIN_ID => {
-            eprintln!("Telemetry is built into mesh-llm. Nothing to install.");
-            eprintln!(
-                "Configure [telemetry] to export metrics, or disable it with [[plugin]] name = \"telemetry\" enabled = false."
+    }
+
+    fn spinner(&mut self, message: String) {
+        self.finish();
+        self.spinner = Some(start_spinner(&message));
+    }
+
+    fn started_download(&mut self, asset: String, total_bytes: Option<u64>) {
+        self.finish();
+        self.active_download = Some(asset.clone());
+        self.last_percent = None;
+        eprintln!("⬇️  Downloading {asset}");
+        if let Some(total) = total_bytes {
+            eprintln!("   size: {}", format_bytes(total));
+        }
+    }
+
+    fn download_progress(&mut self, downloaded: u64, total: Option<u64>) {
+        let Some(asset) = self.active_download.as_deref() else {
+            return;
+        };
+        if let Some(total) = total.filter(|total| *total > 0) {
+            let percent = downloaded.saturating_mul(100) / total;
+            if self.last_percent == Some(percent) {
+                return;
+            }
+            self.last_percent = Some(percent);
+            eprint!(
+                "\r\x1b[2K⬇️  {} {} / {} ({}%)",
+                asset,
+                format_bytes(downloaded),
+                format_bytes(total),
+                percent
             );
+            let _ = std::io::stderr().flush();
         }
-        PluginCommand::Install { name } => {
-            let config = plugin::config_path(cli.config.as_deref())?;
-            anyhow::bail!(
-                "Plugins are configured as executables in {}. No install step exists for '{}'.",
-                config.display(),
-                name
-            );
-        }
-        PluginCommand::List => {
-            let resolved = runtime::load_resolved_plugins(cli)?;
-            for spec in resolved.externals {
-                println!(
-                    "{}\tkind=external\tcommand={}\targs={}",
-                    spec.name,
-                    spec.command,
-                    spec.args.join(" ")
-                );
+    }
+}
+
+impl PluginProgressReporter for CliPluginProgress {
+    fn report(&mut self, event: PluginProgressEvent) {
+        match event {
+            PluginProgressEvent::ResolvingCatalog { name } => {
+                self.spinner(format!("Looking up {name} in the plugin catalog"));
+            }
+            PluginProgressEvent::ResolvingGitHub { repo } => {
+                self.spinner(format!("Checking GitHub releases for {repo}"));
+            }
+            PluginProgressEvent::SelectingAsset { target } => {
+                self.spinner(format!("Finding compatible plugin asset for {target}"));
+            }
+            PluginProgressEvent::DownloadStarted { asset, total_bytes } => {
+                self.started_download(asset, total_bytes);
+            }
+            PluginProgressEvent::DownloadProgress {
+                downloaded_bytes,
+                total_bytes,
+            } => self.download_progress(downloaded_bytes, total_bytes),
+            PluginProgressEvent::DownloadFinished { asset } => {
+                self.finish();
+                eprintln!("✅ Downloaded {asset}");
+            }
+            PluginProgressEvent::Extracting { asset } => {
+                self.spinner(format!("Installing {asset}"));
+            }
+            PluginProgressEvent::Installed { name, version } => {
+                self.finish();
+                eprintln!("📦 Installed {name} {version}");
+            }
+            PluginProgressEvent::Updated { name, from, to } => {
+                self.finish();
+                eprintln!("⬆️  Updated {name} {from} -> {to}");
+            }
+            PluginProgressEvent::AlreadyCurrent { name, version } => {
+                self.finish();
+                eprintln!("✅ {name} is up to date ({version})");
             }
         }
     }
-    Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KiB", "MiB", "GiB"];
+    let mut value = bytes as f64;
+    let mut unit = UNITS[0];
+    for candidate in &UNITS[1..] {
+        if value < 1024.0 {
+            break;
+        }
+        value /= 1024.0;
+        unit = candidate;
+    }
+    if unit == "B" {
+        format!("{bytes} {unit}")
+    } else {
+        format!("{value:.1} {unit}")
+    }
 }

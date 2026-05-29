@@ -7,6 +7,7 @@ pub mod gguf;
 pub mod inventory;
 pub mod local;
 mod maintenance;
+mod profile;
 pub mod remote_catalog;
 pub mod resolve;
 pub use resolve::ResolvedModel;
@@ -20,33 +21,33 @@ use anyhow::{Context, Result};
 use hf_hub::{HFClient, HFClientBuilder, HFClientSync};
 
 pub use capabilities::{
-    runtime_verified_model_capabilities, CapabilityLevel, ModelCapabilities,
-    RuntimeMediaCapabilityEvidence,
+    CapabilityLevel, ModelCapabilities, RuntimeMediaCapabilityEvidence,
+    runtime_verified_model_capabilities,
 };
-pub use inventory::{scan_local_inventory_snapshot_with_progress, LocalModelInventorySnapshot};
+pub use inventory::{LocalModelInventorySnapshot, scan_local_inventory_snapshot_with_progress};
 pub use local::{
     find_mmproj_path, find_model_path, huggingface_hub_cache_dir, huggingface_identity_for_path,
     layered_package_layer_count_for_path, layered_package_total_bytes_for_path, mesh_llm_cache_dir,
     model_ref_for_path, scan_installed_models, scan_local_models,
 };
 pub use maintenance::{run_update, warn_about_updates_for_paths};
+pub(crate) use profile::{served_model_metadata_for_model, served_model_metadata_for_path};
 pub use resolve::{
-    canonicalize_interest_model_ref, download_model_ref_with_progress_details,
-    find_loaded_remote_catalog_model_exact, find_remote_catalog_model_exact,
-    installed_model_capabilities, installed_model_display_name, installed_model_huggingface_ref,
-    remote_catalog_model_draft_ref, remote_catalog_model_ref, resolve_model_spec,
-    resolve_model_spec_with_progress, show_exact_model, show_model_variants_with_progress,
-    ModelDetails, ShowVariantsProgress,
+    ModelDetails, ShowVariantsProgress, canonicalize_interest_model_ref,
+    download_model_ref_with_progress_details, find_loaded_remote_catalog_model_exact,
+    find_remote_catalog_model_exact, installed_model_capabilities, installed_model_display_name,
+    installed_model_huggingface_ref, remote_catalog_model_draft_ref, remote_catalog_model_ref,
+    resolve_model_spec, resolve_model_spec_with_progress, show_exact_model,
+    show_model_variants_with_progress,
 };
 pub use search::{
-    search_catalog_json_payload, search_catalog_models, search_huggingface,
-    search_huggingface_json_payload, SearchArtifactFilter, SearchHit, SearchProgress, SearchSort,
+    SearchArtifactFilter, SearchHit, SearchProgress, SearchSort, search_catalog_json_payload,
+    search_catalog_models, search_huggingface, search_huggingface_json_payload,
 };
-pub use topology::{infer_local_model_topology, ModelMoeInfo, ModelTopology};
+pub use topology::{ModelMoeInfo, ModelTopology, infer_local_model_topology};
 pub use usage::{
-    execute_model_cleanup, load_model_usage_record_for_path, model_usage_cache_dir,
-    plan_model_cleanup, track_managed_model_usage, track_model_usage, ModelCleanupPlan,
-    ModelCleanupResult,
+    ModelCleanupPlan, ModelCleanupResult, execute_model_cleanup, load_model_usage_record_for_path,
+    model_usage_cache_dir, plan_model_cleanup, track_managed_model_usage, track_model_usage,
 };
 
 pub(crate) fn build_hf_api(_progress: bool) -> Result<HFClientSync> {

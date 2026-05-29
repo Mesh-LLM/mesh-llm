@@ -1,5 +1,5 @@
 use crate::api;
-use crate::cli::output::{emit_event, OutputEvent};
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, pipeline};
 use crate::mesh;
 use crate::network::affinity;
@@ -147,15 +147,17 @@ async fn handle_models_list_request(
 ) {
     let mut models = callable_models(targets);
     models.extend(node.models_being_served().await);
-    if let Some(plugin_manager) = plugin_manager {
-        if let Ok(mut external_models) = plugin_manager.inference_models().await {
-            models.append(&mut external_models);
-        }
+    if let Some(plugin_manager) = plugin_manager
+        && let Ok(mut external_models) = plugin_manager.inference_models().await
+    {
+        models.append(&mut external_models);
     }
     models.sort();
     models.dedup();
-    let descriptors = node.served_model_descriptors().await;
-    let _ = proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors).await;
+    let descriptors = node.all_served_model_descriptors().await;
+    let runtimes = node.all_model_runtime_descriptors().await;
+    let _ = proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors, &runtimes)
+        .await;
 }
 
 async fn collect_available_models_for_auto_route(
@@ -169,12 +171,12 @@ async fn collect_available_models_for_auto_route(
             available_models.push(name);
         }
     }
-    if let Some(plugin_manager) = plugin_manager {
-        if let Ok(external_models) = plugin_manager.inference_models().await {
-            for name in external_models {
-                if !available_models.iter().any(|existing| existing == &name) {
-                    available_models.push(name);
-                }
+    if let Some(plugin_manager) = plugin_manager
+        && let Ok(external_models) = plugin_manager.inference_models().await
+    {
+        for name in external_models {
+            if !available_models.iter().any(|existing| existing == &name) {
+                available_models.push(name);
             }
         }
     }
@@ -219,6 +221,8 @@ async fn resolve_auto_routed_model(
             router::RoutingCandidate {
                 name: name.as_str(),
                 caps,
+                parameter_count_b: proxy::descriptor_metadata_for_model(name, descriptors)
+                    .and_then(|metadata| metadata.parameter_count_b),
                 tps_hint,
                 throughput_samples,
             }
@@ -637,7 +641,7 @@ async fn handle_buffered_api_request(
 
     let local_models = ctx.route.node.models_being_served().await;
     let callable = callable_models_with_local_served(ctx.route.targets, local_models);
-    let descriptors = ctx.route.node.served_model_descriptors().await;
+    let descriptors = ctx.route.node.all_served_model_descriptors().await;
     proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
 
     if proxy::is_drop_request(&request.method, &request.path) {

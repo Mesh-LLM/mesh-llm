@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use skippy_protocol::{StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload};
-use skippy_topology::{infer_family_capability, FamilyCapabilityRecord, WireDType};
+use skippy_topology::{FamilyCapabilityRecord, WireDType, infer_family_capability};
 
 use super::StageWireDType;
-use crate::models::gguf::{scan_gguf_compact_meta, GgufCompactMeta};
+use crate::models::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct FamilyPolicy {
@@ -185,12 +185,11 @@ fn capability_from_gguf_meta(
         return Some(capability);
     }
 
-    if !meta.architecture.trim().is_empty() {
-        if let Some(capability) =
+    if !meta.architecture.trim().is_empty()
+        && let Some(capability) =
             infer_family_capability(&meta.architecture, meta.layer_count, meta.embedding_size)
-        {
-            return Some(capability);
-        }
+    {
+        return Some(capability);
     }
 
     None
@@ -406,7 +405,7 @@ fn ggml_block_bytes(elements: u64, block_size: u64, type_size: u64) -> Option<u6
 mod tests {
     use super::*;
     use skippy_protocol::{FlashAttentionType, LoadMode};
-    use skippy_topology::{reviewed_capability_records, STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS};
+    use skippy_topology::{STAGE_RUNTIME_LLAMA_FAMILY_EXPECTATIONS, reviewed_capability_records};
 
     fn meta(architecture: &str) -> GgufCompactMeta {
         GgufCompactMeta {

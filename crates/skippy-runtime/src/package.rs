@@ -6,7 +6,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -568,10 +568,10 @@ fn parse_hf_package_ref(value: &str) -> Result<HfPackageRef> {
     if repo_id.split('/').count() != 2 || repo_id.contains(':') || repo_id.contains('@') {
         bail!("HF package repo id must look like namespace/repo");
     }
-    if let Some(revision) = revision {
-        if revision.is_empty() {
-            bail!("HF package revision is empty");
-        }
+    if let Some(revision) = revision
+        && revision.is_empty()
+    {
+        bail!("HF package revision is empty");
     }
 
     Ok(HfPackageRef {
@@ -865,17 +865,17 @@ fn verify_package_artifacts(
             format!("read package artifact metadata {}", relative_path.display())
         })?;
         let fingerprint = file_fingerprint(&metadata);
-        if let Some(cache_dir) = &options.cache_dir {
-            if integrity_cache_hit(
+        if let Some(cache_dir) = &options.cache_dir
+            && integrity_cache_hit(
                 cache_dir,
                 manifest_sha256,
                 &artifact,
                 metadata.len(),
                 fingerprint,
-            )? {
-                report.cached_artifacts += 1;
-                continue;
-            }
+            )?
+        {
+            report.cached_artifacts += 1;
+            continue;
         }
 
         let actual = file_sha256(&absolute)?;
@@ -1354,22 +1354,26 @@ mod tests {
 
     #[test]
     fn checks_abi_version_compatibility() {
-        assert!(abi_version_supported(&format!(
-            "{}.{}.0",
-            skippy_ffi::ABI_VERSION_MAJOR,
-            skippy_ffi::ABI_VERSION_MINOR
-        ))
-        .unwrap());
+        assert!(
+            abi_version_supported(&format!(
+                "{}.{}.0",
+                skippy_ffi::ABI_VERSION_MAJOR,
+                skippy_ffi::ABI_VERSION_MINOR
+            ))
+            .unwrap()
+        );
         assert!(
             !abi_version_supported(&format!("{}.{}.0", skippy_ffi::ABI_VERSION_MAJOR + 1, 0))
                 .unwrap()
         );
-        assert!(!abi_version_supported(&format!(
-            "{}.{}.0",
-            skippy_ffi::ABI_VERSION_MAJOR,
-            skippy_ffi::ABI_VERSION_MINOR + 1
-        ))
-        .unwrap());
+        assert!(
+            !abi_version_supported(&format!(
+                "{}.{}.0",
+                skippy_ffi::ABI_VERSION_MAJOR,
+                skippy_ffi::ABI_VERSION_MINOR + 1
+            ))
+            .unwrap()
+        );
     }
 
     #[test]

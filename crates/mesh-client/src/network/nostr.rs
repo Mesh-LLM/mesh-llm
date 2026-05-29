@@ -271,10 +271,10 @@ pub async fn discover(
             .and_then(|t| t.as_slice().get(1))
             .and_then(|s| s.parse::<u64>().ok());
 
-        if let Some(exp) = expires_at {
-            if exp < now {
-                continue;
-            }
+        if let Some(exp) = expires_at
+            && exp < now
+        {
+            continue;
         }
 
         let listing: MeshListing = match serde_json::from_str(&event.content) {
@@ -316,10 +316,10 @@ pub fn score_mesh(mesh: &DiscoveredMesh, _now_secs: u64, last_mesh_id: Option<&s
         }
     }
 
-    if let (Some(last_id), Some(mesh_id)) = (last_mesh_id, &mesh.listing.mesh_id) {
-        if last_id == mesh_id {
-            score += 500;
-        }
+    if let (Some(last_id), Some(mesh_id)) = (last_mesh_id, &mesh.listing.mesh_id)
+        && last_id == mesh_id
+    {
+        score += 500;
     }
 
     if mesh.listing.max_clients > 0 {

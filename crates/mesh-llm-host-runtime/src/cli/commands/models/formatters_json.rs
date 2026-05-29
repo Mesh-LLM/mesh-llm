@@ -1,17 +1,17 @@
 use super::formatters::{
-    capabilities_json, catalog_model_capabilities, catalog_model_kind_code,
-    fit_code_for_size_label, format_installed_size, huggingface_cache_dir,
-    installed_model_kind_code, local_capacity_json, model_kind_code, print_json, InstalledRow,
-    JsonFormatter, ModelsFormatter, SearchFormatter,
-};
-use crate::models::{
-    remote_catalog, remote_catalog_model_draft_ref, remote_catalog_model_ref,
-    search_catalog_json_payload, search_huggingface_json_payload, ModelDetails,
-    SearchArtifactFilter, SearchHit, SearchSort,
+    InstalledRow, JsonFormatter, ModelsFormatter, SearchFormatter, capabilities_json,
+    catalog_model_capabilities, catalog_model_kind_code, fit_code_for_size_label,
+    format_installed_size, huggingface_cache_dir, installed_model_kind_code, local_capacity_json,
+    model_kind_code, print_json,
 };
 use crate::models::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
+use crate::models::{
+    ModelDetails, SearchArtifactFilter, SearchHit, SearchSort, remote_catalog,
+    remote_catalog_model_draft_ref, remote_catalog_model_ref, search_catalog_json_payload,
+    search_huggingface_json_payload,
+};
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 fn show_payload(details: &ModelDetails, variants: Option<&[ModelDetails]>) -> Value {
@@ -186,6 +186,20 @@ impl ModelsFormatter for JsonFormatter {
             };
         }
         print_json(payload)
+    }
+
+    fn render_layer_package_download(
+        &self,
+        model_ref: &str,
+        package_ref: &str,
+        path: &Path,
+    ) -> Result<()> {
+        print_json(json!({
+            "requested_ref": model_ref,
+            "type": "layer_package",
+            "package_ref": package_ref,
+            "path": path,
+        }))
     }
 
     fn render_updates_status(&self, repo: Option<&str>, all: bool, check: bool) -> Result<()> {

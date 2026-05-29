@@ -165,12 +165,14 @@ fn mmproj_hf_ref_does_not_expand_to_full_remote_catalog_download() {
             "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
         ),
     ]);
-    assert!(matching_remote_catalog_primary_for_huggingface(
-        "unsloth/Qwen3.5-0.8B-GGUF",
-        Some("main"),
-        "mmproj-BF16.gguf",
-    )
-    .is_none());
+    assert!(
+        matching_remote_catalog_primary_for_huggingface(
+            "unsloth/Qwen3.5-0.8B-GGUF",
+            Some("main"),
+            "mmproj-BF16.gguf",
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -205,10 +207,12 @@ fn mmproj_url_does_not_expand_to_full_remote_catalog_download() {
             "unsloth/Qwen3.5-0.8B-GGUF@main/mmproj-BF16.gguf",
         ),
     ]);
-    assert!(matching_remote_catalog_primary_for_url(
-        "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf",
-    )
-    .is_none());
+    assert!(
+        matching_remote_catalog_primary_for_url(
+            "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/main/mmproj-BF16.gguf",
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -802,12 +806,16 @@ async fn show_model_variants_accepts_selected_quant_ref() {
         .expect("repo-backed GGUF refs should enumerate variants");
 
     assert!(!variants.is_empty());
-    assert!(variants
-        .iter()
-        .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:BF16" }));
-    assert!(variants
-        .iter()
-        .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL" }));
+    assert!(
+        variants
+            .iter()
+            .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:BF16" })
+    );
+    assert!(
+        variants
+            .iter()
+            .any(|variant| { variant.exact_ref == "unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL" })
+    );
 }
 
 #[test]

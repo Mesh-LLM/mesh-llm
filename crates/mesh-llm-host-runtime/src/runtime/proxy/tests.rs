@@ -633,15 +633,17 @@ async fn test_api_proxy_rewrites_image_blob_url_to_data_url() {
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(raw.contains("data:image/png;base64,aGVsbG8="));
     assert!(!raw.contains(&format!("mesh://blob/{client_id}/{}", put.token)));
-    assert!(crate::plugins::blobstore::get_request_object(
-        &plugin_manager,
-        crate::plugins::blobstore::GetRequestObjectRequest {
-            token: put.token.clone(),
-            request_id: Some("req-image-smoke".into()),
-        },
-    )
-    .await
-    .is_err());
+    assert!(
+        crate::plugins::blobstore::get_request_object(
+            &plugin_manager,
+            crate::plugins::blobstore::GetRequestObjectRequest {
+                token: put.token.clone(),
+                request_id: Some("req-image-smoke".into()),
+            },
+        )
+        .await
+        .is_err()
+    );
 
     proxy_handle.abort();
     let _ = upstream_handle.await;
@@ -863,15 +865,17 @@ async fn test_api_proxy_rewrites_audio_blob_url_to_data_url() {
     assert!(response.starts_with("HTTP/1.1 200 OK"));
     assert!(raw.contains("data:audio/wav;base64,UklGRg=="));
     assert!(!raw.contains(&format!("mesh://blob/{client_id}/{}", put.token)));
-    assert!(crate::plugins::blobstore::get_request_object(
-        &plugin_manager,
-        crate::plugins::blobstore::GetRequestObjectRequest {
-            token: put.token.clone(),
-            request_id: Some("req-audio-smoke".into()),
-        },
-    )
-    .await
-    .is_err());
+    assert!(
+        crate::plugins::blobstore::get_request_object(
+            &plugin_manager,
+            crate::plugins::blobstore::GetRequestObjectRequest {
+                token: put.token.clone(),
+                request_id: Some("req-audio-smoke".into()),
+            },
+        )
+        .await
+        .is_err()
+    );
 
     proxy_handle.abort();
     let _ = upstream_handle.await;
@@ -932,15 +936,17 @@ async fn test_api_proxy_rewrites_input_audio_blob_url_to_inline_audio() {
     assert!(raw.contains(r#""format":"wav""#));
     assert!(raw.contains(r#""mime_type":"audio/wav""#));
     assert!(!raw.contains(&format!("mesh://blob/{client_id}/{}", put.token)));
-    assert!(crate::plugins::blobstore::get_request_object(
-        &plugin_manager,
-        crate::plugins::blobstore::GetRequestObjectRequest {
-            token: put.token.clone(),
-            request_id: Some("req-input-audio-smoke".into()),
-        },
-    )
-    .await
-    .is_err());
+    assert!(
+        crate::plugins::blobstore::get_request_object(
+            &plugin_manager,
+            crate::plugins::blobstore::GetRequestObjectRequest {
+                token: put.token.clone(),
+                request_id: Some("req-input-audio-smoke".into()),
+            },
+        )
+        .await
+        .is_err()
+    );
 
     proxy_handle.abort();
     let _ = upstream_handle.await;
@@ -1128,9 +1134,11 @@ async fn test_api_proxy_integration_expect_continue() {
     stream.read_to_end(&mut response).await.unwrap();
     let raw = String::from_utf8(upstream_rx.await.unwrap()).unwrap();
 
-    assert!(String::from_utf8(response)
-        .unwrap()
-        .starts_with("HTTP/1.1 200 OK"));
+    assert!(
+        String::from_utf8(response)
+            .unwrap()
+            .starts_with("HTTP/1.1 200 OK")
+    );
     assert!(!raw.contains("Expect: 100-continue"));
     assert!(raw.contains("Connection: close"));
     assert!(raw.contains(std::str::from_utf8(body).unwrap()));
@@ -1631,9 +1639,11 @@ async fn test_api_proxy_does_not_retry_generic_bad_request() {
     assert!(response.starts_with("HTTP/1.1 400 Bad Request"));
     assert!(response.contains("missing required field"));
     assert!(first_raw.contains("bad request should stop"));
-    assert!(tokio::time::timeout(Duration::from_millis(250), unused_rx)
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), unused_rx)
+            .await
+            .is_err()
+    );
 
     proxy_handle.abort();
     let _ = bad_handle.await;
@@ -1717,9 +1727,11 @@ async fn test_api_proxy_does_not_retry_after_successful_stream_starts() {
     assert!(first_text.contains("HTTP/1.1 200 OK"));
     assert!(first_text.contains(r#"data: {"delta":"first"}\n\n"#));
     assert!(raw.contains("stream wins immediately"));
-    assert!(tokio::time::timeout(Duration::from_millis(250), unused_rx)
-        .await
-        .is_err());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(250), unused_rx)
+            .await
+            .is_err()
+    );
 
     drop(stream);
     proxy_handle.abort();

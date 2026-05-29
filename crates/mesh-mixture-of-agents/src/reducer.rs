@@ -8,9 +8,9 @@
 //! `hedge_delay`, race for the first OK. On fast errors, jump to the
 //! next candidate immediately.
 
-use crate::backend::{call_backend, ModelBackend, SamplingParams};
-use crate::worker;
 use crate::GatewayConfig;
+use crate::backend::{ModelBackend, SamplingParams, call_backend};
+use crate::worker;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;

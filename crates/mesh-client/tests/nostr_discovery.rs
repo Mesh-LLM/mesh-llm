@@ -1,5 +1,5 @@
 use mesh_client::network::nostr::{
-    score_mesh, smart_auto, AutoDecision, DiscoveredMesh, MeshFilter, MeshListing,
+    AutoDecision, DiscoveredMesh, MeshFilter, MeshListing, score_mesh, smart_auto,
 };
 
 fn make_listing(

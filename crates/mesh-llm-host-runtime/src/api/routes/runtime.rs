@@ -1,17 +1,20 @@
 use super::super::{
+    MeshApi, RuntimeControlRequest,
     http::{respond_error, respond_json, respond_runtime_error},
     status::decode_runtime_model_path,
-    MeshApi, RuntimeControlRequest,
 };
 use crate::crypto::{
-    keystore_metadata, load_keystore, load_owner_keypair_from_keychain, OwnerKeychainLoadError,
+    OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
 };
 use mesh_client::{
     ClientBuilder, ControlPlaneBootstrapOptions, ControlPlaneClientError, ControlPlaneConnection,
     InviteToken, OwnerControlRemoteError,
 };
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+use openai_frontend::GuardrailMode;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use zeroize::Zeroizing;
@@ -23,33 +26,64 @@ pub(super) async fn handle(
     path_only: &str,
     body: &str,
 ) -> anyhow::Result<()> {
-    match (method, path_only) {
-        ("GET", "/api/status") => handle_status(stream, state).await,
-        ("GET", "/api/models") => handle_models(stream, state).await,
-        ("GET", "/api/runtime") => handle_runtime_status(stream, state).await,
-        ("GET", "/api/runtime/llama") => handle_runtime_llama(stream, state).await,
-        ("GET", "/api/runtime/events") => handle_runtime_events(stream, state).await,
-        ("GET", "/api/runtime/endpoints") => handle_runtime_endpoints(stream, state).await,
-        ("GET", "/api/runtime/processes") => handle_runtime_processes(stream, state).await,
-        ("GET", "/api/runtime/stages") => handle_runtime_stages(stream, state).await,
-        ("GET", "/api/runtime/control-bootstrap") => handle_control_bootstrap(stream, state).await,
-        ("POST", "/api/runtime/control/get-config") => {
-            handle_control_get_config(stream, state, body).await
-        }
-        ("POST", "/api/runtime/control/refresh-inventory") => {
+    match method {
+        "GET" => handle_get(stream, state, path_only).await,
+        "POST" => handle_post(stream, state, path_only, body).await,
+        "DELETE" => handle_delete(stream, state, path_only).await,
+        _ => Ok(()),
+    }
+}
+
+async fn handle_get(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path_only: &str,
+) -> anyhow::Result<()> {
+    match path_only {
+        "/api/status" => handle_status(stream, state).await,
+        "/api/models" => handle_models(stream, state).await,
+        "/api/runtime" => handle_runtime_status(stream, state).await,
+        "/api/runtime/llama" => handle_runtime_llama(stream, state).await,
+        "/api/runtime/events" => handle_runtime_events(stream, state).await,
+        "/api/runtime/endpoints" => handle_runtime_endpoints(stream, state).await,
+        "/api/runtime/processes" => handle_runtime_processes(stream, state).await,
+        "/api/runtime/stages" => handle_runtime_stages(stream, state).await,
+        "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
+        "/api/events" => handle_events(stream, state).await,
+        _ => Ok(()),
+    }
+}
+
+async fn handle_post(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path_only: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    match path_only {
+        "/api/runtime/control/get-config" => handle_control_get_config(stream, state, body).await,
+        "/api/runtime/control/refresh-inventory" => {
             handle_control_refresh_inventory(stream, state, body).await
         }
-        ("POST", "/api/runtime/control/apply-config") => {
+        "/api/runtime/control/apply-config" => {
             handle_control_apply_config(stream, state, body).await
         }
-        ("POST", "/api/runtime/models") => handle_load_model(stream, state, body).await,
-        ("DELETE", p) if p.starts_with("/api/runtime/instances/") => {
+        "/api/runtime/mesh-guardrails" => handle_set_mesh_guardrails(stream, state, body).await,
+        "/api/runtime/models" => handle_load_model(stream, state, body).await,
+        _ => Ok(()),
+    }
+}
+
+async fn handle_delete(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    path_only: &str,
+) -> anyhow::Result<()> {
+    match path_only {
+        p if p.starts_with("/api/runtime/instances/") => {
             handle_unload_instance(stream, state, p).await
         }
-        ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
-            handle_unload_model(stream, state, p).await
-        }
-        ("GET", "/api/events") => handle_events(stream, state).await,
+        p if p.starts_with("/api/runtime/models/") => handle_unload_model(stream, state, p).await,
         _ => Ok(()),
     }
 }
@@ -71,6 +105,11 @@ struct ApplyConfigRequest {
     endpoint: Option<String>,
     expected_revision: u64,
     config: crate::plugin::MeshConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiGuardrailsModeRequest {
+    mode: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -120,7 +159,9 @@ async fn handle_control_get_config(
     };
     match connect_owner_control_client(state, &endpoint).await {
         Ok(client) => {
-            match client.get_config().await {
+            let result = client.get_config().await;
+            client.close().await;
+            match result {
                 Ok(snapshot) => respond_json(
                     stream,
                     200,
@@ -152,7 +193,9 @@ async fn handle_control_refresh_inventory(
     };
     match connect_owner_control_client(state, &endpoint).await {
         Ok(client) => {
-            match client.refresh_inventory().await {
+            let result = client.refresh_inventory().await;
+            client.close().await;
+            match result {
                 Ok(snapshot) => respond_json(
                     stream,
                     200,
@@ -183,29 +226,32 @@ async fn handle_control_apply_config(
         Err(error) => return respond_control_error(stream, error).await,
     };
     match connect_owner_control_client(state, &endpoint).await {
-        Ok(client) => match client
-            .apply_config(
-                request.expected_revision,
-                crate::protocol::convert::mesh_config_to_proto(&request.config),
-            )
-            .await
-        {
-            Ok(response) => {
-                respond_json(
-                    stream,
-                    200,
-                    &LocalControlApplyPayload {
-                        success: response.success,
-                        current_revision: response.current_revision,
-                        config_hash: hex::encode(response.config_hash),
-                        apply_mode: control_apply_mode_label(response.apply_mode),
-                        error: response.error,
-                    },
+        Ok(client) => {
+            let result = client
+                .apply_config(
+                    request.expected_revision,
+                    crate::protocol::convert::mesh_config_to_proto(&request.config),
                 )
-                .await
+                .await;
+            client.close().await;
+            match result {
+                Ok(response) => {
+                    respond_json(
+                        stream,
+                        200,
+                        &LocalControlApplyPayload {
+                            success: response.success,
+                            current_revision: response.current_revision,
+                            config_hash: hex::encode(response.config_hash),
+                            apply_mode: control_apply_mode_label(response.apply_mode),
+                            error: response.error,
+                        },
+                    )
+                    .await
+                }
+                Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
             }
-            Err(error) => respond_control_error(stream, control_error_from_client(error)).await,
-        },
+        }
         Err(error) => respond_control_error(stream, error).await,
     }
 }
@@ -244,8 +290,15 @@ fn required_control_endpoint(endpoint: Option<String>) -> Result<String, LocalCo
 }
 
 async fn ensure_loopback_control_caller(stream: &mut TcpStream) -> anyhow::Result<bool> {
-    match stream.peer_addr() {
-        Ok(addr) if addr.ip().is_loopback() => Ok(true),
+    ensure_loopback_control_caller_for_peer_addr(stream, stream.peer_addr()).await
+}
+
+pub(crate) async fn ensure_loopback_control_caller_for_peer_addr(
+    stream: &mut TcpStream,
+    peer_addr: std::io::Result<std::net::SocketAddr>,
+) -> anyhow::Result<bool> {
+    match peer_addr {
+        Ok(addr) if is_loopback_control_caller(addr) => Ok(true),
         Ok(addr) => {
             tracing::warn!("runtime control: rejected non-loopback caller {addr}");
             respond_json(
@@ -267,6 +320,10 @@ async fn ensure_loopback_control_caller(stream: &mut TcpStream) -> anyhow::Resul
             Ok(false)
         }
     }
+}
+
+fn is_loopback_control_caller(addr: SocketAddr) -> bool {
+    addr.ip().is_loopback()
 }
 
 fn local_control_snapshot_payload(
@@ -557,6 +614,48 @@ async fn handle_runtime_endpoints(stream: &mut TcpStream, state: &MeshApi) -> an
     }
 }
 
+async fn handle_set_mesh_guardrails(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    body: &str,
+) -> anyhow::Result<()> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(());
+    }
+
+    let Some(control_tx) = state.inner.lock().await.runtime_control.clone() else {
+        return respond_error(stream, 503, "Runtime control unavailable").await;
+    };
+    let request: OpenAiGuardrailsModeRequest = match serde_json::from_str(body) {
+        Ok(request) => request,
+        Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
+    };
+    let Some(mode) = parse_guardrail_mode(&request.mode) else {
+        return respond_error(stream, 400, "Invalid guardrail mode").await;
+    };
+
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    let _ = control_tx.send(RuntimeControlRequest::SetOpenAiGuardrailMode {
+        mode,
+        resp: resp_tx,
+    });
+    match resp_rx.await {
+        Ok(Ok(updated)) => respond_json(stream, 200, &updated).await?,
+        Ok(Err(e)) => respond_runtime_error(stream, &e.to_string()).await?,
+        Err(_) => respond_error(stream, 503, "Runtime control unavailable").await?,
+    }
+    Ok(())
+}
+
+fn parse_guardrail_mode(mode: &str) -> Option<GuardrailMode> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "disabled" | "disable" | "off" => Some(GuardrailMode::Disabled),
+        "metrics" | "metrics_only" | "metrics-only" => Some(GuardrailMode::MetricsOnly),
+        "enforce" | "enforced" => Some(GuardrailMode::Enforce),
+        _ => None,
+    }
+}
+
 async fn handle_load_model(
     stream: &mut TcpStream,
     state: &MeshApi,
@@ -748,4 +847,46 @@ async fn handle_events(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Resul
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GuardrailMode, is_loopback_control_caller, parse_guardrail_mode};
+
+    #[test]
+    fn loopback_control_caller_accepts_localhost_only() {
+        assert!(is_loopback_control_caller(
+            "127.0.0.1:3131".parse().unwrap()
+        ));
+        assert!(is_loopback_control_caller("[::1]:3131".parse().unwrap()));
+        assert!(!is_loopback_control_caller(
+            "192.0.2.10:3131".parse().unwrap()
+        ));
+        assert!(!is_loopback_control_caller(
+            "[2001:db8::1]:3131".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn parse_guardrail_mode_accepts_operator_labels() {
+        assert_eq!(
+            parse_guardrail_mode("disabled"),
+            Some(GuardrailMode::Disabled)
+        );
+        assert_eq!(parse_guardrail_mode("off"), Some(GuardrailMode::Disabled));
+        assert_eq!(
+            parse_guardrail_mode("metrics-only"),
+            Some(GuardrailMode::MetricsOnly)
+        );
+        assert_eq!(
+            parse_guardrail_mode("enforce"),
+            Some(GuardrailMode::Enforce)
+        );
+    }
+
+    #[test]
+    fn parse_guardrail_mode_rejects_unknown_labels() {
+        assert_eq!(parse_guardrail_mode(""), None);
+        assert_eq!(parse_guardrail_mode("strict"), None);
+    }
 }

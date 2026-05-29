@@ -10,10 +10,10 @@ use mesh_client::proto::node::{
 };
 use mesh_client::protocol::convert::canonical_config_hash;
 use mesh_client::protocol::{
-    decode_control_frame, decode_legacy_tunnel_map_frame, decode_owner_control_envelope,
-    encode_control_frame, encode_owner_control_envelope, owner_control_rejection_envelope,
     ControlFrameError, MAX_CONTROL_FRAME_BYTES, NODE_PROTOCOL_GENERATION, STREAM_GOSSIP,
-    STREAM_TUNNEL_MAP,
+    STREAM_TUNNEL_MAP, decode_control_frame, decode_legacy_tunnel_map_frame,
+    decode_owner_control_envelope, encode_control_frame, encode_owner_control_envelope,
+    owner_control_rejection_envelope,
 };
 
 fn minimal_config() -> NodeConfigSnapshot {
@@ -37,7 +37,7 @@ fn minimal_config() -> NodeConfigSnapshot {
 
 fn valid_gossip_frame() -> GossipFrame {
     GossipFrame {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         sender_id: vec![0xAB; 32],
         peers: vec![PeerAnnouncement {
             endpoint_id: vec![0u8; 32],
@@ -88,7 +88,7 @@ fn gossip_frame_encodes_and_decodes_intact() {
     let encoded = encode_control_frame(STREAM_GOSSIP, &frame);
     let decoded: GossipFrame = decode_control_frame(STREAM_GOSSIP, &encoded)
         .expect("valid gossip frame must decode successfully");
-    assert_eq!(decoded.gen, NODE_PROTOCOL_GENERATION);
+    assert_eq!(decoded.r#gen, NODE_PROTOCOL_GENERATION);
     assert_eq!(decoded.sender_id, vec![0xAB; 32]);
     assert_eq!(decoded.peers.len(), 1);
 }
@@ -166,7 +166,7 @@ fn v0_tunnel_map_rejects_invalid_hex_peer_id() {
 #[test]
 fn gossip_frame_with_wrong_generation_is_rejected() {
     let bad_frame = GossipFrame {
-        gen: 0,
+        r#gen: 0,
         sender_id: vec![0u8; 32],
         peers: vec![],
     };
@@ -179,7 +179,7 @@ fn gossip_frame_with_wrong_generation_is_rejected() {
 #[test]
 fn owner_control_get_config_roundtrip_works() {
     let envelope = OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: Some(OwnerControlRequest {
             request_id: 77,
@@ -202,7 +202,7 @@ fn owner_control_get_config_roundtrip_works() {
 #[test]
 fn owner_control_unknown_command_maps_to_structured_error() {
     let envelope = OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: Some(OwnerControlRequest {
             request_id: 88,

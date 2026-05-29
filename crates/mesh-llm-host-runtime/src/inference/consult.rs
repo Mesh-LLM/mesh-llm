@@ -8,12 +8,14 @@
 //! Three consultation patterns:
 //!
 //! - **Caption** — send an image to a vision-capable peer, get a text description
+//! - **Audio rescue** — send audio to an audio-capable peer, get concise text context
 //! - **Summarize** — send conversation history, get a condensed summary
 //! - **Second opinion** — send the same question to a different model, get its answer
 
 use crate::mesh;
 use anyhow::Result;
 use iroh::EndpointId;
+use mesh_llm_guardrails::{parse_tool_call_value, strip_thinking_blocks};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -196,17 +198,24 @@ fn parse_chat_completion_response(response: &[u8]) -> Result<String> {
         )
     })?;
 
-    // Extract the assistant message content
-    let content = parsed["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let message = &parsed["choices"][0]["message"];
+    let content = message["content"].as_str().unwrap_or("");
+    let content = strip_thinking_blocks(content);
 
     if content.is_empty() {
-        anyhow::bail!("peer returned empty response");
+        return tool_calls_as_consultation_text(message)
+            .ok_or_else(|| anyhow::anyhow!("peer returned empty response"));
     }
 
     Ok(content)
+}
+
+fn tool_calls_as_consultation_text(message: &Value) -> Option<String> {
+    let allowed_tools = Vec::new();
+    let calls = parse_tool_call_value(&message["tool_calls"], &allowed_tools).ok()?;
+    let first = calls.first()?;
+    let arguments = serde_json::to_string(&first.arguments).ok()?;
+    Some(format!("{}({arguments})", first.name))
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +234,9 @@ pub async fn caption_image(
     let prompt = if user_text.is_empty() {
         "Describe this image concisely in one paragraph.".to_string()
     } else {
-        format!("The user asked: \"{user_text}\"\n\nDescribe this image concisely, focusing on details relevant to the user's question.")
+        format!(
+            "The user asked: \"{user_text}\"\n\nDescribe this image concisely, focusing on details relevant to the user's question."
+        )
     };
 
     let messages = vec![serde_json::json!({
@@ -237,6 +248,46 @@ pub async fn caption_image(
     })];
 
     chat_completion(node, peer_id, model, messages, 256, TIMEOUT_CONSULTATION).await
+}
+
+/// Ask an audio-capable peer to extract useful text context from audio.
+/// `audio_url` should be a URL or a data URL accepted by the peer's OpenAI
+/// chat surface.
+pub async fn transcribe_audio(
+    node: &mesh::Node,
+    peer_id: EndpointId,
+    model: &str,
+    audio_url: &str,
+    user_text: &str,
+) -> Result<String> {
+    chat_completion(
+        node,
+        peer_id,
+        model,
+        audio_rescue_messages(audio_url, user_text),
+        512,
+        TIMEOUT_CONSULTATION,
+    )
+    .await
+}
+
+fn audio_rescue_messages(audio_url: &str, user_text: &str) -> Vec<Value> {
+    let prompt = if user_text.is_empty() {
+        "Extract concise text context from this audio. If it contains speech, transcribe the speech. If it contains non-speech audio, describe the audible events. Return only the useful context."
+            .to_string()
+    } else {
+        format!(
+            "The user asked: \"{user_text}\"\n\nExtract concise text context from this audio for a text-only model. If it contains speech, transcribe the relevant speech. If it contains non-speech audio, describe the audible events relevant to the user's request. Return only the useful context."
+        )
+    };
+
+    vec![serde_json::json!({
+        "role": "user",
+        "content": [
+            {"type": "text", "text": prompt},
+            {"type": "input_audio", "input_audio": {"url": audio_url}}
+        ]
+    })]
 }
 
 /// Ask a peer for a second opinion on the user's question.
@@ -409,11 +460,69 @@ mod tests {
     }
 
     #[test]
+    fn audio_rescue_messages_attach_audio_and_user_prompt() {
+        let messages = audio_rescue_messages("data:audio/wav;base64,abc", "please transcribe this");
+        let body = consultation_request_body("audio-model", messages, 512);
+
+        assert_eq!(body["mesh_hooks"], false);
+        assert_eq!(body["model"], "audio-model");
+        assert_eq!(
+            body["messages"][0]["content"][1]["input_audio"]["url"],
+            "data:audio/wav;base64,abc"
+        );
+        assert!(
+            body["messages"][0]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("please transcribe this")
+        );
+    }
+
+    #[test]
     fn parse_chat_completion_response_extracts_assistant_content() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}";
 
         let content = parse_chat_completion_response(response).unwrap();
 
         assert_eq!(content, "hello");
+    }
+
+    #[test]
+    fn parse_chat_completion_response_strips_thinking_blocks() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"choices\":[{\"message\":{\"content\":\"<think>scratch</think>hello\"}}]}";
+
+        let content = parse_chat_completion_response(response).unwrap();
+
+        assert_eq!(content, "hello");
+    }
+
+    #[test]
+    fn parse_chat_completion_response_falls_back_to_tool_calls() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+            "{\"choices\":[{\"message\":{\"content\":\"\",\"tool_calls\":[",
+            "{\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}",
+            "]}}]}"
+        )
+        .as_bytes();
+
+        let content = parse_chat_completion_response(response).unwrap();
+
+        assert_eq!(content, "read_file({\"path\":\"README.md\"})");
+    }
+
+    #[test]
+    fn parse_chat_completion_response_falls_back_to_tool_calls_after_thinking_stripping() {
+        let response = concat!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+            "{\"choices\":[{\"message\":{\"content\":\"<think>scratch</think>\",\"tool_calls\":[",
+            "{\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}",
+            "]}}]}"
+        )
+        .as_bytes();
+
+        let content = parse_chat_completion_response(response).unwrap();
+
+        assert_eq!(content, "read_file({\"path\":\"README.md\"})");
     }
 }

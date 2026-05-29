@@ -5,27 +5,28 @@ mod formatters_json;
 use crate::cli::commands::model_package;
 use crate::cli::models::ModelSearchSort;
 use crate::cli::models::ModelsCommand;
-use crate::cli::terminal_progress::{clear_stderr_line, start_spinner, DeterminateProgressLine};
+use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use crate::inference::skippy::{
-    certify_layer_package, CertificationGateStatus, SkippyCertificationRequest,
+    CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
+    identity_from_layer_package, is_layer_package_ref, resolve_hf_package_to_local,
 };
 use crate::models::{
-    delete, download_model_ref_with_progress_details, find_remote_catalog_model_exact,
-    installed_model_capabilities, load_model_usage_record_for_path, model_usage_cache_dir,
-    plan_model_cleanup, remote_catalog, remote_catalog_model_ref, scan_installed_models,
-    search_catalog_models, search_huggingface, show_exact_model, show_model_variants_with_progress,
     ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter, SearchProgress, SearchSort,
-    ShowVariantsProgress,
+    ShowVariantsProgress, delete, download_model_ref_with_progress_details,
+    find_remote_catalog_model_exact, installed_model_capabilities,
+    load_model_usage_record_for_path, model_usage_cache_dir, plan_model_cleanup, remote_catalog,
+    remote_catalog_model_ref, scan_installed_models, search_catalog_models, search_huggingface,
+    show_exact_model, show_model_variants_with_progress,
 };
-use anyhow::{anyhow, bail, Result};
+use anyhow::{Result, anyhow, bail};
 use serde_json::json;
 use std::io::IsTerminal;
 use std::time::Duration;
 use std::time::Instant;
 
 use formatters::{
-    catalog_model_is_mlx, format_installed_size, format_relative_timestamp, model_kind_code,
-    models_formatter, search_formatter, InstalledRow,
+    InstalledRow, catalog_model_is_mlx, format_installed_size, format_relative_timestamp,
+    model_kind_code, models_formatter, search_formatter,
 };
 
 pub async fn run_model_search(
@@ -223,10 +224,10 @@ pub async fn run_model_certify(
     .await?;
     let report_json = serde_json::to_string_pretty(&report)?;
     if let Some(path) = report_out {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, format!("{report_json}\n"))?;
     }
@@ -263,7 +264,9 @@ fn validate_model_certify_options(
     let api_base = api_base.map(str::trim).filter(|value| !value.is_empty());
     if package_only {
         if api_base.is_some() {
-            bail!("Do not combine --package-only with --api-base; remove --package-only to run runtime smoke gates.");
+            bail!(
+                "Do not combine --package-only with --api-base; remove --package-only to run runtime smoke gates."
+            );
         }
         return Ok(());
     }
@@ -386,6 +389,15 @@ pub async fn run_model_download(
     json_output: bool,
 ) -> Result<()> {
     let formatter = models_formatter(json_output);
+    if let Some((package_ref, package_dir)) =
+        download_layer_package_for_model_ref(model_ref).await?
+    {
+        if include_draft && !json_output {
+            eprintln!("⚠ Draft download is not available for layer packages");
+        }
+        return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
+    }
+
     let (path, details) = download_model_ref_with_progress_details(model_ref, !json_output).await?;
     if !include_draft {
         return formatter.render_download(model_ref, &path, details.as_ref(), false, None);
@@ -414,6 +426,33 @@ pub async fn run_model_download(
         true,
         draft_out.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
     )
+}
+
+async fn download_layer_package_for_model_ref(
+    model_ref: &str,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    let Some(package_ref) = resolve_download_layer_package_ref(model_ref) else {
+        return Ok(None);
+    };
+    let package_dir = tokio::task::spawn_blocking({
+        let package_ref = package_ref.clone();
+        move || {
+            let identity = identity_from_layer_package(&package_ref)?;
+            resolve_hf_package_to_local(&package_ref, 0, identity.layer_count, true, true)
+                .map(std::path::PathBuf::from)
+        }
+    })
+    .await??;
+    Ok(Some((package_ref, package_dir)))
+}
+
+fn resolve_download_layer_package_ref(model_ref: &str) -> Option<String> {
+    if is_layer_package_ref(model_ref) {
+        return Some(model_ref.to_string());
+    }
+    let _ = remote_catalog::ensure_catalog();
+    remote_catalog::find_layer_package(model_ref)
+        .or_else(|| remote_catalog::find_huggingface_layer_package(model_ref))
 }
 
 pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
@@ -634,7 +673,9 @@ fn render_cleanup_console(
             }
             println!("   path: {}", candidate.primary_path.display());
             if candidate.stale_record_only {
-                println!("   note: no managed files remain on disk; cleanup only removes the usage record");
+                println!(
+                    "   note: no managed files remain on disk; cleanup only removes the usage record"
+                );
             }
             println!();
         }
@@ -772,7 +813,7 @@ fn map_search_sort(sort: ModelSearchSort) -> SearchSort {
 mod tests {
     use super::{
         build_delete_preview_model, build_installed_rows, parse_cleanup_age,
-        validate_model_certify_options,
+        resolve_download_layer_package_ref, validate_model_certify_options,
     };
     use serial_test::serial;
     use std::ffi::OsString;
@@ -788,9 +829,11 @@ mod tests {
 
     fn restore_env(key: &str, previous: Option<OsString>) {
         if let Some(value) = previous {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -889,6 +932,24 @@ mod tests {
     }
 
     #[test]
+    fn model_download_accepts_explicit_hf_layer_package_ref() {
+        assert_eq!(
+            resolve_download_layer_package_ref("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123"),
+            Some("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn model_download_without_package_mapping_falls_back_to_model_download() {
+        let _catalog = crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+        assert_eq!(
+            resolve_download_layer_package_ref("plain-local-model"),
+            None
+        );
+    }
+
+    #[test]
     #[serial]
     fn installed_rows_keep_layered_package_ref_and_safe_commands() {
         let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
@@ -918,9 +979,12 @@ mod tests {
             9,
         );
 
-        std::env::set_var("HF_HUB_CACHE", &temp);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let rows = build_installed_rows();
         assert_eq!(rows.len(), 1);

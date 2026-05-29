@@ -72,6 +72,7 @@ mesh-llm serve --auto
 mesh-llm serve --model Qwen2.5-32B
 mesh-llm serve --join <token>
 mesh-llm serve --discover "my-mesh"
+mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
 mesh-llm client --auto
 mesh-llm gpus
 mesh-llm discover
@@ -603,6 +604,7 @@ alias = "qwen-vl"
 [[plugin]]
 name    = "blackboard"
 enabled = true
+command = "mesh-llm-plugin-blackboard"
 
 # [[plugin]]
 # name    = "openai-endpoint"
@@ -635,6 +637,9 @@ Config precedence:
 - Explicit `--model` or `--gguf` ignores configured `[[models]]`.
 - Explicit `--ctx-size` overrides configured `ctx_size` for the selected startup
   models.
+- Explicit `--mesh-guardrails <disabled|metrics|enforce>` seeds the
+  server-side mesh guardrail mode for hosted Skippy startup models and later
+  runtime-loaded models.
 - `mmproj` is optional and only used when that startup model needs a projector
   sidecar.
 - `skippy.*` staged-serving controls stay staged-only. `activation_wire_dtype`,
@@ -729,7 +734,7 @@ mesh-llm gpus --json
 mesh-llm gpu benchmark --json
 ```
 
-This prints the local GPU inventory with stable IDs, backend device names, VRAM, unified-memory status, and cached bandwidth when a benchmark fingerprint is already present. Add `--json` for machine-readable inventory output, or run `mesh-llm gpu benchmark --json` to refresh the cached fingerprint and print the benchmark summary as JSON.
+This prints the local runtime-selectable GPU inventory with stable IDs, backend device names, VRAM, unified-memory status, and cached bandwidth when a benchmark fingerprint is already present. In the shipped Skippy-enabled binary, a GPU appears here only when the embedded backend reports it as selectable. Add `--json` for machine-readable inventory output, or run `mesh-llm gpu benchmark --json` to refresh the cached fingerprint and print the benchmark summary as JSON.
 
 ## Local runtime control
 
@@ -739,6 +744,7 @@ Stage one supports local-only hot load and unload on a running node.
 mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
 mesh-llm unload Llama-3.2-1B-Instruct-Q4_K_M
 mesh-llm status
+mesh-llm runtime guardrails --mode enforce --port 3131
 ```
 
 Management API endpoints:
@@ -750,9 +756,16 @@ curl -X POST localhost:3131/api/runtime/models \
   -H 'Content-Type: application/json' \
   -d '{"model":"Llama-3.2-1B-Instruct-Q4_K_M"}'
 curl -X DELETE localhost:3131/api/runtime/models/Llama-3.2-1B-Instruct-Q4_K_M
+curl -X POST localhost:3131/api/runtime/mesh-guardrails \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"enforce"}'
+curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 ```
 
-This stage is intentionally node-local. Mesh-wide rebalancing and distributed load/unload come later.
+The guardrail mode update is also node-local. It changes the shared
+server-side `GuardrailPolicy.mode` without restarting the process, so existing
+hosted Skippy backends and future local runtime loads observe the new mode.
+Mesh-wide rebalancing and distributed load/unload come later.
 
 ## Owner-control plane
 

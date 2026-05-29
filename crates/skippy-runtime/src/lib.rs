@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::ffi::{c_char, c_int, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fs::{File, OpenOptions};
 use std::io::{LineWriter, Write};
 use std::path::Path;
@@ -10,7 +10,7 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
@@ -53,7 +53,7 @@ pub enum FlashAttentionType {
     Enabled = 1,
 }
 
-pub use devices::{backend_devices, BackendDevice, BackendDeviceType};
+pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::{
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
@@ -353,15 +353,14 @@ impl NativeLogAggregator {
         }
 
         if let Some(layer_index) = parse_layer_assign_index(s) {
-            if self.layer_assign_progress.total.is_none() {
-                if let Some(total) = self
+            if self.layer_assign_progress.total.is_none()
+                && let Some(total) = self
                     .metadata_highlights
                     .block_count
                     .as_deref()
                     .and_then(|s| s.parse::<usize>().ok())
-                {
-                    self.layer_assign_progress.set_total(total);
-                }
+            {
+                self.layer_assign_progress.set_total(total);
             }
             let new_completed = layer_index + 1;
             if new_completed > self.layer_assign_progress.completed {
@@ -464,11 +463,25 @@ fn should_suppress_native_log_line(line: &str) -> bool {
 }
 
 fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
+    if let Some((category, params)) = cpu_offload_diagnostic_params(line) {
+        return Some(NativeLogEvent {
+            message: line.to_string(),
+            category,
+            params,
+        });
+    }
+
+    let lower = line.to_ascii_lowercase();
     if line.contains("backend_init")
         || line.contains("llama_backend_init")
         || line.contains("GGML_CUDA")
-        || (line.contains("CUDA") && (line.contains("init") || line.contains("device")))
-        || (line.contains("metal") && (line.contains("init") || line.contains("device")))
+        || line.contains("GGML_HIP")
+        || line.contains("GGML_ROCM")
+        || ((lower.contains("cuda")
+            || lower.contains("hip")
+            || lower.contains("rocm")
+            || lower.contains("metal"))
+            && (lower.contains("init") || lower.contains("device") || lower.contains("backend")))
     {
         return Some(NativeLogEvent {
             message: line.to_string(),
@@ -527,6 +540,32 @@ fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
     }
 
     None
+}
+
+fn cpu_offload_diagnostic_params(line: &str) -> Option<(&'static str, Vec<(String, Value)>)> {
+    let lower = line.to_ascii_lowercase();
+    let (category, surface) = if lower.contains("cpu_mapped model buffer size") {
+        ("memory", "model_buffer")
+    } else if lower.contains("cpu kv buffer size") {
+        ("kv_cache", "kv_buffer")
+    } else if lower.contains("cpu compute buffer size") {
+        ("memory", "compute_buffer")
+    } else {
+        return None;
+    };
+    Some((
+        category,
+        vec![
+            (
+                "offload_device".to_string(),
+                Value::String("CPU".to_string()),
+            ),
+            (
+                "offload_surface".to_string(),
+                Value::String(surface.to_string()),
+            ),
+        ],
+    ))
 }
 
 fn parse_loaded_metadata_counts(line: &str) -> Option<(usize, usize)> {
@@ -659,12 +698,14 @@ pub fn restore_native_logs() {
 /// Enable verbose llama.cpp logging. Call before `llama_backend_init()` / model loading.
 /// Sets GGML_LLAMA_LOG_LEVEL=4 so LLAMA_LOG_DEBUG macros produce output.
 pub fn enable_verbose_native_logs() {
-    std::env::set_var("GGML_LLAMA_LOG_LEVEL", LLAMA_LOG_LEVEL_DEBUG);
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("GGML_LLAMA_LOG_LEVEL", LLAMA_LOG_LEVEL_DEBUG) };
 }
 
 /// Disable verbose llama.cpp logging (restore default level).
 pub fn disable_verbose_native_logs() {
-    std::env::remove_var("GGML_LLAMA_LOG_LEVEL");
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::remove_var("GGML_LLAMA_LOG_LEVEL") };
 }
 
 unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_data: *mut c_void) {
@@ -673,10 +714,10 @@ unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_
     }
 
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
-    if let Ok(mut guard) = native_log_file().lock() {
-        if let Some(writer) = guard.as_mut() {
-            let _ = writer.write_all(bytes);
-        }
+    if let Ok(mut guard) = native_log_file().lock()
+        && let Some(writer) = guard.as_mut()
+    {
+        let _ = writer.write_all(bytes);
     }
 
     // Also send aggregated messages through the channel when runtime forwarding is enabled.
@@ -685,18 +726,16 @@ unsafe extern "C" fn write_native_log(_level: c_int, text: *const c_char, _user_
     }
 
     if let Ok(text_str) = core::str::from_utf8(bytes) {
-        let events = if let Ok(mut aggregator) = native_log_aggregator().lock() {
-            aggregator.process_line(text_str.trim())
-        } else {
-            Vec::new()
+        let events = match native_log_aggregator().lock() {
+            Ok(mut aggregator) => aggregator.process_line(text_str.trim()),
+            _ => Vec::new(),
         };
-        if let Some(tx) = NATIVE_LOG_FILTERED_TX.get() {
-            if let Ok(guard) = tx.lock() {
-                if let Some(ref sender) = *guard {
-                    for event in events {
-                        let _ = sender.send(event);
-                    }
-                }
+        if let Some(tx) = NATIVE_LOG_FILTERED_TX.get()
+            && let Ok(guard) = tx.lock()
+            && let Some(ref sender) = *guard
+        {
+            for event in events {
+                let _ = sender.send(event);
             }
         }
     }
@@ -3437,6 +3476,14 @@ pub fn write_gguf_from_parts(
     ensure_ok(status, error)
 }
 
+fn format_skippy_error(status: Status, message: &str) -> String {
+    if message.is_empty() {
+        format!("{:?}", status)
+    } else {
+        format!("{:?}: {}", status, message)
+    }
+}
+
 fn ensure_ok(status: Status, error: *mut RawError) -> Result<()> {
     if status == Status::Ok {
         free_error(error);
@@ -3444,11 +3491,7 @@ fn ensure_ok(status: Status, error: *mut RawError) -> Result<()> {
     } else {
         let message = error_message(error);
         free_error(error);
-        if message.is_empty() {
-            Err(anyhow!("skippy ABI call failed: {:?}", status))
-        } else {
-            Err(anyhow!("skippy ABI call failed: {:?}: {}", status, message))
-        }
+        Err(anyhow!("{}", format_skippy_error(status, &message)))
     }
 }
 
@@ -3487,21 +3530,21 @@ mod tests {
         path::PathBuf,
         ptr,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         time::{SystemTime, UNIX_EPOCH},
     };
     use tokio::sync::mpsc::error::TryRecvError;
 
     use super::{
-        flush_native_log_writer, parse_cache_type, parse_layer_assign_index,
+        ChatTemplateMessage, FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0,
+        LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH, ModelInfo,
+        NativeLogAggregator, NativeLogEvent, RuntimeConfig, RuntimeLoadMode,
+        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH, SamplingConfig, StageModel, Status, TensorRole,
+        flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
         redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
         set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
-        ChatTemplateMessage, FlashAttentionType, ModelInfo, NativeLogAggregator, NativeLogEvent,
-        RuntimeConfig, RuntimeLoadMode, StageModel, TensorRole, GGML_TYPE_F16, GGML_TYPE_Q4_0,
-        GGML_TYPE_Q8_0, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
-        SKIPPY_UNIFIED_KV_DEFAULT_N_BATCH,
     };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3819,14 +3862,32 @@ mod tests {
                 params: Vec::new(),
             }]
         );
+        assert_eq!(
+            aggregator.process_line("llama_backend_init: GGML_HIP backend initialized"),
+            vec![NativeLogEvent {
+                message: "llama_backend_init: GGML_HIP backend initialized".to_string(),
+                category: "backend",
+                params: Vec::new(),
+            }]
+        );
+        assert_eq!(
+            aggregator.process_line("llama_backend_init: GGML_ROCM backend initialized"),
+            vec![NativeLogEvent {
+                message: "llama_backend_init: GGML_ROCM backend initialized".to_string(),
+                category: "backend",
+                params: Vec::new(),
+            }]
+        );
     }
 
     #[test]
     fn aggregator_ignores_non_backend_cuda_mentions() {
         let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator
-            .process_line("CUDA kernel launch for attention")
-            .is_empty());
+        assert!(
+            aggregator
+                .process_line("CUDA kernel launch for attention")
+                .is_empty()
+        );
         assert!(aggregator.process_line("offloading to CUDA").is_empty());
     }
 
@@ -3871,17 +3932,21 @@ mod tests {
         }
 
         let flush_events = aggregator.process_line("llm_load_print_meta: version = 3");
-        assert!(flush_events
-            .iter()
-            .any(|event| event.message == "llm_load_print_meta: version = 3"));
-        assert!(flush_events
-            .iter()
-            .any(|event| event.message == "Reading model metadata..."));
-        assert!(flush_events.iter().any(|event| event
-            .params
-            .iter()
-            .any(|(key, value)| key == "architecture"
-                && value == &Value::String("qwen35".to_string()))));
+        assert!(
+            flush_events
+                .iter()
+                .any(|event| event.message == "llm_load_print_meta: version = 3")
+        );
+        assert!(
+            flush_events
+                .iter()
+                .any(|event| event.message == "Reading model metadata...")
+        );
+        assert!(flush_events.iter().any(|event| {
+            event.params.iter().any(|(key, value)| {
+                key == "architecture" && value == &Value::String("qwen35".to_string())
+            })
+        }));
     }
 
     #[test]
@@ -3892,17 +3957,23 @@ mod tests {
         );
 
         let first = aggregator.process_line("llama_model_loader: - type  f32:  30 tensors");
-        assert!(first
-            .iter()
-            .any(|event| event.message.contains("tensors 10%")));
-        assert!(first
-            .iter()
-            .any(|event| event.message.contains("tensors 30%")));
+        assert!(
+            first
+                .iter()
+                .any(|event| event.message.contains("tensors 10%"))
+        );
+        assert!(
+            first
+                .iter()
+                .any(|event| event.message.contains("tensors 30%"))
+        );
 
         let second = aggregator.process_line("llama_model_loader: - type q4_k:  70 tensors");
-        assert!(second
-            .iter()
-            .any(|event| event.message.contains("tensors 100%")));
+        assert!(
+            second
+                .iter()
+                .any(|event| event.message.contains("tensors 100%"))
+        );
         assert!(second.iter().any(|event| {
             event.message == "Reading tensor groups..."
                 && event
@@ -3930,6 +4001,82 @@ mod tests {
     }
 
     #[test]
+    fn aggregator_tags_cpu_offload_evidence_without_capacity_facts() {
+        let mut aggregator = NativeLogAggregator::default();
+        let model_buffer =
+            aggregator.process_line("load_tensors:   CPU_Mapped model buffer size = 47492.37 MiB");
+        assert_eq!(
+            model_buffer,
+            vec![NativeLogEvent {
+                message: "load_tensors:   CPU_Mapped model buffer size = 47492.37 MiB".to_string(),
+                category: "memory",
+                params: vec![
+                    (
+                        "offload_device".to_string(),
+                        Value::String("CPU".to_string())
+                    ),
+                    (
+                        "offload_surface".to_string(),
+                        Value::String("model_buffer".to_string())
+                    ),
+                ],
+            }]
+        );
+        assert_no_capacity_params(&model_buffer);
+
+        assert_eq!(
+            aggregator.process_line("llama_kv_cache:        CPU KV buffer size =  3264.00 MiB"),
+            vec![NativeLogEvent {
+                message: "llama_kv_cache:        CPU KV buffer size =  3264.00 MiB".to_string(),
+                category: "kv_cache",
+                params: vec![
+                    (
+                        "offload_device".to_string(),
+                        Value::String("CPU".to_string())
+                    ),
+                    (
+                        "offload_surface".to_string(),
+                        Value::String("kv_buffer".to_string())
+                    ),
+                ],
+            }]
+        );
+        assert_eq!(
+            aggregator.process_line("sched_reserve:        CPU compute buffer size =   856.29 MiB"),
+            vec![NativeLogEvent {
+                message: "sched_reserve:        CPU compute buffer size =   856.29 MiB".to_string(),
+                category: "memory",
+                params: vec![
+                    (
+                        "offload_device".to_string(),
+                        Value::String("CPU".to_string())
+                    ),
+                    (
+                        "offload_surface".to_string(),
+                        Value::String("compute_buffer".to_string())
+                    ),
+                ],
+            }]
+        );
+    }
+
+    fn assert_no_capacity_params(events: &[NativeLogEvent]) {
+        const CAPACITY_KEYS: &[&str] = &[
+            "backend_device",
+            "capacity_gb",
+            "gpu_count",
+            "gpu_vram",
+            "vram_bytes",
+        ];
+        assert!(events.iter().all(|event| {
+            event
+                .params
+                .iter()
+                .all(|(key, _)| !CAPACITY_KEYS.contains(&key.as_str()))
+        }));
+    }
+
+    #[test]
     fn aggregator_tracks_kv_cache_layer_progress_without_double_counting() {
         let mut aggregator = NativeLogAggregator::default();
         let plan = aggregator.process_line(
@@ -3945,9 +4092,11 @@ mod tests {
         );
 
         let first = aggregator.process_line("llama_kv_cache: layer   0: filtered");
-        assert!(first
-            .iter()
-            .any(|event| event.message.contains("kv cache 10%")));
+        assert!(
+            first
+                .iter()
+                .any(|event| event.message.contains("kv cache 10%"))
+        );
 
         let duplicate = aggregator.process_line("llama_kv_cache: layer   0: dev = MTL0");
         assert!(duplicate.is_empty());
@@ -3983,9 +4132,11 @@ mod tests {
     #[test]
     fn aggregator_suppresses_print_info_lines() {
         let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator
-            .process_line("print_info: n_vocab               = 248320")
-            .is_empty());
+        assert!(
+            aggregator
+                .process_line("print_info: n_vocab               = 248320")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -3998,12 +4149,18 @@ mod tests {
     #[test]
     fn aggregator_suppresses_raw_noise_lines() {
         let mut aggregator = NativeLogAggregator::default();
-        assert!(aggregator
-            .process_line("clip_model_loader: tensor[0]: n_dims = 1, name = v.blk.0.attn_out.bias")
-            .is_empty());
-        assert!(aggregator
-            .process_line("tokenizer.ggml.tokens arr[str,248320] = [\"!\", ...]")
-            .is_empty());
+        assert!(
+            aggregator
+                .process_line(
+                    "clip_model_loader: tensor[0]: n_dims = 1, name = v.blk.0.attn_out.bias"
+                )
+                .is_empty()
+        );
+        assert!(
+            aggregator
+                .process_line("tokenizer.ggml.tokens arr[str,248320] = [\"!\", ...]")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -4150,5 +4307,72 @@ mod tests {
             "expected layers 100% at final layer, got {:?}",
             pcts
         );
+    }
+
+    #[test]
+    fn format_skippy_error_omits_abi_envelope() {
+        let err = format_skippy_error(Status::RuntimeError, "something broke");
+        assert!(
+            !err.contains("skippy ABI call failed"),
+            "error format must not contain the old ABI envelope prefix: {err}"
+        );
+        assert!(
+            err.contains("RuntimeError"),
+            "error must contain the status variant"
+        );
+        assert!(
+            err.contains("something broke"),
+            "error must contain the message"
+        );
+    }
+
+    #[test]
+    fn format_skippy_error_works_without_message() {
+        let err = format_skippy_error(Status::Unsupported, "");
+        assert!(!err.contains("skippy ABI call failed"));
+        assert!(err.contains("Unsupported"));
+    }
+
+    #[test]
+    fn format_skippy_error_covers_all_status_variants() {
+        for status in [
+            Status::Error,
+            Status::InvalidArgument,
+            Status::Unsupported,
+            Status::BufferTooSmall,
+            Status::IoError,
+            Status::ModelError,
+            Status::RuntimeError,
+        ] {
+            let err = format_skippy_error(status, "test");
+            assert!(
+                !err.contains("skippy ABI call failed"),
+                "error must not contain ABI envelope for {status:?}: {err}"
+            );
+            assert!(err.contains("test"));
+        }
+    }
+
+    #[test]
+    fn configure_chat_sampling_survives_bad_metadata_json() -> anyhow::Result<()> {
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let mut session = model.create_session()?;
+        let sampling = SamplingConfig {
+            temperature: 0.0,
+            ..Default::default()
+        };
+        // Send deliberately malformed JSON — the C++ catch blocks
+        // should clear chat sampling and return success instead of
+        // surfacing the parse error as a fatal status.
+        let result = session.configure_chat_sampling("this is not valid json", 0, Some(&sampling));
+        assert!(
+            result.is_ok(),
+            "configure_chat_sampling should return Ok even with bad metadata: {result:?}"
+        );
+        Ok(())
     }
 }

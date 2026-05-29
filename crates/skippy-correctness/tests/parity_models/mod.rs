@@ -6,14 +6,15 @@ use std::{
     sync::OnceLock,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use model_ref::split_gguf_shard_info;
 use serde::Deserialize;
 use serde_json::Value;
 use skippy_runtime::{
-    package::{inspect_layer_package, materialize_layer_package_details, PackageStageRequest},
-    redirect_native_logs_to_file, ActivationFrame, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode,
-    StageModel, StageSession, GGML_TYPE_F16,
+    ActivationFrame, GGML_TYPE_F16, RuntimeConfig, RuntimeKvPage, RuntimeLoadMode, StageModel,
+    StageSession,
+    package::{PackageStageRequest, inspect_layer_package, materialize_layer_package_details},
+    redirect_native_logs_to_file,
 };
 
 use crate::FamilySpec;
@@ -579,9 +580,7 @@ fn parse_reviewed_splits(row: &CandidateRow, splits: &str, layer_count: u32) -> 
         })
         .collect::<Result<Vec<_>>>()?;
     match values.as_slice() {
-        [split_1, split_2]
-            if *split_1 > 0 && split_1 < split_2 && *split_2 < layer_count =>
-        {
+        [split_1, split_2] if *split_1 > 0 && split_1 < split_2 && *split_2 < layer_count => {
             Ok((*split_1, *split_2))
         }
         _ => bail!(

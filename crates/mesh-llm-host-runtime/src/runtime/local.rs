@@ -1,21 +1,22 @@
 use super::capacity::{model_fits_runtime_capacity, runtime_model_required_bytes};
 use super::context_planning::{
-    plan_runtime_resources, RuntimeResourcePlan, RuntimeResourcePlanInput,
+    RuntimeResourcePlan, RuntimeResourcePlanInput, plan_runtime_resources,
+};
+use super::split_planning::{
+    PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs, format_gb,
+    plan_runtime_slice_topology_with_resources, split_participant_exclusion_labels,
+    split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
 };
 #[cfg(test)]
 use super::split_planning::{format_aggregate_split_capacity_error, validate_split_capacity};
-use super::split_planning::{
-    format_gb, plan_runtime_slice_topology_with_resources, split_participant_exclusion_labels,
-    split_participant_labels, split_participants_for_stages, split_stage_plan_labels,
-    PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs,
-};
 use crate::api;
-use crate::cli::output::{emit_event, OutputEvent};
+use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, skippy};
 use crate::mesh::{self, NodeRole};
 use crate::models;
 use crate::network::router;
 use crate::plugin;
+use crate::runtime::survey;
 use crate::runtime_data::{
     RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot,
 };
@@ -32,11 +33,33 @@ pub(super) const SPLIT_DEFAULT_MIN_PARTICIPANTS: usize = 2;
 const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
 const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
 
+pub(super) type OpenAiGuardrailPolicyHandle = openai_frontend::GuardrailPolicyHandle;
+
+pub(super) fn openai_guardrail_policy_handle(
+    mode: openai_frontend::GuardrailMode,
+) -> OpenAiGuardrailPolicyHandle {
+    OpenAiGuardrailPolicyHandle::new(openai_frontend::GuardrailPolicy {
+        mode,
+        ..openai_frontend::GuardrailPolicy::default()
+    })
+}
+
+pub(super) fn set_openai_guardrail_policy_mode(
+    handle: &OpenAiGuardrailPolicyHandle,
+    mode: openai_frontend::GuardrailMode,
+) {
+    handle.set_mode(mode);
+}
+
 pub(super) enum RuntimeEvent {
     Exited {
         instance_id: String,
         model: String,
         port: u16,
+    },
+    ModelTargetReconciliationLoadFinished {
+        model_ref: String,
+        result: std::result::Result<api::RuntimeLoadResponse, String>,
     },
 }
 
@@ -68,6 +91,23 @@ impl LocalRuntimeModelHandle {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { model, .. } => {
                 Some(model.status().max_session_tokens)
+            }
+        }
+    }
+
+    pub(super) fn openai_guardrails(&self) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => model.openai_guardrails(),
+        }
+    }
+
+    pub(super) fn set_openai_guardrail_mode(
+        &self,
+        mode: openai_frontend::GuardrailMode,
+    ) -> Option<skippy::SkippyOpenAiGuardrailsStatus> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => {
+                model.set_openai_guardrail_mode(mode)
             }
         }
     }
@@ -157,7 +197,9 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
+    pub(super) survey_telemetry: survey::SurveyTelemetry,
 }
 
 pub(super) enum SplitRuntimeStart {
@@ -473,6 +515,7 @@ fn runtime_verified_served_model_descriptor(
         capabilities_known: false,
         capabilities: models::ModelCapabilities::default(),
         topology: None,
+        metadata: crate::models::served_model_metadata_for_model(model_name),
     });
     descriptor.identity.model_name = model_name.to_string();
     descriptor.identity.is_primary = model_name == primary_model_name;
@@ -729,9 +772,11 @@ pub(super) async fn start_runtime_split_model(
         n_batch_override: spec.n_batch_override,
         n_ubatch_override: spec.n_ubatch_override,
         flash_attention_override: spec.flash_attention_override,
+        openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
         pinned_gpu: spec.pinned_gpu,
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
+        survey_telemetry: spec.survey_telemetry.clone(),
     })
     .await?;
     let (coordinator_tx, coordinator_rx) = tokio::sync::mpsc::channel(1);
@@ -757,9 +802,11 @@ pub(super) async fn start_runtime_split_model(
         n_batch_override: spec.n_batch_override,
         n_ubatch_override: spec.n_ubatch_override,
         flash_attention_override: spec.flash_attention_override,
+        openai_guardrail_policy: spec.openai_guardrail_policy.clone(),
         pinned_gpu: spec.pinned_gpu.cloned(),
         slots,
         skippy_telemetry: spec.skippy_telemetry.clone(),
+        survey_telemetry: spec.survey_telemetry.clone(),
         event_tx: coordinator_tx,
     }));
 
@@ -1054,7 +1101,9 @@ struct SplitGenerationLoadSpec<'a> {
     n_batch_override: Option<u32>,
     n_ubatch_override: Option<u32>,
     flash_attention_override: FlashAttentionType,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
+    survey_telemetry: survey::SurveyTelemetry,
 }
 
 struct SplitGenerationLoadSettings<'a> {
@@ -1075,18 +1124,18 @@ async fn load_split_runtime_generation(
         &mut cleanup_on_error,
     ))
     .await;
-    if let Err(error) = &result {
-        if cleanup_on_error {
-            tracing::warn!(
-                model_ref = spec.model_ref,
-                topology_id = %spec.generation.topology_id,
-                run_id = %spec.generation.run_id,
-                generation = spec.generation.generation,
-                error = %error,
-                "cleaning up split runtime generation after failed load"
-            );
-            stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
-        }
+    if let Err(error) = &result
+        && cleanup_on_error
+    {
+        tracing::warn!(
+            model_ref = spec.model_ref,
+            topology_id = %spec.generation.topology_id,
+            run_id = %spec.generation.run_id,
+            generation = spec.generation.generation,
+            error = %error,
+            "cleaning up split runtime generation after failed load"
+        );
+        stop_split_generation(spec.node, spec.generation, spec.generation.generation).await;
     }
     result
 }
@@ -1185,6 +1234,9 @@ async fn load_split_runtime_generation_inner(
     let node_for_hook = spec.node.clone();
     let model_ref = spec.model_ref.to_string();
     let skippy_telemetry = spec.skippy_telemetry.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    let openai_guardrails =
+        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_ref.clone(),
         source: None,
@@ -1195,6 +1247,7 @@ async fn load_split_runtime_generation_inner(
             settings.embedded_openai.clone(),
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
             skippy_telemetry,
+            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
         )
     })
     .await
@@ -1709,9 +1762,11 @@ struct SplitTopologyCoordinator {
     n_batch_override: Option<u32>,
     n_ubatch_override: Option<u32>,
     flash_attention_override: FlashAttentionType,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pinned_gpu: Option<crate::runtime::StartupPinnedGpuTarget>,
     slots: usize,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
+    survey_telemetry: survey::SurveyTelemetry,
     event_tx: tokio::sync::mpsc::Sender<SplitCoordinatorEvent>,
 }
 
@@ -2086,19 +2141,20 @@ impl SplitTopologyCoordinator {
         reason: &'static str,
         unavailable_stage_nodes: Vec<iroh::EndpointId>,
     ) -> bool {
-        if let Err(err) = self
+        match self
             .request_local_fallback(reason, unavailable_stage_nodes)
             .await
         {
-            tracing::warn!(
-                model_ref = self.model_ref,
-                reason,
-                error = %err,
-                "failed to publish split topology local fallback request"
-            );
-            true
-        } else {
-            false
+            Err(err) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    error = %err,
+                    "failed to publish split topology local fallback request"
+                );
+                true
+            }
+            _ => false,
         }
     }
 
@@ -2107,19 +2163,20 @@ impl SplitTopologyCoordinator {
         reason: &'static str,
         unavailable_stage_nodes: Vec<iroh::EndpointId>,
     ) -> bool {
-        if let Err(err) = self
+        match self
             .withdraw_active_generation(reason, unavailable_stage_nodes)
             .await
         {
-            tracing::warn!(
-                model_ref = self.model_ref,
-                reason,
-                error = %err,
-                "failed to publish split topology withdrawal"
-            );
-            true
-        } else {
-            false
+            Err(err) => {
+                tracing::warn!(
+                    model_ref = self.model_ref,
+                    reason,
+                    error = %err,
+                    "failed to publish split topology withdrawal"
+                );
+                true
+            }
+            _ => false,
         }
     }
 
@@ -2194,9 +2251,11 @@ impl SplitTopologyCoordinator {
             n_batch_override: self.n_batch_override,
             n_ubatch_override: self.n_ubatch_override,
             flash_attention_override: self.flash_attention_override,
+            openai_guardrail_policy: self.openai_guardrail_policy.clone(),
             pinned_gpu: self.pinned_gpu.as_ref(),
             slots: self.slots,
             skippy_telemetry: self.skippy_telemetry.clone(),
+            survey_telemetry: self.survey_telemetry.clone(),
         })
         .await?;
         let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
@@ -3041,12 +3100,7 @@ async fn wait_for_split_stage_source(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let inventory = query_stage_inventory(node, stage_node_id, load).await?;
-        if inventory
-            .available_ranges
-            .iter()
-            .chain(inventory.ready_ranges.iter())
-            .any(|range| range.layer_start <= load.layer_start && range.layer_end >= load.layer_end)
-        {
+        if split_stage_source_is_ready(&inventory, load) {
             tracing::info!(
                 topology_id = %load.topology_id,
                 run_id = %load.run_id,
@@ -3075,6 +3129,44 @@ async fn wait_for_split_stage_source(
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
+}
+
+fn split_stage_source_is_ready(
+    inventory: &skippy::StageLayerInventory,
+    load: &skippy::StageLoadRequest,
+) -> bool {
+    let ready_running_stage = inventory
+        .ready_ranges
+        .iter()
+        .any(|range| split_layer_range_covers(range, load));
+    if ready_running_stage {
+        return true;
+    }
+    if load.load_mode != LoadMode::LayerPackage && !skippy::is_layer_package_ref(&load.package_ref)
+    {
+        return inventory
+            .available_ranges
+            .iter()
+            .any(|range| split_layer_range_covers(range, load));
+    }
+    inventory.preparing_ranges.iter().any(|status| {
+        status.topology_id == load.topology_id
+            && status.run_id == load.run_id
+            && status.stage_id == load.stage_id
+            && status.model_id == load.model_id
+            && status.package_ref == load.package_ref
+            && status.manifest_sha256 == load.manifest_sha256
+            && status.layer_start <= load.layer_start
+            && status.layer_end >= load.layer_end
+            && matches!(
+                status.state,
+                skippy::StagePreparationState::Available | skippy::StagePreparationState::Ready
+            )
+    })
+}
+
+fn split_layer_range_covers(range: &skippy::LayerRange, load: &skippy::StageLoadRequest) -> bool {
+    range.layer_start <= load.layer_start && range.layer_end >= load.layer_end
 }
 
 async fn query_stage_inventory(
@@ -3180,7 +3272,10 @@ async fn start_runtime_skippy_model(
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
-        .with_embedded_openai(embedded_openai);
+        .with_embedded_openai(embedded_openai)
+        .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
+            spec.openai_guardrail_policy.clone(),
+        ));
     if let Some(gpu) = spec.pinned_gpu {
         options = options.with_selected_device(pinned_skippy_device(gpu));
     }
@@ -3189,10 +3284,12 @@ async fn start_runtime_skippy_model(
         source: None,
     });
     let node_for_hook = spec.node.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
     let skippy_model = tokio::task::spawn_blocking(move || {
         skippy::SkippyModelHandle::load_with_hooks(
             options,
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
+            guardrail_telemetry,
         )
     })
     .await
@@ -3293,6 +3390,9 @@ async fn start_runtime_layer_package_model(
     let node_for_hook = spec.node.clone();
     let model_ref = model_name.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    let openai_guardrails =
+        skippy::skippy_openai_guardrails_for_policy_handle(spec.openai_guardrail_policy.clone());
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_ref.clone(),
         source: None,
@@ -3303,6 +3403,7 @@ async fn start_runtime_layer_package_model(
             embedded_openai,
             Some(skippy::MeshAutoHookPolicy::new(node_for_hook)),
             skippy_telemetry,
+            skippy::SkippyOpenAiGuardrailOptions::new(Some(openai_guardrails), guardrail_telemetry),
         )
     })
     .await
@@ -3410,6 +3511,48 @@ mod tests {
             layer_count,
             activation_width: 2048,
             tensor_count: 100,
+        }
+    }
+
+    fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadRequest {
+        skippy::StageLoadRequest {
+            topology_id: "topology-a".to_string(),
+            run_id: "run-a".to_string(),
+            model_id: "model-a".to_string(),
+            backend: "skippy".to_string(),
+            package_ref: match load_mode {
+                LoadMode::LayerPackage => "hf://meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+                LoadMode::RuntimeSlice | LoadMode::ArtifactSlice => {
+                    "gguf:///models/qwen.gguf".to_string()
+                }
+            },
+            manifest_sha256: "a".repeat(64),
+            stage_id: "stage-1".to_string(),
+            stage_index: 1,
+            layer_start: 18,
+            layer_end: 36,
+            model_path: Some("/models/qwen.gguf".to_string()),
+            source_model_bytes: Some(4_900_000_000),
+            projector_path: None,
+            selected_device: None,
+            bind_addr: "127.0.0.1:0".to_string(),
+            activation_width: 4096,
+            wire_dtype: skippy::StageWireDType::F16,
+            ctx_size: 8192,
+            lane_count: 4,
+            n_batch: Some(2048),
+            n_ubatch: Some(512),
+            n_gpu_layers: -1,
+            cache_type_k: "f16".to_string(),
+            cache_type_v: "f16".to_string(),
+            flash_attn_type: FlashAttentionType::Auto,
+            shutdown_generation: 1,
+            coordinator_term: 1,
+            coordinator_id: None,
+            lease_until_unix_ms: u64::MAX,
+            load_mode,
+            upstream: None,
+            downstream: None,
         }
     }
 
@@ -3724,7 +3867,11 @@ stop = ["END"]
             n_batch_override: None,
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
             skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
         };
         let settings =
             split_generation_load_settings(&spec).expect("split settings should resolve");
@@ -3817,7 +3964,11 @@ max_tokens = 222
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
             parallel_override: None,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
             skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
         };
 
         let resolved =
@@ -3846,6 +3997,7 @@ max_tokens = 222
             capabilities_known: false,
             capabilities: models::ModelCapabilities::default(),
             topology: None,
+            metadata: None,
         };
         let capabilities = models::ModelCapabilities {
             multimodal: true,
@@ -4233,6 +4385,60 @@ max_tokens = 222
     }
 
     #[test]
+    fn layer_package_stage_source_waits_for_exact_prepare_availability() {
+        let load = stage_load_request(LoadMode::LayerPackage);
+        let mut inventory = skippy::StageLayerInventory {
+            model_id: load.model_id.clone(),
+            package_ref: load.package_ref.clone(),
+            manifest_sha256: load.manifest_sha256.clone(),
+            layer_count: 36,
+            ready_ranges: Vec::new(),
+            available_ranges: vec![skippy::LayerRange {
+                layer_start: 0,
+                layer_end: 36,
+            }],
+            missing_ranges: Vec::new(),
+            preparing_ranges: Vec::new(),
+            source_model_path: Some(
+                "/cache/models--meshllm--Qwen3-8B-Q4_K_M-layers/snapshots/main".to_string(),
+            ),
+            source_model_bytes: Some(4_900_000_000),
+            source_model_kind: skippy::SourceModelKind::LayerPackage,
+        };
+
+        assert!(!split_stage_source_is_ready(&inventory, &load));
+
+        inventory
+            .preparing_ranges
+            .push(test_preparation_status_from_load(&load));
+
+        assert!(split_stage_source_is_ready(&inventory, &load));
+    }
+
+    #[test]
+    fn runtime_slice_stage_source_accepts_inventory_availability() {
+        let load = stage_load_request(LoadMode::RuntimeSlice);
+        let inventory = skippy::StageLayerInventory {
+            model_id: load.model_id.clone(),
+            package_ref: load.package_ref.clone(),
+            manifest_sha256: load.manifest_sha256.clone(),
+            layer_count: 36,
+            ready_ranges: Vec::new(),
+            available_ranges: vec![skippy::LayerRange {
+                layer_start: 0,
+                layer_end: 36,
+            }],
+            missing_ranges: Vec::new(),
+            preparing_ranges: Vec::new(),
+            source_model_path: Some("/models/qwen.gguf".to_string()),
+            source_model_bytes: Some(4_900_000_000),
+            source_model_kind: skippy::SourceModelKind::PlainGguf,
+        };
+
+        assert!(split_stage_source_is_ready(&inventory, &load));
+    }
+
+    #[test]
     fn split_inventory_package_signal_treats_unknown_inventory_as_missing_package() {
         let package = skippy::SkippyPackageIdentity {
             source_model_bytes: 1_000,
@@ -4511,8 +4717,8 @@ max_tokens = 222
     fn split_participant_signature_includes_package_signals_for_stability() {
         let node_id = make_id(9);
         let first = vec![SplitParticipant::new(node_id, 24_000_000_000, None)];
-        let second = vec![SplitParticipant::new(node_id, 24_000_000_000, None)
-            .with_package_signals(
+        let second = vec![
+            SplitParticipant::new(node_id, 24_000_000_000, None).with_package_signals(
                 SplitParticipantPackageSignal {
                     cached_slice_bytes: 12_000_000,
                     missing_artifact_bytes: 0,
@@ -4520,7 +4726,8 @@ max_tokens = 222
                 },
                 Some(20),
                 true,
-            )];
+            ),
+        ];
 
         assert_ne!(
             split_participant_signature(&first),
@@ -4615,7 +4822,9 @@ max_tokens = 222
         node.set_stage_control_sender(control_tx).await;
 
         let requests = Arc::new(StdMutex::new(Vec::new()));
+        let preparations = Arc::new(StdMutex::new(Vec::<skippy::StagePreparationStatus>::new()));
         let captured_requests = Arc::clone(&requests);
+        let captured_preparations = Arc::clone(&preparations);
         tokio::spawn(async move {
             while let Some(command) = control_rx.recv().await {
                 captured_requests
@@ -4624,18 +4833,30 @@ max_tokens = 222
                     .push(command.request.clone());
                 let response = match &command.request {
                     skippy::StageControlRequest::Prepare(prepare) => {
+                        let status = test_preparation_status_from_load(&prepare.load);
+                        captured_preparations.lock().unwrap().push(status.clone());
                         Ok(skippy::StageControlResponse::PrepareAccepted(
                             skippy::StagePrepareAcceptedResponse {
                                 accepted: true,
-                                status: test_preparation_status_from_load(&prepare.load),
+                                status,
                                 error: None,
                             },
                         ))
                     }
                     skippy::StageControlRequest::Inventory(inventory) => {
-                        Ok(skippy::StageControlResponse::Inventory(
-                            test_inventory_from_request(inventory),
-                        ))
+                        let mut response = test_inventory_from_request(inventory);
+                        response.preparing_ranges = captured_preparations
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|status| {
+                                status.model_id == inventory.model_id
+                                    && status.package_ref == inventory.package_ref
+                                    && status.manifest_sha256 == inventory.manifest_sha256
+                            })
+                            .cloned()
+                            .collect();
+                        Ok(skippy::StageControlResponse::Inventory(response))
                     }
                     skippy::StageControlRequest::Claim(claim) => {
                         Ok(skippy::StageControlResponse::ClaimAccepted(
@@ -4707,7 +4928,11 @@ max_tokens = 222
             n_batch_override: None,
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
+            openai_guardrail_policy: openai_guardrail_policy_handle(
+                openai_frontend::GuardrailMode::Disabled,
+            ),
             skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+            survey_telemetry: survey::SurveyTelemetry::disabled(),
         }))
         .await
         {

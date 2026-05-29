@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use super::bytes::{CacheBlockRef, CacheBytesRepr};
 use super::CacheBytes;
+use super::bytes::{CacheBlockRef, CacheBytesRepr};
 
 const DEFAULT_BLOCK_SIZE_BYTES: usize = 1024 * 1024;
 

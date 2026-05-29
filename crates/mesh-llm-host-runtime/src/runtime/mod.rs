@@ -5,40 +5,47 @@ mod discovery;
 pub mod instance;
 mod interactive;
 mod local;
+mod model_target_reconciliation;
 mod proxy;
 mod split_planning;
-mod survey;
+pub(crate) mod survey;
 pub(crate) mod wakeable;
 
 pub(crate) use self::capacity::runtime_model_required_bytes;
 use self::capacity::{
-    model_fits_runtime_capacity, RuntimeCapacityLedger, RuntimeCapacityPool,
-    RuntimeCapacityRequest, RuntimeCapacityReservation,
+    RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
+    model_fits_runtime_capacity,
 };
 use self::discovery::{nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
-    add_runtime_local_target, add_serving_assignment, advertise_model_ready, local_process_payload,
-    remove_runtime_local_target, remove_serving_assignment, resolved_model_name,
-    runtime_model_planning_bytes, set_advertised_model_context,
-    set_runtime_verified_served_model_capabilities, start_runtime_local_model,
-    start_runtime_split_model, startup_runtime_plan, stop_split_generation_cleanup,
-    withdraw_advertised_model, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
-    ManagedModelController, RuntimeEvent, SplitCoordinatorAck, SplitCoordinatorEvent,
-    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan,
+    LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController,
+    OpenAiGuardrailPolicyHandle, RuntimeEvent, SplitCoordinatorAck, SplitCoordinatorEvent,
+    SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan, add_runtime_local_target,
+    add_serving_assignment, advertise_model_ready, local_process_payload,
+    openai_guardrail_policy_handle, remove_runtime_local_target, remove_serving_assignment,
+    resolved_model_name, runtime_model_planning_bytes, set_advertised_model_context,
+    set_openai_guardrail_policy_mode, set_runtime_verified_served_model_capabilities,
+    start_runtime_local_model, start_runtime_split_model, startup_runtime_plan,
+    stop_split_generation_cleanup, withdraw_advertised_model,
+};
+use self::model_target_reconciliation::{
+    ModelTargetReconciliationCandidate, ModelTargetReconciliationCapacityState,
+    ModelTargetReconciliationInput, ModelTargetReconciliationPolicy,
+    ModelTargetReconciliationState, plan_model_target_reconciliation,
 };
 use self::proxy::{api_proxy, bootstrap_proxy};
 use crate::api;
 use crate::cli::output::{
-    emit_event, flush_output, sort_dashboard_endpoint_rows, ConsoleSessionMode,
-    DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan, DashboardModelLane,
-    DashboardModelRow, DashboardProcessRow, DashboardSnapshot, DashboardSnapshotFuture,
-    DashboardSnapshotProvider, OutputEvent, RuntimeStatus,
+    ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
+    DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
+    DashboardSnapshotFuture, DashboardSnapshotProvider, OutputEvent, RuntimeStatus, emit_event,
+    flush_output, sort_dashboard_endpoint_rows,
 };
 use crate::cli::{Cli, Command, RuntimeSurface};
 use crate::crypto::{
-    default_keystore_path, default_trust_store_path, keystore_exists, keystore_metadata,
-    load_keystore, load_owner_keypair_from_keychain, load_trust_store, OwnerKeychainLoadError,
+    OwnerKeychainLoadError, default_keystore_path, default_trust_store_path, keystore_exists,
+    keystore_metadata, load_keystore, load_owner_keypair_from_keychain, load_trust_store,
 };
 use crate::inference::{election, skippy};
 use crate::mesh;
@@ -52,14 +59,14 @@ use clap::{CommandFactory, Parser};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 use skippy_protocol::FlashAttentionType;
 use std::cell::Cell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::fmt::MakeWriter;
 use zeroize::Zeroizing;
 
@@ -67,6 +74,7 @@ const PRETTY_DASHBOARD_INVENTORY_CACHE_TTL: Duration = Duration::from_secs(5);
 const DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL: Duration = Duration::from_millis(250);
 const DASHBOARD_FIRST_PAINT_TIMEOUT: Duration = Duration::from_secs(2);
 const SPLIT_STANDBY_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+const MODEL_TARGET_RECONCILIATION_INTERVAL: Duration = Duration::from_secs(15);
 
 type DashboardContextUsage =
     Arc<tokio::sync::Mutex<HashMap<String, HashMap<DashboardContextUsageSource, u64>>>>;
@@ -405,10 +413,10 @@ impl RuntimeDashboardSnapshotProvider {
     async fn inventory_snapshot(&self) -> crate::models::LocalModelInventorySnapshot {
         {
             let cache = self.inventory_snapshot_cache.lock().await;
-            if let Some(captured_at) = cache.captured_at {
-                if captured_at.elapsed() < self.inventory_snapshot_ttl {
-                    return cache.snapshot.clone();
-                }
+            if let Some(captured_at) = cache.captured_at
+                && captured_at.elapsed() < self.inventory_snapshot_ttl
+            {
+                return cache.snapshot.clone();
             }
         }
 
@@ -1134,6 +1142,7 @@ struct StartupLocalModelTask {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     split: bool,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
     survey_telemetry: survey::SurveyTelemetry,
@@ -1212,6 +1221,7 @@ struct StartupLoopContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
     launch_kind: survey::SurveyLaunchKind,
@@ -1283,6 +1293,7 @@ struct StartupLaunchRuntimeContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
     console_state: Option<&'a api::MeshApi>,
@@ -1748,7 +1759,9 @@ async fn startup_handle_local_fallback_event(
             n_ubatch_override: ctx.n_ubatch,
             flash_attention_override: ctx.flash_attention,
             parallel_override: ctx.parallel_override,
+            openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: ctx.skippy_telemetry.clone(),
+            survey_telemetry: ctx.survey_telemetry.clone(),
         },
         ctx.model_ref,
     )
@@ -2068,6 +2081,7 @@ async fn startup_launch_runtime(
         n_ubatch,
         flash_attention,
         parallel_override,
+        openai_guardrail_policy,
         skippy_telemetry,
         survey_telemetry,
         console_state,
@@ -2094,7 +2108,9 @@ async fn startup_launch_runtime(
         n_ubatch_override: n_ubatch,
         flash_attention_override: flash_attention,
         parallel_override,
+        openai_guardrail_policy: openai_guardrail_policy.clone(),
         skippy_telemetry: skippy_telemetry.clone(),
+        survey_telemetry: survey_telemetry.clone(),
     };
     let make_launch_failure_spec = || survey::SurveyModelSpec {
         model: model_name,
@@ -2202,6 +2218,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        openai_guardrail_policy,
         split,
         skippy_telemetry,
         survey_telemetry,
@@ -2260,6 +2277,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
             n_ubatch,
             flash_attention,
             parallel_override,
+            openai_guardrail_policy: openai_guardrail_policy.clone(),
             skippy_telemetry: &skippy_telemetry,
             survey_telemetry: &survey_telemetry,
             console_state: console_state.as_ref(),
@@ -2313,6 +2331,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        openai_guardrail_policy,
         skippy_telemetry: &skippy_telemetry,
         survey_telemetry: &survey_telemetry,
         launch_kind,
@@ -2739,7 +2758,7 @@ fn owner_runtime_config(
         },
         None if cli.owner_required => {
             anyhow::bail!(
-                "Owner identity is required but no keystore was found. Use --owner-key or run `mesh-llm auth init`."
+                "Owner identity is required but no keystore was found. To enable owner control, run `mesh-llm auth init --no-passphrase`, then restart with `mesh-llm serve --owner-required`."
             );
         }
         None => None,
@@ -2757,12 +2776,19 @@ fn owner_runtime_config(
     })
 }
 
+fn emit_configuration_ui_read_only_hint() {
+    let _ = emit_event(OutputEvent::Warning {
+        message: "Configuration UI is read-only: no owner identity found. To enable saving config from the UI:\n  mesh-llm auth init --no-passphrase\n  mesh-llm serve --owner-required".to_string(),
+        context: None,
+    });
+}
+
 /// Wait for either SIGINT (ctrl-c) or SIGTERM. Without this, an unhandled
 /// SIGTERM aborts the process before runtime cleanup can run.
 async fn wait_shutdown_signal() -> &'static str {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut term = match signal(SignalKind::terminate()) {
             Ok(s) => s,
             Err(_) => {
@@ -2836,7 +2862,7 @@ fn initialize_runtime_entrypoint() -> Result<()> {
 }
 
 fn acquire_instance_runtime(cli: &Cli) -> Option<Arc<crate::runtime::instance::InstanceRuntime>> {
-    if cli.client {
+    if cli.client && !swarm_capture_observer_requested(cli) {
         return None;
     }
 
@@ -2919,10 +2945,10 @@ async fn maybe_discover_join_candidates(
         return Ok(());
     }
 
-    if let Some(name) = cli.discover.as_ref().filter(|name| !name.is_empty()) {
-        if cli.mesh_name.is_none() {
-            cli.mesh_name = Some(name.clone());
-        }
+    if let Some(name) = cli.discover.as_ref().filter(|name| !name.is_empty())
+        && cli.mesh_name.is_none()
+    {
+        cli.mesh_name = Some(name.clone());
     }
 
     let my_vram_gb = mesh::detect_vram_bytes_capped(cli.max_vram) as f64 / 1e9;
@@ -3205,7 +3231,9 @@ pub(crate) async fn run() -> Result<()> {
     let has_config_models = !config.models.is_empty();
     let has_startup_models = cli_has_explicit_models || has_config_models;
 
-    // Acquire the per-instance runtime directory and flock (skip for --client).
+    // Acquire the per-instance runtime directory and flock. Plain --client still
+    // skips this, but capture observers register so detached runs can be found
+    // and stopped by `mesh-llm stop`.
     // Wrap in Arc so it can be cheaply shared with local model tasks.
     let runtime = acquire_instance_runtime(&cli);
 
@@ -3252,6 +3280,181 @@ pub(crate) async fn run() -> Result<()> {
 /// Resolve a model path: local file, catalog name, or HuggingFace URL.
 async fn resolve_model(input: &std::path::Path) -> Result<PathBuf> {
     models::resolve_model_spec(input).await
+}
+
+fn model_target_reconciliation_policy(
+    config: &plugin::MeshConfig,
+) -> ModelTargetReconciliationPolicy {
+    ModelTargetReconciliationPolicy {
+        enabled: config.runtime.reconcile_model_targets,
+        ..ModelTargetReconciliationPolicy::default()
+    }
+}
+
+struct ReconcileModelTargetsContext<'a> {
+    policy: &'a ModelTargetReconciliationPolicy,
+    state: &'a mut ModelTargetReconciliationState,
+    node: &'a mesh::Node,
+    console_state: Option<&'a api::MeshApi>,
+    runtime_models: &'a HashMap<String, RuntimeModelHandleEntry>,
+    managed_models: &'a HashMap<String, ManagedModelController>,
+    control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
+}
+
+async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsContext<'_>) {
+    let ReconcileModelTargetsContext {
+        policy,
+        state,
+        node,
+        console_state,
+        runtime_models,
+        managed_models,
+        control_tx,
+        runtime_event_tx,
+    } = ctx;
+    if !policy.enabled {
+        return;
+    }
+    let Some(console_state) = console_state else {
+        return;
+    };
+    let local_interest_model_refs = node
+        .explicit_model_interests()
+        .await
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if local_interest_model_refs.is_empty() {
+        state.prune_expired(runtime_unix_secs());
+        return;
+    }
+
+    let target_lookup = console_state.model_target_lookup().await;
+    let loaded_model_refs = runtime_loaded_model_refs(runtime_models, managed_models);
+    let local_vram_bytes = node.vram_bytes();
+    let targets = target_lookup
+        .targets
+        .into_iter()
+        .map(|target| {
+            let local_path = if target.wanted
+                && target.serving_node_count == 0
+                && local_interest_model_refs.contains(&target.model_ref)
+                && target.capacity_advice.state
+                    == api::status::ModelTargetCapacityAdviceState::SingleNodeFit
+                && model_target_reconciliation_local_fit(&target, local_vram_bytes)
+            {
+                local_model_path_for_reconciliation_target(&target)
+            } else {
+                None
+            };
+            ModelTargetReconciliationCandidate {
+                model_ref: target.model_ref,
+                model_name: target.model_name,
+                wanted: target.wanted,
+                serving_node_count: target.serving_node_count,
+                capacity_state: ModelTargetReconciliationCapacityState::from(
+                    target.capacity_advice.state,
+                ),
+                local_path,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let now_secs = runtime_unix_secs();
+    let actions = plan_model_target_reconciliation(
+        policy,
+        state,
+        ModelTargetReconciliationInput {
+            now_secs,
+            local_role: node.role().await,
+            local_interest_model_refs: &local_interest_model_refs,
+            loaded_model_refs: &loaded_model_refs,
+            targets: &targets,
+        },
+    );
+
+    for action in actions {
+        let load_spec = action.load_spec.to_string_lossy().to_string();
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        if control_tx
+            .send(api::RuntimeControlRequest::Load {
+                spec: load_spec.clone(),
+                resp: resp_tx,
+            })
+            .is_err()
+        {
+            state.record_load_failure(&action.model_ref, now_secs, policy);
+            let _ = emit_event(OutputEvent::Warning {
+                message: format!(
+                    "Model target reconciliation could not queue '{}'",
+                    action.model_ref
+                ),
+                context: Some("runtime control channel closed".to_string()),
+            });
+            continue;
+        }
+
+        state.mark_load_started(&action.model_ref);
+        let event_tx = runtime_event_tx.clone();
+        let model_ref = action.model_ref.clone();
+        tokio::spawn(async move {
+            let result = match resp_rx.await {
+                Ok(result) => result.map_err(|err| err.to_string()),
+                Err(err) => Err(format!("runtime load response channel closed: {err}")),
+            };
+            let _ = event_tx
+                .send(RuntimeEvent::ModelTargetReconciliationLoadFinished { model_ref, result });
+        });
+        let _ = emit_event(OutputEvent::Info {
+            message: format!("Model target reconciliation loading '{}'", action.model_ref),
+            context: Some(format!("path={load_spec}")),
+        });
+    }
+}
+
+fn runtime_loaded_model_refs(
+    runtime_models: &HashMap<String, RuntimeModelHandleEntry>,
+    managed_models: &HashMap<String, ManagedModelController>,
+) -> BTreeSet<String> {
+    runtime_models
+        .values()
+        .map(|entry| entry.model_name.clone())
+        .chain(
+            managed_models
+                .values()
+                .map(|controller| controller.model_name.clone()),
+        )
+        .collect()
+}
+
+fn local_model_path_for_reconciliation_target(
+    target: &api::status::ModelTargetPayload,
+) -> Option<PathBuf> {
+    [
+        Some(target.model_ref.as_str()),
+        target.model_name.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .map(models::find_model_path)
+    .find(|path| path.exists())
+}
+
+fn model_target_reconciliation_local_fit(
+    target: &api::status::ModelTargetPayload,
+    local_vram_bytes: u64,
+) -> bool {
+    target
+        .capacity_advice
+        .required_bytes
+        .is_some_and(|required| local_vram_bytes >= required)
+}
+
+fn runtime_unix_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
 }
 
 fn cli_has_explicit_models(cli: &Cli) -> bool {
@@ -3301,10 +3504,10 @@ fn build_startup_model_specs(
                 flash_attention: FlashAttentionType::Auto,
             });
         }
-        if let Some(mmproj) = &cli.mmproj {
-            if let Some(primary) = specs.first_mut() {
-                primary.mmproj_ref = Some(mmproj.clone());
-            }
+        if let Some(mmproj) = &cli.mmproj
+            && let Some(primary) = specs.first_mut()
+        {
+            primary.mmproj_ref = Some(mmproj.clone());
         }
         return Ok(specs);
     }
@@ -3471,6 +3674,13 @@ fn apply_backend_devices_for_flavor(
     for gpu in gpus {
         gpu.backend_device = backend::backend_device_for_flavor(gpu.index, binary_flavor);
     }
+}
+
+fn swarm_capture_observer_requested(cli: &Cli) -> bool {
+    cli.client
+        && (cli.swarm_capture.is_some()
+            || std::env::var_os(crate::capture::SWARM_CAPTURE_ENV)
+                .is_some_and(|value| !value.is_empty()))
 }
 
 fn pinned_startup_preflight_metrics() -> &'static [hardware::Metric] {
@@ -3667,16 +3877,14 @@ fn startup_launch_plan(
         port: api_port,
         pid: None,
     }];
-    if !headless {
-        if let Some(console_port) = console_port {
-            webserver_rows.push(DashboardEndpointRow {
-                label: "Console".to_string(),
-                status: RuntimeStatus::NotReady,
-                url: format!("http://localhost:{console_port}"),
-                port: console_port,
-                pid: None,
-            });
-        }
+    if !headless && let Some(console_port) = console_port {
+        webserver_rows.push(DashboardEndpointRow {
+            label: "Console".to_string(),
+            status: RuntimeStatus::NotReady,
+            url: format!("http://localhost:{console_port}"),
+            port: console_port,
+            pid: None,
+        });
     }
     sort_dashboard_endpoint_rows(&mut webserver_rows);
 
@@ -3717,10 +3925,8 @@ fn serve_path_builtin_endpoint_ready_events(
 ) -> Vec<OutputEvent> {
     let mut events = vec![OutputEvent::ApiReady { url: api_url }];
 
-    if !headless {
-        if let Some(console_url) = console_url {
-            events.push(OutputEvent::WebserverReady { url: console_url });
-        }
+    if !headless && let Some(console_url) = console_url {
+        events.push(OutputEvent::WebserverReady { url: console_url });
     }
 
     events
@@ -4018,10 +4224,11 @@ fn startup_model_plan_fixture() -> Vec<StartupModelPlan> {
 
 #[cfg(test)]
 fn assert_llama_process_row(plan: &DashboardLaunchPlan, name: &str) {
-    assert!(plan
-        .llama_process_rows
-        .iter()
-        .any(|row| { row.name == name && row.status == RuntimeStatus::Loading && row.port == 0 }));
+    assert!(
+        plan.llama_process_rows.iter().any(|row| {
+            row.name == name && row.status == RuntimeStatus::Loading && row.port == 0
+        })
+    );
 }
 
 #[cfg(test)]
@@ -4398,10 +4605,10 @@ async fn handle_auto_decision(
                 // Clients skip health probe — joining itself is the test.
                 // Queue all candidates so we can fall back if the top one is unreachable.
                 let (_, mesh) = &candidates[0];
-                if cli.mesh_name.is_none() {
-                    if let Some(ref name) = mesh.listing.name {
-                        cli.mesh_name = Some(name.clone());
-                    }
+                if cli.mesh_name.is_none()
+                    && let Some(ref name) = mesh.listing.name
+                {
+                    cli.mesh_name = Some(name.clone());
                 }
                 let _ = emit_event(OutputEvent::DiscoveryJoined {
                     mesh: mesh
@@ -4596,7 +4803,7 @@ async fn pick_model_assignment(node: &mesh::Node, local_models: &[String]) -> Op
         let (pick, count, _) = &underserved[0];
         let max_model = serving_count
             .iter()
-            .max_by_key(|(_, &v)| v)
+            .max_by_key(|&(_, &v)| v)
             .map(|(k, _)| k.as_str())
             .unwrap_or("?");
         let _ = emit_event(OutputEvent::Info {
@@ -4807,221 +5014,6 @@ fn node_display_name(cli: &Cli, node: &mesh::Node) -> String {
         .unwrap_or_else(|| node.id().fmt_short().to_string())
 }
 
-async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
-    if !cli.join.is_empty() {
-        return join_mcp_with_tokens(&cli.join, node).await;
-    }
-
-    if cli.auto || cli.discover.is_some() {
-        if cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Mdns {
-            return join_mcp_via_lan_discovery(cli, node).await;
-        }
-
-        return join_mcp_via_nostr_discovery(cli, node).await;
-    }
-
-    Ok(())
-}
-
-async fn join_mcp_with_tokens(tokens: &[String], node: &mesh::Node) -> Result<()> {
-    for token in tokens {
-        match node.join_with_retry(token).await {
-            Ok(()) => {
-                if node.mesh_id().await.is_some() {
-                    record_first_joined_mesh_ts(node).await;
-                }
-                let _ = emit_event(OutputEvent::Info {
-                    message: "Joined mesh".to_string(),
-                    context: None,
-                });
-                return Ok(());
-            }
-            Err(err) => tracing::warn!("Failed to join via token: {err}"),
-        }
-    }
-    anyhow::bail!("Failed to join any peer for MCP mode");
-}
-
-async fn join_mcp_via_lan_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> {
-    let filter = nostr::MeshFilter {
-        region: cli.region.clone(),
-        name: cli
-            .discover
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .or(cli.mesh_name.as_deref())
-            .map(str::to_owned),
-        ..Default::default()
-    };
-    let _ = emit_event(OutputEvent::DiscoveryStarting {
-        source: mesh_discovery::discovery_source_label(cli.mesh_discovery_mode, "discovery"),
-    });
-    let candidates = mesh_discovery::discover_lan_join_candidates(
-        &filter,
-        cli.join.first().map(String::as_str),
-        std::time::Duration::from_secs(5),
-    )
-    .await?;
-    if candidates.is_empty() {
-        let _ = emit_event(OutputEvent::DiscoveryFailed {
-            message: "No joinable LAN mesh found for MCP mode".to_string(),
-            detail: Some("Pass --join or start a LAN mesh first.".to_string()),
-        });
-        anyhow::bail!(
-            "No joinable LAN mesh found for MCP mode. Pass --join or start a LAN mesh first."
-        );
-    }
-
-    let mut last_err = None;
-    for (token, mesh) in candidates {
-        let label = mesh
-            .listing
-            .name
-            .as_deref()
-            .unwrap_or("unnamed")
-            .to_string();
-        let _ = emit_event(OutputEvent::MeshFound {
-            mesh: label.clone(),
-            peers: mesh.listing.node_count,
-            region: mesh.listing.region.clone(),
-        });
-        match node.join_with_retry(&token).await {
-            Ok(()) => {
-                if node.mesh_id().await.is_some() {
-                    record_first_joined_mesh_ts(node).await;
-                }
-                let _ = emit_event(OutputEvent::DiscoveryJoined { mesh: label });
-                return Ok(());
-            }
-            Err(err) => {
-                let _ = emit_event(OutputEvent::DiscoveryFailed {
-                    message: format!("Failed to join LAN mesh {label}"),
-                    detail: Some(err.to_string()),
-                });
-                last_err = Some(err);
-            }
-        }
-    }
-
-    if let Some(err) = last_err {
-        return Err(err);
-    }
-    Ok(())
-}
-
-async fn join_mcp_via_nostr_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> {
-    let relays = nostr_relays(&cli.nostr_relay);
-    let filter = nostr::MeshFilter {
-        region: cli.region.clone(),
-        ..Default::default()
-    };
-    let target_name = cli
-        .discover
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .or(cli.mesh_name.as_deref())
-        .map(str::to_owned);
-    let _ = emit_event(OutputEvent::DiscoveryStarting {
-        source: "Nostr discovery".to_string(),
-    });
-    let meshes = match nostr::discover(&relays, &filter, None).await {
-        Ok(meshes) => meshes,
-        Err(err) => {
-            let _ = emit_event(OutputEvent::DiscoveryFailed {
-                message: "Nostr discovery failed".to_string(),
-                detail: Some(err.to_string()),
-            });
-            return Err(err);
-        }
-    };
-
-    match smart_auto_blocking(meshes, 0.0, target_name).await? {
-        nostr::AutoDecision::Join { candidates } => {
-            let mut last_err: Option<anyhow::Error> = None;
-            for (token, mesh) in &candidates {
-                let label = mesh
-                    .listing
-                    .name
-                    .as_deref()
-                    .unwrap_or("unnamed")
-                    .to_string();
-                let _ = emit_event(OutputEvent::MeshFound {
-                    mesh: label.clone(),
-                    peers: mesh.listing.node_count,
-                    region: mesh.listing.region.clone(),
-                });
-                match node.join_with_retry(token).await {
-                    Ok(()) => {
-                        if node.mesh_id().await.is_some() {
-                            record_first_joined_mesh_ts(node).await;
-                        }
-                        let _ = emit_event(OutputEvent::DiscoveryJoined { mesh: label });
-                        last_err = None;
-                        break;
-                    }
-                    Err(err) => {
-                        let _ = emit_event(OutputEvent::DiscoveryFailed {
-                            message: format!("Failed to join mesh {label}"),
-                            detail: Some(err.to_string()),
-                        });
-                        tracing::warn!("Failed to join mesh candidate: {err}");
-                        last_err = Some(err);
-                    }
-                }
-            }
-            if let Some(err) = last_err {
-                return Err(err);
-            }
-            Ok(())
-        }
-        nostr::AutoDecision::StartNew { .. } => {
-            let _ = emit_event(OutputEvent::DiscoveryFailed {
-                message: "No mesh found for MCP mode".to_string(),
-                detail: Some("Pass --join or start a mesh first.".to_string()),
-            });
-            anyhow::bail!("No mesh found for MCP mode. Pass --join or start a mesh first.");
-        }
-    }
-}
-
-pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
-    let resolved_plugins = load_resolved_plugins(cli)?;
-    let config = plugin::load_config(cli.config.as_deref())?;
-    let owner_config = owner_runtime_config(cli, &config)?;
-    let (node, _channels) = mesh::Node::start(
-        NodeRole::Client,
-        &cli.relay,
-        mesh::QuicBindSelection {
-            ip: cli.bind_ip,
-            port: cli.bind_port,
-        },
-        Some(0.0),
-        !cli.no_enumerate_host,
-        Some(owner_config),
-        cli.config.as_deref(),
-    )
-    .await?;
-    node.start_accepting();
-    node.set_display_name(node_display_name(cli, &node)).await;
-    node.start_heartbeat();
-    node.start_rtt_refresh();
-    node.start_relay_health_monitor();
-    join_mesh_for_mcp(cli, &node).await?;
-
-    let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
-    let plugin_manager =
-        plugin::PluginManager::start(&resolved_plugins, plugin_host_mode(cli), plugin_mesh_tx)
-            .await?;
-    node.set_plugin_manager(plugin_manager.clone()).await;
-    node.start_plugin_channel_forwarder(plugin_mesh_rx);
-
-    if plugin_manager.list().await.is_empty() {
-        tracing::warn!("No plugins are enabled for MCP exposure");
-    }
-
-    plugin::mcp::run_mcp_server(plugin_manager).await
-}
-
 pub(crate) use self::discovery::{check_mesh, nostr_relays};
 
 async fn store_benchmark_metrics(
@@ -5053,7 +5045,8 @@ fn configure_run_auto_process_state(
     cli: &Cli,
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 ) {
-    std::env::set_var("MESH_API_PORT", cli.console.to_string());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("MESH_API_PORT", cli.console.to_string()) };
 
     let verbose_native_debug = cli.debug
         && std::env::var("MESH_LLM_DEBUG_NATIVE_VERBOSE")
@@ -5147,6 +5140,7 @@ async fn start_run_auto_node_and_plugins(
     cli: &Cli,
     config: &plugin::MeshConfig,
     resolved_plugins: &plugin::ResolvedPlugins,
+    swarm_capture: Option<crate::capture::SwarmCaptureRecorder>,
 ) -> Result<(mesh::Node, mesh::TunnelChannels, plugin::PluginManager)> {
     let role = if cli.client {
         NodeRole::Client
@@ -5154,10 +5148,18 @@ async fn start_run_auto_node_and_plugins(
         NodeRole::Worker
     };
     let owner_config = owner_runtime_config(cli, config)?;
+    if !cli.headless && owner_config.keypair.is_none() {
+        emit_configuration_ui_read_only_hint();
+    }
     let max_vram = if cli.client { Some(0.0) } else { cli.max_vram };
+    let relay_auths: std::collections::HashMap<String, String> =
+        cli.relay_auth.iter().cloned().collect();
     let (node, channels) = mesh::Node::start(
         role,
-        &cli.relay,
+        mesh::RelayConfig {
+            urls: &cli.relay,
+            auths: &relay_auths,
+        },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
             port: cli.bind_port,
@@ -5168,6 +5170,7 @@ async fn start_run_auto_node_and_plugins(
         cli.config.as_deref(),
     )
     .await?;
+    node.set_swarm_capture_recorder(swarm_capture);
     node.set_stage_control_sender(skippy::spawn_stage_control_loop(Some(Arc::new(
         node.clone(),
     ))))
@@ -5202,6 +5205,7 @@ async fn build_run_auto_node_setup(
     config: &plugin::MeshConfig,
     resolved_plugins: &plugin::ResolvedPlugins,
     bin_dir: &Path,
+    swarm_capture: Option<crate::capture::SwarmCaptureRecorder>,
 ) -> Result<AutoRuntimeNodeSetup> {
     let console_port = Some(cli.console);
     let is_client = cli.client;
@@ -5213,7 +5217,7 @@ async fn build_run_auto_node_setup(
     };
     tracing::info!("Local models on disk: {:?}", local_models);
     let (node, channels, plugin_manager) =
-        start_run_auto_node_and_plugins(cli, config, resolved_plugins).await?;
+        start_run_auto_node_and_plugins(cli, config, resolved_plugins, swarm_capture).await?;
     let survey_hardware = run_auto_survey_hardware(is_client);
     let survey_telemetry = survey::SurveyTelemetry::start(
         config,
@@ -5292,10 +5296,10 @@ fn update_cli_with_successful_run_auto_join(
     cli.join.clear();
     if let Some((token, mesh_name)) = successful_join {
         cli.join.push(token);
-        if cli.mesh_name.is_none() {
-            if let Some(name) = mesh_name {
-                cli.mesh_name = Some(name);
-            }
+        if cli.mesh_name.is_none()
+            && let Some(name) = mesh_name
+        {
+            cli.mesh_name = Some(name);
         }
     }
 }
@@ -5498,19 +5502,20 @@ async fn select_run_auto_model_path(
     };
 
     let Some(model_name) = assignment else {
-        let passive_api_listener = if let Some(tx) = bootstrap_listener_tx.take() {
-            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-            if tx.send(resp_tx).await.is_ok() {
-                Some(
-                    resp_rx
-                        .await
-                        .context("bootstrap API listener handoff was cancelled")?,
-                )
-            } else {
-                None
+        let passive_api_listener = match bootstrap_listener_tx.take() {
+            Some(tx) => {
+                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                if tx.send(resp_tx).await.is_ok() {
+                    Some(
+                        resp_rx
+                            .await
+                            .context("bootstrap API listener handoff was cancelled")?,
+                    )
+                } else {
+                    None
+                }
             }
-        } else {
-            None
+            _ => None,
         };
         if is_client {
             let _ = emit_event(OutputEvent::PassiveMode {
@@ -5637,6 +5642,7 @@ struct RunAutoRuntimeLifecycleContext<'a> {
     primary_model_name: &'a str,
     target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
     control_rx: &'a mut tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
+    control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     runtime_event_rx: &'a mut tokio::sync::mpsc::UnboundedReceiver<RuntimeEvent>,
     runtime_state: &'a mut RunAutoRuntimeState,
     console_state: Option<&'a api::MeshApi>,
@@ -5699,6 +5705,7 @@ struct RunAutoAdditionalModelsContext<'a> {
     control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     survey_telemetry: &'a survey::SurveyTelemetry,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
+    openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
 }
 
 struct RunAutoServingSurfaceContext<'a> {
@@ -5732,6 +5739,7 @@ struct RunAutoRuntimeLoopContext<'a> {
     node: &'a mesh::Node,
     primary_model_name: &'a str,
     target_tx: &'a Arc<tokio::sync::watch::Sender<election::ModelTargets>>,
+    control_tx: &'a tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
     runtime_models: &'a mut HashMap<String, RuntimeModelHandleEntry>,
     runtime_survey_models: &'a mut HashMap<String, survey::SurveyLoadedModel>,
     managed_models: &'a mut HashMap<String, ManagedModelController>,
@@ -5745,6 +5753,9 @@ struct RunAutoRuntimeLoopContext<'a> {
     runtime_event_tx: &'a tokio::sync::mpsc::UnboundedSender<RuntimeEvent>,
     survey_telemetry: &'a survey::SurveyTelemetry,
     startup_ready_reporter: &'a StartupReadyReporter,
+    openai_guardrail_policy: &'a OpenAiGuardrailPolicyHandle,
+    model_target_reconciliation_policy: ModelTargetReconciliationPolicy,
+    model_target_reconciliation_state: ModelTargetReconciliationState,
 }
 
 struct RunAutoRuntimeState {
@@ -5757,6 +5768,7 @@ struct RunAutoRuntimeState {
     dashboard_processes: Arc<tokio::sync::Mutex<Vec<api::RuntimeProcessPayload>>>,
     dashboard_context_usage: DashboardContextUsage,
     input_handler_enabled: bool,
+    openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
 }
 
 struct RunAutoStartupTasksContext<'a> {
@@ -5782,7 +5794,7 @@ struct RunAutoStartupTasksContext<'a> {
     interactive_started: Arc<AtomicBool>,
 }
 
-fn initialize_run_auto_runtime_state() -> RunAutoRuntimeState {
+fn initialize_run_auto_runtime_state(cli: &Cli) -> RunAutoRuntimeState {
     RunAutoRuntimeState {
         runtime_models: HashMap::new(),
         runtime_survey_models: HashMap::new(),
@@ -5795,6 +5807,9 @@ fn initialize_run_auto_runtime_state() -> RunAutoRuntimeState {
         input_handler_enabled: crate::cli::output::OutputManager::global()
             .console_session_mode()
             .is_some(),
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            cli.mesh_guardrails.to_guardrail_mode(),
+        ),
     }
 }
 
@@ -5878,6 +5893,7 @@ async fn spawn_run_auto_startup_model_tasks(
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
         split: cli.split,
         skippy_telemetry: skippy_telemetry.clone(),
         survey_telemetry: survey_telemetry.clone(),
@@ -5924,6 +5940,7 @@ async fn spawn_run_auto_startup_model_tasks(
         control_tx,
         survey_telemetry,
         skippy_telemetry,
+        openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
     })
     .await;
 
@@ -5938,6 +5955,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         primary_model_name,
         target_tx,
         control_rx,
+        control_tx,
         runtime_event_rx,
         runtime_state,
         console_state,
@@ -5957,6 +5975,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         node,
         primary_model_name,
         target_tx,
+        control_tx,
         runtime_models: &mut runtime_state.runtime_models,
         runtime_survey_models: &mut runtime_state.runtime_survey_models,
         managed_models: &mut runtime_state.managed_models,
@@ -5970,6 +5989,9 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         runtime_event_tx,
         survey_telemetry,
         startup_ready_reporter,
+        openai_guardrail_policy: &runtime_state.openai_guardrail_policy,
+        model_target_reconciliation_policy: model_target_reconciliation_policy(config),
+        model_target_reconciliation_state: ModelTargetReconciliationState::default(),
     };
     run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx).await;
 
@@ -6148,7 +6170,7 @@ async fn run_auto_load_runtime_model(
         ctx.node.vram_bytes(),
         model_bytes,
     )?;
-    add_serving_assignment(ctx.node, ctx.primary_model_name, &requested_model).await;
+    add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();
     let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
     let (loaded_name, handle, death_rx) = match start_runtime_local_model(
@@ -6170,7 +6192,9 @@ async fn run_auto_load_runtime_model(
                 .and_then(|m| m.flash_attention)
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
+            openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.cli),
+            survey_telemetry: ctx.survey_telemetry.clone(),
         },
         &runtime_model_name,
     )
@@ -6179,7 +6203,7 @@ async fn run_auto_load_runtime_model(
         Ok(result) => result,
         Err(err) => {
             drop(capacity_reservation);
-            remove_serving_assignment(ctx.node, &requested_model).await;
+            remove_serving_assignment(ctx.node, &runtime_model_name).await;
             ctx.survey_telemetry.record_launch_failure(
                 survey::SurveyModelSpec {
                     model: &requested_model,
@@ -6230,6 +6254,12 @@ async fn run_auto_load_runtime_model(
     );
     upsert_dashboard_process(ctx.dashboard_processes, payload.clone()).await;
     if let Some(cs) = ctx.console_state {
+        cs.set_openai_guardrails(
+            handle
+                .openai_guardrails()
+                .map(crate::api::status::OpenAiGuardrailsPayload::from),
+        )
+        .await;
         cs.upsert_local_process(payload).await;
     }
 
@@ -6501,6 +6531,74 @@ async fn run_auto_handle_runtime_exit(
     });
 }
 
+async fn run_auto_reconcile_model_targets(ctx: &mut RunAutoRuntimeLoopContext<'_>) {
+    reconcile_model_targets_once(ReconcileModelTargetsContext {
+        policy: &ctx.model_target_reconciliation_policy,
+        state: &mut ctx.model_target_reconciliation_state,
+        node: ctx.node,
+        console_state: ctx.console_state,
+        runtime_models: ctx.runtime_models,
+        managed_models: ctx.managed_models,
+        control_tx: ctx.control_tx,
+        runtime_event_tx: ctx.runtime_event_tx,
+    })
+    .await;
+}
+
+fn run_auto_record_model_target_manual_unload(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    requested_target: &str,
+    result: &Result<api::RuntimeUnloadResponse>,
+) {
+    let Ok(response) = result else {
+        return;
+    };
+    let now_secs = runtime_unix_secs();
+    ctx.model_target_reconciliation_state.record_manual_unload(
+        requested_target,
+        now_secs,
+        &ctx.model_target_reconciliation_policy,
+    );
+    if response.model != requested_target {
+        ctx.model_target_reconciliation_state.record_manual_unload(
+            &response.model,
+            now_secs,
+            &ctx.model_target_reconciliation_policy,
+        );
+    }
+}
+
+fn run_auto_handle_model_target_reconciliation_result(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    model_ref: String,
+    result: std::result::Result<api::RuntimeLoadResponse, String>,
+) {
+    match result {
+        Ok(response) => {
+            ctx.model_target_reconciliation_state
+                .record_load_success(&model_ref);
+            let _ = emit_event(OutputEvent::Info {
+                message: format!("Model target reconciliation loaded '{}'", response.model),
+                context: Some(format!(
+                    "model_ref={} instance={}",
+                    model_ref, response.instance_id
+                )),
+            });
+        }
+        Err(error) => {
+            ctx.model_target_reconciliation_state.record_load_failure(
+                &model_ref,
+                runtime_unix_secs(),
+                &ctx.model_target_reconciliation_policy,
+            );
+            let _ = emit_event(OutputEvent::Warning {
+                message: format!("Model target reconciliation failed for '{model_ref}'"),
+                context: Some(error),
+            });
+        }
+    }
+}
+
 async fn run_auto_handle_control_request(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     cmd: api::RuntimeControlRequest,
@@ -6516,7 +6614,13 @@ async fn run_auto_handle_control_request(
             options,
             resp,
         } => {
-            let result = run_auto_unload_runtime_model(ctx, target, options).await;
+            let result = run_auto_unload_runtime_model(ctx, target.clone(), options).await;
+            run_auto_record_model_target_manual_unload(ctx, target.as_runtime_target(), &result);
+            let _ = resp.send(result);
+            false
+        }
+        api::RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp } => {
+            let result = run_auto_set_openai_guardrail_mode(ctx, mode).await;
             let _ = resp.send(result);
             false
         }
@@ -6530,6 +6634,66 @@ async fn run_auto_handle_control_request(
     }
 }
 
+async fn run_auto_set_openai_guardrail_mode(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    mode: openai_frontend::GuardrailMode,
+) -> Result<api::OpenAiGuardrailModeUpdateResponse> {
+    set_openai_guardrail_policy_mode(ctx.openai_guardrail_policy, mode);
+    let mut updated_models = 0_usize;
+    let mut latest_status = None;
+    for entry in ctx.runtime_models.values() {
+        if let Some(status) = entry.handle.set_openai_guardrail_mode(mode) {
+            updated_models += 1;
+            latest_status = Some(status);
+        }
+    }
+
+    let status_payload = Some(
+        latest_status
+            .map(api::status::OpenAiGuardrailsPayload::from)
+            .unwrap_or_else(|| openai_guardrails_payload_from_policy(ctx.openai_guardrail_policy)),
+    );
+    if let Some(console_state) = ctx.console_state {
+        console_state
+            .set_openai_guardrails(status_payload.clone())
+            .await;
+    }
+
+    Ok(api::OpenAiGuardrailModeUpdateResponse {
+        mode: guardrail_mode_status_label(mode),
+        updated_models,
+        status: status_payload,
+    })
+}
+
+fn guardrail_mode_status_label(mode: openai_frontend::GuardrailMode) -> &'static str {
+    match mode {
+        openai_frontend::GuardrailMode::Disabled => "disabled",
+        openai_frontend::GuardrailMode::MetricsOnly => "metrics",
+        openai_frontend::GuardrailMode::Enforce => "enforce",
+    }
+}
+
+fn openai_guardrails_payload_from_policy(
+    policy: &OpenAiGuardrailPolicyHandle,
+) -> api::status::OpenAiGuardrailsPayload {
+    api::status::OpenAiGuardrailsPayload::from(
+        skippy::skippy_openai_guardrails_for_policy_handle(policy.clone()).status(),
+    )
+}
+
+async fn publish_initial_openai_guardrails_status(
+    console_state: Option<&api::MeshApi>,
+    policy: &OpenAiGuardrailPolicyHandle,
+) {
+    let Some(console_state) = console_state else {
+        return;
+    };
+    console_state
+        .set_openai_guardrails(Some(openai_guardrails_payload_from_policy(policy)))
+        .await;
+}
+
 async fn run_auto_runtime_event_loop(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     control_rx: &mut tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>,
@@ -6538,6 +6702,10 @@ async fn run_auto_runtime_event_loop(
     let mut dashboard_context_usage_tick =
         tokio::time::interval(DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL);
     dashboard_context_usage_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut model_target_reconciliation_tick =
+        tokio::time::interval(MODEL_TARGET_RECONCILIATION_INTERVAL);
+    model_target_reconciliation_tick
+        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             _ = dashboard_context_usage_tick.tick() => {
@@ -6559,6 +6727,9 @@ async fn run_auto_runtime_event_loop(
                     .collect();
                 refresh_dashboard_context_usage_batch(ctx.dashboard_context_usage, updates).await;
             }
+            _ = model_target_reconciliation_tick.tick() => {
+                run_auto_reconcile_model_targets(ctx).await;
+            }
             signal = wait_shutdown_signal() => {
                 let _ = emit_event(OutputEvent::ShutdownRequested { signal });
                 ctx.startup_ready_reporter.mark_shutdown_requested();
@@ -6573,6 +6744,9 @@ async fn run_auto_runtime_event_loop(
             }
             Some(event) = runtime_event_rx.recv() => {
                 match event {
+                    RuntimeEvent::ModelTargetReconciliationLoadFinished { model_ref, result } => {
+                        run_auto_handle_model_target_reconciliation_result(ctx, model_ref, result);
+                    }
                     RuntimeEvent::Exited { instance_id, model, port } => {
                         run_auto_handle_runtime_exit(ctx, instance_id, model, port).await;
                     }
@@ -6611,14 +6785,10 @@ async fn setup_run_auto_console_state(
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;
-    let control_endpoint = ctx.node.control_endpoint().await;
     console_state
-        .set_control_bootstrap(api::ControlBootstrapPayload {
-            enabled: control_endpoint.is_some(),
-            local_only: true,
-            requires_explicit_remote_endpoint: true,
-            endpoint: control_endpoint,
-        })
+        .set_control_bootstrap(api::ControlBootstrapPayload::from_control_endpoint(
+            ctx.node.control_endpoint().await,
+        ))
         .await;
     console_state
         .set_nostr_relays(nostr_relays(&ctx.cli.nostr_relay))
@@ -6725,7 +6895,10 @@ async fn spawn_run_auto_nostr_publisher(
                 message: format!(
                     "Publishing to Nostr failed: {e}. Mesh is running privately — add --publish after fixing the issue to make discoverable."
                 ),
-                context: cli.mesh_name.as_ref().map(|mesh_name| format!("mesh={mesh_name}")),
+                context: cli
+                    .mesh_name
+                    .as_ref()
+                    .map(|mesh_name| format!("mesh={mesh_name}")),
             });
             tracing::warn!("Nostr publish failed: {e}");
             if let Some(cs) = console_state {
@@ -6824,6 +6997,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
             n_ubatch: extra_model.n_ubatch,
             flash_attention: extra_model.flash_attention,
             parallel_override: extra_model.parallel.or(ctx.config.gpu.parallel),
+            openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             split: ctx.cli.split,
             skippy_telemetry: ctx.skippy_telemetry.clone(),
             survey_telemetry: ctx.survey_telemetry.clone(),
@@ -7049,6 +7223,51 @@ async fn spawn_run_auto_local_instance_scanner(
     );
 }
 
+fn configure_swarm_capture(cli: &Cli) -> Result<Option<crate::capture::SwarmCaptureRecorder>> {
+    let recorder =
+        crate::capture::SwarmCaptureRecorder::from_cli_or_env(cli.swarm_capture.as_deref())?;
+    if let Some(recorder) = recorder.as_ref() {
+        tracing::info!(
+            path = %recorder.path().display(),
+            "passive swarm capture enabled; writing local debug capture JSONL"
+        );
+    }
+    Ok(recorder)
+}
+
+struct RunAutoModelSelectionContext<'a> {
+    cli: &'a Cli,
+    node: &'a mesh::Node,
+    startup_models: &'a [StartupModelPlan],
+    local_models: &'a [String],
+    is_client: bool,
+    plugin_manager: &'a plugin::PluginManager,
+    bootstrap_listener_tx: &'a mut Option<BootstrapProxyStopTx>,
+    primary_startup_model: Option<&'a StartupModelPlan>,
+}
+
+async fn select_advertised_run_auto_model(
+    ctx: RunAutoModelSelectionContext<'_>,
+) -> Result<Option<(PathBuf, String)>> {
+    let Some(model) = run_auto_model_path_or_shutdown(
+        ctx.cli,
+        ctx.node,
+        ctx.startup_models,
+        ctx.local_models,
+        ctx.is_client,
+        ctx.plugin_manager,
+        ctx.bootstrap_listener_tx,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let (model_name, model_source) = run_auto_model_identity(ctx.primary_startup_model, &model);
+    advertise_run_auto_models(ctx.node, ctx.startup_models, &model_name, model_source).await;
+    Ok(Some((model, model_name)))
+}
+
 /// Serve mode: join the mesh and serve local models through the embedded runtime.
 async fn run_auto(
     mut cli: Cli,
@@ -7060,6 +7279,7 @@ async fn run_auto(
     auto_join_candidates: Vec<(String, Option<String>)>,
 ) -> Result<()> {
     let resolved_plugins = resolve_plugins_from_config(&config, &cli)?;
+    let swarm_capture = configure_swarm_capture(&cli)?;
     let api_port = cli.port;
     configure_run_auto_process_state(&cli, runtime.as_ref());
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
@@ -7076,7 +7296,8 @@ async fn run_auto(
         channels,
         plugin_manager,
         survey_telemetry,
-    } = build_run_auto_node_setup(&cli, &config, &resolved_plugins, &bin_dir).await?;
+    } = build_run_auto_node_setup(&cli, &config, &resolved_plugins, &bin_dir, swarm_capture)
+        .await?;
 
     // Advertise what we have on disk and what we want the mesh to serve
     node.set_requested_models(requested_model_names.clone())
@@ -7098,24 +7319,21 @@ async fn run_auto(
 
     let primary_startup_model = startup_models.first().cloned();
 
-    // Decide which model THIS node will serve
-    let Some(model) = run_auto_model_path_or_shutdown(
-        &cli,
-        &node,
-        &startup_models,
-        &local_models,
-        is_client,
-        &plugin_manager,
-        &mut bootstrap_listener_tx,
-    )
-    .await?
+    let Some((model, model_name)) =
+        select_advertised_run_auto_model(RunAutoModelSelectionContext {
+            cli: &cli,
+            node: &node,
+            startup_models: &startup_models,
+            local_models: &local_models,
+            is_client,
+            plugin_manager: &plugin_manager,
+            bootstrap_listener_tx: &mut bootstrap_listener_tx,
+            primary_startup_model: primary_startup_model.as_ref(),
+        })
+        .await?
     else {
         return Ok(());
     };
-
-    let (model_name, model_source) =
-        run_auto_model_identity(primary_startup_model.as_ref(), &model);
-    advertise_run_auto_models(&node, &startup_models, &model_name, model_source).await;
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), channels.rpc, channels.http, channels.stage).await?;
@@ -7129,7 +7347,7 @@ async fn run_auto(
         tokio::sync::mpsc::unbounded_channel::<api::RuntimeControlRequest>();
     let (runtime_event_tx, mut runtime_event_rx) =
         tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
-    let mut runtime_state = initialize_run_auto_runtime_state();
+    let mut runtime_state = initialize_run_auto_runtime_state(&cli);
 
     let model_name_for_console = model_name.clone();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&cli)?;
@@ -7146,6 +7364,11 @@ async fn run_auto(
         owner_key_path: &runtime_owner_key_path,
     })
     .await?;
+    publish_initial_openai_guardrails_status(
+        console_state.as_ref(),
+        &runtime_state.openai_guardrail_policy,
+    )
+    .await;
 
     crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
         RuntimeDashboardSnapshotProvider::new(
@@ -7233,6 +7456,7 @@ async fn run_auto(
         primary_model_name: &model_name,
         target_tx: &target_tx,
         control_rx: &mut control_rx,
+        control_tx: &control_tx,
         runtime_event_rx: &mut runtime_event_rx,
         runtime_state: &mut runtime_state,
         console_state: console_state.as_ref(),
@@ -7294,14 +7518,10 @@ async fn setup_passive_console_runtime(
         runtime_data_collector,
         runtime_data_producer,
     });
-    let control_endpoint = node.control_endpoint().await;
     console_state
-        .set_control_bootstrap(api::ControlBootstrapPayload {
-            enabled: control_endpoint.is_some(),
-            local_only: true,
-            requires_explicit_remote_endpoint: true,
-            endpoint: control_endpoint,
-        })
+        .set_control_bootstrap(api::ControlBootstrapPayload::from_control_endpoint(
+            node.control_endpoint().await,
+        ))
         .await;
     console_state
         .set_nostr_relays(nostr_relays(&cli.nostr_relay))
@@ -7598,7 +7818,10 @@ async fn setup_passive_publication(
                         message: format!(
                             "Publishing to Nostr failed: {e}. Standby node is running privately — add --publish after fixing the issue to make discoverable."
                         ),
-                        context: cli.mesh_name.as_ref().map(|mesh_name| format!("mesh={mesh_name}")),
+                        context: cli
+                            .mesh_name
+                            .as_ref()
+                            .map(|mesh_name| format!("mesh={mesh_name}")),
                     });
                     tracing::warn!("Passive Nostr publish failed: {e}");
                     setup.state = Some(api::PublicationState::PublishFailed);
@@ -7797,10 +8020,10 @@ fn update_pi_models_json(model_id: &str, port: u16) {
     if let Some(parent) = models_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_string_pretty(&root) {
-        if let Err(e) = std::fs::write(&models_path, json) {
-            tracing::warn!("Failed to update {}: {e}", models_path.display());
-        }
+    if let Ok(json) = serde_json::to_string_pretty(&root)
+        && let Err(e) = std::fs::write(&models_path, json)
+    {
+        tracing::warn!("Failed to update {}: {e}", models_path.display());
     }
 }
 
@@ -7848,10 +8071,57 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
+    }
+
+    fn reconciliation_target_with_required_bytes(
+        required_bytes: Option<u64>,
+    ) -> api::status::ModelTargetPayload {
+        api::status::ModelTargetPayload {
+            rank: 1,
+            model_ref: "org/model@main:model.gguf".to_string(),
+            display_name: "Model".to_string(),
+            model_name: Some("Model".to_string()),
+            explicit_interest_count: 1,
+            request_count: 0,
+            last_active_secs_ago: None,
+            serving_node_count: 0,
+            requested: false,
+            wanted: true,
+            wanted_reason: Some("explicit_interest"),
+            capacity_advice: api::status::ModelTargetCapacityAdvicePayload {
+                state: api::status::ModelTargetCapacityAdviceState::SingleNodeFit,
+                reason: "single_node_capacity_available",
+                required_bytes,
+                best_single_node_capacity_bytes: required_bytes,
+                aggregate_capacity_bytes: required_bytes.unwrap_or_default(),
+                shortfall_bytes: None,
+                eligible_node_count: 1,
+                missing_capacity_node_count: 0,
+                excluded_client_node_count: 0,
+                split_capable: false,
+            },
+        }
+    }
+
+    #[test]
+    fn model_target_reconciliation_local_fit_requires_current_node_capacity() {
+        let target = reconciliation_target_with_required_bytes(Some(10));
+
+        assert!(model_target_reconciliation_local_fit(&target, 10));
+        assert!(!model_target_reconciliation_local_fit(&target, 9));
+    }
+
+    #[test]
+    fn model_target_reconciliation_local_fit_rejects_unknown_required_bytes() {
+        let target = reconciliation_target_with_required_bytes(None);
+
+        assert!(!model_target_reconciliation_local_fit(&target, u64::MAX));
     }
 
     fn remote_catalog_layer_entry(
@@ -8586,9 +8856,12 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&cache_root).unwrap();
-        std::env::set_var("HF_HUB_CACHE", &cache_root);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &cache_root) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let repo_id = "bartowski/Llama-3.2-1B-Instruct-GGUF";
         let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
@@ -8625,9 +8898,12 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&cache_root).unwrap();
-        std::env::set_var("HF_HUB_CACHE", &cache_root);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &cache_root) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let repo_id = "someone/Custom-GGUF";
         let repo_dir = cache_root.join(huggingface_repo_folder_name(repo_id, RepoTypeModel));
@@ -9779,6 +10055,46 @@ mod tests {
     /// Helper to build a minimal `Cli` for publication-state tests.
     fn make_cli(args: &[&str]) -> crate::cli::Cli {
         crate::cli::Cli::try_parse_from(args).unwrap()
+    }
+
+    fn make_runtime_cli(args: &[&str]) -> crate::cli::Cli {
+        let normalized = crate::cli::normalize_runtime_surface_args(args.iter().copied());
+        crate::cli::Cli::try_parse_from(normalized.normalized).unwrap()
+    }
+
+    #[test]
+    fn swarm_capture_client_registers_runtime_owner() {
+        let cli = make_runtime_cli(&[
+            "mesh-llm",
+            "client",
+            "--auto",
+            "--swarm-capture",
+            "/tmp/mesh-capture",
+        ]);
+
+        assert!(cli.client);
+        assert!(swarm_capture_observer_requested(&cli));
+    }
+
+    #[test]
+    fn plain_client_still_skips_runtime_owner_registration() {
+        let cli = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
+
+        assert!(cli.client);
+        assert!(!swarm_capture_observer_requested(&cli));
+    }
+
+    #[test]
+    #[serial]
+    fn swarm_capture_env_client_registers_runtime_owner() {
+        let key = crate::capture::SWARM_CAPTURE_ENV;
+        let old = std::env::var_os(key);
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var(key, "/tmp/mesh-capture") };
+        let cli = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
+
+        assert!(swarm_capture_observer_requested(&cli));
+        restore_env(key, old);
     }
 
     #[test]

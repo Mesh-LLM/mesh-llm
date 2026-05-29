@@ -45,13 +45,14 @@ pub mod session;
 mod tool_guard;
 pub mod worker;
 
-pub use backend::{apply_enable_thinking, HttpBackend, ModelBackend, ModelEntry, SamplingParams};
+pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
 
 use backend::call_backend;
 use fanout::gather_workers_incremental;
+use mesh_llm_guardrails::tool_arguments_wire_string;
 use normalize::WorkerOutput;
 use reducer::{hedged_reducer_call, reducer_candidates};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
 use tool_guard::enforce_allowed_tools;
@@ -595,24 +596,7 @@ fn tool_call_response(name: &str, arguments: &Value) -> Value {
     //     to the literal four-char string `"null"`, which downstream
     //     OpenAI tool-call consumers reject.
     //   * Object: serialize as JSON.
-    let args_str = match arguments {
-        Value::String(s) => {
-            // Validate that the string is itself a JSON object; if not,
-            // fall back to `{}` to keep wire-shape sane.
-            if serde_json::from_str::<Value>(s)
-                .map(|v| v.is_object())
-                .unwrap_or(false)
-            {
-                s.clone()
-            } else {
-                "{}".to_string()
-            }
-        }
-        Value::Null => "{}".to_string(),
-        v if v.is_object() => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
-        // Bare primitives / arrays — not a valid tool-call arguments object.
-        _ => "{}".to_string(),
-    };
+    let args_str = tool_arguments_wire_string(arguments);
 
     // For tool-call responses, the user-visible output is the
     // arguments JSON, not free-form text. Use it as the basis of the

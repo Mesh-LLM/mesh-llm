@@ -1,5 +1,6 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rmcp::{
+    ErrorData, RoleClient, RoleServer, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, ClientResult,
         CompleteRequestParams, CompleteResult, CreateElicitationRequest,
@@ -13,8 +14,10 @@ use rmcp::{
         SubscribeRequestParams, UnsubscribeRequestParams,
     },
     service::{NotificationContext, Peer, RequestContext, RunningService},
-    transport::{io::stdio, StreamableHttpClientTransport, TokioChildProcess},
-    ErrorData, RoleClient, RoleServer, ServerHandler, ServiceExt,
+    transport::streamable_http_server::{
+        StreamableHttpService, session::local::LocalSessionManager,
+    },
+    transport::{StreamableHttpClientTransport, TokioChildProcess},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -46,6 +49,37 @@ enum ToolTarget {
 struct ToolRef {
     target: ToolTarget,
     tool: rmcp::model::Tool,
+}
+
+fn normalize_tool_schema(mut tool: rmcp::model::Tool) -> rmcp::model::Tool {
+    tool.input_schema = Arc::new(normalize_input_schema((*tool.input_schema).clone()));
+    if tool
+        .output_schema
+        .as_deref()
+        .is_some_and(|schema| schema.get("type").and_then(Value::as_str) != Some("object"))
+    {
+        tool.output_schema = None;
+    }
+    tool
+}
+
+fn normalize_input_schema(
+    mut schema: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if schema.get("type").and_then(Value::as_str) == Some("object") {
+        return schema;
+    }
+    if schema.contains_key("properties") {
+        schema.insert("type".to_string(), serde_json::json!("object"));
+        return schema;
+    }
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": true,
+    })
+    .as_object()
+    .cloned()
+    .expect("object schema")
 }
 
 #[derive(Clone)]
@@ -598,7 +632,7 @@ impl PluginMcpServer {
                                 plugin_name: plugin_name.clone(),
                                 tool_name: raw_name.clone(),
                             },
-                            tool: stapler::operation(mcp_name, operation),
+                            tool: normalize_tool_schema(stapler::operation(mcp_name, operation)),
                         },
                     );
                 }
@@ -621,7 +655,7 @@ impl PluginMcpServer {
             for tool in listed {
                 let raw_name = tool.name.to_string();
                 let canonical_name = endpoint.canonical_name(&raw_name);
-                let mut namespaced = tool.clone();
+                let mut namespaced = normalize_tool_schema(tool.clone());
                 namespaced.name = canonical_name.clone().into();
                 tools.insert(
                     canonical_name,
@@ -804,7 +838,11 @@ impl ServerHandler for PluginMcpServer {
                     .unwrap_or_else(|| serde_json::json!({}));
                 let result = self
                     .plugin_manager
-                    .invoke_operation(plugin_name, tool_name, &arguments.to_string())
+                    .invoke_operation_without_timeout(
+                        plugin_name,
+                        tool_name,
+                        &arguments.to_string(),
+                    )
                     .await
                     .map_err(internal_error)?;
                 Ok(operation_result_to_call_tool_result(result))
@@ -1318,21 +1356,40 @@ impl ServerHandler for PluginMcpServer {
     }
 }
 
-pub async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> {
-    let bridge = ActiveBridge::default();
-    plugin_manager
-        .set_rpc_bridge(Some(Arc::new(bridge.clone())))
-        .await;
+#[derive(Clone)]
+pub(crate) struct PluginMcpHttpEndpoint {
+    plugin_manager: PluginManager,
+    bridge: ActiveBridge,
+    session_manager: Arc<LocalSessionManager>,
+}
 
-    let result = async {
-        let server = PluginMcpServer::new(plugin_manager.clone(), bridge);
-        server.serve(stdio()).await?.waiting().await?;
-        Ok::<(), anyhow::Error>(())
+impl PluginMcpHttpEndpoint {
+    pub(crate) fn new(plugin_manager: PluginManager) -> Self {
+        Self {
+            plugin_manager,
+            bridge: ActiveBridge::default(),
+            session_manager: Arc::new(LocalSessionManager::default()),
+        }
     }
-    .await;
 
-    plugin_manager.set_rpc_bridge(None).await;
-    result
+    pub(crate) async fn handle(
+        &self,
+        request: http::Request<http_body_util::Full<bytes::Bytes>>,
+    ) -> http::Response<http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>>
+    {
+        self.plugin_manager
+            .set_rpc_bridge(Some(Arc::new(self.bridge.clone())))
+            .await;
+
+        let plugin_manager = self.plugin_manager.clone();
+        let bridge = self.bridge.clone();
+        let service = StreamableHttpService::new(
+            move || Ok(PluginMcpServer::new(plugin_manager.clone(), bridge.clone())),
+            self.session_manager.clone(),
+            Default::default(),
+        );
+        service.handle(request).await
+    }
 }
 
 fn internal_error(err: impl std::fmt::Display) -> ErrorData {
@@ -1395,12 +1452,7 @@ fn operation_result_to_call_tool_result(result: plugin::ToolCallResult) -> CallT
 }
 
 fn tool_aliases(plugin_name: &str, tool_name: &str) -> Vec<String> {
-    let canonical = canonical_name(plugin_name, tool_name);
-    let mut names = vec![canonical];
-    if plugin_name == plugin::BLACKBOARD_PLUGIN_ID {
-        names.push(format!("blackboard_{tool_name}"));
-    }
-    names
+    vec![canonical_name(plugin_name, tool_name)]
 }
 
 fn canonical_name(plugin_name: &str, local_name: &str) -> String {
@@ -1409,7 +1461,7 @@ fn canonical_name(plugin_name: &str, local_name: &str) -> String {
 
 mod proto_error {
     use anyhow::Error;
-    use rmcp::{model::ErrorCode, ServiceError};
+    use rmcp::{ServiceError, model::ErrorCode};
 
     pub fn from_anyhow(err: Error) -> crate::plugin::proto::ErrorResponse {
         crate::plugin::proto::ErrorResponse {
@@ -1450,10 +1502,42 @@ mod tests {
     };
     use rmcp::service::RequestContext;
     use rmcp::transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpService,
+        StreamableHttpService, session::local::LocalSessionManager,
     };
     use serde_json::json;
     use std::path::PathBuf;
+
+    #[test]
+    fn normalize_tool_schema_makes_empty_input_schema_object() {
+        let mut tool = Tool::new("bad", "Bad schema", Arc::new(Default::default()));
+        tool.output_schema = Some(Arc::new(
+            json!({
+                "type": "array",
+                "items": { "type": "string" }
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+        ));
+
+        let normalized = normalize_tool_schema(tool);
+
+        assert_eq!(
+            normalized.input_schema.get("type").and_then(Value::as_str),
+            Some("object")
+        );
+        assert_eq!(
+            normalized
+                .input_schema
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(
+            normalized.output_schema.is_none(),
+            "non-object output schemas should be omitted for strict MCP clients"
+        );
+    }
 
     struct NoopBridge;
 
@@ -1559,12 +1643,11 @@ mod tests {
             _request: Option<PaginatedRequestParams>,
             _context: RequestContext<RoleServer>,
         ) -> Result<ListResourcesResult, ErrorData> {
-            Ok(ListResourcesResult::with_all_items(vec![RawResource::new(
-                "note://one",
-                "First Note",
-            )
-            .with_description("External note")
-            .no_annotation()]))
+            Ok(ListResourcesResult::with_all_items(vec![
+                RawResource::new("note://one", "First Note")
+                    .with_description("External note")
+                    .no_annotation(),
+            ]))
         }
 
         async fn list_resource_templates(

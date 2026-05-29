@@ -5,7 +5,9 @@ use serde::Serialize;
 
 pub fn json_event(value: &impl Serialize) -> Result<Event, Infallible> {
     Ok(Event::default().json_data(value).unwrap_or_else(|_| {
-        Event::default().data(r#"{"error":{"message":"failed to serialize SSE event"}}"#)
+        Event::default().data(
+            r#"{"error":{"message":"failed to serialize SSE event","type":"server_error","param":null,"code":"internal_server_error"}}"#,
+        )
     }))
 }
 

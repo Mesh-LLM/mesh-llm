@@ -1,13 +1,52 @@
 use anyhow::{Context, Result};
+use mesh_llm_plugin_manager::SkillAgent;
+use std::process::{Command, Stdio};
 
+use crate::cli::commands::skills::install_skills_for_agent;
 use crate::{cli::shell, runtime};
 use url::Url;
 
 const OPENCODE_PROVIDER_ID: &str = "mesh";
-const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
 const OPENCODE_API_KEY_ENV: &str = "OPENAI_API_KEY";
 const OPENCODE_API_KEY_VALUE: &str = "dummy";
 const OPENCODE_INSTALL_HINT: &str = "curl -fsSL https://opencode.ai/install | bash";
+const OPENCODE_DEFAULT_CONTEXT_LIMIT: u32 = 32_768;
+const OPENCODE_OUTPUT_LIMIT: u32 = 4_096;
+const MESH_MCP_SERVER_ID: &str = "mesh";
+const MESH_MCP_DISPLAY_NAME: &str = "Mesh LLM";
+const DEFAULT_MESH_MCP_URL: &str = "http://127.0.0.1:3131/mcp";
+
+fn configure_interactive_stdio(command: &mut Command) {
+    #[cfg(unix)]
+    if let Ok(tty) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+    {
+        if let Ok(stdin) = tty.try_clone() {
+            command.stdin(Stdio::from(stdin));
+        }
+        if let Ok(stdout) = tty.try_clone() {
+            command.stdout(Stdio::from(stdout));
+        }
+        command.stderr(Stdio::from(tty));
+        return;
+    }
+
+    command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+}
+
+fn configure_opencode_launch_command(command: &mut Command, spec: &OpenCodeLaunchSpec) {
+    command
+        .args(["-m", &spec.model])
+        .env(spec.api_key_env, spec.api_key_value);
+    // OpenCode runs on Bun, which expects the original terminal file
+    // descriptors. Reopening /dev/tty here can make Bun fail while
+    // initializing its TTY write streams.
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OpenCodeLaunchSpec {
@@ -25,8 +64,124 @@ struct OpenCodeTarget {
     api_base_url: String,
     api_models_url: String,
     management_models_url: String,
+    mcp_url: String,
     auto_start_local_mesh: bool,
     local_port: Option<u16>,
+}
+
+fn mesh_mcp_opencode_config(mcp_url: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "remote",
+        "url": mcp_url,
+        "enabled": true,
+        "timeout": 300000,
+    })
+}
+
+fn mesh_mcp_claude_config_json(mcp_url: &str) -> Result<String> {
+    serde_json::to_string(&serde_json::json!({
+        "mcpServers": {
+            MESH_MCP_SERVER_ID: {
+                "type": "http",
+                "url": mcp_url,
+            }
+        }
+    }))
+    .context("serialize Claude MCP config")
+}
+
+fn mesh_mcp_goose_extension(mcp_url: &str) -> Result<serde_yaml::Value> {
+    serde_yaml::to_value(serde_json::json!({
+        "enabled": true,
+        "type": "streamable_http",
+        "name": MESH_MCP_DISPLAY_NAME,
+        "description": "Expose mesh-llm plugin MCP tools.",
+        "uri": mcp_url,
+        "timeout": 300,
+        "bundled": null,
+        "available_tools": [],
+    }))
+    .context("build Goose MCP extension config")
+}
+
+fn yaml_key(key: &str) -> serde_yaml::Value {
+    serde_yaml::Value::String(key.to_string())
+}
+
+fn empty_yaml_mapping() -> serde_yaml::Value {
+    serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+}
+
+fn ensure_yaml_mapping<'a>(
+    parent: &'a mut serde_yaml::Mapping,
+    key: &str,
+    path: &std::path::Path,
+) -> Result<&'a mut serde_yaml::Mapping> {
+    let key_value = yaml_key(key);
+    parent
+        .entry(key_value.clone())
+        .or_insert_with(empty_yaml_mapping);
+    parent
+        .get_mut(&key_value)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Expected '{}' in {} to be a YAML mapping",
+                key,
+                path.display()
+            )
+        })
+}
+
+fn read_goose_config(path: &std::path::Path) -> Result<serde_yaml::Value> {
+    if !path.exists() {
+        return Ok(empty_yaml_mapping());
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(empty_yaml_mapping());
+    }
+    let value: serde_yaml::Value = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse {} as YAML", path.display()))?;
+    if value.as_mapping().is_none() {
+        anyhow::bail!("Expected {} to contain a YAML mapping", path.display());
+    }
+    Ok(value)
+}
+
+fn merge_goose_mcp_config(
+    config: &mut serde_yaml::Value,
+    mcp_url: &str,
+    path: &std::path::Path,
+) -> Result<()> {
+    let root = config
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("Expected {} to contain a YAML mapping", path.display()))?;
+    let extensions = ensure_yaml_mapping(root, "extensions", path)?;
+    extensions.insert(
+        yaml_key(MESH_MCP_SERVER_ID),
+        mesh_mcp_goose_extension(mcp_url)?,
+    );
+    Ok(())
+}
+
+fn write_goose_mcp_config_to_path(path: &std::path::Path, mcp_url: &str) -> Result<()> {
+    std::fs::create_dir_all(path.parent().expect("Goose config path must have parent"))?;
+    let mut config = read_goose_config(path)?;
+    merge_goose_mcp_config(&mut config, mcp_url, path)?;
+    std::fs::write(path, serde_yaml::to_string(&config)?)?;
+    eprintln!("✅ Wrote mesh MCP extension to {}", path.display());
+    Ok(())
+}
+
+fn write_goose_mcp_config(mcp_url: &str) -> Result<()> {
+    let config_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".config")
+        .join("goose")
+        .join("config.yaml");
+    write_goose_mcp_config_to_path(&config_path, mcp_url)
 }
 
 fn is_loopback_or_localhost(host: &str) -> bool {
@@ -98,6 +253,9 @@ fn normalize_mesh_host_with_label(host: &str, label: &str) -> Result<OpenCodeTar
     }
     management.set_path("/api/models");
 
+    let mut mcp = management.clone();
+    mcp.set_path("/mcp");
+
     let auto_start_local_mesh = is_local_host && parsed.scheme() == "http";
 
     Ok(OpenCodeTarget {
@@ -105,6 +263,7 @@ fn normalize_mesh_host_with_label(host: &str, label: &str) -> Result<OpenCodeTar
         api_base_url: api_base.to_string(),
         api_models_url: api_models.to_string(),
         management_models_url: management.to_string(),
+        mcp_url: mcp.to_string(),
         auto_start_local_mesh,
         local_port: api_base.port_or_known_default(),
     })
@@ -114,15 +273,32 @@ fn normalize_opencode_host(host: &str) -> Result<OpenCodeTarget> {
     normalize_mesh_host_with_label(host, "OpenCode host")
 }
 
+#[cfg(test)]
 fn build_opencode_launch_spec(
     model_names: &[String],
     resolved_model: &str,
     api_base_url: &str,
 ) -> OpenCodeLaunchSpec {
+    build_opencode_launch_spec_with_mcp(
+        model_names,
+        resolved_model,
+        api_base_url,
+        DEFAULT_MESH_MCP_URL,
+    )
+}
+
+#[cfg(test)]
+fn build_opencode_launch_spec_with_mcp(
+    model_names: &[String],
+    resolved_model: &str,
+    api_base_url: &str,
+    mcp_url: &str,
+) -> OpenCodeLaunchSpec {
     build_opencode_launch_spec_with_limits(
         model_names,
         resolved_model,
         api_base_url,
+        mcp_url,
         &std::collections::HashMap::new(),
     )
 }
@@ -131,6 +307,7 @@ fn build_opencode_launch_spec_with_limits(
     model_names: &[String],
     resolved_model: &str,
     api_base_url: &str,
+    mcp_url: &str,
     context_lengths: &std::collections::HashMap<String, Option<u32>>,
 ) -> OpenCodeLaunchSpec {
     let mut models = serde_json::Map::new();
@@ -138,13 +315,15 @@ fn build_opencode_launch_spec_with_limits(
         let mut model_obj = serde_json::Map::new();
         model_obj.insert("name".to_string(), serde_json::json!(model));
 
-        if let Some(&Some(ctx_len)) = context_lengths.get(model) {
-            let limit = serde_json::json!({
-                "context": ctx_len,
-                "output": ctx_len,
-            });
-            model_obj.insert("limit".to_string(), limit);
-        }
+        let ctx_len = context_lengths
+            .get(model)
+            .and_then(|ctx_len| *ctx_len)
+            .unwrap_or(OPENCODE_DEFAULT_CONTEXT_LIMIT);
+        let limit = serde_json::json!({
+            "context": ctx_len,
+            "output": OPENCODE_OUTPUT_LIMIT.min(ctx_len),
+        });
+        model_obj.insert("limit".to_string(), limit);
 
         models.insert(model.clone(), serde_json::Value::Object(model_obj));
     }
@@ -168,6 +347,9 @@ fn build_opencode_launch_spec_with_limits(
         "$schema": "https://opencode.ai/config.json",
         "provider": {
             OPENCODE_PROVIDER_ID: serde_json::Value::Object(mesh_provider),
+        },
+        "mcp": {
+            MESH_MCP_SERVER_ID: mesh_mcp_opencode_config(mcp_url),
         }
     });
 
@@ -191,8 +373,7 @@ fn opencode_missing_binary_guidance(
         spec.install_hint.to_string(),
         "Then rerun through mesh-llm:".to_string(),
         format!("  mesh-llm opencode --host {host} --model {chosen}"),
-        "mesh-llm injects OPENCODE_CONFIG_CONTENT automatically when launching OpenCode."
-            .to_string(),
+        "mesh-llm writes the mesh provider into your OpenCode config before launching.".to_string(),
     ]
 }
 
@@ -206,7 +387,7 @@ fn pi_missing_binary_guidance(model_arg: &str) -> Vec<String> {
 }
 
 fn cleanup_mesh_child(mesh_child: &mut Option<std::process::Child>) {
-    if let Some(ref mut child) = mesh_child {
+    if let Some(child) = mesh_child {
         eprintln!("🧹 Stopping mesh-llm node we started...");
         let _ = child.kill();
         let _ = child.wait();
@@ -245,7 +426,7 @@ async fn fetch_mesh_models(
         );
     }
 
-    let chosen = if let Some(ref model) = requested_model {
+    let chosen = if let Some(model) = requested_model {
         if !models.iter().any(|name| name == model) {
             anyhow::bail!(
                 "Model '{}' not available. Available: {}",
@@ -315,6 +496,8 @@ pub(crate) async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
     let provider_path = goose_config_dir.join("mesh.json");
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
     eprintln!("✅ Wrote {}", provider_path.display());
+    write_goose_mcp_config(DEFAULT_MESH_MCP_URL)?;
+    install_skills_for_agent(SkillAgent::Goose);
 
     let goose_app = std::path::Path::new("/Applications/Goose.app");
     if goose_app.exists() {
@@ -332,11 +515,13 @@ pub(crate) async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
         }
     } else {
         eprintln!("🪿 Launching goose session...");
-        let status = std::process::Command::new("goose")
+        let mut command = Command::new("goose");
+        command
             .arg("session")
             .env("GOOSE_PROVIDER", "mesh")
-            .env("GOOSE_MODEL", &chosen)
-            .status();
+            .env("GOOSE_MODEL", &chosen);
+        configure_interactive_stdio(&mut command);
+        let status = command.status();
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => eprintln!("goose exited with {s}"),
@@ -389,11 +574,21 @@ pub(crate) async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
         "terminalProgressBarEnabled": false
     });
     let settings_json = serde_json::to_string(&settings)?;
+    let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
+    install_skills_for_agent(SkillAgent::Claude);
 
     eprintln!("🚀 Launching Claude Code with {chosen} → {base_url}\n");
-    let status = std::process::Command::new("claude")
-        .args(["--model", &chosen, "--settings", &settings_json])
-        .status();
+    let mut command = Command::new("claude");
+    command.args([
+        "--model",
+        &chosen,
+        "--settings",
+        &settings_json,
+        "--mcp-config",
+        &mcp_config_json,
+    ]);
+    configure_interactive_stdio(&mut command);
+    let status = command.status();
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => eprintln!("claude exited with {s}"),
@@ -473,14 +668,27 @@ fn load_existing_config(path: &std::path::Path) -> Result<serde_json::Value> {
 
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    let config: serde_json::Value = serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {} as JSON", path.display()))?;
+    let config: serde_json::Value = parse_config_content(path, &content)?;
 
     if !config.is_object() {
         anyhow::bail!("Expected {} to contain a JSON object", path.display());
     }
 
     Ok(config)
+}
+
+fn parse_config_content(path: &std::path::Path, content: &str) -> Result<serde_json::Value> {
+    if path.extension().and_then(|ext| ext.to_str()) == Some("jsonc") {
+        json5::from_str(content).with_context(|| {
+            format!(
+                "Failed to parse {} as JSONC-compatible OpenCode config",
+                path.display()
+            )
+        })
+    } else {
+        serde_json::from_str(content)
+            .with_context(|| format!("Failed to parse {} as JSON", path.display()))
+    }
 }
 
 fn provider_map_mut<'a>(
@@ -609,6 +817,7 @@ fn run_pi_with_mesh(
     write: bool,
 ) -> Result<()> {
     write_pi_config_with_limits(model_names, base_url, context_lengths)?;
+    install_skills_for_agent(SkillAgent::Pi);
 
     if write {
         return Ok(());
@@ -616,9 +825,10 @@ fn run_pi_with_mesh(
 
     let model_arg = format!("mesh/{chosen}");
     eprintln!("🚀 Launching pi with {chosen} → {base_url}\n");
-    let status = std::process::Command::new("pi")
-        .args(["--model", &model_arg])
-        .status();
+    let mut command = Command::new("pi");
+    command.args(["--model", &model_arg]);
+    configure_interactive_stdio(&mut command);
+    let status = command.status();
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => eprintln!("pi exited with {s}"),
@@ -650,29 +860,43 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
     };
 
     let result = if write {
+        install_skills_for_agent(SkillAgent::Opencode);
         write_opencode_config(&client, &models, &chosen, &target).await
     } else {
-        let spec = build_opencode_launch_spec(&models, &chosen, &target.api_base_url);
+        let context_lengths =
+            fetch_model_context_lengths(&client, &target.management_models_url).await;
+        match write_opencode_config(&client, &models, &chosen, &target).await {
+            Ok(()) => {
+                let spec = build_opencode_launch_spec_with_limits(
+                    &models,
+                    &chosen,
+                    &target.api_base_url,
+                    &target.mcp_url,
+                    &context_lengths,
+                );
 
-        eprintln!(
-            "🚀 Launching OpenCode with {} → {}\n",
-            chosen, target.api_base_url
-        );
-        let status = std::process::Command::new("opencode")
-            .args(["-m", &spec.model])
-            .env(OPENCODE_CONFIG_ENV, &spec.config_content)
-            .env(spec.api_key_env, spec.api_key_value)
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => eprintln!("opencode exited with {s}"),
-            Err(_) => {
-                for line in opencode_missing_binary_guidance(&chosen, &target.input, &spec) {
-                    eprintln!("{line}");
+                eprintln!(
+                    "🚀 Launching OpenCode with {} → {}\n",
+                    chosen, target.api_base_url
+                );
+                install_skills_for_agent(SkillAgent::Opencode);
+                let mut command = Command::new("opencode");
+                configure_opencode_launch_command(&mut command, &spec);
+                let status = command.status();
+                match status {
+                    Ok(s) if s.success() => {}
+                    Ok(s) => eprintln!("opencode exited with {s}"),
+                    Err(_) => {
+                        for line in opencode_missing_binary_guidance(&chosen, &target.input, &spec)
+                        {
+                            eprintln!("{line}");
+                        }
+                    }
                 }
+                Ok(())
             }
+            Err(error) => Err(error),
         }
-        Ok(())
     };
 
     cleanup_mesh_child(&mut mesh_child);
@@ -701,11 +925,7 @@ fn resolve_opencode_config_path_from_home(
         return Ok(json_path);
     }
     if jsonc_path.exists() {
-        anyhow::bail!(
-            "Found {} but mesh-llm only writes opencode.json. Rename or migrate it to {} and rerun `mesh-llm opencode --write`.",
-            jsonc_path.display(),
-            json_path.display()
-        );
+        return Ok(jsonc_path);
     }
 
     Ok(json_path)
@@ -723,16 +943,49 @@ async fn fetch_model_context_lengths(
     client: &reqwest::Client,
     management_models_url: &str,
 ) -> std::collections::HashMap<String, Option<u32>> {
+    let models_json = fetch_json(client, management_models_url).await;
+
+    // Query /api/runtime/processes for the actual running context_lengths.
+    let processes_url = management_models_url.replace("/api/models", "/api/runtime/processes");
+    let processes_json = fetch_json(client, &processes_url).await;
+
+    merge_context_lengths(&models_json, &processes_json)
+}
+
+async fn fetch_json(client: &reqwest::Client, url: &str) -> serde_json::Value {
+    match client.get(url).send().await {
+        Ok(resp) => resp.json::<serde_json::Value>().await.unwrap_or_default(),
+        Err(_) => serde_json::Value::Null,
+    }
+}
+
+fn merge_context_lengths(
+    models_json: &serde_json::Value,
+    processes_json: &serde_json::Value,
+) -> std::collections::HashMap<String, Option<u32>> {
     let mut context_map = std::collections::HashMap::new();
 
-    if let Ok(resp) = client.get(management_models_url).send().await {
-        if let Ok(body) = resp.json::<serde_json::Value>().await {
-            for model in body["mesh_models"].as_array().unwrap_or(&vec![]) {
-                let name = model["name"].as_str().map(String::from);
-                let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
-                if let Some(n) = name {
-                    context_map.insert(n, ctx_len);
-                }
+    // Primary source: runtime process data — the actual context_length the
+    // model is running with (from CLI --ctx-size, config.toml, or auto-computed
+    // from VRAM by plan_runtime_resources).
+    if let Some(processes) = processes_json["processes"].as_array() {
+        for process in processes {
+            let name = process["name"].as_str().map(String::from);
+            let ctx_len = process["context_length"].as_u64().map(|v| v as u32);
+            if let (Some(n), Some(ctx_len)) = (name, ctx_len) {
+                context_map.insert(n, Some(ctx_len));
+            }
+        }
+    }
+
+    // Fallback: GGUF metadata / peer metadata for any model whose runtime
+    // context_length is unknown (e.g. remote models or stopped instances).
+    if let Some(mesh_models) = models_json["mesh_models"].as_array() {
+        for model in mesh_models {
+            let name = model["name"].as_str().map(String::from);
+            let ctx_len = model["context_length"].as_u64().map(|v| v as u32);
+            if let Some(n) = name {
+                context_map.entry(n).or_insert(ctx_len);
             }
         }
     }
@@ -767,28 +1020,32 @@ async fn write_opencode_config_to_path(
         model_names,
         resolved_model,
         &target.api_base_url,
+        &target.mcp_url,
         &context_lengths,
     );
     let config_value: serde_json::Value = serde_json::from_str(&spec.config_content)?;
     let mesh_provider = config_value["provider"]["mesh"].clone();
+    let mesh_mcp = config_value["mcp"]["mesh"].clone();
 
     // Merge schema if needed (for display in ordered format)
     let mut merged_config = existing_config.clone();
-    if merged_config.get("$schema").is_none() {
-        if let Some(schema) = config_value.get("$schema") {
-            merged_config
-                .as_object_mut()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Expected {} to contain a JSON object",
-                        config_path.display()
-                    )
-                })?
-                .insert("$schema".to_string(), schema.clone());
-        }
+    let schema = config_value
+        .get("$schema")
+        .filter(|_| merged_config.get("$schema").is_none());
+    if let Some(schema) = schema {
+        merged_config
+            .as_object_mut()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Expected {} to contain a JSON object",
+                    config_path.display()
+                )
+            })?
+            .insert("$schema".to_string(), schema.clone());
     }
 
     merge_mesh_provider(&mut merged_config, mesh_provider.clone(), config_path)?;
+    merge_provider(&mut merged_config, "mcp", "mesh", mesh_mcp, config_path)?;
 
     let formatted_json = serde_json::to_string_pretty(&merged_config)?;
     std::fs::write(config_path, &formatted_json)?;
@@ -841,12 +1098,14 @@ pub(crate) fn build_mesh_provider_spec_for_test(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_mesh_provider_spec_for_test, build_opencode_launch_spec,
+        DEFAULT_MESH_MCP_URL, OPENCODE_DEFAULT_CONTEXT_LIMIT, OPENCODE_INSTALL_HINT,
+        OPENCODE_OUTPUT_LIMIT, build_mesh_provider_spec_for_test, build_opencode_launch_spec,
         build_opencode_launch_spec_with_limits, build_pi_provider_config,
-        build_pi_provider_config_with_limits, cleanup_mesh_child, normalize_opencode_host,
-        opencode_missing_binary_guidance, pi_missing_binary_guidance,
-        resolve_opencode_config_path_from_home, write_opencode_config_for_test,
-        write_pi_config_for_test, write_pi_config_to_path, OPENCODE_INSTALL_HINT,
+        build_pi_provider_config_with_limits, cleanup_mesh_child,
+        configure_opencode_launch_command, merge_context_lengths, merge_goose_mcp_config,
+        mesh_mcp_claude_config_json, normalize_opencode_host, opencode_missing_binary_guidance,
+        pi_missing_binary_guidance, resolve_opencode_config_path_from_home,
+        write_opencode_config_for_test, write_pi_config_for_test, write_pi_config_to_path,
     };
 
     const LOCAL_OPENCODE_HOST: &str = "127.0.0.1:9337";
@@ -908,6 +1167,58 @@ mod tests {
                 .map(|m| m.len()),
             Some(2)
         );
+        assert_eq!(config["mcp"]["mesh"]["type"], "remote");
+        assert_eq!(config["mcp"]["mesh"]["enabled"], true);
+        assert_eq!(config["mcp"]["mesh"]["url"], DEFAULT_MESH_MCP_URL);
+    }
+
+    #[test]
+    fn claude_mcp_config_points_at_mesh_mcp_http_endpoint() {
+        let config = mesh_mcp_claude_config_json("http://127.0.0.1:3131/mcp").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
+
+        assert_eq!(
+            parsed["mcpServers"]["mesh"]["type"],
+            serde_json::json!("http")
+        );
+        assert_eq!(
+            parsed["mcpServers"]["mesh"]["url"],
+            serde_json::json!("http://127.0.0.1:3131/mcp")
+        );
+    }
+
+    #[test]
+    fn goose_mcp_merge_preserves_existing_extensions() {
+        let mut config: serde_yaml::Value = serde_yaml::from_str(
+            r#"
+extensions:
+  developer:
+    enabled: true
+GOOSE_PROVIDER: mesh
+"#,
+        )
+        .unwrap();
+        let path = std::path::Path::new("/tmp/goose/config.yaml");
+
+        merge_goose_mcp_config(&mut config, "http://127.0.0.1:3131/mcp", path).unwrap();
+        let extensions = config
+            .get("extensions")
+            .and_then(serde_yaml::Value::as_mapping)
+            .unwrap();
+
+        assert!(extensions.contains_key("developer"));
+        let mesh = extensions
+            .get("mesh")
+            .and_then(serde_yaml::Value::as_mapping)
+            .unwrap();
+        assert_eq!(
+            mesh.get("type").and_then(serde_yaml::Value::as_str),
+            Some("streamable_http")
+        );
+        assert_eq!(
+            mesh.get("uri").and_then(serde_yaml::Value::as_str),
+            Some("http://127.0.0.1:3131/mcp")
+        );
     }
 
     #[test]
@@ -923,6 +1234,44 @@ mod tests {
 
         assert_eq!(spec.provider_id, "mesh");
         assert_eq!(spec.model, "mesh/bartowski/DeepSeek-R1.gguf");
+    }
+
+    #[test]
+    fn opencode_launch_command_uses_persisted_config_instead_of_env_blob() {
+        let spec = build_opencode_launch_spec(
+            &["GLM-4.7-Flash-Q4_K_M".to_string()],
+            "GLM-4.7-Flash-Q4_K_M",
+            "http://127.0.0.1:9337/v1",
+        );
+        let mut command = std::process::Command::new("opencode");
+
+        configure_opencode_launch_command(&mut command, &spec);
+
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let envs = command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| {
+                    (
+                        key.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        assert_eq!(args, vec!["-m", "mesh/GLM-4.7-Flash-Q4_K_M"]);
+        assert_eq!(
+            envs.get("OPENAI_API_KEY").map(String::as_str),
+            Some("dummy")
+        );
+        assert!(
+            !envs.contains_key("OPENCODE_CONFIG_CONTENT"),
+            "interactive launch should use the persisted opencode config"
+        );
     }
 
     #[test]
@@ -956,7 +1305,7 @@ mod tests {
         );
         assert_eq!(
             lines[4],
-            "mesh-llm injects OPENCODE_CONFIG_CONTENT automatically when launching OpenCode."
+            "mesh-llm writes the mesh provider into your OpenCode config before launching."
         );
     }
 
@@ -995,6 +1344,9 @@ mod tests {
 
         assert_eq!(parsed["$schema"], "https://opencode.ai/config.json");
         assert!(parsed["provider"]["mesh"].is_object());
+        assert_eq!(parsed["mcp"]["mesh"]["type"], "remote");
+        assert_eq!(parsed["mcp"]["mesh"]["url"], "http://127.0.0.1:3131/mcp");
+        assert_eq!(parsed["mcp"]["mesh"]["enabled"], true);
     }
 
     #[test]
@@ -1477,6 +1829,7 @@ mod tests {
             &models,
             "Qwen3.5-27B",
             "http://127.0.0.1:9337/v1",
+            DEFAULT_MESH_MCP_URL,
             &context_lengths,
         );
         let config: serde_json::Value =
@@ -1492,7 +1845,7 @@ mod tests {
         );
         assert_eq!(
             config["provider"]["mesh"]["models"]["Qwen3.5-27B"]["limit"]["output"],
-            262144
+            OPENCODE_OUTPUT_LIMIT
         );
 
         assert_eq!(
@@ -1505,16 +1858,20 @@ mod tests {
         );
         assert_eq!(
             config["provider"]["mesh"]["models"]["Gemma-7B"]["limit"]["output"],
-            8192
+            OPENCODE_OUTPUT_LIMIT
         );
 
         assert_eq!(
             config["provider"]["mesh"]["models"]["Llama-3B"]["name"],
             "Llama-3B"
         );
-        assert!(
-            config["provider"]["mesh"]["models"]["Llama-3B"]["limit"].is_null(),
-            "model with None context_length should not have limit field"
+        assert_eq!(
+            config["provider"]["mesh"]["models"]["Llama-3B"]["limit"]["context"],
+            OPENCODE_DEFAULT_CONTEXT_LIMIT
+        );
+        assert_eq!(
+            config["provider"]["mesh"]["models"]["Llama-3B"]["limit"]["output"],
+            OPENCODE_OUTPUT_LIMIT
         );
     }
 
@@ -1531,6 +1888,7 @@ mod tests {
             target.management_models_url,
             "http://mesh.example.com:3131/api/models"
         );
+        assert_eq!(target.mcp_url, "http://mesh.example.com:3131/mcp");
         assert!(!target.auto_start_local_mesh);
     }
 
@@ -1544,6 +1902,7 @@ mod tests {
             target.management_models_url,
             "http://127.0.0.1:3131/api/models"
         );
+        assert_eq!(target.mcp_url, "http://127.0.0.1:3131/mcp");
         assert!(target.auto_start_local_mesh);
         assert_eq!(target.local_port, Some(9443));
     }
@@ -1617,6 +1976,96 @@ mod tests {
     }
 
     #[test]
+    fn merge_context_lengths_uses_runtime_process_when_api_models_missing() {
+        let models = serde_json::json!({
+            "mesh_models": [
+                { "name": "ModelA", "context_length": null },
+                { "name": "ModelB", "context_length": 8192 },
+            ]
+        });
+        let processes = serde_json::json!({
+            "processes": [
+                { "name": "ModelA", "context_length": 16384 },
+                { "name": "ModelB", "context_length": null },
+                { "name": "ModelC", "context_length": 32768 },
+            ]
+        });
+
+        let result = merge_context_lengths(&models, &processes);
+
+        assert_eq!(result.get("ModelA"), Some(&Some(16384)));
+        assert_eq!(result.get("ModelB"), Some(&Some(8192)));
+        assert_eq!(result.get("ModelC"), Some(&Some(32768)));
+    }
+
+    #[test]
+    fn merge_context_lengths_api_models_only() {
+        let models = serde_json::json!({
+            "mesh_models": [
+                { "name": "ModelA", "context_length": 4096 },
+                { "name": "ModelB", "context_length": 8192 },
+            ]
+        });
+        let processes = serde_json::json!({ "processes": [] });
+
+        let result = merge_context_lengths(&models, &processes);
+
+        assert_eq!(result.get("ModelA"), Some(&Some(4096)));
+        assert_eq!(result.get("ModelB"), Some(&Some(8192)));
+        assert_eq!(result.get("ModelC"), None);
+    }
+
+    #[test]
+    fn merge_context_lengths_runtime_process_only() {
+        let models = serde_json::json!({ "mesh_models": [] });
+        let processes = serde_json::json!({
+            "processes": [
+                { "name": "ModelX", "context_length": 65536 },
+            ]
+        });
+
+        let result = merge_context_lengths(&models, &processes);
+
+        assert_eq!(result.get("ModelX"), Some(&Some(65536)));
+    }
+
+    #[test]
+    fn merge_context_lengths_runtime_process_trumps_api_models() {
+        let models = serde_json::json!({
+            "mesh_models": [
+                { "name": "Qwen3-8B", "context_length": 32768 },
+            ]
+        });
+        let processes = serde_json::json!({
+            "processes": [
+                { "name": "Qwen3-8B", "context_length": 16384 },
+            ]
+        });
+
+        let result = merge_context_lengths(&models, &processes);
+
+        assert_eq!(result.get("Qwen3-8B"), Some(&Some(16384)));
+    }
+
+    #[test]
+    fn merge_context_lengths_falls_back_to_metadata_when_runtime_null() {
+        let models = serde_json::json!({
+            "mesh_models": [
+                { "name": "ModelA", "context_length": 4096 },
+            ]
+        });
+        let processes = serde_json::json!({
+            "processes": [
+                { "name": "ModelA", "context_length": null },
+            ]
+        });
+
+        let result = merge_context_lengths(&models, &processes);
+
+        assert_eq!(result.get("ModelA"), Some(&Some(4096)));
+    }
+
+    #[test]
     fn context_length_lookup_is_best_effort_and_returns_empty_map_on_failure() {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(50))
@@ -1657,19 +2106,44 @@ mod tests {
     }
 
     #[test]
-    fn resolve_opencode_config_path_rejects_jsonc_only_configs() {
+    fn resolve_opencode_config_path_accepts_jsonc_only_configs() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
         let config_dir = temp_dir.path().join(".config").join("opencode");
         std::fs::create_dir_all(&config_dir).expect("failed to create config dir");
         let jsonc_path = config_dir.join("opencode.jsonc");
         std::fs::write(&jsonc_path, "{/* comments */}").expect("failed to write jsonc config");
 
-        let err = resolve_opencode_config_path_from_home(temp_dir.path())
-            .expect_err("jsonc-only config should be rejected");
-        let rendered = err.to_string();
+        let resolved =
+            resolve_opencode_config_path_from_home(temp_dir.path()).expect("jsonc should resolve");
 
-        assert!(rendered.contains("only writes opencode.json"));
-        assert!(rendered.contains("Rename or migrate"));
+        assert_eq!(resolved, jsonc_path);
+    }
+
+    #[test]
+    fn opencode_write_accepts_jsonc_config_with_comments_and_trailing_commas() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let config_path = temp_dir.path().join("opencode.jsonc");
+        std::fs::write(
+            &config_path,
+            r#"{
+              // Existing OpenCode setting
+              "$schema": "https://opencode.ai/config.json",
+              "theme": "opencode",
+            }"#,
+        )
+        .expect("failed to write jsonc config");
+
+        write_config(
+            &config_path,
+            &["Qwen3.5-27B".to_string()],
+            LOCAL_OPENCODE_HOST,
+        )
+        .expect("jsonc config should be updated");
+
+        let content = std::fs::read_to_string(&config_path).expect("failed to read config");
+        let parsed: serde_json::Value = serde_json::from_str(&content).expect("written JSON");
+        assert_eq!(parsed["theme"], "opencode");
+        assert!(parsed["provider"]["mesh"].is_object());
     }
 
     #[test]

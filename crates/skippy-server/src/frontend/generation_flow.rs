@@ -187,28 +187,27 @@ impl StageOpenAiBackend {
             lane_pool,
             ..
         } = self.mode.clone()
+            && config.downstream.is_some()
         {
-            if config.downstream.is_some() {
-                let lane_pool = lane_pool.ok_or_else(|| {
-                    OpenAiError::backend("embedded stage 0 has no downstream lane pool")
-                })?;
-                return self.generate_split_multimodal_text(
-                    SplitMultimodalGeneration {
-                        prompt,
-                        max_tokens,
-                        stop,
-                        sampling,
-                        cancellation,
-                        ids,
-                        config,
-                        wire_dtype,
-                        activation_width,
-                        downstream_wire_condition,
-                        lane_pool,
-                    },
-                    on_text_chunk,
-                );
-            }
+            let lane_pool = lane_pool.ok_or_else(|| {
+                OpenAiError::backend("embedded stage 0 has no downstream lane pool")
+            })?;
+            return self.generate_split_multimodal_text(
+                SplitMultimodalGeneration {
+                    prompt,
+                    max_tokens,
+                    stop,
+                    sampling,
+                    cancellation,
+                    ids,
+                    config,
+                    wire_dtype,
+                    activation_width,
+                    downstream_wire_condition,
+                    lane_pool,
+                },
+                on_text_chunk,
+            );
         }
 
         match &self.mode {

@@ -514,15 +514,13 @@ pub fn classify(body: &Value) -> Classification {
     let mut system_code = false;
     if let Some(messages) = body.get("messages").and_then(|m| m.as_array()) {
         for msg in messages {
-            if msg.get("role").and_then(|r| r.as_str()) == Some("system") {
-                if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
-                    let sys = content.to_lowercase();
-                    if sys.contains("developer")
-                        || sys.contains("coding")
-                        || sys.contains("programmer")
-                    {
-                        system_code = true;
-                    }
+            if msg.get("role").and_then(|r| r.as_str()) == Some("system")
+                && let Some(content) = msg.get("content").and_then(|c| c.as_str())
+            {
+                let sys = content.to_lowercase();
+                if sys.contains("developer") || sys.contains("coding") || sys.contains("programmer")
+                {
+                    system_code = true;
                 }
             }
         }

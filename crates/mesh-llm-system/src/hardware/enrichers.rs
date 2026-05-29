@@ -28,11 +28,11 @@ mod linux {
         }
 
         unsafe fn symbol<T: Copy>(&self, name: &'static [u8]) -> Option<T> {
-            let symbol = libc::dlsym(self.0, name.as_ptr().cast());
+            let symbol = unsafe { libc::dlsym(self.0, name.as_ptr().cast()) };
             if symbol.is_null() {
                 None
             } else {
-                Some(std::mem::transmute_copy(&symbol))
+                Some(unsafe { std::mem::transmute_copy(&symbol) })
             }
         }
     }
@@ -89,12 +89,14 @@ mod linux {
     pub(crate) fn enrich_gpu_facts(gpus: &mut [GpuFacts]) {
         let mut infos = cuda_device_infos();
         merge_nvml_device_infos(&mut infos);
-        if infos.is_empty() {
-            return;
+        if !infos.is_empty() {
+            enrich_nvidia_gpu_facts(gpus, &infos);
         }
+    }
 
+    fn enrich_nvidia_gpu_facts(gpus: &mut [GpuFacts], infos: &[NvidiaDeviceInfo]) {
         for gpu in gpus {
-            let Some(info) = match_nvidia_device(gpu, &infos) else {
+            let Some(info) = match_nvidia_device(gpu, infos) else {
                 continue;
             };
             if let Some(total_bytes) = info.total_bytes {
@@ -122,17 +124,6 @@ mod linux {
         }
     }
 
-    pub(crate) fn discover_gpu_facts() -> Vec<GpuFacts> {
-        let mut infos = cuda_device_infos();
-        merge_nvml_device_infos(&mut infos);
-
-        infos
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, info)| gpu_fact_from_nvidia_info(index, info))
-            .collect()
-    }
-
     fn match_nvidia_device<'a>(
         gpu: &GpuFacts,
         infos: &'a [NvidiaDeviceInfo],
@@ -147,13 +138,12 @@ mod linux {
             return None;
         }
 
-        if let Some(pci_bdf) = gpu.pci_bdf.as_deref().and_then(normalize_pci_bdf) {
-            if let Some(info) = infos
+        if let Some(pci_bdf) = gpu.pci_bdf.as_deref().and_then(normalize_pci_bdf)
+            && let Some(info) = infos
                 .iter()
                 .find(|info| info.pci_bdf.as_deref() == Some(pci_bdf.as_str()))
-            {
-                return Some(info);
-            }
+        {
+            return Some(info);
         }
 
         infos.get(gpu.index).or_else(|| {
@@ -317,12 +307,11 @@ mod linux {
         if ptr.is_null() {
             return None;
         }
-        let value = CStr::from_ptr(ptr).to_string_lossy().trim().to_string();
-        if value.is_empty() {
-            None
-        } else {
-            Some(value)
-        }
+        let value = unsafe { CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .trim()
+            .to_string();
+        if value.is_empty() { None } else { Some(value) }
     }
 
     fn normalize_pci_bdf(value: &str) -> Option<String> {
@@ -341,41 +330,10 @@ mod linux {
         const MIB: u64 = 1024 * 1024;
         bytes.div_ceil(MIB) * MIB
     }
-
-    fn gpu_fact_from_nvidia_info(index: usize, info: NvidiaDeviceInfo) -> Option<GpuFacts> {
-        let display_name = info.name?;
-        let stable_id = info
-            .pci_bdf
-            .as_ref()
-            .filter(|pci_bdf| !super::super::is_placeholder_pci_bdf(pci_bdf))
-            .map(|pci_bdf| format!("pci:{pci_bdf}"));
-        Some(GpuFacts {
-            index,
-            display_name,
-            backend_device: Some(format!("CUDA{index}")),
-            vram_bytes: info.total_bytes.unwrap_or(0),
-            reserved_bytes: info.reserved_bytes,
-            mem_bandwidth_gbps: None,
-            compute_tflops_fp32: None,
-            compute_tflops_fp16: None,
-            unified_memory: false,
-            stable_id,
-            pci_bdf: info.pci_bdf,
-            vendor_uuid: info.uuid,
-            metal_registry_id: None,
-            dxgi_luid: None,
-            pnp_instance_id: None,
-        })
-    }
 }
 
 #[cfg(target_os = "linux")]
-pub(super) use linux::{discover_gpu_facts, enrich_gpu_facts};
+pub(super) use linux::enrich_gpu_facts;
 
 #[cfg(not(target_os = "linux"))]
 pub(super) fn enrich_gpu_facts(_gpus: &mut [GpuFacts]) {}
-
-#[cfg(not(target_os = "linux"))]
-pub(super) fn discover_gpu_facts() -> Vec<GpuFacts> {
-    Vec::new()
-}

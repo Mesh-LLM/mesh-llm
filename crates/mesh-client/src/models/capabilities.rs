@@ -1,7 +1,7 @@
 use super::catalog;
 pub use mesh_llm_types::models::capabilities::{
-    merge_config_signals, merge_name_signals, merge_sibling_signals, CapabilityLevel,
-    ModelCapabilities,
+    CapabilityLevel, ModelCapabilities, merge_config_signals, merge_name_signals,
+    merge_sibling_signals,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -66,7 +66,7 @@ fn read_local_metadata_jsons(path: &Path) -> Vec<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_name_signals, CapabilityLevel};
+    use super::{CapabilityLevel, merge_name_signals};
 
     #[test]
     fn qwen3vl_name_signal_is_supported_vision() {

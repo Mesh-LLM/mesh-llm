@@ -46,7 +46,7 @@ impl FileSystemConsoleAssets {
 
 #[cfg(feature = "embed-assets")]
 mod embedded {
-    use include_dir::{include_dir, Dir};
+    use include_dir::{Dir, include_dir};
 
     pub(super) static CONSOLE_DIST: Dir<'_> = include_dir!("$MESH_LLM_UI_DIST");
 }
@@ -94,7 +94,11 @@ impl ConsoleAssetProvider for FileSystemConsoleAssets {
 
     fn asset(&self, path: &str) -> Option<UiAsset> {
         let rel = clean_relative_path(path)?;
-        let full_path = self.root.join(rel);
+        let root = self.root.canonicalize().ok()?;
+        let full_path = root.join(rel).canonicalize().ok()?;
+        if !full_path.starts_with(&root) {
+            return None;
+        }
         let contents = std::fs::read(full_path).ok()?;
         Some(UiAsset {
             contents: Cow::Owned(contents),
@@ -138,8 +142,7 @@ pub fn cache_control(path: &str) -> &'static str {
 
 #[cfg(all(test, feature = "embed-assets"))]
 mod tests {
-    use super::{asset, content_type, ConsoleAssetProvider, FileSystemConsoleAssets};
-    use std::fs;
+    use super::{asset, content_type};
 
     #[test]
     fn rejects_parent_directory_paths() {
@@ -159,6 +162,12 @@ mod tests {
             "application/json; charset=utf-8"
         );
     }
+}
+
+#[cfg(test)]
+mod filesystem_tests {
+    use super::{ConsoleAssetProvider, FileSystemConsoleAssets};
+    use std::fs;
 
     #[test]
     fn filesystem_assets_read_from_root() {
@@ -180,6 +189,26 @@ mod tests {
         assert!(assets.asset("../secret").is_none());
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_assets_reject_symlinks_outside_root() {
+        let temp =
+            std::env::temp_dir().join(format!("mesh-llm-ui-assets-symlink-{}", std::process::id()));
+        let root = temp.join("root");
+        let secret = temp.join("secret.txt");
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(root.join("assets")).expect("create temp asset root");
+        fs::write(root.join("index.html"), "<html></html>").expect("write index");
+        fs::write(&secret, "secret").expect("write secret");
+        std::os::unix::fs::symlink(&secret, root.join("assets/secret.txt"))
+            .expect("create symlink");
+
+        let assets = FileSystemConsoleAssets::new(&root);
+        assert!(assets.asset("/assets/secret.txt").is_none());
+
+        let _ = fs::remove_dir_all(temp);
     }
 }
 

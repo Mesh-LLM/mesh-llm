@@ -204,7 +204,7 @@ skippy-wan-lab-build-bins:
     cargo build --release --locked -p skippy-server -p skippy-prompt -p metrics-server -p skippy-model-package
 
 # Generate a reproducible benchmark corpus for skippy bench tooling.
-bench-corpus tier="smoke" *ARGS:
+bench-corpus tier="smoke" *ARGS="":
     scripts/generate-bench-corpus.py "{{ tier }}" {{ ARGS }}
 
 # Run skippy family certification checks.
@@ -221,7 +221,7 @@ skippy-openai-smoke *ARGS:
     just with-lld scripts/skippy-openai-smoke.sh {{ ARGS }}
 
 # Run the skippy benchmark/debug telemetry collector.
-metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS: metrics-server-build
+metrics-server db="/tmp/mesh-metrics.duckdb" http_addr="127.0.0.1:18080" otlp_addr="127.0.0.1:14317" *ARGS="": metrics-server-build
     target/debug/metrics-server serve --db "{{ db }}" --http-addr "{{ http_addr }}" --otlp-grpc-addr "{{ otlp_addr }}" {{ ARGS }}
 
 # Download the default model (GLM-4.7-Flash Q4_K_M, 17GB)
@@ -350,7 +350,7 @@ ui-test:
 
 # ── Full Validation Gate ───────────────────────────────────────
 
-# Run all checks: Rust tests, fmt, clippy, ESLint, Prettier, E2E smoke.
+# Run all checks: repo consistency, Rust tests, fmt, clippy, ESLint, Prettier, E2E smoke.
 test-all:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -376,13 +376,23 @@ test-all:
     echo ""
 
     # Each UI step runs in a subshell so cd doesn't leak between steps.
-    echo "=== 1/7 Rust format check ==="
+    echo "=== 1/8 Repo consistency ==="
+    just with-lld cargo run -p xtask -- repo-consistency ci-crate-lists
+    echo ""
+    echo "=== 2/8 Rust format check ==="
     just with-lld cargo fmt --all -- --check
     echo ""
-    echo "=== 2/7 Clippy ==="
-    just with-lld cargo clippy -p mesh-llm -- -D warnings
+    echo "=== GPU bench Rust feature check ==="
+    MESH_LLM_GPU_BENCH_RUST_ONLY=1 just with-lld cargo check -p mesh-llm-gpu-bench --features cuda,hip,intel
     echo ""
-    echo "=== 3/7 Rust tests ==="
+    echo "=== 3/8 Clippy ==="
+    mapfile -t clippy_crates < <(bash scripts/plan-clippy-batches.sh --all --bins 1 | jq -r '.[].crates[]')
+    for crate in "${clippy_crates[@]}"; do
+        echo "--- $crate ---"
+        just with-lld cargo clippy -p "$crate" --all-targets -- -D warnings
+    done
+    echo ""
+    echo "=== 4/8 Rust tests ==="
     echo "--- mesh-llm-host-runtime lib ---"
     just with-lld cargo test -p mesh-llm-host-runtime --lib
     echo "--- mesh-llm ---"
@@ -394,16 +404,16 @@ test-all:
     echo "--- skippy-runtime lib ---"
     just with-lld cargo test -p skippy-runtime --lib
     echo ""
-    echo "=== 4/7 ESLint + Prettier ==="
+    echo "=== 5/8 ESLint + Prettier ==="
     (cd "{{ ui_dir }}" && pnpm run lint)
     echo ""
-    echo "=== 5/7 UI type check (tsc) ==="
+    echo "=== 6/8 UI type check (tsc) ==="
     (cd "{{ ui_dir }}" && pnpm run typecheck)
     echo ""
-    echo "=== 6/7 UI unit tests (vitest) ==="
+    echo "=== 7/8 UI unit tests (vitest) ==="
     (cd "{{ ui_dir }}" && pnpm test)
     echo ""
-    echo "=== 7/7 E2E smoke tests (Playwright) ==="
+    echo "=== 8/8 E2E smoke tests (Playwright) ==="
     if curl -sf http://127.0.0.1:3131/health >/dev/null 2>&1; then
         (cd "{{ ui_dir }}" && pnpm run test:e2e)
     else

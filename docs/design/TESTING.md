@@ -10,7 +10,8 @@ mesh-llm gpus --json | jq .
 mesh-llm gpu benchmark --json | jq .
 ```
 
-- Prints local GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
+- Prints local runtime-selectable GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
+- In the shipped Skippy-enabled binary, platform tools alone are not enough: if the embedded backend does not enumerate a GPU, the node should report CPU-only rather than advertising probe-visible GPU capacity
 - `--json` emits machine-readable inventory and benchmark payloads suitable for automation
 
 ### 0a. Startup config smoke
@@ -164,12 +165,58 @@ workflows or lab jobs. The job summary includes the timing snapshot from
 artifacts. It is intentionally evidence-producing and non-required: failed
 nightlies should guide stabilization work, not block unrelated pull requests.
 
+### 0f. KV/tool-loop stability certification
+
+Run the KV/tool-loop certification probe when changing Skippy KV slot cleanup,
+prefix-cache lookup, agent tool-loop behavior, or any runtime path related to
+issues where repeated tool calls eventually hit `llama_decode failed` or low
+same-prefix cache reuse.
+
+```bash
+scripts/qa-kv-tool-loop-stability.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --models Qwen/Qwen2.5-3B-Instruct-GGUF:q4_k_m \
+  --attempts 5 \
+  --pressure-turns 8 \
+  --timeout 180 \
+  --min-cached-tokens 2048 \
+  --suffix-prefill-limit 256 \
+  --native-log ~/.mesh-llm/runtime/<pid>/logs/skippy-native.log \
+  --output-dir target/kv-tool-loop-stability/local
+```
+
+- the probe attaches to an existing `/v1/chat/completions` endpoint; it does
+  not start nodes, load models, join a mesh, or change routing policy
+- each attempt runs a growing non-streaming tool-result conversation with a
+  long stable system prefix, repeated pressure turns, a second forced tool
+  call, and final recall of both deterministic tool facts
+- `same_prefix_cache` warms the same long prefix with one tail and measures a
+  different tail; `exact_prefix_cache` verifies the identical-body cache path
+  still works
+- `--min-cached-tokens 2048` matches the known Qwen 3B reproduction shape where
+  healthy same-prefix reuse is near the shared prefix, not the 256-token floor
+- `--native-log` scans Skippy native logs for `failed to find a memory slot`,
+  `llama_decode failed`, and proactive eviction errors appended after the
+  certification starts, so stale failures in long-lived logs do not fail a
+  clean run
+- every run writes `manifest.json`, `results.jsonl`, `summary.json`,
+  `summary.md`, and sanitized transcript JSONL under `transcripts/`; the
+  transcript directory is reset at run start to keep repeated `latest` runs
+  auditable
+- `--print-plan` is side-effect-free and emits the exact models, thresholds,
+  runtime options, checks, and evidence files that would be produced
+
+This certification is deliberately a lab/release-confidence check, not a
+required PR gate. Use it to prove KV/cache stability on a real direct-model
+endpoint after local unit tests and before relying on agent workloads such as
+Goose, Pi, or OpenCode for broad smoke coverage.
+
 ## Single-model permutations
 
 ### 1. Solo (single node)
 
 ```bash
-mesh-llm serve --model Qwen2.5-3B --console
+mesh-llm serve --model Qwen2.5-3B --console 3131
 ```
 
 - API on `:9337`, console on `:3131`
@@ -205,16 +252,58 @@ mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
 ### 3. Two GPU nodes, forced split
 
 ```bash
-# host with --split
-mesh-llm serve --model Qwen2.5-32B --bind-port 7842 --split
-# worker joins
-mesh-llm serve --model Qwen2.5-32B --join <TOKEN>
+# node A (coordinator)
+mesh-llm serve \
+  --model meshllm/Qwen3-8B-Q4_K_M-layers \
+  --split \
+  --max-vram 5 \
+  --bind-port 7842 \
+  --port 9447 \
+  --console 3232
+
+# node B (worker)
+mesh-llm serve \
+  --model meshllm/Qwen3-8B-Q4_K_M-layers \
+  --split \
+  --max-vram 5 \
+  --join <TOKEN> \
+  --bind-port 7843 \
+  --port 9447 \
+  --console 3232
 ```
 
 - `--split` forces staged execution even when the model fits on the host
-- Embedded runtime assigns two participating stage routes
+- Use a published layer package (`*-layers`) so each node downloads only the
+  shared artifacts and layer files assigned to its stage.
+- Embedded runtime assigns participating stage routes
 - Stage placement is proportional to available VRAM (e.g. `0.67,0.33`)
-- Draft model auto-detected and used
+- If `--max-vram` is too low, planning should fail before startup with the
+  required memory estimate. In lab testing, `3` GB was too low for this Qwen3
+  8B package at the default context, while `5` GB per node reached readiness.
+- Wait for `/api/status` on the coordinator to show `node_state="serving"`,
+  `llama_ready=true`, a ready runtime stage, and one peer.
+- `GET /v1/models` should list the full layer-package model id.
+- A short `/v1/chat/completions` request should return an OpenAI-shaped
+  response from the layer-package model.
+
+> **CI coverage:** `two_node_split_smoke` runs
+> `scripts/ci-two-node-split-smoke.sh` against the Linux inference binary and a
+> tiny GGUF. It starts two serving nodes, waits for a topology with stages on
+> two distinct nodes, checks `/v1/models`, and sends a short
+> `/v1/chat/completions` request through stage 0.
+>
+> Other nearby CI coverage:
+>
+> - `scripts/ci-two-node-client-serving-smoke.sh` — two nodes, but only tests
+>   `client` -> `serve` routing. The model is held entirely on one node.
+> - `scripts/skippy-ci-smoke.sh` — exercises 3-stage layer splits via
+>   `skippy-correctness chain`, but all stages run on `127.0.0.1` in a single
+>   runner. It validates the staged-runtime ABI, not mesh-llm node-to-node
+>   split serving over QUIC.
+>
+> Use real flags only: `--split`, `--max-vram`, `--join`, `--bind-port`,
+> `--port`, `--console`. There is no `--layer-range` flag — layer placement
+> is decided by the runtime from advertised VRAM, not pinned by CLI.
 
 #### Multi-interface Docker/Linux bind-IP validation
 
@@ -237,6 +326,21 @@ mesh-llm serve --model Qwen2.5-32B --split --join <TOKEN>
 - `--listen-all` is not a substitute for this test; it only affects local
   HTTP API/console listeners.
 
+#### Split-package preflight diagnostics
+
+Before starting a package-backed split run, preflight the local package
+directory and then certify the immutable published ref:
+
+```bash
+skippy-model-package preflight ./model-package --stages 2 --verify-sha256
+mesh-llm models certify hf://namespace/repo@revision --package-only --report-out target/skippy-preflight/cert.json
+```
+
+Clean packages should pass with a machine-readable report. Deliberately broken
+packages or refs should fail before the model is advertised through `/v1/models`
+and should name the blocked manifest field, missing artifact, size/SHA mismatch,
+sidecar, or stage part.
+
 ### 4. Two GPU nodes, model too big for one
 
 When the model exceeds host VRAM, split happens automatically without `--split`.
@@ -258,7 +362,7 @@ mesh-llm client --join <TOKEN> --port 9555
 
 ```bash
 # node A: seeds mesh with two models, serves 3B
-mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console
+mesh-llm serve --model Qwen2.5-3B --model GLM-4.7-Flash --console 3131
 # node B: joins, auto-assigned to GLM (needed, on disk)
 mesh-llm serve --join <TOKEN>
 ```
@@ -313,7 +417,7 @@ mesh-llm unload GLM-4.7-Flash-Q4_K_M
 
 ```bash
 # Running node
-mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console
+mesh-llm serve --model Qwen2.5-0.5B-Instruct-Q4_K_M --console 3131
 
 # Operator surface
 mesh-llm load Llama-3.2-1B-Instruct-Q4_K_M
@@ -461,6 +565,7 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 - `/api/search` returns 200 JSON with canonical model refs for matching results
 - `/api/model-interests` stores and returns local explicit-interest entries keyed by canonical model refs
 - `/api/model-targets` returns ranked targets with explicit-interest counts, request counts, serving-node counts, `wanted` for targets not currently served, and derived `capacity_advice` without changing ranking or routing behavior
+- If `[runtime] reconcile_model_targets = true` is enabled, unserved local explicit interests that are already present on disk and fit the current node may be runtime-loaded automatically. Leave it unset for read-only advisory checks.
 - Discover results can be matched to current mesh by `mesh_id`
 
 ### 24. HTTP proxy single-request connection contract
@@ -470,6 +575,44 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 - Verify only the first request reaches the selected upstream.
 - Verify the proxy closes the routed connection after the first response.
 - Verify the upstream-observed request includes `Connection: close`.
+
+### 25. OpenAI guardrail corpus smoke
+
+Enable the server-side guardrail mode first. Either start the runtime in that
+mode or update the running process without restarting it:
+
+```bash
+mesh-llm serve --model MiniMax-M2.5-Q4_K_M --mesh-guardrails metrics
+# or, for an already-running node:
+mesh-llm runtime guardrails --mode metrics --port 3131
+curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
+```
+
+```bash
+python3 scripts/run-openai-guardrail-corpus.py \
+  --base-url http://127.0.0.1:9337/v1 \
+  --model MiniMax-M2.5-Q4_K_M \
+  --guardrail-mode metrics \
+  --trials 20 \
+  --out .sisyphus/evidence/openai-guardrail-corpus.json
+```
+
+- Phase 0 stays off by default. `metrics` and `enforce` are opt-in.
+- `--guardrail-mode` only records request intent and sends the matching
+  `mesh_guardrails` request override. It does not reconfigure the server; use
+  `--mesh-guardrails`, `mesh-llm runtime guardrails`, or the management API
+  for server-side activation.
+- If the runtime is unavailable, the script falls back to deterministic
+  fake-backend mode and still writes the expected JSON artifact.
+- The corpus covers streaming pass-through, tool-call reliability, synthetic
+  `_mesh_respond` rescue, strict structured output, and the unsupported real
+  tools plus strict structured combination.
+- The command is a reliability check, not a hard constrained decoding promise.
+
+If a Python sidecar baseline is available, you may optionally run a smoke
+comparison on the same corpus to compare behavior before and after this
+adaptation. Treat it as a local comparison aid only; it is not a mandatory
+implementation gate.
 
 ## Resilience
 
@@ -646,10 +789,10 @@ Without this, both processes share `~/.mesh-llm/key` and appear as the same node
 
 ```bash
 # Terminal 1: host with --split
-mesh-llm serve --model Qwen2.5-3B --port 9337 --split --console
+mesh-llm serve --model Qwen2.5-3B --port 9337 --console 3131 --split
 
 # Terminal 2: worker with ephemeral key
-MESH_LLM_EPHEMERAL_KEY=1 mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 9338 --split --max-vram 1
+MESH_LLM_EPHEMERAL_KEY=1 mesh-llm serve --model Qwen2.5-3B --join <TOKEN> --port 9338 --console 3145 --split --max-vram 1
 ```
 
 - Host starts solo, then re-elects with split when worker joins

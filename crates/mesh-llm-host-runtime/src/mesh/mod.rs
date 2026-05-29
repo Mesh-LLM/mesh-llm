@@ -6,9 +6,10 @@
 //! latency-sensitive `skippy-stage/1` ALPN.
 
 pub use mesh_llm_types::mesh::{
+    DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
+    ServedModelDescriptor, ServedModelIdentity, ServedModelMetadata,
     infer_available_model_descriptors, infer_local_served_model_descriptor,
-    infer_served_model_descriptors, merge_demand, ModelDemand, ModelRuntimeDescriptor,
-    ModelSourceKind, ServedModelDescriptor, ServedModelIdentity, DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS,
+    infer_served_model_descriptors, merge_demand,
 };
 
 use anyhow::{Context, Result};
@@ -17,21 +18,22 @@ use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey, TransportAddr};
 use prost::Message;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::crypto::{
-    default_node_ownership_path, save_node_ownership, sign_node_ownership,
-    verify_control_plane_target_node, verify_node_ownership, OwnershipStatus, OwnershipSummary,
-    SignedNodeOwnership, TrustPolicy, TrustStore, DEFAULT_NODE_CERT_LIFETIME_SECS,
+    DEFAULT_NODE_CERT_LIFETIME_SECS, OwnershipStatus, OwnershipSummary, SignedNodeOwnership,
+    TrustPolicy, TrustStore, default_node_ownership_path, save_node_ownership, sign_node_ownership,
+    verify_control_plane_target_node, verify_node_ownership,
 };
 use crate::protocol::*;
 
 use self::artifact_transfer_io::{
-    append_artifact_transfer_body, select_partial_artifact, PartialArtifactGuard,
+    PartialArtifactGuard, append_artifact_transfer_body, select_partial_artifact,
 };
 
 #[cfg(test)]
@@ -68,6 +70,136 @@ fn current_time_unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn elapsed_ms_u64(duration: std::time::Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SelectedPathObservation {
+    pub(crate) path_type: &'static str,
+    pub(crate) rtt_ms: Option<u32>,
+    pub(crate) observed_direct_remote_addr: Option<SocketAddr>,
+}
+
+pub(crate) struct ConnectionCaptureEvent<'a> {
+    pub(crate) event: &'a str,
+    pub(crate) remote: EndpointId,
+    pub(crate) direction: &'a str,
+    pub(crate) phase: &'a str,
+    pub(crate) protocol: Option<ControlProtocol>,
+    pub(crate) path_type: Option<&'a str>,
+    pub(crate) rtt_ms: Option<u32>,
+    pub(crate) admitted_peer: Option<bool>,
+    pub(crate) reason: Option<&'a str>,
+}
+
+pub(crate) struct PeerLifecycleCaptureEvent<'a> {
+    pub(crate) event: &'a str,
+    pub(crate) peer: EndpointId,
+    pub(crate) reason: &'a str,
+    pub(crate) reporter: Option<EndpointId>,
+    pub(crate) last_seen_age_ms: Option<u64>,
+    pub(crate) last_mentioned_age_ms: Option<u64>,
+    pub(crate) had_connection: Option<bool>,
+    pub(crate) bridge_id: Option<EndpointId>,
+}
+
+pub(crate) struct HttpCaptureEvent<'a> {
+    pub(crate) event: &'a str,
+    pub(crate) source_addr: Option<SocketAddr>,
+    pub(crate) method: &'a str,
+    pub(crate) path: &'a str,
+    pub(crate) body_len_bytes: usize,
+    pub(crate) model_name: Option<&'a str>,
+    pub(crate) completion_tokens: Option<u32>,
+    pub(crate) stream: Option<bool>,
+}
+
+fn selected_path_observation(conn: &Connection) -> Option<SelectedPathObservation> {
+    let path_list = conn.paths();
+    for path_info in &path_list {
+        if !path_info.is_selected() {
+            continue;
+        }
+
+        let path_type = if path_info.is_ip() { "direct" } else { "relay" };
+        let rtt = path_info.rtt();
+        let rtt_ms = if rtt.is_zero() {
+            None
+        } else {
+            Some(rtt.as_millis().min(u128::from(u32::MAX)) as u32)
+        };
+        let observed_direct_remote_addr = match path_info.remote_addr() {
+            TransportAddr::Ip(addr) => Some(*addr),
+            _ => None,
+        };
+
+        return Some(SelectedPathObservation {
+            path_type,
+            rtt_ms,
+            observed_direct_remote_addr,
+        });
+    }
+
+    None
+}
+
+fn endpoint_id_capture_fields(id: EndpointId) -> serde_json::Value {
+    json!({
+        "short": id.fmt_short().to_string(),
+        "hex": hex::encode(id.as_bytes()),
+    })
+}
+
+fn peer_capture_fields(
+    peer: &PeerInfo,
+    source: &str,
+    bridge_id: Option<EndpointId>,
+) -> serde_json::Value {
+    let direct_rtt_ms = peer
+        .display_rtt
+        .as_ref()
+        .map(|observation| observation.rtt_ms);
+    let propagated_latency = peer.propagated_latency.as_ref().map(|observation| {
+        json!({
+            "latency_ms": observation.latency_ms,
+            "age_ms_at_received": observation.age_ms_at_received,
+            "observer": observation.observer_id.map(endpoint_id_capture_fields),
+        })
+    });
+
+    json!({
+        "peer": endpoint_id_capture_fields(peer.id),
+        "source": source,
+        "bridge": bridge_id.map(endpoint_id_capture_fields),
+        "role": &peer.role,
+        "version": &peer.version,
+        "hostname": &peer.hostname,
+        "models": &peer.models,
+        "serving_models": &peer.serving_models,
+        "hosted_models": &peer.hosted_models,
+        "hosted_models_known": peer.hosted_models_known,
+        "available_models": &peer.available_models,
+        "requested_models": &peer.requested_models,
+        "explicit_model_interests": &peer.explicit_model_interests,
+        "model_source": &peer.model_source,
+        "gpu_name": &peer.gpu_name,
+        "is_soc": peer.is_soc,
+        "vram_bytes": peer.vram_bytes,
+        "gpu_vram": &peer.gpu_vram,
+        "gpu_reserved_bytes": &peer.gpu_reserved_bytes,
+        "gpu_mem_bandwidth_gbps": &peer.gpu_mem_bandwidth_gbps,
+        "gpu_compute_tflops_fp32": &peer.gpu_compute_tflops_fp32,
+        "gpu_compute_tflops_fp16": &peer.gpu_compute_tflops_fp16,
+        "direct_rtt_ms": direct_rtt_ms.or(peer.rtt_ms),
+        "propagated_latency": propagated_latency,
+        "owner": &peer.owner_summary,
+        "artifact_transfer_supported": peer.artifact_transfer_supported,
+        "stage_status_list_supported": peer.stage_status_list_supported,
+        "first_joined_mesh_ts": peer.first_joined_mesh_ts,
+    })
 }
 
 pub(super) const PEER_CONNECT_AND_GOSSIP_TIMEOUT: std::time::Duration =
@@ -122,6 +254,17 @@ enum ClosedConnectionRecovery {
 pub struct QuicBindSelection {
     pub ip: Option<IpAddr>,
     pub port: Option<u16>,
+}
+
+/// Relay map plus per-relay bearer tokens for gated iroh-relays.
+///
+/// `urls` is the relay map; `auths` is a sparse map of relay URL -> bearer
+/// token used when registering with relays running `AccessConfig::Restricted`.
+/// Public relays in the same map continue to register without auth.
+#[derive(Clone, Copy, Debug)]
+pub struct RelayConfig<'a> {
+    pub urls: &'a [String],
+    pub auths: &'a std::collections::HashMap<String, String>,
 }
 
 fn quic_bind_addr(bind: QuicBindSelection) -> Option<SocketAddr> {
@@ -278,11 +421,268 @@ fn effective_relay_urls(relay_urls: &[String]) -> Vec<String> {
     }
 }
 
-fn relay_map_from_urls(urls: &[String]) -> iroh::RelayMap {
-    let configs = urls
-        .iter()
-        .map(|url| iroh::RelayConfig::new(url.parse().expect("invalid relay URL"), None));
+/// Build an [`iroh::RelayMap`] from URLs, attaching per-relay auth tokens
+/// where configured.
+///
+/// `auths` maps relay URLs (as they appear in `urls`) to bearer tokens. Tokens
+/// are passed to `iroh::RelayConfig::with_auth_token` which sends them as
+/// `Authorization: Bearer <token>` on the WebSocket upgrade. Relays not present
+/// in the map register unauthenticated, which is the correct behavior for
+/// public (`AccessConfig::Everyone`) relays.
+///
+/// This is the wire-up that lets a gated iroh-relay (e.g. one running
+/// `AccessConfig::Restricted` with NIP-98 admission) admit this node while
+/// public relays in the same map continue to work normally.
+fn relay_map_from_urls(
+    urls: &[String],
+    auths: &std::collections::HashMap<String, String>,
+) -> iroh::RelayMap {
+    let configs = urls.iter().map(|url| {
+        let parsed = url.parse().expect("invalid relay URL");
+        let cfg = iroh::RelayConfig::new(parsed, None);
+        match auths.get(url) {
+            Some(token) => cfg.with_auth_token(token.clone()),
+            None => cfg,
+        }
+    });
     iroh::RelayMap::from_iter(configs)
+}
+
+#[cfg(test)]
+mod relay_map_tests {
+    use super::relay_map_from_urls;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn configs(map: &iroh::RelayMap) -> Vec<Arc<iroh::RelayConfig>> {
+        map.relays::<Vec<_>>()
+    }
+
+    #[test]
+    fn builds_map_without_auth_when_empty() {
+        let urls = vec!["https://r1.example/".to_string()];
+        let map = relay_map_from_urls(&urls, &HashMap::new());
+        let cfgs = configs(&map);
+        assert_eq!(cfgs.len(), 1);
+        assert!(
+            cfgs[0].auth_token.is_none(),
+            "no auth supplied → no auth_token set"
+        );
+    }
+
+    #[test]
+    fn attaches_auth_token_for_matching_url() {
+        let urls = vec!["https://gated.example/".to_string()];
+        let mut auths = HashMap::new();
+        auths.insert("https://gated.example/".to_string(), "nip98-bearer".into());
+        let map = relay_map_from_urls(&urls, &auths);
+        let cfgs = configs(&map);
+        assert_eq!(cfgs.len(), 1);
+        assert_eq!(cfgs[0].auth_token.as_deref(), Some("nip98-bearer"));
+    }
+
+    #[test]
+    fn leaves_other_relays_unauthenticated_in_mixed_map() {
+        // The whole point: gated relay gets a token, public relays don't.
+        let urls = vec![
+            "https://gated.example/".to_string(),
+            "https://public.iroh/".to_string(),
+        ];
+        let mut auths = HashMap::new();
+        auths.insert("https://gated.example/".to_string(), "bearer-xyz".into());
+
+        let map = relay_map_from_urls(&urls, &auths);
+        let by_url: HashMap<String, Option<String>> = configs(&map)
+            .into_iter()
+            .map(|cfg| (cfg.url.to_string(), cfg.auth_token.clone()))
+            .collect();
+
+        // Find the entries by matching on host substring, since iroh-relay may
+        // canonicalise the URL form (e.g. trailing dot on the host).
+        let gated = by_url
+            .iter()
+            .find(|(u, _)| u.contains("gated.example"))
+            .expect("gated relay should be in the map");
+        let public = by_url
+            .iter()
+            .find(|(u, _)| u.contains("public.iroh"))
+            .expect("public relay should be in the map");
+
+        assert_eq!(
+            gated.1.as_deref(),
+            Some("bearer-xyz"),
+            "gated relay must carry its token"
+        );
+        assert!(
+            public.1.is_none(),
+            "public relay must register without a token, got {:?}",
+            public.1
+        );
+    }
+}
+
+/// End-to-end regression tests for `--relay-auth` against a real in-process
+/// iroh-relay running [`iroh_relay::server::AccessConfig::Restricted`].
+///
+/// These tests do not go through the full `Node::start` path — they exercise
+/// `relay_map_from_urls` (the new wiring) plus the iroh `Endpoint` builder
+/// the same way `bind_mesh_endpoint` does, with `ca_roots_config` overridden
+/// for the relay's self-signed test cert. The contract being defended is:
+///
+///  1. A token configured for a gated relay URL reaches iroh as
+///     `RelayConfig::with_auth_token`, gets sent as `Authorization: Bearer`
+///     on the WebSocket upgrade, and the relay admits the endpoint.
+///  2. The wrong token (or no token) is rejected with `not authorized` and
+///     the endpoint never reaches `online()`.
+///  3. Mixed maps work: a gated relay with the right token coexists with a
+///     public relay (no token) in the same `RelayMap`.
+#[cfg(test)]
+mod gated_relay_e2e_tests {
+    use super::relay_map_from_urls;
+    use futures_util::StreamExt;
+    use iroh::SecretKey;
+    use iroh::Watcher;
+    use iroh::endpoint::{Endpoint, RelayMode, presets};
+    use iroh::test_utils::run_relay_server_with_access;
+    use iroh_relay::server::{Access, AccessConfig};
+    use iroh_relay::tls::CaRootsConfig;
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    /// Spawn an in-process iroh-relay that only admits `expected_token`.
+    /// Returns (relay_url_string, drop-guard server).
+    async fn spawn_gated_relay(
+        expected_token: &'static str,
+    ) -> (String, iroh_relay::server::Server) {
+        let access = AccessConfig::Restricted(Box::new(move |request| {
+            Box::pin(async move {
+                if request.auth_token().as_deref() == Some(expected_token) {
+                    Access::Allow
+                } else {
+                    Access::Deny
+                }
+            })
+        }));
+        let (_relay_map, relay_url, server) = run_relay_server_with_access(false, access)
+            .await
+            .expect("spawn gated relay");
+        (relay_url.to_string(), server)
+    }
+
+    /// Build an `Endpoint` configured the same way `bind_mesh_endpoint` does,
+    /// but using `relay_map_from_urls` for the relay map and accepting the
+    /// relay's self-signed test cert via `insecure_skip_verify`.
+    async fn build_endpoint(
+        relay_urls: &[String],
+        relay_auths: &HashMap<String, String>,
+    ) -> Endpoint {
+        Endpoint::builder(presets::Minimal)
+            .secret_key(SecretKey::generate())
+            .relay_mode(RelayMode::Custom(relay_map_from_urls(
+                relay_urls,
+                relay_auths,
+            )))
+            .ca_roots_config(CaRootsConfig::insecure_skip_verify())
+            .bind()
+            .await
+            .expect("endpoint bind")
+    }
+
+    #[tokio::test]
+    async fn matching_token_admits_endpoint_to_gated_relay() {
+        const TOKEN: &str = "secret-token";
+        let (relay_url, _server) = spawn_gated_relay(TOKEN).await;
+
+        let urls = vec![relay_url.clone()];
+        let mut auths = HashMap::new();
+        auths.insert(relay_url, TOKEN.to_string());
+
+        let ep = build_endpoint(&urls, &auths).await;
+        tokio::time::timeout(Duration::from_secs(5), ep.online())
+            .await
+            .expect("endpoint with matching token should come online");
+    }
+
+    #[tokio::test]
+    async fn wrong_token_is_rejected_by_gated_relay() {
+        const TOKEN: &str = "secret-token";
+        let (relay_url, _server) = spawn_gated_relay(TOKEN).await;
+
+        let urls = vec![relay_url.clone()];
+        let mut auths = HashMap::new();
+        auths.insert(relay_url, "wrong-token".to_string());
+
+        let ep = build_endpoint(&urls, &auths).await;
+
+        // Observe the relay-side denial via home_relay_status before falling
+        // back to the timeout. We must see `not authorized` to prove the
+        // token actually reached the relay (rather than e.g. silently being
+        // dropped before the WebSocket upgrade).
+        let mut stream = ep.home_relay_status().stream();
+        let auth_err = tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(status) = stream.next().await {
+                if let Some(err) = status.iter().filter_map(|s| s.last_error()).next() {
+                    return Some(format!("{err:#}"));
+                }
+            }
+            None
+        })
+        .await
+        .expect("home relay status should report an error within 5s")
+        .expect("home relay status should yield an error");
+        assert!(
+            auth_err.contains("not authorized"),
+            "expected 'not authorized' in error, got: {auth_err}"
+        );
+
+        // And the endpoint must NOT come online.
+        let online = tokio::time::timeout(Duration::from_millis(500), ep.online()).await;
+        assert!(
+            online.is_err(),
+            "endpoint with wrong token must not reach online() within 500ms"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_token_for_gated_relay_is_rejected() {
+        const TOKEN: &str = "secret-token";
+        let (relay_url, _server) = spawn_gated_relay(TOKEN).await;
+
+        // No auth in the map at all → relay must deny.
+        let urls = vec![relay_url];
+        let auths = HashMap::new();
+        let ep = build_endpoint(&urls, &auths).await;
+
+        let online = tokio::time::timeout(Duration::from_millis(500), ep.online()).await;
+        assert!(
+            online.is_err(),
+            "endpoint without a token must not be admitted by a gated relay"
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_map_authenticates_only_the_gated_relay() {
+        const TOKEN: &str = "secret-token";
+        let (gated_url, _gated) = spawn_gated_relay(TOKEN).await;
+
+        // Spin up a second, fully-open relay to stand in for a public iroh
+        // relay sharing the same map.
+        let (_public_map, public_url, _public) =
+            run_relay_server_with_access(false, AccessConfig::Everyone)
+                .await
+                .expect("spawn public relay");
+        let public_url = public_url.to_string();
+
+        let urls = vec![gated_url.clone(), public_url.clone()];
+        let mut auths = HashMap::new();
+        auths.insert(gated_url, TOKEN.to_string());
+        // Public relay intentionally absent from `auths`.
+
+        let ep = build_endpoint(&urls, &auths).await;
+        tokio::time::timeout(Duration::from_secs(5), ep.online())
+            .await
+            .expect("endpoint should come online via the mixed relay map");
+    }
 }
 
 fn encode_endpoint_addr_token(addr: &EndpointAddr) -> String {
@@ -311,7 +711,7 @@ async fn write_artifact_transfer_response(
     error: Option<&str>,
 ) -> Result<()> {
     let response = skippy_stage_proto::StageArtifactTransferResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         accepted,
         total_size,
         sha256: sha256.map(str::to_string),
@@ -479,7 +879,7 @@ fn owner_control_error_envelope(
     message: impl Into<String>,
 ) -> crate::proto::node::OwnerControlEnvelope {
     crate::proto::node::OwnerControlEnvelope {
-        gen: NODE_PROTOCOL_GENERATION,
+        r#gen: NODE_PROTOCOL_GENERATION,
         handshake: None,
         request: None,
         response: None,
@@ -535,6 +935,7 @@ fn infer_remote_served_descriptors(
                 capabilities_known: false,
                 capabilities: crate::models::ModelCapabilities::default(),
                 topology: None,
+                metadata: None,
             }
         })
         .collect()
@@ -727,6 +1128,7 @@ fn descriptor_from_identity(
         capabilities_known: true,
         capabilities,
         topology,
+        metadata: crate::models::served_model_metadata_for_path(model_name, &path),
     }
 }
 
@@ -848,7 +1250,8 @@ fn model_descriptor_score(descriptor: &ServedModelDescriptor) -> u8 {
         + u8::from(descriptor.capabilities.vision != crate::models::CapabilityLevel::None)
         + u8::from(descriptor.capabilities.reasoning != crate::models::CapabilityLevel::None)
         + u8::from(descriptor.capabilities.tool_use != crate::models::CapabilityLevel::None);
-    model_identity_score(identity) + capability_bonus
+    let metadata_bonus = u8::from(descriptor.metadata.is_some());
+    model_identity_score(identity) + capability_bonus + metadata_bonus
 }
 
 fn upsert_mesh_catalog_descriptor(
@@ -1368,6 +1771,7 @@ fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig {
 async fn bind_mesh_endpoint(
     secret_key: SecretKey,
     relay_urls: &[String],
+    relay_auths: &std::collections::HashMap<String, String>,
     quic_bind: QuicBindSelection,
 ) -> Result<Endpoint> {
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
@@ -1382,6 +1786,7 @@ async fn bind_mesh_endpoint(
     tracing::info!("Relay: {:?}", urls);
     builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
         &urls,
+        relay_auths,
     )));
 
     if let Some(addr) = quic_bind_addr(quic_bind) {
@@ -1517,12 +1922,14 @@ fn init_owner_runtime(
 fn configure_control_relay(
     mut builder: iroh::endpoint::Builder,
     relay_urls: Option<&[String]>,
+    relay_auths: &std::collections::HashMap<String, String>,
 ) -> iroh::endpoint::Builder {
     if let Some(relay_urls) = relay_urls {
         let urls = effective_relay_urls(relay_urls);
         tracing::info!("Owner-control relay: {:?}", urls);
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
             &urls,
+            relay_auths,
         )));
     } else {
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Disabled);
@@ -1567,6 +1974,7 @@ pub struct Node {
     routing_metrics: crate::network::metrics::RoutingMetrics,
     routing_telemetry:
         Arc<std::sync::Mutex<Option<Arc<dyn crate::network::metrics::RoutingTelemetrySink>>>>,
+    swarm_capture: Arc<std::sync::Mutex<Option<crate::capture::SwarmCaptureRecorder>>>,
     local_request_metrics: Arc<LocalRequestMetricsSampler>,
     runtime_data_producer: crate::runtime_data::RuntimeDataProducer,
     tunnel_tx: tokio::sync::mpsc::Sender<(iroh::endpoint::SendStream, iroh::endpoint::RecvStream)>,
@@ -1655,11 +2063,11 @@ impl LocalRequestMetricsSampler {
             .lock()
             .expect("pretty request metrics mutex poisoned");
         guard.prune(now_sec);
-        if let Some((second, count)) = guard.accepted_by_second.back_mut() {
-            if *second == now_sec {
-                *count += 1;
-                return;
-            }
+        if let Some((second, count)) = guard.accepted_by_second.back_mut()
+            && *second == now_sec
+        {
+            *count += 1;
+            return;
         }
         guard.accepted_by_second.push_back((now_sec, 1));
     }
@@ -1970,14 +2378,13 @@ impl StageTopologyState {
         if !runtime_status.bind_addr.is_empty() && !runtime_status.bind_addr.ends_with(":0") {
             let topology_key =
                 stage_topology_key(&runtime_status.topology_id, &runtime_status.run_id);
-            if let Some(topology) = self.topologies.get_mut(&topology_key) {
-                if let Some(stage) = topology
+            if let Some(topology) = self.topologies.get_mut(&topology_key)
+                && let Some(stage) = topology
                     .stages
                     .iter_mut()
                     .find(|stage| stage.stage_id == runtime_status.stage_id)
-                {
-                    stage.endpoint.bind_addr = runtime_status.bind_addr.clone();
-                }
+            {
+                stage.endpoint.bind_addr = runtime_status.bind_addr.clone();
             }
         }
         self.statuses.insert(
@@ -2048,6 +2455,280 @@ impl crate::inference::skippy::StagePackagePrefetcher for Node {
         request: &crate::inference::skippy::StagePrepareRequest,
     ) -> Result<()> {
         self.prefetch_stage_package_from_coordinator(request).await
+    }
+}
+
+impl Node {
+    pub(crate) fn set_swarm_capture_recorder(
+        &self,
+        recorder: Option<crate::capture::SwarmCaptureRecorder>,
+    ) {
+        *self
+            .swarm_capture
+            .lock()
+            .expect("swarm capture recorder lock poisoned") = recorder;
+    }
+
+    fn swarm_capture_recorder(&self) -> Option<crate::capture::SwarmCaptureRecorder> {
+        self.swarm_capture
+            .lock()
+            .expect("swarm capture recorder lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn swarm_capture_enabled(&self) -> bool {
+        self.swarm_capture
+            .lock()
+            .expect("swarm capture recorder lock poisoned")
+            .is_some()
+    }
+
+    fn capture_event(&self, event: &str, fields: impl FnOnce() -> serde_json::Value) {
+        if let Some(recorder) = self.swarm_capture_recorder() {
+            recorder.record_event(event, fields());
+        }
+    }
+
+    pub(crate) fn capture_peer_observation(
+        &self,
+        event: &str,
+        peer: &PeerInfo,
+        source: &str,
+        bridge_id: Option<EndpointId>,
+    ) {
+        self.capture_event(event, || peer_capture_fields(peer, source, bridge_id));
+    }
+
+    pub(crate) fn capture_peer_rejected(
+        &self,
+        id: EndpointId,
+        _addr: &EndpointAddr,
+        ann: &PeerAnnouncement,
+        owner_summary: &OwnershipSummary,
+        source: &str,
+        bridge_id: Option<EndpointId>,
+    ) {
+        self.capture_event("peer_rejected", || {
+            json!({
+                "peer": endpoint_id_capture_fields(id),
+                "source": source,
+                "bridge": bridge_id.map(endpoint_id_capture_fields),
+                "role": &ann.role,
+                "version": &ann.version,
+                "hostname": &ann.hostname,
+                "mesh_id": &ann.mesh_id,
+                "models": &ann.models,
+                "serving_models": &ann.serving_models,
+                "hosted_models": &ann.hosted_models,
+                "available_models": &ann.available_models,
+                "requested_models": &ann.requested_models,
+                "gpu_name": &ann.gpu_name,
+                "is_soc": ann.is_soc,
+                "vram_bytes": ann.vram_bytes,
+                "latency_ms": ann.latency_ms,
+                "latency_source": ann.latency_source.map(|value| value.as_str_name()),
+                "owner": owner_summary,
+            })
+        });
+    }
+
+    pub(crate) fn capture_gossip_inbound(
+        &self,
+        remote: EndpointId,
+        protocol: ControlProtocol,
+        announcement_count: usize,
+    ) {
+        self.capture_event("gossip_inbound", || {
+            json!({
+                "remote": endpoint_id_capture_fields(remote),
+                "protocol": format!("{protocol:?}"),
+                "announcement_count": announcement_count,
+            })
+        });
+    }
+
+    pub(crate) fn capture_path_observation(
+        &self,
+        remote: EndpointId,
+        path_type: &str,
+        rtt_ms: Option<u32>,
+        observed_direct_remote_addr: Option<SocketAddr>,
+        source: &str,
+    ) {
+        let observed_via_relay = path_type == "relay";
+        self.capture_event("peer_path_observed", || json!({
+            "remote": endpoint_id_capture_fields(remote),
+            "path_type": path_type,
+            "rtt_ms": rtt_ms,
+            "observed_direct_remote_addr": observed_direct_remote_addr.map(|addr| addr.to_string()),
+            "observed_via_relay": observed_via_relay,
+            "direct_addr_available": observed_direct_remote_addr.is_some(),
+            "source": source,
+        }));
+    }
+
+    pub(crate) fn capture_selected_connection_path(
+        &self,
+        remote: EndpointId,
+        conn: &Connection,
+        source: &str,
+    ) -> Option<SelectedPathObservation> {
+        let observation = selected_path_observation(conn)?;
+        self.capture_path_observation(
+            remote,
+            observation.path_type,
+            observation.rtt_ms,
+            observation.observed_direct_remote_addr,
+            source,
+        );
+        Some(observation)
+    }
+
+    pub(crate) fn capture_connection_event(&self, event: ConnectionCaptureEvent<'_>) {
+        self.capture_event(event.event, || {
+            json!({
+                "remote": endpoint_id_capture_fields(event.remote),
+                "direction": event.direction,
+                "phase": event.phase,
+                "protocol": event.protocol.map(|value| format!("{value:?}")),
+                "path_type": event.path_type,
+                "rtt_ms": event.rtt_ms,
+                "admitted_peer": event.admitted_peer,
+                "reason": event.reason,
+            })
+        });
+    }
+
+    pub(crate) fn capture_direct_proof_of_life(
+        &self,
+        remote: EndpointId,
+        protocol: ControlProtocol,
+        announcement_count: usize,
+        recovered_from_dead: bool,
+        prior_state: &str,
+    ) {
+        self.capture_event("peer_direct_proof_of_life", || {
+            json!({
+                "remote": endpoint_id_capture_fields(remote),
+                "protocol": format!("{protocol:?}"),
+                "announcement_count": announcement_count,
+                "recovered_from_dead": recovered_from_dead,
+                "prior_state": prior_state,
+            })
+        });
+    }
+
+    pub(crate) fn capture_peer_lifecycle_event(&self, event: PeerLifecycleCaptureEvent<'_>) {
+        self.capture_event(event.event, || {
+            json!({
+                "peer": endpoint_id_capture_fields(event.peer),
+                "reason": event.reason,
+                "reporter": event.reporter.map(endpoint_id_capture_fields),
+                "last_seen_age_ms": event.last_seen_age_ms,
+                "last_mentioned_age_ms": event.last_mentioned_age_ms,
+                "had_connection": event.had_connection,
+                "bridge": event.bridge_id.map(endpoint_id_capture_fields),
+            })
+        });
+    }
+
+    pub(crate) async fn capture_peer_lifecycle_snapshot(
+        &self,
+        event: &str,
+        peer: EndpointId,
+        reason: &str,
+        reporter: Option<EndpointId>,
+    ) {
+        if !self.swarm_capture_enabled() {
+            return;
+        }
+
+        let (last_seen_age_ms, last_mentioned_age_ms, had_connection, bridge_id) = {
+            let state = self.state.lock().await;
+            let peer_info = state.peers.get(&peer);
+            (
+                peer_info.map(|info| elapsed_ms_u64(info.last_seen.elapsed())),
+                peer_info.map(|info| elapsed_ms_u64(info.last_mentioned.elapsed())),
+                Some(state.connections.contains_key(&peer)),
+                peer_info
+                    .and_then(|info| info.propagated_latency.as_ref())
+                    .and_then(|latency| latency.observer_id),
+            )
+        };
+        self.capture_peer_lifecycle_event(PeerLifecycleCaptureEvent {
+            event,
+            peer,
+            reason,
+            reporter,
+            last_seen_age_ms,
+            last_mentioned_age_ms,
+            had_connection,
+            bridge_id,
+        });
+    }
+
+    pub(crate) fn capture_stream_observation(
+        &self,
+        remote: EndpointId,
+        stream_type: u8,
+        protocol: ControlProtocol,
+        admitted: bool,
+    ) {
+        self.capture_event("mesh_stream_observed", || {
+            json!({
+                "remote": endpoint_id_capture_fields(remote),
+                "stream_type": stream_type,
+                "protocol": format!("{protocol:?}"),
+                "admitted": admitted,
+            })
+        });
+    }
+
+    pub(crate) fn capture_stream_rejected(
+        &self,
+        remote: EndpointId,
+        stream_type: u8,
+        protocol: ControlProtocol,
+        reason: &str,
+    ) {
+        self.capture_event("mesh_stream_rejected", || {
+            json!({
+                "remote": endpoint_id_capture_fields(remote),
+                "stream_type": stream_type,
+                "protocol": format!("{protocol:?}"),
+                "reason": reason,
+            })
+        });
+    }
+
+    pub(crate) fn capture_route_request(
+        &self,
+        remote: EndpointId,
+        protocol: ControlProtocol,
+        outcome: &str,
+    ) {
+        self.capture_event("route_request", || {
+            json!({
+                "remote": endpoint_id_capture_fields(remote),
+                "protocol": format!("{protocol:?}"),
+                "outcome": outcome,
+            })
+        });
+    }
+
+    pub(crate) fn capture_http_request(&self, event: HttpCaptureEvent<'_>) {
+        self.capture_event(event.event, || {
+            json!({
+                "source_addr": event.source_addr.map(|addr| addr.to_string()),
+                "method": event.method,
+                "path": crate::capture::http_path_without_query(event.path),
+                "query_present": event.path.contains('?'),
+                "body_len_bytes": event.body_len_bytes,
+                "model": event.model_name,
+                "completion_tokens": event.completion_tokens,
+                "stream": event.stream,
+            })
+        });
     }
 }
 
@@ -2385,7 +3066,7 @@ impl Node {
         use prost::Message as _;
 
         let open = skippy_protocol::proto::stage::StageTransportOpen {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: self.endpoint.id().as_bytes().to_vec(),
             topology_id: topology_id.into(),
             run_id: run_id.into(),
@@ -2575,15 +3256,18 @@ impl Node {
 
     pub async fn start(
         role: NodeRole,
-        relay_urls: &[String],
+        relay: RelayConfig<'_>,
         quic_bind: QuicBindSelection,
         max_vram_gb: Option<f64>,
         enumerate_host: bool,
         owner_config: Option<OwnerRuntimeConfig>,
         config_path: Option<&std::path::Path>,
     ) -> Result<(Self, TunnelChannels)> {
+        let relay_urls = relay.urls;
+        let relay_auths = relay.auths;
         let secret_key = startup_secret_key(&role).await?;
-        let endpoint = bind_mesh_endpoint(secret_key.clone(), relay_urls, quic_bind).await?;
+        let endpoint =
+            bind_mesh_endpoint(secret_key.clone(), relay_urls, relay_auths, quic_bind).await?;
         // Wait briefly for relay connection so the invite token includes the relay URL.
         // On sinkholed networks this times out and we proceed without relay (direct UDP only).
         wait_for_endpoint_online(
@@ -2674,6 +3358,7 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+            swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
             runtime_data_producer,
             tunnel_tx,
@@ -2712,6 +3397,7 @@ impl Node {
                 .as_ref()
                 .and_then(|config| config.control_advertise_addr),
             Some(relay_urls),
+            relay_auths,
         )
         .await?;
 
@@ -2815,6 +3501,7 @@ impl Node {
             inflight_change_tx,
             routing_metrics: crate::network::metrics::RoutingMetrics::default(),
             routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
+            swarm_capture: Arc::new(std::sync::Mutex::new(None)),
             local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
             runtime_data_producer,
             tunnel_tx,
@@ -2855,6 +3542,7 @@ impl Node {
         bind_addr: Option<std::net::SocketAddr>,
         advertise_addr: Option<std::net::SocketAddr>,
         relay_urls: Option<&[String]>,
+        relay_auths: &std::collections::HashMap<String, String>,
     ) -> Result<()> {
         if self.local_verified_owner_id().await.is_none() {
             return Ok(());
@@ -2864,7 +3552,7 @@ impl Node {
             .secret_key(secret_key)
             .alpns(vec![ALPN_CONTROL_V1.to_vec()])
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?;
-        builder = configure_control_relay(builder, relay_urls);
+        builder = configure_control_relay(builder, relay_urls, relay_auths);
         let endpoint = builder.bind().await?;
         if relay_urls.is_some() {
             wait_for_endpoint_online(
@@ -2954,10 +3642,10 @@ impl Node {
     pub fn invite_token(&self) -> String {
         let mut addr = self.endpoint_addr_for_advertisement();
         // Inject STUN-discovered public address if relay STUN didn't provide one.
-        if let Some(pub_addr) = self.public_addr {
-            if !endpoint_addr_has_public_ipv4(&addr) {
-                addr.addrs.insert(TransportAddr::Ip(pub_addr));
-            }
+        if let Some(pub_addr) = self.public_addr
+            && !endpoint_addr_has_public_ipv4(&addr)
+        {
+            addr.addrs.insert(TransportAddr::Ip(pub_addr));
         }
         addr = filter_endpoint_addr_for_bind_ip(addr, self.quic_bind.ip);
         let json = serde_json::to_vec(&addr).expect("serializable");
@@ -3225,6 +3913,34 @@ impl Node {
         self.served_model_descriptors.lock().await.clone()
     }
 
+    pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
+        let mut descriptors = self.served_model_descriptors.lock().await.clone();
+        let peer_descriptors = {
+            let state = self.state.lock().await;
+            state
+                .peers
+                .values()
+                .flat_map(|peer| peer.served_model_descriptors.clone())
+                .collect::<Vec<_>>()
+        };
+        descriptors.extend(peer_descriptors);
+        descriptors
+    }
+
+    pub async fn all_model_runtime_descriptors(&self) -> Vec<ModelRuntimeDescriptor> {
+        let mut runtimes = self.model_runtime_descriptors.lock().await.clone();
+        let peer_runtimes = {
+            let state = self.state.lock().await;
+            state
+                .peers
+                .values()
+                .flat_map(|peer| peer.served_model_runtime.clone())
+                .collect::<Vec<_>>()
+        };
+        runtimes.extend(peer_runtimes);
+        runtimes
+    }
+
     pub async fn serving_models(&self) -> Vec<String> {
         self.serving_models.lock().await.clone()
     }
@@ -3259,11 +3975,18 @@ impl Node {
             Vec::new()
         };
         for descriptor in &mut descriptors {
+            if descriptor.metadata.is_none() {
+                descriptor.metadata =
+                    crate::models::served_model_metadata_for_model(&descriptor.identity.model_name);
+            }
             if let Some(existing) = existing_by_name.get(&descriptor.identity.model_name) {
                 descriptor.capabilities = existing.capabilities;
                 descriptor.capabilities_known = existing.capabilities_known;
                 if existing.topology.is_some() {
                     descriptor.topology = existing.topology.clone();
+                }
+                if existing.metadata.is_some() {
+                    descriptor.metadata = existing.metadata.clone();
                 }
             }
         }
@@ -3310,21 +4033,20 @@ impl Node {
         detail_json: String,
     ) {
         let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager {
-            if let Err(err) = plugin_manager
+        if let Some(plugin_manager) = plugin_manager
+            && let Err(err) = plugin_manager
                 .broadcast_mesh_event(
                     self.build_mesh_event(kind, peer.map(peer_info_to_mesh_peer), detail_json)
                         .await,
                 )
                 .await
-            {
-                tracing::debug!(
-                    "Failed to deliver plugin mesh event {:?} for {}: {err}",
-                    kind,
-                    peer.map(|p| p.id.fmt_short().to_string())
-                        .unwrap_or_else(|| self.endpoint.id().fmt_short().to_string())
-                );
-            }
+        {
+            tracing::debug!(
+                "Failed to deliver plugin mesh event {:?} for {}: {err}",
+                kind,
+                peer.map(|p| p.id.fmt_short().to_string())
+                    .unwrap_or_else(|| self.endpoint.id().fmt_short().to_string())
+            );
         }
     }
 
@@ -3627,6 +4349,17 @@ impl Node {
                 }
                 self.broadcast_plugin_bulk_frame(&frame, None).await
             }
+            crate::plugin::PluginMeshEvent::OpenStream {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let response = self
+                    .open_outbound_plugin_mesh_stream(plugin_id, request)
+                    .await;
+                let _ = response_tx.send(response);
+                Ok(())
+            }
         }
     }
 
@@ -3637,18 +4370,17 @@ impl Node {
         noun: &str,
     ) -> bool {
         let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager {
-            if !plugin_manager
+        if let Some(plugin_manager) = plugin_manager
+            && !plugin_manager
                 .plugin_declares_mesh_channel(plugin_id, channel)
                 .await
-            {
-                tracing::debug!(
-                    plugin = %plugin_id,
-                    channel = %channel,
-                    "Dropping outbound {noun} for undeclared mesh channel"
-                );
-                return false;
-            }
+        {
+            tracing::debug!(
+                plugin = %plugin_id,
+                channel = %channel,
+                "Dropping outbound {noun} for undeclared mesh channel"
+            );
+            return false;
         }
         true
     }
@@ -4173,7 +4905,7 @@ impl Node {
         let (mut send, recv) = conn.open_bi().await?;
         send.write_all(&[STREAM_SUBPROTOCOL]).await?;
         let open = crate::proto::node::MeshSubprotocolOpen {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             name: name.to_string(),
             major,
         };
@@ -4302,9 +5034,14 @@ impl Node {
         }
     }
 
-    async fn remember_incoming_connection(&self, remote: EndpointId, conn: &Connection) -> bool {
+    async fn remember_incoming_connection(
+        &self,
+        remote: EndpointId,
+        conn: &Connection,
+    ) -> (bool, bool) {
         let mut state = self.state.lock().await;
         let was_dead = state.dead_peers.remove(&remote).is_some();
+        let admitted = state.peers.contains_key(&remote);
         if was_dead {
             emit_mesh_info(format!(
                 "🔄 Previously dead peer {} reconnected",
@@ -4312,7 +5049,7 @@ impl Node {
             ));
         }
         state.connections.insert(remote, conn.clone());
-        was_dead
+        (was_dead, admitted)
     }
 
     fn spawn_reconnect_gossip(&self, conn: Connection, remote: EndpointId) {
@@ -4336,7 +5073,19 @@ impl Node {
 
         // Store connection for stream dispatch (tunneling, route requests, etc.)
         // Don't add to peer list yet — only gossip exchange promotes to peer.
-        let was_dead = self.remember_incoming_connection(remote, &conn).await;
+        let (was_dead, admitted) = self.remember_incoming_connection(remote, &conn).await;
+        self.capture_connection_event(ConnectionCaptureEvent {
+            event: "peer_connection_accepted",
+            remote,
+            direction: "inbound",
+            phase: "accept",
+            protocol: Some(connection_protocol(&conn)),
+            path_type: None,
+            rtt_ms: None,
+            admitted_peer: Some(admitted),
+            reason: was_dead.then_some("previously_dead"),
+        });
+        self.capture_selected_connection_path(remote, &conn, "inbound_connection_accept_path");
 
         // If this peer was previously dead, immediately gossip to restore their
         // assigned/routable state in our peer list. Without this, models served by the
@@ -4667,9 +5416,21 @@ impl Node {
         &self,
         conn: &Connection,
         remote: EndpointId,
+        protocol: ControlProtocol,
     ) -> Result<AcceptedMeshStream, ()> {
         let (send, mut recv) = conn.accept_bi().await.map_err(|error| {
             tracing::info!("Connection to {} closed: {error}", remote.fmt_short());
+            self.capture_connection_event(ConnectionCaptureEvent {
+                event: "peer_connection_closed",
+                remote,
+                direction: "unknown",
+                phase: "accept_bi",
+                protocol: Some(protocol),
+                path_type: None,
+                rtt_ms: None,
+                admitted_peer: None,
+                reason: Some("accept_bi_error"),
+            });
         })?;
         let mut type_buf = [0u8; 1];
         if recv.read_exact(&mut type_buf).await.is_err() {
@@ -4685,20 +5446,29 @@ impl Node {
     async fn admitted_mesh_stream(
         &self,
         remote: EndpointId,
+        protocol: ControlProtocol,
         stream_type: u8,
         send: iroh::endpoint::SendStream,
         recv: iroh::endpoint::RecvStream,
     ) -> Option<MeshBiStream> {
+        let capture_streams = self.swarm_capture_enabled();
         if stream_allowed_before_admission(stream_type) {
+            if capture_streams {
+                self.capture_stream_observation(remote, stream_type, protocol, true);
+            }
             return Some((send, recv));
         }
         let admitted = {
             let state = self.state.lock().await;
             state.peers.contains_key(&remote)
         };
+        if capture_streams {
+            self.capture_stream_observation(remote, stream_type, protocol, admitted);
+        }
         if admitted {
             Some((send, recv))
         } else {
+            self.capture_stream_rejected(remote, stream_type, protocol, "unadmitted_peer");
             tracing::warn!(
                 "Quarantine: stream {:#04x} from unadmitted peer {} rejected — peer must complete gossip first",
                 stream_type,
@@ -4727,11 +5497,14 @@ impl Node {
 
     async fn reconnect_closed_connection_or_remove(&self, remote: EndpointId, addr: EndpointAddr) {
         tracing::info!("Attempting reconnect to {}...", remote.fmt_short());
-        if let Some(new_conn) = self.reconnect_closed_peer(remote, addr).await {
-            self.complete_recovered_connection(remote, new_conn).await;
-        } else {
-            tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
-            self.remove_peer(remote).await;
+        match self.reconnect_closed_peer(remote, addr).await {
+            Some(new_conn) => {
+                self.complete_recovered_connection(remote, new_conn).await;
+            }
+            _ => {
+                tracing::info!("Reconnect to {} failed — removing peer", remote.fmt_short());
+                self.remove_peer(remote).await;
+            }
         }
     }
 
@@ -4859,6 +5632,7 @@ impl Node {
 
     fn spawn_route_request_stream(
         &self,
+        remote: EndpointId,
         protocol: ControlProtocol,
         send: iroh::endpoint::SendStream,
         mut recv: iroh::endpoint::RecvStream,
@@ -4872,6 +5646,7 @@ impl Node {
                         tracing::warn!(
                             "Route request: failed to read proto body — rejecting: {error}"
                         );
+                        node.capture_route_request(remote, protocol, "read_error");
                         return;
                     }
                 };
@@ -4880,11 +5655,13 @@ impl Node {
                     Ok(request) => request,
                     Err(error) => {
                         tracing::warn!("Route request: invalid protobuf — rejecting: {error}");
+                        node.capture_route_request(remote, protocol, "decode_error");
                         return;
                     }
                 };
                 if let Err(error) = req.validate_frame() {
                     tracing::warn!("Route request: frame validation failed — rejecting: {error}");
+                    node.capture_route_request(remote, protocol, "validation_error");
                     return;
                 }
             }
@@ -4892,7 +5669,14 @@ impl Node {
             let mut send = send;
             let table = node.routing_table().await;
             let proto_table = routing_table_to_proto(&table);
-            let _ = write_len_prefixed(&mut send, &proto_table.encode_to_vec()).await;
+            if write_len_prefixed(&mut send, &proto_table.encode_to_vec())
+                .await
+                .is_err()
+            {
+                node.capture_route_request(remote, protocol, "write_error");
+                return;
+            }
+            node.capture_route_request(remote, protocol, "served");
             let _ = send.finish();
         });
     }
@@ -4925,6 +5709,23 @@ impl Node {
             if let Err(error) = node.handle_plugin_bulk_stream(remote, send, recv).await {
                 tracing::debug!(
                     "Plugin bulk stream error from {}: {error}",
+                    remote.fmt_short()
+                );
+            }
+        });
+    }
+
+    fn spawn_plugin_mesh_stream(
+        &self,
+        remote: EndpointId,
+        send: iroh::endpoint::SendStream,
+        recv: iroh::endpoint::RecvStream,
+    ) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = node.handle_plugin_mesh_stream(remote, send, recv).await {
+                tracing::debug!(
+                    "Plugin mesh stream error from {}: {error}",
                     remote.fmt_short()
                 );
             }
@@ -5201,11 +6002,12 @@ impl Node {
         match stream_type {
             STREAM_GOSSIP => self.spawn_gossip_stream(remote, protocol, send, recv),
             STREAM_TUNNEL_MAP => self.spawn_tunnel_map_stream(remote, protocol, recv),
-            STREAM_ROUTE_REQUEST => self.spawn_route_request_stream(protocol, send, recv),
+            STREAM_ROUTE_REQUEST => self.spawn_route_request_stream(remote, protocol, send, recv),
             STREAM_PEER_DOWN => self.spawn_peer_down_stream(remote, recv),
             STREAM_PEER_LEAVING => self.spawn_peer_leaving_stream(remote, recv),
             STREAM_PLUGIN_CHANNEL => self.spawn_plugin_channel_stream(remote, send, recv),
             STREAM_PLUGIN_BULK_TRANSFER => self.spawn_plugin_bulk_stream(remote, send, recv),
+            STREAM_PLUGIN_MESH_STREAM => self.spawn_plugin_mesh_stream(remote, send, recv),
             STREAM_SUBPROTOCOL => self.spawn_subprotocol_stream(remote, send, recv),
             other => tracing::warn!("Unknown stream type {other} from {}", remote.fmt_short()),
         }
@@ -5298,7 +6100,7 @@ impl Node {
         let protocol = connection_protocol(&conn);
         let dispatcher_stable_id = conn.stable_id();
         loop {
-            let accepted = match self.accept_mesh_stream(&conn, remote).await {
+            let accepted = match self.accept_mesh_stream(&conn, remote, protocol).await {
                 Ok(accepted) => accepted,
                 Err(()) => {
                     self.recover_closed_connection(remote, dispatcher_stable_id)
@@ -5307,7 +6109,13 @@ impl Node {
                 }
             };
             let Some((send, recv)) = self
-                .admitted_mesh_stream(remote, accepted.stream_type, accepted.send, accepted.recv)
+                .admitted_mesh_stream(
+                    remote,
+                    protocol,
+                    accepted.stream_type,
+                    accepted.send,
+                    accepted.recv,
+                )
                 .await
             else {
                 continue;
@@ -5457,6 +6265,43 @@ impl Node {
         }
     }
 
+    async fn execute_stage_control_request_for_peer(
+        &self,
+        remote: EndpointId,
+        request: crate::inference::skippy::StageControlRequest,
+    ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
+        match self.execute_stage_control_request(request.clone()).await {
+            Ok(response) => Ok(response),
+            Err(error) => Self::stage_control_load_failure_response(remote, request, error),
+        }
+    }
+
+    fn stage_control_load_failure_response(
+        remote: EndpointId,
+        request: crate::inference::skippy::StageControlRequest,
+        error: anyhow::Error,
+    ) -> anyhow::Result<crate::inference::skippy::StageControlResponse> {
+        let crate::inference::skippy::StageControlRequest::Load(load) = request else {
+            return Err(error);
+        };
+        let error_message = format!("{error:#}");
+        tracing::warn!(
+            peer = %remote.fmt_short(),
+            stage_id = %load.stage_id,
+            "stage load failed: {error_message}"
+        );
+        let mut status =
+            stage_status_from_load(&load, crate::inference::skippy::StageRuntimeState::Failed);
+        status.error = Some(error_message.clone());
+        Ok(crate::inference::skippy::StageControlResponse::Ready(
+            crate::inference::skippy::StageReadyResponse {
+                accepted: false,
+                status,
+                error: Some(error_message),
+            },
+        ))
+    }
+
     async fn handle_stage_control(
         &self,
         remote: EndpointId,
@@ -5486,7 +6331,9 @@ impl Node {
             self.record_stage_topology(stage_topology_from_load(self.endpoint.id(), load))
                 .await;
         }
-        let response = self.execute_stage_control_request(request).await?;
+        let response = self
+            .execute_stage_control_request_for_peer(remote, request)
+            .await?;
         self.record_stage_control_response(&response).await;
         let status_list_supported = self
             .peer_supports_skippy_subprotocol_feature(
@@ -5522,11 +6369,10 @@ impl Node {
                     {
                         if let Ok(path) =
                             crate::models::resolve_model_spec(std::path::Path::new(candidate)).await
+                            && path.exists()
                         {
-                            if path.exists() {
-                                load.model_path = Some(path.to_string_lossy().to_string());
-                                break;
-                            }
+                            load.model_path = Some(path.to_string_lossy().to_string());
+                            break;
                         }
                     }
                 }
@@ -5698,7 +6544,7 @@ impl Node {
         let mut partial_guard = PartialArtifactGuard::preserve_on_error(temp_path.clone());
 
         let frame = skippy_stage_proto::StageArtifactTransferRequest {
-            gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+            r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
             requester_id: self.endpoint.id().as_bytes().to_vec(),
             topology_id: load.topology_id.clone(),
             run_id: load.run_id.clone(),
@@ -6267,7 +7113,7 @@ impl Node {
         watch_response: crate::proto::node::OwnerControlWatchConfigResponse,
     ) -> crate::proto::node::OwnerControlEnvelope {
         crate::proto::node::OwnerControlEnvelope {
-            gen: NODE_PROTOCOL_GENERATION,
+            r#gen: NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(crate::proto::node::OwnerControlResponse {
@@ -6322,7 +7168,7 @@ impl Node {
         self.send_owner_control_envelope(
             send,
             crate::proto::node::OwnerControlEnvelope {
-                gen: NODE_PROTOCOL_GENERATION,
+                r#gen: NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(crate::proto::node::OwnerControlResponse {
@@ -6527,7 +7373,7 @@ impl Node {
                     let _ = self.config_revision_tx.send(revision);
                 }
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -6566,7 +7412,7 @@ impl Node {
             } => {
                 let _ = self.config_revision_tx.send(revision);
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -6587,7 +7433,7 @@ impl Node {
             }
             ApplyResult::ValidationError(error) | ApplyResult::PersistError(error) => {
                 crate::proto::node::OwnerControlEnvelope {
-                    gen: NODE_PROTOCOL_GENERATION,
+                    r#gen: NODE_PROTOCOL_GENERATION,
                     handshake: None,
                     request: None,
                     response: Some(crate::proto::node::OwnerControlResponse {
@@ -6636,7 +7482,7 @@ impl Node {
         self.send_owner_control_envelope(
             send,
             crate::proto::node::OwnerControlEnvelope {
-                gen: NODE_PROTOCOL_GENERATION,
+                r#gen: NODE_PROTOCOL_GENERATION,
                 handshake: None,
                 request: None,
                 response: Some(crate::proto::node::OwnerControlResponse {
@@ -7011,7 +7857,7 @@ fn stage_control_request_to_proto(
     };
 
     skippy_stage_proto::StageControlRequest {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         requester_id: requester_id.as_bytes().to_vec(),
         command: Some(command),
     }
@@ -7577,7 +8423,7 @@ fn stage_control_response_to_proto(
     };
 
     skippy_stage_proto::StageControlResponse {
-        gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+        r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
         response: Some(response),
     }
 }
@@ -8326,13 +9172,14 @@ fn ensure_private_node_key_file(path: &std::path::Path) -> Result<()> {
 mod artifact_transfer_io;
 mod gossip;
 mod heartbeat;
+mod plugin_streams;
 pub use gossip::backfill_legacy_descriptors;
 #[allow(unused_imports)]
 use gossip::{apply_transitive_ann, peer_meaningfully_changed};
 #[allow(unused_imports)]
-use heartbeat::{heartbeat_failure_policy_for_peer, HeartbeatFailurePolicy};
+use heartbeat::{HeartbeatFailurePolicy, heartbeat_failure_policy_for_peer};
 pub(crate) use heartbeat::{
-    peer_down_report_disposition, resolve_peer_down, PeerDownReportDisposition,
+    PeerDownReportDisposition, peer_down_report_disposition, resolve_peer_down,
 };
 
 #[cfg(test)]

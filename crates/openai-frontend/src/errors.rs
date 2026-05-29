@@ -1,7 +1,7 @@
 use axum::{
-    http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Json,
+    http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -178,7 +178,9 @@ fn map_upstream_kind(status_code: u16, upstream_type: &str) -> OpenAiErrorKind {
         (403, _) => OpenAiErrorKind::Permission,
         (404, _) => OpenAiErrorKind::NotFound,
         (429, _) => OpenAiErrorKind::RateLimit,
+        (502, _) => OpenAiErrorKind::ServiceUnavailable,
         (503, _) => OpenAiErrorKind::ServiceUnavailable,
+        (504, _) => OpenAiErrorKind::Timeout,
         _ => OpenAiErrorKind::Internal,
     }
 }
@@ -256,10 +258,10 @@ pub fn map_upstream_error_body(status_code: u16, body: &[u8]) -> Option<Vec<u8>>
     }
 
     let parsed = serde_json::from_slice::<Value>(body).ok();
-    if let Some(value) = parsed.as_ref() {
-        if already_openai_error(value) {
-            return None;
-        }
+    if let Some(value) = parsed.as_ref()
+        && already_openai_error(value)
+    {
+        return None;
     }
 
     let message = parsed
@@ -267,11 +269,7 @@ pub fn map_upstream_error_body(status_code: u16, body: &[u8]) -> Option<Vec<u8>>
         .and_then(extract_message)
         .or_else(|| {
             let text = String::from_utf8_lossy(body).trim().to_string();
-            if text.is_empty() {
-                None
-            } else {
-                Some(text)
-            }
+            if text.is_empty() { None } else { Some(text) }
         })
         .unwrap_or_else(|| "Unknown error".to_string());
 

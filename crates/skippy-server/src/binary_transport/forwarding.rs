@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use skippy_protocol::{
-    binary::{activation_state_flags_from_frame_flags, StageWireMessage, WireActivationDType},
     StageConfig,
+    binary::{StageWireMessage, WireActivationDType, activation_state_flags_from_frame_flags},
 };
 use skippy_runtime::ActivationFrame;
 
@@ -78,10 +78,10 @@ pub(crate) fn forwarded_stage_message_timed(
 mod tests {
     use super::*;
     use skippy_protocol::{
-        binary::{
-            activation_frame_flags_from_state_flags, state_flags, StageStateHeader, WireMessageKind,
-        },
         FlashAttentionType, LoadMode, PeerConfig, StageDevice, StageKvCacheConfig,
+        binary::{
+            StageStateHeader, WireMessageKind, activation_frame_flags_from_state_flags, state_flags,
+        },
     };
     use skippy_runtime::{ActivationDesc, RuntimeActivationDType, RuntimeActivationLayout};
 

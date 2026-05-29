@@ -1,5 +1,24 @@
 use super::*;
 
+pub(super) fn stage0_prefill_record_identities(
+    kv: &KvStageIntegration,
+    config: &StageConfig,
+    base: &MessageBase,
+    token_start: u64,
+    token_ids: &[i32],
+) -> Vec<crate::kv_integration::PrefillKvIdentity> {
+    kv.record_identities(config, base, token_start, token_ids)
+}
+
+pub(super) fn stage0_full_prefill_record_identities(
+    kv: &KvStageIntegration,
+    config: &StageConfig,
+    base: &MessageBase,
+    token_ids: &[i32],
+) -> Vec<crate::kv_integration::PrefillKvIdentity> {
+    stage0_prefill_record_identities(kv, config, base, 0, token_ids)
+}
+
 impl StageOpenAiBackend {
     pub(super) fn local_kv_message_base(
         &self,
@@ -137,14 +156,32 @@ impl StageOpenAiBackend {
             return Ok(());
         };
         let base = self.local_kv_message_base(session_id, ids);
-        let identity = kv.prefill_identity(&self.config, &base, token_start, token_ids);
-        let resident_record = {
+        let identities =
+            stage0_prefill_record_identities(kv, &self.config, &base, token_start, token_ids);
+        let record_candidate_count = identities.len();
+        let resident_records = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            kv.record_resident_prefix(&mut runtime, session_id, &identity, token_ids)
-                .map_err(openai_backend_error)?
+            identities
+                .iter()
+                .map(|identity| {
+                    let token_count = identity
+                        .identity
+                        .token_count
+                        .try_into()
+                        .unwrap_or(usize::MAX)
+                        .min(token_ids.len());
+                    kv.record_resident_prefix(
+                        &mut runtime,
+                        session_id,
+                        identity,
+                        &token_ids[..token_count],
+                    )
+                    .map_err(openai_backend_error)
+                })
+                .collect::<OpenAiResult<Vec<_>>>()?
         };
         let activation_record = kv.record_resident_activation(
             &self.config,
@@ -154,11 +191,17 @@ impl StageOpenAiBackend {
             activation_width,
             output,
         );
-        let mut attrs = self.openai_attrs(ids);
-        attrs.insert("skippy.kv.decision".to_string(), json!("stage0_record"));
-        attrs.insert("skippy.kv.token_start".to_string(), json!(token_start));
-        attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
-        if let Some(record) = resident_record {
+        let mut recorded_any = false;
+        for record in resident_records.into_iter().flatten() {
+            recorded_any = true;
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert("skippy.kv.decision".to_string(), json!("stage0_record"));
+            attrs.insert(
+                "skippy.kv.record_candidates".to_string(),
+                json!(record_candidate_count),
+            );
+            attrs.insert("skippy.kv.token_start".to_string(), json!(token_start));
+            attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
             attrs.insert(
                 "skippy.kv.recorded_page_id".to_string(),
                 json!(record.page_id),
@@ -171,8 +214,21 @@ impl StageOpenAiBackend {
                 "skippy.kv.resident_seq_id".to_string(),
                 json!(record.seq_id),
             );
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
         }
         if let Some(record) = activation_record {
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("stage0_activation_record"),
+            );
+            attrs.insert(
+                "skippy.kv.record_candidates".to_string(),
+                json!(record_candidate_count),
+            );
+            attrs.insert("skippy.kv.token_start".to_string(), json!(token_start));
+            attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
             attrs.insert(
                 "skippy.activation_cache.recorded_page_id".to_string(),
                 json!(record.page_id),
@@ -181,9 +237,20 @@ impl StageOpenAiBackend {
                 "skippy.activation_cache.payload_bytes".to_string(),
                 json!(record.payload_bytes),
             );
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
+        } else if !recorded_any {
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert("skippy.kv.decision".to_string(), json!("stage0_record"));
+            attrs.insert(
+                "skippy.kv.record_candidates".to_string(),
+                json!(record_candidate_count),
+            );
+            attrs.insert("skippy.kv.token_start".to_string(), json!(token_start));
+            attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
         }
-        self.telemetry
-            .emit("stage.openai_kv_record_decision", attrs);
         Ok(())
     }
 
@@ -200,22 +267,34 @@ impl StageOpenAiBackend {
             return Ok(false);
         }
         let base = self.local_kv_message_base(session_id, ids);
-        let identity = kv.prefill_identity(&self.config, &base, 0, token_ids);
-        let record = {
+        let identities = stage0_full_prefill_record_identities(kv, &self.config, &base, token_ids);
+        let record_candidate_count = identities.len();
+        let records = {
             let mut runtime = self
                 .runtime
                 .lock()
                 .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
-            kv.record_resident_prefix(&mut runtime, session_id, &identity, token_ids)
-                .map_err(openai_backend_error)?
+            identities
+                .iter()
+                .map(|identity| {
+                    kv.record_resident_prefix(&mut runtime, session_id, identity, token_ids)
+                        .map_err(openai_backend_error)
+                })
+                .collect::<OpenAiResult<Vec<_>>>()?
         };
-        let mut attrs = self.openai_attrs(ids);
-        attrs.insert(
-            "skippy.kv.decision".to_string(),
-            json!("stage0_full_prefill_record"),
-        );
-        attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
-        if let Some(record) = record {
+        let mut recorded_any = false;
+        for record in records.into_iter().flatten() {
+            recorded_any = true;
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("stage0_full_prefill_record"),
+            );
+            attrs.insert(
+                "skippy.kv.record_candidates".to_string(),
+                json!(record_candidate_count),
+            );
+            attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
             attrs.insert(
                 "skippy.kv.recorded_page_id".to_string(),
                 json!(record.page_id),
@@ -230,11 +309,22 @@ impl StageOpenAiBackend {
             );
             self.telemetry
                 .emit("stage.openai_kv_record_decision", attrs);
-            return Ok(true);
         }
-        self.telemetry
-            .emit("stage.openai_kv_record_decision", attrs);
-        Ok(false)
+        if !recorded_any {
+            let mut attrs = self.openai_attrs(ids);
+            attrs.insert(
+                "skippy.kv.decision".to_string(),
+                json!("stage0_full_prefill_record"),
+            );
+            attrs.insert(
+                "skippy.kv.record_candidates".to_string(),
+                json!(record_candidate_count),
+            );
+            attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
+            self.telemetry
+                .emit("stage.openai_kv_record_decision", attrs);
+        }
+        Ok(recorded_any)
     }
 
     pub(super) fn try_restore_embedded_split_prefill(

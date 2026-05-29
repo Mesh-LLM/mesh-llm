@@ -1,4 +1,4 @@
-use meshllm_ffi::{create_node, ClientEvent, EventListener, FfiError, ModelSearchQuery};
+use meshllm_ffi::{ClientEvent, EventListener, FfiError, ModelSearchQuery, create_node};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

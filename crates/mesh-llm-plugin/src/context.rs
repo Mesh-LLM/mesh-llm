@@ -1,11 +1,18 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::{
+    PROTOCOL_VERSION,
     helpers::{channel_message, json_channel_message},
-    io::{send_bulk_transfer_message, send_channel_message, write_envelope, LocalStream},
-    proto, PROTOCOL_VERSION,
+    io::{
+        LocalStream, connect_side_stream, read_envelope, send_bulk_transfer_message,
+        send_channel_message, write_envelope,
+    },
+    proto,
 };
+
+static NEXT_HOST_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 pub struct PluginContext<'a> {
     pub(crate) stream: &'a mut LocalStream,
@@ -84,5 +91,56 @@ impl<'a> PluginContext<'a> {
             },
         )
         .await
+    }
+
+    pub async fn open_mesh_stream(
+        &mut self,
+        request: proto::OpenMeshStreamRequest,
+    ) -> Result<proto::OpenMeshStreamResponse> {
+        let request_id = NEXT_HOST_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+        write_envelope(
+            self.stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: self.plugin_id.to_string(),
+                request_id,
+                payload: Some(proto::envelope::Payload::OpenMeshStreamRequest(request)),
+            },
+        )
+        .await?;
+
+        let response = read_envelope(self.stream).await?;
+        if response.request_id != request_id {
+            bail!(
+                "Received host response id {} while waiting for {}",
+                response.request_id,
+                request_id
+            );
+        }
+        match response.payload {
+            Some(proto::envelope::Payload::OpenMeshStreamResponse(response)) => Ok(response),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected open_mesh_stream response"),
+        }
+    }
+
+    pub async fn connect_mesh_stream(
+        &mut self,
+        request: proto::OpenMeshStreamRequest,
+    ) -> Result<LocalStream> {
+        let response = self.open_mesh_stream(request).await?;
+        if !response.accepted {
+            bail!(
+                "Host rejected mesh stream: {}",
+                response
+                    .message
+                    .unwrap_or_else(|| "no reason provided".into())
+            );
+        }
+        let endpoint = response
+            .endpoint
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Host accepted mesh stream without an endpoint"))?;
+        connect_side_stream(endpoint, response.transport_kind).await
     }
 }

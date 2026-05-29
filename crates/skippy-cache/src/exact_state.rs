@@ -108,12 +108,13 @@ impl<E: Clone> ExactStateCache<E> {
         );
 
         let (mut evicted_entries, mut evicted_logical_bytes) = self.evict_until_within_limits();
-        if self.max_bytes > 0 && self.blobs.physical_bytes() > self.max_bytes {
-            if let Some(entry) = self.entries.remove(&page_id) {
-                evicted_entries = evicted_entries.saturating_add(1);
-                evicted_logical_bytes = evicted_logical_bytes.saturating_add(entry.logical_bytes);
-                self.remove_entry(entry);
-            }
+        if self.max_bytes > 0
+            && self.blobs.physical_bytes() > self.max_bytes
+            && let Some(entry) = self.entries.remove(&page_id)
+        {
+            evicted_entries = evicted_entries.saturating_add(1);
+            evicted_logical_bytes = evicted_logical_bytes.saturating_add(entry.logical_bytes);
+            self.remove_entry(entry);
         }
         let stored = self.entries.contains_key(&page_id);
         let stats = self.stats();
@@ -175,7 +176,7 @@ impl<E: Clone> ExactStateCache<E> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{exact_state::ExactStateCache, ExactStatePayload};
+    use crate::{ExactStatePayload, exact_state::ExactStateCache};
 
     #[test]
     fn exact_state_cache_evicts_lru_by_entry_cap() {

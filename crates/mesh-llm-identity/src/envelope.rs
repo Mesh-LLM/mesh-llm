@@ -1,5 +1,5 @@
-use crypto_box::aead::{Aead, AeadCore, OsRng as CryptoOsRng};
 use crypto_box::SalsaBox;
+use crypto_box::aead::{Aead, AeadCore, OsRng as CryptoOsRng};
 use ed25519_dalek::{Signer, Verifier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

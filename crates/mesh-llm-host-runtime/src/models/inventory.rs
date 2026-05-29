@@ -24,10 +24,14 @@ pub struct ModelMetadataCacheProgress {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CachedCompactModelMetadata {
     model_key: String,
+    #[serde(default)]
+    parameter_size: Option<String>,
     context_length: u32,
     vocab_size: u32,
     embedding_size: u32,
     head_count: u32,
+    #[serde(default)]
+    kv_head_count: u32,
     layer_count: u32,
     feed_forward_length: u32,
     key_length: u32,
@@ -59,6 +63,7 @@ impl CachedCompactModelMetadata {
             vocab_size: self.vocab_size,
             embedding_size: self.embedding_size,
             head_count: self.head_count,
+            kv_head_count: self.kv_head_count,
             layer_count: self.layer_count,
             feed_forward_length: self.feed_forward_length,
             key_length: self.key_length,
@@ -68,20 +73,23 @@ impl CachedCompactModelMetadata {
             special_tokens: vec![],
             rope_scale: self.rope_scale,
             rope_freq_base: self.rope_freq_base,
-            is_moe: false,
-            expert_count: 0,
-            used_expert_count: 0,
+            is_moe: self.expert_count > 0,
+            expert_count: self.expert_count,
+            used_expert_count: self.used_expert_count,
             quantization_type: self.quantization_type,
+            parameter_size: self.parameter_size,
         }
     }
 
     fn from_proto(meta: &crate::proto::node::CompactModelMetadata) -> Self {
         Self {
             model_key: meta.model_key.clone(),
+            parameter_size: meta.parameter_size.clone(),
             context_length: meta.context_length,
             vocab_size: meta.vocab_size,
             embedding_size: meta.embedding_size,
             head_count: meta.head_count,
+            kv_head_count: meta.kv_head_count,
             layer_count: meta.layer_count,
             feed_forward_length: meta.feed_forward_length,
             key_length: meta.key_length,
@@ -90,8 +98,8 @@ impl CachedCompactModelMetadata {
             tokenizer_model_name: meta.tokenizer_model_name.clone(),
             rope_scale: meta.rope_scale,
             rope_freq_base: meta.rope_freq_base,
-            expert_count: 0,
-            used_expert_count: 0,
+            expert_count: meta.expert_count,
+            used_expert_count: meta.used_expert_count,
             quantization_type: meta.quantization_type.clone(),
         }
     }
@@ -199,6 +207,7 @@ fn compact_metadata_from_gguf(
             vocab_size: m.vocab_size,
             embedding_size: m.embedding_size,
             head_count: m.head_count,
+            kv_head_count: m.kv_head_count,
             layer_count: m.layer_count,
             feed_forward_length: m.feed_forward_length,
             key_length: m.key_length,
@@ -208,10 +217,11 @@ fn compact_metadata_from_gguf(
             special_tokens: vec![],
             rope_scale: m.rope_scale,
             rope_freq_base: m.rope_freq_base,
-            is_moe: false,
-            expert_count: 0,
-            used_expert_count: 0,
+            is_moe: m.expert_count > 0,
+            expert_count: m.expert_count,
+            used_expert_count: m.expert_used_count,
             quantization_type,
+            parameter_size: m.parameter_size,
         }
     } else {
         crate::proto::node::CompactModelMetadata {
@@ -232,10 +242,10 @@ fn cached_compact_metadata_for_path(
     let Some(cache_path) = gguf_metadata_cache_path(path) else {
         return computed();
     };
-    if let Ok(bytes) = std::fs::read(&cache_path) {
-        if let Ok(cached) = serde_json::from_slice::<CachedCompactModelMetadata>(&bytes) {
-            return cached.into_proto();
-        }
+    if let Ok(bytes) = std::fs::read(&cache_path)
+        && let Ok(cached) = serde_json::from_slice::<CachedCompactModelMetadata>(&bytes)
+    {
+        return cached.into_proto();
     }
     let meta = computed();
     if let Some(parent) = cache_path.parent() {
@@ -338,9 +348,11 @@ mod tests {
 
     fn restore_env(key: &str, value: Option<std::ffi::OsString>) {
         if let Some(value) = value {
-            std::env::set_var(key, value);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
         } else {
-            std::env::remove_var(key);
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
         }
     }
 
@@ -362,9 +374,12 @@ mod tests {
         let model = temp.join("Inventory-Root-Q4_K_M.gguf");
         std::fs::write(&model, b"gguf").unwrap();
 
-        std::env::set_var("HF_HUB_CACHE", &temp);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
 
         let paths = local_gguf_paths();
         assert!(paths.iter().any(|path| path == &model));
@@ -398,10 +413,14 @@ mod tests {
         let model = snapshot_dir.join("Inventory-Snapshot-Q4_K_M.gguf");
         std::fs::write(&model, b"gguf").unwrap();
 
-        std::env::set_var("HF_HUB_CACHE", &temp);
-        std::env::remove_var("HF_HOME");
-        std::env::remove_var("XDG_CACHE_HOME");
-        std::env::remove_var("MESH_LLM_ALLOW_FULL_HF_CACHE_SCAN");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("MESH_LLM_ALLOW_FULL_HF_CACHE_SCAN") };
 
         let paths = local_gguf_paths();
         assert!(paths.iter().any(|path| path == &model));

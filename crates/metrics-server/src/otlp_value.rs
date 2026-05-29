@@ -1,5 +1,5 @@
-use opentelemetry_proto::tonic::common::v1::{any_value, AnyValue, KeyValue};
-use serde_json::{json, Map, Value};
+use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
+use serde_json::{Map, Value, json};
 
 pub(crate) fn attributes_to_json(attributes: &[KeyValue]) -> Value {
     let mut map = Map::new();
@@ -17,11 +17,7 @@ pub(crate) fn attributes_to_json(attributes: &[KeyValue]) -> Value {
 }
 
 pub(crate) fn empty_string_to_none(value: &str) -> Option<&str> {
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 pub(crate) fn any_value_to_json(value: &AnyValue) -> Value {

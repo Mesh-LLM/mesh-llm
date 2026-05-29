@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CatalogEntry {

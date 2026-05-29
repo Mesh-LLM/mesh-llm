@@ -3,26 +3,26 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
     task::{Context, Poll},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
+    Json, Router,
     body::Body,
-    extract::{rejection::JsonRejection, DefaultBodyLimit, State},
-    http::{header::HeaderName, HeaderValue, Method, Request, StatusCode, Uri},
+    extract::{DefaultBodyLimit, State, rejection::JsonRejection},
+    http::{HeaderValue, Method, Request, StatusCode, Uri, header::HeaderName},
     middleware::{self, Next},
     response::{
-        sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
     },
     routing::{get, post},
-    Json, Router,
 };
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -35,14 +35,13 @@ use crate::{
     errors::OpenAiError,
     models::ModelsResponse,
     responses::{
-        chunk_delta_text, normalize_openai_compat_request,
+        ResponseAdapterMode, ResponseSseState, chunk_delta_text, normalize_openai_compat_request,
         responses_stream_completed_event_with_sequence, responses_stream_content_part_added_event,
         responses_stream_content_part_done_event, responses_stream_created_event_with_sequence,
         responses_stream_delta_event_with_logprobs_and_sequence,
         responses_stream_output_item_added_event, responses_stream_output_item_done_event,
         responses_stream_text_done_event_with_sequence,
         translate_chat_completion_response_to_responses, usage_to_responses_usage,
-        ResponseAdapterMode, ResponseSseState,
     },
     sse::{done_event, json_event},
 };
@@ -215,6 +214,9 @@ async fn responses(
                 let mut state_machine = body_state
                     .lock()
                     .expect("responses stream state lock poisoned");
+                if state_machine.failed {
+                    return stream::iter(out.into_iter().map(Ok::<_, Infallible>));
+                }
                 match item {
                     Ok(chunk) => {
                         if !state_machine.created_emitted {
@@ -281,6 +283,7 @@ async fn responses(
                         }
                     }
                     Err(error) => {
+                        state_machine.failed = true;
                         out.push(
                             Event::default()
                                 .event("error")
@@ -296,6 +299,9 @@ async fn responses(
                     .lock()
                     .expect("responses stream state lock poisoned");
                 let mut out = Vec::new();
+                if state_machine.failed {
+                    return out;
+                }
                 if !state_machine.created_emitted {
                     let sequence_number = state_machine.next_sequence_number();
                     out.push(
@@ -562,29 +568,30 @@ mod tests {
 
     use async_trait::async_trait;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
     };
     use futures_util::stream;
     use http_body_util::BodyExt;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tower::ServiceExt;
 
     use super::*;
     use crate::{
+        FinishReason, GuardedOpenAiBackend, GuardrailMode, GuardrailPolicy,
         backend::{
             CancellationToken, ChatCompletionStream, CompletionStream, OpenAiRequestContext,
             OpenAiResult,
         },
         chat::{
-            messages_to_plain_prompt, AssistantMessage, ChatCompletionChoice,
-            ChatCompletionResponse, ChatMessage, MessageContent, MessageContentPart,
+            AssistantMessage, ChatCompletionChoice, ChatCompletionResponse, ChatMessage,
+            MessageContent, MessageContentPart, messages_to_plain_prompt,
         },
         common::Usage,
         completions::{CompletionPrompt, CompletionResponse},
-        errors::{already_openai_error, map_upstream_error_body, OpenAiErrorKind},
+        errors::{OpenAiErrorKind, already_openai_error, map_upstream_error_body},
         models::ModelObject,
-        FinishReason,
     };
 
     struct FakeBackend;
@@ -772,6 +779,11 @@ mod tests {
         token: Arc<Mutex<Option<CancellationToken>>>,
     }
 
+    #[derive(Default)]
+    struct GuardrailRescueBackend {
+        seen_chat_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    }
+
     #[async_trait]
     impl OpenAiBackend for CancellationBackend {
         async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
@@ -792,6 +804,51 @@ mod tests {
         ) -> OpenAiResult<ChatCompletionStream> {
             *self.token.lock().expect("token lock poisoned") = Some(context.cancellation_token());
             Ok(Box::pin(stream::pending()))
+        }
+    }
+
+    #[async_trait]
+    impl OpenAiBackend for GuardrailRescueBackend {
+        async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+            Ok(vec![ModelObject::new("Qwen3-8B-Q4_K_M")])
+        }
+
+        async fn chat_completion(
+            &self,
+            request: ChatCompletionRequest,
+        ) -> OpenAiResult<ChatCompletionResponse> {
+            self.seen_chat_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(ChatCompletionResponse::new(
+                request.model,
+                r#"lookup[ARGS]{"city":"Sydney"}"#,
+                Usage::new(8, 3),
+            ))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: ChatCompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<ChatCompletionStream> {
+            unreachable!("guardrail rescue backend test only calls non-stream chat")
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> OpenAiResult<CompletionResponse> {
+            unreachable!("guardrail rescue backend test only calls chat")
+        }
+
+        async fn completion_stream(
+            &self,
+            _request: CompletionRequest,
+            _context: OpenAiRequestContext,
+        ) -> OpenAiResult<CompletionStream> {
+            unreachable!("guardrail rescue backend test only calls chat")
         }
     }
 
@@ -860,6 +917,19 @@ mod tests {
         assert_eq!(value["error"]["message"], "too long");
         assert_eq!(value["error"]["type"], "invalid_request_error");
         assert_eq!(value["error"]["code"], "context_length_exceeded");
+    }
+
+    #[test]
+    fn upstream_error_body_maps_legacy_string_error_shape() {
+        let body = br#"{"error":"skippy ABI call failed: Unsupported"}"#;
+        let mapped = map_upstream_error_body(503, body).unwrap();
+        let value: Value = serde_json::from_slice(&mapped).unwrap();
+        assert_eq!(
+            value["error"]["message"],
+            "skippy ABI call failed: Unsupported"
+        );
+        assert_eq!(value["error"]["type"], "server_error");
+        assert_eq!(value["error"]["code"], "service_unavailable");
     }
 
     #[test]
@@ -1097,6 +1167,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn responses_stream_frames_backend_errors_without_completed_tail() {
+        let response = post_json(
+            "/v1/responses",
+            json!({
+                "model": "stream-error",
+                "input": "hi",
+                "stream": true
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_body_text(response).await;
+        assert!(body.contains("event: error"));
+        assert!(body.contains(r#""message":"stream backend failed""#));
+        assert!(body.contains(r#""code":"service_unavailable""#));
+        assert!(!body.contains("event: response.completed"));
+        assert!(body.contains("data: [DONE]"));
+    }
+
+    #[tokio::test]
     async fn dropping_stream_response_cancels_request_context() {
         let token = Arc::new(Mutex::new(None));
         let app = router(Arc::new(CancellationBackend {
@@ -1281,10 +1371,59 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = response_body_json(response).await;
         assert_eq!(body["error"]["code"], "unsupported_model_feature");
-        assert!(body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("structured output"));
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("structured output")
+        );
+    }
+
+    #[tokio::test]
+    async fn guarded_chat_rescues_tool_call_text() {
+        let backend = Arc::new(GuardrailRescueBackend::default());
+        let app = guarded_test_app(backend.clone());
+
+        let response = post_json_with_app_and_request_id(
+            app,
+            "/v1/chat/completions",
+            json!({
+                "model": "Qwen3-8B-Q4_K_M",
+                "messages": [{"role": "user", "content": "weather"}],
+                "tools": [{"type": "function", "function": {"name": "lookup"}}],
+                "tool_choice": "auto"
+            }),
+            Some("guarded-chat-req"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-request-id"], "guarded-chat-req");
+        let body = response_body_json(response).await;
+        assert_eq!(body["object"], "chat.completion");
+        assert!(body["choices"][0]["message"]["content"].is_null());
+        assert_eq!(body["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(
+            body["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "lookup"
+        );
+        assert_eq!(
+            body["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+            "{\"city\":\"Sydney\"}"
+        );
+        assert!(!serde_json::to_string(&body).unwrap().contains("_mesh_"));
+
+        let seen_requests = backend.seen_chat_requests.lock().unwrap();
+        assert_eq!(seen_requests.len(), 1);
+        let seen_tools = seen_requests[0]
+            .tools
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("guarded backend should receive tools");
+        assert_eq!(seen_tools.len(), 2);
+        assert_eq!(seen_tools[0]["function"]["name"], "lookup");
+        assert_eq!(seen_tools[1]["function"]["name"], "_mesh_respond");
     }
 
     #[tokio::test]
@@ -1512,18 +1651,42 @@ mod tests {
         assert_eq!(body["error"]["code"], "payload_too_large");
     }
 
-    async fn post_json(path: &str, value: Value) -> axum::response::Response {
-        let app = router_for(Arc::new(FakeBackend));
-        app.oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(path)
-                .header("content-type", "application/json")
-                .body(Body::from(value.to_string()))
-                .unwrap(),
+    fn guarded_test_app(backend: Arc<GuardrailRescueBackend>) -> Router {
+        let guarded = Arc::new(GuardedOpenAiBackend::new(
+            backend,
+            GuardrailPolicy {
+                mode: GuardrailMode::Enforce,
+                apply_to_all_models: true,
+                ..GuardrailPolicy::default()
+            },
+        ));
+        router_for_with_config(
+            guarded,
+            OpenAiFrontendConfig::default().without_backend_timeout(),
         )
-        .await
-        .unwrap()
+    }
+
+    async fn post_json(path: &str, value: Value) -> axum::response::Response {
+        post_json_with_app_and_request_id(router_for(Arc::new(FakeBackend)), path, value, None)
+            .await
+    }
+
+    async fn post_json_with_app_and_request_id(
+        app: Router,
+        path: &str,
+        value: Value,
+        request_id: Option<&str>,
+    ) -> axum::response::Response {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json");
+        if let Some(request_id) = request_id {
+            builder = builder.header("x-request-id", request_id);
+        }
+        app.oneshot(builder.body(Body::from(value.to_string())).unwrap())
+            .await
+            .unwrap()
     }
 
     async fn response_body_json(response: axum::response::Response) -> Value {

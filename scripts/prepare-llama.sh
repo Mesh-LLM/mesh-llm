@@ -21,9 +21,59 @@ fi
 
 mkdir -p "$(dirname "$LLAMA_WORKDIR")"
 
+git_retry() {
+  local attempt=1
+  local max_attempts="${LLAMA_GIT_MAX_ATTEMPTS:-4}"
+  local delay="${LLAMA_GIT_RETRY_DELAY_SECONDS:-10}"
+  local status=0
+
+  while (( attempt <= max_attempts )); do
+    if "$@"; then
+      return 0
+    else
+      status=$?
+    fi
+
+    if (( attempt == max_attempts )); then
+      return "$status"
+    fi
+
+    echo "git command failed (attempt $attempt/$max_attempts): $*" >&2
+    echo "retrying in ${delay}s..." >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
+clone_llama_workdir() {
+  local attempt=1
+  local max_attempts="${LLAMA_GIT_MAX_ATTEMPTS:-4}"
+  local delay="${LLAMA_GIT_RETRY_DELAY_SECONDS:-10}"
+  local status=0
+
+  while (( attempt <= max_attempts )); do
+    rm -rf "$LLAMA_WORKDIR"
+    if git clone --filter=blob:none "$LLAMA_UPSTREAM_URL" "$LLAMA_WORKDIR"; then
+      return 0
+    else
+      status=$?
+    fi
+
+    if (( attempt == max_attempts )); then
+      return "$status"
+    fi
+
+    echo "llama.cpp clone failed (attempt $attempt/$max_attempts)" >&2
+    echo "retrying in ${delay}s..." >&2
+    sleep "$delay"
+    attempt=$((attempt + 1))
+    delay=$((delay * 2))
+  done
+}
+
 if [[ ! -d "$LLAMA_WORKDIR/.git" ]]; then
-  rm -rf "$LLAMA_WORKDIR"
-  git clone --filter=blob:none "$LLAMA_UPSTREAM_URL" "$LLAMA_WORKDIR"
+  clone_llama_workdir
 fi
 
 case "$MODE" in
@@ -32,7 +82,7 @@ case "$MODE" in
     ;;
   latest)
     git -C "$LLAMA_WORKDIR" remote set-url origin "$LLAMA_UPSTREAM_URL"
-    git -C "$LLAMA_WORKDIR" fetch origin master --tags
+    git_retry git -C "$LLAMA_WORKDIR" fetch origin master --tags
     TARGET_SHA="$(git -C "$LLAMA_WORKDIR" rev-parse origin/master)"
     ;;
   *)
@@ -82,7 +132,7 @@ fi
 git -C "$LLAMA_WORKDIR" am --abort >/dev/null 2>&1 || true
 git -C "$LLAMA_WORKDIR" remote set-url origin "$LLAMA_UPSTREAM_URL"
 if [[ "$MODE" != "latest" ]]; then
-  git -C "$LLAMA_WORKDIR" fetch origin master --tags
+  git_retry git -C "$LLAMA_WORKDIR" fetch origin master --tags
 fi
 git -C "$LLAMA_WORKDIR" config user.name "${GIT_AUTHOR_NAME:-Mesh-LLM CI}"
 git -C "$LLAMA_WORKDIR" config user.email "${GIT_AUTHOR_EMAIL:-ci@mesh-llm.local}"

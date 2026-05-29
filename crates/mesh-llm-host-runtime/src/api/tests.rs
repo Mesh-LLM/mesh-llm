@@ -1,14 +1,16 @@
 use super::*;
 use crate::api::status::decode_runtime_model_path;
-use crate::crypto::{default_keystore_path, save_keystore, OwnerKeypair};
+use crate::crypto::{OwnerKeypair, default_keystore_path, save_keystore};
 use crate::plugin;
-use crate::plugins::{blackboard, blobstore};
+use crate::plugins::blobstore;
 use base64::Engine;
 use mesh_client::proto::node::{
-    NodeConfigSnapshot, OwnerControlEnvelope, OwnerControlGetConfigResponse, OwnerControlResponse,
+    ConfigApplyMode, NodeConfigSnapshot, OwnerControlApplyConfigRequest,
+    OwnerControlApplyConfigResponse, OwnerControlConfigSnapshot, OwnerControlEnvelope,
+    OwnerControlError, OwnerControlErrorCode, OwnerControlGetConfigResponse, OwnerControlResponse,
 };
 use mesh_llm_plugin::MeshVisibility;
-use mesh_llm_protocol::{decode_owner_control_envelope, write_len_prefixed, ALPN_CONTROL_V1};
+use mesh_llm_protocol::{ALPN_CONTROL_V1, decode_owner_control_envelope, write_len_prefixed};
 use prost::Message;
 use rmcp::model::ErrorCode;
 use serde_json::json;
@@ -362,6 +364,7 @@ fn test_build_runtime_status_payload_uses_local_processes() {
     let result = build_runtime_status_payload(
         "Qwen",
         Some("llama".into()),
+        None,
         true,
         true,
         Some(9337),
@@ -399,6 +402,7 @@ fn test_build_runtime_status_payload_keeps_duplicate_model_instances() {
     let result = build_runtime_status_payload(
         "Qwen",
         Some("skippy".into()),
+        None,
         true,
         true,
         Some(9337),
@@ -837,6 +841,9 @@ async fn control_plane_api_exposes_local_endpoint_only() {
             local_only: true,
             requires_explicit_remote_endpoint: true,
             endpoint: Some("http://127.0.0.1:7447".to_string()),
+            disabled_reason: None,
+            message: None,
+            suggested_commands: None,
         })
         .await;
     let (addr, handle) = spawn_management_test_server(state).await;
@@ -863,6 +870,38 @@ async fn control_plane_api_exposes_local_endpoint_only() {
 }
 
 #[tokio::test]
+async fn control_plane_api_explains_disabled_owner_control() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let response = send_management_request(
+        addr,
+        "GET /api/runtime/control-bootstrap HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+    )
+    .await;
+    let body = json_body(&response);
+
+    assert_eq!(body["enabled"], serde_json::Value::Bool(false));
+    assert_eq!(body["local_only"], serde_json::Value::Bool(true));
+    assert_eq!(body["disabled_reason"], "missing_owner_identity");
+    assert_eq!(
+        body["message"],
+        "Configuration saving requires a local owner identity."
+    );
+    assert_eq!(
+        body["suggested_commands"],
+        serde_json::json!([
+            "mesh-llm auth status",
+            "mesh-llm auth init --no-passphrase",
+            "mesh-llm serve --owner-required"
+        ])
+    );
+    assert!(body.get("endpoint").is_none());
+
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn status_payload_control_plane_compat() {
     let state = build_test_mesh_api().await;
     state
@@ -871,17 +910,63 @@ async fn status_payload_control_plane_compat() {
             local_only: true,
             requires_explicit_remote_endpoint: true,
             endpoint: Some("control-endpoint-token".to_string()),
+            disabled_reason: None,
+            message: None,
+            suggested_commands: None,
         })
         .await;
 
     let payload = serde_json::to_value(state.status().await).unwrap();
     assert!(payload.get("control_bootstrap").is_none());
     assert!(payload.get("control_endpoint").is_none());
-    assert!(payload["peers"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .all(|peer| { peer.get("control_endpoint").is_none() && peer.get("endpoint").is_none() }));
+    assert!(
+        payload["peers"].as_array().unwrap().iter().all(|peer| {
+            peer.get("control_endpoint").is_none() && peer.get("endpoint").is_none()
+        })
+    );
+}
+
+#[tokio::test]
+async fn mesh_guardrails_runtime_mode_accepts_loopback_callers() {
+    let state = build_test_mesh_api().await;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    state.set_runtime_control(control_tx).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let control_handle = tokio::spawn(async move {
+        match control_rx.recv().await {
+            Some(RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp }) => {
+                assert_eq!(mode, openai_frontend::GuardrailMode::Enforce);
+                let _ = resp.send(Ok(OpenAiGuardrailModeUpdateResponse {
+                    mode: "enforce",
+                    updated_models: 1,
+                    status: None,
+                }));
+            }
+            _ => panic!("expected SetOpenAiGuardrailMode request"),
+        }
+    });
+    let body = r#"{"mode":"enforce"}"#;
+
+    let response = send_management_request(
+        addr,
+        format!(
+            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        ),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "response was {response:?}"
+    );
+    assert_eq!(
+        json_body(&response)["mode"],
+        serde_json::Value::String("enforce".to_string())
+    );
+    handle.await.unwrap().unwrap();
+    control_handle.await.unwrap();
 }
 
 #[tokio::test]
@@ -906,6 +991,9 @@ async fn config_apply_does_not_emit_peer_churn() {
             local_only: true,
             requires_explicit_remote_endpoint: true,
             endpoint: Some("control-endpoint-token".to_string()),
+            disabled_reason: None,
+            message: None,
+            suggested_commands: None,
         })
         .await;
     state.push_status().await;
@@ -927,7 +1015,8 @@ async fn config_apply_does_not_emit_peer_churn() {
 #[serial]
 async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchestration() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -973,9 +1062,201 @@ async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchest
 
 #[tokio::test]
 #[serial]
+async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
+    let temp = tempfile::tempdir().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
+    let owner = OwnerKeypair::generate();
+    let keystore_path = default_keystore_path().unwrap();
+    save_keystore(&keystore_path, &owner, None, true).unwrap();
+
+    let get_server = spawn_owner_control_test_server().await;
+    let OwnerControlApplyTestServer {
+        endpoint_token: apply_endpoint_token,
+        task: control_task,
+        received_apply,
+    } = spawn_owner_control_apply_test_server(OwnerControlApplyTestResponse::Success(
+        OwnerControlApplyConfigResponse {
+            success: true,
+            current_revision: 43,
+            config_hash: vec![0xab; 32],
+            error: None,
+            apply_mode: ConfigApplyMode::Staged as i32,
+        },
+    ))
+    .await;
+    let state = build_test_mesh_api().await;
+    state.set_owner_key_path(Some(keystore_path)).await;
+    let (addr, handle) = spawn_management_test_server(state.clone()).await;
+
+    let get_request_body = json!({ "endpoint": get_server.endpoint_token }).to_string();
+    let get_response = send_management_request(
+        addr,
+        management_post_request("/api/runtime/control/get-config", &get_request_body),
+    )
+    .await;
+    let get_body = json_body(&get_response);
+    assert_eq!(
+        get_body["snapshot"]["revision"], 42,
+        "response: {get_response}"
+    );
+    let mut merged_config_json = get_body["snapshot"]["config"].clone();
+    merge_json_object(
+        &mut merged_config_json,
+        serde_json::to_value(full_mesh_config_fixture()).unwrap(),
+    );
+    let expected_config: crate::plugin::MeshConfig =
+        serde_json::from_value(merged_config_json).unwrap();
+    handle.await.unwrap().unwrap();
+
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let apply_request_body = json!({
+        "endpoint": apply_endpoint_token,
+        "expected_revision": get_body["snapshot"]["revision"],
+        "config": expected_config.clone(),
+    })
+    .to_string();
+    let apply_response = send_management_request(
+        addr,
+        management_post_request("/api/runtime/control/apply-config", &apply_request_body),
+    )
+    .await;
+    let apply_body = json_body(&apply_response);
+    assert!(
+        apply_response.starts_with("HTTP/1.1 200"),
+        "response: {apply_response}"
+    );
+    assert_eq!(apply_body["success"], true);
+    assert_eq!(apply_body["current_revision"], 43);
+    assert_eq!(apply_body["apply_mode"], "staged");
+    assert_eq!(
+        apply_body["config_hash"],
+        "abababababababababababababababababababababababababababababababab"
+    );
+
+    let received_apply = received_apply
+        .expect("apply-config flow should capture the forwarded full MeshConfig")
+        .await
+        .unwrap();
+    assert_eq!(received_apply.expected_revision, 42);
+    assert_eq!(
+        received_apply.config,
+        Some(crate::protocol::convert::mesh_config_to_proto(
+            &expected_config
+        ))
+    );
+
+    handle.await.unwrap().unwrap();
+    get_server.task.abort();
+    control_task.await.unwrap();
+}
+
+#[tokio::test]
+#[serial]
+async fn control_plane_api_apply_config_reports_revision_conflict() {
+    let temp = tempfile::tempdir().unwrap();
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
+    let owner = OwnerKeypair::generate();
+    let keystore_path = default_keystore_path().unwrap();
+    save_keystore(&keystore_path, &owner, None, true).unwrap();
+
+    let OwnerControlApplyTestServer {
+        endpoint_token,
+        task: control_task,
+        received_apply,
+    } = spawn_owner_control_apply_test_server(OwnerControlApplyTestResponse::Error {
+        code: OwnerControlErrorCode::RevisionConflict,
+        message: "stale config revision".to_string(),
+        current_revision: Some(7),
+    })
+    .await;
+    let state = build_test_mesh_api().await;
+    state.set_owner_key_path(Some(keystore_path)).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let request_body = json!({
+        "endpoint": endpoint_token,
+        "expected_revision": 6,
+        "config": full_mesh_config_fixture(),
+    })
+    .to_string();
+    let response = send_management_request(
+        addr,
+        management_post_request("/api/runtime/control/apply-config", &request_body),
+    )
+    .await;
+    let body = json_body(&response);
+    assert!(response.starts_with("HTTP/1.1 409"), "response: {response}");
+    assert_eq!(body["error"]["code"], "revision_conflict");
+    assert_eq!(body["error"]["message"], "stale config revision");
+    assert_eq!(body["error"]["current_revision"], 7);
+
+    let received_apply = received_apply
+        .expect("revision conflict path should still capture apply requests")
+        .await
+        .unwrap();
+    assert_eq!(received_apply.expected_revision, 6);
+
+    handle.await.unwrap().unwrap();
+    control_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn control_plane_api_apply_config_rejects_invalid_json() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let request_body = "{\"endpoint\":";
+    let response = send_management_request(
+        addr,
+        management_post_request("/api/runtime/control/apply-config", request_body),
+    )
+    .await;
+    let body = json_body(&response);
+    assert!(response.starts_with("HTTP/1.1 400"), "response: {response}");
+    assert_eq!(body["error"], "Invalid JSON body");
+
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn control_route_rejects_non_loopback() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let client = tokio::spawn(async move {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        String::from_utf8(response).unwrap()
+    });
+
+    let (mut server_stream, _) = listener.accept().await.unwrap();
+    let allowed = crate::api::routes::runtime::ensure_loopback_control_caller_for_peer_addr(
+        &mut server_stream,
+        Ok(std::net::SocketAddr::from(([192, 0, 2, 10], 40123))),
+    )
+    .await
+    .unwrap();
+    assert!(!allowed);
+    drop(server_stream);
+
+    let response = client.await.unwrap();
+    let body = json_body(&response);
+    assert!(response.starts_with("HTTP/1.1 403"), "response: {response}");
+    assert_eq!(
+        body["error"],
+        "runtime control endpoints only accept localhost connections"
+    );
+}
+
+#[tokio::test]
+#[serial]
 async fn control_plane_api_reports_remote_endpoint_unreachable() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let owner = OwnerKeypair::generate();
     let keystore_path = default_keystore_path().unwrap();
     save_keystore(&keystore_path, &owner, None, true).unwrap();
@@ -1016,7 +1297,8 @@ async fn control_plane_api_reports_remote_endpoint_unreachable() {
 #[serial]
 async fn control_plane_api_cli_uses_custom_owner_key_path() {
     let temp = tempfile::tempdir().unwrap();
-    std::env::set_var("HOME", temp.path());
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { std::env::set_var("HOME", temp.path()) };
     let custom_owner_key = temp.path().join("custom-owner.json");
     save_keystore(&custom_owner_key, &OwnerKeypair::generate(), None, true).unwrap();
 
@@ -1077,13 +1359,13 @@ async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
         let envelope = decode_owner_control_envelope(&request).unwrap();
         let request_id = envelope.request.as_ref().unwrap().request_id;
         let response = OwnerControlEnvelope {
-            gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
+            r#gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
             handshake: None,
             request: None,
             response: Some(OwnerControlResponse {
                 request_id,
                 get_config: Some(OwnerControlGetConfigResponse {
-                    snapshot: Some(mesh_client::proto::node::OwnerControlConfigSnapshot {
+                    snapshot: Some(OwnerControlConfigSnapshot {
                         node_id: vec![7; 32],
                         revision: 42,
                         config_hash: vec![9; 32],
@@ -1115,6 +1397,170 @@ async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
     }
 }
 
+struct OwnerControlApplyTestServer {
+    endpoint_token: String,
+    task: tokio::task::JoinHandle<()>,
+    received_apply: Option<oneshot::Receiver<OwnerControlApplyConfigRequest>>,
+}
+
+enum OwnerControlApplyTestResponse {
+    Success(OwnerControlApplyConfigResponse),
+    Error {
+        code: OwnerControlErrorCode,
+        message: String,
+        current_revision: Option<u64>,
+    },
+}
+
+async fn spawn_owner_control_apply_test_server(
+    response: OwnerControlApplyTestResponse,
+) -> OwnerControlApplyTestServer {
+    let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(iroh::SecretKey::generate())
+        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let endpoint_token = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&endpoint.addr()).unwrap());
+    let (apply_tx, apply_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let Some(incoming) = endpoint.accept().await else {
+            return;
+        };
+        let mut accepting = incoming.accept().unwrap();
+        let _ = accepting.alpn().await.unwrap();
+        let conn = accepting.await.unwrap();
+        let (mut send, mut recv) = conn.accept_bi().await.unwrap();
+        let handshake = mesh_llm_protocol::read_len_prefixed(&mut recv)
+            .await
+            .unwrap();
+        let _ = decode_owner_control_envelope(&handshake).unwrap();
+        let request = mesh_llm_protocol::read_len_prefixed(&mut recv)
+            .await
+            .unwrap();
+        let envelope = decode_owner_control_envelope(&request).unwrap();
+        let request = envelope
+            .request
+            .expect("owner-control request should be present");
+        let request_id = request.request_id;
+        let apply = request
+            .apply_config
+            .expect("expected apply-config request for apply response");
+        let _ = apply_tx.send(apply);
+        let envelope = match response {
+            OwnerControlApplyTestResponse::Success(response) => OwnerControlEnvelope {
+                r#gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
+                handshake: None,
+                request: None,
+                response: Some(OwnerControlResponse {
+                    request_id,
+                    get_config: None,
+                    watch_config: None,
+                    apply_config: Some(response),
+                    refresh_inventory: None,
+                }),
+                error: None,
+            },
+            OwnerControlApplyTestResponse::Error {
+                code,
+                message,
+                current_revision,
+            } => OwnerControlEnvelope {
+                r#gen: mesh_llm_protocol::NODE_PROTOCOL_GENERATION,
+                handshake: None,
+                request: None,
+                response: None,
+                error: Some(OwnerControlError {
+                    code: code as i32,
+                    message,
+                    request_id: Some(request_id),
+                    current_revision,
+                }),
+            },
+        };
+        write_len_prefixed(&mut send, &envelope.encode_to_vec())
+            .await
+            .unwrap();
+        let _ = send.finish();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    });
+    OwnerControlApplyTestServer {
+        endpoint_token,
+        task,
+        received_apply: Some(apply_rx),
+    }
+}
+
+fn management_post_request(path: &str, body: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
+fn full_mesh_config_fixture() -> crate::plugin::MeshConfig {
+    serde_json::from_value(json!({
+        "version": 1,
+        "gpu": {
+            "assignment": "auto",
+            "parallel": 2
+        },
+        "owner_control": {
+            "bind": "127.0.0.1:7447",
+            "advertise_addr": "127.0.0.1:7447"
+        },
+        "telemetry": {
+            "enabled": true,
+            "service_name": "mesh-llm-control",
+            "endpoint": "http://127.0.0.1:4317",
+            "headers": {
+                "authorization": "Bearer control-test"
+            },
+            "export_interval_secs": 30,
+            "queue_size": 256,
+            "prompt_shape_metrics": false,
+            "metrics": {
+                "endpoint": "http://127.0.0.1:4318"
+            }
+        },
+        "models": [
+            {
+                "model": "hf://meshllm/base@main:Q4_K_M",
+                "mmproj": "hf://meshllm/base@main:mmproj.gguf",
+                "ctx_size": 8192,
+                "parallel": 1,
+                "cache_type_k": "q8_0",
+                "cache_type_v": "q8_0",
+                "batch": 512,
+                "ubatch": 256
+            }
+        ],
+        "plugin": [
+            {
+                "name": "telemetry",
+                "enabled": true,
+                "command": "mesh-telemetry"
+            }
+        ]
+    }))
+    .unwrap()
+}
+
+fn merge_json_object(target: &mut serde_json::Value, source: serde_json::Value) {
+    let target = target
+        .as_object_mut()
+        .expect("target JSON should be an object for config merge");
+    let source = source
+        .as_object()
+        .expect("source JSON should be an object for config merge");
+    target.extend(source.clone());
+}
+
 async fn unreachable_owner_control_endpoint_token() -> String {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
@@ -1137,7 +1583,17 @@ async fn spawn_management_test_server(
     std::net::SocketAddr,
     tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    spawn_management_test_server_on(std::net::SocketAddr::from(([127, 0, 0, 1], 0)), state).await
+}
+
+async fn spawn_management_test_server_on(
+    bind_addr: std::net::SocketAddr,
+    state: MeshApi,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    let listener = TcpListener::bind(bind_addr).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
@@ -1236,23 +1692,7 @@ struct BlobstoreApiTestBridge {
     store: blobstore::BlobStore,
 }
 
-#[derive(Clone)]
-struct BlackboardApiTestBridge {
-    plugin_name: String,
-    store: blackboard::BlackboardStore,
-}
-
 impl BlobstoreApiTestBridge {
-    fn error_response(message: impl Into<String>) -> plugin::proto::ErrorResponse {
-        plugin::proto::ErrorResponse {
-            code: ErrorCode::INTERNAL_ERROR.0,
-            message: message.into(),
-            data_json: String::new(),
-        }
-    }
-}
-
-impl BlackboardApiTestBridge {
     fn error_response(message: impl Into<String>) -> plugin::proto::ErrorResponse {
         plugin::proto::ErrorResponse {
             code: ErrorCode::INTERNAL_ERROR.0,
@@ -1336,103 +1776,6 @@ impl plugin::PluginRpcBridge for BlobstoreApiTestBridge {
     }
 }
 
-impl plugin::PluginRpcBridge for BlackboardApiTestBridge {
-    fn handle_request(
-        &self,
-        plugin_name: String,
-        method: String,
-        params_json: String,
-    ) -> plugin::BridgeFuture<Result<plugin::RpcResult, plugin::proto::ErrorResponse>> {
-        let expected_plugin_name = self.plugin_name.clone();
-        let store = self.store.clone();
-        Box::pin(async move {
-            if plugin_name != expected_plugin_name {
-                return Err(Self::error_response(format!(
-                    "Unsupported test plugin '{}'",
-                    plugin_name
-                )));
-            }
-            if method != "tools/call" {
-                return Err(Self::error_response(format!(
-                    "Unsupported method '{}'",
-                    method
-                )));
-            }
-
-            let request: mesh_llm_plugin::OperationRequest = serde_json::from_str(&params_json)
-                .map_err(|err| Self::error_response(err.to_string()))?;
-            let result_json = match request.name.as_str() {
-                "feed" => {
-                    let request: blackboard::FeedRequest =
-                        serde_json::from_value(request.arguments)
-                            .map_err(|err| Self::error_response(err.to_string()))?;
-                    let response = store
-                        .feed(request.since, request.from.as_deref(), request.limit)
-                        .await;
-                    serde_json::to_string(&rmcp::model::CallToolResult::structured(
-                        serde_json::to_value(response)
-                            .map_err(|err| Self::error_response(err.to_string()))?,
-                    ))
-                    .map_err(|err| Self::error_response(err.to_string()))?
-                }
-                "search" => {
-                    let request: blackboard::SearchRequest =
-                        serde_json::from_value(request.arguments)
-                            .map_err(|err| Self::error_response(err.to_string()))?;
-                    let mut response = store.search(&request.query, request.since).await;
-                    response.truncate(request.limit.max(1));
-                    serde_json::to_string(&rmcp::model::CallToolResult::structured(
-                        serde_json::to_value(response)
-                            .map_err(|err| Self::error_response(err.to_string()))?,
-                    ))
-                    .map_err(|err| Self::error_response(err.to_string()))?
-                }
-                "post" => {
-                    let request: blackboard::PostRequest =
-                        serde_json::from_value(request.arguments)
-                            .map_err(|err| Self::error_response(err.to_string()))?;
-                    let item = blackboard::BlackboardItem::new(
-                        if request.from.trim().is_empty() {
-                            "mcp".into()
-                        } else {
-                            request.from
-                        },
-                        if request.peer_id.trim().is_empty() {
-                            "mcp".into()
-                        } else {
-                            request.peer_id
-                        },
-                        request.text,
-                    );
-                    let response = store.post(item).await.map_err(Self::error_response)?;
-                    serde_json::to_string(&rmcp::model::CallToolResult::structured(
-                        serde_json::to_value(response)
-                            .map_err(|err| Self::error_response(err.to_string()))?,
-                    ))
-                    .map_err(|err| Self::error_response(err.to_string()))?
-                }
-                _ => {
-                    return Err(Self::error_response(format!(
-                        "Unsupported blackboard tool '{}'",
-                        request.name
-                    )));
-                }
-            };
-
-            Ok(plugin::RpcResult { result_json })
-        })
-    }
-
-    fn handle_notification(
-        &self,
-        _plugin_name: String,
-        _method: String,
-        _params_json: String,
-    ) -> plugin::BridgeFuture<()> {
-        Box::pin(async {})
-    }
-}
-
 fn temp_blobstore_root(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "mesh-llm-api-server-{name}-{}",
@@ -1461,29 +1804,6 @@ async fn build_blobstore_api_plugin_manager() -> (plugin::PluginManager, std::pa
     (plugin_manager, root)
 }
 
-async fn build_blackboard_api_plugin_manager() -> plugin::PluginManager {
-    let plugin_name = "blackboard";
-    let bridge = BlackboardApiTestBridge {
-        plugin_name: plugin_name.into(),
-        store: blackboard::BlackboardStore::new(true),
-    };
-    let plugin_manager = plugin::PluginManager::for_test_bridge(&[plugin_name], Arc::new(bridge));
-    let mut manifests = HashMap::new();
-    manifests.insert(
-        plugin_name.to_string(),
-        mesh_llm_plugin::plugin_manifest![
-            mesh_llm_plugin::capability(blackboard::BLACKBOARD_CHANNEL),
-            mesh_llm_plugin::http_get("/feed", "feed"),
-            mesh_llm_plugin::http_get("/search", "search"),
-            mesh_llm_plugin::http_post("/post", "post"),
-        ],
-    );
-    plugin_manager
-        .set_test_manifests(manifests.into_iter().collect())
-        .await;
-    plugin_manager
-}
-
 async fn spawn_capturing_upstream(
     response_body: &str,
 ) -> (u16, oneshot::Receiver<Vec<u8>>, tokio::task::JoinHandle<()>) {
@@ -1497,10 +1817,10 @@ async fn spawn_capturing_upstream(
         let _ = request_tx.send(request.raw);
 
         let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response.len(),
-                response
-            );
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response.len(),
+            response
+        );
         stream.write_all(resp.as_bytes()).await.unwrap();
         let _ = stream.shutdown().await;
     });
@@ -1521,8 +1841,8 @@ async fn spawn_streaming_upstream(
         let _ = request_tx.send(request.raw);
 
         let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
-            );
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+        );
         if stream.write_all(header.as_bytes()).await.is_err() {
             return;
         }
@@ -1597,9 +1917,9 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
     let addr = listener.local_addr().unwrap();
     let body = br#"{"text":"fragmented"}"#;
     let headers = format!(
-            "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        );
+        "POST /api/plugins/demo/http/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
 
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
@@ -1625,7 +1945,7 @@ async fn test_management_request_parser_handles_fragmented_post_body() {
     client.await.unwrap();
     let request = server.await.unwrap();
     assert_eq!(request.method, "POST");
-    assert_eq!(request.path, "/api/blackboard/post");
+    assert_eq!(request.path, "/api/plugins/demo/http/post");
     assert_eq!(http_body_text(&request.raw), "{\"text\":\"fragmented\"}");
 }
 
@@ -1894,6 +2214,18 @@ async fn request_management_json(state: MeshApi, path: &str) -> serde_json::Valu
     json_body(&response)
 }
 
+fn response_header<'a>(response: &'a str, name: &str) -> Option<&'a str> {
+    response
+        .split("\r\n\r\n")
+        .next()
+        .unwrap_or_default()
+        .lines()
+        .find_map(|line| {
+            let (header_name, value) = line.split_once(':')?;
+            header_name.eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+}
+
 fn assert_runtime_status_payload(status_body: &serde_json::Value) {
     assert_eq!(status_body["model_name"], json!("collector-model"));
     assert_eq!(status_body["llama_ready"], json!(true));
@@ -2055,11 +2387,13 @@ async fn runtime_data_api_routes_remain_payload_stable() {
 
     let providers_body = request_management_json(state.clone(), "/api/plugins/providers").await;
     assert!(providers_body.as_array().is_some());
-    assert!(providers_body
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|provider| provider["capability"] == json!("chat")));
+    assert!(
+        providers_body
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["capability"] == json!("chat"))
+    );
 
     let provider_body = request_management_json(state.clone(), "/api/plugins/providers/chat").await;
     assert_eq!(provider_body["capability"], json!("chat"));
@@ -2069,6 +2403,60 @@ async fn runtime_data_api_routes_remain_payload_stable() {
         request_management_json(state, "/api/plugins/collector-plugin/manifest").await;
     assert_eq!(manifest_body["capabilities"], json!(["chat"]));
     assert_eq!(manifest_body["endpoints"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn management_mcp_endpoint_initializes_streamable_http_session() {
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "mesh-api-test",
+                "version": "0.1.0"
+            }
+        }
+    })
+    .to_string();
+    let mut stream = TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "POST /mcp HTTP/1.1\r\n\
+                 Host: localhost\r\n\
+                 Accept: application/json, text/event-stream\r\n\
+                 Content-Type: application/json\r\n\
+                 Content-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let response =
+        read_until_contains(&mut stream, b"\"serverInfo\"", Duration::from_secs(2)).await;
+    let response = String::from_utf8(response).unwrap();
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "unexpected MCP response: {response}"
+    );
+    assert_eq!(
+        response_header(&response, "content-type"),
+        Some("text/event-stream")
+    );
+    assert!(
+        response_header(&response, "mcp-session-id").is_some(),
+        "MCP initialize response should include a session id: {response}"
+    );
+    assert!(response.contains("\"serverInfo\""));
+    handle.abort();
 }
 
 #[tokio::test]
@@ -2243,9 +2631,11 @@ async fn test_api_search_rejects_invalid_sort_value() {
     assert!(response.starts_with("HTTP/1.1 400"));
     let payload = json_body(&response);
     assert_eq!(
-            payload["error"],
-            json!("Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc")
-        );
+        payload["error"],
+        json!(
+            "Invalid 'sort' value 'random'. Expected one of: trending, downloads, likes, created, updated, parameters-desc, parameters-asc"
+        )
+    );
 
     handle.abort();
 }
@@ -2305,10 +2695,10 @@ async fn test_api_model_interests_post_is_idempotent() {
     let state = build_test_mesh_api().await;
     let body = r#"{"model_ref":"Qwen/Qwen3-Coder-Next-GGUF@main:Q4_K_M","source":"ui"}"#;
     let request = format!(
-            "POST /api/model-interests HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/model-interests HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let (first_addr, first_handle) = spawn_management_test_server(state.clone()).await;
     let first_response = send_management_request(first_addr, request.clone()).await;
@@ -2844,9 +3234,11 @@ async fn wakeable_inventory_is_not_routable_capacity() {
     let hosts = node.hosts_for_model("wakeable-only-model").await;
 
     assert_eq!(status.wakeable_nodes.len(), 1);
-    assert!(!served_models
-        .iter()
-        .any(|model| model == "wakeable-only-model"));
+    assert!(
+        !served_models
+            .iter()
+            .any(|model| model == "wakeable-only-model")
+    );
     assert!(hosts.is_empty());
 }
 
@@ -2866,9 +3258,11 @@ async fn wakeable_inventory_is_excluded_from_v1_models() {
     let node = { state.inner.lock().await.node.clone() };
     let served_models = node.models_being_served().await;
 
-    assert!(!served_models
-        .iter()
-        .any(|model| model == "wakeable-only-model"));
+    assert!(
+        !served_models
+            .iter()
+            .any(|model| model == "wakeable-only-model")
+    );
     assert!(served_models.is_empty());
 }
 
@@ -3091,70 +3485,25 @@ async fn test_api_objects_routes_through_object_store_capability() {
     })
     .to_string();
     let request = format!(
-            "POST /api/objects HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/objects HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
     let response = send_management_request(addr, request).await;
 
     assert!(response.starts_with("HTTP/1.1 201"));
     let payload = json_body(&response);
     assert_eq!(payload["request_id"], "req-api-object");
     assert_eq!(payload["mime_type"], "text/plain");
-    assert!(payload["token"]
-        .as_str()
-        .unwrap_or_default()
-        .starts_with("obj_"));
+    assert!(
+        payload["token"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("obj_")
+    );
 
     handle.abort();
     let _ = std::fs::remove_dir_all(blobstore_root);
-}
-
-#[tokio::test]
-async fn test_api_blackboard_routes_through_blackboard_capability() {
-    let plugin_manager = build_blackboard_api_plugin_manager().await;
-    let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
-
-    let (post_addr, post_handle) = spawn_management_test_server(state.clone()).await;
-    let post_body = json!({ "text": "hello integration blackboard" }).to_string();
-    let post_request = format!(
-            "POST /api/blackboard/post HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            post_body.len(),
-            post_body
-        );
-    let post_response = send_management_request(post_addr, post_request).await;
-    assert!(post_response.starts_with("HTTP/1.1 200"));
-    let posted = json_body(&post_response);
-    assert_eq!(posted["text"], "hello integration blackboard");
-    post_handle.abort();
-
-    let (feed_addr, feed_handle) = spawn_management_test_server(state.clone()).await;
-    let feed_response = send_management_request(
-        feed_addr,
-        "GET /api/blackboard/feed?limit=5 HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
-    )
-    .await;
-    assert!(feed_response.starts_with("HTTP/1.1 200"));
-    let feed = json_body(&feed_response);
-    let feed_items = feed.as_array().cloned().unwrap_or_default();
-    assert!(feed_items
-        .iter()
-        .any(|item| item["text"] == "hello integration blackboard"));
-    feed_handle.abort();
-
-    let (search_addr, search_handle) = spawn_management_test_server(state).await;
-    let search_response = send_management_request(
-        search_addr,
-        "GET /api/blackboard/search?q=integration HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
-    )
-    .await;
-    assert!(search_response.starts_with("HTTP/1.1 200"));
-    let search = json_body(&search_response);
-    let search_items = search.as_array().cloned().unwrap_or_default();
-    assert!(search_items
-        .iter()
-        .any(|item| item["text"] == "hello integration blackboard"));
-    search_handle.abort();
 }
 
 #[tokio::test]
@@ -3178,10 +3527,10 @@ async fn test_api_chat_smoke_for_image_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3225,10 +3574,10 @@ async fn test_api_chat_smoke_for_audio_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3270,10 +3619,10 @@ async fn test_api_responses_smoke_for_image_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3320,10 +3669,10 @@ async fn test_api_responses_smoke_for_file_request() {
     })
     .to_string();
     let request = format!(
-            "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3372,10 +3721,10 @@ data: [DONE]
     })
     .to_string();
     let request = format!(
-            "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
+        "POST /api/responses HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
 
     let mut stream = TcpStream::connect(addr).await.unwrap();
     stream.write_all(request.as_bytes()).await.unwrap();
@@ -3490,6 +3839,8 @@ fn headless_mode_disables_ui_routes_but_preserves_api() {
     assert!(is_ui_only_route("/"));
     assert!(is_ui_only_route("/dashboard"));
     assert!(is_ui_only_route("/chat"));
+    assert!(is_ui_only_route("/configuration"));
+    assert!(is_ui_only_route("/configuration/defaults"));
 
     assert!(!is_ui_only_route("/api/status"));
     assert!(!is_ui_only_route("/api/events"));
@@ -3503,6 +3854,8 @@ fn headless_mode_returns_404_for_assets_and_dashboard_routes() {
     assert!(is_ui_only_route("/dashboard/"));
     assert!(is_ui_only_route("/chat/"));
     assert!(is_ui_only_route("/chat/some-room"));
+    assert!(is_ui_only_route("/configuration/"));
+    assert!(is_ui_only_route("/configuration/toml-review"));
     assert!(is_ui_only_route("/assets/main.js"));
     assert!(is_ui_only_route("/assets/index-abc123.css"));
     assert!(is_ui_only_route("/favicon.ico"));
@@ -3518,10 +3871,45 @@ fn default_mode_still_serves_embedded_ui_routes() {
     assert!(is_ui_only_route("/"));
     assert!(is_ui_only_route("/dashboard"));
     assert!(is_ui_only_route("/chat"));
+    assert!(is_ui_only_route("/configuration/defaults"));
     assert!(is_ui_only_route("/assets/app.js"));
 
     assert!(!is_ui_only_route("/api/status"));
     assert!(!is_ui_only_route("/api/events"));
+}
+
+#[tokio::test]
+async fn direct_configuration_deep_link_serves_embedded_ui_index() {
+    assert!(crate::api::server::is_console_index_route(
+        "/configuration/defaults"
+    ));
+
+    if mesh_llm_ui::index().is_none() {
+        return;
+    }
+
+    let state = build_test_mesh_api().await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+
+    let response = send_management_request(
+        addr,
+        "GET /configuration/defaults HTTP/1.1\r\nHost: localhost\r\n\r\n".into(),
+    )
+    .await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "expected direct configuration deep link to serve UI index, got: {response}"
+    );
+    assert!(
+        response.contains("Content-Type: text/html; charset=utf-8"),
+        "expected HTML response for UI deep link, got: {response}"
+    );
+    assert!(
+        !response.contains(r#"{"error":"Not found"}"#),
+        "UI deep link must not fall through to JSON 404"
+    );
+    handle.await.unwrap().unwrap();
 }
 
 #[test]
@@ -3541,7 +3929,7 @@ fn headless_status_command_works_against_management_api() {
 }
 
 #[test]
-fn headless_blackboard_status_still_reads_api_status() {
+fn headless_mode_still_reads_api_status() {
     assert!(
         !is_ui_only_route("/api/status"),
         "/api/status must be accessible in headless mode"

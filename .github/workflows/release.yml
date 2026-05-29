@@ -30,7 +30,7 @@ env:
 jobs:
   metadata:
     name: Resolve release metadata
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
@@ -74,13 +74,13 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: macos-14
+            os: blacksmith-6vcpu-macos-15
             artifact_name: release-macos
             build_recipe: release-build
             bundle_recipe: release-bundle
             backend: metal
           - name: Linux x86_64 CPU
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
             artifact_name: release-linux
             build_recipe: release-build
             bundle_recipe: release-bundle
@@ -115,6 +115,12 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install cmake ninja lld
+
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
 
       - name: Build release bundle
         env:
@@ -156,12 +162,12 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: macos-14
+            os: blacksmith-6vcpu-macos-15
             backend: metal
             target: aarch64-apple-darwin
             artifact_suffix: darwin-aarch64-metal
           - name: Linux x86_64 CPU
-            os: ubuntu-latest
+            os: blacksmith-4vcpu-ubuntu-2404
             backend: cpu
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64-cpu
@@ -182,6 +188,12 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install cmake ninja lld
+
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
 
       - name: Package native SDK runtime
         run: |
@@ -210,7 +222,7 @@ jobs:
   build_swift_sdk_artifact:
     name: Build Swift SDK XCFramework
     needs: metadata
-    runs-on: macos-14
+    runs-on: blacksmith-6vcpu-macos-15
     env:
       LLAMA_STAGE_BACKEND: metal
     steps:
@@ -223,6 +235,12 @@ jobs:
       - name: Install macOS dependencies
         run: brew install cmake ninja lld
 
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
       - name: Build SwiftPM binary artifact
         run: |
           sdk/swift/scripts/build-xcframework.sh
@@ -232,12 +250,27 @@ jobs:
             sdk/swift/Generated/MeshLLMFFI.xcframework \
             dist/MeshLLMFFI.xcframework.zip
 
+      - name: Prepare SwiftPM manifest for dispatched release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          scripts/update-swift-package-manifest.sh \
+            "${{ needs.metadata.outputs.tag }}" \
+            dist/MeshLLMFFI.xcframework.zip
+
       - name: Verify SwiftPM binary artifact
         run: |
           scripts/verify-swift-release-artifact.sh dist/MeshLLMFFI.xcframework.zip
           scripts/verify-swift-package-manifest.sh \
             "${{ needs.metadata.outputs.tag }}" \
             dist/MeshLLMFFI.xcframework.zip
+
+      - name: Upload generated SwiftPM manifest
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v6
+        with:
+          name: swift-package-manifest
+          path: Package.swift
+          if-no-files-found: error
 
       - name: Upload SwiftPM binary artifact
         uses: actions/upload-artifact@v6
@@ -249,7 +282,7 @@ jobs:
   build_linux_arm64:
     name: Build Linux ARM64 CPU
     needs: metadata
-    runs-on: ubuntu-24.04-arm
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     env:
       LLAMA_STAGE_BACKEND: cpu
       MESH_RELEASE_ARCH: aarch64
@@ -269,6 +302,11 @@ jobs:
       - uses: taiki-e/install-action@just
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl lld
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build ARM64 CPU release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -285,7 +323,7 @@ jobs:
     name: Build Linux CUDA
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
     env:
@@ -316,6 +354,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build CUDA release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -332,7 +375,7 @@ jobs:
     name: Build Linux CUDA (Blackwell)
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: nvidia/cuda:${{ vars.CUDA_BLACKWELL_VERSION || '12.8.0' }}-devel-ubuntu22.04
     env:
@@ -363,6 +406,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build CUDA Blackwell release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -379,7 +427,7 @@ jobs:
     name: Build Linux ROCm
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
@@ -410,6 +458,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build ROCm release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -426,7 +479,7 @@ jobs:
     name: Build Linux Vulkan
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
       LLAMA_STAGE_BACKEND: vulkan
     steps:
@@ -445,6 +498,11 @@ jobs:
       - uses: taiki-e/install-action@just
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl glslc libvulkan-dev spirv-headers lld
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build Vulkan release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -460,7 +518,7 @@ jobs:
   build_windows_cpu:
     name: Build Windows CPU
     needs: metadata
-    runs-on: windows-2022
+    runs-on: blacksmith-8vcpu-windows-2025
     env:
       LLAMA_STAGE_BACKEND: cpu
     steps:
@@ -478,6 +536,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build Windows CPU release bundle
         shell: pwsh
         env:
@@ -496,7 +560,7 @@ jobs:
     name: Build Windows ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: windows-2022
+    runs-on: blacksmith-8vcpu-windows-2025
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
       # Pin Windows CUDA to a version sccache 0.15.0 supports.
@@ -539,6 +603,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
       - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Cache Windows SDK installers
         if: ${{ matrix.backend != 'cuda' }}
         uses: actions/cache@v5
@@ -602,8 +672,16 @@ jobs:
       - build_windows_cpu
       - build_windows_gpu
     if: ${{ always() && needs.metadata.result == 'success' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_cuda_blackwell.result == 'success' || needs.build_linux_cuda_blackwell.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'workflow_dispatch'
+
       - name: Download release artifacts
         uses: actions/download-artifact@v7
         with:
@@ -613,6 +691,36 @@ jobs:
 
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
+
+      - name: Download generated SwiftPM manifest
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/download-artifact@v7
+        with:
+          name: swift-package-manifest
+          path: generated-swift-manifest
+
+      - name: Create dispatched release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release tag already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          scripts/release-version.sh "$RELEASE_TAG"
+          cp generated-swift-manifest/Package.swift Package.swift
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml tools/*/Cargo.toml sdk/kotlin/build.gradle.kts Package.swift
+          if git diff --cached --quiet; then
+            echo "Release source files already match $RELEASE_TAG"
+          else
+            git commit -m "$RELEASE_TAG: prepare release source"
+          fi
+          git tag "$RELEASE_TAG"
+          git push origin "refs/tags/$RELEASE_TAG"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -625,7 +733,7 @@ jobs:
     name: Publish crates.io packages
     needs: [metadata, publish]
     if: ${{ needs.metadata.outputs.prerelease != 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

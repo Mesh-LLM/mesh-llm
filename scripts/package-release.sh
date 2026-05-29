@@ -307,6 +307,28 @@ usage() {
     echo "usage: scripts/package-release.sh <version> [output_dir]" >&2
 }
 
+verify_mesh_binary_version() {
+    local binary="$1"
+    local expected="$2"
+    local output
+    local actual
+
+    expected="${expected#v}"
+    if [[ ! -x "$binary" ]]; then
+        echo "Release binary is not executable: $binary" >&2
+        exit 1
+    fi
+
+    output="$("$binary" --version)"
+    actual="$(awk '{print $NF}' <<<"$output")"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "Release binary version mismatch: expected $expected, got ${actual:-<empty>}" >&2
+        echo "Binary: $binary" >&2
+        echo "Output: $output" >&2
+        exit 1
+    fi
+}
+
 main() {
     if [[ $# -lt 1 || -z "${1:-}" ]]; then
         usage
@@ -334,6 +356,7 @@ main() {
     mkdir -p "$bundle_dir"
 
     cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_dir/$(bundle_bin_name mesh-llm)"
+    verify_mesh_binary_version "$bundle_dir/$(bundle_bin_name mesh-llm)" "$version"
 
     if [[ "$os_name" == "Darwin" ]]; then
         for bin in "$bundle_dir/$(bundle_bin_name mesh-llm)"; do

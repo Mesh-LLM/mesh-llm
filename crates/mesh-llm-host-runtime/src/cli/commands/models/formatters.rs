@@ -1,12 +1,12 @@
-use crate::models::{
-    capabilities, catalog, huggingface_hub_cache_dir, remote_catalog, ModelCapabilities,
-    ModelDetails, SearchArtifactFilter, SearchHit, SearchSort,
-};
 use crate::models::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
+use crate::models::{
+    ModelCapabilities, ModelDetails, SearchArtifactFilter, SearchHit, SearchSort, capabilities,
+    catalog, huggingface_hub_cache_dir, remote_catalog,
+};
 use crate::system::hardware;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 pub(crate) trait SearchFormatter {
@@ -67,6 +67,12 @@ pub(crate) trait ModelsFormatter: SearchFormatter {
         details: Option<&ModelDetails>,
         include_draft: bool,
         draft: Option<(&str, &Path)>,
+    ) -> Result<()>;
+    fn render_layer_package_download(
+        &self,
+        model_ref: &str,
+        package_ref: &str,
+        path: &Path,
     ) -> Result<()>;
     fn render_updates_status(&self, repo: Option<&str>, all: bool, check: bool) -> Result<()>;
     fn render_delete_preview(&self, resolved: &CliResolvedModel) -> Result<()>;

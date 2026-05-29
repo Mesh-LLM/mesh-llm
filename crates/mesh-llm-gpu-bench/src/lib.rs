@@ -18,5 +18,5 @@ mod metal;
 
 pub use output::BenchmarkOutput;
 pub use runner::{
-    parse_benchmark_output, run_benchmark, runner_for, BenchmarkBackend, BenchmarkRunner,
+    BenchmarkBackend, BenchmarkRunner, parse_benchmark_output, run_benchmark, runner_for,
 };

@@ -28,6 +28,8 @@ message Envelope {
     StreamError stream_error = 27;
     InvokeServiceRequest invoke_service_request = 28;
     InvokeServiceResponse invoke_service_response = 29;
+    OpenMeshStreamRequest open_mesh_stream_request = 30;
+    OpenMeshStreamResponse open_mesh_stream_response = 31;
   }
 }
 
@@ -334,6 +336,31 @@ message OpenStreamRequest {
 }
 
 message OpenStreamResponse {
+  string stream_id = 1;
+  bool accepted = 2;
+  StreamTransportKind transport_kind = 3;
+  optional string endpoint = 4;
+  optional string token = 5;
+  optional uint64 expires_at_unix_ms = 6;
+  optional string message = 7;
+}
+
+message OpenMeshStreamRequest {
+  string stream_id = 1;
+  string target_peer_id = 2;
+  string plugin_id = 3;
+  string channel = 4;
+  StreamPurpose purpose = 5;
+  StreamMode mode = 6;
+  bool bidirectional = 7;
+  optional string content_type = 8;
+  optional string correlation_id = 9;
+  optional string metadata_json = 10;
+  optional uint64 expected_bytes = 11;
+  optional uint64 idle_timeout_ms = 12;
+}
+
+message OpenMeshStreamResponse {
   string stream_id = 1;
   bool accepted = 2;
   StreamTransportKind transport_kind = 3;

@@ -24,7 +24,7 @@ function pathToTab(pathname: string): AppTab | null {
   if (pathname.startsWith('/chat')) return 'chat'
   if (pathname.startsWith('/reserves')) return 'reserves'
   if (pathname.startsWith('/configuration')) return 'configuration'
-  if (import.meta.env.DEV && pathname.startsWith('/__playground')) return null
+  if (env.isDevelopment && pathname.startsWith('/__playground')) return null
   return 'network'
 }
 
@@ -96,13 +96,13 @@ export function RootLayout({ data = SHELL_HARNESS }: RootLayoutProps = {}) {
     }),
     [enabledConfigurationTabs, pathname]
   )
-  const showDevelopmentNavControls = import.meta.env.DEV
   const visibleActiveTab =
     activeTab === 'configuration' && !newConfigurationPageEnabled
       ? null
       : activeTab === 'reserves' && !newReservesPageEnabled
         ? null
         : activeTab
+  const showDevelopmentNavControls = env.isDevelopment
 
   const onTabChange = useCallback(
     (tab: AppTab | null) => {

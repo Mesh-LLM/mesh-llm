@@ -1,17 +1,22 @@
 use super::*;
+use async_trait::async_trait;
 use std::io::Cursor;
 use std::{
     env, fs,
     net::SocketAddr,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
-        Arc,
     },
     time::Duration,
 };
 
 use axum::{http::StatusCode, response::IntoResponse};
+use openai_frontend::{AssistantMessage, ChatCompletionChoice};
 use serde_json::json;
+use skippy_protocol::{
+    LoadMode, PeerConfig, SCHEMA_VERSION, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
+};
 use tokio::sync::Semaphore;
 
 const MM_MODEL_ENV: &str = "SKIPPY_MM_MODEL";
@@ -57,6 +62,175 @@ fn proactive_eviction_attrs_are_bounded_and_request_free() {
     assert!(!attrs.contains_key("openai.prompt_cache_retention"));
 }
 
+fn prefix_cache_test_config() -> StageConfig {
+    StageConfig {
+        run_id: "run".to_string(),
+        topology_id: "topology".to_string(),
+        model_id: "org/model:Q4_K_M".to_string(),
+        package_ref: None,
+        manifest_sha256: None,
+        source_model_path: None,
+        source_model_sha256: None,
+        source_model_bytes: None,
+        materialized_path: None,
+        materialized_pinned: false,
+        model_path: None,
+        projector_path: None,
+        stage_id: "stage-0".to_string(),
+        stage_index: 0,
+        layer_start: 0,
+        layer_end: 4,
+        ctx_size: 8192,
+        lane_count: 2,
+        n_batch: None,
+        n_ubatch: None,
+        n_gpu_layers: 0,
+        cache_type_k: "f16".to_string(),
+        cache_type_v: "f16".to_string(),
+        flash_attn_type: Default::default(),
+        filter_tensors_on_load: false,
+        selected_device: None,
+        kv_cache: Some(StageKvCacheConfig {
+            mode: StageKvCacheMode::LookupRecord,
+            payload: StageKvCachePayload::ResidentKv,
+            max_entries: 8,
+            max_bytes: 0,
+            min_tokens: 256,
+            shared_prefix_stride_tokens: 128,
+            shared_prefix_record_limit: 2,
+        }),
+        load_mode: LoadMode::RuntimeSlice,
+        bind_addr: "127.0.0.1:0".to_string(),
+        upstream: None,
+        downstream: Some(PeerConfig {
+            stage_id: "stage-1".to_string(),
+            stage_index: 1,
+            endpoint: "127.0.0.1:0".to_string(),
+        }),
+    }
+}
+
+fn prefix_cache_test_base() -> MessageBase {
+    MessageBase {
+        schema_version: SCHEMA_VERSION,
+        run_id: "run".to_string(),
+        request_id: "request".to_string(),
+        session_id: "session".to_string(),
+        stage_id: "stage-0".to_string(),
+        stage_index: 0,
+        topology_id: "topology".to_string(),
+        model_id: Some("org/model:Q4_K_M".to_string()),
+        tokenizer_id: None,
+        chat_template_id: Some("template".to_string()),
+        seq: Some(1),
+    }
+}
+
+#[test]
+fn stage0_full_prefill_record_plan_includes_shared_prefix_candidate() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let base = prefix_cache_test_base();
+    let recorded_tokens = (0..2214).collect::<Vec<_>>();
+    let mut lookup_tokens = recorded_tokens.clone();
+    lookup_tokens.extend(100_000..100_017);
+
+    let record_plan = super::prefix_cache::stage0_full_prefill_record_identities(
+        &kv,
+        &config,
+        &base,
+        &recorded_tokens,
+    );
+    let lookup_plan = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
+
+    let record_counts = record_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+    let lookup_counts = lookup_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+
+    assert_eq!(record_counts, vec![2214, 2176]);
+    assert!(lookup_counts.contains(&2176));
+
+    let recorded_shared = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("record plan should include shared grid prefix");
+    let lookup_shared = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("lookup plan should probe shared grid prefix");
+    let recorded_exact = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2214)
+        .expect("record plan should keep exact first prompt");
+    let lookup_exact = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2231)
+        .expect("lookup plan should probe exact second prompt");
+
+    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
+    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+}
+
+#[test]
+fn stage0_chunked_prefill_record_plan_includes_shared_prefix_candidate() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_config(&config)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let base = prefix_cache_test_base();
+    let recorded_tokens = (0..2214).collect::<Vec<_>>();
+    let mut lookup_tokens = recorded_tokens.clone();
+    lookup_tokens.extend(100_000..100_017);
+
+    let record_plan = super::prefix_cache::stage0_prefill_record_identities(
+        &kv,
+        &config,
+        &base,
+        0,
+        &recorded_tokens,
+    );
+    let lookup_plan = kv.lookup_identities(&config, &base, 0, &lookup_tokens);
+
+    let record_counts = record_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+    let lookup_counts = lookup_plan
+        .iter()
+        .map(|identity| identity.identity.token_count)
+        .collect::<Vec<_>>();
+
+    assert_eq!(record_counts, vec![2214, 2176]);
+    assert!(lookup_counts.contains(&2176));
+
+    let recorded_shared = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("chunked record plan should include shared grid prefix");
+    let lookup_shared = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2176)
+        .expect("lookup plan should probe shared grid prefix");
+    let recorded_exact = record_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2214)
+        .expect("chunked record plan should keep exact first prompt");
+    let lookup_exact = lookup_plan
+        .iter()
+        .find(|identity| identity.identity.token_count == 2231)
+        .expect("lookup plan should probe exact second prompt");
+
+    assert_eq!(recorded_shared.page_id, lookup_shared.page_id);
+    assert_ne!(recorded_exact.page_id, lookup_exact.page_id);
+}
+
 struct MultimodalSmokeFixture {
     model_path: PathBuf,
     projector_path: PathBuf,
@@ -73,8 +247,8 @@ fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
         Some(path) => PathBuf::from(path),
         None => {
             eprintln!(
-                    "skipping real multimodal smoke: set {MM_MODEL_ENV}, {MM_PROJECTOR_ENV}, and {MM_IMAGE_ENV}"
-                );
+                "skipping real multimodal smoke: set {MM_MODEL_ENV}, {MM_PROJECTOR_ENV}, and {MM_IMAGE_ENV}"
+            );
             return Ok(None);
         }
     };
@@ -337,6 +511,259 @@ fn chat_runtime_feature_guard_rejects_structured_output() {
         unsupported_code(error),
         Some("unsupported_model_feature".to_string())
     );
+}
+
+#[derive(Default)]
+struct StructuredGuardrailRecordingBackend {
+    seen: Mutex<Option<ChatCompletionRequest>>,
+}
+
+#[async_trait]
+impl OpenAiBackend for StructuredGuardrailRecordingBackend {
+    async fn models(&self) -> OpenAiResult<Vec<ModelObject>> {
+        Ok(vec![ModelObject::new("test")])
+    }
+
+    async fn chat_completion(
+        &self,
+        request: ChatCompletionRequest,
+    ) -> OpenAiResult<ChatCompletionResponse> {
+        ensure_chat_runtime_features_supported(&request)
+            .expect("guarded wrapper should downgrade backend-facing structured requests");
+        *self.seen.lock().unwrap() = Some(request);
+        Ok(ChatCompletionResponse {
+            id: "chatcmpl-test".to_string(),
+            object: "chat.completion",
+            created: 123,
+            model: "test".to_string(),
+            choices: vec![ChatCompletionChoice {
+                index: 0,
+                message: AssistantMessage {
+                    role: "assistant",
+                    content: None,
+                    reasoning_content: None,
+                    tool_calls: Some(json!([{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "_mesh_emit_structured",
+                            "arguments": "{\"answer\":\"ok\"}"
+                        }
+                    }])),
+                },
+                logprobs: None,
+                finish_reason: Some(FinishReason::ToolCalls),
+            }],
+            usage: Usage::new(1, 1),
+        })
+    }
+
+    async fn chat_completion_stream(
+        &self,
+        _request: ChatCompletionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<ChatCompletionStream> {
+        unreachable!("streaming is not used in this test")
+    }
+
+    async fn completion(&self, _request: CompletionRequest) -> OpenAiResult<CompletionResponse> {
+        unreachable!("completions are not used in this test")
+    }
+
+    async fn completion_stream(
+        &self,
+        _request: CompletionRequest,
+        _context: OpenAiRequestContext,
+    ) -> OpenAiResult<CompletionStream> {
+        unreachable!("completions are not used in this test")
+    }
+}
+
+#[tokio::test]
+async fn guarded_structured_output_is_not_rejected_by_runtime_feature_guard() {
+    let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
+    let guardrails = OpenAiGuardrailsConfig {
+        target: OpenAiGuardrailsTarget::Skippy,
+        policy: GuardrailPolicy {
+            mode: GuardrailMode::Enforce,
+            apply_to_all_models: true,
+            ..GuardrailPolicy::default()
+        }
+        .into(),
+        compaction: None,
+    };
+    let guarded = guardrails.wrap_backend(backend.clone());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "hi"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                    "additionalProperties": false
+                }
+            }
+        }
+    }))
+    .unwrap();
+
+    let response = guarded.chat_completion(request).await.unwrap();
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("{\"answer\":\"ok\"}")
+    );
+
+    let seen = backend.seen.lock().unwrap().clone().unwrap();
+    assert!(
+        seen.response_format.is_none(),
+        "guarded backend should clear backend-facing response_format"
+    );
+}
+
+#[tokio::test]
+async fn compaction_wraps_skippy_backend_even_when_guardrails_are_disabled() {
+    let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
+    let guardrails = OpenAiGuardrailsConfig {
+        target: OpenAiGuardrailsTarget::Skippy,
+        policy: GuardrailPolicy::default().into(),
+        compaction: Some(CompactionConfig::default()),
+    };
+    let wrapped = guardrails.wrap_backend(backend.clone());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [
+            {"role": "tool", "content": "stale tool result"},
+            {"role": "user", "content": "continue"}
+        ],
+        "mesh_compact": true
+    }))
+    .unwrap();
+
+    let _ = wrapped.chat_completion(request).await;
+
+    let seen = backend.seen.lock().unwrap().clone().unwrap();
+    assert_eq!(seen.messages[0].role, "system");
+    assert!(seen.messages.iter().all(|message| message.role != "tool"));
+}
+
+#[tokio::test]
+async fn disabled_skippy_guardrail_wrapper_can_be_enabled_live() {
+    let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
+    let policy: openai_frontend::GuardrailPolicyHandle = GuardrailPolicy::default().into();
+    let guardrails = OpenAiGuardrailsConfig {
+        target: OpenAiGuardrailsTarget::Skippy,
+        policy: policy.clone(),
+        compaction: None,
+    };
+    let wrapped = guardrails.wrap_backend(backend.clone());
+    let request = tool_request();
+
+    wrapped.chat_completion(request.clone()).await.unwrap();
+    assert_eq!(
+        backend.seen.lock().unwrap().clone().unwrap().tools,
+        request.tools
+    );
+
+    policy.update(GuardrailPolicy {
+        mode: GuardrailMode::Enforce,
+        apply_to_all_models: true,
+        ..GuardrailPolicy::default()
+    });
+    let _ = wrapped.chat_completion(request).await;
+
+    let seen = backend.seen.lock().unwrap().clone().unwrap();
+    let tool_names = seen
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.as_array())
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool.get("function"))
+        .filter_map(|function| function.get("name"))
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"_mesh_respond"));
+    assert_eq!(guardrails.status().mode, "enforce");
+}
+
+#[tokio::test]
+async fn compaction_wraps_skippy_backend_with_runtime_context_limit() {
+    let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
+    let guardrails = OpenAiGuardrailsConfig {
+        target: OpenAiGuardrailsTarget::Skippy,
+        policy: GuardrailPolicy::default().into(),
+        compaction: Some(CompactionConfig {
+            enabled: true,
+            ..CompactionConfig::default()
+        }),
+    };
+    let wrapped = guardrails.wrap_backend_with_context_limit(backend.clone(), Some(1));
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [
+            {"role": "tool", "content": "stale tool result"},
+            {"role": "user", "content": "continue"}
+        ]
+    }))
+    .unwrap();
+
+    wrapped.chat_completion(request).await.unwrap();
+
+    let seen = backend.seen.lock().unwrap().clone().unwrap();
+    assert_eq!(seen.messages[0].role, "system");
+    assert!(seen.messages.iter().all(|message| message.role != "tool"));
+}
+
+#[tokio::test]
+async fn compaction_and_guardrails_can_stack() {
+    let backend = Arc::new(StructuredGuardrailRecordingBackend::default());
+    let guardrails = OpenAiGuardrailsConfig {
+        target: OpenAiGuardrailsTarget::Skippy,
+        policy: GuardrailPolicy {
+            mode: GuardrailMode::Enforce,
+            apply_to_all_models: true,
+            ..GuardrailPolicy::default()
+        }
+        .into(),
+        compaction: Some(CompactionConfig::default()),
+    };
+    let wrapped = guardrails.wrap_backend(backend.clone());
+    let request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "test",
+        "messages": [
+            {"role": "tool", "content": "stale tool result"},
+            {"role": "user", "content": "continue"}
+        ],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "answer",
+                "schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "mesh_compact": true
+    }))
+    .unwrap();
+
+    let response = wrapped.chat_completion(request).await.unwrap();
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("{\"answer\":\"ok\"}")
+    );
+
+    let seen = backend.seen.lock().unwrap().clone().unwrap();
+    assert!(seen.response_format.is_none());
+    assert_eq!(seen.messages[0].role, "system");
+    assert!(seen.messages.iter().all(|message| message.role != "tool"));
 }
 
 #[test]
@@ -921,6 +1348,81 @@ fn message_content_to_generation_text_rejects_remote_media_urls() {
 }
 
 #[test]
+fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "auto",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "please transcribe this"},
+                {"type": "input_audio", "input_audio": {
+                    "data": "YWJj",
+                    "format": "wav"
+                }}
+            ]
+        }],
+        "mesh_hooks": true
+    }))
+    .unwrap();
+    let media = openai_frontend::first_chat_media(&request.messages).expect("media");
+
+    apply_chat_hook_outcome(
+        &mut request,
+        &ChatHookOutcome::injected_with_consumed_media("[Audio context: hello]\n\n", media),
+    );
+
+    let content = request.messages[0].content.as_ref().expect("content");
+    let mut media = Vec::new();
+    let text = message_content_to_generation_text(content, "<__media__>", &mut media)
+        .expect("generation text");
+
+    assert!(media.is_empty());
+    assert!(!text.contains("<__media__>"));
+    assert!(text.contains("[Audio context: hello]"));
+    assert!(text.contains("please transcribe this"));
+}
+
+#[test]
+fn rescued_media_leaves_unhandled_second_media_in_prompt_media() {
+    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+        "model": "auto",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "compare these"},
+                {"type": "input_audio", "input_audio": {
+                    "data": "YXVkaW8=",
+                    "format": "wav"
+                }},
+                {"type": "image_url", "image_url": {
+                    "url": "data:image/png;base64,aW1hZ2U="
+                }}
+            ]
+        }],
+        "mesh_hooks": true
+    }))
+    .unwrap();
+    let media = openai_frontend::first_chat_media(&request.messages).expect("media");
+
+    apply_chat_hook_outcome(
+        &mut request,
+        &ChatHookOutcome::injected_with_consumed_media("[Audio context: hello]\n\n", media),
+    );
+
+    let content = request.messages[0].content.as_ref().expect("content");
+    let mut media = Vec::new();
+    let text = message_content_to_generation_text(content, "<__media__>", &mut media)
+        .expect("generation text");
+
+    assert_eq!(media.len(), 1);
+    assert_eq!(media[0].bytes, b"image");
+    assert_eq!(
+        text,
+        "[Audio context: hello]\n\n\ncompare these\n<__media__>"
+    );
+}
+
+#[test]
 fn multimodal_final_prefill_message_requests_downstream_prediction() {
     let sampling = WireSamplingConfig {
         flags: 1,
@@ -1221,9 +1723,9 @@ fn explicit_chat_request_values_override_request_defaults() {
     assert_eq!(request.effective_max_tokens(), Some(32));
     assert_eq!(
         request.stop,
-        Some(openai_frontend::StopSequence::Many(
-            vec!["USER".to_string()]
-        ))
+        Some(openai_frontend::StopSequence::Many(vec![
+            "USER".to_string()
+        ]))
     );
     assert_eq!(sampling.top_p, 0.7);
     assert_eq!(sampling.presence_penalty, 0.1);

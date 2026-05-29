@@ -2,10 +2,10 @@ use std::net::SocketAddr;
 
 use anyhow::Result;
 use axum::{
+    Json, Router,
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use opentelemetry_proto::tonic::collector::{
     logs::v1::logs_service_server::LogsServiceServer,

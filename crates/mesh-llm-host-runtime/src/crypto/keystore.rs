@@ -7,7 +7,7 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use super::{owner_id_from_verifying_key, CryptoError, OwnerKeypair};
+use super::{CryptoError, OwnerKeypair, owner_id_from_verifying_key};
 
 const KEYSTORE_VERSION: u32 = 1;
 

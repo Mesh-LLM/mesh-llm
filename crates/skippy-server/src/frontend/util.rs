@@ -42,9 +42,163 @@ pub(super) fn stable_wire_id(parts: &[&[u8]]) -> u64 {
             .try_into()
             .expect("sha256 digest has an 8-byte prefix"),
     );
-    if id == 0 {
-        1
+    if id == 0 { 1 } else { id }
+}
+
+pub(super) fn detokenize_bytes_with_runtime(
+    runtime: &Arc<Mutex<RuntimeState>>,
+    token_ids: &[i32],
+) -> OpenAiResult<Vec<u8>> {
+    let runtime = runtime
+        .lock()
+        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+    runtime
+        .model
+        .detokenize_bytes(token_ids)
+        .map_err(openai_backend_error)
+}
+
+pub(super) fn token_is_eog_with_runtime(
+    runtime: &Arc<Mutex<RuntimeState>>,
+    token_id: i32,
+) -> OpenAiResult<bool> {
+    let runtime = runtime
+        .lock()
+        .map_err(|_| OpenAiError::backend("runtime lock poisoned"))?;
+    runtime
+        .model
+        .token_is_eog(token_id)
+        .map_err(openai_backend_error)
+}
+
+pub(super) fn ms_to_us(ms: f64) -> i64 {
+    (ms * 1000.0).round() as i64
+}
+
+pub(super) fn us_to_ms(us: i64) -> f64 {
+    us as f64 / 1000.0
+}
+
+pub(super) fn openai_backend_error(error: anyhow::Error) -> OpenAiError {
+    OpenAiError::backend(error.to_string())
+}
+
+pub(super) fn openai_io_error(error: std::io::Error) -> OpenAiError {
+    OpenAiError::backend(error.to_string())
+}
+
+pub(super) fn proactive_eviction_error_kind(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("is not active") {
+        "inactive_session"
+    } else if message.contains("batch size") {
+        "invalid_batch_size"
     } else {
-        id
+        "native_drop_failed"
     }
+}
+
+pub(super) fn proactive_eviction_attrs(
+    status: &str,
+    error_kind: Option<&str>,
+    target_tokens: u64,
+    evicted_entries: usize,
+    evicted_tokens: u64,
+) -> BTreeMap<String, Value> {
+    let mut attrs = BTreeMap::from([
+        (
+            "skippy.kv.decision".to_string(),
+            json!("proactive_eviction"),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTION_STATUS.to_string(),
+            json!(status),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTION_TARGET_TOKENS.to_string(),
+            json!(target_tokens),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTED_ENTRIES.to_string(),
+            json!(evicted_entries),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTED_TOKENS.to_string(),
+            json!(evicted_tokens),
+        ),
+    ]);
+    if let Some(error_kind) = error_kind {
+        attrs.insert(
+            attr_key::KV_PROACTIVE_EVICTION_ERROR_KIND.to_string(),
+            json!(error_kind),
+        );
+    }
+    attrs
+}
+
+pub(super) fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
+    match value {
+        "fp32" | "f32" => Ok(WireActivationDType::F32),
+        "fp16" | "f16" => Ok(WireActivationDType::F16),
+        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
+        _ => bail!("unsupported activation wire dtype {value}"),
+    }
+}
+
+pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
+    let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
+    let attempts = timeout_secs.saturating_mul(2).max(1);
+    let mut last_error = None;
+    for _ in 0..attempts {
+        match TcpStream::connect(endpoint) {
+            Ok(mut stream) => {
+                stream.set_nodelay(true).ok();
+                match recv_ready(&mut stream) {
+                    Ok(()) => return Ok(stream),
+                    Err(error) => {
+                        last_error = Some(anyhow!(error).context("ready handshake failed"))
+                    }
+                }
+            }
+            Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
+}
+
+pub(super) fn finish_reason_for_generation(exhausted_max_tokens: bool) -> FinishReason {
+    if exhausted_max_tokens {
+        FinishReason::Length
+    } else {
+        FinishReason::Stop
+    }
+}
+
+pub(super) fn ensure_context_capacity(
+    prompt_token_count: usize,
+    max_tokens: u32,
+    ctx_size: usize,
+) -> OpenAiResult<()> {
+    let requested_tokens = prompt_token_count.saturating_add(max_tokens as usize);
+    if requested_tokens > ctx_size {
+        return Err(OpenAiError::context_length_exceeded(format!(
+            "requested prompt plus completion tokens ({requested_tokens}) exceed context window ({ctx_size})"
+        )));
+    }
+    Ok(())
+}
+
+pub(super) fn context_budget_completion_tokens(
+    prompt_token_count: usize,
+    ctx_size: usize,
+) -> OpenAiResult<u32> {
+    if prompt_token_count > ctx_size {
+        return Err(OpenAiError::context_length_exceeded(format!(
+            "requested prompt tokens ({prompt_token_count}) exceed context window ({ctx_size})"
+        )));
+    }
+    Ok(ctx_size
+        .saturating_sub(prompt_token_count)
+        .min(u32::MAX as usize) as u32)
 }

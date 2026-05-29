@@ -35,7 +35,7 @@ pub(super) fn connect_downstream_socket(
     let mut errors = Vec::new();
 
     macro_rules! try_connect {
-        ($mode:literal, $connect:expr) => {
+        ($mode:literal, $connect:expr_2021) => {
             match $connect {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {

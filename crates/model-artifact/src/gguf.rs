@@ -224,6 +224,7 @@ fn read_gguf_value_as_string_opt(
 #[derive(Clone, Debug, Default)]
 pub struct GgufCompactMeta {
     pub architecture: String,
+    pub parameter_size: Option<String>,
     pub context_length: u32,
     pub vocab_size: u32,
     pub embedding_size: u32,
@@ -432,6 +433,8 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
 
         if key == "general.architecture" {
             meta.architecture = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
+        } else if key == "general.size_label" {
+            meta.parameter_size = read_gguf_value_as_string_opt(&mut f, vtype).ok()?;
         } else if key == "tokenizer.ggml.model" {
             meta.tokenizer_model_name = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
         } else if key.ends_with(".context_length") {
@@ -491,17 +494,17 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
         }
     }
 
-    if meta.key_length == 0 && meta.head_count > 0 {
-        if let Some(key_length) = meta.embedding_size.checked_div(meta.head_count) {
-            meta.key_length = key_length;
-        }
+    if meta.key_length == 0
+        && meta.head_count > 0
+        && let Some(key_length) = meta.embedding_size.checked_div(meta.head_count)
+    {
+        meta.key_length = key_length;
     }
-    if meta.value_length == 0 {
-        if let Some(effective_kv) = meta.effective_kv_head_count() {
-            if let Some(value_length) = meta.embedding_size.checked_div(effective_kv) {
-                meta.value_length = value_length;
-            }
-        }
+    if meta.value_length == 0
+        && let Some(effective_kv) = meta.effective_kv_head_count()
+        && let Some(value_length) = meta.embedding_size.checked_div(effective_kv)
+    {
+        meta.value_length = value_length;
     }
 
     Some(meta)
@@ -882,9 +885,10 @@ mod tests {
         let mut file = std::fs::File::open(&path).unwrap();
         let err = read_gguf_value_as_u32(&mut file, GgufType::Int32).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-        assert!(err
-            .to_string()
-            .contains("negative Int32 where unsigned GGUF value was expected"));
+        assert!(
+            err.to_string()
+                .contains("negative Int32 where unsigned GGUF value was expected")
+        );
         let _ = std::fs::remove_file(path);
     }
 

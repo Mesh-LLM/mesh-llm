@@ -6,9 +6,9 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use hf_hub::{
+    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
     cache::{CachedRepoInfo, HFCacheInfo},
     repository::ModelInfo,
-    HFClient, HFClientBuilder, RepoType, RepoTypeModel,
 };
 use model_artifact::{ModelArtifactFile, ModelIdentity, ModelRepository, ResolvedModelArtifact};
 use model_ref::{
@@ -244,31 +244,30 @@ pub fn huggingface_identity_for_path_in_cache(
     let resolved_cache_root = cache_root
         .canonicalize()
         .unwrap_or_else(|_| cache_root.to_path_buf());
-    if resolved_cache_root != cache_root {
-        if let Some(identity) = identity_from_cache_snapshot_path(path, &resolved_cache_root) {
-            return Some(identity);
-        }
+    if resolved_cache_root != cache_root
+        && let Some(identity) = identity_from_cache_snapshot_path(path, &resolved_cache_root)
+    {
+        return Some(identity);
     }
     let resolved = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     if resolved != path {
         if let Some(identity) = identity_from_cache_snapshot_path(&resolved, cache_root) {
             return Some(identity);
         }
-        if resolved_cache_root != cache_root {
-            if let Some(identity) =
+        if resolved_cache_root != cache_root
+            && let Some(identity) =
                 identity_from_cache_snapshot_path(&resolved, &resolved_cache_root)
-            {
-                return Some(identity);
-            }
+        {
+            return Some(identity);
         }
     }
     if let Some(identity) = identity_from_snapshot_layout_ancestors(path) {
         return Some(identity);
     }
-    if resolved != path {
-        if let Some(identity) = identity_from_snapshot_layout_ancestors(&resolved) {
-            return Some(identity);
-        }
+    if resolved != path
+        && let Some(identity) = identity_from_snapshot_layout_ancestors(&resolved)
+    {
+        return Some(identity);
     }
     scan_hf_cache_identity_for_path(path, cache_root)
 }
@@ -424,6 +423,7 @@ fn env_path(key: &str) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn cache_path_identity_matches_mesh_snapshot_layout() {
@@ -493,5 +493,125 @@ mod tests {
             huggingface_repo_folder_name("org/repo", RepoTypeModel),
             "models--org--repo"
         );
+    }
+
+    #[tokio::test]
+    async fn download_file_resumes_existing_incomplete_cache_blob() {
+        let body = Arc::new(b"abcdefghij".to_vec());
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let endpoint = start_http_resume_server(Arc::clone(&body), Arc::clone(&ranges));
+
+        let cache_dir = tempfile::tempdir().unwrap();
+        let incomplete = cache_dir
+            .path()
+            .join("models--owner--repo")
+            .join("blobs")
+            .join(format!("{TEST_ETAG}.incomplete"));
+        std::fs::create_dir_all(incomplete.parent().unwrap()).unwrap();
+        std::fs::write(&incomplete, b"abcd").unwrap();
+
+        let repo = HfModelRepository::builder()
+            .endpoint(endpoint)
+            .cache_dir(cache_dir.path())
+            .build()
+            .unwrap();
+
+        let path = repo
+            .download_file("owner/repo", "main", "model.bin")
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(path).unwrap(), body.as_slice());
+        assert!(
+            ranges
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|range| range == "bytes=4-")
+        );
+    }
+
+    const TEST_COMMIT: &str = "0123456789012345678901234567890123456789";
+    const TEST_ETAG: &str = "etag-http";
+
+    fn start_http_resume_server(body: Arc<Vec<u8>>, ranges: Arc<Mutex<Vec<String>>>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut stream) = connection else {
+                    return;
+                };
+                let body = Arc::clone(&body);
+                let ranges = Arc::clone(&ranges);
+                std::thread::spawn(move || handle_resume_request(&mut stream, &body, &ranges));
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn handle_resume_request(
+        stream: &mut std::net::TcpStream,
+        body: &[u8],
+        ranges: &Mutex<Vec<String>>,
+    ) {
+        use std::io::{Read, Write};
+
+        let mut request = vec![0; 4096];
+        let Ok(read) = stream.read(&mut request) else {
+            return;
+        };
+        let request = String::from_utf8_lossy(&request[..read]);
+        let is_head = request.starts_with("HEAD ");
+        let range = request.lines().find_map(range_header_value);
+        if !is_head && let Some(range) = range {
+            ranges.lock().unwrap().push(range.to_string());
+        }
+        let response = http_resume_response(body, is_head, range);
+        let _ = stream.write_all(&response);
+    }
+
+    fn range_header_value(line: &str) -> Option<&str> {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("range").then(|| value.trim())
+    }
+
+    fn http_resume_response(body: &[u8], is_head: bool, range: Option<&str>) -> Vec<u8> {
+        if is_head {
+            return response_bytes("200 OK", body.len(), None, &[]);
+        }
+        if range == Some("bytes=4-") {
+            return response_bytes(
+                "206 Partial Content",
+                body.len() - 4,
+                Some("bytes 4-9/10"),
+                &body[4..],
+            );
+        }
+        response_bytes("200 OK", body.len(), None, body)
+    }
+
+    fn response_bytes(
+        status: &str,
+        content_length: usize,
+        content_range: Option<&str>,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let content_range = content_range
+            .map(|value| format!("Content-Range: {value}\r\n"))
+            .unwrap_or_default();
+        format!(
+            "HTTP/1.1 {status}\r\n\
+             ETag: \"{TEST_ETAG}\"\r\n\
+             X-Repo-Commit: {TEST_COMMIT}\r\n\
+             Content-Length: {content_length}\r\n\
+             {content_range}\
+             Connection: close\r\n\
+             \r\n"
+        )
+        .into_bytes()
+        .into_iter()
+        .chain(body.iter().copied())
+        .collect()
     }
 }

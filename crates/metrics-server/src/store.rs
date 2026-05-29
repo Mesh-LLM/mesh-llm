@@ -11,10 +11,10 @@ use opentelemetry_proto::tonic::{
         trace::v1::ExportTraceServiceRequest,
     },
     common::v1::InstrumentationScope,
-    metrics::v1::{metric as otlp_metric, number_data_point, Metric, NumberDataPoint},
+    metrics::v1::{Metric, NumberDataPoint, metric as otlp_metric, number_data_point},
     trace::v1::{ResourceSpans, Span},
 };
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde_json::{Map, Value};
 use skippy_metrics::{attr, metric};
 

@@ -1,5 +1,5 @@
 use mesh_client::inference::election::{
-    should_be_host_for_model, total_model_bytes, InferenceTarget,
+    InferenceTarget, should_be_host_for_model, total_model_bytes,
 };
 
 #[test]
