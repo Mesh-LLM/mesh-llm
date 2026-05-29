@@ -148,7 +148,7 @@ release-build-aarch64:
     @scripts/build-release.sh
 
 # Build a Linux aarch64 CUDA release artifact (Jetson/Orin).
-release-build-aarch64-cuda cuda_arch="75;80;86;87;89;90":
+release-build-aarch64-cuda cuda_arch="75;80;86;87;89;90;110":
     @MESH_LLM_BUILD_PROFILE=release MESH_RELEASE_ARCH=aarch64 scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
 
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
@@ -170,7 +170,7 @@ release-build-windows:
 release-build-cuda cuda_arch="75;80;86;87;89;90":
     @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
 
-release-build-cuda-blackwell cuda_arch="75;80;86;87;89;90;100;120":
+release-build-cuda-blackwell cuda_arch="75;80;86;87;89;90;100;103;120;121":
     @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
 
 release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
