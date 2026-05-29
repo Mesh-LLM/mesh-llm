@@ -117,6 +117,7 @@ impl ReleaseTarget {
             | (CanonicalOs::Linux, CanonicalArch::X86_64, BinaryFlavor::CudaBlackwell)
             | (CanonicalOs::Linux, CanonicalArch::X86_64, BinaryFlavor::Rocm)
             | (CanonicalOs::Linux, CanonicalArch::X86_64, BinaryFlavor::Vulkan)
+            | (CanonicalOs::Linux, CanonicalArch::Aarch64, BinaryFlavor::Cuda)
             | (CanonicalOs::Linux, CanonicalArch::Aarch64, BinaryFlavor::Cpu)
             | (CanonicalOs::Windows, CanonicalArch::X86_64, BinaryFlavor::Cpu)
             | (CanonicalOs::Windows, CanonicalArch::X86_64, BinaryFlavor::Cuda)

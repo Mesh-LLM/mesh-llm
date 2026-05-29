@@ -59,9 +59,9 @@
     "os": "linux",
     "arch": "aarch64",
     "flavor": "cuda",
-    "support": "unknown",
-    "stable_asset": null,
-    "versioned_asset": null
+    "support": "supported",
+    "stable_asset": "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz",
+    "versioned_asset": "mesh-llm-v0.60.0-aarch64-unknown-linux-gnu-cuda.tar.gz"
   },
   {
     "os": "linux",

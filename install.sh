@@ -251,6 +251,12 @@ probe_vulkan() {
     return 1
 }
 
+probe_tegra() {
+    # Detect NVIDIA Tegra / Jetson SoC accelerators (Orin AGX, Orin NX, Xavier, etc.)
+    # These are typically Linux aarch64 devices with an integrated NVIDIA GPU.
+    [[ -f /proc/device-tree/model ]] && grep -qi "tegra\|jetson" /proc/device-tree/model
+}
+
 supported_flavors() {
     case "$(platform_support_status)" in
         supported)
@@ -259,7 +265,7 @@ supported_flavors() {
             echo "metal"
             ;;
         Linux/aarch64)
-            echo "cpu"
+            echo "cuda cpu"
             ;;
         Linux/x86_64)
             echo "cuda-blackwell cuda rocm vulkan cpu"
@@ -277,8 +283,9 @@ supported_flavors() {
     esac
 }
 
-# Keep this detection order and the probes above in sync with the Rust updater
-# flavor selection in crates/mesh-llm-system/src/autoupdate.rs.
+# Keep this detection order and the probes above (probe_nvidia, probe_cuda_blackwell,
+# probe_rocm, probe_vulkan, probe_tegra) in sync with the Rust updater flavor
+# selection in crates/mesh-llm-system/src/autoupdate.rs.
 recommended_flavor() {
     case "$(platform_support_status)" in
         supported)
@@ -287,7 +294,11 @@ recommended_flavor() {
             echo "metal"
             ;;
         Linux/aarch64)
-            echo "cpu"
+            if probe_tegra; then
+                echo "cuda"
+            else
+                echo "cpu"
+            fi
             ;;
         Linux/x86_64)
             if probe_cuda_blackwell; then
@@ -321,7 +332,11 @@ recommendation_reason() {
             echo "Apple Silicon host detected."
             ;;
         cuda)
-            echo "NVIDIA tooling or devices were detected."
+            if probe_tegra; then
+                echo "NVIDIA Tegra/Jetson SoC detected (Orin AGX, Orin NX, Xavier, etc.)."
+            else
+                echo "NVIDIA tooling or devices were detected."
+            fi
             ;;
         cuda-blackwell)
             echo "Blackwell NVIDIA hardware was detected."
@@ -416,7 +431,14 @@ asset_name() {
             echo "mesh-llm-aarch64-apple-darwin.tar.gz"
             ;;
         Linux/aarch64)
-            echo "mesh-llm-aarch64-unknown-linux-gnu.tar.gz"
+            case "$flavor" in
+                cpu) echo "mesh-llm-aarch64-unknown-linux-gnu.tar.gz" ;;
+                cuda) echo "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz" ;;
+                *)
+                    echo "error: unsupported aarch64 flavor '$flavor'" >&2
+                    exit 1
+                    ;;
+            esac
             ;;
         Linux/x86_64)
             case "$flavor" in
