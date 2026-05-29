@@ -424,6 +424,7 @@ choose_flavor() {
 
 detect_cuda_major() {
     # Detect host CUDA major version from nvcc or libcudart.
+    # Only return versions we publish artifacts for (12, 13).
     local ver=""
     if command -v nvcc >/dev/null 2>&1; then
         ver="$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+')"
@@ -442,7 +443,11 @@ detect_cuda_major() {
         # Fallback: check ldconfig for libcudart.
         ver="$(ldconfig -p 2>/dev/null | grep -oP 'libcudart\.so\.\K[0-9]+' | sort -rn | head -n 1)"
     fi
-    echo "${ver:-}"
+    # Only return versions we publish artifacts for (12, 13).
+    case "$ver" in
+        12|13) echo "$ver" ;;
+        *)     echo "" ;;
+    esac
 }
 
 asset_name() {
