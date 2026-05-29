@@ -1326,8 +1326,8 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &release_workflow,
-        "name: release-linux-aarch64-cuda",
-        "release workflow aarch64 CUDA artifact",
+        "name: release-linux-aarch64-cuda-${{ matrix.cuda_version }}",
+        "release workflow aarch64 CUDA artifact (matrix)",
     )?;
     ensure_contains(
         &release_workflow,

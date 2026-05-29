@@ -339,15 +339,20 @@ jobs:
           if-no-files-found: error
 
   build_linux_aarch64_cuda:
-    name: Build Linux aarch64 CUDA
+    name: Build Linux aarch64 CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda_version: ['12.9.2', '13.1.2']
     container:
-      image: nvidia/cuda:13.1.2-devel-ubuntu24.04
+      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
     env:
       LLAMA_STAGE_BACKEND: cuda
       MESH_RELEASE_ARCH: aarch64
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
     steps:
       - name: Install base packages
         run: |
@@ -374,7 +379,7 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
-      - name: Build ARM64 CUDA release bundle
+      - name: Build aarch64 CUDA release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: |
@@ -382,19 +387,24 @@ jobs:
           just --shell bash --shell-arg -c release-bundle-aarch64-cuda "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
-          name: release-linux-aarch64-cuda
+          name: release-linux-aarch64-cuda-${{ matrix.cuda_version }}
           path: dist/*
           if-no-files-found: error
 
   build_linux_cuda:
-    name: Build Linux CUDA
+    name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda_version: ['12.9.2', '13.1.2']
     container:
-      image: nvidia/cuda:12.9.2-devel-ubuntu24.04
+      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
     env:
       LLAMA_STAGE_BACKEND: cuda
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
     steps:
       - name: Install base packages
         run: |
@@ -440,19 +450,24 @@ jobs:
           just --shell bash --shell-arg -c release-bundle-cuda "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
-          name: release-linux-cuda
+          name: release-linux-cuda-${{ matrix.cuda_version }}
           path: dist/*
           if-no-files-found: error
 
   build_linux_cuda_blackwell:
-    name: Build Linux CUDA (Blackwell)
+    name: Build Linux CUDA Blackwell (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        cuda_version: ['12.9.2', '13.1.2']
     container:
-      image: nvidia/cuda:13.1.2-devel-ubuntu24.04
+      image: nvidia/cuda:${{ matrix.cuda_version }}-devel-ubuntu24.04
     env:
       LLAMA_STAGE_BACKEND: cuda
+      MESH_CUDA_VERSION: ${{ matrix.cuda_version }}
     steps:
       - name: Install base packages
         run: |
@@ -498,7 +513,7 @@ jobs:
           just --shell bash --shell-arg -c release-bundle-cuda-blackwell "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
-          name: release-linux-cuda-blackwell
+          name: release-linux-cuda-blackwell-${{ matrix.cuda_version }}
           path: dist/*
           if-no-files-found: error
 

@@ -63,6 +63,15 @@ flavor_suffix() {
         ""|cpu|metal)
             printf '\n'
             ;;
+        cuda|cuda-blackwell)
+            # When MESH_CUDA_VERSION is set (CI matrix), include major version.
+            if [[ -n "${MESH_CUDA_VERSION:-}" ]]; then
+                local major="${MESH_CUDA_VERSION%%.*}"
+                printf -- '-%s-%s\n' "$1" "$major"
+            else
+                printf -- '-%s\n' "$1"
+            fi
+            ;;
         *)
             printf -- '-%s\n' "$1"
             ;;

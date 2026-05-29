@@ -148,8 +148,10 @@ release-build-aarch64:
     @scripts/build-release.sh
 
 # Build a Linux aarch64 CUDA release artifact (Jetson/Orin).
-release-build-aarch64-cuda cuda_arch="75;80;86;87;89;90;110":
-    @MESH_LLM_BUILD_PROFILE=release MESH_RELEASE_ARCH=aarch64 scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
+# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
+release-build-aarch64-cuda:
+    @MESH_LLM_BUILD_PROFILE=release MESH_RELEASE_ARCH=aarch64 scripts/build-linux.sh --backend cuda \
+      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;110'; else echo '75;80;86;87;89;90'; fi)"
 
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
 llama-prepare:
@@ -166,12 +168,17 @@ llama-build: llama-prepare
 release-build-windows:
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cpu -BuildProfile release
 
-# Build a Linux CUDA release artifact (primary / R535-compatible lane).
-release-build-cuda cuda_arch="75;80;86;87;89;90":
-    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
+# Build a Linux CUDA release artifact (primary lane).
+# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
+release-build-cuda:
+    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda \
+      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90'; else echo '75;80;86;87;89;90'; fi)"
 
-release-build-cuda-blackwell cuda_arch="75;80;86;87;89;90;100;103;120;121":
-    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
+# Build a Linux CUDA release artifact (Blackwell lane).
+# SM arches selected by MESH_CUDA_VERSION env (set by CI matrix).
+release-build-cuda-blackwell:
+    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda \
+      --cuda-arch "$(if [[ "${MESH_CUDA_VERSION:-}" == 13.* ]]; then echo '75;80;86;87;89;90;100;103;120;121'; else echo '75;80;86;87;89;90;100;120'; fi)"
 
 release-build-cuda-windows cuda_arch="75;80;86;87;89;90":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{cuda_arch}}" -BuildProfile release

@@ -453,6 +453,29 @@ choose_flavor() {
     echo "$reply"
 }
 
+detect_cuda_major() {
+    # Detect host CUDA major version from nvcc or libcudart.
+    local ver=""
+    if command -v nvcc >/dev/null 2>&1; then
+        ver="$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+')"
+    fi
+    if [[ -z "$ver" ]]; then
+        # Try to find libcudart.so and extract version from filename.
+        local lib
+        for lib in /usr/local/cuda*/targets/*/lib/libcudart.so.* /usr/local/cuda*/targets/*/lib/stubs/libcudart.so.*; do
+            if [[ -f "$lib" ]]; then
+                ver="$(basename "$lib" | grep -oP 'libcudart\.so\.\K[0-9]+' | head -n 1)"
+                break
+            fi
+        done
+    fi
+    if [[ -z "$ver" ]]; then
+        # Fallback: check ldconfig for libcudart.
+        ver="$(ldconfig -p 2>/dev/null | grep -oP 'libcudart\.so\.\K[0-9]+' | sort -rn | head -n 1)"
+    fi
+    echo "${ver:-}"
+}
+
 asset_name() {
     local flavor="$1"
     case "$(platform_support_status)" in
@@ -464,7 +487,15 @@ asset_name() {
         Linux/aarch64)
             case "$flavor" in
                 cpu) echo "mesh-llm-aarch64-unknown-linux-gnu.tar.gz" ;;
-                cuda) echo "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz" ;;
+                cuda)
+                    local cuda_major="$(detect_cuda_major)"
+                    if [[ -n "$cuda_major" ]]; then
+                        echo "mesh-llm-aarch64-unknown-linux-gnu-cuda-${cuda_major}.tar.gz"
+                    else
+                        # Fallback: try to match any cuda artifact.
+                        echo "mesh-llm-aarch64-unknown-linux-gnu-cuda.tar.gz"
+                    fi
+                    ;;
                 *)
                     echo "error: unsupported aarch64 flavor '$flavor'" >&2
                     exit 1
@@ -474,8 +505,14 @@ asset_name() {
         Linux/x86_64)
             case "$flavor" in
                 cpu) echo "mesh-llm-x86_64-unknown-linux-gnu.tar.gz" ;;
-                cuda) echo "mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz" ;;
-                cuda-blackwell) echo "mesh-llm-x86_64-unknown-linux-gnu-cuda-blackwell.tar.gz" ;;
+                cuda|cuda-blackwell)
+                    local cuda_major="$(detect_cuda_major)"
+                    if [[ -n "$cuda_major" ]]; then
+                        echo "mesh-llm-x86_64-unknown-linux-gnu-${flavor}-${cuda_major}.tar.gz"
+                    else
+                        echo "mesh-llm-x86_64-unknown-linux-gnu-${flavor}.tar.gz"
+                    fi
+                    ;;
                 rocm) echo "mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz" ;;
                 vulkan) echo "mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz" ;;
                 *)

@@ -431,10 +431,16 @@ fn release_asset_candidates(
     match preference {
         ReleaseAssetPreference::StableFirst => {
             push_release_asset_candidate(&mut candidates, target.stable_asset_name());
+            for name in target.stable_cuda_versioned_names() {
+                push_release_asset_candidate(&mut candidates, Some(name));
+            }
             push_release_asset_candidate(&mut candidates, target.versioned_asset_name(release_tag));
         }
         ReleaseAssetPreference::VersionedFirst => {
             push_release_asset_candidate(&mut candidates, target.versioned_asset_name(release_tag));
+            for name in target.stable_cuda_versioned_names() {
+                push_release_asset_candidate(&mut candidates, Some(name));
+            }
             push_release_asset_candidate(&mut candidates, target.stable_asset_name());
         }
     }
