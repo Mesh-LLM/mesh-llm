@@ -4804,6 +4804,7 @@ mod tests {
             advertised_model_throughput: vec![],
             display_rtt: None,
             propagated_latency: None,
+            selected_path: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
         }
     }
