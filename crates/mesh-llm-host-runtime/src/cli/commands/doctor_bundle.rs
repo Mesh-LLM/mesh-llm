@@ -114,7 +114,6 @@ pub(crate) async fn run_doctor_bundle(cli: &Cli, options: DoctorBundleOptions) -
         &system_report(cli, &hw, api_port),
     )?;
     add_json(&mut bundle, "gpus.json", &gpus::gpus_json(&hw))?;
-    add_text(&mut bundle, "gpus.txt", gpus::gpus_text(&hw))?;
     add_plugin_inventory(&mut bundle, cli, &mut warnings)?;
     add_config_file(&mut bundle, cli, &mut warnings)?;
     add_json(
@@ -864,7 +863,7 @@ fn doctor_readme(max_log_bytes: u64) -> String {
         "mesh-llm doctor bundle\n\n\
          Contents:\n\
          - system.json: mesh-llm version, platform, flavor, CPU, and memory summary\n\
-         - gpus.json / gpus.txt: local GPU facts shown by `mesh-llm gpus`\n\
+         - gpus.json: local GPU facts shown by `mesh-llm gpus --json`\n\
          - plugins.json: installed plugin metadata and resolved runtime plugins\n\
          - config/config.toml: resolved mesh-llm config file when available\n\
          - runtime/instances.json: local runtime process metadata\n\
@@ -1006,6 +1005,8 @@ mod tests {
         let readme = doctor_readme(1024);
 
         assert!(readme.contains("config/config.toml"));
+        assert!(readme.contains("gpus.json"));
+        assert!(!readme.contains("gpus.txt"));
         assert!(readme.contains("Environment variable values are intentionally not included"));
     }
 

@@ -41,7 +41,7 @@ from likely causes.
 - `manifest.json`: warnings, selected runtime, included files, truncated logs.
 - `system.json`: flavor mismatch, low available memory, CPU/OS/arch details,
   runtime port.
-- `gpus.json` and `gpus.txt`: no GPUs, backend detection mismatch, low VRAM,
+- `gpus.json`: no GPUs, backend detection mismatch, low VRAM,
   CUDA/ROCm/Metal/Vulkan errors, unavailable devices.
 - `plugins.json`: installed versions, disabled plugins, inactive runtime plugins,
   missing commands, unexpected plugin versions.
@@ -77,7 +77,8 @@ Still unknown:
 
 ## Safety
 
-Doctor bundles are intended to avoid config files and environment variable
-values, but logs can still contain user prompts, local paths, hostnames, model
-names, or tokens emitted by external tools. Do not paste long logs back to the
-user. Quote only the minimal evidence needed for the diagnosis.
+Doctor bundles include the resolved `config.toml` when available and avoid
+environment variable values, but logs and config can still contain user prompts,
+local paths, hostnames, model names, or tokens emitted by external tools. Do not
+paste long logs back to the user. Quote only the minimal evidence needed for the
+diagnosis.
