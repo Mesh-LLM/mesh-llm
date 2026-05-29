@@ -5223,6 +5223,7 @@ fn node_display_name(cli: &Cli, node: &mesh::Node) -> String {
         .unwrap_or_else(|| node.id().fmt_short().to_string())
 }
 
+#[allow(dead_code)]
 async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
     if !cli.join.is_empty() {
         return join_mcp_with_tokens(&cli.join, node).await;
@@ -5239,6 +5240,7 @@ async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn join_mcp_with_tokens(tokens: &[String], node: &mesh::Node) -> Result<()> {
     for token in tokens {
         match node.join_with_retry(token).await {
@@ -5258,6 +5260,7 @@ async fn join_mcp_with_tokens(tokens: &[String], node: &mesh::Node) -> Result<()
     anyhow::bail!("Failed to join any peer for MCP mode");
 }
 
+#[allow(dead_code)]
 async fn join_mcp_via_lan_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> {
     let filter = nostr::MeshFilter {
         region: cli.region.clone(),
@@ -5325,6 +5328,7 @@ async fn join_mcp_via_lan_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> 
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn join_mcp_via_nostr_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> {
     let relays = nostr_relays(&cli.nostr_relay);
     let filter = nostr::MeshFilter {
@@ -5400,6 +5404,7 @@ async fn join_mcp_via_nostr_discovery(cli: &Cli, node: &mesh::Node) -> Result<()
     }
 }
 
+#[allow(dead_code)]
 pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     let resolved_plugins = load_resolved_plugins(cli)?;
     let config = plugin::load_config(cli.config.as_deref())?;

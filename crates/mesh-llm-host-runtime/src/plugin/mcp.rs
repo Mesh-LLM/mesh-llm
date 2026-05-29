@@ -1490,11 +1490,19 @@ mod proto_error {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> {
-    use rmcp::transport::streamable_http_server::{StreamableHttpService, session::local::LocalSessionManager};
+    use rmcp::transport::streamable_http_server::{
+        StreamableHttpService, session::local::LocalSessionManager,
+    };
 
     let service = StreamableHttpService::new(
-        move || Ok(PluginMcpServer::new(plugin_manager.clone(), Default::default())),
+        move || {
+            Ok(PluginMcpServer::new(
+                plugin_manager.clone(),
+                Default::default(),
+            ))
+        },
         Arc::new(LocalSessionManager::default()),
         Default::default(),
     );
@@ -1515,7 +1523,6 @@ pub(crate) async fn run_mcp_server(plugin_manager: PluginManager) -> Result<()> 
         .await
         .context("MCP server exited")
 }
-
 
 #[cfg(test)]
 mod tests {
