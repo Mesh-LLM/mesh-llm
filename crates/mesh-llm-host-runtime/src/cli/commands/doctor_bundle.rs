@@ -44,7 +44,9 @@ struct RuntimeInstanceInfo {
     version: Option<String>,
     started_at_unix: Option<i64>,
     mesh_llm_binary: Option<String>,
+    command: Option<String>,
     runtime_dir: PathBuf,
+    runtime_metadata: bool,
     is_live: bool,
     sort_time_unix: i64,
 }
@@ -262,6 +264,14 @@ fn add_runtime_files(
     max_log_bytes: u64,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    if !info.runtime_metadata {
+        warnings.push(format!(
+            "selected process has no runtime metadata directory: {}",
+            info.runtime_dir.display()
+        ));
+        return Ok(());
+    }
+
     add_existing_file(
         zip,
         &info.runtime_dir.join("owner.json"),
@@ -396,9 +406,10 @@ async fn fetch_api_snapshot(client: &reqwest::Client, port: u16, endpoint: &str)
 async fn api_response_json(url: String, response: reqwest::Response) -> Value {
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    if status == StatusCode::OK
-        && let Ok(json_body) = serde_json::from_str::<Value>(&body)
-    {
+    if status != StatusCode::OK {
+        return json!({"ok": status.is_success(), "url": url, "status": status.as_u16(), "body": body});
+    }
+    if let Ok(json_body) = serde_json::from_str::<Value>(&body) {
         return json!({"ok": true, "url": url, "status": status.as_u16(), "body": json_body});
     }
     json!({"ok": status.is_success(), "url": url, "status": status.as_u16(), "body": body})
@@ -406,18 +417,21 @@ async fn api_response_json(url: String, response: reqwest::Response) -> Value {
 
 fn load_runtime_instances(root: &Path) -> Result<Vec<RuntimeInstanceInfo>> {
     if !root.exists() {
-        return Ok(Vec::new());
+        return Ok(discover_running_mesh_processes(root, &[]));
     }
 
     let mut instances = Vec::new();
     for entry in fs::read_dir(root).with_context(|| format!("failed to read {}", root.display()))? {
         let path = entry?.path();
-        if path.is_dir()
-            && let Some(info) = read_runtime_instance(&path)
-        {
-            instances.push(info);
+        if !path.is_dir() {
+            continue;
         }
+        let Some(info) = read_runtime_instance(&path) else {
+            continue;
+        };
+        instances.push(info);
     }
+    instances.extend(discover_running_mesh_processes(root, &instances));
     instances.sort_by(|a, b| {
         b.sort_time_unix
             .cmp(&a.sort_time_unix)
@@ -443,9 +457,90 @@ fn read_runtime_instance(runtime_dir: &Path) -> Option<RuntimeInstanceInfo> {
         version: value["version"].as_str().map(str::to_owned),
         started_at_unix,
         mesh_llm_binary: value["mesh_llm_binary"].as_str().map(str::to_owned),
+        command: None,
         runtime_dir: runtime_dir.to_path_buf(),
+        runtime_metadata: true,
         is_live: instance::validate::process_liveness(pid) != instance::validate::Liveness::Dead,
         sort_time_unix: started_at_unix.unwrap_or_else(|| path_modified_unix(runtime_dir)),
+    })
+}
+
+fn discover_running_mesh_processes(
+    runtime_root: &Path,
+    known_instances: &[RuntimeInstanceInfo],
+) -> Vec<RuntimeInstanceInfo> {
+    let known_pids = known_instances
+        .iter()
+        .map(|info| info.pid)
+        .collect::<std::collections::BTreeSet<_>>();
+    parse_running_mesh_processes(
+        &process_table_output().unwrap_or_default(),
+        runtime_root,
+        &known_pids,
+        std::process::id(),
+        chrono::Utc::now().timestamp(),
+    )
+}
+
+#[cfg(unix)]
+fn process_table_output() -> Option<String> {
+    command_stdout("ps", &["-eo", "pid=,command="])
+}
+
+#[cfg(not(unix))]
+fn process_table_output() -> Option<String> {
+    None
+}
+
+fn parse_running_mesh_processes(
+    output: &str,
+    runtime_root: &Path,
+    known_pids: &std::collections::BTreeSet<u32>,
+    current_pid: u32,
+    sort_time_unix: i64,
+) -> Vec<RuntimeInstanceInfo> {
+    output
+        .lines()
+        .filter_map(|line| parse_process_table_row(line))
+        .filter(|(pid, command)| {
+            *pid != current_pid && !known_pids.contains(pid) && is_mesh_llm_runtime_command(command)
+        })
+        .map(|(pid, command)| RuntimeInstanceInfo {
+            pid,
+            api_port: None,
+            version: None,
+            started_at_unix: None,
+            mesh_llm_binary: command.split_whitespace().next().map(str::to_string),
+            command: Some(command.to_string()),
+            runtime_dir: runtime_root.join(pid.to_string()),
+            runtime_metadata: false,
+            is_live: true,
+            sort_time_unix,
+        })
+        .collect()
+}
+
+fn parse_process_table_row(line: &str) -> Option<(u32, &str)> {
+    let trimmed = line.trim_start();
+    let split_at = trimmed.find(char::is_whitespace)?;
+    let pid = trimmed[..split_at].parse().ok()?;
+    let command = trimmed[split_at..].trim();
+    (!command.is_empty()).then_some((pid, command))
+}
+
+fn is_mesh_llm_runtime_command(command: &str) -> bool {
+    if !command.contains("mesh-llm") {
+        return false;
+    }
+    let args = command.split_whitespace().collect::<Vec<_>>();
+    let Some(binary_index) = args.iter().position(|arg| arg.contains("mesh-llm")) else {
+        return false;
+    };
+    args[binary_index + 1..].iter().any(|arg| {
+        matches!(
+            *arg,
+            "client" | "serve" | "--client" | "--auto" | "--model" | "--gguf"
+        )
     })
 }
 
@@ -711,7 +806,6 @@ fn command_u64(command: &str, args: &[&str]) -> Option<u64> {
     command_stdout(command, args)?.trim().parse().ok()
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new(command)
         .args(args)
@@ -884,6 +978,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parses_running_client_without_runtime_metadata() {
+        let known_pids = std::collections::BTreeSet::new();
+        let processes = parse_running_mesh_processes(
+            "  42 ./target/debug/mesh-llm client --auto\n  43 ./target/debug/mesh-llm doctor\n",
+            Path::new("/tmp/runtime"),
+            &known_pids,
+            99,
+            123,
+        );
+
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].pid, 42);
+        assert!(processes[0].is_live);
+        assert!(!processes[0].runtime_metadata);
+        assert_eq!(processes[0].runtime_dir, PathBuf::from("/tmp/runtime/42"));
+    }
+
+    #[test]
+    fn process_discovery_skips_current_and_known_pids() {
+        let known_pids = std::collections::BTreeSet::from([42]);
+        let processes = parse_running_mesh_processes(
+            "  42 ./target/debug/mesh-llm serve --model qwen\n  43 ./target/debug/mesh-llm client --auto\n",
+            Path::new("/tmp/runtime"),
+            &known_pids,
+            43,
+            123,
+        );
+
+        assert!(processes.is_empty());
+    }
+
     fn instance_info(pid: u32, is_live: bool, sort_time_unix: i64) -> RuntimeInstanceInfo {
         RuntimeInstanceInfo {
             pid,
@@ -891,7 +1017,9 @@ mod tests {
             version: Some("0.0.0-test".into()),
             started_at_unix: Some(sort_time_unix),
             mesh_llm_binary: Some("/tmp/mesh-llm".into()),
+            command: None,
             runtime_dir: PathBuf::from(format!("/tmp/{pid}")),
+            runtime_metadata: true,
             is_live,
             sort_time_unix,
         }
