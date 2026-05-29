@@ -535,6 +535,10 @@ fn flavor_supported_for_update(
 }
 
 fn current_host_backend_probe() -> HostBackendProbe {
+    // probe_tegra_backend() exists to mirror install.sh and is available
+    // for future use when aarch64 CUDA bundle selection is needed.
+    let _ = probe_tegra_backend();
+
     HostBackendProbe {
         cuda_blackwell: probe_cuda_blackwell_backend(),
         cuda: probe_nvidia_backend(),
@@ -578,6 +582,20 @@ fn probe_tegra_backend() -> bool {
 fn is_tegra_model(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     lower.contains("tegra") || lower.contains("jetson")
+}
+
+fn probe_tegra_backend() -> bool {
+    // Detect NVIDIA Tegra / Jetson SoC accelerators (Orin AGX, Orin NX, Xavier, etc.).
+    // These are Linux aarch64 devices with an integrated NVIDIA GPU identified by the
+    // device-tree model string.
+    let dt_model = Path::new("/proc/device-tree/model");
+    if !dt_model.exists() {
+        return false;
+    }
+    std::fs::read_to_string(dt_model).is_ok_and(|content| {
+        let lower = content.to_ascii_lowercase();
+        lower.contains("tegra") || lower.contains("jetson")
+    })
 }
 
 fn nvidia_compute_caps() -> Vec<String> {
