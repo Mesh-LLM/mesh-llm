@@ -1968,12 +1968,16 @@ mod tests {
 
     #[test]
     fn test_is_tegra_nvidia_model_positive_orin_agx() {
-        assert!(is_tegra_nvidia_model("NVIDIA Jetson AGX Orin Developer Kit"));
+        assert!(is_tegra_nvidia_model(
+            "NVIDIA Jetson AGX Orin Developer Kit"
+        ));
     }
 
     #[test]
     fn test_is_tegra_nvidia_model_positive_orin_nano() {
-        assert!(is_tegra_nvidia_model("NVIDIA Jetson Orin Nano Developer Kit"));
+        assert!(is_tegra_nvidia_model(
+            "NVIDIA Jetson Orin Nano Developer Kit"
+        ));
     }
 
     #[test]
