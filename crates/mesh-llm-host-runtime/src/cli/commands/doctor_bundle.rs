@@ -690,10 +690,12 @@ fn cpu_brand() -> Option<String> {
     None
 }
 
+#[cfg(target_os = "macos")]
 fn command_u64(command: &str, args: &[&str]) -> Option<u64> {
     command_stdout(command, args)?.trim().parse().ok()
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new(command)
         .args(args)
