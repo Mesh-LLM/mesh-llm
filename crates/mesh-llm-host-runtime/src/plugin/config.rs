@@ -1,5 +1,5 @@
 use super::installed::{append_installed_plugins, configured_external_plugin_spec};
-use super::{BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, PluginSummary, TELEMETRY_PLUGIN_ID};
+use super::{BLOBSTORE_PLUGIN_ID, PluginSummary};
 use anyhow::{Context, Result, bail};
 #[allow(unused_imports)]
 pub use mesh_llm_config::{
@@ -14,10 +14,6 @@ pub use mesh_llm_config::{
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
-
-const FLASH_MOE_INSTALL_HINT: &str = "Install Flash-MoE separately and set \
-                                     `command` to its infer binary, or set \
-                                     `url` to an already-running Flash-MoE /v1 endpoint.";
 
 #[derive(Clone, Debug)]
 pub struct ResolvedPlugins {
@@ -41,22 +37,11 @@ pub struct PluginHostMode {
     pub mesh_visibility: MeshVisibility,
 }
 
-pub(crate) fn telemetry_plugin_enabled(config: &MeshConfig) -> bool {
-    config
-        .plugins
-        .iter()
-        .find(|entry| entry.name == TELEMETRY_PLUGIN_ID)
-        .map(|entry| entry.enabled.unwrap_or(true))
-        .unwrap_or(true)
-}
-
 pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Result<ResolvedPlugins> {
     let mut externals = Vec::new();
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
-    let mut flash_moe_entry: Option<&PluginConfigEntry> = None;
-    let mut telemetry_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
@@ -72,23 +57,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
             blobstore_enabled = enabled;
             continue;
         }
-        if entry.name == FLASH_MOE_PLUGIN_ID {
-            if !enabled {
-                continue;
-            }
-            flash_moe_entry = Some(entry);
-            continue;
-        }
-        if entry.name == TELEMETRY_PLUGIN_ID {
-            if entry.command.is_some() || !entry.args.is_empty() || entry.url.is_some() {
-                bail!(
-                    "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
-                    TELEMETRY_PLUGIN_ID
-                );
-            }
-            telemetry_enabled = enabled;
-            continue;
-        }
         if !enabled {
             continue;
         }
@@ -97,12 +65,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
 
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
-    if telemetry_enabled {
-        externals.insert(0, telemetry_plugin_spec()?);
-    }
-    if let Some(entry) = flash_moe_entry {
-        externals.push(flash_moe_plugin_spec(entry)?);
-    }
     if blobstore_enabled {
         externals.push(blobstore_plugin_spec()?);
     }
@@ -126,97 +88,6 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
             "json".into(),
             "--plugin".into(),
             BLOBSTORE_PLUGIN_ID.into(),
-        ],
-        url: None,
-        env: BTreeMap::new(),
-    })
-}
-
-pub fn flash_moe_plugin_spec(entry: &PluginConfigEntry) -> Result<ExternalPluginSpec> {
-    let backend_command = entry
-        .command
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let endpoint_url = entry
-        .url
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    if backend_command.is_some() && endpoint_url.is_some() {
-        bail!(
-            "Plugin '{}' accepts either `command` for a managed flash-moe process or `url` for an already-running endpoint, not both",
-            FLASH_MOE_PLUGIN_ID
-        );
-    }
-    if backend_command.is_none() && endpoint_url.is_none() {
-        bail!(
-            "Plugin '{}' requires `command` or `url`. {}",
-            FLASH_MOE_PLUGIN_ID,
-            FLASH_MOE_INSTALL_HINT
-        );
-    }
-    if backend_command.is_none() && !entry.args.is_empty() {
-        bail!("Plugin '{}' args require `command`", FLASH_MOE_PLUGIN_ID);
-    }
-    if entry
-        .args
-        .iter()
-        .any(|arg| arg == "--serve" || arg.starts_with("--serve="))
-    {
-        bail!(
-            "Plugin '{}' owns the flash-moe `--serve` port; remove `--serve` from args",
-            FLASH_MOE_PLUGIN_ID
-        );
-    }
-
-    let command = std::env::current_exe()
-        .context("Cannot determine mesh-llm executable path")?
-        .display()
-        .to_string();
-    let mut env = BTreeMap::new();
-    if let Some(backend_command) = backend_command {
-        env.insert(
-            "MESH_LLM_FLASH_MOE_COMMAND".to_string(),
-            backend_command.to_string(),
-        );
-        env.insert(
-            "MESH_LLM_FLASH_MOE_ARGS_JSON".to_string(),
-            serde_json::to_string(&entry.args)?,
-        );
-    }
-    if let Some(url) = endpoint_url {
-        env.insert("MESH_LLM_FLASH_MOE_URL".to_string(), url.to_string());
-    }
-
-    Ok(ExternalPluginSpec {
-        name: FLASH_MOE_PLUGIN_ID.to_string(),
-        command,
-        args: vec![
-            "--log-format".into(),
-            "json".into(),
-            "--plugin".into(),
-            FLASH_MOE_PLUGIN_ID.into(),
-        ],
-        url: None,
-        env,
-    })
-}
-
-pub fn telemetry_plugin_spec() -> Result<ExternalPluginSpec> {
-    let command = std::env::current_exe()
-        .context("Cannot determine mesh-llm executable path")?
-        .display()
-        .to_string();
-    Ok(ExternalPluginSpec {
-        name: TELEMETRY_PLUGIN_ID.to_string(),
-        command,
-        args: vec![
-            "--log-format".into(),
-            "json".into(),
-            "--plugin".into(),
-            TELEMETRY_PLUGIN_ID.into(),
         ],
         url: None,
         env: BTreeMap::new(),
@@ -360,7 +231,7 @@ prompt_shape_metrics = false
 endpoint = "https://otel.example.com/v1/metrics"
 
 [[plugin]]
-name = "telemetry"
+name = "metrics"
 enabled = true
 "#,
         )
@@ -473,25 +344,6 @@ prompt_shape_metrics = true
                 .contains("telemetry.prompt_shape_metrics is not supported yet"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn flash_moe_config_requires_external_command_or_endpoint_with_install_hint() {
-        let entry = PluginConfigEntry {
-            name: FLASH_MOE_PLUGIN_ID.to_string(),
-            enabled: Some(true),
-            command: None,
-            args: Vec::new(),
-            url: None,
-        };
-
-        let err = flash_moe_plugin_spec(&entry)
-            .expect_err("flash-moe requires a managed command or attached endpoint");
-        let message = err.to_string();
-
-        assert!(message.contains("Install Flash-MoE separately"));
-        assert!(message.contains("command"));
-        assert!(message.contains("url"));
     }
 
     #[test]
