@@ -2,6 +2,7 @@
 //! and peer list management (add/remove/update).
 
 use super::*;
+use crate::models::append_external_inference_models;
 
 /// Minimum peer version we accept into the local mesh table and re-broadcast.
 ///
@@ -106,15 +107,6 @@ pub(super) fn peer_is_idle_transitive_client(ann: &PeerAnnouncement) -> bool {
             .as_ref()
             .map(|h| h.is_empty())
             .unwrap_or(true)
-}
-
-fn append_external_inference_models(models: &mut Vec<String>, external_models: &[String]) {
-    for model in external_models {
-        if model.trim().is_empty() || models.iter().any(|existing| existing == model) {
-            continue;
-        }
-        models.push(model.clone());
-    }
 }
 
 struct LocalAnnouncementData {

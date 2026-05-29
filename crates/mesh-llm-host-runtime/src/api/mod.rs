@@ -68,6 +68,7 @@ use self::status::{
     runtime_stage_wire_dtype_label,
 };
 use crate::mesh;
+use crate::models::append_external_inference_models;
 use crate::network::{affinity, nostr};
 use crate::plugin;
 use crate::runtime_data;
@@ -100,15 +101,6 @@ async fn external_inference_models(plugin_manager: &plugin::PluginManager) -> Ve
             tracing::debug!(%error, "failed to collect plugin inference models for status");
             Vec::new()
         })
-}
-
-fn append_external_inference_models(models: &mut Vec<String>, external_models: &[String]) {
-    for model in external_models {
-        if model.trim().is_empty() || models.iter().any(|existing| existing == model) {
-            continue;
-        }
-        models.push(model.clone());
-    }
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ pub mod capabilities;
 pub mod catalog;
 pub mod delete;
 pub use delete::DeleteResult;
+mod external_inference;
 pub mod gguf;
 pub mod inventory;
 pub mod local;
@@ -23,6 +24,7 @@ pub use capabilities::{
     CapabilityLevel, ModelCapabilities, RuntimeMediaCapabilityEvidence,
     runtime_verified_model_capabilities,
 };
+pub(crate) use external_inference::append_external_inference_models;
 pub use inventory::{LocalModelInventorySnapshot, scan_local_inventory_snapshot_with_progress};
 pub use local::{
     find_mmproj_path, find_model_path, huggingface_hub_cache_dir, huggingface_identity_for_path,
