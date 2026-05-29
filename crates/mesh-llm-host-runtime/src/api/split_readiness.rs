@@ -224,6 +224,17 @@ fn split_node_exclusion_reason(
     if !node.stage_protocol_generation_supported {
         return Some(SplitReadinessExclusionReason::StageProtocolGeneration);
     }
+    if node.source == SplitReadinessNodeSource::Peer {
+        if node.rtt_ms.is_none() {
+            return Some(SplitReadinessExclusionReason::MissingStagePath);
+        }
+        if node
+            .rtt_ms
+            .is_some_and(|rtt_ms| rtt_ms > crate::mesh::MAX_SPLIT_RTT_MS)
+        {
+            return Some(SplitReadinessExclusionReason::StagePathTooSlow);
+        }
+    }
     if node.source == SplitReadinessNodeSource::Peer && !node_has_stage_source(model_ref, node) {
         return Some(SplitReadinessExclusionReason::MissingModelSource);
     }
@@ -433,6 +444,24 @@ fn split_readiness_recommendations(
                 .to_string(),
         );
     }
+    if exclusions
+        .iter()
+        .any(|item| item.reason == SplitReadinessExclusionReason::MissingStagePath.as_str())
+    {
+        recommendations.push(
+            "Wait for direct peer latency to be measured before split serving, or check that the nodes can establish a direct QUIC path."
+                .to_string(),
+        );
+    }
+    if exclusions
+        .iter()
+        .any(|item| item.reason == SplitReadinessExclusionReason::StagePathTooSlow.as_str())
+    {
+        recommendations.push(format!(
+            "Use lower-latency peers for split serving; direct stage RTT must be at or below {}ms.",
+            crate::mesh::MAX_SPLIT_RTT_MS
+        ));
+    }
     recommendations
 }
 
@@ -506,6 +535,8 @@ enum SplitReadinessExclusionReason {
     MissingVram,
     MissingModelInterest,
     StageProtocolGeneration,
+    MissingStagePath,
+    StagePathTooSlow,
     MissingModelSource,
 }
 
@@ -516,6 +547,8 @@ impl SplitReadinessExclusionReason {
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
             Self::StageProtocolGeneration => "stage_protocol_generation",
+            Self::MissingStagePath => "missing_stage_path",
+            Self::StagePathTooSlow => "stage_path_too_slow",
             Self::MissingModelSource => "missing_model_source",
         }
     }
@@ -531,6 +564,12 @@ impl SplitReadinessExclusionReason {
             }
             Self::StageProtocolGeneration => {
                 "Upgrade this peer; its stage protocol generation is too old for split serving."
+            }
+            Self::MissingStagePath => {
+                "Wait for a measured direct path before admitting this peer to split serving."
+            }
+            Self::StagePathTooSlow => {
+                "Use a lower-latency path or peer before admitting this peer to split serving."
             }
             Self::MissingModelSource => {
                 "Ensure this peer can resolve or inventory the layer package before split serving."
@@ -735,6 +774,66 @@ mod tests {
                 .recommendations
                 .iter()
                 .any(|item| item.contains("resolvable package source"))
+        );
+    }
+
+    #[test]
+    fn split_readiness_excludes_peer_without_measured_stage_path() {
+        let mut peer = node(
+            "peer000000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        peer.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        peer.rtt_ms = None;
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![peer],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
+        assert_eq!(report.participant_count, 1);
+        assert_eq!(report.exclusions[0].reason, "missing_stage_path");
+        assert!(
+            report
+                .recommendations
+                .iter()
+                .any(|item| item.contains("direct peer latency"))
+        );
+    }
+
+    #[test]
+    fn split_readiness_excludes_peer_with_slow_stage_path() {
+        let mut peer = node(
+            "peer000000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        peer.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS + 1);
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![peer],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
+        assert_eq!(report.participant_count, 1);
+        assert_eq!(report.exclusions[0].reason, "stage_path_too_slow");
+        assert!(
+            report
+                .recommendations
+                .iter()
+                .any(|item| item.contains("80ms"))
         );
     }
 }

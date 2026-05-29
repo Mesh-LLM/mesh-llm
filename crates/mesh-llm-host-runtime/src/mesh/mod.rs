@@ -117,6 +117,42 @@ pub(crate) struct HttpCaptureEvent<'a> {
     pub(crate) stream: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SplitStagePathKind {
+    Direct,
+    Relay,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SplitStagePathSnapshot {
+    pub(crate) kind: SplitStagePathKind,
+    pub(crate) rtt_ms: Option<u32>,
+}
+
+impl SplitStagePathSnapshot {
+    pub(crate) const fn direct(rtt_ms: Option<u32>) -> Self {
+        Self {
+            kind: SplitStagePathKind::Direct,
+            rtt_ms,
+        }
+    }
+
+    pub(crate) const fn relay(rtt_ms: Option<u32>) -> Self {
+        Self {
+            kind: SplitStagePathKind::Relay,
+            rtt_ms,
+        }
+    }
+
+    pub(crate) const fn unknown() -> Self {
+        Self {
+            kind: SplitStagePathKind::Unknown,
+            rtt_ms: None,
+        }
+    }
+}
+
 fn selected_path_observation(conn: &Connection) -> Option<SelectedPathObservation> {
     let path_list = conn.paths();
     for path_info in &path_list {
@@ -144,6 +180,17 @@ fn selected_path_observation(conn: &Connection) -> Option<SelectedPathObservatio
     }
 
     None
+}
+
+fn split_stage_path_snapshot_from_connection(conn: &Connection) -> SplitStagePathSnapshot {
+    let Some(observation) = selected_path_observation(conn) else {
+        return SplitStagePathSnapshot::unknown();
+    };
+    match observation.path_type {
+        "direct" => SplitStagePathSnapshot::direct(observation.rtt_ms),
+        "relay" => SplitStagePathSnapshot::relay(observation.rtt_ms),
+        _ => SplitStagePathSnapshot::unknown(),
+    }
 }
 
 fn endpoint_id_capture_fields(id: EndpointId) -> serde_json::Value {
@@ -4889,6 +4936,23 @@ impl Node {
                     );
                 }
                 Ok(conn)
+            }
+        }
+    }
+
+    pub(crate) async fn split_stage_path_snapshot(
+        &self,
+        peer_id: EndpointId,
+    ) -> SplitStagePathSnapshot {
+        match self.connection_to_peer(peer_id).await {
+            Ok(conn) => split_stage_path_snapshot_from_connection(&conn),
+            Err(error) => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    error = %error,
+                    "split stage path probe could not open mesh connection"
+                );
+                SplitStagePathSnapshot::unknown()
             }
         }
     }
