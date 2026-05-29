@@ -146,15 +146,11 @@ impl<'a> PluginContext<'a> {
         let mut pending_guard =
             PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
 
-        if let Err(err) = self
-            .send_payload(
-                proto::envelope::Payload::OpenMeshStreamRequest(request),
-                request_id,
-            )
-            .await
-        {
-            return Err(err);
-        }
+        self.send_payload(
+            proto::envelope::Payload::OpenMeshStreamRequest(request),
+            request_id,
+        )
+        .await?;
 
         let response = rx.await??;
         pending_guard.disarm();
