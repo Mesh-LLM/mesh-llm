@@ -12,7 +12,7 @@ use crate::proto::node::{GossipFrame, NodeRole, PeerAnnouncement, RouteTableRequ
 use serial_test::serial;
 use skippy_protocol::proto::stage as skippy_stage_proto;
 use std::collections::{HashMap, HashSet};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 /// Empty per-relay auth map for tests that don't exercise gated relays.
 ///
@@ -1269,6 +1269,51 @@ async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> 
     assert!(!status_snapshot.contains(&control_endpoint));
 
     node.shutdown_control_listener().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn external_inference_endpoint_models_are_advertised_in_gossip() -> anyhow::Result<()> {
+    let node = Node::new_for_tests(super::NodeRole::Worker).await?;
+    let resolved_plugins = plugin::ResolvedPlugins {
+        externals: vec![],
+        inactive: vec![],
+    };
+    let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+    let plugin_manager = plugin::PluginManager::start(
+        &resolved_plugins,
+        plugin::PluginHostMode {
+            mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
+        },
+        mesh_tx,
+    )
+    .await?;
+    plugin_manager
+        .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
+            plugin_name: "endpoint-plugin".into(),
+            endpoint_id: "endpoint-plugin".into(),
+            address: "http://127.0.0.1:8000/v1".into(),
+            models: vec!["lemonade-small".into()],
+        }])
+        .await;
+    node.set_plugin_manager(plugin_manager).await;
+
+    let announcements = node.collect_announcements().await;
+    let local = announcements.last().expect("local announcement");
+
+    assert!(local.models.iter().any(|model| model == "lemonade-small"));
+    assert!(
+        local
+            .serving_models
+            .iter()
+            .any(|model| model == "lemonade-small")
+    );
+    assert!(
+        local
+            .hosted_models
+            .as_ref()
+            .is_some_and(|models| models.iter().any(|model| model == "lemonade-small"))
+    );
     Ok(())
 }
 

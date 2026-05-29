@@ -137,7 +137,7 @@ impl ExternalPlugin {
         child.env("MESH_LLM_PLUGIN_TRANSPORT", transport);
         child.env("MESH_LLM_PLUGIN_NAME", &self.spec.name);
         if let Some(ref url) = self.spec.url {
-            child.env("MESH_LLM_OPENAI_ENDPOINT_URL", url);
+            child.env("MESH_LLM_PLUGIN_URL", url);
         }
         for (key, value) in &self.spec.env {
             child.env(key, value);

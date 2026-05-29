@@ -212,13 +212,6 @@ impl ConfigEditor {
             .args(args);
         Ok(self)
     }
-
-    pub fn upsert_openai_endpoint_plugin(&mut self, url: impl Into<String>) -> Result<&mut Self> {
-        self.upsert_plugin("openai-endpoint")?
-            .enabled(true)
-            .url(url);
-        Ok(self)
-    }
 }
 
 impl From<MeshConfig> for ConfigEditor {

@@ -130,7 +130,10 @@ ctx_size = 4096
         let config = store
             .update(|config| {
                 config.enable_builtin_plugin("telemetry")?;
-                config.upsert_openai_endpoint_plugin("http://localhost:8000/v1")?;
+                config
+                    .upsert_plugin("endpoint-plugin")?
+                    .enabled(true)
+                    .url("http://localhost:8000/v1");
                 config.upsert_external_plugin("custom-tool", "mesh-tool", ["--serve"])?;
                 Ok(())
             })
@@ -141,7 +144,7 @@ ctx_size = 4096
             config
                 .plugins
                 .iter()
-                .find(|plugin| plugin.name == "openai-endpoint")
+                .find(|plugin| plugin.name == "endpoint-plugin")
                 .and_then(|plugin| plugin.url.as_deref()),
             Some("http://localhost:8000/v1")
         );

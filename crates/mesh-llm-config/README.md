@@ -140,7 +140,9 @@ use mesh_llm_config::ConfigStore;
 let store = ConfigStore::default_path()?;
 store.update(|config| {
     config.enable_builtin_plugin("telemetry")?;
-    config.upsert_openai_endpoint_plugin("http://localhost:8000/v1")?;
+    config.upsert_plugin("endpoint-plugin")?
+        .enabled(true)
+        .url("http://localhost:8000/v1");
     config.upsert_external_plugin("custom-tool", "mesh-tool", ["--serve"])?;
     Ok(())
 })?;

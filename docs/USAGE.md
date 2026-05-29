@@ -662,6 +662,18 @@ lemonade-server serve
 curl -s http://localhost:8000/api/v1/models | jq '.data[].id'
 ```
 
+Install the plugin:
+
+```bash
+mesh-llm plugins install openai-endpoint
+```
+
+You can also install directly from GitHub:
+
+```bash
+mesh-llm plugins install Mesh-LLM/openai-endpoint
+```
+
 Then enable the plugin in `~/.mesh-llm/config.toml`:
 
 ```toml
@@ -669,6 +681,10 @@ Then enable the plugin in `~/.mesh-llm/config.toml`:
 name = "openai-endpoint"
 url = "http://localhost:8000/api/v1"
 ```
+
+If you are running the plugin binary yourself instead of using
+`mesh-llm plugins install`, set `command = "openai-endpoint"` in the same
+plugin block.
 
 Start mesh-llm normally:
 
@@ -699,7 +715,7 @@ Notes:
 
 - mesh-llm does not start or supervise Lemonade; run it separately with the Desktop app or CLI.
 - Use the exact model ID returned by Lemonade's `/api/v1/models`.
-- The URL can also be set via `MESH_LLM_OPENAI_ENDPOINT_URL` env var (config takes precedence).
+- mesh-llm passes the configured URL to the plugin through `MESH_LLM_PLUGIN_URL`.
 
 Useful model commands:
 

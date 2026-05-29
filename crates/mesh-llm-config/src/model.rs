@@ -924,7 +924,7 @@ pub struct PluginConfigEntry {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
-    /// Base URL for inference endpoint plugins (e.g. http://localhost:8000/v1).
+    /// Optional URL passed to the plugin as `MESH_LLM_PLUGIN_URL`.
     #[serde(default)]
     pub url: Option<String>,
 }

@@ -1,4 +1,5 @@
 mod config;
+mod installed;
 pub(crate) mod mcp;
 mod runtime;
 pub(crate) mod stapler;
@@ -61,7 +62,6 @@ use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 pub const FLASH_MOE_PLUGIN_ID: &str = "flash-moe";
-pub const OPENAI_ENDPOINT_PLUGIN_ID: &str = "openai-endpoint";
 pub const TELEMETRY_PLUGIN_ID: &str = "telemetry";
 pub const TELEMETRY_CAPABILITY: &str = "telemetry.metrics.v1";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
@@ -1878,7 +1878,6 @@ pub async fn run_plugin_process(name: String) -> Result<()> {
     match name.as_str() {
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
         FLASH_MOE_PLUGIN_ID => crate::plugins::flash_moe::run_plugin(name).await,
-        OPENAI_ENDPOINT_PLUGIN_ID => crate::plugins::openai_endpoint::run_plugin(name).await,
         TELEMETRY_PLUGIN_ID => crate::plugins::telemetry::run_plugin(name).await,
         _ => bail!("Unknown built-in plugin '{}'", name),
     }
@@ -2025,12 +2024,12 @@ mod tests {
     }
 
     #[test]
-    fn openai_endpoint_can_be_enabled_with_url() {
+    fn external_plugin_can_be_enabled_with_url() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
-                name: OPENAI_ENDPOINT_PLUGIN_ID.into(),
+                name: "endpoint-plugin".into(),
                 enabled: Some(true),
-                command: None,
+                command: Some("endpoint-plugin".into()),
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
             }],
@@ -2040,21 +2039,22 @@ mod tests {
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
         assert_eq!(resolved.externals.len(), 3);
         assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, OPENAI_ENDPOINT_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, "endpoint-plugin");
         assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
         let spec = &resolved.externals[1];
-        assert!(spec.args.contains(&"openai-endpoint".to_string()));
+        assert_eq!(spec.command, "endpoint-plugin");
+        assert!(spec.args.is_empty());
         assert_eq!(spec.url.as_deref(), Some("http://gpu-box:8000/v1"));
     }
 
     #[test]
-    fn openai_endpoint_can_be_enabled_explicitly() {
+    fn external_plugin_can_be_enabled_with_command_args() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
-                name: OPENAI_ENDPOINT_PLUGIN_ID.into(),
+                name: "endpoint-plugin".into(),
                 enabled: Some(true),
-                command: None,
-                args: Vec::new(),
+                command: Some("/opt/plugins/endpoint-plugin".into()),
+                args: vec!["--verbose".into()],
                 url: None,
             }],
             defaults: None,
@@ -2063,29 +2063,30 @@ mod tests {
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
         assert_eq!(resolved.externals.len(), 3);
         assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, OPENAI_ENDPOINT_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, "endpoint-plugin");
         assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
-        // Verify the spec args dispatch to the right plugin binary
         let spec = &resolved.externals[1];
-        assert!(spec.args.contains(&"--plugin".to_string()));
-        assert!(spec.args.contains(&"openai-endpoint".to_string()));
+        assert_eq!(spec.command, "/opt/plugins/endpoint-plugin");
+        assert_eq!(spec.args, vec!["--verbose"]);
     }
 
     #[test]
-    fn openai_endpoint_rejects_custom_command() {
+    fn external_plugin_ignores_disabled_entry_without_install() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
-                name: OPENAI_ENDPOINT_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: Some("/usr/bin/something".into()),
+                name: "endpoint-plugin".into(),
+                enabled: Some(false),
+                command: None,
                 args: Vec::new(),
-                url: None,
+                url: Some("http://gpu-box:8000/v1".into()),
             }],
             defaults: None,
             ..MeshConfig::default()
         };
-        let result = resolve_plugins(&config, private_host_mode());
-        assert!(result.is_err());
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
     }
 
     #[test]

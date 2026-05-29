@@ -1,7 +1,5 @@
-use super::{
-    BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, OPENAI_ENDPOINT_PLUGIN_ID, PluginSummary,
-    TELEMETRY_PLUGIN_ID,
-};
+use super::installed::{append_installed_plugins, configured_external_plugin_spec};
+use super::{BLOBSTORE_PLUGIN_ID, FLASH_MOE_PLUGIN_ID, PluginSummary, TELEMETRY_PLUGIN_ID};
 use anyhow::{Context, Result, bail};
 #[allow(unused_imports)]
 pub use mesh_llm_config::{
@@ -15,9 +13,7 @@ pub use mesh_llm_config::{
     ThroughputConfig, config_path, config_to_toml, load_config, parse_config_toml, validate_config,
 };
 use mesh_llm_plugin::MeshVisibility;
-use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 
 const FLASH_MOE_INSTALL_HINT: &str = "Install Flash-MoE separately and set \
                                      `command` to its infer binary, or set \
@@ -34,7 +30,7 @@ pub struct ExternalPluginSpec {
     pub name: String,
     pub command: String,
     pub args: Vec<String>,
-    /// Backend URL for inference endpoint plugins.
+    /// Optional plugin URL passed through the generic plugin launch contract.
     pub url: Option<String>,
     /// Extra environment passed only to the plugin process.
     pub env: BTreeMap<String, String>,
@@ -59,8 +55,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
-    let mut openai_endpoint_enabled = false;
-    let mut openai_endpoint_url: Option<String> = None;
     let mut flash_moe_entry: Option<&PluginConfigEntry> = None;
     let mut telemetry_enabled = true;
     for entry in &config.plugins {
@@ -76,19 +70,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
                 );
             }
             blobstore_enabled = enabled;
-            continue;
-        }
-        if entry.name == OPENAI_ENDPOINT_PLUGIN_ID {
-            if entry.command.is_some() || !entry.args.is_empty() {
-                bail!(
-                    "Plugin '{}' is served by mesh-llm itself; only `enabled` and `url` may be set",
-                    OPENAI_ENDPOINT_PLUGIN_ID
-                );
-            }
-            openai_endpoint_enabled = enabled;
-            if let Some(ref url) = entry.url {
-                openai_endpoint_url = Some(url.clone());
-            }
             continue;
         }
         if entry.name == FLASH_MOE_PLUGIN_ID {
@@ -111,28 +92,13 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         if !enabled {
             continue;
         }
-        let command = entry
-            .command
-            .clone()
-            .with_context(|| format!("Plugin '{}' is enabled but missing command", entry.name))?;
-        externals.push(ExternalPluginSpec {
-            name: entry.name.clone(),
-            command,
-            args: entry.args.clone(),
-            url: None,
-            env: BTreeMap::new(),
-        });
+        externals.push(configured_external_plugin_spec(entry)?);
     }
 
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
 
     if telemetry_enabled {
         externals.insert(0, telemetry_plugin_spec()?);
-    }
-    if openai_endpoint_enabled {
-        let mut spec = openai_endpoint_plugin_spec()?;
-        spec.url = openai_endpoint_url;
-        externals.push(spec);
     }
     if let Some(entry) = flash_moe_entry {
         externals.push(flash_moe_plugin_spec(entry)?);
@@ -145,113 +111,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         externals,
         inactive,
     })
-}
-
-fn append_installed_plugins(
-    externals: &mut Vec<ExternalPluginSpec>,
-    inactive: &mut Vec<PluginSummary>,
-    names: &mut BTreeMap<String, ()>,
-) {
-    #[cfg(test)]
-    if std::env::var_os("MESH_LLM_PLUGIN_DIR").is_none() {
-        return;
-    }
-
-    let Ok(root) = default_store_root() else {
-        return;
-    };
-    let store = PluginStore::new(root);
-    let installed = match store.list() {
-        Ok(installed) => installed,
-        Err(error) => {
-            inactive.push(installed_store_error_summary(error));
-            return;
-        }
-    };
-
-    for metadata in installed {
-        if names.contains_key(&metadata.name) {
-            continue;
-        }
-        names.insert(metadata.name.clone(), ());
-        if !metadata.enabled {
-            inactive.push(disabled_installed_plugin_summary(&metadata));
-            continue;
-        }
-        let command = installed_plugin_command(&metadata);
-        if !command.exists() {
-            inactive.push(missing_installed_plugin_summary(&metadata, &command));
-            continue;
-        }
-        let spec = ExternalPluginSpec {
-            name: metadata.name.clone(),
-            command: command.display().to_string(),
-            args: Vec::new(),
-            url: None,
-            env: BTreeMap::new(),
-        };
-        externals.push(spec);
-    }
-}
-
-fn installed_plugin_command(metadata: &InstalledPluginMetadata) -> PathBuf {
-    metadata.executable_path()
-}
-
-fn disabled_installed_plugin_summary(metadata: &InstalledPluginMetadata) -> PluginSummary {
-    installed_plugin_summary(metadata, "disabled", metadata.last_error.clone())
-}
-
-fn missing_installed_plugin_summary(
-    metadata: &InstalledPluginMetadata,
-    command: &Path,
-) -> PluginSummary {
-    installed_plugin_summary(
-        metadata,
-        "error",
-        Some(format!(
-            "installed plugin executable is missing: {}",
-            command.display()
-        )),
-    )
-}
-
-fn installed_store_error_summary(error: anyhow::Error) -> PluginSummary {
-    PluginSummary {
-        name: "installed-plugins".to_string(),
-        kind: "installed".to_string(),
-        enabled: false,
-        status: "error".to_string(),
-        pid: None,
-        version: None,
-        capabilities: Vec::new(),
-        command: None,
-        args: Vec::new(),
-        tools: Vec::new(),
-        manifest: None,
-        error: Some(error.to_string()),
-    }
-}
-
-fn installed_plugin_summary(
-    metadata: &InstalledPluginMetadata,
-    status: &str,
-    error: Option<String>,
-) -> PluginSummary {
-    PluginSummary {
-        name: metadata.name.clone(),
-        kind: "installed".to_string(),
-        enabled: metadata.enabled,
-        status: status.to_string(),
-        pid: None,
-        version: Some(metadata.installed_version.clone()),
-        capabilities: Vec::new(),
-        command: Some(installed_plugin_command(metadata).display().to_string()),
-        args: Vec::new(),
-        tools: Vec::new(),
-        manifest: None,
-        error,
-    }
 }
 
 pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
@@ -267,25 +126,6 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
             "json".into(),
             "--plugin".into(),
             BLOBSTORE_PLUGIN_ID.into(),
-        ],
-        url: None,
-        env: BTreeMap::new(),
-    })
-}
-
-pub fn openai_endpoint_plugin_spec() -> Result<ExternalPluginSpec> {
-    let command = std::env::current_exe()
-        .context("Cannot determine mesh-llm executable path")?
-        .display()
-        .to_string();
-    Ok(ExternalPluginSpec {
-        name: OPENAI_ENDPOINT_PLUGIN_ID.to_string(),
-        command,
-        args: vec![
-            "--log-format".into(),
-            "json".into(),
-            "--plugin".into(),
-            OPENAI_ENDPOINT_PLUGIN_ID.into(),
         ],
         url: None,
         env: BTreeMap::new(),

@@ -832,6 +832,32 @@ async fn build_test_mesh_api_with_plugin_manager(
     })
 }
 
+async fn build_inference_endpoint_plugin_manager(models: &[&str]) -> plugin::PluginManager {
+    let resolved_plugins = plugin::ResolvedPlugins {
+        externals: vec![],
+        inactive: vec![],
+    };
+    let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+    let plugin_manager = plugin::PluginManager::start(
+        &resolved_plugins,
+        plugin::PluginHostMode {
+            mesh_visibility: MeshVisibility::Private,
+        },
+        mesh_tx,
+    )
+    .await
+    .unwrap();
+    plugin_manager
+        .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
+            plugin_name: "endpoint-plugin".into(),
+            endpoint_id: "endpoint-plugin".into(),
+            address: "http://127.0.0.1:8000/v1".into(),
+            models: models.iter().map(|model| (*model).to_string()).collect(),
+        }])
+        .await;
+    plugin_manager
+}
+
 #[tokio::test]
 async fn control_plane_api_exposes_local_endpoint_only() {
     let state = build_test_mesh_api().await;
@@ -2403,6 +2429,29 @@ async fn runtime_data_api_routes_remain_payload_stable() {
         request_management_json(state, "/api/plugins/collector-plugin/manifest").await;
     assert_eq!(manifest_body["capabilities"], json!(["chat"]));
     assert_eq!(manifest_body["endpoints"].as_array().map(Vec::len), Some(1));
+}
+
+#[tokio::test]
+async fn status_includes_external_inference_endpoint_models() {
+    let plugin_manager =
+        build_inference_endpoint_plugin_manager(&["lemonade-small", "lemonade-large"]).await;
+    let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;
+
+    let status_body = request_management_json(state, "/api/status").await;
+
+    for field in ["models", "serving_models", "hosted_models"] {
+        let models = status_body[field]
+            .as_array()
+            .unwrap_or_else(|| panic!("{field} should be an array"));
+        assert!(
+            models.iter().any(|model| model == "lemonade-small"),
+            "{field} should include plugin endpoint model: {status_body}"
+        );
+        assert!(
+            models.iter().any(|model| model == "lemonade-large"),
+            "{field} should include plugin endpoint model: {status_body}"
+        );
+    }
 }
 
 #[tokio::test]
