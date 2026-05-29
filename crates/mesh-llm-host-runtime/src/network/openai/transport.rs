@@ -4030,10 +4030,10 @@ fn models_list_json(
                 "audio_status": capabilities.audio_status(),
                 "reasoning_status": capabilities.reasoning_status(),
             });
-            if let Some(metadata) = model_metadata_json(m, descriptor, runtimes) {
-                if let Some(object) = model.as_object_mut() {
-                    object.insert("metadata".to_string(), metadata);
-                }
+            if let Some(metadata) = model_metadata_json(m, descriptor, runtimes)
+                && let Some(object) = model.as_object_mut()
+            {
+                object.insert("metadata".to_string(), metadata);
             }
             Some(model)
         })
@@ -4055,10 +4055,10 @@ fn model_metadata_json(
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_size.as_ref()) {
         metadata.insert("parameter_size".to_string(), serde_json::json!(value));
     }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_count_b) {
-        if value.is_finite() {
-            metadata.insert("parameter_count_b".to_string(), serde_json::json!(value));
-        }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_count_b)
+        && value.is_finite()
+    {
+        metadata.insert("parameter_count_b".to_string(), serde_json::json!(value));
     }
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.quant.as_ref()) {
         metadata.insert("quant".to_string(), serde_json::json!(value));
