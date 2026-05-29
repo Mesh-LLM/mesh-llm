@@ -51,9 +51,9 @@ Run giant MoE models on a single node by streaming active experts from NVMe inst
 
 [flash-moe](https://github.com/danveloper/flash-moe) already does this — runs Qwen3.5-397B-A17B at 5.5 tok/s on a 48GB M3 Max with 6GB resident memory. See [ROADMAP.md](../../ROADMAP.md).
 
-Initial adapter: mesh-llm registers Flash-MoE through the built-in `flash-moe` plugin, either by spawning the Flash-MoE `infer --serve` process or by attaching an already-running OpenAI-compatible endpoint. The adapter keeps Flash-MoE installation, source builds, and model artifact preparation outside mesh-llm.
+Initial adapter: mesh-llm registers Flash-MoE through the external [`flash-moe`](https://github.com/Mesh-LLM/flash-moe) plugin, either by letting the plugin spawn the Flash-MoE `infer --serve` process or by attaching an already-running OpenAI-compatible endpoint. The adapter keeps Flash-MoE installation, source builds, and model artifact preparation outside mesh-llm.
 
-Remaining work: document the exact Flash-MoE artifact preparation flow, add real-machine smoke coverage for the target Qwen3.5-397B path, and revisit out-of-tree adapter packaging once the plugin SDK and crates.io surface are stable enough.
+Remaining work: document the exact Flash-MoE artifact preparation flow and add real-machine smoke coverage for the target Qwen3.5-397B path.
 
 ## MoE Expert Sharding
 

@@ -1,9 +1,12 @@
-# Telemetry Plugin
+# Telemetry And Metrics Plugin
 
-The built-in `telemetry` plugin enables metrics-only OTLP/HTTP export for local
-model lifecycle and routing telemetry. The plugin is enabled by default, while
-export still requires a configured OTLP metrics endpoint. No collector or
-project-owned destination is hard-coded.
+mesh-llm exports metrics-only OTLP/HTTP telemetry from host runtime code when
+`[telemetry]` config enables an explicit endpoint. No collector or project-owned
+destination is hard-coded.
+
+The external `metrics` plugin lives at [Mesh-LLM/metrics](https://github.com/Mesh-LLM/metrics).
+It advertises metrics support through the plugin API, but it does not receive
+prompts, completions, logs, traces, endpoint URLs, or raw host identifiers.
 
 ## Configuration
 
@@ -20,19 +23,18 @@ queue_size = 2048
 
 [telemetry.metrics]
 endpoint = "https://otel.example.com/v1/metrics"
-
-[[plugin]]
-name = "telemetry"
-enabled = true
 ```
 
-The `[[plugin]]` entry is optional when telemetry should stay enabled. To opt
-out of the built-in plugin entirely, set:
+Install and enable the optional metrics plugin when you want the plugin
+capability advertised:
+
+```bash
+mesh-llm plugins install metrics
+```
 
 ```toml
 [[plugin]]
-name = "telemetry"
-enabled = false
+name = "metrics"
 ```
 
 Endpoint precedence is:
@@ -79,9 +81,10 @@ Histograms:
 
 ## Privacy Boundary
 
-The telemetry plugin exports metrics only. It does not export prompts,
-completions, logs, traces, hostnames, mesh gossip, relay messages, raw node IDs,
-raw GPU stable IDs, endpoint URLs, or prompt hashes.
+Runtime telemetry exports metrics only. The external metrics plugin advertises a
+capability only. Neither path exports prompts, completions, logs, traces,
+hostnames, mesh gossip, relay messages, raw node IDs, raw GPU stable IDs,
+endpoint URLs, or prompt hashes.
 
 Guardrail telemetry follows the same boundary. It exports only bounded labels for
 guardrail mode, contract kind, decision, bypass reason, parser stage, and retry

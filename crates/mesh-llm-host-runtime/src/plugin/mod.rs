@@ -31,6 +31,7 @@ use url::Url;
 
 #[allow(unused_imports)]
 pub use self::config::ExternalPluginSpec;
+pub(crate) use self::config::validate_config;
 #[allow(unused_imports)]
 pub(crate) use self::config::{
     BoolOrAuto, HardwareConfig, IntegerOrString, ModelConfigDefaults, ModelFitConfig,
@@ -45,7 +46,6 @@ pub use self::config::{
     bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
     resolve_plugins,
 };
-pub(crate) use self::config::{telemetry_plugin_enabled, validate_config};
 use self::runtime::ExternalPlugin;
 pub(crate) use self::support::parse_optional_json;
 use self::support::{format_args_for_log, format_slice_for_log, format_tool_names_for_log};
@@ -61,9 +61,6 @@ use mesh_llm_plugin::MeshVisibility;
 use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
-pub const FLASH_MOE_PLUGIN_ID: &str = "flash-moe";
-pub const TELEMETRY_PLUGIN_ID: &str = "telemetry";
-pub const TELEMETRY_CAPABILITY: &str = "telemetry.metrics.v1";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const CONNECT_TIMEOUT_SECS: u64 = 10;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -1877,8 +1874,6 @@ fn endpoint_models_url(address: &str) -> Option<Url> {
 pub async fn run_plugin_process(name: String) -> Result<()> {
     match name.as_str() {
         BLOBSTORE_PLUGIN_ID => crate::plugins::blobstore::run_plugin(name).await,
-        FLASH_MOE_PLUGIN_ID => crate::plugins::flash_moe::run_plugin(name).await,
-        TELEMETRY_PLUGIN_ID => crate::plugins::telemetry::run_plugin(name).await,
         _ => bail!("Unknown built-in plugin '{}'", name),
     }
 }
@@ -1927,9 +1922,8 @@ mod tests {
     #[test]
     fn resolves_default_builtin_plugins() {
         let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
@@ -1947,12 +1941,11 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, "demo");
-        assert_eq!(resolved.externals[1].command, "mesh-llm-plugin-demo");
-        assert_eq!(resolved.externals[1].args, ["--stdio"]);
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, "demo");
+        assert_eq!(resolved.externals[0].command, "mesh-llm-plugin-demo");
+        assert_eq!(resolved.externals[0].args, ["--stdio"]);
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
@@ -1970,57 +1963,8 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
+        assert!(resolved.externals.is_empty());
         assert!(resolved.inactive.is_empty());
-    }
-
-    #[test]
-    fn telemetry_plugin_is_opt_out_builtin() {
-        let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.externals[0].args.contains(&"--plugin".to_string()));
-        assert!(
-            resolved.externals[0]
-                .args
-                .contains(&TELEMETRY_PLUGIN_ID.to_string())
-        );
-
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: TELEMETRY_PLUGIN_ID.into(),
-                enabled: Some(false),
-                command: None,
-                args: Vec::new(),
-                url: None,
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-    }
-
-    #[test]
-    fn telemetry_plugin_rejects_custom_runtime_fields() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: TELEMETRY_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: Some("/tmp/telemetry".into()),
-                args: Vec::new(),
-                url: None,
-            }],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-
-        let result = resolve_plugins(&config, private_host_mode());
-        assert!(result.is_err());
     }
 
     #[test]
@@ -2037,11 +1981,10 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, "endpoint-plugin");
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[1];
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, "endpoint-plugin");
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        let spec = &resolved.externals[0];
         assert_eq!(spec.command, "endpoint-plugin");
         assert!(spec.args.is_empty());
         assert_eq!(spec.url.as_deref(), Some("http://gpu-box:8000/v1"));
@@ -2061,11 +2004,10 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, "endpoint-plugin");
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[1];
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, "endpoint-plugin");
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        let spec = &resolved.externals[0];
         assert_eq!(spec.command, "/opt/plugins/endpoint-plugin");
         assert_eq!(spec.args, vec!["--verbose"]);
     }
@@ -2084,114 +2026,8 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
-    }
-
-    #[test]
-    fn flash_moe_can_be_enabled_with_managed_command() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: FLASH_MOE_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: Some(" /opt/flash-moe/infer ".into()),
-                args: vec![
-                    "--model".into(),
-                    "/models/qwen3.5".into(),
-                    "--weights".into(),
-                    "/models/experts.bin".into(),
-                ],
-                url: None,
-            }],
-            ..MeshConfig::default()
-        };
-
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, FLASH_MOE_PLUGIN_ID);
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
-        let spec = &resolved.externals[1];
-        assert!(spec.args.contains(&"--plugin".to_string()));
-        assert!(spec.args.contains(&FLASH_MOE_PLUGIN_ID.to_string()));
-        assert_eq!(
-            spec.env
-                .get("MESH_LLM_FLASH_MOE_COMMAND")
-                .map(String::as_str),
-            Some("/opt/flash-moe/infer")
-        );
-        assert_eq!(
-            spec.env
-                .get("MESH_LLM_FLASH_MOE_ARGS_JSON")
-                .map(String::as_str),
-            Some(r#"["--model","/models/qwen3.5","--weights","/models/experts.bin"]"#)
-        );
-        assert!(!spec.env.contains_key("MESH_LLM_FLASH_MOE_URL"));
-        assert_eq!(spec.url, None);
-    }
-
-    #[test]
-    fn flash_moe_can_attach_existing_endpoint() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: FLASH_MOE_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: None,
-                args: Vec::new(),
-                url: Some(" http://127.0.0.1:8000/v1/ ".into()),
-            }],
-            ..MeshConfig::default()
-        };
-
-        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        let spec = resolved
-            .externals
-            .iter()
-            .find(|spec| spec.name == FLASH_MOE_PLUGIN_ID)
-            .expect("flash-moe spec");
-
-        assert_eq!(
-            spec.env.get("MESH_LLM_FLASH_MOE_URL").map(String::as_str),
-            Some("http://127.0.0.1:8000/v1/")
-        );
-        assert!(!spec.env.contains_key("MESH_LLM_FLASH_MOE_COMMAND"));
-        assert!(spec.args.contains(&FLASH_MOE_PLUGIN_ID.to_string()));
-    }
-
-    #[test]
-    fn flash_moe_rejects_missing_command_or_url() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: FLASH_MOE_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: None,
-                args: Vec::new(),
-                url: None,
-            }],
-            ..MeshConfig::default()
-        };
-
-        let err = resolve_plugins(&config, private_host_mode()).unwrap_err();
-        assert!(err.to_string().contains("requires `command` or `url`"));
-    }
-
-    #[test]
-    fn flash_moe_rejects_user_supplied_serve_arg() {
-        let config = MeshConfig {
-            plugins: vec![PluginConfigEntry {
-                name: FLASH_MOE_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: Some("/opt/flash-moe/infer".into()),
-                args: vec!["--serve".into(), "9000".into()],
-                url: None,
-            }],
-            ..MeshConfig::default()
-        };
-
-        let err = resolve_plugins(&config, private_host_mode()).unwrap_err();
-        assert!(err.to_string().contains("owns the flash-moe `--serve`"));
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
     }
 
     #[test]
@@ -2203,9 +2039,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(resolved.externals.len(), 2);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 1);
+        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 
@@ -2223,10 +2058,9 @@ mod tests {
             ..MeshConfig::default()
         };
         let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-        assert_eq!(resolved.externals.len(), 3);
-        assert_eq!(resolved.externals[0].name, TELEMETRY_PLUGIN_ID);
-        assert_eq!(resolved.externals[1].name, "demo");
-        assert_eq!(resolved.externals[2].name, BLOBSTORE_PLUGIN_ID);
+        assert_eq!(resolved.externals.len(), 2);
+        assert_eq!(resolved.externals[0].name, "demo");
+        assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
         assert!(resolved.inactive.is_empty());
     }
 

@@ -140,9 +140,6 @@ impl SurveySettings {
     where
         F: Fn(&str) -> Option<String>,
     {
-        if !plugin::telemetry_plugin_enabled(config) {
-            return None;
-        }
         if config.telemetry.enabled == Some(false) {
             return None;
         }
@@ -1196,7 +1193,7 @@ fn service_version_attrs() -> Vec<KeyValue> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::{MeshConfig, PluginConfigEntry, TelemetryConfig, TelemetryMetricsConfig};
+    use crate::plugin::{MeshConfig, TelemetryConfig, TelemetryMetricsConfig};
     use std::collections::{BTreeMap, BTreeSet, HashMap};
 
     fn test_source() -> SurveyTelemetrySource {
@@ -1226,13 +1223,6 @@ mod tests {
                 queue_size: Some(2),
                 ..Default::default()
             },
-            plugins: vec![PluginConfigEntry {
-                name: plugin::TELEMETRY_PLUGIN_ID.into(),
-                enabled: Some(true),
-                command: None,
-                args: Vec::new(),
-                url: None,
-            }],
             defaults: None,
             ..Default::default()
         }
@@ -1243,24 +1233,6 @@ mod tests {
         let mut config = survey_config();
         config.plugins.clear();
         assert!(SurveySettings::from_config_with_env(&config, |_| None).is_some());
-    }
-
-    #[test]
-    fn settings_disable_when_plugin_opted_out() {
-        let mut config = survey_config();
-        config.plugins = vec![PluginConfigEntry {
-            name: plugin::TELEMETRY_PLUGIN_ID.into(),
-            enabled: Some(false),
-            command: None,
-            args: Vec::new(),
-            url: None,
-        }];
-        assert!(
-            SurveySettings::from_config_with_env(&config, |_| {
-                Some("https://env.example.com".into())
-            })
-            .is_none()
-        );
     }
 
     #[test]
