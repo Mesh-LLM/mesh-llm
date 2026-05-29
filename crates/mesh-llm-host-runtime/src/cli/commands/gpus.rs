@@ -16,28 +16,35 @@ pub(crate) fn dispatch_gpu_command(json_output: bool, command: Option<&GpuComman
 }
 
 pub(crate) fn run_gpus(json_output: bool) -> Result<()> {
-    let mut hw = hardware::survey();
-    attach_cached_bandwidth(&mut hw);
+    let hw = collect_gpus_survey();
 
     if json_output {
         return print_json(gpus_json(&hw));
     }
 
+    print!("{}", gpus_text(&hw));
+    Ok(())
+}
+
+pub(crate) fn collect_gpus_survey() -> HardwareSurvey {
+    let mut hw = hardware::survey();
+    attach_cached_bandwidth(&mut hw);
+    hw
+}
+
+pub(crate) fn gpus_text(hw: &HardwareSurvey) -> String {
     if hw.gpus.is_empty() {
-        println!(
-            "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device."
-        );
-        return Ok(());
+        return "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device.\n".to_string();
     }
 
+    let mut output = String::new();
     for (index, gpu) in hw.gpus.iter().enumerate() {
         if index > 0 {
-            println!();
+            output.push('\n');
         }
-        print_gpu(gpu);
+        push_gpu(&mut output, gpu);
     }
-
-    Ok(())
+    output
 }
 
 fn run_gpu_benchmark(json_output: bool) -> Result<()> {
@@ -74,7 +81,7 @@ fn run_gpu_benchmark(json_output: bool) -> Result<()> {
     Ok(())
 }
 
-fn gpus_json(hw: &HardwareSurvey) -> Value {
+pub(crate) fn gpus_json(hw: &HardwareSurvey) -> Value {
     json!({
         "gpu_count": hw.gpus.len(),
         "gpus": hw.gpus.iter().map(gpu_json).collect::<Vec<_>>(),
@@ -192,45 +199,57 @@ fn attach_cached_bandwidth(hw: &mut HardwareSurvey) {
     }
 }
 
-fn print_gpu(gpu: &GpuFacts) {
-    println!("🖥️ GPU {}", gpu.index);
-    println!("  Name: {}", gpu.display_name);
+fn push_gpu(output: &mut String, gpu: &GpuFacts) {
+    push_line(output, format!("🖥️ GPU {}", gpu.index));
+    push_line(output, format!("  Name: {}", gpu.display_name));
     if let Some(stable_id) = gpu.stable_id.as_deref() {
-        println!("  Stable ID: {stable_id}");
+        push_line(output, format!("  Stable ID: {stable_id}"));
     }
     if let Some(backend_device) = gpu.backend_device.as_deref() {
-        println!("  Backend device: {backend_device}");
+        push_line(output, format!("  Backend device: {backend_device}"));
     } else {
-        println!(
-            "  Backend device: unavailable (hardware-visible only; embedded runtime did not report a selectable device)"
+        push_line(
+            output,
+            "  Backend device: unavailable (hardware-visible only; embedded runtime did not report a selectable device)",
         );
     }
-    println!("  VRAM: {}", format_vram(gpu.vram_bytes));
-    println!(
-        "  Bandwidth: {}",
-        gpu.mem_bandwidth_gbps
-            .map(format_bandwidth)
-            .unwrap_or_else(|| "unavailable".to_string())
+    push_line(output, format!("  VRAM: {}", format_vram(gpu.vram_bytes)));
+    push_line(
+        output,
+        format!(
+            "  Bandwidth: {}",
+            gpu.mem_bandwidth_gbps
+                .map(format_bandwidth)
+                .unwrap_or_else(|| "unavailable".to_string())
+        ),
     );
-    println!(
-        "  Unified memory: {}",
-        if gpu.unified_memory { "yes" } else { "no" }
+    push_line(
+        output,
+        format!(
+            "  Unified memory: {}",
+            if gpu.unified_memory { "yes" } else { "no" }
+        ),
     );
     if let Some(pci_bdf) = gpu.pci_bdf.as_deref() {
-        println!("  PCI BDF: {pci_bdf}");
+        push_line(output, format!("  PCI BDF: {pci_bdf}"));
     }
     if let Some(vendor_uuid) = gpu.vendor_uuid.as_deref() {
-        println!("  Vendor UUID: {vendor_uuid}");
+        push_line(output, format!("  Vendor UUID: {vendor_uuid}"));
     }
     if let Some(metal_registry_id) = gpu.metal_registry_id.as_deref() {
-        println!("  Metal registry ID: {metal_registry_id}");
+        push_line(output, format!("  Metal registry ID: {metal_registry_id}"));
     }
     if let Some(dxgi_luid) = gpu.dxgi_luid.as_deref() {
-        println!("  DXGI LUID: {dxgi_luid}");
+        push_line(output, format!("  DXGI LUID: {dxgi_luid}"));
     }
     if let Some(pnp_instance_id) = gpu.pnp_instance_id.as_deref() {
-        println!("  PnP instance ID: {pnp_instance_id}");
+        push_line(output, format!("  PnP instance ID: {pnp_instance_id}"));
     }
+}
+
+fn push_line(output: &mut String, line: impl AsRef<str>) {
+    output.push_str(line.as_ref());
+    output.push('\n');
 }
 
 fn format_vram(bytes: u64) -> String {

@@ -617,6 +617,26 @@ pub(crate) enum Command {
         #[arg(long, conflicts_with = "flavor")]
         detect_flavor: bool,
     },
+    /// Diagnose local mesh, runtime, and split-readiness problems.
+    Doctor {
+        #[command(subcommand)]
+        command: Option<DoctorCommand>,
+        /// Output zip path. Defaults to ./mesh-llm-doctor-<timestamp>.zip.
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Which runtime process logs to include.
+        #[arg(long, value_enum, default_value_t = commands::doctor_bundle::DoctorLogTarget::Auto)]
+        target: commands::doctor_bundle::DoctorLogTarget,
+        /// Include logs for a specific runtime PID.
+        #[arg(long)]
+        pid: Option<u32>,
+        /// Console/API port to query. Defaults to selected owner.json port or 3131.
+        #[arg(long)]
+        port: Option<u16>,
+        /// Maximum bytes to include from each log file; larger logs include the tail.
+        #[arg(long, default_value_t = commands::doctor_bundle::DEFAULT_MAX_LOG_BYTES)]
+        max_log_bytes: u64,
+    },
     /// Inspect local GPUs, stable IDs, and cached bandwidth.
     #[command(alias = "gpu")]
     Gpus {
@@ -631,11 +651,6 @@ pub(crate) enum Command {
     Runtime {
         #[command(subcommand)]
         command: Option<RuntimeCommand>,
-    },
-    /// Diagnose local mesh, runtime, and split-readiness problems.
-    Doctor {
-        #[command(subcommand)]
-        command: DoctorCommand,
     },
     /// Load a local model into a running mesh-llm instance.
     Load {
@@ -865,6 +880,9 @@ pub(crate) enum PluginCommand {
     Info {
         /// Plugin name.
         name: String,
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
     },
     /// Search the plugin catalog.
     Search {
@@ -872,7 +890,11 @@ pub(crate) enum PluginCommand {
         query: Option<String>,
     },
     /// List installed, auto-registered, and configured plugins.
-    List,
+    List {
+        /// Print machine-readable JSON output.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

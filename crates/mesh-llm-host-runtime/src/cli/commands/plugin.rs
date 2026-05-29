@@ -6,6 +6,7 @@ use mesh_llm_plugin_manager::{
     default_store_root, install_plugin, update_plugin,
 };
 use reqwest::Client;
+use serde_json::{Value, json};
 
 use crate::cli::terminal_progress::{SpinnerHandle, clear_stderr_line, start_spinner};
 use crate::cli::{Cli, PluginCommand};
@@ -18,9 +19,9 @@ pub(crate) async fn run_plugin_command(command: &PluginCommand, cli: &Cli) -> Re
         PluginCommand::Enable { name } => set_enabled(name, true)?,
         PluginCommand::Disable { name } => set_enabled(name, false)?,
         PluginCommand::Delete { name } => delete(name)?,
-        PluginCommand::Info { name } => info(name)?,
+        PluginCommand::Info { name, json } => info(name, *json)?,
         PluginCommand::Search { query } => search(query.as_deref()).await?,
-        PluginCommand::List => list(cli)?,
+        PluginCommand::List { json } => list(cli, *json)?,
     }
     Ok(())
 }
@@ -71,24 +72,30 @@ fn delete(name: &str) -> Result<()> {
     Ok(())
 }
 
-fn info(name: &str) -> Result<()> {
+fn info(name: &str, json_output: bool) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
     let metadata = store.load(name)?;
-    println!("name\t{}", metadata.name);
-    println!("version\t{}", metadata.installed_version);
-    println!("enabled\t{}", metadata.enabled);
-    println!("source\t{}", metadata.source_repository);
-    println!("target\t{}", metadata.target_triple);
-    println!("asset\t{}", metadata.downloaded_asset_name);
-    println!("path\t{}", metadata.install_path.display());
+    if json_output {
+        return print_json(&json!({ "plugin": metadata }));
+    }
+
+    println!("🔌 Plugin");
+    println!();
+    println!("Name: {}", metadata.name);
+    println!("Version: {}", metadata.installed_version);
+    println!("State: {}", enabled_label(metadata.enabled));
+    println!("Source: {}", metadata.source_repository);
+    println!("Target: {}", metadata.target_triple);
+    println!("Asset: {}", metadata.downloaded_asset_name);
+    println!("Path: {}", metadata.install_path.display());
     if let Some(protocol) = metadata.last_protocol_version {
-        println!("protocol\t{protocol}");
+        println!("Protocol: {protocol}");
     }
     if let Some(status) = metadata.last_status {
-        println!("status\t{status}");
+        println!("Last status: {status}");
     }
     if let Some(error) = metadata.last_error {
-        println!("error\t{error}");
+        println!("Last error: {error}");
     }
     Ok(())
 }
@@ -113,38 +120,97 @@ async fn search(query: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn list(cli: &Cli) -> Result<()> {
+fn list(cli: &Cli, json_output: bool) -> Result<()> {
+    if json_output {
+        return print_json(&plugin_inventory_json(cli)?);
+    }
+
     let store = PluginStore::new(default_store_root()?);
-    for metadata in store.list()? {
-        let state = if metadata.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        };
+    let installed = store.list()?;
+    let resolved = runtime::load_resolved_plugins(cli)?;
+
+    println!("🔌 Plugins");
+    println!();
+
+    println!("📦 Installed: {}", installed.len());
+    for metadata in installed {
         println!(
-            "{}\tversion={}\tstate={}\tsource={}",
-            metadata.name, metadata.installed_version, state, metadata.source_repository
+            "  {}  version={}  state={}  source={}",
+            metadata.name,
+            metadata.installed_version,
+            enabled_label(metadata.enabled),
+            metadata.source_repository
         );
     }
 
-    let resolved = runtime::load_resolved_plugins(cli)?;
+    println!();
+    println!("⚙️  Runtime: {}", resolved.externals.len());
     for spec in resolved.externals {
         println!(
-            "{}\tkind=runtime\tcommand={}\targs={}",
+            "  {}  command={}  args={}",
             spec.name,
             spec.command,
             spec.args.join(" ")
         );
     }
+
+    if !resolved.inactive.is_empty() {
+        println!();
+        println!("⚠️  Inactive: {}", resolved.inactive.len());
+    }
     for summary in resolved.inactive {
         println!(
-            "{}\tkind={}\tstate={}\terror={}",
+            "  {}  kind={}  state={}  error={}",
             summary.name,
             summary.kind,
             summary.status,
             summary.error.unwrap_or_default()
         );
     }
+    Ok(())
+}
+
+fn enabled_label(enabled: bool) -> &'static str {
+    if enabled {
+        "✅ enabled"
+    } else {
+        "⏸️ disabled"
+    }
+}
+
+pub(crate) fn plugin_inventory_json(cli: &Cli) -> Result<Value> {
+    let store_root = default_store_root()?;
+    let store = PluginStore::new(&store_root);
+    let installed = store.list()?;
+    let resolved = runtime::load_resolved_plugins(cli)?;
+    let active = resolved
+        .externals
+        .into_iter()
+        .map(|spec| {
+            let env_keys = spec.env.keys().cloned().collect::<Vec<_>>();
+            json!({
+                "name": spec.name,
+                "kind": "runtime",
+                "command": spec.command,
+                "args": spec.args,
+                "url": spec.url,
+                "env_keys": env_keys,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "store_root": store_root,
+        "installed": installed,
+        "resolved": {
+            "active": active,
+            "inactive": resolved.inactive,
+        },
+    }))
+}
+
+fn print_json(value: &Value) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
 
