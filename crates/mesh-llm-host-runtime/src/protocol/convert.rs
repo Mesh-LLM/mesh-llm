@@ -261,6 +261,45 @@ fn legacy_descriptor_from_identity(
         capabilities_known: false,
         capabilities: crate::models::ModelCapabilities::default(),
         topology: None,
+        metadata: None,
+    }
+}
+
+fn local_model_metadata_to_proto(
+    metadata: &crate::mesh::ServedModelMetadata,
+) -> crate::proto::node::ServedModelMetadata {
+    crate::proto::node::ServedModelMetadata {
+        architecture: metadata.architecture.clone(),
+        parameter_size: metadata.parameter_size.clone(),
+        parameter_count_b: metadata.parameter_count_b,
+        quant: metadata.quant.clone(),
+        native_context_length: metadata.native_context_length,
+        tokenizer: metadata.tokenizer.clone(),
+        layer_count: metadata.layer_count,
+        embedding_size: metadata.embedding_size,
+        head_count: metadata.head_count,
+        kv_head_count: metadata.kv_head_count,
+        expert_count: metadata.expert_count,
+        active_expert_count: metadata.active_expert_count,
+    }
+}
+
+fn proto_model_metadata_to_local(
+    metadata: &crate::proto::node::ServedModelMetadata,
+) -> crate::mesh::ServedModelMetadata {
+    crate::mesh::ServedModelMetadata {
+        architecture: metadata.architecture.clone(),
+        parameter_size: metadata.parameter_size.clone(),
+        parameter_count_b: metadata.parameter_count_b,
+        quant: metadata.quant.clone(),
+        native_context_length: metadata.native_context_length,
+        tokenizer: metadata.tokenizer.clone(),
+        layer_count: metadata.layer_count,
+        embedding_size: metadata.embedding_size,
+        head_count: metadata.head_count,
+        kv_head_count: metadata.kv_head_count,
+        expert_count: metadata.expert_count,
+        active_expert_count: metadata.active_expert_count,
     }
 }
 
@@ -552,6 +591,10 @@ pub(crate) fn local_ann_to_proto_ann(
                         }),
                 }
             }),
+            metadata: descriptor
+                .metadata
+                .as_ref()
+                .map(local_model_metadata_to_proto),
         })
         .collect();
     let served_model_runtime = ann
@@ -765,6 +808,10 @@ pub(crate) fn proto_ann_to_local(
                                     }),
                                 }
                             }),
+                            metadata: descriptor
+                                .metadata
+                                .as_ref()
+                                .map(proto_model_metadata_to_local),
                         }
                     })
                     .collect();

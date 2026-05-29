@@ -492,6 +492,8 @@ fn message_text(msg: &Value) -> String {
 pub struct RoutingCandidate<'a> {
     pub name: &'a str,
     pub caps: crate::models::ModelCapabilities,
+    /// Total model parameter count in billions, when advertised.
+    pub parameter_count_b: Option<f64>,
     /// Locally observed throughput in tokens/sec. `None` if no
     /// throughput-bearing attempts have completed for this model yet.
     pub tps_hint: Option<f64>,
@@ -507,6 +509,7 @@ impl<'a> RoutingCandidate<'a> {
         Self {
             name,
             caps,
+            parameter_count_b: None,
             tps_hint: None,
             throughput_samples: 0,
         }
@@ -588,15 +591,12 @@ pub fn pick_model_classified<'a>(
         filtered
     };
 
-    // Bias toward larger models: names that advertise a single-digit
-    // parameter count (e.g. "2B", "9B") go to the bottom. Everything
-    // else — multi-digit billions (31B, 70B) or names that don't encode
-    // a size at all (MiniMax, Coder-Next, fine-tune tags) — stays on
-    // top. The big tier is sampled by tok/s-weighted draw; the small
-    // tier acts only as a fallback when the big tier is empty.
+    // Bias toward larger models: explicit metadata below 10B goes to the
+    // bottom tier. When metadata is absent, fall back to the legacy
+    // single-digit-B name heuristic.
     let (big, small): (Vec<_>, Vec<_>) = candidates
         .into_iter()
-        .partition(|c| !is_single_digit_b_name(c.name));
+        .partition(|c| !is_small_parameter_model(c));
 
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -660,6 +660,13 @@ fn pick_weighted<'a>(candidates: &[&RoutingCandidate<'a>], seed: u64) -> &'a str
     }
     // Numerical tail: pick the last candidate.
     candidates[candidates.len() - 1].name
+}
+
+fn is_small_parameter_model(candidate: &RoutingCandidate<'_>) -> bool {
+    candidate
+        .parameter_count_b
+        .map(|count| count.is_finite() && count < 10.0)
+        .unwrap_or_else(|| is_single_digit_b_name(candidate.name))
 }
 
 /// Small deterministic PRNG so a single seed drives both the
@@ -1271,6 +1278,29 @@ mod tests {
     }
 
     #[test]
+    fn test_pick_uses_parameter_metadata_before_name_heuristic() {
+        use crate::models::ModelCapabilities;
+
+        let no_caps = ModelCapabilities::default();
+        let mut misleading_big_name = RoutingCandidate::unscored("unknown-strong-name", no_caps);
+        misleading_big_name.parameter_count_b = Some(7.0);
+        let mut misleading_small_name = RoutingCandidate::unscored("tiny-looking-7B", no_caps);
+        misleading_small_name.parameter_count_b = Some(32.0);
+        let available = vec![misleading_big_name, misleading_small_name];
+        let cl = Classification {
+            category: Category::Chat,
+            complexity: Complexity::Moderate,
+            needs_tools: false,
+            has_media_inputs: false,
+        };
+
+        for _ in 0..100 {
+            let picked = pick_model_classified(&cl, &available).expect("some pick");
+            assert_eq!(picked, "tiny-looking-7B");
+        }
+    }
+
+    #[test]
     fn test_pick_falls_back_to_small_when_no_big_tier() {
         use crate::models::ModelCapabilities;
 
@@ -1338,6 +1368,7 @@ mod tests {
         RoutingCandidate {
             name,
             caps,
+            parameter_count_b: None,
             tps_hint: Some(tps),
             throughput_samples: samples,
         }

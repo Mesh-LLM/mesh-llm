@@ -71,6 +71,7 @@ jobs:
             crates/mesh-llm-config/ \
             crates/mesh-llm-console-server/ \
             crates/mesh-llm-plugin/ \
+            crates/mesh-llm-skills/ \
             crates/mesh-llm-plugin-manager/ \
             crates/mesh-client/ \
             crates/mesh-llm-api-client/ \

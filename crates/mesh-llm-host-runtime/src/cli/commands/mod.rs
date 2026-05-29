@@ -10,6 +10,7 @@ mod models;
 mod plugin;
 mod plugin_cli;
 mod runtime;
+mod skills;
 mod update;
 
 use anyhow::Result;
@@ -24,6 +25,7 @@ use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::plugin::run_plugin_command;
 use crate::cli::commands::plugin_cli::run_external_plugin_command;
 use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
+use crate::cli::commands::skills::run_skills_command;
 use crate::cli::commands::update::run_update;
 use crate::cli::{AuthCommand, Cli, Command};
 use crate::network::nostr;
@@ -89,6 +91,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Claude { model, port } => run_claude(model.clone(), *port).await,
         Command::Pi { model, host, write } => run_pi(model.clone(), host, *write).await,
         Command::Opencode { model, host, write } => run_opencode(model.clone(), host, *write).await,
+        Command::Skills { command } => run_skills_command(command),
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => dispatch_benchmark_command(command).await,
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,

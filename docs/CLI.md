@@ -428,6 +428,16 @@ Switches:
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--port <PORT>`: mesh-llm API port (default `9337`).
 
+### `pi`
+
+Use this to launch Pi already wired to mesh-llm’s OpenAI-compatible endpoint.
+
+Switches:
+
+- `--model <MODEL>`: model id from `/v1/models`.
+- `--host <HOST|HOST:PORT|URL>`: Pi target host or URL (default `127.0.0.1:9337`).
+- `--write`: write the mesh provider config without launching Pi.
+
 ### `opencode`
 
 Use this to launch OpenCode already wired to mesh-llm’s OpenAI-compatible endpoint.
@@ -439,6 +449,30 @@ Switches:
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--host <HOST|HOST:PORT|URL>`: OpenCode target host or URL (default `127.0.0.1:9337`). Bare host forms assume `http`, default inference port `9337`, and default management port `3131`.
 - `--write`: write a merged `~/.config/opencode/opencode.json` that preserves unrelated root keys and sibling providers. If only `opencode.jsonc` exists, mesh-llm errors and tells you to rename or migrate it to `opencode.json` first.
+
+### `skills`
+
+Use this to install Agent Skills exposed by installed mesh plugins.
+
+Usage:
+
+```bash
+mesh-llm skills install
+mesh-llm skills install --agent goose --agent codex
+mesh-llm skills install --all --dry-run
+```
+
+By default, the installer writes only to detected agents. Plugin packages expose
+skills by shipping `skills/<name>/SKILL.md` under the plugin archive root.
+Agent launch commands (`goose`, `pi`, `opencode`, and `claude`) install
+available plugin skills for that agent before starting the session.
+
+Switches:
+
+- `--agent <AGENT>`: install to a specific agent (`goose`, `pi`, `codex`, `opencode`, `claude`); repeatable.
+- `--all`: install to every supported target location even if the agent is not detected.
+- `--dry-run`: print planned writes without changing files.
+- `--force`: overwrite an existing user-owned skill directory with the same name.
 
 ### `stop`
 

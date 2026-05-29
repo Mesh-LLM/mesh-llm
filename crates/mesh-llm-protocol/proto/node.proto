@@ -115,6 +115,22 @@ message ServedModelDescriptor {
   ModelCapabilities capabilities = 2;
   optional ModelTopology topology = 3;
   optional bool capabilities_known = 4;
+  optional ServedModelMetadata metadata = 5;
+}
+
+message ServedModelMetadata {
+  optional string architecture = 1;
+  optional string parameter_size = 2;
+  optional double parameter_count_b = 3;
+  optional string quant = 4;
+  optional uint32 native_context_length = 5;
+  optional string tokenizer = 6;
+  optional uint32 layer_count = 7;
+  optional uint32 embedding_size = 8;
+  optional uint32 head_count = 9;
+  optional uint32 kv_head_count = 10;
+  optional uint32 expert_count = 11;
+  optional uint32 active_expert_count = 12;
 }
 
 message ServedModelIdentity {
@@ -188,6 +204,8 @@ message CompactModelMetadata {
   uint32 expert_count = 16;
   uint32 used_expert_count = 17;
   string quantization_type = 18;                     // GGUF quantization type string (e.g. "Q4_K_M")
+  uint32 kv_head_count = 19;
+  optional string parameter_size = 20;               // GGUF general.size_label when present (e.g. "32B")
 }
 
 message SpecialToken {

@@ -163,6 +163,9 @@ cool-plugin/
   cool-plugin
   README.md
   LICENSE
+  skills/
+    cool-workflow/
+      SKILL.md
 ```
 
 On Windows, the executable should use `.exe`:
@@ -173,8 +176,47 @@ cool-plugin/
   cool-plugin.exe
 ```
 
-Only `plugin.toml` and the native executable are required. Documentation and
-license files are optional but recommended.
+Only `plugin.toml` and the native executable are required. Documentation,
+license files, and skill folders are optional but recommended when the plugin
+has agent-facing workflows.
+
+## Plugin Skills
+
+Installed plugins may expose Agent Skills by shipping skill directories under
+their extracted plugin root:
+
+```text
+cool-plugin/
+  skills/
+    cool-workflow/
+      SKILL.md
+      references/
+      scripts/
+      assets/
+```
+
+Each skill directory name must use the portable Agent Skills naming convention:
+lowercase ASCII letters, numbers, and single hyphen separators. `SKILL.md`
+should include `name` and `description` YAML frontmatter and should refer to
+supporting files with paths relative to the skill directory. Avoid hard-coded
+home directories, OS-specific absolute paths, and shell-specific commands unless
+the skill documents the required platform in its `compatibility` field.
+
+`mesh-llm skills install` copies plugin skills into detected agent skill
+directories. `mesh-llm goose`, `mesh-llm pi`, `mesh-llm opencode`, and
+`mesh-llm claude` also install available plugin skills for that launched agent
+before starting the session. Existing user-owned skill directories are not
+overwritten unless `--force` is passed to the explicit installer.
+
+Current install targets:
+
+| Agent | Target |
+|---|---|
+| Goose | `~/.agents/skills` |
+| Codex | `~/.agents/skills` |
+| Pi | `~/.pi/agent/skills` |
+| OpenCode | `~/.config/opencode/skills` |
+| Claude Code | `~/.claude/skills` |
 
 Install selection should follow this order:
 

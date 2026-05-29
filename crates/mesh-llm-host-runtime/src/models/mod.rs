@@ -8,6 +8,7 @@ pub mod gguf;
 pub mod inventory;
 pub mod local;
 mod maintenance;
+mod profile;
 pub mod remote_catalog;
 pub mod resolve;
 pub use resolve::ResolvedModel;
@@ -32,6 +33,7 @@ pub use local::{
     model_ref_for_path, scan_installed_models, scan_local_models,
 };
 pub use maintenance::{run_update, warn_about_updates_for_paths};
+pub(crate) use profile::{served_model_metadata_for_model, served_model_metadata_for_path};
 pub use resolve::{
     ModelDetails, ShowVariantsProgress, canonicalize_interest_model_ref,
     download_model_ref_with_progress_details, find_loaded_remote_catalog_model_exact,

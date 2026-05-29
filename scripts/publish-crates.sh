@@ -161,7 +161,7 @@ publish_error_is_429() {
 
 publish_error_is_already_uploaded() {
     local output="$1"
-    [[ "$output" == *"already uploaded"* ]]
+    [[ "$output" == *"already uploaded"* || "$output" == *"already exists on crates.io index"* ]]
 }
 
 print_publish_output() {

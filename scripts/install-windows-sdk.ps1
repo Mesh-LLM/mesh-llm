@@ -131,6 +131,38 @@ function Test-ExeHeader([string]$Path) {
     return $header.Length -eq 2 -and $header[0] -eq 0x4D -and $header[1] -eq 0x5A
 }
 
+function Test-VulkanRuntimeInstalled {
+    $candidate = Join-Path $env:WINDIR 'System32\vulkan-1.dll'
+    return Test-Path $candidate
+}
+
+function Install-VulkanRuntime {
+    param([string]$CacheDir)
+
+    if (Test-VulkanRuntimeInstalled) {
+        Write-Host 'Vulkan runtime loader is already installed.'
+        return
+    }
+
+    $runtimeInstaller = Join-Path $CacheDir 'vulkan-runtime.exe'
+    if (-not (Test-ExeHeader $runtimeInstaller)) {
+        $url = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-runtime.exe'
+        Write-Host "Downloading Vulkan runtime installer: $url"
+        Invoke-WebRequest -Uri $url -OutFile $runtimeInstaller
+    } else {
+        Write-Host 'Using cached Vulkan runtime installer.'
+    }
+
+    $process = Start-Process $runtimeInstaller -ArgumentList '/S' -NoNewWindow -Wait -PassThru
+    if ($process.ExitCode -ne 0) {
+        throw "Vulkan runtime installer exited with code $($process.ExitCode)."
+    }
+
+    if (-not (Test-VulkanRuntimeInstalled)) {
+        throw 'Vulkan runtime installer completed, but C:\Windows\System32\vulkan-1.dll was not found.'
+    }
+}
+
 $Backend = Normalize-RecipeArgument $Backend @('backend')
 $RocmHipSdkFilename = Normalize-RecipeArgument $RocmHipSdkFilename @('rocm_hip_sdk_filename', 'rocmhipsdkfilename')
 $InstallerCacheDir = Normalize-RecipeArgument $InstallerCacheDir @('installer_cache_dir', 'installercachedir', 'cache_dir', 'cachedir')
@@ -233,6 +265,7 @@ switch ($Backend.ToLowerInvariant()) {
         New-Item -ItemType Directory -Path $vulkanCacheDir -Force | Out-Null
 
         Invoke-NativeCommand 'choco' @('install', 'vulkan-sdk', '-y', '--no-progress', '--cache-location', $vulkanCacheDir)
+        Install-VulkanRuntime -CacheDir $vulkanCacheDir
 
         $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory -ErrorAction SilentlyContinue |
             Sort-Object Name -Descending |

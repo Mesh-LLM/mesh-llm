@@ -374,7 +374,7 @@ Before committing, run the local checks most likely to fail in CI for the files 
 
 ### Minimum bar before every commit
 
-- Rust-only change — format the changed Rust files and run `cargo check -p <touched-crate>` (and `cargo check -p mesh-llm` if you touched anything reachable from the shipped binary).
+- Rust-only change — format the changed Rust files and run `cargo check -p <touched-crate>` plus `cargo clippy -p <touched-crate> --all-targets -- -D warnings` (and both commands with `-p mesh-llm` if you touched anything reachable from the shipped binary).
 - UI-only change — run `just build`.
 - Mixed Rust and UI change — run `just build`.
 
@@ -382,7 +382,8 @@ Before committing, run the local checks most likely to fail in CI for the files 
 
 - Format only the changed Rust files from the repo root, for example with `cargo fmt --all -- path/to/file.rs`, and include those formatting changes in the commit.
 - Before committing Rust changes, ensure the formatting check passes with `cargo fmt --all -- --check`.
-- After Rust changes, run `cargo check` for each touched crate (`-p <crate>`), and at least `cargo check -p mesh-llm` if the change is reachable from the shipped binary.
+- After Rust changes, run `cargo check` and `cargo clippy --all-targets -- -D warnings` for each touched crate (`-p <crate>`), and at least `cargo check -p mesh-llm` plus `cargo clippy -p mesh-llm --all-targets -- -D warnings` if the change is reachable from the shipped binary.
+- Treat Clippy as a required local gate, not a CI-only cleanup step. `cargo check`, `just build`, and formatter success do not catch lints such as `clippy::collapsible-if`; run the warning-denying Clippy command before opening or updating a PR.
 - If you touched tests, public APIs, routing, inference, gossip, plugin protocol, skippy ABI, or CLI behavior, run the relevant tests before committing.
 - If you touched `proto/`, any `protocol/` module, `mesh-llm-host-runtime/src/mesh/gossip.rs`, `mesh-llm-host-runtime/src/mesh/mod.rs`, routing, election, API serialization, or `skippy-ffi` ABI constants, do not stop at build-only validation: run at least `cargo test -p mesh-llm-host-runtime --lib` (plus `cargo test -p skippy-ffi --lib` / `-p skippy-runtime --lib` when ABI is touched) and wait for it to exit successfully before committing.
 - Do not report a build or test step as complete until the command has actually exited with code `0`.

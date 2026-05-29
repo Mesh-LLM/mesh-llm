@@ -8,6 +8,7 @@ use crate::mesh;
 use crate::network::affinity::{
     AffinityRouter, PreparedTargets, TargetSelection, prepare_remote_targets_for_request,
 };
+use crate::network::openai::auto_route;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::{
     ChatStreamNormalizationState, normalize_chat_completion_json_body,
@@ -2739,6 +2740,13 @@ pub(crate) fn capabilities_for_model(
         .unwrap_or_else(|| crate::models::installed_model_capabilities(model))
 }
 
+pub(crate) fn descriptor_metadata_for_model<'a>(
+    model: &str,
+    descriptors: &'a [mesh::ServedModelDescriptor],
+) -> Option<&'a mesh::ServedModelMetadata> {
+    descriptor_for_model(descriptors, model).and_then(|descriptor| descriptor.metadata.as_ref())
+}
+
 fn capture_path_for_request(request: &BufferedHttpRequest) -> &str {
     &request.client_path
 }
@@ -2785,8 +2793,10 @@ pub async fn handle_mesh_request(
     // Handle /v1/models
     if is_models_list_request(&request.method, &request.path) {
         let served = node.models_being_served().await;
-        let descriptors = node.served_model_descriptors().await;
-        let _ = send_models_list_with_descriptors(tcp_stream, &served, &descriptors).await;
+        let descriptors = node.all_served_model_descriptors().await;
+        let runtimes = node.all_model_runtime_descriptors().await;
+        let _ =
+            send_models_list_with_descriptors(tcp_stream, &served, &descriptors, &runtimes).await;
         return;
     }
 
@@ -2847,21 +2857,24 @@ async fn build_mesh_request_plan(
     affinity: &AffinityRouter,
 ) -> std::result::Result<MeshRequestPlan, MeshRequestFailure> {
     let served = node.models_being_served().await;
-    let descriptors = node.served_model_descriptors().await;
+    let descriptors = node.all_served_model_descriptors().await;
     rewrite_public_model_alias(request, &served, &descriptors);
 
     let is_auto_request =
         request.model_name.is_none() || request.model_name.as_deref() == Some("auto");
     let auto_session_key = auto_session_key_for_request(request, is_auto_request);
-    let effective_model = match resolve_auto_model_request(
+    let required_tokens =
+        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+    let effective_model = match resolve_auto_model_request(AutoModelRequestArgs {
         node,
         request,
-        &served,
-        &descriptors,
+        served: &served,
+        descriptors: &descriptors,
         is_auto_request,
         auto_session_key,
+        required_tokens,
         affinity,
-    )
+    })
     .await
     {
         AutoModelResolution::Model(model) => model.or(request.model_name.clone()),
@@ -2883,8 +2896,6 @@ async fn build_mesh_request_plan(
         MeshTargetResolution::NoHostsAvailable => return Err(MeshRequestFailure::NoHostsAvailable),
     };
 
-    let required_tokens =
-        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
     let prepared = prepare_mesh_targets(
         request,
         effective_model.as_deref(),
@@ -3287,15 +3298,28 @@ fn auto_session_key_for_request(
         .and_then(|body| crate::network::affinity::auto_model_session_key(Some(body)))
 }
 
-async fn resolve_auto_model_request(
-    node: &mesh::Node,
-    request: &mut BufferedHttpRequest,
-    served: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
+struct AutoModelRequestArgs<'a> {
+    node: &'a mesh::Node,
+    request: &'a mut BufferedHttpRequest,
+    served: &'a [String],
+    descriptors: &'a [mesh::ServedModelDescriptor],
     is_auto_request: bool,
     auto_session_key: Option<u64>,
-    affinity: &AffinityRouter,
-) -> AutoModelResolution {
+    required_tokens: Option<u32>,
+    affinity: &'a AffinityRouter,
+}
+
+async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModelResolution {
+    let AutoModelRequestArgs {
+        node,
+        request,
+        served,
+        descriptors,
+        is_auto_request,
+        auto_session_key,
+        required_tokens,
+        affinity,
+    } = args;
     if !is_auto_request {
         return AutoModelResolution::Model(None);
     }
@@ -3304,13 +3328,6 @@ async fn resolve_auto_model_request(
         return AutoModelResolution::Model(None);
     };
     let media = router::media_requirements(body_json);
-    if let Some(model) =
-        lookup_cached_auto_model(node, descriptors, affinity, auto_session_key, &media).await
-    {
-        return AutoModelResolution::Model(Some(model));
-    }
-
-    let cl = router::classify(body_json);
     // Build candidates with observed throughput so pick_model_classified
     // can weight by locally-measured tok/s where samples exist.
     let routing_metrics = node.routing_metrics();
@@ -3325,14 +3342,37 @@ async fn resolve_auto_model_request(
             router::RoutingCandidate {
                 name: name.as_str(),
                 caps,
+                parameter_count_b: descriptor_metadata_for_model(name, descriptors)
+                    .and_then(|metadata| metadata.parameter_count_b),
                 tps_hint,
                 throughput_samples,
             }
         })
         .collect();
-    let Some(available) = router::filter_media_compatible_candidates(&with_caps, &media) else {
+    let available = router::filter_media_compatible_candidates(&with_caps, &media);
+    let ready_models = if let Some(available) = available.as_ref() {
+        auto_route::ready_remote_models(node, required_tokens, available, affinity).await
+    } else {
+        Vec::new()
+    };
+    if let Some(model) = lookup_cached_auto_model(
+        node,
+        descriptors,
+        affinity,
+        auto_session_key,
+        &media,
+        &ready_models,
+    )
+    .await
+    {
+        return AutoModelResolution::Model(Some(model));
+    }
+
+    let Some(available) = available else {
         return AutoModelResolution::UnsupportedMedia;
     };
+    let available = auto_route::pool_for_ready_models(&available, &ready_models);
+    let cl = router::classify(body_json);
     let picked = router::pick_model_classified(&cl, &available).map(str::to_string);
     if let Some(name) = picked.as_deref() {
         tracing::info!(
@@ -3355,11 +3395,12 @@ async fn lookup_cached_auto_model(
     affinity: &AffinityRouter,
     auto_session_key: Option<u64>,
     media: &router::MediaRequirements,
+    ready_models: &[&str],
 ) -> Option<String> {
     let key = auto_session_key?;
     let model = affinity.lookup_auto_model(key)?;
     if let Some(reason) =
-        cached_auto_model_reclassify_reason(node, &model, media, descriptors).await
+        cached_auto_model_reclassify_reason(node, &model, media, descriptors, ready_models).await
     {
         tracing::debug!("auto: cached model {model} {reason}, reclassifying");
         affinity.forget_auto_model(key);
@@ -3374,12 +3415,18 @@ async fn cached_auto_model_reclassify_reason(
     model: &str,
     media: &router::MediaRequirements,
     descriptors: &[mesh::ServedModelDescriptor],
+    ready_models: &[&str],
 ) -> Option<&'static str> {
     if cached_auto_model_missing(node, model).await {
         return Some("no longer served");
     }
-    cached_auto_model_needs_reclassify(model, media, descriptors)
-        .then_some("cannot satisfy media requirements")
+    if cached_auto_model_needs_reclassify(model, media, descriptors) {
+        return Some("cannot satisfy media requirements");
+    }
+    if !ready_models.is_empty() && !ready_models.contains(&model) {
+        return Some("has no eligible target for this request");
+    }
+    None
 }
 
 async fn cached_auto_model_missing(node: &mesh::Node, model: &str) -> bool {
@@ -3959,8 +4006,9 @@ pub async fn send_models_list_with_descriptors(
     mut stream: TcpStream,
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
+    runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> std::io::Result<()> {
-    let body = models_list_json(models, descriptors).to_string();
+    let body = models_list_json(models, descriptors, runtimes).to_string();
     let resp = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
         body.len(),
@@ -3974,6 +4022,7 @@ pub async fn send_models_list_with_descriptors(
 fn models_list_json(
     models: &[String],
     descriptors: &[mesh::ServedModelDescriptor],
+    runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> serde_json::Value {
     let mut seen = std::collections::HashSet::new();
     let data: Vec<serde_json::Value> = models
@@ -4006,7 +4055,7 @@ fn models_list_json(
             } else {
                 public_id.clone()
             };
-            Some(serde_json::json!({
+            let mut model = serde_json::json!({
                 "id": public_id,
                 "display_name": display_name,
                 "object": "model",
@@ -4016,11 +4065,82 @@ fn models_list_json(
                 "vision_status": capabilities.vision_status(),
                 "audio_status": capabilities.audio_status(),
                 "reasoning_status": capabilities.reasoning_status(),
-            }))
+            });
+            if let Some(metadata) = model_metadata_json(m, descriptor, runtimes)
+                && let Some(object) = model.as_object_mut()
+            {
+                object.insert("metadata".to_string(), metadata);
+            }
+            Some(model)
         })
         .collect();
 
     serde_json::json!({ "object": "list", "data": data })
+}
+
+fn model_metadata_json(
+    model_name: &str,
+    descriptor: Option<&mesh::ServedModelDescriptor>,
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+) -> Option<serde_json::Value> {
+    let mut metadata = serde_json::Map::new();
+    let descriptor_metadata = descriptor.and_then(|descriptor| descriptor.metadata.as_ref());
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.architecture.as_ref()) {
+        metadata.insert("architecture".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_size.as_ref()) {
+        metadata.insert("parameter_size".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_count_b)
+        && value.is_finite()
+    {
+        metadata.insert("parameter_count_b".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.quant.as_ref()) {
+        metadata.insert("quant".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = runtime_context_length_for_model(model_name, runtimes) {
+        metadata.insert("context_length".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.native_context_length) {
+        metadata.insert(
+            "native_context_length".to_string(),
+            serde_json::json!(value),
+        );
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.tokenizer.as_ref()) {
+        metadata.insert("tokenizer".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.layer_count) {
+        metadata.insert("layer_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.embedding_size) {
+        metadata.insert("embedding_size".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.head_count) {
+        metadata.insert("head_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.kv_head_count) {
+        metadata.insert("kv_head_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.expert_count) {
+        metadata.insert("expert_count".to_string(), serde_json::json!(value));
+    }
+    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.active_expert_count) {
+        metadata.insert("active_expert_count".to_string(), serde_json::json!(value));
+    }
+    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
+}
+
+fn runtime_context_length_for_model(
+    model_name: &str,
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+) -> Option<u32> {
+    runtimes
+        .iter()
+        .filter(|runtime| runtime.model_name == model_name)
+        .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length)
+        .max()
 }
 
 pub fn rewrite_public_model_alias(
@@ -4642,6 +4762,86 @@ mod tests {
         }
     }
 
+    fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+        mesh::PeerInfo {
+            id: peer_id,
+            addr: iroh::EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            role: mesh::NodeRole::Host { http_port: 9337 },
+            first_joined_mesh_ts: None,
+            models: vec![model.to_string()],
+            vram_bytes: 16 * 1024 * 1024 * 1024,
+            rtt_ms: None,
+            model_source: None,
+            serving_models: vec![model.to_string()],
+            hosted_models: vec![model.to_string()],
+            hosted_models_known: true,
+            available_models: vec![],
+            requested_models: vec![],
+            explicit_model_interests: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            version: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![local_gguf_descriptor(model)],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            advertised_model_throughput: vec![],
+            display_rtt: None,
+            propagated_latency: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+        }
+    }
+
+    async fn test_node_with_remote_models(models: &[(&str, iroh::EndpointId)]) -> mesh::Node {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .expect("test node should start");
+        for (model, peer_id) in models {
+            node.insert_test_peer(test_peer_serving_model(*peer_id, model))
+                .await;
+        }
+        node
+    }
+
+    fn text_auto_request() -> BufferedHttpRequest {
+        let body = serde_json::json!({
+            "model": "auto",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let body_bytes = serde_json::to_vec(&body).expect("request body should serialize");
+        BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
+            body_json: Some(body),
+            body_json_attempted: true,
+            body_bytes: Some(body_bytes),
+            body_len_bytes: 0,
+            completion_tokens: None,
+            model_name: Some("auto".to_string()),
+            stream: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+        }
+    }
+
     async fn read_request_from_parts_with_limits(
         parts: Vec<Vec<u8>>,
         limits: HttpReadLimits,
@@ -4676,7 +4876,7 @@ mod tests {
         let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![hf_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(
             body["data"][0]["id"],
@@ -4727,7 +4927,7 @@ mod tests {
         };
         let descriptors = vec![descriptor];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
         let public_id = body["data"][0]["id"].as_str().unwrap_or_default();
 
         // The public ID must NOT silently drop the quant suffix that the
@@ -4750,7 +4950,7 @@ mod tests {
         let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![catalog_model_ref_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(
             body["data"][0]["id"],
@@ -4763,10 +4963,53 @@ mod tests {
         let models = vec!["smollm2-a".to_string()];
         let descriptors = vec![local_gguf_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(body["data"][0]["id"], "smollm2-a");
         assert_eq!(body["data"][0]["display_name"], "smollm2-a");
+    }
+
+    #[test]
+    fn models_list_reports_model_metadata() {
+        let models = vec!["Qwen3-32B-Q4_K_M".to_string()];
+        let mut descriptor = local_gguf_descriptor(&models[0]);
+        descriptor.metadata = Some(mesh::ServedModelMetadata {
+            architecture: Some("qwen3".to_string()),
+            parameter_size: Some("32B".to_string()),
+            parameter_count_b: Some(32.0),
+            quant: Some("Q4_K_M".to_string()),
+            native_context_length: Some(32_768),
+            tokenizer: Some("gpt2".to_string()),
+            layer_count: Some(64),
+            embedding_size: Some(5120),
+            head_count: Some(40),
+            kv_head_count: Some(8),
+            expert_count: Some(128),
+            active_expert_count: Some(8),
+        });
+        let runtimes = vec![mesh::ModelRuntimeDescriptor {
+            model_name: models[0].clone(),
+            identity_hash: None,
+            context_length: Some(65_536),
+            ready: true,
+        }];
+
+        let body = models_list_json(&models, &[descriptor], &runtimes);
+        let metadata = &body["data"][0]["metadata"];
+
+        assert_eq!(metadata["architecture"], "qwen3");
+        assert_eq!(metadata["parameter_size"], "32B");
+        assert_eq!(metadata["parameter_count_b"], 32.0);
+        assert_eq!(metadata["quant"], "Q4_K_M");
+        assert_eq!(metadata["context_length"], 65_536);
+        assert_eq!(metadata["native_context_length"], 32_768);
+        assert_eq!(metadata["tokenizer"], "gpt2");
+        assert_eq!(metadata["layer_count"], 64);
+        assert_eq!(metadata["embedding_size"], 5120);
+        assert_eq!(metadata["head_count"], 40);
+        assert_eq!(metadata["kv_head_count"], 8);
+        assert_eq!(metadata["expert_count"], 128);
+        assert_eq!(metadata["active_expert_count"], 8);
     }
 
     #[test]
@@ -4777,7 +5020,7 @@ mod tests {
             crate::models::ModelCapabilities::default(),
         )];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
 
         assert_eq!(body["data"][0]["capabilities"], serde_json::json!(["text"]));
         assert_eq!(body["data"][0]["vision_status"], "none");
@@ -4789,7 +5032,7 @@ mod tests {
         let models = vec!["Qwen3VL-2B-Instruct-Q4_K_M".to_string()];
         let descriptors = vec![local_gguf_descriptor(&models[0])];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
         let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
 
         assert!(capabilities.iter().any(|cap| cap == "multimodal"));
@@ -4810,7 +5053,7 @@ mod tests {
             },
         )];
 
-        let body = models_list_json(&models, &descriptors);
+        let body = models_list_json(&models, &descriptors, &[]);
         let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
 
         assert!(capabilities.iter().any(|cap| cap == "multimodal"));
@@ -5032,6 +5275,111 @@ mod tests {
             &media,
             &descriptors
         ));
+    }
+
+    #[tokio::test]
+    async fn cached_auto_model_stays_sticky_when_no_ready_remote_model_exists() -> Result<()> {
+        let cached_model = "cached-cooling-model-31B";
+        let alternate_model = "alternate-cooling-model-31B";
+        let cached_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let alternate_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let node = test_node_with_remote_models(&[
+            (cached_model, cached_peer),
+            (alternate_model, alternate_peer),
+        ])
+        .await;
+        let affinity = AffinityRouter::new();
+        let key = 0xA11CE;
+        affinity.remember_auto_model(key, cached_model);
+        affinity.record_target_outcome(
+            Some(cached_model),
+            &election::InferenceTarget::Remote(cached_peer),
+            TargetHealthOutcome::Unavailable,
+        );
+        affinity.record_target_outcome(
+            Some(alternate_model),
+            &election::InferenceTarget::Remote(alternate_peer),
+            TargetHealthOutcome::Unavailable,
+        );
+        let descriptors = vec![
+            local_gguf_descriptor(cached_model),
+            local_gguf_descriptor(alternate_model),
+        ];
+        let media = router::MediaRequirements::default();
+        let caps = crate::models::ModelCapabilities::default();
+        let available = vec![
+            router::RoutingCandidate::unscored(cached_model, caps),
+            router::RoutingCandidate::unscored(alternate_model, caps),
+        ];
+        let ready_models =
+            auto_route::ready_remote_models(&node, None, &available, &affinity).await;
+        assert!(ready_models.is_empty());
+
+        let cached = lookup_cached_auto_model(
+            &node,
+            &descriptors,
+            &affinity,
+            Some(key),
+            &media,
+            &ready_models,
+        )
+        .await;
+
+        assert_eq!(cached.as_deref(), Some(cached_model));
+        assert_eq!(
+            affinity.lookup_auto_model(key).as_deref(),
+            Some(cached_model)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_model_cache_switches_when_ready_alternate_exists() -> Result<()> {
+        let cached_model = "cached-cooling-model-31B";
+        let alternate_model = "ready-alternate-model-31B";
+        let cached_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let alternate_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let node = test_node_with_remote_models(&[
+            (cached_model, cached_peer),
+            (alternate_model, alternate_peer),
+        ])
+        .await;
+        let affinity = AffinityRouter::new();
+        let key = 0xB0B;
+        affinity.remember_auto_model(key, cached_model);
+        affinity.record_target_outcome(
+            Some(cached_model),
+            &election::InferenceTarget::Remote(cached_peer),
+            TargetHealthOutcome::Unavailable,
+        );
+        let served = vec![cached_model.to_string(), alternate_model.to_string()];
+        let descriptors = vec![
+            local_gguf_descriptor(cached_model),
+            local_gguf_descriptor(alternate_model),
+        ];
+        let mut request = text_auto_request();
+
+        let resolved = resolve_auto_model_request(AutoModelRequestArgs {
+            node: &node,
+            request: &mut request,
+            served: &served,
+            descriptors: &descriptors,
+            is_auto_request: true,
+            auto_session_key: Some(key),
+            required_tokens: None,
+            affinity: &affinity,
+        })
+        .await;
+
+        assert!(matches!(
+            resolved,
+            AutoModelResolution::Model(Some(model)) if model == alternate_model
+        ));
+        assert_eq!(
+            affinity.lookup_auto_model(key).as_deref(),
+            Some(alternate_model)
+        );
+        Ok(())
     }
 
     #[test]

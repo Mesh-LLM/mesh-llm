@@ -36,7 +36,7 @@ pub struct ServedModelIdentity {
     pub identity_hash: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ServedModelDescriptor {
     pub identity: ServedModelIdentity,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -44,10 +44,57 @@ pub struct ServedModelDescriptor {
     pub capabilities: ModelCapabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub topology: Option<ModelTopology>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<ServedModelMetadata>,
 }
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ServedModelMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameter_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parameter_count_b: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_context_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tokenizer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kv_head_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expert_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_expert_count: Option<u32>,
+}
+
+impl ServedModelMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.architecture.is_none()
+            && self.parameter_size.is_none()
+            && self.parameter_count_b.is_none()
+            && self.quant.is_none()
+            && self.native_context_length.is_none()
+            && self.tokenizer.is_none()
+            && self.layer_count.is_none()
+            && self.embedding_size.is_none()
+            && self.head_count.is_none()
+            && self.kv_head_count.is_none()
+            && self.expert_count.is_none()
+            && self.active_expert_count.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -114,6 +161,7 @@ pub fn infer_served_model_descriptors(
                 capabilities_known: false,
                 capabilities: ModelCapabilities::default(),
                 topology: None,
+                metadata: None,
             }
         })
         .collect()

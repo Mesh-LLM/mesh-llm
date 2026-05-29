@@ -547,6 +547,7 @@ mod tests {
             capabilities_known: true,
             capabilities: crate::models::ModelCapabilities::default(),
             topology: None,
+            metadata: None,
         };
 
         let snapshot = collector.build_model_view(ModelViewInput {
@@ -595,6 +596,7 @@ mod tests {
             capabilities_known: false,
             capabilities: crate::models::ModelCapabilities::default(),
             topology: None,
+            metadata: None,
         };
 
         let snapshot = collector.build_model_view(ModelViewInput {
@@ -646,6 +648,7 @@ mod tests {
                 ..Default::default()
             },
             topology: None,
+            metadata: None,
         };
 
         let snapshot = collector.build_model_view(ModelViewInput {

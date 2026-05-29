@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
+use mesh_llm_plugin_manager::SkillAgent;
 use std::process::{Command, Stdio};
 
+use crate::cli::commands::skills::install_skills_for_agent;
 use crate::{cli::shell, runtime};
 use url::Url;
 
@@ -495,6 +497,7 @@ pub(crate) async fn run_goose(model: Option<String>, port: u16) -> Result<()> {
     std::fs::write(&provider_path, serde_json::to_string_pretty(&provider)?)?;
     eprintln!("✅ Wrote {}", provider_path.display());
     write_goose_mcp_config(DEFAULT_MESH_MCP_URL)?;
+    install_skills_for_agent(SkillAgent::Goose);
 
     let goose_app = std::path::Path::new("/Applications/Goose.app");
     if goose_app.exists() {
@@ -572,6 +575,7 @@ pub(crate) async fn run_claude(model: Option<String>, port: u16) -> Result<()> {
     });
     let settings_json = serde_json::to_string(&settings)?;
     let mcp_config_json = mesh_mcp_claude_config_json(DEFAULT_MESH_MCP_URL)?;
+    install_skills_for_agent(SkillAgent::Claude);
 
     eprintln!("🚀 Launching Claude Code with {chosen} → {base_url}\n");
     let mut command = Command::new("claude");
@@ -813,6 +817,7 @@ fn run_pi_with_mesh(
     write: bool,
 ) -> Result<()> {
     write_pi_config_with_limits(model_names, base_url, context_lengths)?;
+    install_skills_for_agent(SkillAgent::Pi);
 
     if write {
         return Ok(());
@@ -855,6 +860,7 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
     };
 
     let result = if write {
+        install_skills_for_agent(SkillAgent::Opencode);
         write_opencode_config(&client, &models, &chosen, &target).await
     } else {
         let context_lengths =
@@ -873,6 +879,7 @@ pub(crate) async fn run_opencode(model: Option<String>, host: &str, write: bool)
                     "🚀 Launching OpenCode with {} → {}\n",
                     chosen, target.api_base_url
                 );
+                install_skills_for_agent(SkillAgent::Opencode);
                 let mut command = Command::new("opencode");
                 configure_opencode_launch_command(&mut command, &spec);
                 let status = command.status();

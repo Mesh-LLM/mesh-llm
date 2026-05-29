@@ -906,6 +906,7 @@ alias = "model-alias"
             advertised_model_throughput: vec![],
 
             display_rtt: None,
+            selected_path: None,
             propagated_latency: None,
         }
     }

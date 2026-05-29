@@ -224,6 +224,7 @@ fn read_gguf_value_as_string_opt(
 #[derive(Clone, Debug, Default)]
 pub struct GgufCompactMeta {
     pub architecture: String,
+    pub parameter_size: Option<String>,
     pub context_length: u32,
     pub vocab_size: u32,
     pub embedding_size: u32,
@@ -432,6 +433,8 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
 
         if key == "general.architecture" {
             meta.architecture = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
+        } else if key == "general.size_label" {
+            meta.parameter_size = read_gguf_value_as_string_opt(&mut f, vtype).ok()?;
         } else if key == "tokenizer.ggml.model" {
             meta.tokenizer_model_name = read_gguf_value_as_string_opt(&mut f, vtype).ok()??;
         } else if key.ends_with(".context_length") {

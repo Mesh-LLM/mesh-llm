@@ -307,6 +307,69 @@ usage() {
     echo "usage: scripts/package-release.sh <version> [output_dir]" >&2
 }
 
+cuda_version_check_needs_stub() {
+    [[ "$(release_os_name)" == "Linux" ]] || return 1
+
+    case "$(effective_release_flavor)" in
+        cuda|cuda-blackwell)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+cuda_stub_library_path() {
+    local candidate
+    local candidates=()
+
+    if [[ -n "${CUDA_HOME:-}" ]]; then
+        candidates+=("$CUDA_HOME/lib64/stubs/libcuda.so")
+        candidates+=("$CUDA_HOME/targets/x86_64-linux/lib/stubs/libcuda.so")
+    fi
+    if [[ -n "${CUDA_PATH:-}" ]]; then
+        candidates+=("$CUDA_PATH/lib64/stubs/libcuda.so")
+        candidates+=("$CUDA_PATH/targets/x86_64-linux/lib/stubs/libcuda.so")
+    fi
+
+    candidates+=(
+        "/usr/local/cuda/lib64/stubs/libcuda.so"
+        "/usr/local/cuda/targets/x86_64-linux/lib/stubs/libcuda.so"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+run_mesh_binary_version_check() {
+    local binary="$1"
+    local cuda_stub
+    local cuda_stub_dir
+
+    if ! cuda_version_check_needs_stub; then
+        "$binary" --version
+        return
+    fi
+
+    if ! cuda_stub="$(cuda_stub_library_path)"; then
+        echo "CUDA release binary needs libcuda.so.1 for version verification, but no CUDA stub libcuda.so was found." >&2
+        exit 1
+    fi
+
+    cuda_stub_dir="$_STAGING_DIR/cuda-version-stubs"
+    mkdir -p "$cuda_stub_dir"
+    ln -sf "$cuda_stub" "$cuda_stub_dir/libcuda.so.1"
+
+    LD_LIBRARY_PATH="$cuda_stub_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$binary" --version
+}
+
 verify_mesh_binary_version() {
     local binary="$1"
     local expected="$2"
@@ -319,7 +382,7 @@ verify_mesh_binary_version() {
         exit 1
     fi
 
-    output="$("$binary" --version)"
+    output="$(run_mesh_binary_version_check "$binary")"
     actual="$(awk '{print $NF}' <<<"$output")"
     if [[ "$actual" != "$expected" ]]; then
         echo "Release binary version mismatch: expected $expected, got ${actual:-<empty>}" >&2

@@ -130,6 +130,15 @@ impl AffinityRouter {
         self.target_health.eligible_candidates(model, candidates)
     }
 
+    pub(crate) fn route_strict_eligible_candidates(
+        &self,
+        model: &str,
+        candidates: &[election::InferenceTarget],
+    ) -> Vec<election::InferenceTarget> {
+        self.target_health
+            .strict_eligible_candidates(model, candidates)
+    }
+
     pub(crate) fn record_target_outcome(
         &self,
         model: Option<&str>,
@@ -888,6 +897,25 @@ mod tests {
         assert_eq!(prepared.ordered.len(), 1);
         assert_eq!(prepared.learn_prefix_hash, None);
         assert_eq!(prepared.cached_target, None);
+    }
+
+    #[test]
+    fn strict_eligible_candidates_drop_single_cooling_auto_target() {
+        let id = make_id(1);
+        let target = election::InferenceTarget::Remote(id);
+        let affinity = AffinityRouter::with_config(true, true);
+
+        affinity.record_target_outcome(Some("qwen"), &target, TargetHealthOutcome::Unavailable);
+
+        assert_eq!(
+            affinity.route_eligible_candidates("qwen", std::slice::from_ref(&target)),
+            vec![target.clone()]
+        );
+        assert!(
+            affinity
+                .route_strict_eligible_candidates("qwen", std::slice::from_ref(&target))
+                .is_empty()
+        );
     }
 
     #[test]

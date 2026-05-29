@@ -16,6 +16,7 @@ anyhow.workspace = true
 dirs = "6"
 flate2 = "1"
 futures-util = "0.3"
+mesh-llm-skills.workspace = true
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde.workspace = true
 serde_json.workspace = true

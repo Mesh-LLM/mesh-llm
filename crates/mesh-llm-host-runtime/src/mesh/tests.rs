@@ -73,6 +73,144 @@ fn quic_bind_addr_keeps_endpoint_default_on_non_windows() {
 }
 
 #[test]
+fn split_stage_path_allows_fast_direct_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(Some(MAX_SPLIT_RTT_MS)).stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_missing_rtt() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(None).stage_path_rejection(),
+        Some(SplitStagePathRejection::MissingStagePath)
+    );
+}
+
+#[test]
+fn split_stage_path_accepts_direct_path_with_peer_rtt_fallback() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(None)
+            .with_direct_rtt_fallback(Some(MAX_SPLIT_RTT_MS))
+            .stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
+fn split_stage_path_keeps_relay_rejection_with_peer_rtt_fallback() {
+    assert_eq!(
+        SplitStagePathSnapshot::relay(None)
+            .with_direct_rtt_fallback(Some(1))
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_slow_peer_rtt_fallback() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(None)
+            .with_direct_rtt_fallback(Some(MAX_SPLIT_RTT_MS + 1))
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathTooSlow)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_relay_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::relay(Some(1)).stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_slow_direct_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(Some(MAX_SPLIT_RTT_MS + 1)).stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathTooSlow)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_unknown_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::unknown().stage_path_rejection(),
+        Some(SplitStagePathRejection::MissingStagePath)
+    );
+}
+
+#[test]
+fn split_stage_path_uses_direct_peer_path_fallback_for_unknown_stage_path() {
+    let fallback = SelectedPathObservation {
+        path_type: "direct",
+        rtt_ms: Some(MAX_SPLIT_RTT_MS),
+        observed_direct_remote_addr: None,
+    };
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(Some(fallback))
+            .stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
+fn split_stage_path_keeps_relay_peer_path_fallback_rejected() {
+    let fallback = SelectedPathObservation {
+        path_type: "relay",
+        rtt_ms: Some(1),
+        observed_direct_remote_addr: None,
+    };
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(Some(fallback))
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_peer_fallback_does_not_convert_relay_rtt_to_direct() {
+    let mut peer = make_test_peer_info(make_test_endpoint_id(0x4a));
+    peer.rtt_ms = Some(1);
+    peer.selected_path = Some(SelectedPathObservation {
+        path_type: "relay",
+        rtt_ms: Some(1),
+        observed_direct_remote_addr: None,
+    });
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(peer.split_stage_path_fallback())
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_peer_fallback_uses_best_direct_rtt() {
+    let mut peer = make_test_peer_info(make_test_endpoint_id(0x4b));
+    peer.rtt_ms = Some(MAX_SPLIT_RTT_MS);
+    peer.selected_path = Some(SelectedPathObservation {
+        path_type: "direct",
+        rtt_ms: None,
+        observed_direct_remote_addr: None,
+    });
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(peer.split_stage_path_fallback())
+            .stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
 fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidates() {
     let mut addr = EndpointAddr {
         id: make_test_endpoint_id(0x42),
@@ -289,6 +427,7 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
             ..Default::default()
         },
         topology: None,
+        metadata: None,
     })
     .await;
 
@@ -989,6 +1128,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         advertised_model_throughput: vec![],
 
         display_rtt: None,
+        selected_path: None,
         propagated_latency: None,
     }
 }
@@ -3320,6 +3460,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         vocab_size: 151936,
         embedding_size: 4096,
         head_count: 32,
+        kv_head_count: 0,
         layer_count: 36,
         feed_forward_length: 14336,
         key_length: 128,
@@ -3333,6 +3474,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         expert_count: 0,
         used_expert_count: 0,
         quantization_type: "Q4_K_M".to_string(),
+        parameter_size: None,
     };
 
     let mut model_sizes = HashMap::new();
@@ -3388,6 +3530,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
             capabilities_known: true,
             capabilities: crate::models::ModelCapabilities::default(),
             topology: None,
+            metadata: None,
         }],
         served_model_runtime: vec![ModelRuntimeDescriptor {
             model_name: "Qwen3-8B-Q4_K_M".to_string(),
@@ -3538,6 +3681,7 @@ fn proto_ann_to_local_treats_missing_default_capability_provenance_as_unknown() 
             capabilities: Some(crate::proto::node::ModelCapabilities::default()),
             capabilities_known: None,
             topology: None,
+            metadata: None,
         }],
         ..Default::default()
     };
@@ -3626,6 +3770,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         vocab_size: 32000,
         embedding_size: 4096,
         head_count: 32,
+        kv_head_count: 0,
         layer_count: 32,
         feed_forward_length: 11008,
         key_length: 128,
@@ -3639,6 +3784,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         expert_count: 0,
         used_expert_count: 0,
         quantization_type: "Q4_K_M".to_string(),
+        parameter_size: None,
     };
 
     let mut new_sizes = HashMap::new();
@@ -4623,6 +4769,7 @@ fn remote_model_scans_are_ignored_after_gossip() {
         vocab_size: 128256,
         embedding_size: 8192,
         head_count: 64,
+        kv_head_count: 0,
         layer_count: 80,
         feed_forward_length: 28672,
         key_length: 128,
@@ -4636,6 +4783,7 @@ fn remote_model_scans_are_ignored_after_gossip() {
         expert_count: 0,
         used_expert_count: 0,
         quantization_type: "Q4_K_M".to_string(),
+        parameter_size: None,
     };
     let mut model_sizes = std::collections::HashMap::new();
     model_sizes.insert("Llama-3.3-70B-Q4_K_M".to_string(), 42_000_000_000u64);
@@ -5165,6 +5313,7 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
         advertised_model_throughput: vec![],
 
         display_rtt: None,
+        selected_path: None,
         propagated_latency: None,
     }
 }

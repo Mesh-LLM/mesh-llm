@@ -13,6 +13,7 @@ members = [
     "crates/mesh-llm-console-server",
     "crates/mesh-llm-ui",
     "crates/mesh-llm-plugin",
+    "crates/mesh-llm-skills",
     "crates/mesh-llm-plugin-manager",
     "crates/mesh-client",
     "crates/mesh-llm-api-client",
@@ -59,6 +60,7 @@ version = "0.68.0"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+mesh-llm-skills = { path = "crates/mesh-llm-skills" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

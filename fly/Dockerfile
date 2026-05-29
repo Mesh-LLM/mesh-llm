@@ -45,9 +45,13 @@ COPY crates/mesh-llm/Cargo.toml crates/mesh-llm/Cargo.toml
 COPY crates/mesh-llm/build.rs crates/mesh-llm/build.rs
 COPY crates/mesh-llm-plugin/Cargo.toml crates/mesh-llm-plugin/Cargo.toml
 COPY crates/mesh-llm-plugin/build.rs crates/mesh-llm-plugin/build.rs
+COPY crates/mesh-llm-skills/Cargo.toml crates/mesh-llm-skills/Cargo.toml
+COPY crates/mesh-llm-plugin-manager/Cargo.toml crates/mesh-llm-plugin-manager/Cargo.toml
 COPY crates/mesh-llm-host-runtime/ crates/mesh-llm-host-runtime/
 COPY crates/mesh-llm/ crates/mesh-llm/
 COPY crates/mesh-llm-plugin/ crates/mesh-llm-plugin/
+COPY crates/mesh-llm-skills/ crates/mesh-llm-skills/
+COPY crates/mesh-llm-plugin-manager/ crates/mesh-llm-plugin-manager/
 COPY crates/mesh-client/ crates/mesh-client/
 COPY crates/mesh-llm-api-client/ crates/mesh-llm-api-client/
 COPY crates/mesh-llm-api-server/ crates/mesh-llm-api-server/

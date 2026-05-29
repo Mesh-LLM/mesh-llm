@@ -24,10 +24,14 @@ pub struct ModelMetadataCacheProgress {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CachedCompactModelMetadata {
     model_key: String,
+    #[serde(default)]
+    parameter_size: Option<String>,
     context_length: u32,
     vocab_size: u32,
     embedding_size: u32,
     head_count: u32,
+    #[serde(default)]
+    kv_head_count: u32,
     layer_count: u32,
     feed_forward_length: u32,
     key_length: u32,
@@ -59,6 +63,7 @@ impl CachedCompactModelMetadata {
             vocab_size: self.vocab_size,
             embedding_size: self.embedding_size,
             head_count: self.head_count,
+            kv_head_count: self.kv_head_count,
             layer_count: self.layer_count,
             feed_forward_length: self.feed_forward_length,
             key_length: self.key_length,
@@ -68,20 +73,23 @@ impl CachedCompactModelMetadata {
             special_tokens: vec![],
             rope_scale: self.rope_scale,
             rope_freq_base: self.rope_freq_base,
-            is_moe: false,
-            expert_count: 0,
-            used_expert_count: 0,
+            is_moe: self.expert_count > 0,
+            expert_count: self.expert_count,
+            used_expert_count: self.used_expert_count,
             quantization_type: self.quantization_type,
+            parameter_size: self.parameter_size,
         }
     }
 
     fn from_proto(meta: &crate::proto::node::CompactModelMetadata) -> Self {
         Self {
             model_key: meta.model_key.clone(),
+            parameter_size: meta.parameter_size.clone(),
             context_length: meta.context_length,
             vocab_size: meta.vocab_size,
             embedding_size: meta.embedding_size,
             head_count: meta.head_count,
+            kv_head_count: meta.kv_head_count,
             layer_count: meta.layer_count,
             feed_forward_length: meta.feed_forward_length,
             key_length: meta.key_length,
@@ -90,8 +98,8 @@ impl CachedCompactModelMetadata {
             tokenizer_model_name: meta.tokenizer_model_name.clone(),
             rope_scale: meta.rope_scale,
             rope_freq_base: meta.rope_freq_base,
-            expert_count: 0,
-            used_expert_count: 0,
+            expert_count: meta.expert_count,
+            used_expert_count: meta.used_expert_count,
             quantization_type: meta.quantization_type.clone(),
         }
     }
@@ -199,6 +207,7 @@ fn compact_metadata_from_gguf(
             vocab_size: m.vocab_size,
             embedding_size: m.embedding_size,
             head_count: m.head_count,
+            kv_head_count: m.kv_head_count,
             layer_count: m.layer_count,
             feed_forward_length: m.feed_forward_length,
             key_length: m.key_length,
@@ -208,10 +217,11 @@ fn compact_metadata_from_gguf(
             special_tokens: vec![],
             rope_scale: m.rope_scale,
             rope_freq_base: m.rope_freq_base,
-            is_moe: false,
-            expert_count: 0,
-            used_expert_count: 0,
+            is_moe: m.expert_count > 0,
+            expert_count: m.expert_count,
+            used_expert_count: m.expert_used_count,
             quantization_type,
+            parameter_size: m.parameter_size,
         }
     } else {
         crate::proto::node::CompactModelMetadata {

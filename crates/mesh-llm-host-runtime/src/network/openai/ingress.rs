@@ -3,6 +3,7 @@ use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, pipeline};
 use crate::mesh;
 use crate::network::affinity;
+use crate::network::openai::auto_route;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
@@ -154,8 +155,10 @@ async fn handle_models_list_request(
     }
     models.sort();
     models.dedup();
-    let descriptors = node.served_model_descriptors().await;
-    let _ = proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors).await;
+    let descriptors = node.all_served_model_descriptors().await;
+    let runtimes = node.all_model_runtime_descriptors().await;
+    let _ = proxy::send_models_list_with_descriptors(tcp_stream, &models, &descriptors, &runtimes)
+        .await;
 }
 
 async fn collect_available_models_for_auto_route(
@@ -187,6 +190,8 @@ async fn resolve_auto_routed_model(
     targets: &election::ModelTargets,
     plugin_manager: Option<&crate::plugin::PluginManager>,
     descriptors: &[crate::mesh::ServedModelDescriptor],
+    required_tokens: Option<u32>,
+    affinity: &affinity::AffinityRouter,
 ) -> AutoRouteResolution {
     if request.model_name.is_some() && request.model_name.as_deref() != Some("auto") {
         return AutoRouteResolution::Continue {
@@ -219,6 +224,8 @@ async fn resolve_auto_routed_model(
             router::RoutingCandidate {
                 name: name.as_str(),
                 caps,
+                parameter_count_b: proxy::descriptor_metadata_for_model(name, descriptors)
+                    .and_then(|metadata| metadata.parameter_count_b),
                 tps_hint,
                 throughput_samples,
             }
@@ -228,6 +235,9 @@ async fn resolve_auto_routed_model(
         proxy::release_request_objects(node, &request.request_object_request_ids).await;
         return AutoRouteResolution::MediaUnsupported;
     };
+    let available =
+        auto_route_pool_for_ready_models(node, targets, required_tokens, &available, affinity)
+            .await;
 
     let effective_model = router::pick_model_classified(&classification, &available).map(|name| {
         tracing::info!(
@@ -243,6 +253,69 @@ async fn resolve_auto_routed_model(
         effective_model,
         classification: Some(classification),
     }
+}
+
+async fn auto_route_pool_for_ready_models<'a>(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    required_tokens: Option<u32>,
+    available: &[router::RoutingCandidate<'a>],
+    affinity: &affinity::AffinityRouter,
+) -> Vec<router::RoutingCandidate<'a>> {
+    let mut ready_models = Vec::new();
+    for candidate in available {
+        if auto_route_model_has_ready_ingress_target(
+            node,
+            targets,
+            candidate.name,
+            required_tokens,
+            affinity,
+        )
+        .await
+        {
+            ready_models.push(candidate.name);
+        }
+    }
+    auto_route::pool_for_ready_models(available, &ready_models)
+}
+
+async fn auto_route_model_has_ready_ingress_target(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    model: &str,
+    required_tokens: Option<u32>,
+    affinity: &affinity::AffinityRouter,
+) -> bool {
+    let local_candidates = targets.candidates(model);
+    if contains_routable_candidate(&local_candidates) {
+        return auto_route::model_has_eligible_target(
+            node,
+            model,
+            required_tokens,
+            &local_candidates,
+            affinity,
+        )
+        .await;
+    }
+
+    let remote_candidates = node
+        .hosts_for_model(model)
+        .await
+        .into_iter()
+        .map(election::InferenceTarget::Remote)
+        .collect::<Vec<_>>();
+    if !remote_candidates.is_empty() {
+        return auto_route::model_has_eligible_target(
+            node,
+            model,
+            required_tokens,
+            &remote_candidates,
+            affinity,
+        )
+        .await;
+    }
+
+    true
 }
 
 fn maybe_enable_auto_route_hooks(
@@ -486,12 +559,16 @@ async fn prepare_auto_route_decision(
     ctx: &IngressRouteContext<'_>,
     descriptors: &[crate::mesh::ServedModelDescriptor],
 ) -> Result<AutoRouteDecision, ()> {
+    let required_tokens =
+        proxy::request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
     match resolve_auto_routed_model(
         ctx.node,
         request,
         ctx.targets,
         ctx.plugin_manager,
         descriptors,
+        required_tokens,
+        ctx.affinity,
     )
     .await
     {
@@ -500,10 +577,6 @@ async fn prepare_auto_route_decision(
             classification,
         } => {
             maybe_enable_auto_route_hooks(request, effective_model.as_deref());
-            let required_tokens = proxy::request_budget_tokens_from_parts(
-                request.body_len_bytes,
-                request.completion_tokens,
-            );
             if let Some(name) = effective_model.as_ref() {
                 ctx.node.record_request(name);
             }
@@ -637,7 +710,7 @@ async fn handle_buffered_api_request(
 
     let local_models = ctx.route.node.models_being_served().await;
     let callable = callable_models_with_local_served(ctx.route.targets, local_models);
-    let descriptors = ctx.route.node.served_model_descriptors().await;
+    let descriptors = ctx.route.node.all_served_model_descriptors().await;
     proxy::rewrite_public_model_alias(&mut request, &callable, &descriptors);
 
     if proxy::is_drop_request(&request.method, &request.path) {
@@ -807,8 +880,11 @@ fn first_available_target(targets: &election::ModelTargets) -> election::Inferen
 }
 
 fn has_available_candidates(targets: &election::ModelTargets, model: &str) -> bool {
-    targets
-        .candidates(model)
+    contains_routable_candidate(&targets.candidates(model))
+}
+
+fn contains_routable_candidate(candidates: &[election::InferenceTarget]) -> bool {
+    candidates
         .iter()
         .any(|target| !matches!(target, election::InferenceTarget::None))
 }

@@ -202,7 +202,7 @@ pub struct SignedNodeOwnership {
     #[prost(bytes = "vec", tag = "10")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServedModelDescriptor {
     #[prost(message, optional, tag = "1")]
     pub identity: ::core::option::Option<ServedModelIdentity>,
@@ -212,6 +212,35 @@ pub struct ServedModelDescriptor {
     pub topology: ::core::option::Option<ModelTopology>,
     #[prost(bool, optional, tag = "4")]
     pub capabilities_known: ::core::option::Option<bool>,
+    #[prost(message, optional, tag = "5")]
+    pub metadata: ::core::option::Option<ServedModelMetadata>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ServedModelMetadata {
+    #[prost(string, optional, tag = "1")]
+    pub architecture: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub parameter_size: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(double, optional, tag = "3")]
+    pub parameter_count_b: ::core::option::Option<f64>,
+    #[prost(string, optional, tag = "4")]
+    pub quant: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag = "5")]
+    pub native_context_length: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "6")]
+    pub tokenizer: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag = "7")]
+    pub layer_count: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "8")]
+    pub embedding_size: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "9")]
+    pub head_count: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "10")]
+    pub kv_head_count: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "11")]
+    pub expert_count: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "12")]
+    pub active_expert_count: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServedModelIdentity {
@@ -327,6 +356,11 @@ pub struct CompactModelMetadata {
     /// GGUF quantization type string (e.g. "Q4_K_M")
     #[prost(string, tag = "18")]
     pub quantization_type: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "19")]
+    pub kv_head_count: u32,
+    /// GGUF general.size_label when present (e.g. "32B")
+    #[prost(string, optional, tag = "20")]
+    pub parameter_size: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SpecialToken {
