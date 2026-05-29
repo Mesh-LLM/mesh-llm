@@ -1,5 +1,6 @@
 use std::{
-    env, fs,
+    collections::HashSet,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -11,6 +12,7 @@ const MARKER_FILE: &str = ".mesh-llm-skill.json";
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SkillAgent {
+    Global,
     Goose,
     Pi,
     Codex,
@@ -21,6 +23,7 @@ pub enum SkillAgent {
 impl SkillAgent {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Global => "global",
             Self::Goose => "goose",
             Self::Pi => "pi",
             Self::Codex => "codex",
@@ -30,7 +33,7 @@ impl SkillAgent {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SkillTarget {
     pub agent: SkillAgent,
     pub root: PathBuf,
@@ -38,7 +41,7 @@ pub struct SkillTarget {
     pub detection_reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SkillPackage {
     pub provider_name: String,
     pub provider_version: String,
@@ -70,19 +73,18 @@ impl SkillInstallOptions {
     pub fn for_agent(agent: SkillAgent) -> Result<Self> {
         let mut options = Self::from_env()?;
         options.agents = vec![agent];
-        options.detected_only = false;
         Ok(options)
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SkillInstallReport {
     pub available_skills: usize,
     pub targets: Vec<SkillTarget>,
     pub actions: Vec<SkillInstallAction>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SkillInstallAction {
     pub agent: SkillAgent,
     pub skill_name: String,
@@ -92,7 +94,8 @@ pub struct SkillInstallAction {
     pub status: SkillInstallStatus,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum SkillInstallStatus {
     Installed,
     Updated,
@@ -133,6 +136,7 @@ pub fn install_skills(
 pub fn resolve_targets(options: &SkillInstallOptions) -> Vec<SkillTarget> {
     let agents = if options.agents.is_empty() {
         vec![
+            SkillAgent::Global,
             SkillAgent::Goose,
             SkillAgent::Pi,
             SkillAgent::Codex,
@@ -148,8 +152,29 @@ pub fn resolve_targets(options: &SkillInstallOptions) -> Vec<SkillTarget> {
         .map(|agent| skill_target(agent, &options.home_dir))
         .filter(|target| !options.detected_only || target.detected)
         .collect::<Vec<_>>();
-    targets.sort_by(|left, right| left.agent.as_str().cmp(right.agent.as_str()));
+    deduplicate_targets_by_root(&mut targets);
+    targets.sort_by(|left, right| {
+        skill_agent_sort_rank(left.agent)
+            .cmp(&skill_agent_sort_rank(right.agent))
+            .then(left.agent.as_str().cmp(right.agent.as_str()))
+    });
     targets
+}
+
+fn deduplicate_targets_by_root(targets: &mut Vec<SkillTarget>) {
+    let mut seen = HashSet::new();
+    targets.retain(|target| seen.insert(target.root.clone()));
+}
+
+fn skill_agent_sort_rank(agent: SkillAgent) -> usize {
+    match agent {
+        SkillAgent::Global => 0,
+        SkillAgent::Claude => 1,
+        SkillAgent::Codex => 2,
+        SkillAgent::Goose => 3,
+        SkillAgent::Opencode => 4,
+        SkillAgent::Pi => 5,
+    }
 }
 
 pub fn is_valid_skill_name(value: &str) -> bool {
@@ -324,33 +349,35 @@ fn write_marker(skill_dir: &Path, marker: &ManagedSkillMarker) -> Result<()> {
 }
 
 fn skill_target(agent: SkillAgent, home_dir: &Path) -> SkillTarget {
-    let (root, command, config_dir) = match agent {
-        SkillAgent::Goose => (home_dir.join(".agents").join("skills"), "goose", None),
+    let (root, config_dir) = match agent {
+        SkillAgent::Global => (home_dir.join(".agents").join("skills"), None),
+        SkillAgent::Goose => (
+            home_dir.join(".agents").join("skills"),
+            Some(home_dir.join(".config").join("goose")),
+        ),
         SkillAgent::Pi => (
             home_dir.join(".pi").join("agent").join("skills"),
-            "pi",
             Some(home_dir.join(".pi").join("agent")),
         ),
-        SkillAgent::Codex => (home_dir.join(".agents").join("skills"), "codex", None),
+        SkillAgent::Codex => (
+            home_dir.join(".agents").join("skills"),
+            Some(home_dir.join(".codex")),
+        ),
         SkillAgent::Opencode => (
             home_dir.join(".config").join("opencode").join("skills"),
-            "opencode",
             Some(home_dir.join(".config").join("opencode")),
         ),
         SkillAgent::Claude => (
             home_dir.join(".claude").join("skills"),
-            "claude",
             Some(home_dir.join(".claude")),
         ),
     };
-    let command_detected = command_exists(command);
     let config_detected = config_dir.as_ref().is_some_and(|dir| dir.exists());
-    let detected = command_detected || config_detected || root.exists();
-    let detection_reason = if command_detected {
-        Some(format!("found '{command}' in PATH"))
-    } else if config_detected {
+    let root_detected = root.exists();
+    let detected = config_detected || root_detected;
+    let detection_reason = if config_detected {
         config_dir.map(|dir| format!("found {}", dir.display()))
-    } else if root.exists() {
+    } else if root_detected {
         Some(format!("found {}", root.display()))
     } else {
         None
@@ -362,27 +389,6 @@ fn skill_target(agent: SkillAgent, home_dir: &Path) -> SkillTarget {
         detected,
         detection_reason,
     }
-}
-
-fn command_exists(command: &str) -> bool {
-    let Some(paths) = env::var_os("PATH") else {
-        return false;
-    };
-    env::split_paths(&paths)
-        .any(|path| command_candidates(command).any(|candidate| path.join(candidate).is_file()))
-}
-
-fn command_candidates(command: &str) -> impl Iterator<Item = String> + '_ {
-    let suffix = env::consts::EXE_SUFFIX;
-    let mut candidates = vec![command.to_string()];
-    if !suffix.is_empty() {
-        candidates.push(format!("{command}{suffix}"));
-    }
-    if cfg!(windows) {
-        candidates.push(format!("{command}.cmd"));
-        candidates.push(format!("{command}.bat"));
-    }
-    candidates.into_iter()
 }
 
 #[cfg(test)]
@@ -441,6 +447,41 @@ mod tests {
                 .join(".pi/agent/skills/demo-skill/SKILL.md")
                 .exists()
         );
+    }
+
+    #[test]
+    fn defaults_to_global_open_skill_target_once() {
+        let temp = TempDir::new().unwrap();
+        let home_dir = temp.path().join("home");
+        fs::create_dir_all(home_dir.join(".agents/skills")).unwrap();
+        fs::create_dir_all(home_dir.join(".codex")).unwrap();
+
+        let options = SkillInstallOptions {
+            home_dir: home_dir.clone(),
+            agents: Vec::new(),
+            detected_only: true,
+            dry_run: true,
+            force: false,
+        };
+        let targets = resolve_targets(&options);
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].agent, SkillAgent::Global);
+        assert_eq!(targets[0].root, home_dir.join(".agents/skills"));
+    }
+
+    #[test]
+    fn launch_time_agent_options_do_not_create_missing_skill_roots() {
+        let temp = TempDir::new().unwrap();
+        let source_dir = write_skill(&temp.path().join("source"), "demo-skill");
+        let mut options = SkillInstallOptions::for_agent(SkillAgent::Goose).unwrap();
+        options.home_dir = temp.path().join("home");
+
+        let report = install_skills(&[skill("demo-skill", source_dir)], &options).unwrap();
+
+        assert!(report.targets.is_empty());
+        assert!(report.actions.is_empty());
+        assert!(!options.home_dir.join(".agents").exists());
     }
 
     #[test]

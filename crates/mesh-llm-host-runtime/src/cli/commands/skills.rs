@@ -4,7 +4,7 @@ use mesh_llm_plugin_manager::{
     install_available_skills,
 };
 
-use crate::cli::{SkillAgentArg, SkillCommand};
+use crate::cli::{SkillAgentArg, SkillCommand, output::json_mode_enabled};
 
 pub(crate) fn run_skills_command(command: &SkillCommand) -> Result<()> {
     match command {
@@ -23,10 +23,13 @@ pub(crate) fn install_skills_for_agent(agent: SkillAgent) {
         Ok(report)
     }) {
         Ok(report) => print_agent_install_summary(agent, &report),
-        Err(error) => eprintln!(
-            "⚠️  Could not install mesh plugin skills for {}: {error}",
-            agent.as_str()
-        ),
+        Err(error) if !json_mode_enabled() => {
+            eprintln!(
+                "Could not install mesh plugin skills for {}: {error}",
+                agent.as_str()
+            );
+        }
+        Err(_) => {}
     }
 }
 
@@ -42,11 +45,14 @@ fn install(agents: &[SkillAgentArg], all: bool, dry_run: bool, force: bool) -> R
         options.skill_options.detected_only = false;
     }
     let report = install_available_skills(&options)?;
-    print_install_report(&report, dry_run);
+    print_install_report(&report, dry_run)?;
     Ok(())
 }
 
 fn print_agent_install_summary(agent: SkillAgent, report: &SkillInstallReport) {
+    if json_mode_enabled() {
+        return;
+    }
     let changed = report
         .actions
         .iter()
@@ -65,7 +71,12 @@ fn print_agent_install_summary(agent: SkillAgent, report: &SkillInstallReport) {
     }
 }
 
-fn print_install_report(report: &SkillInstallReport, dry_run: bool) {
+fn print_install_report(report: &SkillInstallReport, dry_run: bool) -> Result<()> {
+    if json_mode_enabled() {
+        println!("{}", serde_json::to_string_pretty(report)?);
+        return Ok(());
+    }
+
     let heading = if dry_run {
         "🧪 Mesh plugin skill install preview"
     } else {
@@ -76,7 +87,7 @@ fn print_install_report(report: &SkillInstallReport, dry_run: bool) {
     if report.available_skills == 0 {
         eprintln!("🔎 No plugin skills found in installed plugins.");
         eprintln!("📦 Plugins can expose skills with skills/<name>/SKILL.md.");
-        return;
+        return Ok(());
     }
 
     eprintln!(
@@ -87,7 +98,7 @@ fn print_install_report(report: &SkillInstallReport, dry_run: bool) {
     if report.targets.is_empty() {
         eprintln!("🔎 No supported agent skill targets detected.");
         eprintln!("💡 Use --agent <agent> or --all to install anyway.");
-        return;
+        return Ok(());
     }
 
     eprintln!(
@@ -120,6 +131,7 @@ fn print_install_report(report: &SkillInstallReport, dry_run: bool) {
     }
 
     print_install_summary(report, dry_run);
+    Ok(())
 }
 
 fn print_install_summary(report: &SkillInstallReport, dry_run: bool) {
@@ -140,14 +152,14 @@ fn print_install_summary(report: &SkillInstallReport, dry_run: bool) {
 
     let verb = if dry_run { "planned" } else { "complete" };
     let mut parts = vec![
-        plural_count(installed, "install").to_string(),
-        plural_count(updated, "update").to_string(),
+        count_label(installed, "installed", "installed"),
+        count_label(updated, "updated", "updated"),
     ];
     if unchanged > 0 {
-        parts.push(plural_count(unchanged, "unchanged").to_string());
+        parts.push(count_label(unchanged, "unchanged", "unchanged"));
     }
     if conflicts > 0 {
-        parts.push(plural_count(conflicts, "conflict").to_string());
+        parts.push(count_label(conflicts, "conflict", "conflicts"));
     }
     eprintln!("✅ Skill install {verb}: {}", parts.join(", "));
 }
@@ -170,11 +182,13 @@ fn skill_display_name(action: &mesh_llm_plugin_manager::SkillInstallAction) -> S
 }
 
 fn plural_count(count: usize, noun: &str) -> String {
+    count_label(count, noun, &format!("{noun}s"))
+}
+
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
     if count == 1 {
-        format!("{count} {noun}")
-    } else if noun == "unchanged" {
-        format!("{count} unchanged")
+        format!("{count} {singular}")
     } else {
-        format!("{count} {noun}s")
+        format!("{count} {plural}")
     }
 }

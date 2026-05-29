@@ -901,6 +901,7 @@ pub(crate) enum SkillCommand {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum SkillAgentArg {
+    Global,
     Goose,
     Pi,
     Codex,
@@ -911,6 +912,7 @@ pub(crate) enum SkillAgentArg {
 impl From<SkillAgentArg> for mesh_llm_plugin_manager::SkillAgent {
     fn from(value: SkillAgentArg) -> Self {
         match value {
+            SkillAgentArg::Global => Self::Global,
             SkillAgentArg::Goose => Self::Goose,
             SkillAgentArg::Pi => Self::Pi,
             SkillAgentArg::Codex => Self::Codex,
@@ -1597,6 +1599,23 @@ mod tests {
         let cli = Cli::parse_from(normalized.normalized);
 
         assert_eq!(cli.log_format, LogFormat::Pretty);
+    }
+
+    #[test]
+    fn skills_install_accepts_global_agent_target() {
+        let cli = Cli::parse_from(["mesh-llm", "skills", "install", "--agent", "global"]);
+
+        match cli.command.expect("skills command expected") {
+            Command::Skills {
+                command:
+                    SkillCommand::Install {
+                        agent, all: false, ..
+                    },
+            } => {
+                assert_eq!(agent, vec![SkillAgentArg::Global]);
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     #[test]
