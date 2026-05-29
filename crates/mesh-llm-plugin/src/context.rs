@@ -2,9 +2,9 @@ use anyhow::{Result, bail};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use std::sync::{Arc, Mutex};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     PROTOCOL_VERSION,
@@ -18,6 +18,34 @@ const PLUGIN_ORIGINATED_REQUEST_BIT: u64 = 1 << 63;
 
 pub(crate) type PendingHostResponses =
     Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>;
+
+struct PendingHostResponseGuard {
+    request_id: u64,
+    pending_host_responses: PendingHostResponses,
+    active: bool,
+}
+
+impl PendingHostResponseGuard {
+    fn new(request_id: u64, pending_host_responses: PendingHostResponses) -> Self {
+        Self {
+            request_id,
+            pending_host_responses,
+            active: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for PendingHostResponseGuard {
+    fn drop(&mut self) {
+        if self.active {
+            remove_pending_host_response(&self.pending_host_responses, self.request_id);
+        }
+    }
+}
 
 pub struct PluginContext<'a> {
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
@@ -114,10 +142,9 @@ impl<'a> PluginContext<'a> {
     ) -> Result<proto::OpenMeshStreamResponse> {
         let request_id = next_host_request_id();
         let (tx, rx) = oneshot::channel();
-        self.pending_host_responses
-            .lock()
-            .await
-            .insert(request_id, tx);
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut pending_guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
 
         if let Err(err) = self
             .send_payload(
@@ -126,11 +153,11 @@ impl<'a> PluginContext<'a> {
             )
             .await
         {
-            self.pending_host_responses.lock().await.remove(&request_id);
             return Err(err);
         }
 
         let response = rx.await??;
+        pending_guard.disarm();
         match response.payload {
             Some(proto::envelope::Payload::OpenMeshStreamResponse(response)) => Ok(response),
             Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
@@ -173,4 +200,36 @@ impl<'a> PluginContext<'a> {
 
 pub(crate) fn next_host_request_id() -> u64 {
     PLUGIN_ORIGINATED_REQUEST_BIT | NEXT_HOST_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+pub(crate) fn insert_pending_host_response(
+    pending_host_responses: &PendingHostResponses,
+    request_id: u64,
+    sender: oneshot::Sender<Result<proto::Envelope>>,
+) {
+    pending_host_responses
+        .lock()
+        .expect("pending host response map poisoned")
+        .insert(request_id, sender);
+}
+
+pub(crate) fn remove_pending_host_response(
+    pending_host_responses: &PendingHostResponses,
+    request_id: u64,
+) -> Option<oneshot::Sender<Result<proto::Envelope>>> {
+    pending_host_responses
+        .lock()
+        .expect("pending host response map poisoned")
+        .remove(&request_id)
+}
+
+pub(crate) fn drain_pending_host_responses(
+    pending_host_responses: &PendingHostResponses,
+) -> Vec<oneshot::Sender<Result<proto::Envelope>>> {
+    pending_host_responses
+        .lock()
+        .expect("pending host response map poisoned")
+        .drain()
+        .map(|(_, sender)| sender)
+        .collect()
 }

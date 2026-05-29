@@ -11,13 +11,16 @@ use serde::de::DeserializeOwned;
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, watch};
 
 use crate::{
     PROTOCOL_VERSION,
-    context::{PendingHostResponses, PluginContext},
+    context::{
+        PendingHostResponses, PluginContext, drain_pending_host_responses,
+        remove_pending_host_response,
+    },
     error::{PluginError, PluginResult, PluginRpcResult},
     helpers::{
         CompletionRouter, PromptRouter, ResourceRouter, TaskRouter, ToolCallRequest, ToolRouter,
@@ -1348,6 +1351,11 @@ struct RuntimeState<P> {
     pending_host_responses: PendingHostResponses,
 }
 
+struct OrderedPayload {
+    request_id: u64,
+    payload: proto::envelope::Payload,
+}
+
 impl PluginRuntime {
     pub async fn run<P: Plugin + Clone + Sync + 'static>(plugin: P) -> Result<()> {
         let stream = connect_from_env().await?;
@@ -1361,19 +1369,92 @@ impl PluginRuntime {
         let plugin_id = plugin.plugin_id().to_string();
         let (read, write) = stream.into_split();
         let (outbound_tx, outbound_rx) = mpsc::channel(256);
-        let writer = tokio::spawn(Self::write_loop(write, outbound_rx));
+        let (ordered_tx, ordered_rx) = mpsc::channel(256);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let state = Arc::new(RuntimeState {
             plugin: Arc::new(RwLock::new(plugin)),
             plugin_id,
             outbound_tx,
             pending_host_responses: Arc::new(Mutex::new(HashMap::new())),
         });
+        let mut writer = tokio::spawn(Self::write_loop(
+            write,
+            outbound_rx,
+            state.pending_host_responses.clone(),
+            shutdown_tx.clone(),
+            shutdown_rx.clone(),
+        ));
+        let ordered_handlers = tokio::spawn(Self::ordered_handler_loop(
+            state.clone(),
+            ordered_rx,
+            shutdown_rx,
+        ));
 
-        match Self::read_loop(state, read).await {
-            Ok(()) => Ok(writer.await??),
-            Err(err) => {
-                writer.abort();
-                Err(err)
+        let read_result = Self::read_loop(state.clone(), read, ordered_tx);
+        tokio::pin!(read_result);
+
+        let result = tokio::select! {
+            read_result = &mut read_result => read_result,
+            writer_result = &mut writer => match writer_result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(err)) => Err(err),
+                Err(err) => Err(err.into()),
+            },
+        };
+
+        let shutdown_reason = match &result {
+            Ok(()) => "plugin host connection is closed".to_string(),
+            Err(err) => format!("plugin host connection is closed: {err}"),
+        };
+        Self::shutdown_runtime(&shutdown_tx, &state.pending_host_responses, shutdown_reason);
+        if !writer.is_finished() {
+            let _ = writer.await;
+        }
+        if !ordered_handlers.is_finished() {
+            ordered_handlers.abort();
+        }
+
+        match ordered_handlers.await {
+            Ok(()) => result,
+            Err(err) if err.is_cancelled() => result,
+            Err(err) if result.is_ok() => Err(err.into()),
+            Err(_) => result,
+        }
+    }
+
+    fn shutdown_runtime(
+        shutdown_tx: &watch::Sender<bool>,
+        pending_host_responses: &PendingHostResponses,
+        reason: String,
+    ) {
+        let _ = shutdown_tx.send(true);
+        Self::fail_pending_host_responses(pending_host_responses, reason);
+    }
+
+    fn fail_pending_host_responses(pending_host_responses: &PendingHostResponses, reason: String) {
+        for sender in drain_pending_host_responses(pending_host_responses) {
+            let _ = sender.send(Err(anyhow::anyhow!(reason.clone())));
+        }
+    }
+
+    async fn ordered_handler_loop<P: Plugin + Clone + Sync + 'static>(
+        state: Arc<RuntimeState<P>>,
+        mut ordered_rx: mpsc::Receiver<OrderedPayload>,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        break;
+                    }
+                }
+                payload = ordered_rx.recv() => {
+                    let Some(payload) = payload else {
+                        break;
+                    };
+                    let _ = Self::handle_payload(state.clone(), payload.request_id, payload.payload).await;
+                }
             }
         }
     }
@@ -1381,13 +1462,14 @@ impl PluginRuntime {
     async fn read_loop<P: Plugin + Clone + Sync + 'static>(
         state: Arc<RuntimeState<P>>,
         mut read: LocalReadHalf,
+        ordered_tx: mpsc::Sender<OrderedPayload>,
     ) -> Result<()> {
         loop {
             let envelope = read_envelope_from(&mut *read).await?;
             if Self::complete_pending_host_response(&state, &envelope).await {
                 continue;
             }
-            if !Self::handle_envelope(state.clone(), envelope).await? {
+            if !Self::handle_envelope(state.clone(), &ordered_tx, envelope).await? {
                 break;
             }
         }
@@ -1397,9 +1479,38 @@ impl PluginRuntime {
     async fn write_loop(
         mut write: LocalWriteHalf,
         mut outbound_rx: mpsc::Receiver<proto::Envelope>,
+        pending_host_responses: PendingHostResponses,
+        shutdown_tx: watch::Sender<bool>,
+        mut shutdown_rx: watch::Receiver<bool>,
     ) -> Result<()> {
-        while let Some(envelope) = outbound_rx.recv().await {
-            write_envelope_to(&mut *write, &envelope).await?;
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        Self::drain_outbound_before_shutdown(&mut write, &mut outbound_rx).await?;
+                        return Ok(());
+                    }
+                }
+                envelope = outbound_rx.recv() => {
+                    let Some(envelope) = envelope else {
+                        return Ok(());
+                    };
+                    if let Err(err) = write_envelope_to(&mut *write, &envelope).await {
+                        let reason = format!("plugin host write failed: {err}");
+                        Self::shutdown_runtime(&shutdown_tx, &pending_host_responses, reason);
+                        return Err(err);
+                    }
+                }
+            }
+        }
+    }
+
+    async fn drain_outbound_before_shutdown(
+        write: &mut LocalWriteHalf,
+        outbound_rx: &mut mpsc::Receiver<proto::Envelope>,
+    ) -> Result<()> {
+        while let Ok(envelope) = outbound_rx.try_recv() {
+            write_envelope_to(&mut **write, &envelope).await?;
         }
         Ok(())
     }
@@ -1408,11 +1519,8 @@ impl PluginRuntime {
         state: &RuntimeState<P>,
         envelope: &proto::Envelope,
     ) -> bool {
-        let Some(sender) = state
-            .pending_host_responses
-            .lock()
-            .await
-            .remove(&envelope.request_id)
+        let Some(sender) =
+            remove_pending_host_response(&state.pending_host_responses, envelope.request_id)
         else {
             return false;
         };
@@ -1422,6 +1530,7 @@ impl PluginRuntime {
 
     async fn handle_envelope<P: Plugin + Clone + Sync + 'static>(
         state: Arc<RuntimeState<P>>,
+        ordered_tx: &mpsc::Sender<OrderedPayload>,
         envelope: proto::Envelope,
     ) -> Result<bool> {
         let request_id = envelope.request_id;
@@ -1443,8 +1552,40 @@ impl PluginRuntime {
                 .await?;
                 Ok(false)
             }
+            payload if Self::is_ordered_payload(&payload) => {
+                Self::enqueue_ordered_payload(ordered_tx, request_id, payload).await
+            }
             payload => Self::spawn_payload_handler(state, request_id, payload),
         }
+    }
+
+    fn is_ordered_payload(payload: &proto::envelope::Payload) -> bool {
+        matches!(
+            payload,
+            proto::envelope::Payload::RpcNotification(_)
+                | proto::envelope::Payload::ChannelMessage(_)
+                | proto::envelope::Payload::BulkTransferMessage(_)
+                | proto::envelope::Payload::MeshEvent(_)
+                | proto::envelope::Payload::CancelStreamNotification(_)
+                | proto::envelope::Payload::CloseStreamNotification(_)
+                | proto::envelope::Payload::StreamError(_)
+                | proto::envelope::Payload::ErrorResponse(_)
+        )
+    }
+
+    async fn enqueue_ordered_payload(
+        ordered_tx: &mpsc::Sender<OrderedPayload>,
+        request_id: u64,
+        payload: proto::envelope::Payload,
+    ) -> Result<bool> {
+        ordered_tx
+            .send(OrderedPayload {
+                request_id,
+                payload,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("plugin ordered handler is closed"))?;
+        Ok(true)
     }
 
     fn spawn_payload_handler<P: Plugin + Clone + Sync + 'static>(
@@ -1786,6 +1927,19 @@ mod tests {
         )
     }
 
+    fn test_channel_message(message_kind: &str) -> proto::ChannelMessage {
+        proto::ChannelMessage {
+            channel: "events".into(),
+            source_peer_id: "peer-a".into(),
+            target_peer_id: "peer-b".into(),
+            content_type: "text/plain".into(),
+            body: Vec::new(),
+            message_kind: message_kind.into(),
+            correlation_id: String::new(),
+            metadata_json: String::new(),
+        }
+    }
+
     #[tokio::test]
     async fn invoke_service_dispatches_operation_prompt_resource_and_completion() {
         let mut plugin = plugin! {
@@ -2057,6 +2211,135 @@ mod tests {
         let mut request_ids = vec![first.request_id, second.request_id];
         request_ids.sort_unstable();
         assert_eq!(request_ids, vec![1, 2]);
+
+        runtime.abort();
+    }
+
+    #[tokio::test]
+    async fn dropped_open_mesh_stream_request_removes_pending_response() {
+        let (outbound_tx, mut outbound_rx) = mpsc::channel(8);
+        let pending_host_responses = Arc::new(Mutex::new(HashMap::new()));
+        let mut context =
+            PluginContext::new("demo".into(), outbound_tx, pending_host_responses.clone());
+
+        let request = tokio::spawn(async move {
+            let _ = context
+                .open_mesh_stream(proto::OpenMeshStreamRequest::default())
+                .await;
+        });
+
+        let outbound = outbound_rx
+            .recv()
+            .await
+            .expect("request should be sent before awaiting host response");
+        assert_ne!(outbound.request_id, 0);
+        assert_eq!(
+            pending_host_responses
+                .lock()
+                .expect("pending map should not be poisoned")
+                .len(),
+            1
+        );
+
+        request.abort();
+        let _ = request.await;
+
+        assert!(
+            pending_host_responses
+                .lock()
+                .expect("pending map should not be poisoned")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn ordered_notifications_do_not_overtake_each_other() {
+        let first_started = Arc::new(Notify::new());
+        let release_first = Arc::new(Notify::new());
+        let handled = Arc::new(Mutex::new(Vec::<String>::new()));
+        let first_started_for_handler = first_started.clone();
+        let release_first_for_handler = release_first.clone();
+        let handled_for_handler = handled.clone();
+        let plugin = SimplePlugin::new(PluginMetadata::new(
+            "demo",
+            "1.0.0",
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>),
+        ))
+        .on_channel_message(move |message, _context| {
+            let first_started = first_started_for_handler.clone();
+            let release_first = release_first_for_handler.clone();
+            let handled = handled_for_handler.clone();
+            Box::pin(async move {
+                if message.message_kind == "first" {
+                    first_started.notify_one();
+                    release_first.notified().await;
+                }
+                handled
+                    .lock()
+                    .expect("handled list should not be poisoned")
+                    .push(message.message_kind);
+                Ok(())
+            })
+        });
+
+        #[cfg(unix)]
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        #[cfg(not(unix))]
+        panic!("runtime stream tests are only implemented for unix");
+
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            plugin,
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+
+        for (request_id, message_kind) in [(1, "first"), (2, "second")] {
+            write_envelope(
+                &mut host_stream,
+                &proto::Envelope {
+                    protocol_version: PROTOCOL_VERSION,
+                    plugin_id: "demo".into(),
+                    request_id,
+                    payload: Some(proto::envelope::Payload::ChannelMessage(
+                        test_channel_message(message_kind),
+                    )),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        first_started.notified().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            handled
+                .lock()
+                .expect("handled list should not be poisoned")
+                .is_empty(),
+            "second message should wait behind the first ordered handler"
+        );
+
+        release_first.notify_one();
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if handled
+                    .lock()
+                    .expect("handled list should not be poisoned")
+                    .len()
+                    == 2
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("ordered handlers should finish");
+
+        assert_eq!(
+            *handled.lock().expect("handled list should not be poisoned"),
+            vec![String::from("first"), String::from("second")]
+        );
 
         runtime.abort();
     }
