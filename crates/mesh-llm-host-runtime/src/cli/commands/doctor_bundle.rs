@@ -12,6 +12,7 @@ use zip::{CompressionMethod, ZipWriter};
 
 use crate::cli::Cli;
 use crate::cli::commands::{gpus, plugin};
+use crate::cli::terminal_progress::start_indeterminate_progress;
 use crate::runtime::instance;
 use crate::system::backend::BinaryFlavor;
 use crate::system::hardware::HardwareSurvey;
@@ -81,6 +82,7 @@ pub(crate) async fn run_doctor_bundle(cli: &Cli, options: DoctorBundleOptions) -
             .with_context(|| format!("failed to create output directory {}", parent.display()))?;
     }
 
+    let mut progress = start_indeterminate_progress("Building doctor bundle");
     let hw = gpus::collect_gpus_survey();
     let runtime_root = instance::runtime_root().ok();
     let all_instances = runtime_root
@@ -145,6 +147,7 @@ pub(crate) async fn run_doctor_bundle(cli: &Cli, options: DoctorBundleOptions) -
     manifest.included_files.clone_from(&bundle.included_files);
     add_json(&mut bundle, "manifest.json", &manifest)?;
     bundle.finish()?;
+    progress.finish();
 
     println!("✅ Created doctor bundle");
     println!();

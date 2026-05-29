@@ -70,6 +70,51 @@ pub(crate) fn start_spinner(message: &str) -> SpinnerHandle {
     }
 }
 
+pub(crate) fn start_indeterminate_progress(message: &str) -> SpinnerHandle {
+    if crate::cli::output::json_mode_enabled() {
+        return SpinnerHandle {
+            done: Arc::new(AtomicBool::new(true)),
+            thread: None,
+        };
+    }
+    let done = Arc::new(AtomicBool::new(false));
+    let done_thread = Arc::clone(&done);
+    let message = message.to_string();
+    let thread = thread::spawn(move || {
+        let mut index = 0usize;
+        while !done_thread.load(Ordering::Relaxed) {
+            eprint!(
+                "\r\x1b[2K🩺 [{}] {}",
+                indeterminate_bar(index, 18, 5),
+                message
+            );
+            let _ = std::io::stderr().flush();
+            index += 1;
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+    SpinnerHandle {
+        done,
+        thread: Some(thread),
+    }
+}
+
+fn indeterminate_bar(index: usize, width: usize, block_width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let block_width = block_width.clamp(1, width);
+    let period = width + block_width;
+    let start = (index % period) as isize - block_width as isize;
+    (0..width)
+        .map(|pos| {
+            let pos = pos as isize;
+            let in_block = pos >= start && pos < start + block_width as isize;
+            if in_block { '█' } else { '░' }
+        })
+        .collect()
+}
+
 pub(crate) struct DeterminateProgressLine {
     prefix: String,
 }
@@ -105,5 +150,28 @@ impl DeterminateProgressLine {
             .flush()
             .context("Flush determinate progress")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::indeterminate_bar;
+
+    #[test]
+    fn indeterminate_bar_keeps_stable_width() {
+        for index in 0..32 {
+            assert_eq!(indeterminate_bar(index, 18, 5).chars().count(), 18);
+        }
+    }
+
+    #[test]
+    fn indeterminate_bar_never_exceeds_block_width() {
+        for index in 0..32 {
+            let filled = indeterminate_bar(index, 18, 5)
+                .chars()
+                .filter(|char| *char == '█')
+                .count();
+            assert!(filled <= 5);
+        }
     }
 }
