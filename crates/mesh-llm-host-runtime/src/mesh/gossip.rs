@@ -327,34 +327,29 @@ impl Node {
         } else {
             "inbound_gossip_path"
         };
-        self.capture_selected_connection_path(remote, &conn, capture_source);
-        let path_list = conn.paths();
-        for path_info in &path_list {
-            if !path_info.is_selected() {
-                continue;
-            }
-            let path_rtt_ms = path_info.rtt().as_millis() as u32;
-            if path_rtt_ms == 0 {
-                continue;
-            }
+        let Some(observation) =
+            self.capture_selected_connection_path(remote, &conn, capture_source)
+        else {
+            return;
+        };
+        if let Some(path_rtt_ms) = observation.rtt_ms {
             if ceiling_rtt_ms.is_some_and(|ceiling| path_rtt_ms >= ceiling) {
-                break;
+                self.update_peer_selected_path(remote, observation).await;
+                return;
             }
-            let path_type = if path_info.is_ip() { "direct" } else { "relay" };
             super::emit_mesh_info(format!(
                 "📡 Peer {} RTT: {}ms ({}){}",
                 remote.fmt_short(),
                 path_rtt_ms,
-                path_type,
+                observation.path_type,
                 if ceiling_rtt_ms.is_some() {
                     " [path info]"
                 } else {
                     ""
                 }
             ));
-            self.update_peer_rtt(remote, path_rtt_ms).await;
-            break;
         }
+        self.update_peer_selected_path(remote, observation).await;
     }
 
     async fn maybe_connect_discovered_peer(

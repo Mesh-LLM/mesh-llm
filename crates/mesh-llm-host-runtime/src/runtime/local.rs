@@ -2815,17 +2815,15 @@ fn split_peer_preflight_exclusion_reason(
 fn split_peer_stage_path_exclusion_reason(
     snapshot: mesh::SplitStagePathSnapshot,
 ) -> Option<SplitParticipantExclusionReason> {
-    match snapshot.kind {
-        mesh::SplitStagePathKind::Direct => match snapshot.rtt_ms {
-            Some(rtt_ms) if rtt_ms <= mesh::MAX_SPLIT_RTT_MS => None,
-            Some(_) => Some(SplitParticipantExclusionReason::StagePathTooSlow),
-            None => Some(SplitParticipantExclusionReason::MissingStagePath),
-        },
-        mesh::SplitStagePathKind::Relay => {
+    match snapshot.stage_path_rejection()? {
+        mesh::SplitStagePathRejection::MissingStagePath => {
+            Some(SplitParticipantExclusionReason::MissingStagePath)
+        }
+        mesh::SplitStagePathRejection::StagePathRelayOnly => {
             Some(SplitParticipantExclusionReason::StagePathRelayOnly)
         }
-        mesh::SplitStagePathKind::Unknown => {
-            Some(SplitParticipantExclusionReason::MissingStagePath)
+        mesh::SplitStagePathRejection::StagePathTooSlow => {
+            Some(SplitParticipantExclusionReason::StagePathTooSlow)
         }
     }
 }
@@ -3636,6 +3634,7 @@ mod tests {
             advertised_model_throughput: vec![],
 
             display_rtt: None,
+            selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
         }
