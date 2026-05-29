@@ -201,11 +201,17 @@ version = 1
 
 [runtime]
 reconcile_model_targets = true
+reconcile_model_target_demand_upgrades = true
+model_target_demand_upgrade_min_requests = 4
+model_target_demand_upgrade_max_age_secs = 900
 "#,
         )
         .unwrap();
 
         assert!(config.runtime.reconcile_model_targets);
+        assert!(config.runtime.reconcile_model_target_demand_upgrades);
+        assert_eq!(config.runtime.model_target_demand_upgrade_min_requests, 4);
+        assert_eq!(config.runtime.model_target_demand_upgrade_max_age_secs, 900);
     }
 
     #[test]
