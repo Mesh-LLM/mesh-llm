@@ -31,8 +31,6 @@ permissions:
 env:
   CACHE_NAMESPACE: mesh-llm
   SCCACHE_GHA_ENABLED: "true"
-  MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
-  MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
 
 jobs:
   metadata:
@@ -134,7 +132,8 @@ jobs:
 
       - name: Build release bundle
         env:
-          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
@@ -332,6 +331,8 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build ARM64 CPU release bundle
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
@@ -448,6 +449,8 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build CUDA release bundle
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
@@ -508,6 +511,8 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build ROCm release bundle
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
@@ -552,6 +557,8 @@ jobs:
         run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build Vulkan release bundle
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
@@ -596,6 +603,8 @@ jobs:
       - name: Build Windows CPU release bundle
         shell: pwsh
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_LLM_REQUIRE_SCCACHE: "1"
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
@@ -699,6 +708,8 @@ jobs:
       - name: Build Windows GPU release bundle
         shell: pwsh
         env:
+          MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
+          MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           MESH_LLM_REQUIRE_SCCACHE: "1"
           MESH_LLM_WINDOWS_BUILD_JOBS: ${{ matrix.backend == 'cuda' && '1' || '' }}
