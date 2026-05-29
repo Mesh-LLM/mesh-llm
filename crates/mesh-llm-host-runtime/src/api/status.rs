@@ -371,6 +371,9 @@ pub(crate) struct StatusPayload {
     pub(crate) mesh_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) mesh_name: Option<String>,
+    pub(crate) mesh_discovery_mode: String,
+    pub(crate) discovery_scope: String,
+    pub(crate) discovery_source: String,
     pub(crate) nostr_discovery: bool,
     /// Best-effort publication state per Issue #240: private | public | publish_failed.
     pub(crate) publication_state: String,
@@ -1077,6 +1080,9 @@ mod tests {
             inflight_requests: 0,
             mesh_id: None,
             mesh_name: None,
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
             nostr_discovery: false,
             publication_state: "private".into(),
             my_hostname: None,
@@ -1092,6 +1098,9 @@ mod tests {
         let json = serde_json::to_string(&status).expect("serialization failed");
         assert!(json.contains("\"node_state\":\"loading\""));
         assert!(json.contains("\"node_status\":\"Loading\""));
+        assert!(json.contains("\"mesh_discovery_mode\":\"nostr\""));
+        assert!(json.contains("\"discovery_scope\":\"public\""));
+        assert!(json.contains("\"discovery_source\":\"nostr-relay\""));
     }
 
     #[test]
@@ -1133,6 +1142,9 @@ mod tests {
             inflight_requests: 0,
             mesh_id: None,
             mesh_name: None,
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
             nostr_discovery: false,
             publication_state: "private".into(),
             my_hostname: None,
@@ -1196,6 +1208,9 @@ mod tests {
             inflight_requests: 0,
             mesh_id: None,
             mesh_name: None,
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
             nostr_discovery: false,
             publication_state: "private".into(),
             my_hostname: None,
@@ -1254,6 +1269,9 @@ mod tests {
             inflight_requests: 0,
             mesh_id: None,
             mesh_name: None,
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
             nostr_discovery: false,
             publication_state: "private".into(),
             my_hostname: None,

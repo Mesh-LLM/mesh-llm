@@ -14,16 +14,6 @@ use skippy_protocol::proto::stage as skippy_stage_proto;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::{mpsc, watch};
 
-/// Empty per-relay auth map for tests that don't exercise gated relays.
-///
-/// Bound to a local before being passed by reference so the borrow lives
-/// for the full duration of any async call — cleaner than `&HashMap::new()`
-/// at the call site, and future-proofs the call against the callee
-/// holding the reference across an internal `.await`.
-fn empty_relay_auths() -> HashMap<String, String> {
-    HashMap::new()
-}
-
 #[test]
 fn quic_bind_addr_uses_explicit_port_on_all_platforms() {
     assert_eq!(
@@ -1305,8 +1295,7 @@ async fn control_plane_listener_starts_with_owner() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
 
-    let auths = empty_relay_auths();
-    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
+    node.maybe_start_control_listener(secret_key, None, None, None)
         .await?;
 
     let endpoint = node
@@ -1331,8 +1320,7 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
     let advertised_addr = std::net::SocketAddr::from(([203, 0, 113, 10], 18443));
 
-    let auths = empty_relay_auths();
-    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr), None, &auths)
+    node.maybe_start_control_listener(secret_key, None, Some(advertised_addr), None)
         .await?;
 
     let endpoint = node
@@ -1356,13 +1344,11 @@ async fn control_plane_listener_uses_explicit_advertised_address() -> anyhow::Re
 async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
 
-    let auths = empty_relay_auths();
     node.maybe_start_control_listener(
         secret_key,
         Some("127.0.0.1:7447".parse().unwrap()),
         None,
         None,
-        &auths,
     )
     .await?;
 
@@ -1374,8 +1360,7 @@ async fn control_plane_listener_disabled_without_owner() -> anyhow::Result<()> {
 async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    let auths = empty_relay_auths();
-    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
+    node.maybe_start_control_listener(secret_key, None, None, None)
         .await?;
     let endpoint = Node::decode_invite_token(
         &node
@@ -1405,8 +1390,7 @@ async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()
 async fn control_plane_endpoint_not_in_gossip_or_status() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    let auths = empty_relay_auths();
-    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
+    node.maybe_start_control_listener(secret_key, None, None, None)
         .await?;
     let control_endpoint = node
         .control_endpoint()
@@ -1487,8 +1471,7 @@ async fn external_inference_endpoint_models_are_advertised_in_gossip() -> anyhow
 async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result<()> {
     let (node, secret_key) = Node::new_for_tests_with_secret(super::NodeRole::Worker).await?;
     *node.owner_summary.lock().await = verified_owner_summary("owner-a");
-    let auths = empty_relay_auths();
-    node.maybe_start_control_listener(secret_key, None, None, None, &auths)
+    node.maybe_start_control_listener(secret_key, None, None, None)
         .await?;
     let endpoint = Node::decode_invite_token(
         &node
@@ -5725,8 +5708,7 @@ async fn start_owner_control_test_server(
     *node.owner_attestation.lock().await = Some(ownership);
     *node.owner_summary.lock().await = owner_summary;
     *node.trust_store.lock().await = trust_store;
-    let auths = empty_relay_auths();
-    node.maybe_start_control_listener(secret_key.clone(), None, None, None, &auths)
+    node.maybe_start_control_listener(secret_key.clone(), None, None, None)
         .await?;
     Ok((node, secret_key, config_path))
 }

@@ -5417,6 +5417,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         mesh::RelayConfig {
             urls: &cli.relay,
             auths: &relay_auths,
+            policy: relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode),
         },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
@@ -5435,7 +5436,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     node.set_display_name(node_display_name(cli, &node)).await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    node.start_relay_health_monitor();
+    start_relay_health_monitor_for_discovery_mode(&node, cli.mesh_discovery_mode);
     join_mesh_for_mcp(cli, &node).await?;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
@@ -5654,6 +5655,7 @@ async fn start_run_auto_node_and_plugins(
         mesh::RelayConfig {
             urls: &cli.relay,
             auths: &relay_auths,
+            policy: relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode),
         },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
@@ -5682,6 +5684,33 @@ async fn start_run_auto_node_and_plugins(
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
+}
+
+fn relay_policy_for_mesh_discovery_mode(
+    mode: mesh_discovery::MeshDiscoveryMode,
+) -> mesh::RelayPolicy {
+    match mode {
+        mesh_discovery::MeshDiscoveryMode::Nostr => mesh::RelayPolicy::DefaultPublic,
+        mesh_discovery::MeshDiscoveryMode::Mdns => mesh::RelayPolicy::Disabled,
+    }
+}
+
+fn should_start_relay_health_monitor(mode: mesh_discovery::MeshDiscoveryMode) -> bool {
+    matches!(
+        relay_policy_for_mesh_discovery_mode(mode),
+        mesh::RelayPolicy::DefaultPublic
+    )
+}
+
+fn start_relay_health_monitor_for_discovery_mode(
+    node: &mesh::Node,
+    mode: mesh_discovery::MeshDiscoveryMode,
+) {
+    if should_start_relay_health_monitor(mode) {
+        node.start_relay_health_monitor();
+    } else {
+        tracing::debug!("Relay health monitor disabled for LAN-only mesh discovery");
+    }
 }
 
 fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSurvey {
@@ -5735,7 +5764,7 @@ async fn build_run_auto_node_setup(
     node.set_available_models(local_models.clone()).await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    node.start_relay_health_monitor();
+    start_relay_health_monitor_for_discovery_mode(&node, cli.mesh_discovery_mode);
 
     if !is_client {
         spawn_node_benchmark_task(&node, bin_dir);
@@ -8650,6 +8679,32 @@ mod tests {
         let target = reconciliation_target_with_required_bytes(None);
 
         assert!(!model_target_reconciliation_local_fit(&target, u64::MAX));
+    }
+
+    #[test]
+    fn mdns_discovery_uses_lan_only_relay_policy() {
+        assert_eq!(
+            relay_policy_for_mesh_discovery_mode(mesh_discovery::MeshDiscoveryMode::Mdns),
+            mesh::RelayPolicy::Disabled
+        );
+        assert_eq!(
+            relay_policy_for_mesh_discovery_mode(mesh_discovery::MeshDiscoveryMode::Nostr),
+            mesh::RelayPolicy::DefaultPublic
+        );
+    }
+
+    #[test]
+    fn mdns_discovery_does_not_start_relay_health_monitor() {
+        assert!(!should_start_relay_health_monitor(
+            mesh_discovery::MeshDiscoveryMode::Mdns
+        ));
+    }
+
+    #[test]
+    fn nostr_discovery_starts_relay_health_monitor() {
+        assert!(should_start_relay_health_monitor(
+            mesh_discovery::MeshDiscoveryMode::Nostr
+        ));
     }
 
     fn remote_catalog_layer_entry(

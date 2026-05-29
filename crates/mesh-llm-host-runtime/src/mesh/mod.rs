@@ -392,6 +392,24 @@ pub struct QuicBindSelection {
 pub struct RelayConfig<'a> {
     pub urls: &'a [String],
     pub auths: &'a std::collections::HashMap<String, String>,
+    pub policy: RelayPolicy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RelayPolicy {
+    #[default]
+    DefaultPublic,
+    Disabled,
+}
+
+impl RelayPolicy {
+    fn uses_relay(self) -> bool {
+        matches!(self, Self::DefaultPublic)
+    }
+
+    fn uses_raw_stun(self) -> bool {
+        matches!(self, Self::DefaultPublic)
+    }
 }
 
 fn quic_bind_addr(bind: QuicBindSelection) -> Option<SocketAddr> {
@@ -537,14 +555,45 @@ fn filter_endpoint_addr_for_bind_ip(
     addr
 }
 
-fn effective_relay_urls(relay_urls: &[String]) -> Vec<String> {
-    if relay_urls.is_empty() {
-        vec![
+fn effective_relay_urls(policy: RelayPolicy, relay_urls: &[String]) -> Vec<String> {
+    match policy {
+        RelayPolicy::Disabled => Vec::new(),
+        RelayPolicy::DefaultPublic if relay_urls.is_empty() => vec![
             "https://usw1-2.relay.michaelneale.mesh-llm.iroh.link./".into(),
             "https://aps1-1.relay.michaelneale.mesh-llm.iroh.link./".into(),
-        ]
-    } else {
-        relay_urls.to_vec()
+        ],
+        RelayPolicy::DefaultPublic => relay_urls.to_vec(),
+    }
+}
+
+#[cfg(test)]
+mod relay_policy_tests {
+    use super::{RelayPolicy, effective_relay_urls};
+
+    #[test]
+    fn default_policy_uses_managed_relays_when_no_urls_are_given() {
+        let urls = effective_relay_urls(RelayPolicy::DefaultPublic, &[]);
+
+        assert!(urls.iter().any(|url| url.contains("relay.michaelneale")));
+    }
+
+    #[test]
+    fn default_policy_uses_custom_relay_urls_when_supplied() {
+        let custom = vec!["https://relay.example/".to_string()];
+
+        assert_eq!(
+            effective_relay_urls(RelayPolicy::DefaultPublic, &custom),
+            custom
+        );
+    }
+
+    #[test]
+    fn disabled_policy_uses_no_relays_or_raw_stun() {
+        let custom = vec!["https://relay.example/".to_string()];
+
+        assert!(effective_relay_urls(RelayPolicy::Disabled, &custom).is_empty());
+        assert!(!RelayPolicy::Disabled.uses_relay());
+        assert!(!RelayPolicy::Disabled.uses_raw_stun());
     }
 }
 
@@ -1977,10 +2026,20 @@ fn startup_transport_config() -> iroh::endpoint::QuicTransportConfig {
         .build()
 }
 
+fn relay_mode_for_startup(relay: RelayConfig<'_>) -> iroh::endpoint::RelayMode {
+    let urls = effective_relay_urls(relay.policy, relay.urls);
+    if relay.policy.uses_relay() {
+        tracing::info!("Relay: {:?}", urls);
+        iroh::endpoint::RelayMode::Custom(relay_map_from_urls(&urls, relay.auths))
+    } else {
+        tracing::info!("Relay: disabled by LAN-only discovery mode");
+        iroh::endpoint::RelayMode::Disabled
+    }
+}
+
 async fn bind_mesh_endpoint(
     secret_key: SecretKey,
-    relay_urls: &[String],
-    relay_auths: &std::collections::HashMap<String, String>,
+    relay: RelayConfig<'_>,
     quic_bind: QuicBindSelection,
 ) -> Result<Endpoint> {
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
@@ -1989,14 +2048,8 @@ async fn bind_mesh_endpoint(
             ALPN_V1.to_vec(),
             skippy_protocol::STAGE_ALPN_V1.to_vec(),
         ])
-        .transport_config(startup_transport_config());
-
-    let urls = effective_relay_urls(relay_urls);
-    tracing::info!("Relay: {:?}", urls);
-    builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
-        &urls,
-        relay_auths,
-    )));
+        .transport_config(startup_transport_config())
+        .relay_mode(relay_mode_for_startup(relay));
 
     if let Some(addr) = quic_bind_addr(quic_bind) {
         tracing::info!("Binding QUIC to {addr}");
@@ -2130,15 +2183,14 @@ fn init_owner_runtime(
 
 fn configure_control_relay(
     mut builder: iroh::endpoint::Builder,
-    relay_urls: Option<&[String]>,
-    relay_auths: &std::collections::HashMap<String, String>,
+    relay: Option<RelayConfig<'_>>,
 ) -> iroh::endpoint::Builder {
-    if let Some(relay_urls) = relay_urls {
-        let urls = effective_relay_urls(relay_urls);
+    if let Some(relay) = relay.filter(|relay| relay.policy.uses_relay()) {
+        let urls = effective_relay_urls(relay.policy, relay.urls);
         tracing::info!("Owner-control relay: {:?}", urls);
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Custom(relay_map_from_urls(
             &urls,
-            relay_auths,
+            relay.auths,
         )));
     } else {
         builder = builder.relay_mode(iroh::endpoint::RelayMode::Disabled);
@@ -3503,19 +3555,18 @@ impl Node {
         config_path: Option<&std::path::Path>,
         local_mesh_requirements: crate::MeshRequirements,
     ) -> Result<(Self, TunnelChannels)> {
-        let relay_urls = relay.urls;
-        let relay_auths = relay.auths;
         let secret_key = startup_secret_key(&role).await?;
-        let endpoint =
-            bind_mesh_endpoint(secret_key.clone(), relay_urls, relay_auths, quic_bind).await?;
-        // Wait briefly for relay connection so the invite token includes the relay URL.
-        // On sinkholed networks this times out and we proceed without relay (direct UDP only).
-        wait_for_endpoint_online(
-            &endpoint,
-            "Relay connected",
-            "Relay connection timed out (5s) — proceeding without relay",
-        )
-        .await;
+        let endpoint = bind_mesh_endpoint(secret_key.clone(), relay, quic_bind).await?;
+        if relay.policy.uses_relay() {
+            // Wait briefly for relay connection so the invite token includes the relay URL.
+            // On sinkholed networks this times out and we proceed without relay (direct UDP only).
+            wait_for_endpoint_online(
+                &endpoint,
+                "Relay connected",
+                "Relay connection timed out (5s) — proceeding without relay",
+            )
+            .await;
+        }
 
         // Discover public IP via STUN so the invite token includes it.
         // With --bind-port, the advertised port is the bound port (for port forwarding).
@@ -3523,7 +3574,12 @@ impl Node {
         // ephemeral port. The IP is still useful for hole-punching.
         // Relay STUN may not work on sinkholed networks, so we use raw STUN to Google/Cloudflare.
         let stun_port = quic_bind.port.unwrap_or(EPHEMERAL_QUIC_PORT);
-        let public_addr = stun_public_addr(stun_port).await;
+        let public_addr = if relay.policy.uses_raw_stun() {
+            stun_public_addr(stun_port).await
+        } else {
+            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
+            None
+        };
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
@@ -3653,8 +3709,7 @@ impl Node {
             owner_config
                 .as_ref()
                 .and_then(|config| config.control_advertise_addr),
-            Some(relay_urls),
-            relay_auths,
+            relay.policy.uses_relay().then_some(relay),
         )
         .await?;
 
@@ -3815,8 +3870,7 @@ impl Node {
         secret_key: SecretKey,
         bind_addr: Option<std::net::SocketAddr>,
         advertise_addr: Option<std::net::SocketAddr>,
-        relay_urls: Option<&[String]>,
-        relay_auths: &std::collections::HashMap<String, String>,
+        relay: Option<RelayConfig<'_>>,
     ) -> Result<()> {
         if self.local_verified_owner_id().await.is_none() {
             return Ok(());
@@ -3826,9 +3880,9 @@ impl Node {
             .secret_key(secret_key)
             .alpns(vec![ALPN_CONTROL_V1.to_vec()])
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?;
-        builder = configure_control_relay(builder, relay_urls, relay_auths);
+        builder = configure_control_relay(builder, relay);
         let endpoint = builder.bind().await?;
-        if relay_urls.is_some() {
+        if relay.is_some_and(|relay| relay.policy.uses_relay()) {
             wait_for_endpoint_online(
                 &endpoint,
                 "Owner-control relay connected",
