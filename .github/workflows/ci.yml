@@ -586,9 +586,6 @@ jobs:
     container:
       image: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
     env:
-      LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-cuda-sm89
-      LLAMA_STAGE_BACKEND: cuda
-      LLAMA_STAGE_CUDA_ARCHITECTURES: "89"
       MESH_LLM_SKIP_UI: "1"
       # CI containers have no GPU driver (libcuda.so.1). Disable VMM and NCCL
       # to avoid linking libraries that require the CUDA driver at runtime.
@@ -629,7 +626,9 @@ jobs:
         run: mkdir -p crates/mesh-llm-ui/dist && printf '<html></html>' > crates/mesh-llm-ui/dist/index.html
 
       - name: Build Linux CUDA backend
-        run: just --shell bash --shell-arg -lc release-build-cuda 89
+        env:
+          MESH_CUDA_VERSION: "12.9.2"
+        run: just --shell bash --shell-arg -lc release-build-cuda
       - name: CLI smoke test
         run: |
           cuda_stub_runtime="$(mktemp -d)"

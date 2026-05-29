@@ -278,8 +278,6 @@ jobs:
             backend: cuda
             container: nvidia/cuda:${{ vars.CUDA_VERSION || '12.6.3' }}-devel-ubuntu22.04
             cache_key: linux-cuda-slim
-            build_dir: .deps/llama-build/build-stage-abi-cuda-sm89
-            cuda_arch: "89"
           - name: ROCm slim
             backend: rocm
             container: rocm/dev-ubuntu-24.04:7.2.3
@@ -295,7 +293,6 @@ jobs:
       RUN_LINUX_BACKEND: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend_changed == 'true' || needs.changes.outputs.benchmarks == 'true' }}
       LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
       LLAMA_STAGE_BUILD_DIR: ${{ matrix.build_dir }}
-      LLAMA_STAGE_CUDA_ARCHITECTURES: ${{ matrix.cuda_arch }}
       LLAMA_STAGE_AMDGPU_TARGETS: ${{ matrix.amdgpu_targets }}
       MESH_LLM_SKIP_UI: "1"
       MESH_LLM_REQUIRE_SCCACHE: "1"
@@ -373,7 +370,9 @@ jobs:
           key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-abi-vulkan-${{ hashFiles('scripts/build-linux.sh', 'scripts/build-llama.sh', 'third_party/llama.cpp/upstream.txt', 'third_party/llama.cpp/patches/**', 'Justfile', '.github/cache-version.txt') }}
       - name: Build Linux CUDA backend
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'cuda' }}
-        run: just --shell bash --shell-arg -lc release-build-cuda 89
+        env:
+          MESH_CUDA_VERSION: "12.9.2"
+        run: just --shell bash --shell-arg -lc release-build-cuda
       - name: Build Linux ROCm backend
         if: ${{ env.RUN_LINUX_BACKEND == 'true' && matrix.backend == 'rocm' }}
         run: |
