@@ -4803,6 +4803,7 @@ mod tests {
             stage_status_list_supported: false,
             advertised_model_throughput: vec![],
             display_rtt: None,
+            selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
         }
