@@ -657,11 +657,11 @@ fn sanitize_native_log_note(note: &str) -> String {
 
 pub fn write_native_log_note(note: impl AsRef<str>) {
     let note = sanitize_native_log_note(note.as_ref());
-    if let Ok(mut guard) = native_log_file().lock() {
-        if let Some(writer) = guard.as_mut() {
-            let _ = writeln!(writer, "mesh-llm: {note}");
-            let _ = writer.flush();
-        }
+    if let Ok(mut guard) = native_log_file().lock()
+        && let Some(writer) = guard.as_mut()
+    {
+        let _ = writeln!(writer, "mesh-llm: {note}");
+        let _ = writer.flush();
     }
 }
 
