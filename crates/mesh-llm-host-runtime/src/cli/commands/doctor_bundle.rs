@@ -793,6 +793,20 @@ mod tests {
         assert!(err.to_string().contains("pid 11"));
     }
 
+    #[test]
+    fn default_output_path_uses_current_directory() {
+        let cwd = std::env::current_dir().expect("current directory should be available");
+        let path = default_output_path();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("default output path should have a UTF-8 filename");
+
+        assert!(path.starts_with(cwd));
+        assert!(file_name.starts_with("mesh-llm-doctor-"));
+        assert!(file_name.ends_with(".zip"));
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn parses_macos_available_memory_bytes() {
