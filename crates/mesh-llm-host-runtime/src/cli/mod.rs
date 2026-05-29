@@ -935,7 +935,7 @@ pub(crate) enum DoctorCommand {
         /// Print machine-readable JSON.
         #[arg(long)]
         json: bool,
-        /// Write split-readiness.json to this directory for sharing with maintainers.
+        /// Write a split and Skippy diagnostic bundle to this directory.
         #[arg(long)]
         output_dir: Option<PathBuf>,
     },
