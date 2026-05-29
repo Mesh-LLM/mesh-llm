@@ -104,6 +104,9 @@ if ui_build_is_stale; then
     cd "$UI_DIR"
 
     if pnpm_install_is_stale; then
+        # onnxruntime-node@1.21.0 postinstall fails on CUDA 13+ (unsupported version).
+        # The UI only needs onnxruntime-web, not the Node.js native binding.
+        export ONNXRUNTIME_NODE_INSTALL_CUDA=skip
         pnpm install --frozen-lockfile
     fi
 

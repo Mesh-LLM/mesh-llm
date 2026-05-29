@@ -167,6 +167,16 @@ stamp_bundle_binary() {
         return 0
     fi
 
+    if [[ ! -s "$ATTESTATION_SIGNING_KEY_FILE" ]]; then
+        echo "Release attestation: signing key file is empty ($ATTESTATION_SIGNING_KEY_FILE); leaving binary unstamped" >&2
+        return 0
+    fi
+
+    if [[ ! -s "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
+        echo "Release attestation: public key file is empty ($ATTESTATION_PUBLIC_KEY_FILE); leaving binary unstamped" >&2
+        return 0
+    fi
+
     py="$(python_bin)"
 
     inspect_json="$(

@@ -134,6 +134,7 @@ jobs:
         env:
           MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-private-key.json
           MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE: ${{ runner.temp }}/mesh-release-attestation-public-key.json
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
           RELEASE_ATTESTATION_SIGNING_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE }}
           RELEASE_ATTESTATION_PUBLIC_KEY: ${{ secrets.MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE }}
         run: |
@@ -339,8 +340,8 @@ jobs:
         run: |
           printf '%s' "$RELEASE_ATTESTATION_SIGNING_KEY" > "$MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE"
           printf '%s' "$RELEASE_ATTESTATION_PUBLIC_KEY" > "$MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE"
-          just --shell bash --shell-arg -c release-build-arm64
-          just --shell bash --shell-arg -c release-bundle-arm64 "$RELEASE_TAG" dist
+          just --shell bash --shell-arg -c release-build-aarch64
+          just --shell bash --shell-arg -c release-bundle-aarch64 "$RELEASE_TAG" dist
       - uses: actions/upload-artifact@v6
         with:
           name: release-linux-arm64

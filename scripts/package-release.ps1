@@ -327,6 +327,16 @@ function Invoke-ReleaseAttestationStamp {
         return
     }
 
+    if (-not (Test-Path $attestationSigningKeyFile) -or (Get-Item $attestationSigningKeyFile).Length -eq 0) {
+        Write-Host "Release attestation: signing key file is empty or missing ($attestationSigningKeyFile); leaving binary unstamped"
+        return
+    }
+
+    if (-not (Test-Path $attestationPublicKeyFile) -or (Get-Item $attestationPublicKeyFile).Length -eq 0) {
+        Write-Host "Release attestation: public key file is empty or missing ($attestationPublicKeyFile); leaving binary unstamped"
+        return
+    }
+
     Push-Location $repoRoot
     try {
         & cargo run -q -p xtask -- release-attestation stamp `
