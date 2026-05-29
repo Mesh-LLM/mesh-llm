@@ -24,7 +24,9 @@ pub(crate) fn run_gpus(json_output: bool) -> Result<()> {
     }
 
     if hw.gpus.is_empty() {
-        println!("⚠️ No GPUs detected on this node.");
+        println!(
+            "⚠️ No runtime-selectable GPUs reported by the embedded inference backend. This node will run CPU-only until the backend exposes a selectable device."
+        );
         return Ok(());
     }
 
@@ -96,6 +98,20 @@ fn gpu_json(gpu: &GpuFacts) -> Value {
         "metal_registry_id": gpu.metal_registry_id,
         "dxgi_luid": gpu.dxgi_luid,
         "pnp_instance_id": gpu.pnp_instance_id,
+        "runtime_offload": runtime_offload_json(gpu),
+    })
+}
+
+fn runtime_offload_json(gpu: &GpuFacts) -> Value {
+    let backend_device_visible = gpu.backend_device.is_some();
+    json!({
+        "backend_device_visible": backend_device_visible,
+        "selectable": backend_device_visible,
+        "diagnostic": if backend_device_visible {
+            "embedded_backend_device_available"
+        } else {
+            "hardware_detected_without_embedded_backend_device"
+        },
     })
 }
 
@@ -184,6 +200,10 @@ fn print_gpu(gpu: &GpuFacts) {
     }
     if let Some(backend_device) = gpu.backend_device.as_deref() {
         println!("  Backend device: {backend_device}");
+    } else {
+        println!(
+            "  Backend device: unavailable (hardware-visible only; embedded runtime did not report a selectable device)"
+        );
     }
     println!("  VRAM: {}", format_vram(gpu.vram_bytes));
     println!(
@@ -278,6 +298,14 @@ mod tests {
         assert_eq!(value["gpus"][0]["name"], json!("GPU 0"));
         assert_eq!(value["gpus"][0]["mem_bandwidth_gbps"], json!(1008.0));
         assert_eq!(value["gpus"][0]["stable_id"], json!("stable-0"));
+        assert_eq!(
+            value["gpus"][0]["runtime_offload"],
+            json!({
+                "backend_device_visible": true,
+                "selectable": true,
+                "diagnostic": "embedded_backend_device_available",
+            })
+        );
     }
 
     #[test]

@@ -2,6 +2,7 @@ mod agent_cli;
 mod auth;
 mod benchmark;
 mod discover;
+mod doctor;
 mod download;
 mod gpus;
 mod model_package;
@@ -17,6 +18,7 @@ use anyhow::Result;
 use crate::cli::commands::agent_cli::{run_claude, run_goose, run_opencode, run_pi};
 use crate::cli::commands::benchmark::dispatch_benchmark_command;
 use crate::cli::commands::discover::{DiscoverOptions, run_discover, run_stop};
+use crate::cli::commands::doctor::dispatch_doctor_command;
 use crate::cli::commands::download::dispatch_download_command;
 use crate::cli::commands::gpus::dispatch_gpu_command;
 use crate::cli::commands::models::dispatch_models_command;
@@ -59,6 +61,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             Ok(())
         }
         Command::Runtime { command } => dispatch_runtime_command(command.as_ref()).await,
+        Command::Doctor { command } => dispatch_doctor_command(command).await,
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,

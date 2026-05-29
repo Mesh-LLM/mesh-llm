@@ -10,7 +10,8 @@ mesh-llm gpus --json | jq .
 mesh-llm gpu benchmark --json | jq .
 ```
 
-- Prints local GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
+- Prints local runtime-selectable GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
+- In the shipped Skippy-enabled binary, platform tools alone are not enough: if the embedded backend does not enumerate a GPU, the node should report CPU-only rather than advertising probe-visible GPU capacity
 - `--json` emits machine-readable inventory and benchmark payloads suitable for automation
 
 ### 0a. Startup config smoke

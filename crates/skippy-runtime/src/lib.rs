@@ -463,11 +463,25 @@ fn should_suppress_native_log_line(line: &str) -> bool {
 }
 
 fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
+    if let Some((category, params)) = cpu_offload_diagnostic_params(line) {
+        return Some(NativeLogEvent {
+            message: line.to_string(),
+            category,
+            params,
+        });
+    }
+
+    let lower = line.to_ascii_lowercase();
     if line.contains("backend_init")
         || line.contains("llama_backend_init")
         || line.contains("GGML_CUDA")
-        || (line.contains("CUDA") && (line.contains("init") || line.contains("device")))
-        || (line.contains("metal") && (line.contains("init") || line.contains("device")))
+        || line.contains("GGML_HIP")
+        || line.contains("GGML_ROCM")
+        || ((lower.contains("cuda")
+            || lower.contains("hip")
+            || lower.contains("rocm")
+            || lower.contains("metal"))
+            && (lower.contains("init") || lower.contains("device") || lower.contains("backend")))
     {
         return Some(NativeLogEvent {
             message: line.to_string(),
@@ -526,6 +540,32 @@ fn summarize_native_log_line(line: &str) -> Option<NativeLogEvent> {
     }
 
     None
+}
+
+fn cpu_offload_diagnostic_params(line: &str) -> Option<(&'static str, Vec<(String, Value)>)> {
+    let lower = line.to_ascii_lowercase();
+    let (category, surface) = if lower.contains("cpu_mapped model buffer size") {
+        ("memory", "model_buffer")
+    } else if lower.contains("cpu kv buffer size") {
+        ("kv_cache", "kv_buffer")
+    } else if lower.contains("cpu compute buffer size") {
+        ("memory", "compute_buffer")
+    } else {
+        return None;
+    };
+    Some((
+        category,
+        vec![
+            (
+                "offload_device".to_string(),
+                Value::String("CPU".to_string()),
+            ),
+            (
+                "offload_surface".to_string(),
+                Value::String(surface.to_string()),
+            ),
+        ],
+    ))
 }
 
 fn parse_loaded_metadata_counts(line: &str) -> Option<(usize, usize)> {
@@ -3822,6 +3862,22 @@ mod tests {
                 params: Vec::new(),
             }]
         );
+        assert_eq!(
+            aggregator.process_line("llama_backend_init: GGML_HIP backend initialized"),
+            vec![NativeLogEvent {
+                message: "llama_backend_init: GGML_HIP backend initialized".to_string(),
+                category: "backend",
+                params: Vec::new(),
+            }]
+        );
+        assert_eq!(
+            aggregator.process_line("llama_backend_init: GGML_ROCM backend initialized"),
+            vec![NativeLogEvent {
+                message: "llama_backend_init: GGML_ROCM backend initialized".to_string(),
+                category: "backend",
+                params: Vec::new(),
+            }]
+        );
     }
 
     #[test]
@@ -3942,6 +3998,82 @@ mod tests {
                 params: Vec::new(),
             }]
         );
+    }
+
+    #[test]
+    fn aggregator_tags_cpu_offload_evidence_without_capacity_facts() {
+        let mut aggregator = NativeLogAggregator::default();
+        let model_buffer =
+            aggregator.process_line("load_tensors:   CPU_Mapped model buffer size = 47492.37 MiB");
+        assert_eq!(
+            model_buffer,
+            vec![NativeLogEvent {
+                message: "load_tensors:   CPU_Mapped model buffer size = 47492.37 MiB".to_string(),
+                category: "memory",
+                params: vec![
+                    (
+                        "offload_device".to_string(),
+                        Value::String("CPU".to_string())
+                    ),
+                    (
+                        "offload_surface".to_string(),
+                        Value::String("model_buffer".to_string())
+                    ),
+                ],
+            }]
+        );
+        assert_no_capacity_params(&model_buffer);
+
+        assert_eq!(
+            aggregator.process_line("llama_kv_cache:        CPU KV buffer size =  3264.00 MiB"),
+            vec![NativeLogEvent {
+                message: "llama_kv_cache:        CPU KV buffer size =  3264.00 MiB".to_string(),
+                category: "kv_cache",
+                params: vec![
+                    (
+                        "offload_device".to_string(),
+                        Value::String("CPU".to_string())
+                    ),
+                    (
+                        "offload_surface".to_string(),
+                        Value::String("kv_buffer".to_string())
+                    ),
+                ],
+            }]
+        );
+        assert_eq!(
+            aggregator.process_line("sched_reserve:        CPU compute buffer size =   856.29 MiB"),
+            vec![NativeLogEvent {
+                message: "sched_reserve:        CPU compute buffer size =   856.29 MiB".to_string(),
+                category: "memory",
+                params: vec![
+                    (
+                        "offload_device".to_string(),
+                        Value::String("CPU".to_string())
+                    ),
+                    (
+                        "offload_surface".to_string(),
+                        Value::String("compute_buffer".to_string())
+                    ),
+                ],
+            }]
+        );
+    }
+
+    fn assert_no_capacity_params(events: &[NativeLogEvent]) {
+        const CAPACITY_KEYS: &[&str] = &[
+            "backend_device",
+            "capacity_gb",
+            "gpu_count",
+            "gpu_vram",
+            "vram_bytes",
+        ];
+        assert!(events.iter().all(|event| {
+            event
+                .params
+                .iter()
+                .all(|(key, _)| !CAPACITY_KEYS.contains(&key.as_str()))
+        }));
     }
 
     #[test]

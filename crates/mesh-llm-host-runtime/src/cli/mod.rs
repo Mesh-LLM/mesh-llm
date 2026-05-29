@@ -632,6 +632,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: Option<RuntimeCommand>,
     },
+    /// Diagnose local mesh, runtime, and split-readiness problems.
+    Doctor {
+        #[command(subcommand)]
+        command: DoctorCommand,
+    },
     /// Load a local model into a running mesh-llm instance.
     Load {
         /// Model name/path/url to load
@@ -913,6 +918,25 @@ impl From<SkillAgentArg> for mesh_llm_plugin_manager::SkillAgent {
             SkillAgentArg::Claude => Self::Claude,
         }
     }
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum DoctorCommand {
+    /// Diagnose split-readiness for a model on a running local mesh node.
+    Split {
+        /// Model ref/name to diagnose.
+        #[arg(long, visible_alias = "model")]
+        model_ref: String,
+        /// Console/API port of the running mesh-llm instance.
+        #[arg(long, default_value = "3131")]
+        port: u16,
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Write split-readiness.json to this directory for sharing with maintainers.
+        #[arg(long)]
+        output_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

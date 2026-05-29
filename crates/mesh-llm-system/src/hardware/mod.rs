@@ -272,8 +272,13 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
         return false;
     }
 
-    let Ok(gpus) = skippy_devices::gpu_facts() else {
-        return false;
+    let gpus = match skippy_devices::gpu_facts() {
+        Ok(gpus) => gpus,
+        Err(_) => {
+            #[cfg(target_os = "linux")]
+            apply_cpu_only_runtime_budget(survey, metrics, read_system_ram_bytes());
+            return true;
+        }
     };
     if gpus.is_empty() {
         #[cfg(target_os = "linux")]
