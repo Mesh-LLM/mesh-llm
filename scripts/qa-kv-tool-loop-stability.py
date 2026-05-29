@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import datetime as dt
 import json
 import os
 from pathlib import Path
 import shutil
+import threading
 import time
 from typing import Any, Iterable, NamedTuple
 import urllib.error
@@ -25,6 +27,7 @@ DEFAULT_BASE_URL = "http://127.0.0.1:9337/v1"
 DEFAULT_MODELS = "auto"
 DEFAULT_ATTEMPTS = 3
 DEFAULT_PRESSURE_TURNS = 6
+DEFAULT_OVERLAP_REQUESTS = 2
 DEFAULT_TIMEOUT = 180.0
 DEFAULT_MIN_CACHED_TOKENS = 2048
 DEFAULT_SUFFIX_PREFILL_LIMIT = 256
@@ -71,6 +74,13 @@ class ProbeResult(NamedTuple):
     status_code: int | None = None
     prompt_tokens: int | None = None
     cached_tokens: int | None = None
+
+
+class OverlapRequest(NamedTuple):
+    label: str
+    payload: dict[str, Any]
+    expects_tool_call: bool
+    expected_values: tuple[str, ...]
 
 
 def normalize_v1_base(base_url: str) -> str:
@@ -125,6 +135,7 @@ def build_plan(
     min_cached_tokens: int,
     suffix_prefill_limit: int,
     native_logs: Iterable[Path],
+    overlap_requests: int = DEFAULT_OVERLAP_REQUESTS,
 ) -> dict[str, Any]:
     model_list = list(models)
     if attempts < 1:
@@ -137,6 +148,8 @@ def build_plan(
         raise ValueError("min_cached_tokens cannot be negative")
     if suffix_prefill_limit < 0:
         raise ValueError("suffix_prefill_limit cannot be negative")
+    if overlap_requests < 2:
+        raise ValueError("overlap_requests must be at least 2")
     checks = [
         {
             "phase": "tool_loop",
@@ -145,6 +158,19 @@ def build_plan(
             "pressure_turns": pressure_turns,
             "timeout_seconds": timeout,
             "description": "Growing tool-result conversation with a stable long prefix.",
+        },
+        {
+            "phase": "overlap_tool_loop",
+            "models": model_list,
+            "attempts": attempts,
+            "overlap_requests": overlap_requests,
+            "min_cached_tokens": min_cached_tokens,
+            "suffix_prefill_limit": suffix_prefill_limit,
+            "timeout_seconds": timeout,
+            "description": (
+                "Goose/Pi-shaped overlapping title and tool requests followed by "
+                "tool-result continuation and same-prefix cache proof."
+            ),
         },
         {
             "phase": "same_prefix_cache",
@@ -180,6 +206,7 @@ def build_plan(
         "models": model_list,
         "attempts": attempts,
         "pressure_turns": pressure_turns,
+        "overlap_requests": overlap_requests,
         "timeout_seconds": timeout,
         "output_dir": str(output_dir),
         "min_cached_tokens": min_cached_tokens,
@@ -246,6 +273,88 @@ def build_tool_call_request(
         "reasoning_effort": "none",
         "chat_template_kwargs": {"enable_thinking": False},
     }
+
+
+def build_overlap_requests(
+    model: str,
+    attempt: int,
+    overlap_requests: int,
+) -> list[OverlapRequest]:
+    if overlap_requests < 2:
+        raise ValueError("overlap_requests must be at least 2")
+    requests = [
+        OverlapRequest(
+            label="title",
+            payload=build_overlap_title_request(model, attempt),
+            expects_tool_call=False,
+            expected_values=(KV_PIN,),
+        ),
+        OverlapRequest(
+            label="tool_primary",
+            payload=build_overlap_tool_request(model, attempt, "tool_primary", "primary"),
+            expects_tool_call=True,
+            expected_values=(),
+        ),
+    ]
+    for index in range(2, overlap_requests):
+        key = "secondary" if index % 2 else "primary"
+        label = f"tool_{index}"
+        requests.append(
+            OverlapRequest(
+                label=label,
+                payload=build_overlap_tool_request(model, attempt, label, key),
+                expects_tool_call=True,
+                expected_values=(),
+            )
+        )
+    return requests
+
+
+def build_overlap_title_request(model: str, attempt: int) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": stable_system_prefix(),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Concurrent title probe attempt {attempt}. "
+                    f"Return a short title that includes {KV_PIN}."
+                ),
+            },
+        ],
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": 48,
+        "reasoning_effort": "none",
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+
+
+def build_overlap_tool_request(
+    model: str,
+    attempt: int,
+    label: str,
+    key: str,
+) -> dict[str, Any]:
+    messages = [
+        {
+            "role": "system",
+            "content": stable_system_prefix(),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Concurrent tool probe {label} attempt {attempt}: call {TOOL_NAME} "
+                f"with key={key}. Keep {KV_PIN} in memory. "
+                "Do not answer directly before the tool call."
+            ),
+        },
+    ]
+    return build_tool_call_request(model, attempt, key=key, messages=messages)
 
 
 def initial_messages(attempt: int, key: str) -> list[dict[str, str]]:
@@ -712,15 +821,21 @@ def run_cache_probe(
     started = time.monotonic()
     try:
         if phase == "exact_prefix_cache":
-            warm = build_cache_request(model, "Exact-prefix warmup tail.")
-            measured = dict(warm)
+            status_code, metrics = measure_cache_reuse(
+                base_url,
+                model,
+                timeout,
+                warm_tail="Exact-prefix warmup tail.",
+                measured_tail="Exact-prefix warmup tail.",
+            )
         else:
-            warm = build_cache_request(model, "Same-prefix warmup tail alpha.")
-            measured = build_cache_request(model, "Same-prefix measured tail beta.")
-        post_json(base_url, "/chat/completions", warm, timeout)
-        response, status_code = post_json(base_url, "/chat/completions", measured, timeout)
-        validate_message(response, [KV_PIN])
-        metrics = extract_cache_metrics(response)
+            status_code, metrics = measure_cache_reuse(
+                base_url,
+                model,
+                timeout,
+                warm_tail="Same-prefix warmup tail alpha.",
+                measured_tail="Same-prefix measured tail beta.",
+            )
         ok, detail = evaluate_cache_threshold(
             metrics,
             min_cached_tokens=min_cached_tokens,
@@ -739,6 +854,138 @@ def run_cache_probe(
         )
     except Exception as exc:
         return _result(model, 0, phase, False, str(exc), started)
+
+
+def measure_cache_reuse(
+    base_url: str,
+    model: str,
+    timeout: float,
+    warm_tail: str,
+    measured_tail: str,
+) -> tuple[int, CacheMetrics]:
+    warm = build_cache_request(model, warm_tail)
+    measured = build_cache_request(model, measured_tail)
+    post_json(base_url, "/chat/completions", warm, timeout)
+    response, status_code = post_json(base_url, "/chat/completions", measured, timeout)
+    validate_message(response, [KV_PIN])
+    return status_code, extract_cache_metrics(response)
+
+
+def run_overlap_tool_loop_probe(
+    base_url: str,
+    model: str,
+    attempt: int,
+    timeout: float,
+    overlap_requests: int,
+    min_cached_tokens: int,
+    suffix_prefill_limit: int,
+    transcript_dir: Path,
+) -> ProbeResult:
+    started = time.monotonic()
+    transcript_path = transcript_dir / safe_name(f"{model}-attempt-{attempt}-overlap")
+    try:
+        contexts = build_overlap_requests(model, attempt, overlap_requests)
+        responses = run_initial_overlap_requests(base_url, contexts, timeout)
+        for context, response, status_code in responses:
+            record_transcript(transcript_path, f"overlap_{context.label}", status_code)
+            if context.expects_tool_call:
+                complete_overlap_tool_loop(
+                    base_url,
+                    model,
+                    context,
+                    response,
+                    status_code,
+                    timeout,
+                    transcript_path,
+                )
+            else:
+                validate_message(response, context.expected_values)
+        status_code, metrics = measure_cache_reuse(
+            base_url,
+            model,
+            timeout,
+            warm_tail="Overlap warmup tail alpha.",
+            measured_tail="Overlap measured tail beta.",
+        )
+        ok, detail = evaluate_cache_threshold(
+            metrics,
+            min_cached_tokens=min_cached_tokens,
+            suffix_prefill_limit=suffix_prefill_limit,
+        )
+        if not ok:
+            return _result(
+                model,
+                attempt,
+                "overlap_tool_loop",
+                False,
+                detail,
+                started,
+                status_code,
+                metrics.prompt_tokens,
+                metrics.cached_tokens,
+            )
+        return _result(
+            model,
+            attempt,
+            "overlap_tool_loop",
+            True,
+            f"completed {len(contexts)} overlapping starts and cache proof; {detail}",
+            started,
+            status_code,
+            metrics.prompt_tokens,
+            metrics.cached_tokens,
+        )
+    except Exception as exc:
+        record_transcript(transcript_path, "failure", None, detail=str(exc))
+        return _result(model, attempt, "overlap_tool_loop", False, str(exc), started)
+
+
+def run_initial_overlap_requests(
+    base_url: str,
+    contexts: list[OverlapRequest],
+    timeout: float,
+) -> list[tuple[OverlapRequest, dict[str, Any], int]]:
+    barrier = threading.Barrier(len(contexts))
+
+    def send(context: OverlapRequest) -> tuple[OverlapRequest, dict[str, Any], int]:
+        try:
+            barrier.wait(timeout=min(max(timeout, 1.0), 30.0))
+        except threading.BrokenBarrierError as exc:
+            raise RuntimeError("overlap request barrier broke before dispatch") from exc
+        response, status_code = post_json(
+            base_url,
+            "/chat/completions",
+            context.payload,
+            timeout,
+        )
+        return context, response, status_code
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(contexts)) as executor:
+        futures = [executor.submit(send, context) for context in contexts]
+        return [future.result(timeout=timeout + 30.0) for future in futures]
+
+
+def complete_overlap_tool_loop(
+    base_url: str,
+    model: str,
+    context: OverlapRequest,
+    response: dict[str, Any],
+    status_code: int,
+    timeout: float,
+    transcript_path: Path,
+) -> None:
+    messages = [dict(message) for message in context.payload["messages"]]
+    first_call = extract_tool_call(response)
+    record_transcript(
+        transcript_path,
+        f"{context.label}_tool_call",
+        status_code,
+        first_call.call_id,
+    )
+    messages.extend([assistant_tool_message(response), tool_result_message(first_call)])
+    run_final_after_tool(base_url, model, messages, timeout, [FIXTURE_FACTS[first_call.key]])
+    run_second_tool_loop(base_url, model, messages, timeout, transcript_path)
+    run_final_recall(base_url, model, messages, timeout, transcript_path)
 
 
 def run_native_log_scan(checkpoints: Iterable[NativeLogCheckpoint]) -> ProbeResult:
@@ -765,6 +1012,7 @@ def run_certification(
     suffix_prefill_limit: int,
     native_logs: Iterable[Path],
     output_dir: Path,
+    overlap_requests: int = DEFAULT_OVERLAP_REQUESTS,
 ) -> list[ProbeResult]:
     transcript_dir = output_dir / "transcripts"
     prepare_transcript_dir(transcript_dir)
@@ -779,6 +1027,18 @@ def run_certification(
                     attempt,
                     timeout,
                     pressure_turns,
+                    transcript_dir,
+                )
+            )
+            results.append(
+                run_overlap_tool_loop_probe(
+                    base_url,
+                    model,
+                    attempt,
+                    timeout,
+                    overlap_requests,
+                    min_cached_tokens,
+                    suffix_prefill_limit,
                     transcript_dir,
                 )
             )
@@ -983,6 +1243,12 @@ def parse_args() -> argparse.Namespace:
         default=int(os.environ.get("MESH_KV_TOOL_LOOP_PRESSURE_TURNS", str(DEFAULT_PRESSURE_TURNS))),
     )
     parser.add_argument(
+        "--overlap-requests",
+        type=int,
+        default=int(os.environ.get("MESH_KV_TOOL_LOOP_OVERLAP_REQUESTS", str(DEFAULT_OVERLAP_REQUESTS))),
+        help="Number of simultaneous title/tool requests to launch for the overlap probe.",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=float(os.environ.get("MESH_KV_TOOL_LOOP_TIMEOUT", str(DEFAULT_TIMEOUT))),
@@ -1040,6 +1306,7 @@ def main() -> int:
         min_cached_tokens=args.min_cached_tokens,
         suffix_prefill_limit=args.suffix_prefill_limit,
         native_logs=native_logs,
+        overlap_requests=args.overlap_requests,
     )
     if args.print_plan:
         print(render_plan(plan))
@@ -1054,6 +1321,7 @@ def main() -> int:
         suffix_prefill_limit=args.suffix_prefill_limit,
         native_logs=native_logs,
         output_dir=output_dir,
+        overlap_requests=args.overlap_requests,
     )
     write_evidence(output_dir, plan, results)
     print_summary(results, output_dir)
@@ -1065,6 +1333,8 @@ def validate_runtime_options(args: argparse.Namespace) -> None:
         raise ValueError("attempts must be at least 1")
     if args.pressure_turns < 0:
         raise ValueError("pressure-turns cannot be negative")
+    if args.overlap_requests < 2:
+        raise ValueError("overlap-requests must be at least 2")
     if args.min_cached_tokens < 0:
         raise ValueError("min-cached-tokens cannot be negative")
     if args.suffix_prefill_limit < 0:

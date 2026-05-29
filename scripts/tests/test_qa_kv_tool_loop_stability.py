@@ -45,12 +45,20 @@ class KvToolLoopStabilityTests(unittest.TestCase):
         self.assertIn("summary.md", plan["evidence_files"])
         self.assertEqual(
             [check["phase"] for check in plan["checks"]],
-            ["tool_loop", "same_prefix_cache", "exact_prefix_cache", "native_log_scan"],
+            [
+                "tool_loop",
+                "overlap_tool_loop",
+                "same_prefix_cache",
+                "exact_prefix_cache",
+                "native_log_scan",
+            ],
         )
         self.assertEqual(plan["checks"][0]["pressure_turns"], 8)
-        self.assertEqual(plan["checks"][1]["suffix_prefill_limit"], 256)
-        self.assertEqual(plan["checks"][2]["timeout_seconds"], 90.0)
-        self.assertEqual(plan["checks"][3]["scan_mode"], "appended_since_run_start")
+        self.assertEqual(plan["checks"][1]["overlap_requests"], 2)
+        self.assertEqual(plan["checks"][1]["min_cached_tokens"], 2048)
+        self.assertEqual(plan["checks"][2]["suffix_prefill_limit"], 256)
+        self.assertEqual(plan["checks"][3]["timeout_seconds"], 90.0)
+        self.assertEqual(plan["checks"][4]["scan_mode"], "appended_since_run_start")
 
     def test_parse_native_logs_dedupes_env_and_cli_paths(self):
         harness = load_module()
@@ -83,6 +91,112 @@ class KvToolLoopStabilityTests(unittest.TestCase):
         )
         self.assertFalse(first["parallel_tool_calls"])
         self.assertEqual(first["tools"][0]["function"]["name"], "lookup_probe_fact")
+
+    def test_overlap_requests_keep_same_prefix_and_distinct_tails(self):
+        harness = load_module()
+        requests = harness.build_overlap_requests("direct-model", attempt=3, overlap_requests=3)
+
+        self.assertEqual([request.label for request in requests], ["title", "tool_primary", "tool_2"])
+        self.assertEqual(
+            len({request.payload["messages"][0]["content"] for request in requests}),
+            1,
+        )
+        self.assertEqual(
+            len({request.payload["messages"][1]["content"] for request in requests}),
+            3,
+        )
+        self.assertFalse(requests[0].expects_tool_call)
+        self.assertTrue(requests[1].expects_tool_call)
+        self.assertTrue(requests[2].expects_tool_call)
+
+    def test_overlap_tool_loop_probe_runs_parallel_requests_and_cache_check(self):
+        harness = load_module()
+        original_post_json = harness.post_json
+        seen_payloads = []
+
+        def fake_post_json(base_url, path, payload, timeout):
+            del base_url, path, timeout
+            seen_payloads.append(payload)
+            last_user = next(
+                (
+                    message.get("content", "")
+                    for message in reversed(payload["messages"])
+                    if message.get("role") == "user"
+                ),
+                "",
+            )
+            if "Concurrent title probe" in last_user:
+                return {
+                    "choices": [{"message": {"content": f"title {harness.KV_PIN}"}}],
+                    "usage": {"prompt_tokens": 2200, "prompt_tokens_details": {"cached_tokens": 0}},
+                }, 200
+            if payload.get("tool_choice"):
+                key = "secondary" if "key=secondary" in last_user else "primary"
+                return {
+                    "choices": [
+                        {
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "id": f"call-{key}-{len(seen_payloads)}",
+                                        "function": {
+                                            "name": harness.TOOL_NAME,
+                                            "arguments": json.dumps({"key": key}),
+                                        },
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }, 200
+            if "Overlap measured tail" in last_user:
+                return {
+                    "choices": [{"message": {"content": harness.KV_PIN}}],
+                    "usage": {
+                        "prompt_tokens": 2240,
+                        "prompt_tokens_details": {"cached_tokens": 2176},
+                    },
+                }, 200
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                f"{harness.KV_PIN} "
+                                f"{harness.FIXTURE_FACTS['primary']} "
+                                f"{harness.FIXTURE_FACTS['secondary']}"
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 2240, "prompt_tokens_details": {"cached_tokens": 0}},
+            }, 200
+
+        harness.post_json = fake_post_json
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                result = harness.run_overlap_tool_loop_probe(
+                    base_url="http://localhost:9337/v1",
+                    model="direct-model",
+                    attempt=1,
+                    timeout=180.0,
+                    overlap_requests=2,
+                    min_cached_tokens=2048,
+                    suffix_prefill_limit=256,
+                    transcript_dir=Path(tmp),
+                )
+        finally:
+            harness.post_json = original_post_json
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(result.phase, "overlap_tool_loop")
+        self.assertEqual(result.cached_tokens, 2176)
+        self.assertGreaterEqual(len(seen_payloads), 7)
+        self.assertEqual(
+            len({payload["messages"][0]["content"] for payload in seen_payloads[:2]}),
+            1,
+        )
 
     def test_cache_metrics_extract_openai_usage_tokens(self):
         harness = load_module()
@@ -276,6 +390,7 @@ class KvToolLoopStabilityTests(unittest.TestCase):
     def test_run_certification_resets_transcripts_before_writing(self):
         harness = load_module()
         original_tool_loop = harness.run_tool_loop_probe
+        original_overlap_tool_loop = harness.run_overlap_tool_loop_probe
         original_cache_probe = harness.run_cache_probe
 
         def fake_tool_loop(
@@ -301,6 +416,31 @@ class KvToolLoopStabilityTests(unittest.TestCase):
                 elapsed_ms=1,
             )
 
+        def fake_overlap_tool_loop(
+            base_url,
+            model,
+            attempt,
+            timeout,
+            overlap_requests,
+            min_cached_tokens,
+            suffix_prefill_limit,
+            transcript_dir,
+        ):
+            del base_url, timeout, overlap_requests, min_cached_tokens, suffix_prefill_limit
+            harness.record_transcript(
+                transcript_dir / f"{model}-attempt-{attempt}-overlap.jsonl",
+                "fresh_overlap",
+                200,
+            )
+            return harness.ProbeResult(
+                model=model,
+                attempt=attempt,
+                phase="overlap_tool_loop",
+                ok=True,
+                detail="overlap ok",
+                elapsed_ms=1,
+            )
+
         def fake_cache_probe(
             base_url,
             model,
@@ -320,6 +460,7 @@ class KvToolLoopStabilityTests(unittest.TestCase):
             )
 
         harness.run_tool_loop_probe = fake_tool_loop
+        harness.run_overlap_tool_loop_probe = fake_overlap_tool_loop
         harness.run_cache_probe = fake_cache_probe
         try:
             with tempfile.TemporaryDirectory() as tmp:
@@ -351,6 +492,7 @@ class KvToolLoopStabilityTests(unittest.TestCase):
             self.assertFalse(obsolete.exists())
         finally:
             harness.run_tool_loop_probe = original_tool_loop
+            harness.run_overlap_tool_loop_probe = original_overlap_tool_loop
             harness.run_cache_probe = original_cache_probe
 
     def test_record_transcript_appends_within_attempt(self):
