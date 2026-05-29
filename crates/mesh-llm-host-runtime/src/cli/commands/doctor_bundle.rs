@@ -154,7 +154,7 @@ pub(crate) async fn run_doctor_bundle(cli: &Cli, options: DoctorBundleOptions) -
     println!("Path: {}", output_path.display());
     println!(
         "Logs: {}",
-        selected_runtime_label(manifest.selected_instance.as_ref())
+        selected_runtime_label(manifest.selected_instance.as_ref(), &all_instances)
     );
     println!("Files: {}", manifest.included_files.len());
     if !manifest.warnings.is_empty() {
@@ -167,12 +167,23 @@ pub(crate) async fn run_doctor_bundle(cli: &Cli, options: DoctorBundleOptions) -
     Ok(())
 }
 
-fn selected_runtime_label(info: Option<&RuntimeInstanceInfo>) -> String {
+fn selected_runtime_label(
+    info: Option<&RuntimeInstanceInfo>,
+    instances: &[RuntimeInstanceInfo],
+) -> String {
     let Some(info) = info else {
         return "none selected".to_string();
     };
-    let live = if info.is_live { "running" } else { "previous" };
-    format!("{live} pid {}", info.pid)
+    if info.is_live {
+        return format!("running pid {}", info.pid);
+    }
+    if instances.iter().any(|instance| instance.is_live) {
+        return format!("previous pid {}", info.pid);
+    }
+    format!(
+        "no running mesh-llm process found; using previous pid {}",
+        info.pid
+    )
 }
 
 struct DoctorZip {
@@ -421,7 +432,9 @@ fn read_runtime_instance(runtime_dir: &Path) -> Option<RuntimeInstanceInfo> {
     let pid = value["pid"]
         .as_u64()
         .and_then(|pid| u32::try_from(pid).ok())?;
-    let started_at_unix = value["started_at_unix"].as_i64();
+    let started_at_unix = value["started_at_unix"]
+        .as_i64()
+        .filter(|started_at| *started_at > 0);
     Some(RuntimeInstanceInfo {
         pid,
         api_port: value["api_port"]
@@ -796,6 +809,51 @@ mod tests {
         .expect_err("missing pid should fail");
 
         assert!(err.to_string().contains("pid 11"));
+    }
+
+    #[test]
+    fn runtime_label_explains_stale_fallback() {
+        let previous = instance_info(10, false, 10);
+
+        assert_eq!(
+            selected_runtime_label(Some(&previous), std::slice::from_ref(&previous)),
+            "no running mesh-llm process found; using previous pid 10"
+        );
+    }
+
+    #[test]
+    fn runtime_label_keeps_explicit_previous_when_live_exists() {
+        let previous = instance_info(10, false, 10);
+        let running = instance_info(20, true, 20);
+
+        assert_eq!(
+            selected_runtime_label(Some(&previous), &[previous.clone(), running]),
+            "previous pid 10"
+        );
+    }
+
+    #[test]
+    fn read_runtime_instance_treats_zero_started_at_as_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = dir.path().join("1234");
+        fs::create_dir(&runtime_dir).expect("runtime dir");
+        fs::write(
+            runtime_dir.join("owner.json"),
+            json!({
+                "pid": 1234,
+                "api_port": 3131,
+                "started_at_unix": 0,
+                "mesh_llm_binary": "/tmp/mesh-llm",
+                "version": "0.0.0-test"
+            })
+            .to_string(),
+        )
+        .expect("owner json");
+
+        let info = read_runtime_instance(&runtime_dir).expect("runtime info");
+
+        assert_eq!(info.started_at_unix, None);
+        assert!(info.sort_time_unix > 0);
     }
 
     #[test]
