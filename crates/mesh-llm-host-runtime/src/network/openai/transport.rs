@@ -8,6 +8,7 @@ use crate::mesh;
 use crate::network::affinity::{
     AffinityRouter, PreparedTargets, TargetSelection, prepare_remote_targets_for_request,
 };
+use crate::network::openai::auto_route;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::{
     ChatStreamNormalizationState, normalize_chat_completion_json_body,
@@ -2862,15 +2863,18 @@ async fn build_mesh_request_plan(
     let is_auto_request =
         request.model_name.is_none() || request.model_name.as_deref() == Some("auto");
     let auto_session_key = auto_session_key_for_request(request, is_auto_request);
-    let effective_model = match resolve_auto_model_request(
+    let required_tokens =
+        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
+    let effective_model = match resolve_auto_model_request(AutoModelRequestArgs {
         node,
         request,
-        &served,
-        &descriptors,
+        served: &served,
+        descriptors: &descriptors,
         is_auto_request,
         auto_session_key,
+        required_tokens,
         affinity,
-    )
+    })
     .await
     {
         AutoModelResolution::Model(model) => model.or(request.model_name.clone()),
@@ -2892,8 +2896,6 @@ async fn build_mesh_request_plan(
         MeshTargetResolution::NoHostsAvailable => return Err(MeshRequestFailure::NoHostsAvailable),
     };
 
-    let required_tokens =
-        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
     let prepared = prepare_mesh_targets(
         request,
         effective_model.as_deref(),
@@ -3296,15 +3298,28 @@ fn auto_session_key_for_request(
         .and_then(|body| crate::network::affinity::auto_model_session_key(Some(body)))
 }
 
-async fn resolve_auto_model_request(
-    node: &mesh::Node,
-    request: &mut BufferedHttpRequest,
-    served: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
+struct AutoModelRequestArgs<'a> {
+    node: &'a mesh::Node,
+    request: &'a mut BufferedHttpRequest,
+    served: &'a [String],
+    descriptors: &'a [mesh::ServedModelDescriptor],
     is_auto_request: bool,
     auto_session_key: Option<u64>,
-    affinity: &AffinityRouter,
-) -> AutoModelResolution {
+    required_tokens: Option<u32>,
+    affinity: &'a AffinityRouter,
+}
+
+async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModelResolution {
+    let AutoModelRequestArgs {
+        node,
+        request,
+        served,
+        descriptors,
+        is_auto_request,
+        auto_session_key,
+        required_tokens,
+        affinity,
+    } = args;
     if !is_auto_request {
         return AutoModelResolution::Model(None);
     }
@@ -3313,13 +3328,6 @@ async fn resolve_auto_model_request(
         return AutoModelResolution::Model(None);
     };
     let media = router::media_requirements(body_json);
-    if let Some(model) =
-        lookup_cached_auto_model(node, descriptors, affinity, auto_session_key, &media).await
-    {
-        return AutoModelResolution::Model(Some(model));
-    }
-
-    let cl = router::classify(body_json);
     // Build candidates with observed throughput so pick_model_classified
     // can weight by locally-measured tok/s where samples exist.
     let routing_metrics = node.routing_metrics();
@@ -3341,9 +3349,30 @@ async fn resolve_auto_model_request(
             }
         })
         .collect();
-    let Some(available) = router::filter_media_compatible_candidates(&with_caps, &media) else {
+    let available = router::filter_media_compatible_candidates(&with_caps, &media);
+    let ready_models = if let Some(available) = available.as_ref() {
+        auto_route::ready_remote_models(node, required_tokens, available, affinity).await
+    } else {
+        Vec::new()
+    };
+    if let Some(model) = lookup_cached_auto_model(
+        node,
+        descriptors,
+        affinity,
+        auto_session_key,
+        &media,
+        &ready_models,
+    )
+    .await
+    {
+        return AutoModelResolution::Model(Some(model));
+    }
+
+    let Some(available) = available else {
         return AutoModelResolution::UnsupportedMedia;
     };
+    let available = auto_route::pool_for_ready_models(&available, &ready_models);
+    let cl = router::classify(body_json);
     let picked = router::pick_model_classified(&cl, &available).map(str::to_string);
     if let Some(name) = picked.as_deref() {
         tracing::info!(
@@ -3366,11 +3395,12 @@ async fn lookup_cached_auto_model(
     affinity: &AffinityRouter,
     auto_session_key: Option<u64>,
     media: &router::MediaRequirements,
+    ready_models: &[&str],
 ) -> Option<String> {
     let key = auto_session_key?;
     let model = affinity.lookup_auto_model(key)?;
     if let Some(reason) =
-        cached_auto_model_reclassify_reason(node, &model, media, descriptors).await
+        cached_auto_model_reclassify_reason(node, &model, media, descriptors, ready_models).await
     {
         tracing::debug!("auto: cached model {model} {reason}, reclassifying");
         affinity.forget_auto_model(key);
@@ -3385,12 +3415,18 @@ async fn cached_auto_model_reclassify_reason(
     model: &str,
     media: &router::MediaRequirements,
     descriptors: &[mesh::ServedModelDescriptor],
+    ready_models: &[&str],
 ) -> Option<&'static str> {
     if cached_auto_model_missing(node, model).await {
         return Some("no longer served");
     }
-    cached_auto_model_needs_reclassify(model, media, descriptors)
-        .then_some("cannot satisfy media requirements")
+    if cached_auto_model_needs_reclassify(model, media, descriptors) {
+        return Some("cannot satisfy media requirements");
+    }
+    if !ready_models.is_empty() && !ready_models.contains(&model) {
+        return Some("has no eligible target for this request");
+    }
+    None
 }
 
 async fn cached_auto_model_missing(node: &mesh::Node, model: &str) -> bool {
@@ -4726,6 +4762,86 @@ mod tests {
         }
     }
 
+    fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+        mesh::PeerInfo {
+            id: peer_id,
+            addr: iroh::EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            role: mesh::NodeRole::Host { http_port: 9337 },
+            first_joined_mesh_ts: None,
+            models: vec![model.to_string()],
+            vram_bytes: 16 * 1024 * 1024 * 1024,
+            rtt_ms: None,
+            model_source: None,
+            serving_models: vec![model.to_string()],
+            hosted_models: vec![model.to_string()],
+            hosted_models_known: true,
+            available_models: vec![],
+            requested_models: vec![],
+            explicit_model_interests: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            version: None,
+            gpu_name: None,
+            hostname: None,
+            is_soc: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![local_gguf_descriptor(model)],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            advertised_model_throughput: vec![],
+            display_rtt: None,
+            propagated_latency: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+        }
+    }
+
+    async fn test_node_with_remote_models(models: &[(&str, iroh::EndpointId)]) -> mesh::Node {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .expect("test node should start");
+        for (model, peer_id) in models {
+            node.insert_test_peer(test_peer_serving_model(*peer_id, model))
+                .await;
+        }
+        node
+    }
+
+    fn text_auto_request() -> BufferedHttpRequest {
+        let body = serde_json::json!({
+            "model": "auto",
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let body_bytes = serde_json::to_vec(&body).expect("request body should serialize");
+        BufferedHttpRequest {
+            raw: Vec::new(),
+            method: "POST".to_string(),
+            path: "/v1/chat/completions".to_string(),
+            client_path: "/v1/chat/completions".to_string(),
+            body_json: Some(body),
+            body_json_attempted: true,
+            body_bytes: Some(body_bytes),
+            body_len_bytes: 0,
+            completion_tokens: None,
+            model_name: Some("auto".to_string()),
+            stream: None,
+            request_object_request_ids: Vec::new(),
+            response_adapter: ResponseAdapter::None,
+        }
+    }
+
     async fn read_request_from_parts_with_limits(
         parts: Vec<Vec<u8>>,
         limits: HttpReadLimits,
@@ -5159,6 +5275,111 @@ mod tests {
             &media,
             &descriptors
         ));
+    }
+
+    #[tokio::test]
+    async fn cached_auto_model_stays_sticky_when_no_ready_remote_model_exists() -> Result<()> {
+        let cached_model = "cached-cooling-model-31B";
+        let alternate_model = "alternate-cooling-model-31B";
+        let cached_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let alternate_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let node = test_node_with_remote_models(&[
+            (cached_model, cached_peer),
+            (alternate_model, alternate_peer),
+        ])
+        .await;
+        let affinity = AffinityRouter::new();
+        let key = 0xA11CE;
+        affinity.remember_auto_model(key, cached_model);
+        affinity.record_target_outcome(
+            Some(cached_model),
+            &election::InferenceTarget::Remote(cached_peer),
+            TargetHealthOutcome::Unavailable,
+        );
+        affinity.record_target_outcome(
+            Some(alternate_model),
+            &election::InferenceTarget::Remote(alternate_peer),
+            TargetHealthOutcome::Unavailable,
+        );
+        let descriptors = vec![
+            local_gguf_descriptor(cached_model),
+            local_gguf_descriptor(alternate_model),
+        ];
+        let media = router::MediaRequirements::default();
+        let caps = crate::models::ModelCapabilities::default();
+        let available = vec![
+            router::RoutingCandidate::unscored(cached_model, caps),
+            router::RoutingCandidate::unscored(alternate_model, caps),
+        ];
+        let ready_models =
+            auto_route::ready_remote_models(&node, None, &available, &affinity).await;
+        assert!(ready_models.is_empty());
+
+        let cached = lookup_cached_auto_model(
+            &node,
+            &descriptors,
+            &affinity,
+            Some(key),
+            &media,
+            &ready_models,
+        )
+        .await;
+
+        assert_eq!(cached.as_deref(), Some(cached_model));
+        assert_eq!(
+            affinity.lookup_auto_model(key).as_deref(),
+            Some(cached_model)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn auto_model_cache_switches_when_ready_alternate_exists() -> Result<()> {
+        let cached_model = "cached-cooling-model-31B";
+        let alternate_model = "ready-alternate-model-31B";
+        let cached_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let alternate_peer = iroh::EndpointId::from(iroh::SecretKey::generate().public());
+        let node = test_node_with_remote_models(&[
+            (cached_model, cached_peer),
+            (alternate_model, alternate_peer),
+        ])
+        .await;
+        let affinity = AffinityRouter::new();
+        let key = 0xB0B;
+        affinity.remember_auto_model(key, cached_model);
+        affinity.record_target_outcome(
+            Some(cached_model),
+            &election::InferenceTarget::Remote(cached_peer),
+            TargetHealthOutcome::Unavailable,
+        );
+        let served = vec![cached_model.to_string(), alternate_model.to_string()];
+        let descriptors = vec![
+            local_gguf_descriptor(cached_model),
+            local_gguf_descriptor(alternate_model),
+        ];
+        let mut request = text_auto_request();
+
+        let resolved = resolve_auto_model_request(AutoModelRequestArgs {
+            node: &node,
+            request: &mut request,
+            served: &served,
+            descriptors: &descriptors,
+            is_auto_request: true,
+            auto_session_key: Some(key),
+            required_tokens: None,
+            affinity: &affinity,
+        })
+        .await;
+
+        assert!(matches!(
+            resolved,
+            AutoModelResolution::Model(Some(model)) if model == alternate_model
+        ));
+        assert_eq!(
+            affinity.lookup_auto_model(key).as_deref(),
+            Some(alternate_model)
+        );
+        Ok(())
     }
 
     #[test]
