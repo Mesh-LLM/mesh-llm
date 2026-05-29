@@ -9,6 +9,26 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+export CARGO_HTTP_MULTIPLEXING="${CARGO_HTTP_MULTIPLEXING:-false}"
+export CARGO_NET_RETRY="${CARGO_NET_RETRY:-10}"
+
+retry_transient() {
+    local attempt=1
+    local max_attempts=3
+
+    while true; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            return 1
+        fi
+        echo "command failed; retrying ($attempt/$max_attempts): $*" >&2
+        sleep $((attempt * 5))
+        attempt=$((attempt + 1))
+    done
+}
+
 scripts/check-sdk-contract.sh
 
 scripts/prepare-llama.sh "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
@@ -19,12 +39,12 @@ LLAMA_BUILD_DIR="$REPO_ROOT/.deps/llama-build/build-stage-abi-ci-kotlin-cpu" \
 
 LLAMA_STAGE_BACKEND=cpu \
 LLAMA_STAGE_BUILD_DIR="$REPO_ROOT/.deps/llama-build/build-stage-abi-ci-kotlin-cpu" \
-    cargo build -p mesh-llm-ffi --no-default-features --features host,embedded-runtime
+    retry_transient cargo build -p mesh-llm-ffi --no-default-features --features host,embedded-runtime
 
 native_sdk_out="$REPO_ROOT/target/kotlin-native-sdk"
 LLAMA_STAGE_BACKEND=cpu \
 LLAMA_STAGE_BUILD_DIR="$REPO_ROOT/.deps/llama-build/build-stage-abi-ci-kotlin-cpu" \
-    scripts/package-native-sdk.sh \
+    retry_transient scripts/package-native-sdk.sh \
         --backend cpu \
         --profile debug \
         --out "$native_sdk_out"
