@@ -54,7 +54,7 @@ pub(crate) use self::config::{
 };
 pub(crate) use self::config::{
     mesh_requirements_config_from_runtime, mesh_requirements_config_to_runtime,
-    mesh_requirements_validation_error, telemetry_plugin_enabled, validate_config,
+    mesh_requirements_validation_error,
 };
 use self::runtime::ExternalPlugin;
 pub(crate) use self::support::parse_optional_json;

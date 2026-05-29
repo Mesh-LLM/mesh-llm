@@ -1,5 +1,9 @@
 use super::installed::{append_installed_plugins, configured_external_plugin_spec};
 use super::{BLOBSTORE_PLUGIN_ID, PluginSummary};
+use crate::{
+    MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
+    ReleaseAttestationRequirement,
+};
 use anyhow::{Context, Result, bail};
 #[allow(unused_imports)]
 pub use mesh_llm_config::{
@@ -15,16 +19,6 @@ pub use mesh_llm_config::{
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-use crate::{
-    MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
-    ReleaseAttestationRequirement,
-};
-
-const FLASH_MOE_INSTALL_HINT: &str = "Install Flash-MoE separately and set \
-                                     `command` to its infer binary, or set \
-                                     `url` to an already-running Flash-MoE /v1 endpoint.";
 
 pub(crate) fn mesh_requirements_config_to_runtime(
     config: &MeshRequirementsConfig,
