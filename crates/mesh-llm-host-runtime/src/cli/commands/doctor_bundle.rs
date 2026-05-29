@@ -116,6 +116,7 @@ pub(crate) async fn run_doctor_bundle(cli: &Cli, options: DoctorBundleOptions) -
     add_json(&mut bundle, "gpus.json", &gpus::gpus_json(&hw))?;
     add_text(&mut bundle, "gpus.txt", gpus::gpus_text(&hw))?;
     add_plugin_inventory(&mut bundle, cli, &mut warnings)?;
+    add_config_file(&mut bundle, cli, &mut warnings)?;
     add_json(
         &mut bundle,
         "runtime/instances.json",
@@ -258,6 +259,20 @@ fn add_plugin_inventory(zip: &mut DoctorZip, cli: &Cli, warnings: &mut Vec<Strin
     }
 }
 
+fn add_config_file(zip: &mut DoctorZip, cli: &Cli, warnings: &mut Vec<String>) -> Result<()> {
+    let config_path = match crate::plugin::config_path(cli.config.as_deref()) {
+        Ok(path) => path,
+        Err(err) => {
+            warnings.push(format!("could not resolve config path: {err:#}"));
+            return Ok(());
+        }
+    };
+    if !config_path.exists() {
+        return Ok(());
+    }
+    add_existing_file_full(zip, &config_path, "config/config.toml", warnings)
+}
+
 fn add_runtime_files(
     zip: &mut DoctorZip,
     info: &RuntimeInstanceInfo,
@@ -334,6 +349,27 @@ fn add_existing_file(
         &bytes,
         truncated,
         Some(original_bytes),
+    )
+}
+
+fn add_existing_file_full(
+    zip: &mut DoctorZip,
+    path: &Path,
+    zip_path: &str,
+    warnings: &mut Vec<String>,
+) -> Result<()> {
+    if !path.exists() {
+        warnings.push(format!("missing diagnostic file: {}", path.display()));
+        return Ok(());
+    }
+
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    zip.add_bytes(
+        zip_path,
+        Some(path.to_path_buf()),
+        &bytes,
+        false,
+        Some(bytes.len() as u64),
     )
 }
 
@@ -830,11 +866,12 @@ fn doctor_readme(max_log_bytes: u64) -> String {
          - system.json: mesh-llm version, platform, flavor, CPU, and memory summary\n\
          - gpus.json / gpus.txt: local GPU facts shown by `mesh-llm gpus`\n\
          - plugins.json: installed plugin metadata and resolved runtime plugins\n\
+         - config/config.toml: resolved mesh-llm config file when available\n\
          - runtime/instances.json: local runtime process metadata\n\
          - runtime/owner.json and runtime/logs/: logs from the selected process when available\n\
          - api/*.json: local management/API snapshots when the console port is reachable\n\
          - manifest.json: source paths, truncation notes, and warnings\n\n\
-         Config files and environment variables are intentionally not included. \
+         Environment variable values are intentionally not included. \
          Log files are capped at {max_log_bytes} bytes each and contain the tail when truncated.\n"
     )
 }
@@ -962,6 +999,39 @@ mod tests {
         assert!(path.starts_with(cwd));
         assert!(file_name.starts_with("mesh-llm-doctor-"));
         assert!(file_name.ends_with(".zip"));
+    }
+
+    #[test]
+    fn doctor_readme_documents_optional_config_file() {
+        let readme = doctor_readme(1024);
+
+        assert!(readme.contains("config/config.toml"));
+        assert!(readme.contains("Environment variable values are intentionally not included"));
+    }
+
+    #[test]
+    fn add_existing_file_full_includes_complete_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config_path = temp.path().join("config.toml");
+        fs::write(&config_path, "[gpu]\nmax_vram = 4\n").expect("write config");
+        let zip_path = temp.path().join("doctor.zip");
+        let file = File::create(&zip_path).expect("create zip");
+        let mut zip = DoctorZip::new(file);
+        let mut warnings = Vec::new();
+
+        add_existing_file_full(&mut zip, &config_path, "config/config.toml", &mut warnings)
+            .expect("add config");
+        zip.finish().expect("finish zip");
+
+        assert!(warnings.is_empty());
+        let file = File::open(&zip_path).expect("open zip");
+        let mut archive = zip::ZipArchive::new(file).expect("read zip");
+        let mut entry = archive.by_name("config/config.toml").expect("config entry");
+        let mut contents = String::new();
+        entry
+            .read_to_string(&mut contents)
+            .expect("read config entry");
+        assert_eq!(contents, "[gpu]\nmax_vram = 4\n");
     }
 
     #[cfg(target_os = "macos")]
