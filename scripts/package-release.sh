@@ -228,7 +228,7 @@ supported_release_flavors() {
             printf 'cpu cuda cuda-blackwell rocm vulkan\n'
             ;;
         linux/aarch64)
-            printf 'cpu\n'
+            printf 'cpu cuda\n'
             ;;
         *)
             printf '\n'

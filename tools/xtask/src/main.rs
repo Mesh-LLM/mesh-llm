@@ -887,7 +887,7 @@ fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) -> DynResult<
             raw_arch: "arm64",
             flavor: "cpu",
             expected_platform: "Linux/aarch64",
-            expected_supported_flavors: "cpu",
+            expected_supported_flavors: "cuda cpu",
             expected_asset: linux_arm64_asset.as_str(),
             label: "Linux/arm64",
         },
@@ -896,7 +896,7 @@ fn check_installer_outcomes(repo_root: &Path, rows: &[FixtureRow]) -> DynResult<
             raw_arch: "aarch64",
             flavor: "cpu",
             expected_platform: "Linux/aarch64",
-            expected_supported_flavors: "cpu",
+            expected_supported_flavors: "cuda cpu",
             expected_asset: linux_arm64_asset.as_str(),
             label: "Linux/aarch64",
         },
@@ -1282,6 +1282,11 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &release_workflow,
+        "name: release-linux-arm64-cuda",
+        "release workflow ARM64 CUDA artifact",
+    )?;
+    ensure_contains(
+        &release_workflow,
         "build_windows_cpu:",
         "release workflow Windows CPU build",
     )?;
@@ -1304,6 +1309,16 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &justfile,
         "check-release:",
         "Justfile release consistency wrapper",
+    )?;
+    ensure_contains(
+        &justfile,
+        "release-build-arm64-cuda",
+        "Justfile ARM64 CUDA build recipe",
+    )?;
+    ensure_contains(
+        &justfile,
+        "release-bundle-arm64-cuda",
+        "Justfile ARM64 CUDA bundle recipe",
     )?;
     ensure_contains(
         &justfile,

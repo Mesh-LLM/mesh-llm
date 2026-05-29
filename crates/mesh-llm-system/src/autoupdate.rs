@@ -535,10 +535,6 @@ fn flavor_supported_for_update(
 }
 
 fn current_host_backend_probe() -> HostBackendProbe {
-    // probe_tegra_backend() exists to mirror install.sh and is available
-    // for future use when aarch64 CUDA bundle selection is needed.
-    let _ = probe_tegra_backend();
-
     HostBackendProbe {
         cuda_blackwell: probe_cuda_blackwell_backend(),
         cuda: probe_nvidia_backend(),
@@ -562,20 +558,26 @@ fn probe_nvidia_backend() -> bool {
         || command_exists("nvcc")
         || Path::new("/dev/nvidiactl").exists()
         || Path::new("/proc/driver/nvidia/gpus").is_dir()
+        || probe_tegra_backend()
 }
 
+/// Detect NVIDIA Tegra / Jetson SoC accelerators (Orin AGX, Orin NX, Xavier, etc.).
+/// These expose an integrated NVIDIA GPU but have no nvidia-smi or /dev/nvidiactl — only a
+/// device-tree model string containing "tegra" or "jetson".
 fn probe_tegra_backend() -> bool {
-    // Detect NVIDIA Tegra / Jetson SoC accelerators (Orin AGX, Orin NX, Xavier, etc.).
-    // These are Linux aarch64 devices with an integrated NVIDIA GPU identified by the
-    // device-tree model string.
     let dt_model = Path::new("/proc/device-tree/model");
     if !dt_model.exists() {
         return false;
     }
-    std::fs::read_to_string(dt_model).is_ok_and(|content| {
-        let lower = content.to_ascii_lowercase();
-        lower.contains("tegra") || lower.contains("jetson")
-    })
+    std::fs::read_to_string(dt_model)
+        .map(|s| is_tegra_model(&s))
+        .unwrap_or(false)
+}
+
+/// Check whether a device-tree model string identifies an NVIDIA Tegra/Jetson SoC.
+fn is_tegra_model(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    lower.contains("tegra") || lower.contains("jetson")
 }
 
 fn nvidia_compute_caps() -> Vec<String> {
@@ -1980,5 +1982,105 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn test_is_tegra_model_positive_orin_agx() {
+        assert!(is_tegra_model("NVIDIA Jetson AGX Orin Developer Kit"));
+    }
+
+    #[test]
+    fn test_is_tegra_model_positive_orin_nano() {
+        assert!(is_tegra_model("NVIDIA Jetson Orin Nano Developer Kit"));
+    }
+
+    #[test]
+    fn test_is_tegra_model_positive_xavier() {
+        assert!(is_tegra_model("NVIDIA Jetson Xavier NX"));
+    }
+
+    #[test]
+    fn test_is_tegra_model_positive_lowercase() {
+        assert!(is_tegra_model("nvidia tegra234"));
+    }
+
+    #[test]
+    fn test_is_tegra_model_negative_raspberry_pi() {
+        assert!(!is_tegra_model("Raspberry Pi 4 Model B Rev 1.5"));
+    }
+
+    #[test]
+    fn test_is_tegra_model_negative_amd() {
+        assert!(!is_tegra_model("AMD EPYC Server"));
+    }
+
+    #[test]
+    fn test_is_tegra_model_empty() {
+        assert!(!is_tegra_model(""));
+    }
+
+    #[test]
+    fn test_tegra_selects_cuda_on_linux_aarch64() {
+        // Simulate a Tegra/Jetson probe: cuda=true (set by tegra), everything else false.
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: true,
+            rocm: false,
+            vulkan: false,
+            metal: false,
+        };
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "aarch64", probe),
+            Some(backend::BinaryFlavor::Cuda),
+            "Tegra on Linux aarch64 must select CUDA bundle"
+        );
+    }
+
+    #[test]
+    fn test_tegra_cuda_not_blackwell() {
+        // Tegra SoCs are not Blackwell — cuda is true, cuda_blackwell is false.
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: true,
+            rocm: false,
+            vulkan: false,
+            metal: false,
+        };
+        assert!(
+            !flavor_supported_for_update(
+                backend::BinaryFlavor::CudaBlackwell,
+                "linux",
+                "aarch64",
+                probe
+            ),
+            "Tegra should NOT select Blackwell"
+        );
+        assert!(
+            flavor_supported_for_update(
+                backend::BinaryFlavor::Cuda,
+                "linux",
+                "aarch64",
+                probe
+            ),
+            "Tegra MUST select standard CUDA"
+        );
+    }
+
+    #[test]
+    fn test_tegra_falls_back_to_cpu_when_cuda_unsupported() {
+        // If the release has no CUDA asset for aarch64, CPU is the fallback.
+        let probe = HostBackendProbe {
+            cuda_blackwell: false,
+            cuda: true,
+            rocm: false,
+            vulkan: false,
+            metal: false,
+        };
+        // On armv7l (no published assets), even with cuda=true, there's nothing to match.
+        assert_eq!(
+            preferred_bundle_flavor_for_platform("linux", "armv7l", probe),
+            None,
+            "armv7l has no published assets regardless of backend"
+        );
     }
 }

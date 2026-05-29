@@ -147,6 +147,10 @@ release-build:
 release-build-arm64:
     @scripts/build-release.sh
 
+# Build a Linux ARM64 CUDA release artifact (Jetson/Orin).
+release-build-arm64-cuda cuda_arch="75;80;86;87;89;90":
+    @MESH_LLM_BUILD_PROFILE=release scripts/build-linux.sh --backend cuda --cuda-arch "{{ cuda_arch }}"
+
 # Prepare the pinned llama.cpp checkout and apply the Mesh-LLM ABI patch queue.
 llama-prepare:
     @scripts/prepare-llama.sh pinned
@@ -284,6 +288,10 @@ release-bundle version output="dist":
 # Create a Linux ARM64 CPU release archive on a native ARM64 runner.
 release-bundle-arm64 version output="dist":
     @scripts/package-release.sh "{{ version }}" "{{ output }}"
+
+# Create a Linux ARM64 CUDA release archive on a native ARM64 runner.
+release-bundle-arm64-cuda version output="dist":
+    MESH_RELEASE_FLAVOR=cuda scripts/package-release.sh "{{ version }}" "{{ output }}"
 
 # Run repo-level release-target consistency checks.
 [unix]
