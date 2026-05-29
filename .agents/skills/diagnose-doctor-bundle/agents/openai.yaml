@@ -1,0 +1,4 @@
+interface:
+  display_name: "Diagnose Doctor Bundle"
+  short_description: "Inspect mesh-llm doctor bundles and suggest fixes."
+  default_prompt: "Diagnose this mesh-llm doctor bundle and suggest likely fixes."
