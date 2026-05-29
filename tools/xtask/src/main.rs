@@ -6,7 +6,7 @@ use mesh_llm_system::embedded_release_footer::{
     verify_embedded_release_footer,
 };
 use serde::Deserialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -82,12 +82,14 @@ impl ReleaseBuildAttestationClaims {
         {
             return Err("invalid release build attestation shape".into());
         }
-        if let (Some(min), Some(max)) = (
+        match (
             self.supported_protocol_generation_min,
             self.supported_protocol_generation_max,
-        ) && min > max
-        {
-            return Err("invalid release build attestation protocol bounds".into());
+        ) {
+            (Some(min), Some(max)) if min > max => {
+                return Err("invalid release build attestation protocol bounds".into());
+            }
+            _ => {}
         }
         if !self.artifact_digest.starts_with("sha256:") {
             return Err("release build attestation artifact digest must start with sha256:".into());
@@ -369,6 +371,12 @@ fn run() -> DynResult<()> {
             println!("repo consistency checks passed: ci-crate-lists");
             Ok(())
         }
+        [command, scope] if command == "repo-consistency" && scope == "publish-crates" => {
+            let repo_root = repo_root()?;
+            check_publish_crates_consistency(&repo_root)?;
+            println!("repo consistency checks passed: publish-crates");
+            Ok(())
+        }
         [command, scope, rest @ ..]
             if command == "release-attestation" && scope == "generate-keypair" =>
         {
@@ -383,7 +391,7 @@ fn run() -> DynResult<()> {
             inspect_release_attestation(rest)
         }
         _ => Err(
-            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
+            "usage:\n  cargo run -p xtask -- repo-consistency release-targets\n  cargo run -p xtask -- repo-consistency ci-crate-lists\n  cargo run -p xtask -- repo-consistency publish-crates\n  cargo run -p xtask -- release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo run -p xtask -- release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo run -p xtask -- release-attestation inspect --binary <path> [--public-key-file <path>] [--json]"
                 .to_string()
                 .into(),
         ),
@@ -701,6 +709,7 @@ fn check_release_targets() -> DynResult<()> {
     check_windows_name_invariance(&fixture_rows, &fixture_version)?;
     check_ci_script_workspace_members(&repo_root)?;
     check_attestation_default_version(&repo_root)?;
+    check_publish_crates_consistency(&repo_root)?;
     check_docs_and_workflow_invariants(&repo_root)?;
 
     println!("repo consistency checks passed: release-targets");
@@ -822,6 +831,24 @@ struct CargoMetadata {
 struct CargoPackage {
     id: String,
     name: String,
+    version: String,
+    manifest_path: PathBuf,
+    #[serde(default)]
+    dependencies: Vec<CargoDependency>,
+    description: Option<String>,
+    license: Option<String>,
+    license_file: Option<String>,
+    repository: Option<String>,
+    readme: Option<String>,
+    publish: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CargoDependency {
+    name: String,
+    req: String,
+    kind: Option<String>,
+    path: Option<PathBuf>,
 }
 
 fn fixture_rows(repo_root: &Path) -> DynResult<Vec<FixtureRow>> {
@@ -1534,7 +1561,28 @@ fn check_ci_script_workspace_members(repo_root: &Path) -> DynResult<()> {
     Ok(())
 }
 
-fn workspace_package_names(repo_root: &Path) -> DynResult<BTreeSet<String>> {
+fn check_publish_crates_consistency(repo_root: &Path) -> DynResult<()> {
+    let metadata = workspace_metadata(repo_root, "publish crate consistency")?;
+    let publish_crates = publish_script_crates(repo_root)?;
+    let workspace_members = metadata
+        .workspace_members
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let packages_by_name = workspace_packages_by_name(&metadata, &workspace_members);
+    let packages_by_dir = workspace_packages_by_dir(&metadata, &workspace_members)?;
+    let publish_order = publish_order(&publish_crates)?;
+
+    check_publish_crate_metadata(repo_root, &publish_crates, &packages_by_name)?;
+    check_publish_crate_dependencies(&publish_order, &packages_by_name, &packages_by_dir)?;
+    check_publish_literal_includes(&publish_crates, &packages_by_name)?;
+    check_publish_catalog_sync(repo_root)?;
+    check_publish_workflow_invariants(repo_root)?;
+
+    Ok(())
+}
+
+fn workspace_metadata(repo_root: &Path, context: &str) -> DynResult<CargoMetadata> {
     let mut cargo = Command::new("cargo");
     cargo
         .current_dir(repo_root)
@@ -1544,13 +1592,384 @@ fn workspace_package_names(repo_root: &Path) -> DynResult<BTreeSet<String>> {
     let output = run_command(&mut cargo)?;
     if !output.status.success() {
         return Err(format!(
-            "cargo metadata failed while checking CI crate lists: {}",
+            "cargo metadata failed while checking {context}: {}",
             trimmed_stderr_or_stdout(&output)
         )
         .into());
     }
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
 
-    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout)?;
+fn publish_script_crates(repo_root: &Path) -> DynResult<Vec<String>> {
+    let relative_path = "scripts/publish-crates.sh";
+    let contents = fs::read_to_string(repo_root.join(relative_path))?;
+    let mut in_array = false;
+    let mut crates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if !in_array {
+            if trimmed == "publish_crates=(" {
+                in_array = true;
+            }
+            continue;
+        }
+
+        if trimmed == ")" {
+            if crates.is_empty() {
+                return Err(format!("{relative_path}: publish_crates array is empty").into());
+            }
+            return Ok(crates);
+        }
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let crate_name = trimmed.trim_matches('"').to_string();
+        if !seen.insert(crate_name.clone()) {
+            return Err(
+                format!("{relative_path}: duplicate publish_crates entry `{crate_name}`").into(),
+            );
+        }
+        crates.push(crate_name);
+    }
+
+    Err(format!("{relative_path}: missing publish_crates array").into())
+}
+
+fn workspace_packages_by_name<'a>(
+    metadata: &'a CargoMetadata,
+    workspace_members: &BTreeSet<String>,
+) -> BTreeMap<String, &'a CargoPackage> {
+    metadata
+        .packages
+        .iter()
+        .filter(|package| workspace_members.contains(&package.id))
+        .map(|package| (package.name.clone(), package))
+        .collect()
+}
+
+fn workspace_packages_by_dir<'a>(
+    metadata: &'a CargoMetadata,
+    workspace_members: &BTreeSet<String>,
+) -> DynResult<BTreeMap<PathBuf, &'a CargoPackage>> {
+    let mut packages = BTreeMap::new();
+    for package in metadata
+        .packages
+        .iter()
+        .filter(|package| workspace_members.contains(&package.id))
+    {
+        let dir = package
+            .manifest_path
+            .parent()
+            .ok_or_else(|| format!("{}: manifest path has no parent", package.name))?
+            .to_path_buf();
+        packages.insert(dir, package);
+    }
+    Ok(packages)
+}
+
+fn publish_order(crates: &[String]) -> DynResult<BTreeMap<String, usize>> {
+    let mut order = BTreeMap::new();
+    for (index, crate_name) in crates.iter().enumerate() {
+        if order.insert(crate_name.clone(), index).is_some() {
+            return Err(format!("duplicate publish crate `{crate_name}`").into());
+        }
+    }
+    Ok(order)
+}
+
+fn check_publish_crate_metadata(
+    repo_root: &Path,
+    publish_crates: &[String],
+    packages_by_name: &BTreeMap<String, &CargoPackage>,
+) -> DynResult<()> {
+    for crate_name in publish_crates {
+        let package = packages_by_name
+            .get(crate_name)
+            .ok_or_else(|| format!("publish crate `{crate_name}` is not a workspace package"))?;
+        if !package_is_publishable(package) {
+            return Err(format!("publish crate `{crate_name}` is marked publish=false").into());
+        }
+        ensure_nonempty_option(&package.description, &format!("{crate_name} description"))?;
+        if package.license.as_deref().unwrap_or("").is_empty()
+            && package.license_file.as_deref().unwrap_or("").is_empty()
+        {
+            return Err(format!("{crate_name}: missing license or license-file").into());
+        }
+        ensure_nonempty_option(&package.repository, &format!("{crate_name} repository"))?;
+        check_publish_readme(repo_root, package)?;
+    }
+
+    Ok(())
+}
+
+fn check_publish_readme(repo_root: &Path, package: &CargoPackage) -> DynResult<()> {
+    let manifest_dir = package
+        .manifest_path
+        .parent()
+        .ok_or_else(|| format!("{}: manifest path has no parent", package.name))?;
+    let readme = package.readme.as_deref().unwrap_or("README.md");
+    let readme_path = manifest_dir.join(readme);
+    if readme_path.exists() {
+        return Ok(());
+    }
+
+    let relative = readme_path
+        .strip_prefix(repo_root)
+        .unwrap_or(readme_path.as_path())
+        .display();
+    Err(format!("{}: missing publish readme `{relative}`", package.name).into())
+}
+
+fn check_publish_crate_dependencies(
+    publish_order: &BTreeMap<String, usize>,
+    packages_by_name: &BTreeMap<String, &CargoPackage>,
+    packages_by_dir: &BTreeMap<PathBuf, &CargoPackage>,
+) -> DynResult<()> {
+    for (crate_name, package) in packages_by_name {
+        let Some(package_index) = publish_order.get(crate_name) else {
+            continue;
+        };
+        for dependency in package
+            .dependencies
+            .iter()
+            .filter(|dep| dep.kind.as_deref() != Some("dev"))
+        {
+            let Some(path) = dependency.path.as_ref() else {
+                continue;
+            };
+            let Some(target) = packages_by_dir.get(path) else {
+                return Err(format!(
+                    "{crate_name}: workspace path dependency `{}` has no package at {}",
+                    dependency.name,
+                    path.display()
+                )
+                .into());
+            };
+            if !package_is_publishable(target) {
+                return Err(format!(
+                    "{crate_name}: publishable crate depends on non-publishable workspace crate `{}`",
+                    target.name
+                )
+                .into());
+            }
+            check_publish_dependency_version(crate_name, target, dependency)?;
+            let Some(dep_index) = publish_order.get(&target.name) else {
+                return Err(format!(
+                    "{crate_name}: publishable dependency `{}` is missing from scripts/publish-crates.sh",
+                    target.name
+                )
+                .into());
+            };
+            if dep_index >= package_index {
+                return Err(format!(
+                    "{crate_name}: dependency `{}` must appear earlier in scripts/publish-crates.sh",
+                    target.name
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn check_publish_dependency_version(
+    crate_name: &str,
+    target: &CargoPackage,
+    dependency: &CargoDependency,
+) -> DynResult<()> {
+    let caret = format!("^{}", target.version);
+    if dependency.req == target.version || dependency.req == caret {
+        return Ok(());
+    }
+    Err(format!(
+        "{crate_name}: dependency `{}` uses version requirement `{}`, expected `{}`",
+        target.name, dependency.req, caret
+    )
+    .into())
+}
+
+fn package_is_publishable(package: &CargoPackage) -> bool {
+    package
+        .publish
+        .as_ref()
+        .map(|registries| !registries.is_empty())
+        .unwrap_or(true)
+}
+
+fn check_publish_literal_includes(
+    publish_crates: &[String],
+    packages_by_name: &BTreeMap<String, &CargoPackage>,
+) -> DynResult<()> {
+    for crate_name in publish_crates {
+        let package = packages_by_name
+            .get(crate_name)
+            .ok_or_else(|| format!("publish crate `{crate_name}` is not a workspace package"))?;
+        check_package_literal_includes(package)?;
+    }
+    Ok(())
+}
+
+fn check_package_literal_includes(package: &CargoPackage) -> DynResult<()> {
+    let package_dir = package
+        .manifest_path
+        .parent()
+        .ok_or_else(|| format!("{}: manifest path has no parent", package.name))?;
+    let src_dir = package_dir.join("src");
+    if !src_dir.exists() {
+        return Ok(());
+    }
+
+    let package_root = package_dir.canonicalize()?;
+    for rust_file in rust_files_under(&src_dir)? {
+        let source = fs::read_to_string(&rust_file)?;
+        for include_path in literal_include_paths(&source) {
+            let resolved = rust_file
+                .parent()
+                .ok_or_else(|| format!("{}: source path has no parent", rust_file.display()))?
+                .join(&include_path);
+            if !resolved.exists() {
+                return Err(format!(
+                    "{}: literal include `{}` does not exist",
+                    rust_file.display(),
+                    include_path
+                )
+                .into());
+            }
+            let resolved = resolved.canonicalize()?;
+            if !resolved.starts_with(&package_root) {
+                return Err(format!(
+                    "{}: literal include `{}` points outside publish package root",
+                    rust_file.display(),
+                    include_path
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn rust_files_under(root: &Path) -> DynResult<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    collect_rust_files(root, &mut files)?;
+    Ok(files)
+}
+
+fn collect_rust_files(dir: &Path, files: &mut Vec<PathBuf>) -> DynResult<()> {
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_rust_files(&path, files)?;
+        } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn literal_include_paths(source: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in source.lines() {
+        for pattern in ["include_str!(\"", "include_bytes!(\""] {
+            let Some(start) = line.find(pattern) else {
+                continue;
+            };
+            let tail = &line[start + pattern.len()..];
+            if let Some(end) = tail.find('"') {
+                paths.push(tail[..end].to_string());
+            }
+        }
+    }
+    paths
+}
+
+fn check_publish_catalog_sync(repo_root: &Path) -> DynResult<()> {
+    let client_catalog = fs::read_to_string(
+        repo_root
+            .join("crates")
+            .join("mesh-client")
+            .join("src")
+            .join("models")
+            .join("catalog.json"),
+    )?;
+    let node_catalog = fs::read_to_string(
+        repo_root
+            .join("crates")
+            .join("mesh-llm-node")
+            .join("src")
+            .join("catalog.json"),
+    )?;
+    ensure_eq(
+        &client_catalog,
+        &node_catalog,
+        "mesh-llm-node packaged catalog copy",
+    )
+}
+
+fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
+    let release = fs::read_to_string(repo_root.join("RELEASE.md"))?;
+    let release_workflow = fs::read_to_string(repo_root.join(".github/workflows/release.yml"))?;
+    let pr_quality_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/pr_quality.yml"))?;
+
+    ensure_contains(
+        &release,
+        "cargo run -p xtask -- repo-consistency publish-crates",
+        "RELEASE publish-chain consistency command",
+    )?;
+    ensure_contains(
+        &release_workflow,
+        "publish_crates_preflight:",
+        "release workflow crates.io preflight job",
+    )?;
+    ensure_contains(
+        &release_workflow,
+        "cargo run -p xtask -- repo-consistency publish-crates",
+        "release workflow publish-chain consistency check",
+    )?;
+    ensure_contains(
+        &release_workflow,
+        "scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0",
+        "release workflow publish-chain dry-run",
+    )?;
+    ensure_contains_normalized(
+        &release_workflow,
+        "publish_crates_preflight:
+          name: Preflight crates.io packages
+          needs: [metadata, publish]
+          if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+          runs-on: blacksmith-4vcpu-ubuntu-2404
+          steps:
+            - uses: actions/checkout@v5
+            - uses: dtolnay/rust-toolchain@stable
+            - name: Prepare dispatched release version
+              if: github.event_name == 'workflow_dispatch'
+              env:
+                RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+              run: scripts/release-version.sh \"$RELEASE_TAG\"",
+        "release workflow publish preflight dispatched version preparation",
+    )?;
+    ensure_contains(
+        &release_workflow,
+        "needs: [metadata, publish, publish_crates_preflight]",
+        "release workflow real publish preflight dependency",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "cargo run -p xtask -- repo-consistency publish-crates",
+        "PR quality publish-chain drift check",
+    )?;
+
+    Ok(())
+}
+
+fn workspace_package_names(repo_root: &Path) -> DynResult<BTreeSet<String>> {
+    let metadata = workspace_metadata(repo_root, "CI crate lists")?;
     let workspace_members = metadata
         .workspace_members
         .into_iter()
@@ -1678,6 +2097,13 @@ fn ensure_eq_option(expected: Option<&str>, actual: Option<&str>, context: &str)
         Ok(())
     } else {
         Err(format!("{context}: expected {:?}, got {:?}", expected, actual).into())
+    }
+}
+
+fn ensure_nonempty_option(value: &Option<String>, context: &str) -> DynResult<()> {
+    match value.as_deref() {
+        Some(value) if !value.is_empty() => Ok(()),
+        _ => Err(format!("{context}: missing value").into()),
     }
 }
 

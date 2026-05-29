@@ -138,11 +138,16 @@ mod linux {
             return None;
         }
 
-        if let Some(pci_bdf) = gpu.pci_bdf.as_deref().and_then(normalize_pci_bdf)
-            && let Some(info) = infos
-                .iter()
-                .find(|info| info.pci_bdf.as_deref() == Some(pci_bdf.as_str()))
-        {
+        let pci_match = gpu
+            .pci_bdf
+            .as_deref()
+            .and_then(normalize_pci_bdf)
+            .and_then(|pci_bdf| {
+                infos
+                    .iter()
+                    .find(|info| info.pci_bdf.as_deref() == Some(pci_bdf.as_str()))
+            });
+        if let Some(info) = pci_match {
             return Some(info);
         }
 

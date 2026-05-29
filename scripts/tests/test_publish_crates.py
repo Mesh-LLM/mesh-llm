@@ -140,6 +140,49 @@ class PublishCratesScriptTests(unittest.TestCase):
             )
             self.assertFalse((fixture.tmp_path / "cargo.log").exists())
 
+    def test_real_publish_can_opt_into_unknown_registry_status(self) -> None:
+        with PublishCratesFixture() as fixture:
+            fixture.write_curl_statuses({"model-ref": 500})
+            fixture.write_fake_cargo()
+            fixture.write_fake_sleep()
+            fixture.write_fake_date()
+
+            result = fixture.run(
+                env={
+                    "CARGO_REGISTRY_TOKEN": "test-token",
+                    "CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS": "1",
+                    "CRATES_IO_PUBLISH_SETTLE_SECONDS": "0",
+                }
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertIn(
+                "trying cargo publish because CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS=1",
+                result.stderr,
+            )
+            self.assertIn("-p model-ref", fixture.read_log("cargo.log"))
+
+    def test_real_publish_rejects_invalid_unknown_status_opt_in(self) -> None:
+        with PublishCratesFixture() as fixture:
+            fixture.write_curl_statuses({})
+            fixture.write_fake_cargo()
+            fixture.write_fake_sleep()
+            fixture.write_fake_date()
+
+            result = fixture.run(
+                env={
+                    "CARGO_REGISTRY_TOKEN": "test-token",
+                    "CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS": "yes",
+                }
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "CRATES_IO_PUBLISH_ALLOW_UNKNOWN_STATUS must be 0 or 1",
+                result.stderr,
+            )
+            self.assertFalse((fixture.tmp_path / "cargo.log").exists())
+
     def test_cargo_failure_output_redacts_registry_token(self) -> None:
         with PublishCratesFixture() as fixture:
             fixture.write_curl_statuses({})

@@ -37,6 +37,8 @@ jobs:
           fetch-depth: 0
       - name: Check CI crate-list drift
         run: cargo run -p xtask -- repo-consistency ci-crate-lists
+      - name: Check publish crate-chain drift
+        run: cargo run -p xtask -- repo-consistency publish-crates
       - uses: ./.github/actions/compute-changes
         id: compute
         with:

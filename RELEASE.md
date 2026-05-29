@@ -109,6 +109,7 @@ On non-prerelease tags, the release workflow also publishes the Rust SDK crate
 chain to crates.io in dependency order:
 
 ```bash
+cargo run -p xtask -- repo-consistency publish-crates
 scripts/publish-crates.sh --dry-run
 ```
 
@@ -126,11 +127,14 @@ The chain currently publishes:
 10. `mesh-llm-node`
 11. `mesh-llm-api-server`
 
-Run the dry-run before cutting a GA tag after changing SDK crate manifests or
-workspace-internal SDK dependencies. On the first release that introduces a
-new internal SDK crate, the dry-run validates packages whose registry
-dependencies already exist and reports downstream packages that will be fully
-verified during the real sequential publish after their upstream crates land.
+Run the consistency check and dry-run before cutting a GA tag after changing
+SDK crate manifests or workspace-internal SDK dependencies. The consistency
+check keeps the scripted publish order, workspace path dependency versions,
+publish metadata, bundled file includes, and CI release preflight in sync. On
+the first release that introduces a new internal SDK crate, the dry-run
+validates packages whose registry dependencies already exist and reports
+downstream packages that will be fully verified during the real sequential
+publish after their upstream crates land.
 
 If crates.io rate-limits the non-prerelease publish chain after some crates
 have already uploaded, rerun `scripts/publish-crates.sh` for the same checked

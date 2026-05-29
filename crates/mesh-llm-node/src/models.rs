@@ -564,8 +564,7 @@ fn is_layer_package_file(relative_file: &str) -> bool {
 }
 
 fn catalog_models() -> Vec<CatalogModel> {
-    serde_json::from_str(include_str!("../../mesh-client/src/models/catalog.json"))
-        .expect("parse bundled mesh client model catalog")
+    serde_json::from_str(include_str!("catalog.json")).expect("parse bundled model catalog")
 }
 
 fn find_catalog_model(query: &str) -> Option<CatalogModel> {
