@@ -649,6 +649,22 @@ fn flush_native_log_writer<W: Write>(writer: &mut Option<LineWriter<W>>) {
     }
 }
 
+fn sanitize_native_log_note(note: &str) -> String {
+    note.chars()
+        .map(|ch| if matches!(ch, '\n' | '\r') { ' ' } else { ch })
+        .collect()
+}
+
+pub fn write_native_log_note(note: impl AsRef<str>) {
+    let note = sanitize_native_log_note(note.as_ref());
+    if let Ok(mut guard) = native_log_file().lock() {
+        if let Some(writer) = guard.as_mut() {
+            let _ = writeln!(writer, "mesh-llm: {note}");
+            let _ = writer.flush();
+        }
+    }
+}
+
 fn clear_native_log_file() {
     if let Ok(mut guard) = native_log_file().lock() {
         flush_native_log_writer(&mut guard);
@@ -856,6 +872,32 @@ impl RuntimeConfig {
             },
             _selected_backend_device: selected_backend_device,
         })
+    }
+
+    fn native_log_summary(&self) -> String {
+        let n_batch = self
+            .n_batch
+            .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
+        let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
+        format!(
+            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} include_embeddings={} include_output={} filter_tensors_on_load={}",
+            self.stage_index,
+            self.layer_start,
+            self.layer_end,
+            self.ctx_size,
+            self.lane_count,
+            n_batch,
+            n_ubatch,
+            self.n_gpu_layers,
+            self.selected_backend_device.as_deref().unwrap_or("auto"),
+            self.cache_type_k,
+            self.cache_type_v,
+            self.flash_attn_type,
+            self.load_mode,
+            self.include_embeddings,
+            self.include_output,
+            self.filter_tensors_on_load,
+        )
     }
 }
 
@@ -1331,6 +1373,11 @@ impl StageModel {
 
     pub fn open(path: impl AsRef<Path>, config: &RuntimeConfig) -> Result<Self> {
         let path = path.as_ref();
+        write_native_log_note(format!(
+            "skippy_model_open begin path={} {}",
+            path.display(),
+            config.native_log_summary()
+        ));
         let path = CString::new(path.to_string_lossy().as_bytes())
             .context("model path contains an interior NUL byte")?;
         let raw_config = config.as_raw()?;
@@ -1339,6 +1386,7 @@ impl StageModel {
         let status = unsafe {
             skippy_ffi::skippy_model_open(path.as_ptr(), &raw_config.raw, &mut raw, &mut error)
         };
+        write_native_log_note(format!("skippy_model_open returned status={status:?}"));
         ensure_ok(status, error)?;
         if raw.is_null() {
             return Err(anyhow!("skippy_model_open returned a null handle"));
@@ -1355,6 +1403,16 @@ impl StageModel {
         if paths.is_empty() {
             return Err(anyhow!("at least one GGUF part path is required"));
         }
+        let path_list = paths
+            .iter()
+            .map(|path| path.as_ref().display().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        write_native_log_note(format!(
+            "skippy_model_open_from_parts begin parts={} {}",
+            path_list,
+            config.native_log_summary()
+        ));
         let paths = paths
             .iter()
             .map(|path| {
@@ -1375,6 +1433,9 @@ impl StageModel {
                 &mut error,
             )
         };
+        write_native_log_note(format!(
+            "skippy_model_open_from_parts returned status={status:?}"
+        ));
         ensure_ok(status, error)?;
         if raw.is_null() {
             return Err(anyhow!(
@@ -1390,9 +1451,11 @@ impl StageModel {
     }
 
     pub fn create_session(&self) -> Result<StageSession> {
+        write_native_log_note("skippy_session_create begin");
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status = unsafe { skippy_ffi::skippy_session_create(self.raw, &mut raw, &mut error) };
+        write_native_log_note(format!("skippy_session_create returned status={status:?}"));
         ensure_ok(status, error)?;
         if raw.is_null() {
             return Err(anyhow!("skippy_session_create returned a null handle"));
@@ -3545,6 +3608,7 @@ mod tests {
         flush_native_log_writer, format_skippy_error, parse_cache_type, parse_layer_assign_index,
         redirect_native_logs_to_file, register_filtered_native_logs, restore_native_logs,
         set_filtered_native_logs_enabled, unregister_filtered_native_logs, write_native_log,
+        write_native_log_note,
     };
 
     static NATIVE_LOG_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3695,6 +3759,36 @@ mod tests {
         let contents = fs::read_to_string(&path)?;
         fs::remove_file(&path)?;
         assert_eq!(contents, "partial native log line");
+        Ok(())
+    }
+
+    #[test]
+    fn native_log_note_writes_sanitized_flushed_context() -> anyhow::Result<()> {
+        let _native_log_guard = native_log_test_guard();
+
+        struct RestoreNativeLogs;
+
+        impl Drop for RestoreNativeLogs {
+            fn drop(&mut self) {
+                restore_native_logs();
+            }
+        }
+
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let path = env::temp_dir().join(format!(
+            "skippy-native-log-note-test-{}-{nanos}.log",
+            std::process::id()
+        ));
+        let _guard = RestoreNativeLogs;
+        redirect_native_logs_to_file(&path)?;
+
+        write_native_log_note("native call begin\nwith context");
+
+        let contents = fs::read_to_string(&path)?;
+        restore_native_logs();
+        fs::remove_file(&path)?;
+
+        assert_eq!(contents, "mesh-llm: native call begin with context\n");
         Ok(())
     }
 
