@@ -1070,6 +1070,9 @@ pub(super) enum SplitParticipantExclusionReason {
     MissingVram,
     MissingModelInterest,
     StageProtocolGeneration,
+    MissingStagePath,
+    StagePathRelayOnly,
+    StagePathTooSlow,
     MissingModelSource,
 }
 
@@ -1080,6 +1083,9 @@ impl SplitParticipantExclusionReason {
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
             Self::StageProtocolGeneration => "stage_protocol_generation",
+            Self::MissingStagePath => "missing_stage_path",
+            Self::StagePathRelayOnly => "stage_path_relay_only",
+            Self::StagePathTooSlow => "stage_path_too_slow",
             Self::MissingModelSource => "missing_model_source",
         }
     }
@@ -2743,6 +2749,15 @@ async fn collect_split_participants(
             });
             continue;
         }
+        if let Some(reason) =
+            split_peer_stage_path_exclusion_reason(node.split_stage_path_snapshot(peer.id).await)
+        {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason,
+            });
+            continue;
+        }
 
         if let Some(package_signal) =
             split_peer_package_signal(node, peer.id, model_ref, package).await
@@ -2795,6 +2810,22 @@ fn split_peer_preflight_exclusion_reason(
         return Some(SplitParticipantExclusionReason::StageProtocolGeneration);
     }
     None
+}
+
+fn split_peer_stage_path_exclusion_reason(
+    snapshot: mesh::SplitStagePathSnapshot,
+) -> Option<SplitParticipantExclusionReason> {
+    match snapshot.stage_path_rejection()? {
+        mesh::SplitStagePathRejection::MissingStagePath => {
+            Some(SplitParticipantExclusionReason::MissingStagePath)
+        }
+        mesh::SplitStagePathRejection::StagePathRelayOnly => {
+            Some(SplitParticipantExclusionReason::StagePathRelayOnly)
+        }
+        mesh::SplitStagePathRejection::StagePathTooSlow => {
+            Some(SplitParticipantExclusionReason::StagePathTooSlow)
+        }
+    }
 }
 
 fn split_peer_stage_host_exclusion_reason(
@@ -3603,6 +3634,7 @@ mod tests {
             advertised_model_throughput: vec![],
 
             display_rtt: None,
+            selected_path: None,
             propagated_latency: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
         }
@@ -4322,6 +4354,7 @@ max_tokens = 222
     #[test]
     fn split_peer_preflight_requires_current_stage_protocol_generation() {
         let mut peer = split_test_peer(0x61, "Qwen3-Coder", false);
+        peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS);
 
         assert_eq!(
             split_peer_preflight_exclusion_reason(
@@ -4333,6 +4366,67 @@ max_tokens = 222
         );
 
         peer.stage_protocol_generation_supported = true;
+        assert_eq!(
+            split_peer_preflight_exclusion_reason(
+                &peer,
+                "Qwen3-Coder",
+                "meshllm/Qwen3-Coder-layers"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn split_peer_preflight_requires_measured_stage_path() {
+        assert_eq!(
+            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::unknown()),
+            Some(SplitParticipantExclusionReason::MissingStagePath)
+        );
+    }
+
+    #[test]
+    fn split_peer_preflight_rejects_slow_stage_path() {
+        assert_eq!(
+            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(Some(
+                crate::mesh::MAX_SPLIT_RTT_MS + 1,
+            ))),
+            Some(SplitParticipantExclusionReason::StagePathTooSlow)
+        );
+    }
+
+    #[test]
+    fn split_peer_preflight_rejects_relay_only_stage_path() {
+        assert_eq!(
+            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::relay(Some(
+                crate::mesh::MAX_SPLIT_RTT_MS,
+            ))),
+            Some(SplitParticipantExclusionReason::StagePathRelayOnly)
+        );
+    }
+
+    #[test]
+    fn split_peer_preflight_rejects_direct_stage_path_without_rtt() {
+        assert_eq!(
+            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(None)),
+            Some(SplitParticipantExclusionReason::MissingStagePath)
+        );
+    }
+
+    #[test]
+    fn split_peer_preflight_allows_fast_stage_path() {
+        assert_eq!(
+            split_peer_stage_path_exclusion_reason(mesh::SplitStagePathSnapshot::direct(Some(
+                crate::mesh::MAX_SPLIT_RTT_MS,
+            ))),
+            None
+        );
+    }
+
+    #[test]
+    fn split_peer_preflight_keeps_host_eligibility_separate_from_stage_path() {
+        let mut peer = split_test_peer(0x66, "Qwen3-Coder", true);
+        peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS + 1);
+
         assert_eq!(
             split_peer_preflight_exclusion_reason(
                 &peer,

@@ -647,6 +647,7 @@ fn make_test_state_peer(seed: u8, role: mesh::NodeRole) -> mesh::PeerInfo {
         advertised_model_throughput: vec![],
 
         display_rtt: None,
+        selected_path: None,
         propagated_latency: None,
     }
 }
@@ -1682,6 +1683,7 @@ fn make_test_peer(
         advertised_model_throughput: vec![],
 
         display_rtt: None,
+        selected_path: None,
         propagated_latency: None,
     }
 }

@@ -73,6 +73,144 @@ fn quic_bind_addr_keeps_endpoint_default_on_non_windows() {
 }
 
 #[test]
+fn split_stage_path_allows_fast_direct_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(Some(MAX_SPLIT_RTT_MS)).stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_missing_rtt() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(None).stage_path_rejection(),
+        Some(SplitStagePathRejection::MissingStagePath)
+    );
+}
+
+#[test]
+fn split_stage_path_accepts_direct_path_with_peer_rtt_fallback() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(None)
+            .with_direct_rtt_fallback(Some(MAX_SPLIT_RTT_MS))
+            .stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
+fn split_stage_path_keeps_relay_rejection_with_peer_rtt_fallback() {
+    assert_eq!(
+        SplitStagePathSnapshot::relay(None)
+            .with_direct_rtt_fallback(Some(1))
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_slow_peer_rtt_fallback() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(None)
+            .with_direct_rtt_fallback(Some(MAX_SPLIT_RTT_MS + 1))
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathTooSlow)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_relay_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::relay(Some(1)).stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_slow_direct_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::direct(Some(MAX_SPLIT_RTT_MS + 1)).stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathTooSlow)
+    );
+}
+
+#[test]
+fn split_stage_path_rejects_unknown_path() {
+    assert_eq!(
+        SplitStagePathSnapshot::unknown().stage_path_rejection(),
+        Some(SplitStagePathRejection::MissingStagePath)
+    );
+}
+
+#[test]
+fn split_stage_path_uses_direct_peer_path_fallback_for_unknown_stage_path() {
+    let fallback = SelectedPathObservation {
+        path_type: "direct",
+        rtt_ms: Some(MAX_SPLIT_RTT_MS),
+        observed_direct_remote_addr: None,
+    };
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(Some(fallback))
+            .stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
+fn split_stage_path_keeps_relay_peer_path_fallback_rejected() {
+    let fallback = SelectedPathObservation {
+        path_type: "relay",
+        rtt_ms: Some(1),
+        observed_direct_remote_addr: None,
+    };
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(Some(fallback))
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_peer_fallback_does_not_convert_relay_rtt_to_direct() {
+    let mut peer = make_test_peer_info(make_test_endpoint_id(0x4a));
+    peer.rtt_ms = Some(1);
+    peer.selected_path = Some(SelectedPathObservation {
+        path_type: "relay",
+        rtt_ms: Some(1),
+        observed_direct_remote_addr: None,
+    });
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(peer.split_stage_path_fallback())
+            .stage_path_rejection(),
+        Some(SplitStagePathRejection::StagePathRelayOnly)
+    );
+}
+
+#[test]
+fn split_stage_path_peer_fallback_uses_best_direct_rtt() {
+    let mut peer = make_test_peer_info(make_test_endpoint_id(0x4b));
+    peer.rtt_ms = Some(MAX_SPLIT_RTT_MS);
+    peer.selected_path = Some(SelectedPathObservation {
+        path_type: "direct",
+        rtt_ms: None,
+        observed_direct_remote_addr: None,
+    });
+
+    assert_eq!(
+        SplitStagePathSnapshot::unknown()
+            .with_peer_path_fallback(peer.split_stage_path_fallback())
+            .stage_path_rejection(),
+        None
+    );
+}
+
+#[test]
 fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidates() {
     let mut addr = EndpointAddr {
         id: make_test_endpoint_id(0x42),
@@ -990,6 +1128,7 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         advertised_model_throughput: vec![],
 
         display_rtt: None,
+        selected_path: None,
         propagated_latency: None,
     }
 }
@@ -5129,6 +5268,7 @@ fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) -> PeerInfo
         advertised_model_throughput: vec![],
 
         display_rtt: None,
+        selected_path: None,
         propagated_latency: None,
     }
 }

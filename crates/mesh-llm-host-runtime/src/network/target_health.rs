@@ -133,7 +133,24 @@ impl TargetHealth {
         model: &str,
         candidates: &[InferenceTarget],
     ) -> Vec<InferenceTarget> {
-        if candidates.len() <= 1 {
+        self.eligible_candidates_inner(model, candidates, true)
+    }
+
+    pub(crate) fn strict_eligible_candidates(
+        &self,
+        model: &str,
+        candidates: &[InferenceTarget],
+    ) -> Vec<InferenceTarget> {
+        self.eligible_candidates_inner(model, candidates, false)
+    }
+
+    fn eligible_candidates_inner(
+        &self,
+        model: &str,
+        candidates: &[InferenceTarget],
+        preserve_availability: bool,
+    ) -> Vec<InferenceTarget> {
+        if preserve_availability && candidates.len() <= 1 {
             return candidates.to_vec();
         }
         let Some(model) = normalized_model(Some(model)) else {
@@ -157,7 +174,7 @@ impl TargetHealth {
             }
         }
 
-        if cooling == 0 || !has_routable_candidate(&eligible) {
+        if cooling == 0 || (preserve_availability && !has_routable_candidate(&eligible)) {
             candidates.to_vec()
         } else {
             state.routes_avoided = state.routes_avoided.saturating_add(cooling as u64);
@@ -337,6 +354,51 @@ mod tests {
             TargetHealthSnapshot {
                 cooling_targets: 1,
                 routes_avoided: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn strict_candidates_exclude_single_cooling_target_for_auto_fallback() {
+        let health = TargetHealth::default();
+        let candidates = vec![local(9001)];
+
+        health.record_outcome(Some("qwen"), &local(9001), TargetHealthOutcome::Timeout);
+
+        assert_eq!(health.eligible_candidates("qwen", &candidates), candidates);
+        assert!(
+            health
+                .strict_eligible_candidates("qwen", &candidates)
+                .is_empty()
+        );
+        assert_eq!(
+            health.snapshot(),
+            TargetHealthSnapshot {
+                cooling_targets: 1,
+                routes_avoided: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn strict_candidates_exclude_all_cooling_targets_for_auto_fallback() {
+        let health = TargetHealth::default();
+        let candidates = vec![local(9001), local(9002)];
+
+        health.record_outcome(Some("qwen"), &local(9001), TargetHealthOutcome::Timeout);
+        health.record_outcome(Some("qwen"), &local(9002), TargetHealthOutcome::Unavailable);
+
+        assert_eq!(health.eligible_candidates("qwen", &candidates), candidates);
+        assert!(
+            health
+                .strict_eligible_candidates("qwen", &candidates)
+                .is_empty()
+        );
+        assert_eq!(
+            health.snapshot(),
+            TargetHealthSnapshot {
+                cooling_targets: 2,
+                routes_avoided: 2,
             }
         );
     }

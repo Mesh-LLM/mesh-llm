@@ -94,6 +94,24 @@ update_gradle_project_version() {
     printf '%s\n' "$after" >"$file"
 }
 
+refresh_cargo_lock_versions() {
+    local attempt
+
+    for attempt in 1 2 3 4 5; do
+        if (cd "$REPO_ROOT" && cargo metadata --format-version 1 >/dev/null); then
+            return
+        fi
+
+        if [[ "$attempt" -eq 5 ]]; then
+            echo "cargo metadata failed after $attempt attempts" >&2
+            return 1
+        fi
+
+        echo "cargo metadata failed; retrying in $((attempt * 10))s..." >&2
+        sleep $((attempt * 10))
+    done
+}
+
 manifests=()
 while IFS= read -r manifest; do
     manifests+=("$manifest")
@@ -131,7 +149,7 @@ update_gradle_project_version "$kotlin_build_file" "$version"
 versioned_files+=("$kotlin_build_file")
 
 echo "Refreshing Cargo.lock workspace package versions..."
-(cd "$REPO_ROOT" && cargo metadata --format-version 1 >/dev/null)
+refresh_cargo_lock_versions
 
 versioned_files+=("$REPO_ROOT/Cargo.lock")
 

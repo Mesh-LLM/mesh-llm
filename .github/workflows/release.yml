@@ -342,6 +342,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -394,6 +396,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -446,6 +450,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -706,8 +712,8 @@ jobs:
         run: |
           set -euo pipefail
           if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release tag already exists: $RELEASE_TAG" >&2
-            exit 1
+            echo "Release tag already exists: $RELEASE_TAG; reusing it"
+            exit 0
           fi
           scripts/release-version.sh "$RELEASE_TAG"
           cp generated-swift-manifest/Package.swift Package.swift
@@ -727,6 +733,7 @@ jobs:
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
           prerelease: ${{ needs.metadata.outputs.prerelease }}
+          overwrite_files: true
           files: release-artifacts/*
 
   publish_crates:
@@ -737,6 +744,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Publish crates.io package chain
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

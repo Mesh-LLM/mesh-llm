@@ -117,6 +117,90 @@ pub(crate) struct HttpCaptureEvent<'a> {
     pub(crate) stream: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SplitStagePathKind {
+    Direct,
+    Relay,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SplitStagePathRejection {
+    MissingStagePath,
+    StagePathRelayOnly,
+    StagePathTooSlow,
+}
+
+impl SplitStagePathRejection {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingStagePath => "missing_stage_path",
+            Self::StagePathRelayOnly => "stage_path_relay_only",
+            Self::StagePathTooSlow => "stage_path_too_slow",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SplitStagePathSnapshot {
+    pub(crate) kind: SplitStagePathKind,
+    pub(crate) rtt_ms: Option<u32>,
+}
+
+impl SplitStagePathSnapshot {
+    pub(crate) const fn direct(rtt_ms: Option<u32>) -> Self {
+        Self {
+            kind: SplitStagePathKind::Direct,
+            rtt_ms,
+        }
+    }
+
+    pub(crate) const fn relay(rtt_ms: Option<u32>) -> Self {
+        Self {
+            kind: SplitStagePathKind::Relay,
+            rtt_ms,
+        }
+    }
+
+    pub(crate) const fn unknown() -> Self {
+        Self {
+            kind: SplitStagePathKind::Unknown,
+            rtt_ms: None,
+        }
+    }
+
+    pub(crate) const fn with_direct_rtt_fallback(self, fallback_rtt_ms: Option<u32>) -> Self {
+        match (self.kind, self.rtt_ms, fallback_rtt_ms) {
+            (SplitStagePathKind::Direct, None, Some(rtt_ms)) => Self::direct(Some(rtt_ms)),
+            _ => self,
+        }
+    }
+
+    pub(crate) fn with_peer_path_fallback(self, fallback: Option<SelectedPathObservation>) -> Self {
+        match (self.kind, fallback) {
+            (SplitStagePathKind::Direct, Some(observation)) => {
+                self.with_direct_rtt_fallback(observation.rtt_ms)
+            }
+            (SplitStagePathKind::Unknown, Some(observation)) => {
+                split_stage_path_snapshot_from_observation(observation)
+            }
+            _ => self,
+        }
+    }
+
+    pub(crate) const fn stage_path_rejection(self) -> Option<SplitStagePathRejection> {
+        match self.kind {
+            SplitStagePathKind::Direct => match self.rtt_ms {
+                Some(rtt_ms) if rtt_ms <= MAX_SPLIT_RTT_MS => None,
+                Some(_) => Some(SplitStagePathRejection::StagePathTooSlow),
+                None => Some(SplitStagePathRejection::MissingStagePath),
+            },
+            SplitStagePathKind::Relay => Some(SplitStagePathRejection::StagePathRelayOnly),
+            SplitStagePathKind::Unknown => Some(SplitStagePathRejection::MissingStagePath),
+        }
+    }
+}
+
 fn selected_path_observation(conn: &Connection) -> Option<SelectedPathObservation> {
     let path_list = conn.paths();
     for path_info in &path_list {
@@ -144,6 +228,36 @@ fn selected_path_observation(conn: &Connection) -> Option<SelectedPathObservatio
     }
 
     None
+}
+
+fn split_stage_path_snapshot_from_observation(
+    observation: SelectedPathObservation,
+) -> SplitStagePathSnapshot {
+    match observation.path_type {
+        "direct" => SplitStagePathSnapshot::direct(observation.rtt_ms),
+        "relay" => SplitStagePathSnapshot::relay(observation.rtt_ms),
+        _ => SplitStagePathSnapshot::unknown(),
+    }
+}
+
+fn split_stage_path_snapshot_from_connection(conn: &Connection) -> SplitStagePathSnapshot {
+    let Some(observation) = selected_path_observation(conn) else {
+        return SplitStagePathSnapshot::unknown();
+    };
+    split_stage_path_snapshot_from_observation(observation)
+}
+
+fn stage_transport_path_rejection(
+    conn: &Connection,
+    stream_type: u8,
+    fallback: Option<SelectedPathObservation>,
+) -> Option<SplitStagePathRejection> {
+    if stream_type != skippy_protocol::STAGE_STREAM_TRANSPORT {
+        return None;
+    }
+    split_stage_path_snapshot_from_connection(conn)
+        .with_peer_path_fallback(fallback)
+        .stage_path_rejection()
 }
 
 fn endpoint_id_capture_fields(id: EndpointId) -> serde_json::Value {
@@ -210,6 +324,12 @@ const ARTIFACT_TRANSFER_BUFFER_BYTES: usize = 1024 * 1024;
 const ARTIFACT_TRANSFER_INVALID_OFFSET_ERROR: &str = "invalid transfer offset";
 
 type MeshBiStream = (iroh::endpoint::SendStream, iroh::endpoint::RecvStream);
+
+enum StageBiAccept {
+    Streams(MeshBiStream),
+    Continue,
+    Closed,
+}
 
 enum StageStreamAccept {
     Dispatch(MeshBiStream, u8),
@@ -1424,6 +1544,8 @@ pub struct PeerInfo {
     pub(crate) advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
     /// Most recent direct RTT sample for display purposes (refreshed periodically).
     pub display_rtt: Option<DirectLatencyObservation>,
+    /// Last selected path observed on the mesh control connection to this peer.
+    pub(crate) selected_path: Option<SelectedPathObservation>,
     /// Latency propagated via transitive gossip.
     pub propagated_latency: Option<PropagatedLatencyObservation>,
     pub owner_summary: OwnershipSummary,
@@ -1496,6 +1618,7 @@ impl PeerInfo {
             stage_status_list_supported: ann.stage_status_list_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             display_rtt: None,
+            selected_path: None,
             propagated_latency: None,
             owner_summary,
         }
@@ -1504,6 +1627,17 @@ impl PeerInfo {
     /// Return the most recent direct RTT sample for display, falling back to best-seen RTT.
     pub fn current_direct_rtt_ms(&self) -> Option<u32> {
         self.display_rtt.as_ref().map(|d| d.rtt_ms).or(self.rtt_ms)
+    }
+
+    pub(crate) fn split_stage_path_fallback(&self) -> Option<SelectedPathObservation> {
+        let observation = self.selected_path?;
+        if observation.path_type != "direct" {
+            return Some(observation);
+        }
+        Some(SelectedPathObservation {
+            rtt_ms: self.rtt_ms.or(observation.rtt_ms),
+            ..observation
+        })
     }
 
     /// Compute display latency from direct sample or propagated data.
@@ -3075,6 +3209,15 @@ impl Node {
         skippy_protocol::validate_stage_transport_open(&open)
             .map_err(|e| anyhow::anyhow!("StageTransportOpen validation error: {e}"))?;
         let conn = self.stage_connection_to_peer(peer_id).await?;
+        let snapshot = split_stage_path_snapshot_from_connection(&conn)
+            .with_peer_path_fallback(self.peer_stage_path_fallback(peer_id).await);
+        if let Some(rejection) = snapshot.stage_path_rejection() {
+            anyhow::bail!(
+                "stage transport path to {} is not eligible for split serving: {}",
+                peer_id.fmt_short(),
+                rejection.as_str()
+            );
+        }
         let (mut send, recv) = conn.open_bi().await?;
         send.write_all(&[skippy_protocol::STAGE_STREAM_TRANSPORT])
             .await?;
@@ -4109,6 +4252,27 @@ impl Node {
         }
     }
 
+    async fn update_peer_selected_path(
+        &self,
+        id: EndpointId,
+        observation: SelectedPathObservation,
+    ) {
+        let direct_rtt_ms = if observation.path_type == "direct" {
+            observation.rtt_ms
+        } else {
+            None
+        };
+        {
+            let mut state = self.state.lock().await;
+            if let Some(peer) = state.peers.get_mut(&id) {
+                peer.selected_path = Some(observation);
+            }
+        }
+        if let Some(rtt_ms) = direct_rtt_ms {
+            self.update_peer_rtt(id, rtt_ms).await;
+        }
+    }
+
     /// Re-gossip our state to all connected peers.
     /// Call after changing assigned/hosted state, role, or configured models.
     pub async fn regossip(&self) {
@@ -4893,6 +5057,37 @@ impl Node {
         }
     }
 
+    pub(crate) async fn split_stage_path_snapshot(
+        &self,
+        peer_id: EndpointId,
+    ) -> SplitStagePathSnapshot {
+        let fallback = self.peer_stage_path_fallback(peer_id).await;
+        match self.stage_connection_to_peer(peer_id).await {
+            Ok(conn) => {
+                split_stage_path_snapshot_from_connection(&conn).with_peer_path_fallback(fallback)
+            }
+            Err(error) => {
+                tracing::debug!(
+                    peer = %peer_id.fmt_short(),
+                    error = %error,
+                    "split stage path probe could not open stage connection"
+                );
+                SplitStagePathSnapshot::unknown().with_peer_path_fallback(fallback)
+            }
+        }
+    }
+
+    async fn peer_stage_path_fallback(
+        &self,
+        peer_id: EndpointId,
+    ) -> Option<SelectedPathObservation> {
+        let state = self.state.lock().await;
+        state
+            .peers
+            .get(&peer_id)
+            .and_then(PeerInfo::split_stage_path_fallback)
+    }
+
     async fn open_mesh_subprotocol_stream(
         &self,
         peer_id: EndpointId,
@@ -5382,19 +5577,19 @@ impl Node {
         }
     }
 
-    async fn accept_stage_stream(
+    async fn accept_admitted_stage_bi(
         &self,
         conn: &Connection,
         remote: EndpointId,
-    ) -> StageStreamAccept {
-        let (send, mut recv) = match conn.accept_bi().await {
+    ) -> StageBiAccept {
+        let (send, recv) = match conn.accept_bi().await {
             Ok(streams) => streams,
             Err(e) => {
                 tracing::info!(
                     "Skippy stage connection to {} closed: {e}",
                     remote.fmt_short()
                 );
-                return StageStreamAccept::Closed;
+                return StageBiAccept::Closed;
             }
         };
         if !self.stage_stream_admitted(remote).await {
@@ -5403,10 +5598,36 @@ impl Node {
                 remote.fmt_short()
             );
             drop((send, recv));
-            return StageStreamAccept::Continue;
+            return StageBiAccept::Continue;
         }
+        StageBiAccept::Streams((send, recv))
+    }
+
+    async fn accept_stage_stream(
+        &self,
+        conn: &Connection,
+        remote: EndpointId,
+    ) -> StageStreamAccept {
+        let (send, mut recv) = match self.accept_admitted_stage_bi(conn, remote).await {
+            StageBiAccept::Streams(streams) => streams,
+            StageBiAccept::Continue => return StageStreamAccept::Continue,
+            StageBiAccept::Closed => return StageStreamAccept::Closed,
+        };
         let mut type_buf = [0u8; 1];
         if recv.read_exact(&mut type_buf).await.is_err() {
+            return StageStreamAccept::Continue;
+        }
+        if let Some(rejection) = stage_transport_path_rejection(
+            conn,
+            type_buf[0],
+            self.peer_stage_path_fallback(remote).await,
+        ) {
+            tracing::warn!(
+                "Rejected skippy stage transport stream from {}: {}",
+                remote.fmt_short(),
+                rejection.as_str()
+            );
+            drop((send, recv));
             return StageStreamAccept::Continue;
         }
         StageStreamAccept::Dispatch((send, recv), type_buf[0])
@@ -7625,19 +7846,29 @@ impl Node {
                 for path_info in &path_list {
                     if path_info.is_selected() {
                         let rtt_ms = path_info.rtt().as_millis() as u32;
-                        if rtt_ms == 0 {
-                            continue;
-                        }
+                        let rtt_ms = (rtt_ms != 0).then_some(rtt_ms);
                         let path_type = if path_info.is_ip() { "direct" } else { "relay" };
-                        if rtt_ms > 0 {
+                        if let Some(rtt_ms) = rtt_ms {
                             emit_mesh_info(format!(
                                 "📡 Peer {} RTT recheck: {}ms ({})",
                                 peer_id.fmt_short(),
                                 rtt_ms,
                                 path_type
                             ));
-                            node_for_recheck.update_peer_rtt(peer_id, rtt_ms).await;
                         }
+                        node_for_recheck
+                            .update_peer_selected_path(
+                                peer_id,
+                                SelectedPathObservation {
+                                    path_type,
+                                    rtt_ms,
+                                    observed_direct_remote_addr: match path_info.remote_addr() {
+                                        TransportAddr::Ip(addr) => Some(*addr),
+                                        _ => None,
+                                    },
+                                },
+                            )
+                            .await;
                         break;
                     }
                 }
