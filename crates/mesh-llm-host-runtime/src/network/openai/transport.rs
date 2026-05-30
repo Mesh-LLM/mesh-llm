@@ -4859,7 +4859,6 @@ mod tests {
             display_rtt: None,
             selected_path: None,
             propagated_latency: None,
-            selected_path: None,
             owner_summary: crate::crypto::OwnershipSummary::default(),
         }
     }
