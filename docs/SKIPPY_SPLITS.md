@@ -108,8 +108,9 @@ participant.
 
 For maintainer debugging, add `--output-dir <dir>`. The doctor bundle includes
 `split-readiness.json`, management API snapshots for runtime/stage/llama status,
-`skippy-diagnostics.json`, and the active instance's `skippy-native.log` when
-the local runtime directory can be matched to the console port.
+plugin startup/provider/endpoint snapshots, `skippy-diagnostics.json`, and the
+active instance's `skippy-native.log` when the local runtime directory can be
+matched to the console port.
 
 On Windows, collect a shareable diagnostic bundle from already-running nodes:
 

@@ -1187,6 +1187,7 @@ pub(crate) mod tests {
                 mesh_event_subscriptions: 0,
                 capabilities: vec!["chat".into()],
             }),
+            startup: None,
             error: None,
         });
         alpha.publish_plugin_manifest(PluginManifestOverview {
@@ -1240,6 +1241,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            startup: None,
             error: Some("disabled".into()),
         });
         beta.publish_plugin_payload("metrics", json!({"requests": 5}));
@@ -1366,6 +1368,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            startup: None,
             error: None,
         });
         alpha.publish_plugin_payload("metrics", json!({"requests": 1}));
@@ -1398,6 +1401,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            startup: None,
             error: None,
         });
         beta.publish_plugin_payload("metrics", json!({"requests": 7}));

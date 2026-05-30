@@ -1,5 +1,6 @@
 mod authoring;
 mod model;
+mod plugin_validation;
 mod store;
 mod validate;
 
@@ -15,7 +16,7 @@ pub use validate::validate_config;
 mod tests {
     use super::{
         ConfigStore, GpuAssignment, LocalServingNodeConfig, MeshConfig, ModelRuntimeKind,
-        parse_config_toml,
+        parse_config_toml, validate_config,
     };
     use std::fs;
     use tempfile::TempDir;
@@ -28,6 +29,58 @@ mod tests {
         let config = store.load().unwrap();
 
         assert!(config.models.is_empty());
+    }
+
+    #[test]
+    fn plugin_startup_config_round_trips_from_toml() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[[plugin]]
+name = "metrics"
+command = "mesh-llm-plugin-metrics"
+
+[plugin.startup]
+connect_timeout_secs = 75
+init_timeout_secs = 90
+optional = true
+lazy_start = true
+"#,
+        )
+        .expect("plugin startup config should parse");
+
+        let startup = &config.plugins[0].startup;
+        assert_eq!(startup.connect_timeout_secs, Some(75));
+        assert_eq!(startup.init_timeout_secs, Some(90));
+        assert!(startup.optional);
+        assert!(startup.lazy_start);
+        validate_config(&config).expect("positive startup timeouts should validate");
+    }
+
+    #[test]
+    fn plugin_startup_config_rejects_zero_timeouts() {
+        let config: MeshConfig = toml::from_str(
+            r#"
+version = 1
+
+[[plugin]]
+name = "metrics"
+command = "mesh-llm-plugin-metrics"
+
+[plugin.startup]
+connect_timeout_secs = 0
+"#,
+        )
+        .expect("plugin startup config should parse before validation");
+
+        let err = validate_config(&config).expect_err("zero connect timeout must be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("plugin[0].startup.connect_timeout_secs must be at least 1"),
+            "unexpected validation error: {err}"
+        );
     }
 
     #[test]

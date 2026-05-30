@@ -1057,6 +1057,7 @@ fn legacy_proto_config_to_mesh(
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,
+            startup: Default::default(),
         })
         .collect();
     let mesh_requirements = snapshot

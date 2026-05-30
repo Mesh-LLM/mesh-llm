@@ -609,6 +609,12 @@ command = "mesh-llm-plugin-blackboard"
 # [[plugin]]
 # name    = "openai-endpoint"
 # url     = "http://localhost:8000/api/v1"
+#
+# [plugin.startup]
+# connect_timeout_secs = 75
+# init_timeout_secs = 90
+# optional = true
+# lazy_start = true
 ```
 
 Use the default config:
@@ -650,6 +656,11 @@ Config precedence:
   written back into TOML.
 - Changing this file affects future starts or reloads, not active sessions.
 - Plugin entries stay in the same file.
+- `[plugin.startup]` controls how long mesh-llm waits for an external plugin to
+  connect and initialize. `optional = true` records a missing installed plugin
+  as inactive instead of rejecting the config, and `lazy_start = true` defers
+  process launch until direct plugin use. This is useful for very slow legacy
+  hosts or emulator-assisted startup paths.
 
 ## Lemonade integration
 

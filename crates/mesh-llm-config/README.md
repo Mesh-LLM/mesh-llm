@@ -142,7 +142,11 @@ store.update(|config| {
     config.enable_builtin_plugin("telemetry")?;
     config.upsert_plugin("endpoint-plugin")?
         .enabled(true)
-        .url("http://localhost:8000/v1");
+        .url("http://localhost:8000/v1")
+        .connect_timeout_secs(75)
+        .init_timeout_secs(90)
+        .optional(true)
+        .lazy_start(true);
     config.upsert_external_plugin("custom-tool", "mesh-tool", ["--serve"])?;
     Ok(())
 })?;

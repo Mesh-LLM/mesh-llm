@@ -153,6 +153,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         args: Vec::new(),
         url: None,
         env: Default::default(),
+        startup: Default::default(),
     }))
 }
 

@@ -15,7 +15,23 @@ const SKIPPY_DIAGNOSTIC_ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/runtime/stages",
         "runtime-stages.json",
     ),
+    (
+        "runtime_endpoints",
+        "/api/runtime/endpoints",
+        "runtime-endpoints.json",
+    ),
     ("runtime_llama", "/api/runtime/llama", "runtime-llama.json"),
+    ("plugins", "/api/plugins", "plugins.json"),
+    (
+        "plugin_endpoints",
+        "/api/plugins/endpoints",
+        "plugin-endpoints.json",
+    ),
+    (
+        "plugin_providers",
+        "/api/plugins/providers",
+        "plugin-providers.json",
+    ),
 ];
 
 pub(crate) async fn dispatch_doctor_command(command: &DoctorCommand) -> Result<()> {
@@ -309,8 +325,8 @@ fn split_readiness_lines(report: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_skippy_native_log, select_runtime_instance, split_readiness_lines,
-        write_split_readiness_report,
+        SKIPPY_DIAGNOSTIC_ENDPOINTS, capture_skippy_native_log, select_runtime_instance,
+        split_readiness_lines, write_split_readiness_report,
     };
     use crate::runtime::instance::LocalInstanceSnapshot;
     use serde_json::json;
@@ -356,6 +372,18 @@ mod tests {
         );
         let written = std::fs::read_to_string(path).expect("read report");
         assert!(written.contains("\"verdict\": \"ready\""));
+    }
+
+    #[test]
+    fn split_doctor_captures_plugin_startup_surfaces() {
+        let paths = SKIPPY_DIAGNOSTIC_ENDPOINTS
+            .iter()
+            .map(|(_, path, _)| *path)
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&"/api/runtime/endpoints"));
+        assert!(paths.contains(&"/api/plugins"));
+        assert!(paths.contains(&"/api/plugins/providers"));
     }
 
     #[test]

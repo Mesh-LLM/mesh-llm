@@ -9074,6 +9074,7 @@ mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            startup: None,
             error: None,
         };
 

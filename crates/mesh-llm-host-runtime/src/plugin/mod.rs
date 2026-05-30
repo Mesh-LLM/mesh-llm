@@ -3,6 +3,7 @@ mod installed;
 pub(crate) mod mcp;
 mod runtime;
 pub(crate) mod stapler;
+mod startup;
 mod support;
 mod transport;
 
@@ -43,8 +44,9 @@ pub use self::config::{
     ConfigEditor, ConfigStore, GpuAssignment, GpuConfig, LocalServingNodeConfig, MeshConfig,
     MeshRequirementsConfig, ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor,
     ModelRuntimeKind, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PluginHostMode,
-    ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig, bundled_cli_plugin_spec, config_path,
-    config_to_toml, load_config, parse_config_toml, resolve_plugins,
+    PluginStartupConfig, ResolvedPlugins, TelemetryConfig, TelemetryMetricsConfig,
+    bundled_cli_plugin_spec, config_path, config_to_toml, load_config, parse_config_toml,
+    resolve_plugins,
 };
 #[cfg(test)]
 pub(crate) use self::config::{
@@ -57,6 +59,7 @@ pub(crate) use self::config::{
     mesh_requirements_validation_error,
 };
 use self::runtime::ExternalPlugin;
+pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
 pub(crate) use self::support::parse_optional_json;
 use self::support::{format_args_for_log, format_slice_for_log, format_tool_names_for_log};
 #[cfg(all(test, unix))]
@@ -72,7 +75,6 @@ use tokio::sync::oneshot;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
-const CONNECT_TIMEOUT_SECS: u64 = 10;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
 const HEALTH_CHECK_INTERVAL_SECS: u64 = 15;
 const ENDPOINT_STARTUP_GRACE_SECS: u64 = 30;
@@ -155,6 +157,8 @@ pub struct PluginSummary {
     pub tools: Vec<ToolSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<PluginManifestOverview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub startup: Option<PluginStartupSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -454,6 +458,7 @@ impl PluginManager {
             args: spec.args.clone(),
             tools: Vec::new(),
             manifest: None,
+            startup: Some(spec.startup.summary()),
             error: Some(error.to_string()),
         }
     }
@@ -562,6 +567,7 @@ impl PluginManager {
                         args: Vec::new(),
                         tools: Vec::new(),
                         manifest: Some(plugin_manifest_overview(&manifest)),
+                        startup: None,
                         error: None,
                     })
                     .collect::<Vec<_>>();
@@ -650,6 +656,7 @@ impl PluginManager {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: Some(plugin_manifest_overview(&manifest)),
+            startup: None,
             error: None,
         };
         self.publish_plugin_summary(&summary);
@@ -1334,7 +1341,11 @@ impl PluginManager {
         };
         self.publish_plugin_summary(&summary);
 
-        let manifest = self.manifest(plugin_name).await.ok().flatten();
+        let manifest = if let Some(plugin) = self.inner.plugins.get(plugin_name) {
+            plugin.manifest_snapshot().await
+        } else {
+            self.manifest(plugin_name).await.ok().flatten()
+        };
         let Some(manifest) = manifest else {
             self.clear_plugin_endpoint_health(plugin_name).await;
             self.publish_plugin_summary(&summary);
@@ -1946,6 +1957,7 @@ mod tests {
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: vec!["--stdio".into()],
                 url: None,
+                startup: Default::default(),
             }],
             defaults: None,
             ..MeshConfig::default()
@@ -1960,6 +1972,86 @@ mod tests {
     }
 
     #[test]
+    fn external_plugin_startup_policy_is_resolved() {
+        let config = MeshConfig {
+            plugins: vec![PluginConfigEntry {
+                name: "metrics".into(),
+                enabled: Some(true),
+                command: Some("mesh-llm-plugin-metrics".into()),
+                args: Vec::new(),
+                url: None,
+                startup: PluginStartupConfig {
+                    connect_timeout_secs: Some(75),
+                    init_timeout_secs: Some(90),
+                    optional: true,
+                    lazy_start: true,
+                },
+            }],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+        let spec = resolved
+            .externals
+            .iter()
+            .find(|spec| spec.name == "metrics")
+            .expect("configured plugin should resolve");
+
+        assert_eq!(spec.startup.connect_timeout().as_secs(), 75);
+        assert_eq!(spec.startup.init_timeout().as_secs(), 90);
+        assert!(spec.startup.optional);
+        assert!(spec.startup.lazy_start);
+    }
+
+    #[test]
+    fn optional_missing_installed_plugin_becomes_inactive_summary() {
+        let config = MeshConfig {
+            plugins: vec![PluginConfigEntry {
+                name: "missing-optional".into(),
+                enabled: Some(true),
+                command: None,
+                args: Vec::new(),
+                url: None,
+                startup: PluginStartupConfig {
+                    optional: true,
+                    ..PluginStartupConfig::default()
+                },
+            }],
+            defaults: None,
+            ..MeshConfig::default()
+        };
+
+        let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+
+        assert_eq!(
+            resolved
+                .inactive
+                .iter()
+                .filter(|summary| summary.name == "missing-optional")
+                .count(),
+            1
+        );
+        let summary = resolved
+            .inactive
+            .iter()
+            .find(|summary| summary.name == "missing-optional")
+            .unwrap();
+        assert_eq!(summary.status, "missing");
+        assert_eq!(
+            summary.startup.as_ref().map(|startup| startup.optional),
+            Some(true)
+        );
+        assert!(
+            summary
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("optional")
+        );
+    }
+
+    #[test]
     fn blobstore_can_be_disabled() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
@@ -1968,6 +2060,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 url: None,
+                startup: Default::default(),
             }],
             defaults: None,
             ..MeshConfig::default()
@@ -1986,6 +2079,7 @@ mod tests {
                 command: Some("endpoint-plugin".into()),
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
+                startup: Default::default(),
             }],
             defaults: None,
             ..MeshConfig::default()
@@ -2009,6 +2103,7 @@ mod tests {
                 command: Some("/opt/plugins/endpoint-plugin".into()),
                 args: vec!["--verbose".into()],
                 url: None,
+                startup: Default::default(),
             }],
             defaults: None,
             ..MeshConfig::default()
@@ -2031,6 +2126,7 @@ mod tests {
                 command: None,
                 args: Vec::new(),
                 url: Some("http://gpu-box:8000/v1".into()),
+                startup: Default::default(),
             }],
             defaults: None,
             ..MeshConfig::default()
@@ -2063,6 +2159,7 @@ mod tests {
                 command: Some("/tmp/demo".into()),
                 args: vec!["--flag".into()],
                 url: None,
+                startup: Default::default(),
             }],
             defaults: None,
             ..MeshConfig::default()
@@ -2083,6 +2180,7 @@ mod tests {
                 args: vec!["--stdio".into()],
                 url: None,
                 env: BTreeMap::new(),
+                startup: PluginStartupOptions::default(),
             }],
             inactive: Vec::new(),
         };
@@ -2098,6 +2196,51 @@ mod tests {
         assert_eq!(summaries[0].name, "broken");
         assert_eq!(summaries[0].status, "error");
         assert!(!summaries[0].error.as_deref().unwrap_or_default().is_empty());
+    }
+
+    #[tokio::test]
+    async fn lazy_start_plugin_does_not_block_manager_startup() {
+        let specs = ResolvedPlugins {
+            externals: vec![ExternalPluginSpec {
+                name: "lazy".into(),
+                command: "mesh-llm-definitely-missing-plugin-binary".into(),
+                args: Vec::new(),
+                url: None,
+                env: BTreeMap::new(),
+                startup: PluginStartupOptions {
+                    optional: true,
+                    lazy_start: true,
+                    ..PluginStartupOptions::default()
+                },
+            }],
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("lazy plugin should not start during manager startup");
+        let summaries = manager.list().await;
+        manager.shutdown().await;
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "lazy");
+        assert_eq!(summaries[0].status, "deferred");
+        assert_eq!(
+            summaries[0]
+                .startup
+                .as_ref()
+                .map(|startup| startup.lazy_start),
+            Some(true)
+        );
+        assert!(summaries[0].pid.is_none());
+        assert!(
+            summaries[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("lazy")
+        );
     }
 
     #[test]
@@ -2145,6 +2288,7 @@ mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            startup: None,
             error: None,
         }
     }
