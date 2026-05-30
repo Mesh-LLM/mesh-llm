@@ -2616,6 +2616,15 @@ impl StageTopologyState {
         self.record_topology(topology);
     }
 
+    fn withdraw_topology(&mut self, topology_id: &str, run_id: &str) -> bool {
+        let topology_key = stage_topology_key(topology_id, run_id);
+        let removed_topology = self.topologies.remove(&topology_key).is_some();
+        let old_status_count = self.statuses.len();
+        self.statuses
+            .retain(|_, status| status.topology_id != topology_id || status.run_id != run_id);
+        removed_topology || self.statuses.len() != old_status_count
+    }
+
     fn visible_topologies(&self) -> Vec<StageTopologyInstance> {
         self.topologies
             .values()
@@ -2669,6 +2678,17 @@ impl StageTopologyState {
             ),
             runtime_status,
         );
+    }
+
+    fn record_status_refresh_failure(&mut self, status: &StageRuntimeStatus, error: String) {
+        self.record_status(stage_runtime_status_from_snapshot(
+            status.node_id,
+            stage_snapshot_from_runtime_status(
+                status,
+                crate::inference::skippy::StageRuntimeState::Failed,
+                Some(error),
+            ),
+        ));
     }
 
     fn active_statuses(&self) -> Vec<StageRuntimeStatus> {
@@ -3091,6 +3111,13 @@ impl Node {
             .activate_topology(topology);
     }
 
+    pub async fn withdraw_stage_topology(&self, topology_id: &str, run_id: &str) -> bool {
+        self.stage_topologies
+            .lock()
+            .await
+            .withdraw_topology(topology_id, run_id)
+    }
+
     pub async fn stage_topologies(&self) -> Vec<StageTopologyInstance> {
         self.stage_topologies.lock().await.visible_topologies()
     }
@@ -3129,15 +3156,13 @@ impl Node {
             match tokio::time::timeout(timeout, refresh).await {
                 Ok(Ok(crate::inference::skippy::StageControlResponse::Status(statuses))) => {
                     if statuses.is_empty() {
-                        self.record_stage_status(
-                            Some(peer_id),
-                            stage_snapshot_from_runtime_status(
+                        self.stage_topologies
+                            .lock()
+                            .await
+                            .record_status_refresh_failure(
                                 &status,
-                                crate::inference::skippy::StageRuntimeState::Failed,
-                                Some("stage status missing from runtime".to_string()),
-                            ),
-                        )
-                        .await;
+                                "stage status missing from runtime".to_string(),
+                            );
                     } else {
                         for status in statuses {
                             self.record_stage_status(Some(peer_id), status).await;
@@ -3149,23 +3174,25 @@ impl Node {
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => {
-                    self.record_stage_status(
-                        Some(peer_id),
-                        stage_snapshot_from_runtime_status(
-                            &status,
-                            crate::inference::skippy::StageRuntimeState::Failed,
-                            Some(error.to_string()),
-                        ),
-                    )
-                    .await;
+                    self.stage_topologies
+                        .lock()
+                        .await
+                        .record_status_refresh_failure(&status, error.to_string());
                 }
                 Err(_) => {
+                    self.stage_topologies
+                        .lock()
+                        .await
+                        .record_status_refresh_failure(
+                            &status,
+                            "stage status refresh timed out".to_string(),
+                        );
                     tracing::debug!(
                         topology_id = %status.topology_id,
                         run_id = %status.run_id,
                         stage_id = %status.stage_id,
                         peer = %peer_id.fmt_short(),
-                        "stage status refresh timed out; preserving last known status"
+                        "stage status refresh timed out; marking stage failed"
                     );
                 }
             }

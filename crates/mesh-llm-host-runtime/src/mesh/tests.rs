@@ -7764,6 +7764,56 @@ fn active_stage_topology_replaces_previous_generation_for_model() {
 }
 
 #[test]
+fn stage_topology_withdraw_removes_active_topology_and_statuses() {
+    let host_id = EndpointId::from(SecretKey::from_bytes(&[0x41; 32]).public());
+    let worker_id = EndpointId::from(SecretKey::from_bytes(&[0x42; 32]).public());
+    let mut state = StageTopologyState::default();
+    state.activate_topology(StageTopologyInstance {
+        topology_id: "topology-a".to_string(),
+        run_id: "run-a".to_string(),
+        model_id: "model-a".to_string(),
+        package_ref: "gguf:///model.gguf".to_string(),
+        manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+        stages: vec![
+            StageAssignment {
+                stage_id: "stage-0".to_string(),
+                stage_index: 0,
+                node_id: host_id,
+                layer_start: 0,
+                layer_end: 12,
+                endpoint: StageEndpoint {
+                    bind_addr: "127.0.0.1:50000".to_string(),
+                },
+            },
+            StageAssignment {
+                stage_id: "stage-1".to_string(),
+                stage_index: 1,
+                node_id: worker_id,
+                layer_start: 12,
+                layer_end: 24,
+                endpoint: StageEndpoint {
+                    bind_addr: "127.0.0.1:0".to_string(),
+                },
+            },
+        ],
+    });
+    state.record_status(test_stage_status(
+        worker_id,
+        "stage-1",
+        1,
+        "127.0.0.1:51234",
+        crate::inference::skippy::StageRuntimeState::Ready,
+    ));
+
+    assert_eq!(state.visible_topologies().len(), 1);
+    assert_eq!(state.runtime_statuses().len(), 1);
+    assert!(state.withdraw_topology("topology-a", "run-a"));
+    assert!(state.visible_topologies().is_empty());
+    assert!(state.runtime_statuses().is_empty());
+    assert!(!state.withdraw_topology("topology-a", "run-a"));
+}
+
+#[test]
 fn empty_stage_status_snapshots_are_ignored() {
     let node_id = EndpointId::from(SecretKey::from_bytes(&[0x39; 32]).public());
     let mut state = StageTopologyState::default();
@@ -7812,5 +7862,31 @@ fn active_stage_refresh_marks_missing_stage_failed() {
     assert_eq!(
         status.error.as_deref(),
         Some("stage status missing from runtime")
+    );
+}
+
+#[test]
+fn active_stage_refresh_timeout_marks_cached_stage_failed() {
+    let node_id = EndpointId::from(SecretKey::from_bytes(&[0x43; 32]).public());
+    let mut state = StageTopologyState::default();
+    state.record_status(test_stage_status(
+        node_id,
+        "stage-1",
+        1,
+        "127.0.0.1:51234",
+        crate::inference::skippy::StageRuntimeState::Ready,
+    ));
+    let cached = state.active_statuses().into_iter().next().unwrap();
+
+    state.record_status_refresh_failure(&cached, "stage status refresh timed out".to_string());
+
+    let status = state.runtime_statuses().into_iter().next().unwrap();
+    assert_eq!(
+        status.state,
+        crate::inference::skippy::StageRuntimeState::Failed
+    );
+    assert_eq!(
+        status.error.as_deref(),
+        Some("stage status refresh timed out")
     );
 }

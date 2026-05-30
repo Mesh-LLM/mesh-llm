@@ -245,6 +245,7 @@ pub(super) struct SplitCoordinatorLocalFallbackEvent {
     pub(super) reason: &'static str,
     pub(super) generation: u64,
     pub(super) topology_id: String,
+    pub(super) run_id: String,
     pub(super) unavailable_stage_nodes: Vec<iroh::EndpointId>,
     pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
 }
@@ -253,6 +254,7 @@ pub(super) struct SplitCoordinatorWithdrawEvent {
     pub(super) reason: &'static str,
     pub(super) generation: u64,
     pub(super) topology_id: String,
+    pub(super) run_id: String,
     pub(super) unavailable_stage_nodes: Vec<iroh::EndpointId>,
     pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
 }
@@ -2310,6 +2312,7 @@ impl SplitTopologyCoordinator {
             reason,
             generation: self.active.generation,
             topology_id: self.active.topology_id.clone(),
+            run_id: self.active.run_id.clone(),
             unavailable_stage_nodes,
             ack: ack_tx,
         });
@@ -2332,6 +2335,7 @@ impl SplitTopologyCoordinator {
             reason,
             generation: self.active.generation,
             topology_id: self.active.topology_id.clone(),
+            run_id: self.active.run_id.clone(),
             unavailable_stage_nodes,
             ack: ack_tx,
         });

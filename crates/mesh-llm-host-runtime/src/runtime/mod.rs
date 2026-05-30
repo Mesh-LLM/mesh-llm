@@ -1711,6 +1711,10 @@ async fn startup_handle_local_fallback_event(
     let unavailable_stage_nodes =
         startup_split_unavailable_stage_nodes(&event.unavailable_stage_nodes);
     let old_loaded_name = state.loaded_name.clone();
+    let withdrew_topology = ctx
+        .node
+        .withdraw_stage_topology(&event.topology_id, &event.run_id)
+        .await;
     let Some(old_handle) = state.handle.take() else {
         let _ = event.ack.send(SplitCoordinatorAck::Accepted);
         return StartupLoopControl::Break;
@@ -1834,9 +1838,11 @@ async fn startup_handle_local_fallback_event(
             event.topology_id, state.loaded_name
         ),
         context: Some(format!(
-            "reason={} generation={} unavailable_stage_nodes=[{}] previous_port={} new_port={} new_ctx={}",
+            "reason={} generation={} run_id={} topology_withdrawn={} unavailable_stage_nodes=[{}] previous_port={} new_port={} new_ctx={}",
             event.reason,
             event.generation,
+            event.run_id,
+            withdrew_topology,
             unavailable_stage_nodes,
             old_port,
             new_port,
@@ -1943,14 +1949,22 @@ async fn startup_handle_split_event(
         SplitCoordinatorEvent::Withdraw(event) => {
             let unavailable_stage_nodes =
                 startup_split_unavailable_stage_nodes(&event.unavailable_stage_nodes);
+            let withdrew_topology = ctx
+                .node
+                .withdraw_stage_topology(&event.topology_id, &event.run_id)
+                .await;
             let _ = emit_event(OutputEvent::Warning {
                 message: format!(
                     "Split runtime topology '{}' lost required stage peer(s); withdrawing model '{}'",
                     event.topology_id, state.loaded_name
                 ),
                 context: Some(format!(
-                    "reason={} generation={} unavailable_stage_nodes=[{}]",
-                    event.reason, event.generation, unavailable_stage_nodes
+                    "reason={} generation={} run_id={} topology_withdrawn={} unavailable_stage_nodes=[{}]",
+                    event.reason,
+                    event.generation,
+                    event.run_id,
+                    withdrew_topology,
+                    unavailable_stage_nodes
                 )),
             });
             let _ = event.ack.send(SplitCoordinatorAck::Accepted);
