@@ -17,7 +17,7 @@ use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
     model_fits_runtime_capacity,
 };
-use self::discovery::{nostr_rediscovery, start_new_mesh};
+use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
     LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController,
@@ -5784,6 +5784,14 @@ fn should_start_relay_health_monitor(mode: mesh_discovery::MeshDiscoveryMode) ->
     )
 }
 
+fn should_start_lan_rediscovery(
+    mode: mesh_discovery::MeshDiscoveryMode,
+    join_tokens: &[String],
+) -> bool {
+    mode == mesh_discovery::MeshDiscoveryMode::Mdns
+        && join_tokens.iter().any(|token| !token.trim().is_empty())
+}
+
 fn start_relay_health_monitor_for_discovery_mode(
     node: &mesh::Node,
     mode: mesh_discovery::MeshDiscoveryMode,
@@ -5993,6 +6001,17 @@ async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
             rediscover_relays,
             rediscover_relay_urls,
             rediscover_mesh_name,
+        )));
+    } else if should_start_lan_rediscovery(cli.mesh_discovery_mode, &cli.join) {
+        let rediscover_node = node.clone();
+        let rediscover_join_tokens = cli.join.clone();
+        let rediscover_mesh_name = cli.mesh_name.clone();
+        let rediscover_region = cli.region.clone();
+        tokio::spawn(Box::pin(lan_rediscovery(
+            rediscover_node,
+            rediscover_join_tokens,
+            rediscover_mesh_name,
+            rediscover_region,
         )));
     }
 }
@@ -7426,9 +7445,13 @@ async fn setup_run_auto_console_state(
             .to_string();
         console_state.set_draft_name(dn).await;
     }
-    if let Some(ref name) = ctx.cli.mesh_name {
-        console_state.set_mesh_name(name.clone()).await;
-    }
+    console_state
+        .set_mesh_publication_metadata(
+            ctx.cli.mesh_name.clone(),
+            ctx.cli.region.clone(),
+            ctx.cli.max_clients,
+        )
+        .await;
     Ok(Some(console_state))
 }
 
@@ -7539,6 +7562,7 @@ fn spawn_run_auto_mdns_publisher(
     let pub_region = cli.region.clone();
     let pub_max_clients = cli.max_clients;
     let pub_api_port = cli.console;
+    let pub_details_reachable = cli.listen_all;
     let (status_tx, status_rx) = tokio::sync::watch::channel(None);
     if let Some(cs) = console_state {
         bridge_publication_state(cs.clone(), status_rx);
@@ -7550,6 +7574,7 @@ fn spawn_run_auto_mdns_publisher(
             region: pub_region,
             max_clients: pub_max_clients,
             api_port: pub_api_port,
+            details_reachable: pub_details_reachable,
             interval_secs: 60,
             status_tx: Some(status_tx),
         },
@@ -8169,6 +8194,9 @@ async fn setup_passive_console_runtime(
         .set_mesh_discovery_mode(cli.mesh_discovery_mode)
         .await;
     console_state.set_nostr_discovery(cli.nostr_discovery).await;
+    console_state
+        .set_mesh_publication_metadata(cli.mesh_name.clone(), cli.region.clone(), cli.max_clients)
+        .await;
     if is_client {
         console_state.set_client(true).await;
         if cli.nostr_discovery {
@@ -8471,6 +8499,7 @@ async fn setup_passive_publication(
                 let pub_region = cli.region.clone();
                 let pub_max_clients = cli.max_clients;
                 let pub_api_port = cli.console;
+                let pub_details_reachable = cli.listen_all;
                 let (status_tx, status_rx) = tokio::sync::watch::channel(None);
                 setup.status_rx = Some(status_rx);
                 tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
@@ -8480,6 +8509,7 @@ async fn setup_passive_publication(
                         region: pub_region,
                         max_clients: pub_max_clients,
                         api_port: pub_api_port,
+                        details_reachable: pub_details_reachable,
                         interval_secs: 60,
                         status_tx: Some(status_tx),
                     },
@@ -8786,6 +8816,22 @@ mod tests {
     fn nostr_discovery_starts_relay_health_monitor() {
         assert!(should_start_relay_health_monitor(
             mesh_discovery::MeshDiscoveryMode::Nostr
+        ));
+    }
+
+    #[test]
+    fn mdns_discovery_starts_lan_rediscovery_only_with_join_token() {
+        assert!(should_start_lan_rediscovery(
+            mesh_discovery::MeshDiscoveryMode::Mdns,
+            &["join-token".to_string()]
+        ));
+        assert!(!should_start_lan_rediscovery(
+            mesh_discovery::MeshDiscoveryMode::Mdns,
+            &[]
+        ));
+        assert!(!should_start_lan_rediscovery(
+            mesh_discovery::MeshDiscoveryMode::Nostr,
+            &["join-token".to_string()]
         ));
     }
 

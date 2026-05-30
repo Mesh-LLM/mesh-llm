@@ -67,8 +67,10 @@ Runtime switches:
 - `--discover [NAME]`: discover a mesh and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
 - `--mesh-discovery-mode <nostr|mdns>`: choose the discovery provider. `nostr`
   is the default public/WAN-capable mode. `mdns` browses LAN DNS-SD records,
-  requires a supplied matching invite token for join material, and disables
-  public iroh relays plus raw STUN startup probing.
+  requires a supplied matching invite token for join material and LAN detail
+  proof, and disables public iroh relays plus raw STUN startup probing. LAN
+  detail endpoints are only advertised when the management API is reachable
+  from LAN peers, for example with `--listen-all`.
 - `--auto`: auto-join the best discovered mesh.
 - `--model <MODEL>`: model to serve (catalog id from `models recommended`, HF ref/URL, or path).
 - `--gguf <GGUF>`: serve a specific local GGUF file directly (repeatable).

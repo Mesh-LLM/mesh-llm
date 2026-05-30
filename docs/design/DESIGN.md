@@ -261,7 +261,8 @@ and the embedded web dashboard.
 | `/api/model-interests/{model_ref}` | DELETE | Clear local explicit interest for one canonical model ref |
 | `/api/model-targets` | GET | Ranked model targets from explicit interest, active demand, and serving visibility |
 | `/api/events` | GET | SSE stream of status updates (2s interval + on change) |
-| `/api/discover` | GET | Browse Nostr-published meshes |
+| `/api/discover` | GET | Browse Nostr-published meshes, or LAN mDNS advertisements when `--mesh-discovery-mode mdns` is active |
+| `/api/discovery/lan-details` | POST | Return local LAN discovery detail after invite-token proof; advertised only when the management API is LAN-reachable, and the raw token is never returned |
 | `/api/chat` | POST | Proxy to inference API (`/v1/chat/completions`) |
 | `/` | GET | Embedded web dashboard |
 

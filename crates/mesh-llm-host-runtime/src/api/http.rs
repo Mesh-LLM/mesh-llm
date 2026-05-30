@@ -19,6 +19,7 @@ pub(super) async fn respond_error(
         .unwrap_or_else(|_| r#"{"error":"internal error"}"#.to_string());
     let status = match code {
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         422 => "Unprocessable Content",
