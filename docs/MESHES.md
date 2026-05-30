@@ -209,6 +209,13 @@ curl -s http://localhost:3131/api/discover | jq .
 `/api/status` reports whether the local mesh publication is `private`,
 `public`, or `publish_failed`.
 
+The same status payload also includes `routing_affinity.target_reputation`.
+Those counters are local behavioral health signals used by the current proxy to
+avoid peers that recently timed out or returned unavailable. They are not
+gossiped, not persisted as mesh trust, and not proof of a peer's identity or
+model honesty. See [NODE_REP.md](NODE_REP.md) for the local reputation model,
+status fields, and testing boundary.
+
 ## Private ownership and trust
 
 For owner-attested private deployments, initialize an owner key and start nodes

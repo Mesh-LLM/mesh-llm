@@ -411,6 +411,14 @@ By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserve
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
 
+Routing health in `/api/status.routing_affinity.target_reputation` is local to
+the process that served the management API. It records behavioral routing
+signals such as penalized targets and routes reordered away from penalized
+targets. This is a local availability/reliability aid only: it is not gossiped,
+not a cross-mesh trust score, and not a replacement for owner attestation or
+model-output verification. The operator-facing behavior is specified in
+[Local Node Reputation](../NODE_REP.md).
+
 `peers[]` entries (only when peer has not passed `--no-enumerate-host`):
 ```json
 {"hostname": "lemony-28", "is_soc": true, "gpus": [{"name": "Tegra AGX Orin", "vram_bytes": 0}]}

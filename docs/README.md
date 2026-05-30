@@ -8,6 +8,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 |---|---|
 | Install, run, service mode, model storage | [USAGE.md](USAGE.md) |
 | Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
+| Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) |
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) |
