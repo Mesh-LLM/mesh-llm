@@ -8498,12 +8498,16 @@ fn select_formatter(
     }
 }
 
-pub struct OutputManager {
+struct OutputManagerState {
     tx: tokio::sync::mpsc::UnboundedSender<OutputCommand>,
     ready_prompt_active: Arc<AtomicBool>,
     mode: LogFormat,
     console_session_mode: Option<ConsoleSessionMode>,
     dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>>,
+}
+
+pub struct OutputManager {
+    state: RwLock<OutputManagerState>,
 }
 
 enum OutputCommand {
@@ -8526,100 +8530,12 @@ impl OutputManager {
         mode: LogFormat,
         console_session_mode: ConsoleSessionMode,
     ) -> &'static OutputManager {
-        GLOBAL_OUTPUT_MANAGER.get_or_init(|| {
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputCommand>();
-            let ready_prompt_active = Arc::new(AtomicBool::new(false));
-            let worker_prompt_active = ready_prompt_active.clone();
-            let dashboard_snapshot_provider: Arc<
-                RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>,
-            > = Arc::new(RwLock::new(None));
-            let worker_snapshot_provider = dashboard_snapshot_provider.clone();
-            tokio::spawn(async move {
-        let mut formatter = select_formatter(mode, console_session_mode);
-                let mut redraw_tick = time::interval(PRETTY_TUI_REDRAW_INTERVAL);
-                redraw_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                let mut snapshot_tick = time::interval(PRETTY_TUI_SNAPSHOT_INTERVAL);
-                snapshot_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-                let mut last_snapshot_at = Instant::now() - PRETTY_TUI_SNAPSHOT_INTERVAL;
-                loop {
-                    tokio::select! {
-                        maybe_command = rx.recv() => {
-                            let Some(command) = maybe_command else {
-                                if let Err(err) = formatter.exit_tui() {
-                                    tracing::warn!("interactive terminal cleanup failed: {err}");
-                                }
-                                break;
-                            };
-                            match command {
-                                OutputCommand::Event(event) => {
-                                    if let Err(err) = formatter.handle_output_event(&event) {
-                                        tracing::warn!("output write failed: {err}");
-                                    } else if matches!(mode, LogFormat::Pretty)
-                                        && worker_prompt_active.load(Ordering::Acquire)
-                                        && formatter.writes_ready_prompt()
-                                        && let Err(err) = write_prompt() {
-                                            tracing::warn!("interactive prompt write failed: {err}");
-                                        }
-                                }
-                                OutputCommand::ActivateReadyPrompt => {
-                                    worker_prompt_active.store(true, Ordering::Release);
-                                    if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt()
-                                        && let Err(err) = write_prompt() {
-                                            tracing::warn!("interactive prompt write failed: {err}");
-                                        }
-                                }
-                                OutputCommand::Flush(response) => {
-                                    let flush_result = if formatter.is_interactive_dashboard() {
-                                        formatter.render_interactive_if_dirty().map(|_| ())
-                                    } else {
-                                        Ok(())
-                                    };
-                                    let _ = response.send(flush_result);
-                                }
-                                OutputCommand::EnterTui(response) => {
-                                    let _ = response.send(formatter.enter_tui());
-                                }
-                                OutputCommand::ExitTui(response) => {
-                                    let _ = response.send(formatter.exit_tui());
-                                }
-                                OutputCommand::TuiEvent { event, response } => {
-                                    let _ = response.send(Ok(formatter.handle_tui_event(event)));
-                                }
-                                OutputCommand::RenderTui(response) => {
-                                    let _ = response.send(formatter.render_interactive_if_dirty());
-                                }
-                            }
-                        }
-                        _ = redraw_tick.tick(), if formatter.is_interactive_dashboard() => {
-                            if let Err(err) = formatter.render_interactive_if_dirty() {
-                                tracing::warn!("interactive dashboard redraw failed: {err}");
-                            }
-                        }
-                        _ = snapshot_tick.tick(), if formatter.is_interactive_dashboard() => {
-                            if last_snapshot_at.elapsed() < PRETTY_TUI_SNAPSHOT_INTERVAL {
-                                continue;
-                            }
-                            let Some(provider) = worker_snapshot_provider
-                                .read()
-                                .ok()
-                                .and_then(|slot| slot.clone()) else {
-                                continue;
-                            };
-                            last_snapshot_at = Instant::now();
-                            formatter.handle_tui_snapshot(provider.snapshot().await);
-                        }
-                    }
-                }
-            });
-            Self {
-                tx,
-                ready_prompt_active,
-                mode,
-            console_session_mode: matches!(mode, LogFormat::Pretty)
-                .then_some(console_session_mode),
-                dashboard_snapshot_provider,
-            }
-        })
+        if let Some(output_manager) = GLOBAL_OUTPUT_MANAGER.get() {
+            output_manager.reset(mode, console_session_mode);
+            output_manager
+        } else {
+            GLOBAL_OUTPUT_MANAGER.get_or_init(|| Self::new(mode, console_session_mode))
+        }
     }
 
     pub fn global() -> &'static OutputManager {
@@ -8628,17 +8544,139 @@ impl OutputManager {
             .expect("OutputManager::init_global must be called before OutputManager::global")
     }
 
+    fn new(mode: LogFormat, console_session_mode: ConsoleSessionMode) -> Self {
+        Self {
+            state: RwLock::new(Self::spawn_state(mode, console_session_mode)),
+        }
+    }
+
+    fn reset(&self, mode: LogFormat, console_session_mode: ConsoleSessionMode) {
+        match self.state.write() {
+            Ok(mut state) => {
+                *state = Self::spawn_state(mode, console_session_mode);
+            }
+            Err(err) => {
+                tracing::warn!("output manager state lock poisoned during reset: {err}");
+            }
+        }
+    }
+
+    fn spawn_state(
+        mode: LogFormat,
+        console_session_mode: ConsoleSessionMode,
+    ) -> OutputManagerState {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputCommand>();
+        let ready_prompt_active = Arc::new(AtomicBool::new(false));
+        let worker_prompt_active = ready_prompt_active.clone();
+        let dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>> =
+            Arc::new(RwLock::new(None));
+        let worker_snapshot_provider = dashboard_snapshot_provider.clone();
+        tokio::spawn(async move {
+            let mut formatter = select_formatter(mode, console_session_mode);
+            let mut redraw_tick = time::interval(PRETTY_TUI_REDRAW_INTERVAL);
+            redraw_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut snapshot_tick = time::interval(PRETTY_TUI_SNAPSHOT_INTERVAL);
+            snapshot_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut last_snapshot_at = Instant::now() - PRETTY_TUI_SNAPSHOT_INTERVAL;
+            loop {
+                tokio::select! {
+                    maybe_command = rx.recv() => {
+                        let Some(command) = maybe_command else {
+                            if let Err(err) = formatter.exit_tui() {
+                                tracing::warn!("interactive terminal cleanup failed: {err}");
+                            }
+                            break;
+                        };
+                        match command {
+                            OutputCommand::Event(event) => {
+                                if let Err(err) = formatter.handle_output_event(&event) {
+                                    tracing::warn!("output write failed: {err}");
+                                } else if matches!(mode, LogFormat::Pretty)
+                                    && worker_prompt_active.load(Ordering::Acquire)
+                                    && formatter.writes_ready_prompt()
+                                    && let Err(err) = write_prompt() {
+                                        tracing::warn!("interactive prompt write failed: {err}");
+                                    }
+                            }
+                            OutputCommand::ActivateReadyPrompt => {
+                                worker_prompt_active.store(true, Ordering::Release);
+                                if matches!(mode, LogFormat::Pretty) && formatter.writes_ready_prompt()
+                                    && let Err(err) = write_prompt() {
+                                        tracing::warn!("interactive prompt write failed: {err}");
+                                    }
+                            }
+                            OutputCommand::Flush(response) => {
+                                let flush_result = if formatter.is_interactive_dashboard() {
+                                    formatter.render_interactive_if_dirty().map(|_| ())
+                                } else {
+                                    Ok(())
+                                };
+                                let _ = response.send(flush_result);
+                            }
+                            OutputCommand::EnterTui(response) => {
+                                let _ = response.send(formatter.enter_tui());
+                            }
+                            OutputCommand::ExitTui(response) => {
+                                let _ = response.send(formatter.exit_tui());
+                            }
+                            OutputCommand::TuiEvent { event, response } => {
+                                let _ = response.send(Ok(formatter.handle_tui_event(event)));
+                            }
+                            OutputCommand::RenderTui(response) => {
+                                let _ = response.send(formatter.render_interactive_if_dirty());
+                            }
+                        }
+                    }
+                    _ = redraw_tick.tick(), if formatter.is_interactive_dashboard() => {
+                        if let Err(err) = formatter.render_interactive_if_dirty() {
+                            tracing::warn!("interactive dashboard redraw failed: {err}");
+                        }
+                    }
+                    _ = snapshot_tick.tick(), if formatter.is_interactive_dashboard() => {
+                        if last_snapshot_at.elapsed() < PRETTY_TUI_SNAPSHOT_INTERVAL {
+                            continue;
+                        }
+                        let Some(provider) = worker_snapshot_provider
+                            .read()
+                            .ok()
+                            .and_then(|slot| slot.clone()) else {
+                            continue;
+                        };
+                        last_snapshot_at = Instant::now();
+                        formatter.handle_tui_snapshot(provider.snapshot().await);
+                    }
+                }
+            }
+        });
+        OutputManagerState {
+            tx,
+            ready_prompt_active,
+            mode,
+            console_session_mode: matches!(mode, LogFormat::Pretty).then_some(console_session_mode),
+            dashboard_snapshot_provider,
+        }
+    }
+
+    fn command_tx(&self) -> io::Result<tokio::sync::mpsc::UnboundedSender<OutputCommand>> {
+        self.state
+            .read()
+            .map(|state| state.tx.clone())
+            .map_err(|err| io::Error::other(format!("output manager state lock poisoned: {err}")))
+    }
+
     pub fn emit_event(&self, event: OutputEvent) -> io::Result<()> {
-        self.tx.send(OutputCommand::Event(event)).map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "output manager worker unavailable",
-            )
-        })
+        self.command_tx()?
+            .send(OutputCommand::Event(event))
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "output manager worker unavailable",
+                )
+            })
     }
 
     pub fn schedule_ready_prompt(&self) -> io::Result<()> {
-        self.tx
+        self.command_tx()?
             .send(OutputCommand::ActivateReadyPrompt)
             .map_err(|_| {
                 io::Error::new(
@@ -8649,10 +8687,23 @@ impl OutputManager {
     }
 
     pub fn write_ready_prompt(&self) -> io::Result<()> {
-        self.ready_prompt_active.store(true, Ordering::Release);
-        if matches!(self.mode, LogFormat::Pretty)
+        let (ready_prompt_active, mode, console_session_mode) = self
+            .state
+            .read()
+            .map(|state| {
+                (
+                    state.ready_prompt_active.clone(),
+                    state.mode,
+                    state.console_session_mode,
+                )
+            })
+            .map_err(|err| {
+                io::Error::other(format!("output manager state lock poisoned: {err}"))
+            })?;
+        ready_prompt_active.store(true, Ordering::Release);
+        if matches!(mode, LogFormat::Pretty)
             && !matches!(
-                self.console_session_mode,
+                console_session_mode,
                 Some(ConsoleSessionMode::InteractiveDashboard)
             )
         {
@@ -8663,12 +8714,15 @@ impl OutputManager {
     }
 
     pub fn ready_prompt_active(&self) -> bool {
-        self.ready_prompt_active.load(Ordering::Acquire)
+        self.state
+            .read()
+            .map(|state| state.ready_prompt_active.load(Ordering::Acquire))
+            .unwrap_or(false)
     }
 
     pub async fn flush(&self) -> io::Result<()> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        self.tx
+        self.command_tx()?
             .send(OutputCommand::Flush(response_tx))
             .map_err(|_| {
                 io::Error::new(
@@ -8685,34 +8739,45 @@ impl OutputManager {
     }
 
     pub fn mode(&self) -> LogFormat {
-        self.mode
+        self.state
+            .read()
+            .map(|state| state.mode)
+            .unwrap_or(LogFormat::Pretty)
     }
 
     pub fn console_session_mode(&self) -> Option<ConsoleSessionMode> {
-        self.console_session_mode
+        self.state
+            .read()
+            .map(|state| state.console_session_mode)
+            .unwrap_or(None)
     }
 
     pub fn register_dashboard_snapshot_provider(
         &self,
         provider: Arc<dyn DashboardSnapshotProvider>,
     ) {
-        if !matches!(self.mode, LogFormat::Pretty) {
-            return;
-        }
+        let dashboard_snapshot_provider = match self.state.read() {
+            Ok(state) if matches!(state.mode, LogFormat::Pretty) => {
+                state.dashboard_snapshot_provider.clone()
+            }
+            _ => return,
+        };
 
-        if let Ok(mut slot) = self.dashboard_snapshot_provider.write() {
+        if let Ok(mut slot) = dashboard_snapshot_provider.write() {
             *slot = Some(provider);
         }
     }
 
     #[allow(dead_code)]
     pub async fn dashboard_snapshot(&self) -> Option<DashboardSnapshot> {
-        if !matches!(self.mode, LogFormat::Pretty) {
-            return None;
-        }
+        let dashboard_snapshot_provider = match self.state.read() {
+            Ok(state) if matches!(state.mode, LogFormat::Pretty) => {
+                state.dashboard_snapshot_provider.clone()
+            }
+            _ => return None,
+        };
 
-        let provider = self
-            .dashboard_snapshot_provider
+        let provider = dashboard_snapshot_provider
             .read()
             .ok()
             .and_then(|slot| slot.clone())?;
@@ -8721,7 +8786,7 @@ impl OutputManager {
 
     pub async fn enter_tui(&self) -> io::Result<()> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        self.tx
+        self.command_tx()?
             .send(OutputCommand::EnterTui(response_tx))
             .map_err(|_| {
                 io::Error::new(
@@ -8739,7 +8804,7 @@ impl OutputManager {
 
     pub async fn exit_tui(&self) -> io::Result<()> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        self.tx
+        self.command_tx()?
             .send(OutputCommand::ExitTui(response_tx))
             .map_err(|_| {
                 io::Error::new(
@@ -8757,7 +8822,7 @@ impl OutputManager {
 
     pub async fn dispatch_tui_event(&self, event: TuiEvent) -> io::Result<TuiControlFlow> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        self.tx
+        self.command_tx()?
             .send(OutputCommand::TuiEvent {
                 event,
                 response: response_tx,
@@ -8778,7 +8843,7 @@ impl OutputManager {
 
     pub async fn render_tui_if_dirty(&self) -> io::Result<bool> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-        self.tx
+        self.command_tx()?
             .send(OutputCommand::RenderTui(response_tx))
             .map_err(|_| {
                 io::Error::new(
@@ -15162,20 +15227,9 @@ tail line"
 
     #[tokio::test]
     async fn dashboard_snapshot_registration_stays_pretty_only() {
-        let dashboard_manager = OutputManager {
-            tx: tokio::sync::mpsc::unbounded_channel().0,
-            ready_prompt_active: Arc::new(AtomicBool::new(false)),
-            mode: LogFormat::Pretty,
-            console_session_mode: Some(ConsoleSessionMode::InteractiveDashboard),
-            dashboard_snapshot_provider: Arc::new(RwLock::new(None)),
-        };
-        let json_manager = OutputManager {
-            tx: tokio::sync::mpsc::unbounded_channel().0,
-            ready_prompt_active: Arc::new(AtomicBool::new(false)),
-            mode: LogFormat::Json,
-            console_session_mode: None,
-            dashboard_snapshot_provider: Arc::new(RwLock::new(None)),
-        };
+        let dashboard_manager =
+            OutputManager::new(LogFormat::Pretty, ConsoleSessionMode::InteractiveDashboard);
+        let json_manager = OutputManager::new(LogFormat::Json, ConsoleSessionMode::None);
         let expected = DashboardSnapshot {
             current_inflight_requests: 3,
             ..DashboardSnapshot::default()
@@ -15189,6 +15243,23 @@ tail line"
 
         assert_eq!(dashboard_manager.dashboard_snapshot().await, Some(expected));
         assert_eq!(json_manager.dashboard_snapshot().await, None);
+    }
+
+    #[tokio::test]
+    async fn output_manager_reset_replaces_runtime_owned_state() {
+        let manager = OutputManager::new(LogFormat::Json, ConsoleSessionMode::None);
+
+        assert!(matches!(manager.mode(), LogFormat::Json));
+        assert_eq!(manager.console_session_mode(), None);
+
+        manager.reset(LogFormat::Pretty, ConsoleSessionMode::Fallback);
+
+        assert!(matches!(manager.mode(), LogFormat::Pretty));
+        assert_eq!(
+            manager.console_session_mode(),
+            Some(ConsoleSessionMode::Fallback)
+        );
+        assert!(manager.flush().await.is_ok());
     }
 
     #[test]
