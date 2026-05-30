@@ -41,6 +41,7 @@ use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
 pub(crate) mod direct_return;
 pub(crate) mod forwarding;
+mod kv_eviction;
 mod options;
 mod socket;
 mod wire;
@@ -49,6 +50,10 @@ pub use self::direct_return::PredictionReturnHub;
 pub use self::direct_return::PredictionReturnListener;
 pub(crate) use self::direct_return::PredictionReturnReceiver;
 pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_message_timed};
+use self::kv_eviction::{
+    BinaryProactiveEvictionPlan, binary_proactive_eviction_plan,
+    evict_binary_resident_prefix_for_decode,
+};
 pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions, parse_wire_dtype};
 use self::socket::*;
 pub use self::wire::WireCondition;
@@ -825,6 +830,7 @@ fn handle_binary_connection(
         let mut runtime_sessions_before = None;
         let mut runtime_sessions_after = None;
         let input_activation_bytes = message.activation.len();
+        let mut proactive_eviction = None;
         let (predicted_token, predicted_tokens, output, compute_ms) = if restored_prefill {
             let now = now_unix_nanos() as u64;
             compute_start_unix_nanos = now;
@@ -880,6 +886,19 @@ fn handle_binary_connection(
                 runtime_lock_acquires = 1;
                 let lock_hold_started = Instant::now();
                 runtime_sessions_before = Some(runtime.session_stats());
+                let eviction_plan = binary_proactive_eviction_plan(
+                    message.kind,
+                    restored_prefill,
+                    executable_token_ids.len(),
+                );
+                if eviction_plan.required {
+                    proactive_eviction = Some(evict_binary_resident_prefix_for_decode(
+                        &mut runtime,
+                        kv,
+                        &session_key,
+                        eviction_plan,
+                    ));
+                }
                 let result = run_binary_stage_message(
                     &mut runtime,
                     &session_key,
@@ -933,6 +952,9 @@ fn handle_binary_connection(
                 stats,
             );
         }
+        if let Some(eviction) = proactive_eviction.as_ref() {
+            eviction.insert_attrs(&mut decode_attrs);
+        }
         decode_attrs.insert(
             "skippy.kv.restored_prefill".to_string(),
             json!(restored_prefill),
@@ -951,6 +973,9 @@ fn handle_binary_connection(
             compute_start_unix_nanos,
             compute_end_unix_nanos,
         );
+        if let Some(eviction) = proactive_eviction {
+            telemetry.emit("stage.binary_kv_record_decision", eviction.attrs());
+        }
 
         if message.kind.is_prefill() && !restored_prefill {
             let record = if let Some(tokens) = accumulated_prefill_tokens.get(&session_key).cloned()
@@ -2076,7 +2101,7 @@ fn handle_binary_restore_prefill_decode_control(
     let input = input_activation_frame(config, topology, &mut message, activation_width)?;
     let decode_message = restore_prefill_decode_as_decode_message(&message, current_token);
     let compute_started = Instant::now();
-    let (predicted_token, output, runtime_lock_wait_ms, runtime_lock_hold_ms) = {
+    let (predicted_token, output, runtime_lock_wait_ms, runtime_lock_hold_ms, proactive_eviction) = {
         let lock_started = Instant::now();
         let mut runtime = runtime.lock().expect("runtime lock poisoned");
         let runtime_lock_wait_ms = elapsed_ms(lock_started);
@@ -2092,6 +2117,15 @@ fn handle_binary_restore_prefill_decode_control(
                 )
                 .context("configure restore-decode chat sampling")?;
         }
+        let proactive_eviction = evict_binary_resident_prefix_for_decode(
+            &mut runtime,
+            kv,
+            session_id,
+            BinaryProactiveEvictionPlan {
+                required: true,
+                ensure_session_before_eviction: false,
+            },
+        );
         let (predicted, _, output) = run_binary_stage_message(
             &mut runtime,
             session_id,
@@ -2106,9 +2140,14 @@ fn handle_binary_restore_prefill_decode_control(
             output,
             runtime_lock_wait_ms,
             elapsed_ms(lock_hold_started),
+            proactive_eviction,
         )
     };
     let compute_ms = elapsed_ms(compute_started);
+    telemetry.emit(
+        "stage.binary_kv_record_decision",
+        proactive_eviction.attrs(),
+    );
 
     if let Some(downstream) = downstream {
         let forwarded =
@@ -2136,6 +2175,7 @@ fn handle_binary_restore_prefill_decode_control(
             "llama_stage.runtime_lock_hold_ms".to_string(),
             json!(runtime_lock_hold_ms),
         );
+        proactive_eviction.insert_attrs(&mut attrs);
         attrs.insert(
             "llama_stage.forward_activation_bytes".to_string(),
             json!(forwarded.message.activation.len()),
@@ -2176,6 +2216,7 @@ fn handle_binary_restore_prefill_decode_control(
         "llama_stage.runtime_lock_hold_ms".to_string(),
         json!(runtime_lock_hold_ms),
     );
+    proactive_eviction.insert_attrs(&mut attrs);
     telemetry.emit_debug("stage.binary_prefix_cache_decode_control", attrs);
     let return_stream = prediction_return_streams
         .get_mut(&(message.request_id, message.session_id))

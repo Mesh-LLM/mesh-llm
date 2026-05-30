@@ -86,6 +86,36 @@ fn restore_prefill_decode_as_decode_preserves_chat_metadata() {
     assert!(decode.positions.is_empty());
 }
 
+#[test]
+fn binary_decode_work_requires_proactive_resident_eviction() {
+    assert!(
+        super::binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, false, 128)
+            .required
+    );
+    assert!(super::binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, false, 1).required);
+    assert!(
+        super::binary_proactive_eviction_plan(WireMessageKind::DecodeReplayEmbd, false, 64)
+            .required
+    );
+    assert!(
+        !super::binary_proactive_eviction_plan(WireMessageKind::PrefillEmbd, false, 128).required
+    );
+    assert!(!super::binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, true, 1).required);
+    assert!(!super::binary_proactive_eviction_plan(WireMessageKind::DecodeEmbd, false, 0).required);
+    assert!(
+        !super::binary_proactive_eviction_plan(WireMessageKind::TryRestorePrefillDecode, false, 1)
+            .required
+    );
+}
+
+#[test]
+fn one_chunk_prefill_final_admits_session_before_proactive_eviction() {
+    let plan = super::binary_proactive_eviction_plan(WireMessageKind::PrefillFinalEmbd, false, 1);
+
+    assert!(plan.required);
+    assert!(plan.ensure_session_before_eviction);
+}
+
 fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
         run_id: "run".to_string(),

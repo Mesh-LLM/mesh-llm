@@ -63,7 +63,7 @@ use crate::{
     },
     cli::ServeOpenAiArgs,
     config::{load_json, validate_config},
-    kv_integration::KvStageIntegration,
+    kv_integration::{KvStageIntegration, proactive_eviction_attrs, proactive_eviction_error_kind},
     runtime_state::{RuntimeSessionStats, RuntimeState, load_runtime},
     telemetry::{Telemetry, lifecycle_attrs, now_unix_nanos},
 };

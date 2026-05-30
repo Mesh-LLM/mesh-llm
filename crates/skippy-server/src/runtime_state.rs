@@ -167,6 +167,10 @@ impl RuntimeState {
         self.active_session(session_id)?.batch_size()
     }
 
+    pub fn ensure_session_active(&mut self, session_id: &str) -> Result<()> {
+        self.session(session_id).map(|_| ())
+    }
+
     pub fn configure_chat_sampling(
         &mut self,
         session_id: &str,

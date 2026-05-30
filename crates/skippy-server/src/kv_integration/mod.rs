@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use skippy_cache::{
     ExactStateCache, PrefixCandidatePolicy, ResidentActivationCache, ResidentPrefixCache,
 };
+use skippy_metrics::attr as attr_key;
 use skippy_runtime::{ActivationFrame, RuntimeKvPageDesc};
 
 use crate::kv_proto::{
@@ -27,6 +28,55 @@ pub use records::{
     RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
     ResidentPrefixRestore,
 };
+
+pub(crate) fn proactive_eviction_error_kind(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("is not active") {
+        "inactive_session"
+    } else if message.contains("batch size") {
+        "invalid_batch_size"
+    } else {
+        "native_drop_failed"
+    }
+}
+
+pub(crate) fn proactive_eviction_attrs(
+    status: &str,
+    error_kind: Option<&str>,
+    target_tokens: u64,
+    evicted_entries: usize,
+    evicted_tokens: u64,
+) -> BTreeMap<String, Value> {
+    let mut attrs = BTreeMap::from([
+        (
+            "skippy.kv.decision".to_string(),
+            json!("proactive_eviction"),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTION_STATUS.to_string(),
+            json!(status),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTION_TARGET_TOKENS.to_string(),
+            json!(target_tokens),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTED_ENTRIES.to_string(),
+            json!(evicted_entries),
+        ),
+        (
+            attr_key::KV_PROACTIVE_EVICTED_TOKENS.to_string(),
+            json!(evicted_tokens),
+        ),
+    ]);
+    if let Some(error_kind) = error_kind {
+        attrs.insert(
+            attr_key::KV_PROACTIVE_EVICTION_ERROR_KIND.to_string(),
+            json!(error_kind),
+        );
+    }
+    attrs
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageKvMode {
