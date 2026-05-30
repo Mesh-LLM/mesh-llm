@@ -1,0 +1,258 @@
+From d683f8a5a1ca50a7f6021b6948e23a8250a4abf4 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 30 May 2026 13:13:23 -0700
+Subject: [PATCH] Compact KV cache cells during optimized memory updates
+
+---
+ include/skippy/common.h |   2 +-
+ src/llama-kv-cache.cpp  | 115 ++++++++++++++++++++++++++++++++++++++--
+ src/llama-kv-cache.h    |  13 ++++-
+ src/llama-kv-cells.h    |  36 ++++++++-----
+ 4 files changed, 145 insertions(+), 21 deletions(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 26e944d8..a680d342 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -26,7 +26,7 @@ extern "C" {
+
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 24
++#define SKIPPY_ABI_VERSION_PATCH 25
+
+ enum skippy_feature {
+     SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 044fbeb8..b4f02eb8 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -673,11 +673,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
+ }
+
+ llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
+-    GGML_UNUSED(optimize);
+-
+     bool do_shift = get_has_shift();
++    bool did_compact = false;
++
++    if (optimize) {
++        if (lctx != nullptr) {
++            lctx->synchronize();
++        }
++
++        const auto moves = compact_cells();
++        did_compact = !moves.empty();
++        if (did_compact) {
++            copy_compacted_cells(moves);
++            LLAMA_LOG_DEBUG("%s: compacted %zu KV cells\n", __func__, moves.size());
++        }
++    }
+
+-    return std::make_unique<llama_kv_cache_context>(this, lctx, do_shift, std::move(sc_info));
++    return std::make_unique<llama_kv_cache_context>(
++            this,
++            lctx,
++            do_shift,
++            std::move(sc_info),
++            did_compact);
+ }
+
+ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
+@@ -1094,6 +1111,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+     }
+ }
+
++std::vector<llama_kv_cache::compaction_move> llama_kv_cache::compact_cells() {
++    std::vector<compaction_move> moves;
++
++    for (uint32_t s = 0; s < n_stream; ++s) {
++        auto & cells = v_cells[s];
++        uint32_t dst = 0;
++
++        for (uint32_t src = 0; src < cells.size(); ++src) {
++            if (cells.is_empty(src)) {
++                continue;
++            }
++            if (src != dst) {
++                moves.push_back({ s, src, dst });
++                cells.mv(src, dst);
++            }
++            ++dst;
++        }
++
++        v_heads[s] = dst;
++    }
++
++    return moves;
++}
++
++static void llama_kv_cache_copy_tensor_bytes(
++        ggml_tensor * tensor,
++        size_t src_offset,
++        size_t dst_offset,
++        size_t size) {
++    if (tensor == nullptr || size == 0 || src_offset == dst_offset) {
++        return;
++    }
++
++    std::vector<uint8_t> bytes(size);
++    ggml_backend_tensor_get(tensor, bytes.data(), src_offset, size);
++    ggml_backend_tensor_set(tensor, bytes.data(), dst_offset, size);
++}
++
++void llama_kv_cache::copy_compacted_cells(const std::vector<compaction_move> & moves) const {
++    for (const auto & layer : layers) {
++        for (const compaction_move & move : moves) {
++            if (move.strm >= layer.k_stream.size()) {
++                continue;
++            }
++
++            auto * k = layer.k_stream[move.strm];
++            if (k != nullptr) {
++                const size_t k_row_bytes = ggml_row_size(k->type, hparams.n_embd_k_gqa(layer.il));
++                llama_kv_cache_copy_tensor_bytes(
++                        k,
++                        static_cast<size_t>(move.src) * k_row_bytes,
++                        static_cast<size_t>(move.dst) * k_row_bytes,
++                        k_row_bytes);
++            }
++
++            if (move.strm >= layer.v_stream.size()) {
++                continue;
++            }
++
++            auto * v = layer.v_stream[move.strm];
++            if (v == nullptr) {
++                continue;
++            }
++
++            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer.il);
++            if (!v_trans) {
++                const size_t v_row_bytes = ggml_row_size(v->type, n_embd_v_gqa);
++                llama_kv_cache_copy_tensor_bytes(
++                        v,
++                        static_cast<size_t>(move.src) * v_row_bytes,
++                        static_cast<size_t>(move.dst) * v_row_bytes,
++                        v_row_bytes);
++            } else {
++                const size_t v_element_bytes = ggml_type_size(v->type);
++                const size_t cells_per_stream = v_cells[move.strm].size();
++                for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
++                    llama_kv_cache_copy_tensor_bytes(
++                            v,
++                            (static_cast<size_t>(move.src) + static_cast<size_t>(j) * cells_per_stream) * v_element_bytes,
++                            (static_cast<size_t>(move.dst) + static_cast<size_t>(j) * cells_per_stream) * v_element_bytes,
++                            v_element_bytes);
++                }
++            }
++        }
++    }
++}
++
+ bool llama_kv_cache::get_can_shift() const {
+     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
+     if (model.arch == LLM_ARCH_STEP35) {
+@@ -2764,8 +2868,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+         llama_kv_cache * kv,
+         llama_context * lctx,
+         bool do_shift,
+-        stream_copy_info sc_info) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), sc_info(std::move(sc_info)) {
+-    if (!do_shift && this->sc_info.empty()) {
++        stream_copy_info sc_info,
++        bool did_compact) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), sc_info(std::move(sc_info)) {
++    if (!do_shift && this->sc_info.empty() && !did_compact) {
+         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
+     }
+ }
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index be3c23a0..0783b359 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -95,6 +95,12 @@ public:
+
+     using slot_info_vec_t = std::vector<slot_info>;
+
++    struct compaction_move {
++        uint32_t strm;
++        uint32_t src;
++        uint32_t dst;
++    };
++
+     // TODO: refactor the memory instances to not depend on `llama_model`
+     //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
+     //       likely through `struct llama_memory_params`
+@@ -212,6 +218,10 @@ public:
+     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+
++    // move used cells toward the beginning of each stream and copy the backing KV rows
++    std::vector<compaction_move> compact_cells();
++    void copy_compacted_cells(const std::vector<compaction_move> & moves) const;
++
+     //
+     // input API
+     //
+@@ -349,7 +359,8 @@ public:
+             llama_kv_cache * kv,
+             llama_context * lctx,
+             bool do_shift,
+-            stream_copy_info sc_info);
++            stream_copy_info sc_info,
++            bool did_compact);
+
+     // used to create a batch processing context from a batch
+     llama_kv_cache_context(
+diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
+index 10063bf4..73ff1db0 100644
+--- a/src/llama-kv-cells.h
++++ b/src/llama-kv-cells.h
+@@ -97,24 +97,32 @@ public:
+     }
+
+     // move cell isrc to idst (used during defrag)
+-    //void mv(uint32_t isrc, uint32_t idst) {
+-    //    assert(isrc < pos.size());
+-    //    assert(idst < pos.size());
++    void mv(uint32_t isrc, uint32_t idst) {
++        assert(isrc < pos.size());
++        assert(idst < pos.size());
++        assert(isrc != idst);
+
+-    //    assert(pos[idst] == -1);
+-    //    assert(pos[isrc] != -1);
++        assert(pos[idst] == -1);
++        assert(seq[idst].none());
++        assert(pos[isrc] != -1);
+
+-    //    pos  [idst] = pos  [isrc];
+-    //    shift[idst] = shift[isrc];
+-    //    seq  [idst] = seq  [isrc];
++        seq_pos_rm(isrc);
+
+-    //    pos  [isrc] = -1;
+-    //    shift[isrc] =  0;
+-    //    seq  [isrc].reset();
++        pos  [idst] = pos  [isrc];
++        ext  [idst] = ext  [isrc];
++        shift[idst] = shift[isrc];
++        seq  [idst] = seq  [isrc];
+
+-    //    used.erase (isrc);
+-    //    used.insert(idst);
+-    //}
++        pos  [isrc] = -1;
++        ext  [isrc].reset();
++        shift[isrc] =  0;
++        seq  [isrc].reset();
++
++        used.erase (isrc);
++        used.insert(idst);
++
++        seq_pos_add(idst);
++    }
+
+     // copy the state of cells [i, i + n) (used for save/restore the state of the cells)
+     llama_kv_cells cp(uint32_t i, uint32_t n) const {
+--
+2.50.1 (Apple Git-155)
