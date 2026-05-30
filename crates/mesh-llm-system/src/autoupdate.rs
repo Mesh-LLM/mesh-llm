@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::backend;
-use crate::release_target::{CanonicalArch, CanonicalOs, ReleaseTarget};
+use crate::release_target::ReleaseTarget;
 
 const DEFAULT_RELEASE_REPO: &str = "Mesh-LLM/mesh-llm";
 #[cfg(not(windows))]
@@ -402,16 +402,6 @@ fn stable_release_asset_name_for(
         .and_then(ReleaseTarget::stable_asset_name)
 }
 
-fn legacy_release_asset_name(target: ReleaseTarget) -> Option<String> {
-    (target
-        == ReleaseTarget::new(
-            CanonicalOs::Macos,
-            CanonicalArch::Aarch64,
-            backend::BinaryFlavor::Metal,
-        ))
-    .then_some("mesh-bundle.tar.gz".to_string())
-}
-
 fn push_release_asset_candidate(candidates: &mut Vec<String>, asset_name: Option<String>) {
     let Some(asset_name) = asset_name else {
         return;
@@ -443,7 +433,6 @@ fn release_asset_candidates(
             push_release_asset_candidate(&mut candidates, target.stable_asset_name());
         }
     }
-    push_release_asset_candidate(&mut candidates, legacy_release_asset_name(target));
     candidates
 }
 
@@ -1701,28 +1690,6 @@ mod tests {
                 ReleaseAssetPreference::VersionedFirst,
             ),
             Some("mesh-llm-aarch64-unknown-linux-gnu.tar.gz".to_string())
-        );
-    }
-
-    #[test]
-    fn test_macos_legacy_bundle_asset_remains_compatible() {
-        let release = ReleaseInfo {
-            tag: "v0.60.0".to_string(),
-            version: "0.60.0".to_string(),
-            assets: vec!["mesh-bundle.tar.gz".to_string()],
-        };
-
-        assert_eq!(
-            resolve_release_asset_name(
-                &release,
-                ReleaseTarget::new(
-                    CanonicalOs::Macos,
-                    CanonicalArch::Aarch64,
-                    backend::BinaryFlavor::Metal,
-                ),
-                ReleaseAssetPreference::StableFirst,
-            ),
-            Some("mesh-bundle.tar.gz".to_string())
         );
     }
 

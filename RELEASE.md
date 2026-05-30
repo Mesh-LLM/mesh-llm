@@ -29,8 +29,7 @@ just bundle
 
 This creates `/tmp/mesh-llm-bundle.tar.gz` containing the packaged `mesh-llm`
 executable for local deployment. Platform release archives are named by target,
-such as `mesh-llm-aarch64-apple-darwin.tar.gz`; the deprecated
-`mesh-bundle.tar.gz` release asset is no longer published.
+such as `mesh-llm-aarch64-apple-darwin.tar.gz`.
 
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
