@@ -18,6 +18,7 @@ use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
     model_fits_runtime_capacity,
 };
+use self::context_planning::RuntimeResourcePlanningProfile;
 use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
@@ -1220,6 +1221,7 @@ struct StartupLocalModelTask {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    resource_planning_profile: RuntimeResourcePlanningProfile,
     openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     split: bool,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -1299,6 +1301,7 @@ struct StartupLoopContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    resource_planning_profile: RuntimeResourcePlanningProfile,
     openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
@@ -1371,6 +1374,7 @@ struct StartupLaunchRuntimeContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    resource_planning_profile: RuntimeResourcePlanningProfile,
     openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
@@ -1841,6 +1845,7 @@ async fn startup_handle_local_fallback_event(
             n_ubatch_override: ctx.n_ubatch,
             flash_attention_override: ctx.flash_attention,
             parallel_override: ctx.parallel_override,
+            planning_profile: ctx.resource_planning_profile,
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: ctx.skippy_telemetry.clone(),
             survey_telemetry: ctx.survey_telemetry.clone(),
@@ -2173,6 +2178,7 @@ async fn startup_launch_runtime(
         n_ubatch,
         flash_attention,
         parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy,
         skippy_telemetry,
         survey_telemetry,
@@ -2200,6 +2206,7 @@ async fn startup_launch_runtime(
         n_ubatch_override: n_ubatch,
         flash_attention_override: flash_attention,
         parallel_override,
+        planning_profile: resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
         skippy_telemetry: skippy_telemetry.clone(),
         survey_telemetry: survey_telemetry.clone(),
@@ -2313,6 +2320,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy,
         split,
         skippy_telemetry,
@@ -2372,6 +2380,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
             n_ubatch,
             flash_attention,
             parallel_override,
+            resource_planning_profile,
             openai_guardrail_policy: openai_guardrail_policy.clone(),
             skippy_telemetry: &skippy_telemetry,
             survey_telemetry: &survey_telemetry,
@@ -2426,6 +2435,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy,
         skippy_telemetry: &skippy_telemetry,
         survey_telemetry: &survey_telemetry,
@@ -3633,6 +3643,7 @@ fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "client" | "--client" => options.client = true,
             "--auto" => options.auto = true,
             "--publish" => options.publish = true,
+            "--discover" => options.discover = Some(next_test_arg(&mut iter, arg).to_string()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
@@ -5968,6 +5979,23 @@ fn relay_policy_for_mesh_discovery_mode(
     }
 }
 
+fn runtime_resource_planning_profile(options: &RuntimeOptions) -> RuntimeResourcePlanningProfile {
+    if options.auto || options.publish || options.discover.is_some() || !options.join.is_empty() {
+        RuntimeResourcePlanningProfile::SharedMesh
+    } else {
+        RuntimeResourcePlanningProfile::DedicatedLocal
+    }
+}
+
+fn runtime_model_ctx_size_override(
+    options: &RuntimeOptions,
+    model_overrides: Option<&plugin::ModelConfigEntry>,
+) -> Option<u32> {
+    options
+        .ctx_size
+        .or_else(|| model_overrides.and_then(|model| model.ctx_size))
+}
+
 fn should_start_relay_health_monitor(mode: mesh_discovery::MeshDiscoveryMode) -> bool {
     matches!(
         relay_policy_for_mesh_discovery_mode(mode),
@@ -6739,6 +6767,7 @@ async fn spawn_run_auto_startup_model_tasks(
     let primary_parallel_override = primary_startup_model
         .and_then(|m| m.parallel)
         .or(config.gpu.parallel);
+    let resource_planning_profile = runtime_resource_planning_profile(options);
     let console_state_for_election = console_state.cloned();
     let interactive_console_state = console_state.cloned();
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
@@ -6777,6 +6806,7 @@ async fn spawn_run_auto_startup_model_tasks(
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
         split: options.split,
         skippy_telemetry: skippy_telemetry.clone(),
@@ -7042,6 +7072,7 @@ async fn run_auto_load_runtime_model(
             })
     };
     let model_overrides = ctx.config.models.iter().find(|m| m.model == spec);
+    let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = model_overrides
         .and_then(|m| m.parallel)
         .or(ctx.config.gpu.parallel);
@@ -7065,7 +7096,7 @@ async fn run_auto_load_runtime_model(
             model_path: &model_path,
             model_bytes,
             mmproj_override: None,
-            ctx_size_override: ctx.options.ctx_size,
+            ctx_size_override,
             pinned_gpu: None,
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
@@ -7076,6 +7107,7 @@ async fn run_auto_load_runtime_model(
                 .and_then(|m| m.flash_attention)
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
+            planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.options),
             survey_telemetry: ctx.survey_telemetry.clone(),
@@ -7095,7 +7127,7 @@ async fn run_auto_load_runtime_model(
                     launch_kind: survey::SurveyLaunchKind::RuntimeLoad,
                     pinned_gpu: None,
                     backend: None,
-                    context_length: ctx.options.ctx_size.map(u64::from),
+                    context_length: ctx_size_override.map(u64::from),
                 },
                 launch_started.elapsed(),
                 survey::classify_launch_failure(&err),
@@ -7892,6 +7924,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
             n_ubatch: extra_model.n_ubatch,
             flash_attention: extra_model.flash_attention,
             parallel_override: extra_model.parallel.or(ctx.config.gpu.parallel),
+            resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             split: ctx.options.split,
             skippy_telemetry: ctx.skippy_telemetry.clone(),
@@ -10932,6 +10965,71 @@ mod tests {
         assert!(
             !line.contains("Management API"),
             "default passive output must not contain 'Management API', got: {line}"
+        );
+    }
+
+    #[test]
+    fn runtime_load_ctx_size_uses_model_override_when_cli_is_unset() {
+        let options = runtime_options_for_test(&["mesh-llm"]);
+        let model = plugin::ModelConfigEntry {
+            model: "runtime/model".to_string(),
+            ctx_size: Some(16_384),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            runtime_model_ctx_size_override(&options, Some(&model)),
+            Some(16_384)
+        );
+    }
+
+    #[test]
+    fn runtime_load_ctx_size_prefers_cli_override_over_model_override() {
+        let options = runtime_options_for_test(&["mesh-llm", "--ctx-size", "8192"]);
+        let model = plugin::ModelConfigEntry {
+            model: "runtime/model".to_string(),
+            ctx_size: Some(16_384),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            runtime_model_ctx_size_override(&options, Some(&model)),
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn shared_mesh_modes_use_concurrency_preserving_resource_planning_profile() {
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&["mesh-llm"])),
+            RuntimeResourcePlanningProfile::DedicatedLocal
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&["mesh-llm", "--auto"])),
+            RuntimeResourcePlanningProfile::SharedMesh
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&[
+                "mesh-llm",
+                "--publish"
+            ])),
+            RuntimeResourcePlanningProfile::SharedMesh
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&[
+                "mesh-llm",
+                "--discover",
+                "lab",
+            ])),
+            RuntimeResourcePlanningProfile::SharedMesh
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&[
+                "mesh-llm",
+                "--join",
+                "mesh-token",
+            ])),
+            RuntimeResourcePlanningProfile::SharedMesh
         );
     }
 
