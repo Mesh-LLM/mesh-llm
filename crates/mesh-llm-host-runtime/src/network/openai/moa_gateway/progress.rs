@@ -11,6 +11,7 @@
 //! (`send_moa_as_*_sse_inner`), and the chunking helpers that this
 //! module hands the final answer off to.
 
+use super::final_text_stream_mode_for_result;
 use super::is_moa_failure_body;
 use super::send_moa_as_responses_sse_inner;
 use super::send_moa_as_sse_inner;
@@ -82,7 +83,7 @@ pub(super) async fn run_moa_turn_with_progress(
 
     if let Err(e) = write_progress_body(
         tcp_stream,
-        &moa_result.response_body,
+        &moa_result,
         response_adapter,
         &completion_id,
         continuation,
@@ -359,19 +360,29 @@ where
 /// so the body writer can emit a wire-monotonic stream.
 async fn write_progress_body(
     mut tcp_stream: TcpStream,
-    body: &serde_json::Value,
+    moa_result: &moa::TurnResult,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
     continuation: Option<ProgressContinuation>,
 ) -> std::io::Result<()> {
+    let body = &moa_result.response_body;
     if is_moa_failure_body(body) {
         return write_failure_as_sse_tail(&mut tcp_stream, body, adapter, completion_id).await;
     }
+    let text_stream_mode = final_text_stream_mode_for_result(moa_result);
     match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
-            send_moa_as_responses_sse_inner(tcp_stream, body, &[], true, continuation).await
+            send_moa_as_responses_sse_inner(
+                tcp_stream,
+                body,
+                &[],
+                true,
+                text_stream_mode,
+                continuation,
+            )
+            .await
         }
-        _ => send_moa_as_sse_inner(tcp_stream, body, &[], true).await,
+        _ => send_moa_as_sse_inner(tcp_stream, body, &[], true, text_stream_mode).await,
     }
 }
 
@@ -527,6 +538,7 @@ async fn write_failure_as_sse_tail(
 
 #[cfg(test)]
 mod tests {
+    use super::super::MoaFinalTextStreamMode;
     use super::*;
 
     /// Test fixture: a stable completion id with the same shape as
@@ -841,6 +853,7 @@ mod tests {
                 &body,
                 &[],
                 /*header_already_sent=*/ true,
+                MoaFinalTextStreamMode::ChunkedCommittedText,
                 continuation,
             )
             .await
@@ -957,9 +970,16 @@ mod tests {
                 created_at,
                 next_sequence_number: seq,
             });
-            send_moa_as_responses_sse_inner(socket, &body, &[], true, continuation)
-                .await
-                .expect("send_moa_as_responses_sse_inner failed");
+            send_moa_as_responses_sse_inner(
+                socket,
+                &body,
+                &[],
+                true,
+                MoaFinalTextStreamMode::ChunkedCommittedText,
+                continuation,
+            )
+            .await
+            .expect("send_moa_as_responses_sse_inner failed");
         });
 
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");

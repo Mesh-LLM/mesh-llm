@@ -243,14 +243,26 @@ async fn write_moa_response(
         match response_adapter {
             proxy::ResponseAdapter::OpenAiResponsesStream => (
                 "SSE-responses",
-                send_moa_as_responses_sse(tcp_stream, body, extra_headers).await,
+                send_moa_as_responses_sse(
+                    tcp_stream,
+                    body,
+                    extra_headers,
+                    final_text_stream_mode_for_result(moa_result),
+                )
+                .await,
             ),
             // None, OpenAiChatCompletionsStream, OpenAiResponsesJson all
             // get the chat.completion.chunk SSE shape — the JSON-mode
             // adapter caller will never set was_streaming=true.
             _ => (
                 "SSE-chat",
-                send_moa_as_sse(tcp_stream, body, extra_headers).await,
+                send_moa_as_sse(
+                    tcp_stream,
+                    body,
+                    extra_headers,
+                    final_text_stream_mode_for_result(moa_result),
+                )
+                .await,
             ),
         }
     } else if is_failure {
@@ -278,6 +290,22 @@ async fn write_moa_response(
     };
     if let Err(e) = result {
         tracing::warn!("MoA: response write failed ({mode}): {e}");
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::network::openai::moa_gateway) enum MoaFinalTextStreamMode {
+    OneShot,
+    ChunkedCommittedText,
+}
+
+pub(in crate::network::openai::moa_gateway) fn final_text_stream_mode_for_result(
+    result: &moa::TurnResult,
+) -> MoaFinalTextStreamMode {
+    if result.reducer_used {
+        MoaFinalTextStreamMode::OneShot
+    } else {
+        MoaFinalTextStreamMode::ChunkedCommittedText
     }
 }
 
@@ -753,8 +781,9 @@ async fn send_moa_as_sse(
     stream: TcpStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
+    text_stream_mode: MoaFinalTextStreamMode,
 ) -> std::io::Result<()> {
-    send_moa_as_sse_inner(stream, response, extra_headers, false).await
+    send_moa_as_sse_inner(stream, response, extra_headers, false, text_stream_mode).await
 }
 
 /// Write the standard SSE response header block, with optional
@@ -782,6 +811,7 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_sse_inner(
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     header_already_sent: bool,
+    text_stream_mode: MoaFinalTextStreamMode,
 ) -> std::io::Result<()> {
     if !header_already_sent {
         write_sse_response_headers(&mut stream, extra_headers).await?;
@@ -850,10 +880,12 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_sse_inner(
         let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
         stream.write_all(framed.as_bytes()).await?;
     } else {
-        // Text path: split content into chunks for pseudo-streaming.
+        // Text path: stream committed non-reducer answers in chunks.
+        // Reducer output remains one-shot because issue #618 explicitly
+        // scoped reducer streaming out of the first MoA streaming pass.
         // First chunk carries `role: "assistant"`; continuation chunks
         // carry only `content` (matches OpenAI streaming convention).
-        let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
+        let pieces = content_pieces_for_streaming(&content, text_stream_mode);
         let chunk_delay = MOA_STREAM_CHUNK_DELAY;
         let inter_chunk_delay = if pieces.len() > 1 {
             Some(chunk_delay)
@@ -1015,22 +1047,43 @@ fn chunk_content_for_streaming(content: &str, target_chunks: usize) -> Vec<&str>
     chunks
 }
 
-/// Emit the MoA response as a one-shot OpenAI Responses-API SSE stream
-/// so callers that hit `/v1/responses` with `stream:true` (the chat UI)
-/// get event shapes their parser understands.
+fn content_pieces_for_streaming(
+    content: &str,
+    text_stream_mode: MoaFinalTextStreamMode,
+) -> Vec<&str> {
+    match text_stream_mode {
+        MoaFinalTextStreamMode::OneShot => vec![content],
+        MoaFinalTextStreamMode::ChunkedCommittedText => {
+            chunk_content_for_streaming(content, MOA_STREAM_CHUNKS)
+        }
+    }
+}
+
+/// Emit the MoA response as an OpenAI Responses-API SSE stream so callers
+/// that hit `/v1/responses` with `stream:true` get event shapes their parser
+/// understands.
 ///
-/// We synthesize the minimum set the standard Responses-API stream
-/// emits: `response.created`, `response.output_text.delta` (one chunk
-/// with the full content), `response.output_text.done`, and
-/// `response.completed`. MoA always knows the full body before writing,
-/// so we don't bother with incremental delta streaming — it would only
-/// make the UI's spinner-to-text transition smoother.
+/// We synthesize the minimum set the standard Responses-API stream emits:
+/// `response.created`, one or more `response.output_text.delta` events,
+/// `response.output_text.done`, and `response.completed`. The text chunking
+/// mode is chosen from the completed MoA turn: committed non-reducer answers
+/// can be split for issue #618's visible streaming path, while reducer output
+/// remains one-shot until reducer streaming is implemented deliberately.
 async fn send_moa_as_responses_sse(
     stream: TcpStream,
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
+    text_stream_mode: MoaFinalTextStreamMode,
 ) -> std::io::Result<()> {
-    send_moa_as_responses_sse_inner(stream, response, extra_headers, false, None).await
+    send_moa_as_responses_sse_inner(
+        stream,
+        response,
+        extra_headers,
+        false,
+        text_stream_mode,
+        None,
+    )
+    .await
 }
 
 pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_inner(
@@ -1038,6 +1091,7 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_i
     response: &serde_json::Value,
     extra_headers: &[(&str, String)],
     header_already_sent: bool,
+    text_stream_mode: MoaFinalTextStreamMode,
     continuation: Option<ProgressContinuation>,
 ) -> std::io::Result<()> {
     if !header_already_sent {
@@ -1110,7 +1164,7 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_i
         stream.flush().await?;
     }
 
-    let pieces = chunk_content_for_streaming(&content, MOA_STREAM_CHUNKS);
+    let pieces = content_pieces_for_streaming(&content, text_stream_mode);
     let chunk_delay = MOA_STREAM_CHUNK_DELAY;
     let inter_chunk_delay = if pieces.len() > 1 {
         Some(chunk_delay)
@@ -1259,6 +1313,33 @@ mod tests {
             "choices": [{ "finish_reason": "error", "message": { "content": "oops" } }],
         });
         assert!(is_moa_failure_body(&body));
+    }
+
+    #[test]
+    fn final_text_stream_mode_chunks_only_non_reducer_results() {
+        assert_eq!(
+            final_text_stream_mode_for_result(&moa_turn_result_for_stream_mode(false)),
+            MoaFinalTextStreamMode::ChunkedCommittedText
+        );
+        assert_eq!(
+            final_text_stream_mode_for_result(&moa_turn_result_for_stream_mode(true)),
+            MoaFinalTextStreamMode::OneShot
+        );
+    }
+
+    fn moa_turn_result_for_stream_mode(reducer_used: bool) -> moa::TurnResult {
+        moa::TurnResult {
+            response_body: fixture_chat_completion("answer"),
+            worker_summaries: Vec::new(),
+            reducer_used,
+            reducer_attempts: u32::from(reducer_used),
+            turn_kind: if reducer_used {
+                moa::TurnKind::Fanout
+            } else {
+                moa::TurnKind::EarlyExit
+            },
+            elapsed_ms: 0,
+        }
     }
 
     #[test]
@@ -1476,6 +1557,14 @@ mod tests {
     /// `.contains(...)`, which is robust to framing without needing
     /// to parse it.
     async fn capture_responses_sse_body(response: serde_json::Value) -> String {
+        capture_responses_sse_body_with_mode(response, MoaFinalTextStreamMode::ChunkedCommittedText)
+            .await
+    }
+
+    async fn capture_responses_sse_body_with_mode(
+        response: serde_json::Value,
+        text_stream_mode: MoaFinalTextStreamMode,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind loopback");
@@ -1483,7 +1572,7 @@ mod tests {
 
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept");
-            send_moa_as_responses_sse(socket, &response, &[])
+            send_moa_as_responses_sse(socket, &response, &[], text_stream_mode)
                 .await
                 .expect("sse write");
         });
@@ -1512,7 +1601,8 @@ mod tests {
             }]
         });
 
-        let raw = capture_responses_sse_body(response).await;
+        let raw =
+            capture_responses_sse_body_with_mode(response, MoaFinalTextStreamMode::OneShot).await;
 
         // Extract every `data: { ... }` JSON blob and look at
         // (event.type, event.response.id).
@@ -1569,7 +1659,8 @@ mod tests {
             }
         });
 
-        let raw = capture_responses_sse_body(response).await;
+        let raw =
+            capture_responses_sse_body_with_mode(response, MoaFinalTextStreamMode::OneShot).await;
 
         // The completed event carries the response object including
         // usage. We assert by string match so we're robust to
@@ -1811,7 +1902,14 @@ mod tests {
         let addr = listener.local_addr().expect("local_addr");
         let server = tokio::spawn(async move {
             let (socket, _) = listener.accept().await.expect("accept");
-            send_moa_as_sse(socket, &response, &[]).await.expect("sse");
+            send_moa_as_sse(
+                socket,
+                &response,
+                &[],
+                MoaFinalTextStreamMode::ChunkedCommittedText,
+            )
+            .await
+            .expect("sse");
         });
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
         use tokio::io::AsyncReadExt;
@@ -1930,24 +2028,44 @@ mod tests {
         // ~500ms test runtime acceptable (MOA_STREAM_CHUNK_DELAY × N).
         let raw = capture_responses_sse_body(response).await;
         // Count response.output_text.delta events.
-        let mut delta_count = 0;
-        for line in raw.lines() {
-            let Some(payload) = line.strip_prefix("data: ") else {
-                continue;
-            };
-            if payload.trim() == "[DONE]" {
-                continue;
-            }
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else {
-                continue;
-            };
-            if v.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta") {
-                delta_count += 1;
-            }
-        }
+        let delta_count = count_responses_output_text_deltas(&raw);
         assert!(
-            delta_count > 1,
-            "expected multiple output_text.delta events; got {delta_count}\nraw: {raw}"
+            delta_count >= 5,
+            "expected at least 5 output_text.delta events; got {delta_count}\nraw: {raw}"
+        );
+    }
+
+    fn count_responses_output_text_deltas(raw: &str) -> usize {
+        raw.lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter(|payload| payload.trim() != "[DONE]")
+            .filter_map(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+            .filter(|v| {
+                v.get("type").and_then(|t| t.as_str()) == Some("response.output_text.delta")
+            })
+            .count()
+    }
+
+    #[tokio::test]
+    async fn responses_sse_keeps_reducer_output_one_delta_for_long_content() {
+        let long_content = "Reduced answer. ".repeat(40);
+        let response = serde_json::json!({
+            "id": "chatcmpl-moa-resp-reducer",
+            "object": "chat.completion",
+            "model": "mesh",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": long_content },
+                "finish_reason": "stop"
+            }]
+        });
+
+        let raw =
+            capture_responses_sse_body_with_mode(response, MoaFinalTextStreamMode::OneShot).await;
+        let delta_count = count_responses_output_text_deltas(&raw);
+        assert_eq!(
+            delta_count, 1,
+            "reducer output is intentionally not pseudo-streamed; raw: {raw}"
         );
     }
 }
