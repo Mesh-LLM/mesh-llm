@@ -15,6 +15,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLVMInstallDir");
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
 
+    if std::env::var_os("CARGO_FEATURE_DYNAMIC_RUNTIME").is_some() {
+        return;
+    }
+
     let link_mode =
         std::env::var("LLAMA_STAGE_LINK_MODE").or_else(|_| std::env::var("SKIPPY_LLAMA_LINK_MODE"));
     if link_mode.as_deref() == Ok("dynamic") {

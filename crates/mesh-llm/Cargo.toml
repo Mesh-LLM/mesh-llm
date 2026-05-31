@@ -12,6 +12,7 @@ web-ui = ["mesh-llm-host-runtime/web-ui"]
 gpu-bench-cuda = ["mesh-llm-host-runtime/gpu-bench-cuda"]
 gpu-bench-hip = ["mesh-llm-host-runtime/gpu-bench-hip"]
 gpu-bench-intel = ["mesh-llm-host-runtime/gpu-bench-intel"]
+dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
 
 [lints]
 workspace = true

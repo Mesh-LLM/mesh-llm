@@ -10,6 +10,7 @@ mod models;
 mod plugin;
 mod plugin_cli;
 mod runtime;
+mod runtime_native;
 mod skills;
 mod update;
 
@@ -61,7 +62,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             Ok(())
         }
         Command::Runtime { command } => dispatch_runtime_command(command.as_ref()).await,
-        Command::Doctor { command } => dispatch_doctor_command(command).await,
+        Command::Doctor { command, json } => dispatch_doctor_command(command.as_ref(), *json).await,
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,

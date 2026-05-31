@@ -633,6 +633,30 @@ install_bundle() {
     done
 }
 
+install_recommended_native_runtime() {
+    local tmp_dir="$1"
+    local manifest_url
+    local manifest_path="$tmp_dir/native-runtimes.json"
+    local binary="$INSTALL_DIR/mesh-llm"
+
+    if [[ ! -x "$binary" ]]; then
+        return 0
+    fi
+    if ! manifest_url="$(release_url "native-runtimes.json")"; then
+        return 0
+    fi
+    if ! curl -fsSL "$manifest_url" -o "$manifest_path"; then
+        echo "Native runtime manifest was not available for this release; skipping runtime install."
+        return 0
+    fi
+
+    "$binary" runtime install --manifest "$manifest_path" || {
+        echo "warning: native runtime install did not complete successfully." >&2
+        return 0
+    }
+    "$binary" runtime prune --active-only || true
+}
+
 systemd_escape_assignment_value() {
     local value="$1"
     value="${value//\\/\\\\}"
@@ -903,6 +927,7 @@ main() {
     fi
 
     install_bundle "$tmp_dir/mesh-bundle"
+    install_recommended_native_runtime "$tmp_dir"
 
     echo "Installed $asset to $INSTALL_DIR"
 

@@ -3,11 +3,64 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::cli::MeshGuardrailCliMode;
+use crate::cli::commands::runtime_native;
 use crate::cli::runtime::RuntimeCommand;
 use crate::plugin::{MeshConfig, load_config};
 
 pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -> Result<()> {
     match command {
+        Some(RuntimeCommand::List {
+            available,
+            installed: _,
+            manifest,
+            bundle_dirs,
+            cache_dir,
+            json,
+        }) => runtime_native::run_native_runtime_list(
+            *available,
+            manifest.as_deref(),
+            bundle_dirs,
+            cache_dir.as_deref(),
+            *json,
+        ),
+        Some(RuntimeCommand::Install {
+            runtime,
+            manifest,
+            bundle_dirs,
+            cache_dir,
+            json,
+        }) => {
+            runtime_native::run_native_runtime_install(
+                runtime.as_deref(),
+                manifest.as_deref(),
+                bundle_dirs,
+                cache_dir.as_deref(),
+                *json,
+            )
+            .await
+        }
+        Some(RuntimeCommand::Remove {
+            native_runtime_id,
+            mesh_version,
+            cache_dir,
+            json,
+        }) => runtime_native::run_native_runtime_remove(
+            native_runtime_id,
+            mesh_version.as_deref(),
+            cache_dir.as_deref(),
+            *json,
+        ),
+        Some(RuntimeCommand::Prune {
+            active_only,
+            mesh_version,
+            cache_dir,
+            json,
+        }) => runtime_native::run_native_runtime_prune(
+            *active_only,
+            mesh_version.as_deref(),
+            cache_dir.as_deref(),
+            *json,
+        ),
         Some(RuntimeCommand::Status { port }) => run_status(*port).await,
         Some(RuntimeCommand::Bootstrap { port, json }) => run_control_bootstrap(*port, *json).await,
         Some(RuntimeCommand::GetConfig {

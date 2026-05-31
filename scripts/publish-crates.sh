@@ -377,6 +377,7 @@ should_skip_initial_dry_run() {
 publish_crates=(
     model-ref
     mesh-llm-identity
+    mesh-llm-native-runtime
     mesh-llm-protocol
     mesh-llm-routing
     mesh-llm-types

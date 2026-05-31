@@ -891,6 +891,7 @@ async fn install_latest_bundle(
             &staged_files,
             action,
         )?;
+        install_native_runtime_after_update(install_dir, release, &workspace).await;
         Ok::<InstallOutcome, anyhow::Error>(install_outcome(action))
     }
     .await;
@@ -899,6 +900,86 @@ async fn install_latest_bundle(
         let _ = std::fs::remove_dir_all(&workspace);
     }
     result
+}
+
+#[cfg(not(windows))]
+async fn install_native_runtime_after_update(
+    install_dir: &Path,
+    release: &ReleaseInfo,
+    workspace: &Path,
+) {
+    let manifest_path = workspace.join("native-runtimes.json");
+    match download_optional_url(
+        &release_asset_url(&release.tag, "native-runtimes.json"),
+        &manifest_path,
+    )
+    .await
+    {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to download native runtime release manifest");
+            return;
+        }
+    }
+
+    let binary = install_dir.join(mesh_binary_name());
+    let install_status = std::process::Command::new(&binary)
+        .arg("runtime")
+        .arg("install")
+        .arg("--manifest")
+        .arg(&manifest_path)
+        .status();
+    match install_status {
+        Ok(status) if status.success() => {
+            let _ = std::process::Command::new(&binary)
+                .arg("runtime")
+                .arg("prune")
+                .arg("--active-only")
+                .status();
+        }
+        Ok(status) => {
+            tracing::warn!(
+                status = status.code(),
+                "Native runtime install after update did not complete successfully"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, "Failed to run native runtime install after update");
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn install_native_runtime_after_update(
+    _install_dir: &Path,
+    _release: &ReleaseInfo,
+    _workspace: &Path,
+) {
+}
+
+async fn download_optional_url(url: &str, path: &Path) -> Result<bool> {
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .context("Build optional release download HTTP client")?
+        .get(url)
+        .header("User-Agent", "mesh-llm")
+        .send()
+        .await
+        .with_context(|| format!("Download optional release asset {url}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(false);
+    }
+    let bytes = response
+        .error_for_status()
+        .with_context(|| format!("Optional release asset request failed for {url}"))?
+        .bytes()
+        .await
+        .with_context(|| format!("Read optional release asset body from {url}"))?;
+    std::fs::write(path, &bytes)
+        .with_context(|| format!("Write optional release asset {}", path.display()))?;
+    Ok(true)
 }
 
 async fn download_url(url: &str, path: &Path) -> Result<()> {

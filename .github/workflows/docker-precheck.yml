@@ -64,6 +64,7 @@ jobs:
           for path in \
             crates/mesh-llm/ \
             crates/mesh-llm-identity/ \
+            crates/mesh-llm-native-runtime/ \
             crates/mesh-llm-protocol/ \
             crates/mesh-llm-routing/ \
             crates/mesh-llm-guardrails/ \

@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LLAMA_WORKDIR="${LLAMA_WORKDIR:-$ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$ROOT/.deps/llama-build}"
 LLAMA_BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-${LLAMA_BACKEND:-cpu}}}"
+LLAMA_LINK_MODE="${LLAMA_STAGE_LINK_MODE:-${SKIPPY_LLAMA_LINK_MODE:-static}}"
 PRINT_BUILD_DIR=0
 
 if [[ "${1:-}" == "--print-build-dir" ]]; then
@@ -18,6 +19,15 @@ case "$LLAMA_BACKEND" in
   *)
     echo "unsupported LLAMA_STAGE_BACKEND: $LLAMA_BACKEND" >&2
     echo "expected one of: cpu, cuda, rocm, hip, vulkan, metal" >&2
+    exit 1
+    ;;
+esac
+
+case "$LLAMA_LINK_MODE" in
+  static|dynamic) ;;
+  *)
+    echo "unsupported LLAMA_STAGE_LINK_MODE: $LLAMA_LINK_MODE" >&2
+    echo "expected one of: static, dynamic" >&2
     exit 1
     ;;
 esac
@@ -41,7 +51,7 @@ default_build_dir_for_backend() {
       suffix="rocm-$(sanitize_build_component "$amdgpu_targets")"
       ;;
   esac
-  printf '%s/build-stage-abi-%s\n' "$LLAMA_BUILD_ROOT" "$suffix"
+  printf '%s/build-stage-abi-%s-%s\n' "$LLAMA_BUILD_ROOT" "$LLAMA_LINK_MODE" "$suffix"
 }
 
 detect_jobs() {
@@ -68,6 +78,35 @@ required_archives_exist() {
   while IFS= read -r archive; do
     [[ -f "$archive" ]] || return 1
   done < <(required_archives)
+}
+
+dynamic_library_names() {
+  case "$(uname -s)" in
+    Darwin)
+      printf '%s\n' libllama.dylib libllama-common.dylib libmtmd.dylib
+      ;;
+    MINGW*|MSYS*|CYGWIN*)
+      printf '%s\n' llama.dll llama-common.dll mtmd.dll
+      ;;
+    *)
+      printf '%s\n' libllama.so libllama-common.so libmtmd.so
+      ;;
+  esac
+}
+
+required_dynamic_libraries_exist() {
+  local name
+  while IFS= read -r name; do
+    find "$LLAMA_BUILD_DIR" -type f -name "$name" -print -quit | grep -q .
+  done < <(dynamic_library_names)
+}
+
+required_outputs_exist() {
+  if [[ "$LLAMA_LINK_MODE" == "dynamic" ]]; then
+    required_dynamic_libraries_exist
+  else
+    required_archives_exist
+  fi
 }
 
 if [[ -z "${LLAMA_BUILD_DIR:-}" ]]; then
@@ -100,7 +139,7 @@ CMAKE_ARGS=(
   -S "$LLAMA_WORKDIR"
   -B "$LLAMA_BUILD_DIR"
   -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
-  -DBUILD_SHARED_LIBS=OFF
+  -DBUILD_SHARED_LIBS="$(if [[ "$LLAMA_LINK_MODE" == "dynamic" ]]; then echo ON; else echo OFF; fi)"
   -DGGML_NATIVE="${LLAMA_STAGE_GGML_NATIVE:-${SKIPPY_GGML_NATIVE:-OFF}}"
   -DLLAMA_BUILD_EXAMPLES=OFF
   -DLLAMA_BUILD_SERVER=OFF
@@ -171,6 +210,7 @@ CURRENT_BUILD_STAMP="$(
   printf 'stamp-version=1\n'
   printf 'patched-sha=%s\n' "$PATCHED_SHA"
   printf 'backend=%s\n' "$LLAMA_BACKEND"
+  printf 'link-mode=%s\n' "$LLAMA_LINK_MODE"
   printf 'build-type=%s\n' "${CMAKE_BUILD_TYPE:-Release}"
   printf 'ggml-native=%s\n' "${LLAMA_STAGE_GGML_NATIVE:-${SKIPPY_GGML_NATIVE:-OFF}}"
   printf 'cuda-architectures=%s\n' "${LLAMA_STAGE_CUDA_ARCHITECTURES:-${SKIPPY_CUDA_ARCHITECTURES:-}}"
@@ -186,7 +226,7 @@ if [[ "${LLAMA_STAGE_FORCE_BUILD:-${SKIPPY_FORCE_LLAMA_BUILD:-0}}" != "1" &&
       -f "$BUILD_STAMP" &&
       "$(cat "$BUILD_STAMP")" == "$CURRENT_BUILD_STAMP" ]] &&
    git -C "$LLAMA_WORKDIR" diff-index --quiet HEAD -- &&
-   required_archives_exist; then
+   required_outputs_exist; then
   echo "patched llama.cpp ABI already built"
   echo "  backend:   $LLAMA_BACKEND"
   echo "  build dir: $LLAMA_BUILD_DIR"

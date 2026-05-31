@@ -656,16 +656,18 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: Option<GpuCommand>,
     },
-    /// Inspect and manage local runtime-served models.
-    #[command(hide = true)]
+    /// Inspect and manage native runtimes.
     Runtime {
         #[command(subcommand)]
         command: Option<RuntimeCommand>,
     },
     /// Diagnose local mesh, runtime, and split-readiness problems.
     Doctor {
+        /// Print machine-readable JSON for the default doctor report.
+        #[arg(long)]
+        json: bool,
         #[command(subcommand)]
-        command: DoctorCommand,
+        command: Option<DoctorCommand>,
     },
     /// Load a local model into a running mesh-llm instance.
     Load {

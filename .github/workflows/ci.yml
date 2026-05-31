@@ -78,6 +78,7 @@ jobs:
               - 'crates/mesh-llm-nodejs/**'
               - 'crates/mesh-client/**'
               - 'crates/mesh-llm-identity/**'
+              - 'crates/mesh-llm-native-runtime/**'
               - 'crates/mesh-llm-protocol/**'
               - 'crates/mesh-llm-routing/**'
               - 'crates/mesh-llm-types/**'

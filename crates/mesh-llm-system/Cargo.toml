@@ -25,6 +25,7 @@ gpu-bench-cuda = ["mesh-llm-gpu-bench/cuda"]
 gpu-bench-hip = ["mesh-llm-gpu-bench/hip"]
 gpu-bench-intel = ["mesh-llm-gpu-bench/intel"]
 skippy-devices = ["dep:skippy-runtime"]
+dynamic-native-runtime = ["skippy-devices", "skippy-runtime/dynamic-native-runtime"]
 
 [dev-dependencies]
 serial_test = "3"

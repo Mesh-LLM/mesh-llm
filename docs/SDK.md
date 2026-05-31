@@ -12,7 +12,7 @@ The SDK is split into two parts:
   client-only apps, Rust `mesh-llm-api-server` for node/serving apps, Swift `MeshLLM`,
   Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
 - **Native runtime artifacts** provide local serving for a specific
-  platform/backend, such as macOS Metal or Linux CUDA.
+  platform/runtime flavor, such as macOS Metal or Linux CUDA.
 
 Client-only mesh inference only needs the language SDK. Local serving also
 needs a matching native runtime artifact or an embedded Rust `ServingController`.
@@ -33,8 +33,8 @@ For client-only mesh inference, depend on `mesh-llm-api-client`. For model
 management and serving, depend on `mesh-llm-api-server`.
 
 For local serving in a Rust app, the node must be built with a
-`ServingController`. The plain `mesh-llm-api-server` crate intentionally does not pick
-a Metal, CUDA, ROCm, Vulkan, or CPU runtime for you.
+`ServingController`. The plain `mesh-llm-api-server` crate intentionally does
+not pick a Metal, CUDA, ROCm, Vulkan, or CPU runtime for you.
 
 ### Swift
 
@@ -221,7 +221,7 @@ node.serving()
 
 If no controller is attached, `serving.load()` returns an unsupported error.
 This is intentional: `mesh-llm-api-server` is platform-neutral and does not silently
-choose a native backend.
+choose a native runtime.
 
 ### Embedded full node from a Rust app
 
@@ -454,8 +454,13 @@ await node.stop()
 
 ## Native Runtime Artifacts
 
+The accepted packaging direction is documented in
+[design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md). In short: native
+runtimes are release artifacts, not implicit Cargo builds, and the native
+runtime version must exactly match the MeshLLM version that loads it.
+
 Swift and Kotlin load MeshLLM through `libmeshllm_ffi`, not through a public
-`libllama` contract. Backend-specific llama.cpp builds are an implementation
+`libllama` contract. Flavor-specific llama.cpp builds are an implementation
 detail of the native runtime artifact.
 
 Native runtime artifacts use this layout:
@@ -468,13 +473,14 @@ meshllm-native-<platform>-<flavor>/
     libmeshllm_ffi.{dylib|so}
 ```
 
-The manifest records the SDK version, target triple, backend flavor, library
-checksum, llama.cpp upstream SHA, patched SHA, and patch digest. SDK loaders
-verify the library checksum before loading the dynamic library.
+The manifest records the MeshLLM version, target triple, runtime flavor,
+library checksum, llama.cpp upstream SHA, patched SHA, and patch digest. SDK
+loaders verify the MeshLLM version and library checksum before loading the
+dynamic library.
 
 Baseline artifact names:
 
-| Artifact directory | Target | Backend |
+| Artifact directory | Target | Flavor |
 |---|---|---|
 | `meshllm-native-darwin-aarch64-metal` | `aarch64-apple-darwin` | Metal |
 | `meshllm-native-darwin-aarch64-cpu` | `aarch64-apple-darwin` | CPU |
@@ -487,8 +493,9 @@ Baseline artifact names:
 | `meshllm-native-windows-x86_64-vulkan` | `x86_64-pc-windows-msvc` | Vulkan |
 | `meshllm-native-windows-x86_64-rocm` | `x86_64-pc-windows-msvc` | ROCm/HIP |
 
-CUDA and ROCm artifacts may include hardware-specific suffixes such as
-`cuda-sm80` or `rocm-gfx1100` when `LLAMA_STAGE_CUDA_ARCHITECTURES` or
+CUDA and ROCm artifacts may include hardware-specific flavor suffixes such as
+`cuda-sm80`, `cuda-blackwell`, or `rocm-gfx1100` when
+`LLAMA_STAGE_CUDA_ARCHITECTURES` or
 `LLAMA_STAGE_AMDGPU_TARGETS` is set.
 
 Build and package one flavor:
@@ -517,7 +524,8 @@ scripts/verify-native-sdk-package.sh dist/native-sdk/*.tar.gz
 
 ## Selecting a Runtime From Cargo
 
-Native runtime crates are generated from verified native runtime artifacts:
+Native runtime crates are generated from verified native runtime artifacts.
+They package release artifacts; they do not build native code implicitly:
 
 ```bash
 scripts/package-native-sdk-crate.sh \
@@ -554,7 +562,7 @@ meshllm-native-linux-x86-64-cpu = "0.68.0"
 
 Because all runtime crates share `links = "meshllm_native_runtime"`, Cargo
 rejects selecting more than one for the same build. Apps that need to ship
-multiple backend choices in one installer should package multiple verified
+multiple runtime flavors in one installer should package multiple verified
 tarball artifacts explicitly and choose between those artifact directories at
 runtime.
 

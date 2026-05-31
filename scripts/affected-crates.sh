@@ -13,6 +13,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
   "mesh-llm-identity"
+  "mesh-llm-native-runtime"
   "mesh-llm-protocol"
   "mesh-llm-routing"
   "mesh-llm-sdk"

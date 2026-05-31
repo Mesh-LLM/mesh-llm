@@ -8,6 +8,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LLAMA_DIR="${MESH_LLM_LLAMA_DIR:-$REPO_ROOT/.deps/llama.cpp}"
 LLAMA_BUILD_ROOT="${MESH_LLM_LLAMA_BUILD_ROOT:-$REPO_ROOT/.deps/llama-build}"
 UI_DIR="$REPO_ROOT/crates/mesh-llm-ui"
+DYNAMIC_NATIVE_RUNTIME="${MESH_LLM_DYNAMIC_NATIVE_RUNTIME:-1}"
 
 append_rustflag() {
     local flag="$1"
@@ -111,17 +112,25 @@ fi
 
 configure_lld_linker
 
-echo "Preparing patched llama.cpp ABI checkout..."
-LLAMA_WORKDIR="$LLAMA_DIR" "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
+if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
+    echo "Skipping embedded llama.cpp ABI build; release binary will load native runtimes dynamically."
+else
+    echo "Preparing patched llama.cpp ABI checkout..."
+    LLAMA_WORKDIR="$LLAMA_DIR" "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
 
-echo "Building patched llama.cpp ABI ($BACKEND)..."
-LLAMA_WORKDIR="$LLAMA_DIR" \
-    LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
-    LLAMA_STAGE_BACKEND="$BACKEND" \
-    "$SCRIPT_DIR/build-llama.sh"
+    echo "Building patched llama.cpp ABI ($BACKEND)..."
+    LLAMA_WORKDIR="$LLAMA_DIR" \
+        LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
+        LLAMA_STAGE_BACKEND="$BACKEND" \
+        "$SCRIPT_DIR/build-llama.sh"
+fi
 
 echo "Building UI..."
 MESH_LLM_BUILD_PROFILE=release "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
 
 echo "Building mesh-llm..."
-(cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm)
+cargo_features=()
+if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
+    cargo_features=(--features dynamic-native-runtime)
+fi
+(cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm "${cargo_features[@]}")

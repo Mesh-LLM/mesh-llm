@@ -3897,6 +3897,7 @@ dependencies = [
  "crypto_box",
  "dirs",
  "ed25519-dalek",
+ "flate2",
  "futures-util",
  "hex",
  "hf-hub",
@@ -3914,6 +3915,7 @@ dependencies = [
  "mesh-llm-config",
  "mesh-llm-guardrails",
  "mesh-llm-identity",
+ "mesh-llm-native-runtime",
  "mesh-llm-node",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
@@ -3953,6 +3955,7 @@ dependencies = [
  "skippy-server",
  "skippy-topology",
  "tabwriter",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3978,6 +3981,17 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mesh-llm-native-runtime"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
@@ -7262,6 +7276,9 @@ dependencies = [
 [[package]]
 name = "skippy-ffi"
 version = "0.68.0"
+dependencies = [
+ "libloading",
+]
 
 [[package]]
 name = "skippy-metrics"

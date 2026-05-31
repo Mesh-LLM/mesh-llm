@@ -4,6 +4,10 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 
+[features]
+default = []
+dynamic-native-runtime = ["skippy-ffi/dynamic-runtime"]
+
 [dependencies]
 anyhow.workspace = true
 skippy-ffi = { path = "../skippy-ffi" }

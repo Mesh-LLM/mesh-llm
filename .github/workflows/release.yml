@@ -242,6 +242,68 @@ jobs:
             dist/native-sdk-crates/*/target/package/*.crate
           if-no-files-found: error
 
+  build_native_runtime:
+    name: Build native runtime ${{ matrix.name }}
+    needs: metadata
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS aarch64 Metal
+            os: blacksmith-6vcpu-macos-15
+            backend: metal
+            target: aarch64-apple-darwin
+            artifact_suffix: darwin-aarch64-metal
+          - name: Linux x86_64 CPU
+            os: blacksmith-4vcpu-ubuntu-2404
+            backend: cpu
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x86_64-cpu
+    env:
+      LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
+      MESH_NATIVE_RUNTIME_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl lld
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja lld
+
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Package native runtime
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend "${{ matrix.backend }}" \
+            --target "${{ matrix.target }}" \
+            --out dist/native-runtimes
+
+      - name: Verify native runtime artifact
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-${{ matrix.artifact_suffix }}
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
   build_swift_sdk_artifact:
     name: Build Swift SDK XCFramework
     needs: metadata
@@ -734,6 +796,7 @@ jobs:
       - build
       - inference_smoke_tests
       - build_native_sdk_runtime
+      - build_native_runtime
       - build_swift_sdk_artifact
       - build_linux_arm64
       - build_linux_aarch64_cuda
@@ -742,11 +805,10 @@ jobs:
       - build_linux_vulkan
       - build_windows_cpu
       - build_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v5
-        if: github.event_name == 'workflow_dispatch'
         with:
           fetch-depth: 0
 
@@ -762,6 +824,16 @@ jobs:
 
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
+
+      - name: Generate native runtime release manifest
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          scripts/generate-native-runtime-release-manifest.sh \
+            --tag "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --out release-artifacts/native-runtimes.json \
+            release-artifacts/meshllm-native-runtime-*.tar.gz
 
       - name: Download generated SwiftPM manifest
         if: github.event_name == 'workflow_dispatch'

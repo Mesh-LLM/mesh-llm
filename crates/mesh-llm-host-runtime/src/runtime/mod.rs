@@ -3566,7 +3566,10 @@ async fn run_runtime_cli(
     .await?;
 
     // Finish the release check before startup continues.
-    if !checked_updates && !matches!(cli.command, Some(Command::Update { .. })) {
+    if !checked_updates
+        && !matches!(cli.command, Some(Command::Update { .. }))
+        && !command_uses_machine_output(cli.command.as_ref())
+    {
         autoupdate::check_for_update(crate::VERSION).await;
     }
 
@@ -3626,6 +3629,23 @@ async fn run_runtime_cli(
         embedded_control_rx,
     })
     .await
+}
+
+fn command_uses_machine_output(command: Option<&Command>) -> bool {
+    matches!(
+        command,
+        Some(Command::Doctor {
+            json: true,
+            command: None,
+        }) | Some(Command::Runtime {
+            command: Some(
+                crate::cli::runtime::RuntimeCommand::List { json: true, .. }
+                    | crate::cli::runtime::RuntimeCommand::Install { json: true, .. }
+                    | crate::cli::runtime::RuntimeCommand::Remove { json: true, .. }
+                    | crate::cli::runtime::RuntimeCommand::Prune { json: true, .. },
+            ),
+        })
+    )
 }
 
 /// Resolve a model path: local file, catalog name, or HuggingFace URL.

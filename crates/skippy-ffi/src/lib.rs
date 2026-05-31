@@ -289,6 +289,276 @@ pub struct GenerationSignalWindow {
     pub repetition_count: u32,
 }
 
+#[cfg(not(feature = "dynamic-runtime"))]
+/// Mark the statically linked native runtime as already available.
+pub fn native_runtime_loaded() -> bool {
+    true
+}
+
+#[cfg(not(feature = "dynamic-runtime"))]
+/// No-op for statically linked builds.
+///
+/// # Safety
+///
+/// Static builds resolve the native ABI at process link/load time, so this
+/// function does not dereference the supplied path or mutate loader state.
+pub unsafe fn load_native_runtime_library(
+    _path: impl AsRef<std::path::Path>,
+) -> Result<(), NativeRuntimeLoadError> {
+    Ok(())
+}
+
+#[cfg(not(feature = "dynamic-runtime"))]
+/// No-op for statically linked builds.
+///
+/// # Safety
+///
+/// Static builds resolve the native ABI at process link/load time, so this
+/// function does not dereference the supplied paths or mutate loader state.
+pub unsafe fn load_native_runtime_libraries<I, P>(_paths: I) -> Result<(), NativeRuntimeLoadError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<std::path::Path>,
+{
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum NativeRuntimeLoadError {
+    Load(String),
+    AlreadyLoaded,
+}
+
+impl std::fmt::Display for NativeRuntimeLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Load(message) => write!(f, "{message}"),
+            Self::AlreadyLoaded => write!(f, "native runtime library is already loaded"),
+        }
+    }
+}
+
+impl std::error::Error for NativeRuntimeLoadError {}
+
+#[cfg(feature = "dynamic-runtime")]
+mod dynamic {
+    use super::*;
+    use libloading::Library;
+    use std::sync::OnceLock;
+
+    static SYMBOLS: OnceLock<Symbols> = OnceLock::new();
+
+    pub fn native_runtime_loaded() -> bool {
+        SYMBOLS.get().is_some()
+    }
+
+    /// Load a native runtime library and resolve the Skippy ABI symbols from it.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the library is a MeshLLM native runtime built for
+    /// the running MeshLLM version and Skippy ABI. Loading an arbitrary library
+    /// can bind incompatible C symbols and cause undefined behavior in later FFI
+    /// calls.
+    pub unsafe fn load_native_runtime_library(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<(), NativeRuntimeLoadError> {
+        let symbols = unsafe { Symbols::load_paths(&[path.as_ref()]) }?;
+        SYMBOLS
+            .set(symbols)
+            .map_err(|_| NativeRuntimeLoadError::AlreadyLoaded)
+    }
+
+    /// Load native runtime libraries and resolve Skippy ABI symbols from them.
+    ///
+    /// Libraries are loaded in the provided order and symbols are resolved by
+    /// searching from the last library backwards, so dependencies should appear
+    /// before the primary `libllama`/`llama.dll` entry.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure every library belongs to the same MeshLLM native
+    /// runtime artifact for the running MeshLLM version and Skippy ABI. Loading
+    /// arbitrary libraries can bind incompatible C symbols and cause undefined
+    /// behavior in later FFI calls.
+    pub unsafe fn load_native_runtime_libraries<I, P>(
+        paths: I,
+    ) -> Result<(), NativeRuntimeLoadError>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<std::path::Path>,
+    {
+        let collected = paths
+            .into_iter()
+            .map(|path| path.as_ref().to_path_buf())
+            .collect::<Vec<_>>();
+        let symbols = unsafe { Symbols::load_paths(&collected) }?;
+        SYMBOLS
+            .set(symbols)
+            .map_err(|_| NativeRuntimeLoadError::AlreadyLoaded)
+    }
+
+    fn symbols() -> &'static Symbols {
+        SYMBOLS
+            .get()
+            .expect("MeshLLM native runtime library has not been loaded")
+    }
+
+    macro_rules! dynamic_symbols {
+        ($($name:ident($($arg:ident: $arg_ty:ty),* $(,)?) $(-> $ret:ty)?;)+) => {
+            #[allow(non_snake_case)]
+            struct Symbols {
+                _libraries: Vec<Library>,
+                $($name: unsafe extern "C" fn($($arg_ty),*) $(-> $ret)?,)+
+            }
+
+            impl Symbols {
+                unsafe fn load_paths<P>(paths: &[P]) -> Result<Self, NativeRuntimeLoadError>
+                where
+                    P: AsRef<std::path::Path>,
+                {
+                    if paths.is_empty() {
+                        return Err(NativeRuntimeLoadError::Load(
+                            "native runtime did not provide any libraries".to_string(),
+                        ));
+                    }
+                    let mut libraries = Vec::with_capacity(paths.len());
+                    for path in paths {
+                        libraries.push(
+                            unsafe { Library::new(path.as_ref()) }
+                                .map_err(|err| NativeRuntimeLoadError::Load(err.to_string()))?,
+                        );
+                    }
+                    $(
+                        let mut $name = None;
+                        for library in libraries.iter().rev() {
+                            if let Ok(symbol) = unsafe {
+                                library.get::<unsafe extern "C" fn($($arg_ty),*) $(-> $ret)?>(
+                                    concat!(stringify!($name), "\0").as_bytes(),
+                                )
+                            } {
+                                $name = Some(*symbol);
+                                break;
+                            }
+                        };
+                        let $name = $name.ok_or_else(|| {
+                            NativeRuntimeLoadError::Load(format!(
+                                "native runtime symbol not found: {}",
+                                stringify!($name),
+                            ))
+                        })?;
+                    )+
+                    Ok(Self {
+                        _libraries: libraries,
+                        $($name,)+
+                    })
+                }
+            }
+
+            $(
+                #[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+                pub unsafe fn $name($($arg: $arg_ty),*) $(-> $ret)? {
+                    unsafe { (symbols().$name)($($arg),*) }
+                }
+            )+
+        };
+    }
+
+    dynamic_symbols! {
+        llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
+        ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
+        skippy_status_string(status: Status) -> *const c_char;
+        skippy_error_free(error: *mut Error);
+        skippy_backend_device_count(out_count: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_backend_device_at(index: usize, out_device: *mut BackendDevice, out_error: *mut *mut Error) -> Status;
+        skippy_model_open(path: *const c_char, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
+        skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
+        skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
+        skippy_model_llama_model(model: *const Model) -> *const Opaque;
+        skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
+        skippy_session_create_from_resident_prefix(model: *mut Model, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
+        skippy_session_llama_context(session: *mut Session) -> *mut Opaque;
+        skippy_session_position(session: *const Session) -> i32;
+        skippy_session_native_seq_id(session: *const Session) -> i32;
+        skippy_session_batch_size(session: *const Session) -> i32;
+        skippy_session_begin_external_decode(session: *mut Session, out_error: *mut *mut Error) -> Status;
+        skippy_session_end_external_decode(session: *mut Session, out_error: *mut *mut Error) -> Status;
+        skippy_session_set_position(session: *mut Session, n_past: i32, out_error: *mut *mut Error) -> Status;
+        skippy_session_sample_current(session: *mut Session, sampling: *const SamplingConfig, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_session_configure_chat_sampling(session: *mut Session, sampling: *const SamplingConfig, metadata_json: *const c_char, prompt_token_count: u64, out_error: *mut *mut Error) -> Status;
+        skippy_session_reset(session: *mut Session, out_error: *mut *mut Error) -> Status;
+        skippy_checkpoint_session(session: *mut Session, out_token_count: *mut u64, out_error: *mut *mut Error) -> Status;
+        skippy_restore_session_checkpoint(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
+        skippy_session_free(session: *mut Session, out_error: *mut *mut Error) -> Status;
+        skippy_prefill_chunk(session: *mut Session, token_ids: *const i32, token_count: usize, input_activations: *const c_void, input_activation_bytes: usize, output_activations: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_decode_step(session: *mut Session, token_id: i32, input_activation: *const c_void, input_activation_bytes: usize, output_activation: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_verify_tokens(session: *mut Session, token_ids: *const i32, token_count: usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_decode_step_sampled(session: *mut Session, token_id: i32, sampling: *const SamplingConfig, input_activation: *const c_void, input_activation_bytes: usize, output_activation: *mut c_void, output_activation_capacity: usize, out_output_activation_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_prefill_chunk_frame(session: *mut Session, token_ids: *const i32, token_count: usize, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_prefill_chunk_frame_sampled(session: *mut Session, token_ids: *const i32, token_count: usize, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_prefill_chunk_frame_with_positions(session: *mut Session, token_ids: *const i32, token_count: usize, positions: *const i32, position_count: usize, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_prefill_chunk_frame_sampled_with_positions(session: *mut Session, token_ids: *const i32, token_count: usize, positions: *const i32, position_count: usize, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_decode_step_frame(session: *mut Session, token_id: i32, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_verify_tokens_frame(session: *mut Session, token_ids: *const i32, token_count: usize, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_decode_step_frame_sampled(session: *mut Session, token_id: i32, sampling: *const SamplingConfig, input_desc: *const ActivationDesc, input_payload: *const c_void, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_predicted_token: *mut i32, out_error: *mut *mut Error) -> Status;
+        skippy_session_copy_output_activation_frame(session: *mut Session, token_count: usize, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
+        skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
+        skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
+        skippy_export_state(session: *mut Session, layer_start: i32, layer_end: i32, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_import_state(session: *mut Session, layer_start: i32, layer_end: i32, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+        skippy_export_full_state(session: *mut Session, layer_start: i32, layer_end: i32, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_import_full_state(session: *mut Session, layer_start: i32, layer_end: i32, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+        skippy_export_kv_page(session: *mut Session, layer_start: i32, layer_end: i32, token_start: u64, token_count: u64, out_desc: *mut KvPageDesc, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_import_kv_page(session: *mut Session, desc: *const KvPageDesc, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+        skippy_export_recurrent_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+        skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
+        skippy_session_restore_prefix(session: *mut Session, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
+        skippy_session_drop_sequence(session: *mut Session, seq_id: i32, out_error: *mut *mut Error) -> Status;
+        skippy_tokenize(model: *mut Model, text: *const c_char, add_special: bool, output_tokens: *mut i32, output_token_capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_detokenize(model: *mut Model, tokens: *const i32, token_count: usize, output_text: *mut c_char, output_text_capacity: usize, out_text_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_token_is_eog(model: *mut Model, token_id: i32, out_is_eog: *mut bool, out_error: *mut *mut Error) -> Status;
+        skippy_apply_chat_template(model: *mut Model, messages: *const ChatMessage, message_count: usize, add_assistant: bool, override_enable_thinking: bool, enable_thinking: bool, output_text: *mut c_char, output_text_capacity: usize, out_text_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_apply_chat_template_json(model: *mut Model, messages_json: *const c_char, tools_json: *const c_char, tool_choice_json: *const c_char, add_assistant: bool, override_enable_thinking: bool, enable_thinking: bool, parallel_tool_calls: bool, output_text: *mut c_char, output_text_capacity: usize, out_text_bytes: *mut usize, output_metadata_json: *mut c_char, output_metadata_json_capacity: usize, out_metadata_json_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_parse_chat_response_json(generated_text: *const c_char, metadata_json: *const c_char, is_partial: bool, output_message_json: *mut c_char, output_message_json_capacity: usize, out_message_json_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_model_info_open(path: *const c_char, out_info: *mut *mut ModelInfo, out_error: *mut *mut Error) -> Status;
+        skippy_model_info_free(info: *mut ModelInfo, out_error: *mut *mut Error) -> Status;
+        skippy_model_info_tensor_count(info: *mut ModelInfo, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
+        skippy_model_info_tensor_at(info: *mut ModelInfo, index: usize, out_tensor: *mut TensorInfo, out_error: *mut *mut Error) -> Status;
+        skippy_slice_plan_create(info: *mut ModelInfo, out_plan: *mut *mut SlicePlan, out_error: *mut *mut Error) -> Status;
+        skippy_slice_plan_free(plan: *mut SlicePlan, out_error: *mut *mut Error) -> Status;
+        skippy_slice_plan_add_layer_range(plan: *mut SlicePlan, stage_index: i32, layer_start: i32, layer_end: i32, include_embeddings: bool, include_output: bool, out_error: *mut *mut Error) -> Status;
+        skippy_write_slice_gguf(info: *mut ModelInfo, plan: *const SlicePlan, stage_index: i32, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
+        skippy_write_gguf_from_parts(input_paths: *const *const c_char, input_count: usize, output_path: *const c_char, out_error: *mut *mut Error) -> Status;
+        mtmd_default_marker() -> *const c_char;
+        mtmd_helper_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
+        mtmd_context_params_default() -> MtmdContextParams;
+        mtmd_init_from_file(mmproj_fname: *const c_char, text_model: *const Opaque, ctx_params: MtmdContextParams) -> *mut MtmdContext;
+        mtmd_free(ctx: *mut MtmdContext);
+        mtmd_helper_bitmap_init_from_buf(ctx: *mut MtmdContext, buf: *const u8, len: usize) -> *mut MtmdBitmap;
+        mtmd_bitmap_free(bitmap: *mut MtmdBitmap);
+        mtmd_input_chunks_init() -> *mut MtmdInputChunks;
+        mtmd_input_chunks_free(chunks: *mut MtmdInputChunks);
+        mtmd_tokenize(ctx: *mut MtmdContext, output: *mut MtmdInputChunks, text: *const MtmdInputText, bitmaps: *const *const MtmdBitmap, n_bitmaps: usize) -> c_int;
+        mtmd_helper_get_n_tokens(chunks: *const MtmdInputChunks) -> usize;
+        mtmd_helper_get_n_pos(chunks: *const MtmdInputChunks) -> i32;
+        mtmd_input_chunks_size(chunks: *const MtmdInputChunks) -> usize;
+        mtmd_input_chunks_get(chunks: *const MtmdInputChunks, index: usize) -> *const Opaque;
+        mtmd_decode_use_mrope(ctx: *const MtmdContext) -> bool;
+        mtmd_input_chunk_get_type(chunk: *const Opaque) -> MtmdInputChunkType;
+        mtmd_input_chunk_get_n_tokens(chunk: *const Opaque) -> usize;
+        mtmd_input_chunk_get_tokens_image(chunk: *const Opaque) -> *const Opaque;
+        mtmd_helper_image_get_decoder_pos(image: *const Opaque, pos_0: i32, out_pos: *mut MtmdDecoderPos);
+        mtmd_helper_eval_chunks(ctx: *mut MtmdContext, lctx: *mut Opaque, chunks: *const MtmdInputChunks, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
+        mtmd_helper_eval_chunk_single(ctx: *mut MtmdContext, lctx: *mut Opaque, chunk: *const Opaque, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
+    }
+}
+
+#[cfg(feature = "dynamic-runtime")]
+pub use dynamic::*;
+
+#[cfg(not(feature = "dynamic-runtime"))]
 unsafe extern "C" {
     pub fn llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
 

@@ -10,6 +10,7 @@ client = ["dep:anyhow", "dep:mesh-llm-host-runtime", "dep:serde_json"]
 serve = ["dep:anyhow", "dep:mesh-llm-host-runtime", "dep:serde_json"]
 console = ["dep:mesh-llm-console-server"]
 web-ui = ["console", "mesh-llm-host-runtime?/web-ui"]
+dynamic-native-runtime = ["mesh-llm-host-runtime?/dynamic-native-runtime"]
 
 [lints]
 workspace = true

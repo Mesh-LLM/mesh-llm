@@ -42,6 +42,14 @@ use std::time::Duration;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn run() -> Result<()> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime()? {
+        tracing::info!(
+            native_runtime_id = %runtime.native_runtime_id,
+            libraries = ?runtime.libraries,
+            "Loaded MeshLLM native runtime"
+        );
+    }
     runtime::run().await
 }
 

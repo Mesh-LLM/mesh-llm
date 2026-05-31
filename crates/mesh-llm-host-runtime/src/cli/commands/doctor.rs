@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli::DoctorCommand;
+use crate::cli::commands::runtime_native;
 use crate::runtime::instance::{LocalInstanceSnapshot, runtime_root, scan_local_instances};
 
 const SKIPPY_NATIVE_LOG_FILE: &str = "skippy-native.log";
@@ -18,14 +19,18 @@ const SKIPPY_DIAGNOSTIC_ENDPOINTS: &[(&str, &str, &str)] = &[
     ("runtime_llama", "/api/runtime/llama", "runtime-llama.json"),
 ];
 
-pub(crate) async fn dispatch_doctor_command(command: &DoctorCommand) -> Result<()> {
+pub(crate) async fn dispatch_doctor_command(
+    command: Option<&DoctorCommand>,
+    json_output: bool,
+) -> Result<()> {
     match command {
-        DoctorCommand::Split {
+        Some(DoctorCommand::Split {
             model_ref,
             port,
             json,
             output_dir,
-        } => run_split_doctor(model_ref, *port, *json, output_dir.as_deref()).await,
+        }) => run_split_doctor(model_ref, *port, *json, output_dir.as_deref()).await,
+        None => runtime_native::run_native_runtime_doctor(json_output),
     }
 }
 

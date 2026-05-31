@@ -8,6 +8,10 @@ version.workspace = true
 name = "skippy_server"
 path = "src/lib.rs"
 
+[features]
+default = []
+dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime"]
+
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
