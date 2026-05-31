@@ -36,6 +36,33 @@ async fn spawn_api_proxy_test_harness(
     (addr, handle)
 }
 
+async fn spawn_api_proxy_test_harness_with_contexts(
+    targets: election::ModelTargets,
+    contexts: &[(&str, u32)],
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .unwrap();
+    for (model, context_length) in contexts {
+        node.set_model_runtime_context_length(model, Some(*context_length))
+            .await;
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (_target_tx, target_rx) = watch::channel(targets);
+    let (drop_tx, _drop_rx) = mpsc::unbounded_channel();
+    let handle = tokio::spawn(api_proxy(
+        node,
+        addr.port(),
+        target_rx,
+        drop_tx,
+        Some(listener),
+        false,
+        affinity::AffinityRouter::default(),
+    ));
+    (addr, handle)
+}
+
 async fn spawn_api_proxy_test_harness_with_plugin_manager(
     targets: election::ModelTargets,
     plugin_manager: plugin::PluginManager,
@@ -1611,6 +1638,52 @@ async fn test_api_proxy_returns_last_context_overflow_bad_request_when_all_targe
     proxy_handle.abort();
     let _ = first_handle.await;
     let _ = second_handle.await;
+}
+
+#[tokio::test]
+async fn test_api_proxy_rejects_request_when_all_known_contexts_too_small() {
+    let (first_port, first_rx, first_handle) = spawn_capturing_upstream(r#"{"ok":"first"}"#).await;
+    let (second_port, second_rx, second_handle) =
+        spawn_capturing_upstream(r#"{"ok":"second"}"#).await;
+    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness_with_contexts(
+        single_model_targets("test", &[first_port, second_port]),
+        &[("test", 4096)],
+    )
+    .await;
+
+    let body = json!({
+        "model": "test",
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "x".repeat(20_000)}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let first_seen = tokio::time::timeout(Duration::from_millis(100), first_rx).await;
+    let second_seen = tokio::time::timeout(Duration::from_millis(100), second_rx).await;
+
+    proxy_handle.abort();
+    first_handle.abort();
+    second_handle.abort();
+
+    assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+    assert!(
+        response.contains("context") || response.contains("target"),
+        "response should explain why no target was eligible: {response}"
+    );
+    assert!(
+        first_seen.is_err(),
+        "proxy should not contact a known-too-small target"
+    );
+    assert!(
+        second_seen.is_err(),
+        "proxy should not contact any known-too-small fallback target"
+    );
 }
 
 #[tokio::test]

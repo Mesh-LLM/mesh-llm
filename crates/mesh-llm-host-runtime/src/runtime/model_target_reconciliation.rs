@@ -9,6 +9,9 @@ pub(crate) struct ModelTargetReconciliationPolicy {
     pub(crate) max_loads_per_tick: usize,
     pub(crate) failure_cooldown_secs: u64,
     pub(crate) manual_unload_cooldown_secs: u64,
+    pub(crate) demand_upgrades_enabled: bool,
+    pub(crate) demand_upgrade_min_request_count: u64,
+    pub(crate) demand_upgrade_max_age_secs: u64,
 }
 
 impl Default for ModelTargetReconciliationPolicy {
@@ -18,6 +21,11 @@ impl Default for ModelTargetReconciliationPolicy {
             max_loads_per_tick: 1,
             failure_cooldown_secs: 5 * 60,
             manual_unload_cooldown_secs: 5 * 60,
+            demand_upgrades_enabled: false,
+            demand_upgrade_min_request_count:
+                mesh_llm_config::DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS,
+            demand_upgrade_max_age_secs:
+                mesh_llm_config::DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS,
         }
     }
 }
@@ -114,9 +122,13 @@ pub(crate) struct ModelTargetReconciliationInput<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ModelTargetReconciliationCandidate {
+    pub(crate) rank: usize,
     pub(crate) model_ref: String,
     pub(crate) model_name: Option<String>,
     pub(crate) wanted: bool,
+    pub(crate) wanted_reason: Option<&'static str>,
+    pub(crate) request_count: u64,
+    pub(crate) last_active_secs_ago: Option<u64>,
     pub(crate) serving_node_count: usize,
     pub(crate) capacity_state: ModelTargetReconciliationCapacityState,
     pub(crate) local_path: Option<PathBuf>,
@@ -152,6 +164,7 @@ pub(crate) struct ModelTargetReconciliationAction {
     pub(crate) model_ref: String,
     pub(crate) model_name: Option<String>,
     pub(crate) load_spec: PathBuf,
+    pub(crate) replace_model_ref: Option<String>,
 }
 
 pub(crate) fn plan_model_target_reconciliation(
@@ -175,10 +188,13 @@ pub(crate) fn plan_model_target_reconciliation(
         let Some(load_spec) = target.local_path.clone() else {
             continue;
         };
+        let replace_model_ref =
+            replacement_target(policy, input.loaded_model_refs, input.targets, target);
+        let has_local_interest = input.local_interest_model_refs.contains(&target.model_ref);
         if !target.wanted
             || target.serving_node_count > 0
             || target.capacity_state != ModelTargetReconciliationCapacityState::SingleNodeFit
-            || !input.local_interest_model_refs.contains(&target.model_ref)
+            || (!has_local_interest && replace_model_ref.is_none())
             || loaded_target(input.loaded_model_refs, target)
             || state.suppressed(
                 &target.model_ref,
@@ -193,9 +209,56 @@ pub(crate) fn plan_model_target_reconciliation(
             model_ref: target.model_ref.clone(),
             model_name: target.model_name.clone(),
             load_spec,
+            replace_model_ref,
         });
     }
     actions
+}
+
+fn replacement_target(
+    policy: &ModelTargetReconciliationPolicy,
+    loaded_model_refs: &BTreeSet<String>,
+    targets: &[ModelTargetReconciliationCandidate],
+    target: &ModelTargetReconciliationCandidate,
+) -> Option<String> {
+    if !demand_upgrade_candidate(policy, loaded_model_refs, target) {
+        return None;
+    }
+    loaded_model_refs
+        .iter()
+        .find(|loaded| replacement_improves_target_mix(loaded, targets, target))
+        .cloned()
+}
+
+fn demand_upgrade_candidate(
+    policy: &ModelTargetReconciliationPolicy,
+    loaded_model_refs: &BTreeSet<String>,
+    target: &ModelTargetReconciliationCandidate,
+) -> bool {
+    policy.demand_upgrades_enabled
+        && !loaded_model_refs.is_empty()
+        && target.wanted_reason == Some("active_demand")
+        && target.request_count >= policy.demand_upgrade_min_request_count
+        && target
+            .last_active_secs_ago
+            .is_some_and(|age| age <= policy.demand_upgrade_max_age_secs)
+}
+
+fn replacement_improves_target_mix(
+    loaded_model_ref: &str,
+    targets: &[ModelTargetReconciliationCandidate],
+    target: &ModelTargetReconciliationCandidate,
+) -> bool {
+    let Some(loaded) = targets
+        .iter()
+        .find(|candidate| model_target_matches_loaded(candidate, loaded_model_ref))
+    else {
+        return true;
+    };
+    if loaded.request_count >= target.request_count {
+        return false;
+    }
+    target.rank < loaded.rank || loaded.request_count == 0
 }
 
 fn loaded_target(
@@ -209,6 +272,17 @@ fn loaded_target(
                 .as_deref()
                 .is_some_and(|name| model_identity_matches(loaded, name))
     })
+}
+
+fn model_target_matches_loaded(
+    target: &ModelTargetReconciliationCandidate,
+    loaded_model_ref: &str,
+) -> bool {
+    model_identity_matches(loaded_model_ref, &target.model_ref)
+        || target
+            .model_name
+            .as_deref()
+            .is_some_and(|name| model_identity_matches(loaded_model_ref, name))
 }
 
 fn model_identity_matches(left: &str, right: &str) -> bool {
@@ -243,11 +317,24 @@ mod tests {
         }
     }
 
+    fn demand_upgrade_policy() -> ModelTargetReconciliationPolicy {
+        ModelTargetReconciliationPolicy {
+            demand_upgrades_enabled: true,
+            demand_upgrade_min_request_count: 2,
+            demand_upgrade_max_age_secs: 60 * 60,
+            ..enabled_policy()
+        }
+    }
+
     fn target(model_ref: &str) -> ModelTargetReconciliationCandidate {
         ModelTargetReconciliationCandidate {
+            rank: 1,
             model_ref: model_ref.to_string(),
             model_name: Some("Qwen3-8B-Q4_K_M".to_string()),
             wanted: true,
+            wanted_reason: Some("explicit_interest"),
+            request_count: 0,
+            last_active_secs_ago: None,
             serving_node_count: 0,
             capacity_state: ModelTargetReconciliationCapacityState::SingleNodeFit,
             local_path: Some(PathBuf::from("/models/qwen.gguf")),
@@ -303,8 +390,138 @@ mod tests {
                 model_ref: "org/model@main:file.gguf".to_string(),
                 model_name: Some("Qwen3-8B-Q4_K_M".to_string()),
                 load_spec: PathBuf::from("/models/qwen.gguf"),
+                replace_model_ref: None,
             }]
         );
+    }
+
+    #[test]
+    fn demand_upgrade_replaces_lower_demand_loaded_model() {
+        let mut wanted_large = target("org/large@main:file.gguf");
+        wanted_large.rank = 1;
+        wanted_large.model_name = Some("Large".to_string());
+        wanted_large.wanted_reason = Some("active_demand");
+        wanted_large.request_count = 8;
+        wanted_large.last_active_secs_ago = Some(30);
+        wanted_large.local_path = Some(PathBuf::from("/models/large.gguf"));
+        let mut loaded_small = target("org/small@main:file.gguf");
+        loaded_small.rank = 2;
+        loaded_small.model_name = Some("Small".to_string());
+        loaded_small.wanted = false;
+        loaded_small.request_count = 1;
+        loaded_small.serving_node_count = 1;
+        loaded_small.capacity_state = ModelTargetReconciliationCapacityState::AlreadyServing;
+        loaded_small.local_path = None;
+        let targets = vec![wanted_large, loaded_small];
+        let local_interests = BTreeSet::new();
+        let loaded = BTreeSet::from(["Small".to_string()]);
+        let mut state = ModelTargetReconciliationState::default();
+
+        let actions = plan_model_target_reconciliation(
+            &demand_upgrade_policy(),
+            &mut state,
+            input(&local_interests, &loaded, &targets),
+        );
+
+        assert_eq!(
+            actions,
+            vec![ModelTargetReconciliationAction {
+                model_ref: "org/large@main:file.gguf".to_string(),
+                model_name: Some("Large".to_string()),
+                load_spec: PathBuf::from("/models/large.gguf"),
+                replace_model_ref: Some("Small".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn demand_upgrade_requires_explicit_policy_opt_in() {
+        let mut wanted_large = target("org/large@main:file.gguf");
+        wanted_large.model_name = Some("Large".to_string());
+        wanted_large.wanted_reason = Some("active_demand");
+        wanted_large.request_count = 8;
+        wanted_large.last_active_secs_ago = Some(30);
+        let loaded = BTreeSet::from(["Small".to_string()]);
+        let targets = vec![wanted_large];
+        let local_interests = BTreeSet::new();
+        let mut state = ModelTargetReconciliationState::default();
+
+        let actions = plan_model_target_reconciliation(
+            &enabled_policy(),
+            &mut state,
+            input(&local_interests, &loaded, &targets),
+        );
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn stale_demand_does_not_replace_loaded_model() {
+        let mut wanted_large = target("org/large@main:file.gguf");
+        wanted_large.model_name = Some("Large".to_string());
+        wanted_large.wanted_reason = Some("active_demand");
+        wanted_large.request_count = 8;
+        wanted_large.last_active_secs_ago = Some(2 * 60 * 60);
+        let loaded = BTreeSet::from(["Small".to_string()]);
+        let targets = vec![wanted_large];
+        let local_interests = BTreeSet::new();
+        let mut state = ModelTargetReconciliationState::default();
+
+        let actions = plan_model_target_reconciliation(
+            &demand_upgrade_policy(),
+            &mut state,
+            input(&local_interests, &loaded, &targets),
+        );
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn requested_only_target_does_not_replace_loaded_model_without_request_demand() {
+        let mut requested_only = target("org/requested@main:file.gguf");
+        requested_only.request_count = 0;
+        let targets = vec![requested_only];
+        let local_interests = BTreeSet::new();
+        let loaded = BTreeSet::from(["Small".to_string()]);
+        let mut state = ModelTargetReconciliationState::default();
+
+        let actions = plan_model_target_reconciliation(
+            &demand_upgrade_policy(),
+            &mut state,
+            input(&local_interests, &loaded, &targets),
+        );
+
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn demand_upgrade_preserves_loaded_model_with_equal_or_higher_demand() {
+        let mut wanted_large = target("org/large@main:file.gguf");
+        wanted_large.rank = 2;
+        wanted_large.model_name = Some("Large".to_string());
+        wanted_large.wanted_reason = Some("active_demand");
+        wanted_large.request_count = 3;
+        wanted_large.last_active_secs_ago = Some(30);
+        let mut loaded_hot = target("org/hot@main:file.gguf");
+        loaded_hot.rank = 1;
+        loaded_hot.model_name = Some("Hot".to_string());
+        loaded_hot.wanted = false;
+        loaded_hot.request_count = 3;
+        loaded_hot.serving_node_count = 1;
+        loaded_hot.capacity_state = ModelTargetReconciliationCapacityState::AlreadyServing;
+        loaded_hot.local_path = None;
+        let targets = vec![loaded_hot, wanted_large];
+        let local_interests = BTreeSet::new();
+        let loaded = BTreeSet::from(["Hot".to_string()]);
+        let mut state = ModelTargetReconciliationState::default();
+
+        let actions = plan_model_target_reconciliation(
+            &demand_upgrade_policy(),
+            &mut state,
+            input(&local_interests, &loaded, &targets),
+        );
+
+        assert!(actions.is_empty());
     }
 
     #[test]

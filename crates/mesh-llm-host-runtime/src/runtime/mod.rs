@@ -31,9 +31,10 @@ use self::local::{
     stop_split_generation_cleanup, withdraw_advertised_model,
 };
 use self::model_target_reconciliation::{
-    ModelTargetReconciliationCandidate, ModelTargetReconciliationCapacityState,
-    ModelTargetReconciliationInput, ModelTargetReconciliationPolicy,
-    ModelTargetReconciliationState, plan_model_target_reconciliation,
+    ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,
+    ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
+    ModelTargetReconciliationPolicy, ModelTargetReconciliationState,
+    plan_model_target_reconciliation,
 };
 use self::proxy::{api_proxy, bootstrap_proxy};
 #[cfg(test)]
@@ -3637,6 +3638,9 @@ fn model_target_reconciliation_policy(
 ) -> ModelTargetReconciliationPolicy {
     ModelTargetReconciliationPolicy {
         enabled: config.runtime.reconcile_model_targets,
+        demand_upgrades_enabled: config.runtime.reconcile_model_target_demand_upgrades,
+        demand_upgrade_min_request_count: config.runtime.model_target_demand_upgrade_min_requests,
+        demand_upgrade_max_age_secs: config.runtime.model_target_demand_upgrade_max_age_secs,
         ..ModelTargetReconciliationPolicy::default()
     }
 }
@@ -3674,21 +3678,26 @@ async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsContext<'_>) {
         .await
         .into_iter()
         .collect::<BTreeSet<_>>();
-    if local_interest_model_refs.is_empty() {
+    let loaded_model_refs = runtime_loaded_model_refs(runtime_models, managed_models);
+    if local_interest_model_refs.is_empty() && loaded_model_refs.is_empty() {
         state.prune_expired(runtime_unix_secs());
         return;
     }
 
     let target_lookup = console_state.model_target_lookup().await;
-    let loaded_model_refs = runtime_loaded_model_refs(runtime_models, managed_models);
     let local_vram_bytes = node.vram_bytes();
     let targets = target_lookup
         .targets
         .into_iter()
         .map(|target| {
+            let demand_upgrade_target = model_target_reconciliation_demand_upgrade_candidate(
+                policy,
+                &loaded_model_refs,
+                &target,
+            );
             let local_path = if target.wanted
                 && target.serving_node_count == 0
-                && local_interest_model_refs.contains(&target.model_ref)
+                && (local_interest_model_refs.contains(&target.model_ref) || demand_upgrade_target)
                 && target.capacity_advice.state
                     == api::status::ModelTargetCapacityAdviceState::SingleNodeFit
                 && model_target_reconciliation_local_fit(&target, local_vram_bytes)
@@ -3698,9 +3707,13 @@ async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsContext<'_>) {
                 None
             };
             ModelTargetReconciliationCandidate {
+                rank: target.rank,
                 model_ref: target.model_ref,
                 model_name: target.model_name,
                 wanted: target.wanted,
+                wanted_reason: target.wanted_reason,
+                request_count: target.request_count,
+                last_active_secs_ago: target.last_active_secs_ago,
                 serving_node_count: target.serving_node_count,
                 capacity_state: ModelTargetReconciliationCapacityState::from(
                     target.capacity_advice.state,
@@ -3725,41 +3738,82 @@ async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsContext<'_>) {
 
     for action in actions {
         let load_spec = action.load_spec.to_string_lossy().to_string();
-        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-        if control_tx
-            .send(api::RuntimeControlRequest::Load {
-                spec: load_spec.clone(),
-                resp: resp_tx,
-            })
-            .is_err()
-        {
-            state.record_load_failure(&action.model_ref, now_secs, policy);
-            let _ = emit_event(OutputEvent::Warning {
-                message: format!(
-                    "Model target reconciliation could not queue '{}'",
-                    action.model_ref
-                ),
-                context: Some("runtime control channel closed".to_string()),
-            });
-            continue;
-        }
-
         state.mark_load_started(&action.model_ref);
         let event_tx = runtime_event_tx.clone();
         let model_ref = action.model_ref.clone();
+        let control_tx = control_tx.clone();
+        let replace_model_ref = action.replace_model_ref.clone();
         tokio::spawn(async move {
-            let result = match resp_rx.await {
-                Ok(result) => result.map_err(|err| err.to_string()),
-                Err(err) => Err(format!("runtime load response channel closed: {err}")),
-            };
+            let result =
+                run_model_target_reconciliation_action(control_tx, load_spec, replace_model_ref)
+                    .await;
             let _ = event_tx
                 .send(RuntimeEvent::ModelTargetReconciliationLoadFinished { model_ref, result });
         });
-        let _ = emit_event(OutputEvent::Info {
-            message: format!("Model target reconciliation loading '{}'", action.model_ref),
-            context: Some(format!("path={load_spec}")),
-        });
+        emit_model_target_reconciliation_queued(&action);
     }
+}
+
+async fn run_model_target_reconciliation_action(
+    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    load_spec: String,
+    replace_model_ref: Option<String>,
+) -> std::result::Result<api::RuntimeLoadResponse, String> {
+    if let Some(replace_model_ref) = replace_model_ref {
+        run_model_target_reconciliation_unload(control_tx.clone(), replace_model_ref).await?;
+    }
+    run_model_target_reconciliation_load(control_tx, load_spec).await
+}
+
+async fn run_model_target_reconciliation_unload(
+    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    model_ref: String,
+) -> std::result::Result<api::RuntimeUnloadResponse, String> {
+    let (resp, response) = tokio::sync::oneshot::channel();
+    control_tx
+        .send(api::RuntimeControlRequest::Unload {
+            target: UnloadTarget::Model(model_ref.clone()),
+            options: UnloadOptions::default(),
+            resp,
+        })
+        .map_err(|_| format!("runtime unload queue closed for replacement target '{model_ref}'"))?;
+    response
+        .await
+        .map_err(|err| format!("runtime unload response channel closed: {err}"))?
+        .map_err(|err| err.to_string())
+}
+
+async fn run_model_target_reconciliation_load(
+    control_tx: tokio::sync::mpsc::UnboundedSender<api::RuntimeControlRequest>,
+    load_spec: String,
+) -> std::result::Result<api::RuntimeLoadResponse, String> {
+    let (resp, response) = tokio::sync::oneshot::channel();
+    control_tx
+        .send(api::RuntimeControlRequest::Load {
+            spec: load_spec.clone(),
+            resp,
+        })
+        .map_err(|_| format!("runtime load queue closed for '{load_spec}'"))?;
+    response
+        .await
+        .map_err(|err| format!("runtime load response channel closed: {err}"))?
+        .map_err(|err| err.to_string())
+}
+
+fn emit_model_target_reconciliation_queued(action: &ModelTargetReconciliationAction) {
+    let context = match action.replace_model_ref.as_deref() {
+        Some(replace_model_ref) => Some(format!("replace={replace_model_ref}")),
+        None => Some(format!("path={}", action.load_spec.display())),
+    };
+    let verb = if action.replace_model_ref.is_some() {
+        "upgrading to"
+    } else {
+        "loading"
+    };
+    let _ = emit_event(OutputEvent::Info {
+        message: format!("Model target reconciliation {verb} '{}'", action.model_ref),
+        context,
+    });
 }
 
 fn runtime_loaded_model_refs(
@@ -3798,6 +3852,20 @@ fn model_target_reconciliation_local_fit(
         .capacity_advice
         .required_bytes
         .is_some_and(|required| local_vram_bytes >= required)
+}
+
+fn model_target_reconciliation_demand_upgrade_candidate(
+    policy: &ModelTargetReconciliationPolicy,
+    loaded_model_refs: &BTreeSet<String>,
+    target: &api::status::ModelTargetPayload,
+) -> bool {
+    policy.demand_upgrades_enabled
+        && !loaded_model_refs.is_empty()
+        && target.wanted_reason == Some("active_demand")
+        && target.request_count >= policy.demand_upgrade_min_request_count
+        && target
+            .last_active_secs_ago
+            .is_some_and(|age| age <= policy.demand_upgrade_max_age_secs)
 }
 
 fn runtime_unix_secs() -> u64 {
@@ -5558,6 +5626,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         mesh::RelayConfig {
             urls: &cli.relay,
             auths: &relay_auths,
+            policy: relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode),
         },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
@@ -5576,7 +5645,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     node.set_display_name(node_display_name(cli, &node)).await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    node.start_relay_health_monitor();
+    start_relay_health_monitor_for_discovery_mode(&node, cli.mesh_discovery_mode);
     join_mesh_for_mcp(cli, &node).await?;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
@@ -5795,6 +5864,7 @@ async fn start_run_auto_node_and_plugins(
         mesh::RelayConfig {
             urls: &cli.relay,
             auths: &relay_auths,
+            policy: relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode),
         },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
@@ -5823,6 +5893,33 @@ async fn start_run_auto_node_and_plugins(
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
+}
+
+fn relay_policy_for_mesh_discovery_mode(
+    mode: mesh_discovery::MeshDiscoveryMode,
+) -> mesh::RelayPolicy {
+    match mode {
+        mesh_discovery::MeshDiscoveryMode::Nostr => mesh::RelayPolicy::DefaultPublic,
+        mesh_discovery::MeshDiscoveryMode::Mdns => mesh::RelayPolicy::Disabled,
+    }
+}
+
+fn should_start_relay_health_monitor(mode: mesh_discovery::MeshDiscoveryMode) -> bool {
+    matches!(
+        relay_policy_for_mesh_discovery_mode(mode),
+        mesh::RelayPolicy::DefaultPublic
+    )
+}
+
+fn start_relay_health_monitor_for_discovery_mode(
+    node: &mesh::Node,
+    mode: mesh_discovery::MeshDiscoveryMode,
+) {
+    if should_start_relay_health_monitor(mode) {
+        node.start_relay_health_monitor();
+    } else {
+        tracing::debug!("Relay health monitor disabled for LAN-only mesh discovery");
+    }
 }
 
 fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSurvey {
@@ -5876,7 +5973,7 @@ async fn build_run_auto_node_setup(
     node.set_available_models(local_models.clone()).await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    node.start_relay_health_monitor();
+    start_relay_health_monitor_for_discovery_mode(&node, cli.mesh_discovery_mode);
 
     if !is_client {
         spawn_node_benchmark_task(&node, bin_dir);
@@ -8797,6 +8894,77 @@ mod tests {
         let target = reconciliation_target_with_required_bytes(None);
 
         assert!(!model_target_reconciliation_local_fit(&target, u64::MAX));
+    }
+
+    #[test]
+    fn mdns_discovery_uses_lan_only_relay_policy() {
+        assert_eq!(
+            relay_policy_for_mesh_discovery_mode(mesh_discovery::MeshDiscoveryMode::Mdns),
+            mesh::RelayPolicy::Disabled
+        );
+        assert_eq!(
+            relay_policy_for_mesh_discovery_mode(mesh_discovery::MeshDiscoveryMode::Nostr),
+            mesh::RelayPolicy::DefaultPublic
+        );
+    }
+
+    #[test]
+    fn mdns_discovery_does_not_start_relay_health_monitor() {
+        assert!(!should_start_relay_health_monitor(
+            mesh_discovery::MeshDiscoveryMode::Mdns
+        ));
+    }
+
+    #[test]
+    fn nostr_discovery_starts_relay_health_monitor() {
+        assert!(should_start_relay_health_monitor(
+            mesh_discovery::MeshDiscoveryMode::Nostr
+        ));
+    }
+
+    #[tokio::test]
+    async fn model_target_reconciliation_replacement_unloads_before_loading() {
+        let (control_tx, mut control_rx) =
+            tokio::sync::mpsc::unbounded_channel::<api::RuntimeControlRequest>();
+        let task = tokio::spawn(run_model_target_reconciliation_action(
+            control_tx,
+            "/models/large.gguf".to_string(),
+            Some("Small".to_string()),
+        ));
+
+        match control_rx.recv().await {
+            Some(api::RuntimeControlRequest::Unload { target, resp, .. }) => {
+                assert_eq!(target.as_runtime_target(), "Small");
+                resp.send(Ok(api::RuntimeUnloadResponse {
+                    model: "Small".to_string(),
+                    instance_id: "runtime-1".to_string(),
+                    unloaded: true,
+                }))
+                .expect("replacement unload response should be received");
+            }
+            _ => panic!("expected unload request before load"),
+        }
+        match control_rx.recv().await {
+            Some(api::RuntimeControlRequest::Load { spec, resp }) => {
+                assert_eq!(spec, "/models/large.gguf");
+                resp.send(Ok(api::RuntimeLoadResponse {
+                    model_ref: spec,
+                    model: "Large".to_string(),
+                    instance_id: "runtime-2".to_string(),
+                    backend: Some("skippy".to_string()),
+                    context_length: Some(4096),
+                }))
+                .expect("replacement load response should be received");
+            }
+            _ => panic!("expected load request after unload"),
+        }
+
+        let result = task
+            .await
+            .expect("replacement task should join")
+            .expect("replacement action should finish");
+        assert_eq!(result.model, "Large");
+        assert!(control_rx.try_recv().is_err());
     }
 
     fn remote_catalog_layer_entry(

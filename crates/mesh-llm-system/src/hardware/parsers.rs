@@ -254,16 +254,22 @@ pub fn expand_gpu_names(summary: Option<&str>, expected_count: usize) -> Vec<Str
         if part.is_empty() {
             continue;
         }
-        if let Some((count_str, name)) = part.split_once('×')
-            && let Ok(count) = count_str.trim().parse::<usize>()
-        {
+        let counted_name = part.split_once('×').and_then(|(count_str, name)| {
             let name = name.trim();
-            if !name.is_empty() {
-                for _ in 0..count {
-                    names.push(name.to_string());
-                }
-                continue;
+            if name.is_empty() {
+                return None;
             }
+            count_str
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .map(|count| (count, name))
+        });
+        if let Some((count, name)) = counted_name {
+            for _ in 0..count {
+                names.push(name.to_string());
+            }
+            continue;
         }
         names.push(part.to_string());
     }

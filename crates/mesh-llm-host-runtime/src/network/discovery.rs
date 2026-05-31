@@ -51,6 +51,15 @@ pub(crate) enum DiscoveryScope {
     Lan,
 }
 
+impl DiscoveryScope {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Lan => "lan",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum LanJoinMaterial {

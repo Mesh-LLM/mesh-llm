@@ -333,23 +333,24 @@ impl Collector for DefaultCollector {
             if metrics.contains(&Metric::IsSoc) {
                 survey.is_soc = true;
             }
-            if metrics.contains(&Metric::VramBytes)
-                && let Some((vram_bytes, reserved_bytes)) =
+            if metrics.contains(&Metric::VramBytes) {
+                if let Some((vram_bytes, reserved_bytes)) =
                     macos_metal_gpu_budget(query_metal_recommended_working_set_bytes())
-            {
-                survey.vram_bytes = vram_bytes;
-                survey.gpu_vram = vec![vram_bytes];
-                survey.gpu_reserved = vec![reserved_bytes];
+                {
+                    survey.vram_bytes = vram_bytes;
+                    survey.gpu_vram = vec![vram_bytes];
+                    survey.gpu_reserved = vec![reserved_bytes];
+                }
             }
             if metrics.contains(&Metric::GpuName) {
                 let out = std::process::Command::new("sysctl")
                     .args(["-n", "machdep.cpu.brand_string"])
                     .output()
                     .ok();
-                if let Some(out) = out
-                    && let Ok(s) = String::from_utf8(out.stdout)
-                {
-                    survey.gpu_name = parse_macos_cpu_brand(&s);
+                if let Some(out) = out {
+                    if let Ok(s) = String::from_utf8(out.stdout) {
+                        survey.gpu_name = parse_macos_cpu_brand(&s);
+                    }
                 }
             }
             if metrics.contains(&Metric::GpuCount) {
@@ -371,21 +372,22 @@ impl Collector for DefaultCollector {
                         ])
                         .output()
                         .ok();
-                    if let Some(out) = out
-                        && out.status.success()
-                    {
-                        let s = String::from_utf8(out.stdout).ok()?;
-                        let parsed = parse_nvidia_gpu_memory_and_reserved(&s);
-                        if !parsed.is_empty() {
-                            survey.gpu_reserved =
-                                parsed.iter().map(|(_, reserved)| *reserved).collect();
-                            let per_gpu: Vec<u64> =
-                                parsed.iter().map(|(total, _)| *total).collect();
-                            let total: u64 = per_gpu.iter().sum();
-                            if total > 0 {
-                                return Some((total, per_gpu));
+                    match out {
+                        Some(out) if out.status.success() => {
+                            let s = String::from_utf8(out.stdout).ok()?;
+                            let parsed = parse_nvidia_gpu_memory_and_reserved(&s);
+                            if !parsed.is_empty() {
+                                survey.gpu_reserved =
+                                    parsed.iter().map(|(_, reserved)| *reserved).collect();
+                                let per_gpu: Vec<u64> =
+                                    parsed.iter().map(|(total, _)| *total).collect();
+                                let total: u64 = per_gpu.iter().sum();
+                                if total > 0 {
+                                    return Some((total, per_gpu));
+                                }
                             }
                         }
+                        Some(_) | None => {}
                     }
                     let out = std::process::Command::new("nvidia-smi")
                         .args(["--query-gpu=memory.total", "--format=csv,noheader,nounits"])
@@ -538,43 +540,48 @@ impl Collector for DefaultCollector {
                         .args(["--showproductname"])
                         .output()
                         .ok();
-                    if let Some(out) = out {
-                        if out.status.success()
-                            && let Ok(s) = String::from_utf8(out.stdout)
-                        {
-                            let names = parse_rocm_gpu_names(&s);
-                            if metrics.contains(&Metric::GpuName) {
-                                survey.gpu_name = summarize_gpu_name(&names);
-                            }
-                            if metrics.contains(&Metric::GpuCount) {
-                                survey.gpu_count = u8::try_from(names.len()).unwrap_or(u8::MAX);
-                            }
-                        }
-                    } else {
-                        for args in [["discovery", "--json"], ["discovery", "-j"]] {
-                            let out = std::process::Command::new("xpu-smi")
-                                .args(args)
-                                .output()
-                                .ok();
-                            if let Some(out) = out
-                                && out.status.success()
-                                && let Ok(stdout) = String::from_utf8(out.stdout)
-                            {
-                                let gpus = parse_xpu_smi_discovery_json(&stdout);
-                                if !gpus.is_empty() {
-                                    let names: Vec<String> =
-                                        gpus.iter().map(|gpu| gpu.name.clone()).collect();
-                                    if metrics.contains(&Metric::GpuName) {
-                                        survey.gpu_name = summarize_gpu_name(&names);
-                                    }
-                                    if metrics.contains(&Metric::GpuCount) {
-                                        survey.gpu_count =
-                                            u8::try_from(names.len()).unwrap_or(u8::MAX);
-                                    }
-                                    break;
+                    match out {
+                        Some(out) if out.status.success() => {
+                            if let Ok(s) = String::from_utf8(out.stdout) {
+                                let names = parse_rocm_gpu_names(&s);
+                                if metrics.contains(&Metric::GpuName) {
+                                    survey.gpu_name = summarize_gpu_name(&names);
+                                }
+                                if metrics.contains(&Metric::GpuCount) {
+                                    survey.gpu_count = u8::try_from(names.len()).unwrap_or(u8::MAX);
                                 }
                             }
                         }
+                        None => {
+                            for args in [["discovery", "--json"], ["discovery", "-j"]] {
+                                let out = std::process::Command::new("xpu-smi")
+                                    .args(args)
+                                    .output()
+                                    .ok();
+                                if let Some(out) = out {
+                                    if !out.status.success() {
+                                        continue;
+                                    }
+                                    let Ok(stdout) = String::from_utf8(out.stdout) else {
+                                        continue;
+                                    };
+                                    let gpus = parse_xpu_smi_discovery_json(&stdout);
+                                    if !gpus.is_empty() {
+                                        let names: Vec<String> =
+                                            gpus.iter().map(|gpu| gpu.name.clone()).collect();
+                                        if metrics.contains(&Metric::GpuName) {
+                                            survey.gpu_name = summarize_gpu_name(&names);
+                                        }
+                                        if metrics.contains(&Metric::GpuCount) {
+                                            survey.gpu_count =
+                                                u8::try_from(names.len()).unwrap_or(u8::MAX);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Some(_) => {}
                     }
                 }
             }
@@ -690,10 +697,10 @@ impl Collector for TegraCollector {
             survey.is_soc = true;
         }
 
-        if metrics.contains(&Metric::GpuName)
-            && let Ok(model) = std::fs::read_to_string("/sys/firmware/devicetree/base/model")
-        {
-            survey.gpu_name = parse_tegra_model_name(&model);
+        if metrics.contains(&Metric::GpuName) {
+            survey.gpu_name = std::fs::read_to_string("/sys/firmware/devicetree/base/model")
+                .ok()
+                .and_then(|model| parse_tegra_model_name(&model));
         }
 
         if metrics.contains(&Metric::VramBytes) {
@@ -734,13 +741,21 @@ fn detect_collector_impl() -> Box<dyn Collector> {
 
 #[cfg(all(target_os = "linux", not(feature = "skippy-devices")))]
 fn detect_collector_impl() -> Box<dyn Collector> {
-    if cfg!(target_arch = "aarch64")
-        && let Ok(compat) = std::fs::read_to_string("/proc/device-tree/compatible")
-        && is_tegra(&compat)
-    {
+    if is_tegra_host() {
         return Box::new(TegraCollector);
     }
     Box::new(DefaultCollector)
+}
+
+#[cfg(all(target_os = "linux", not(feature = "skippy-devices")))]
+fn is_tegra_host() -> bool {
+    if !cfg!(target_arch = "aarch64") {
+        return false;
+    }
+    match std::fs::read_to_string("/proc/device-tree/compatible") {
+        Ok(compat) => is_tegra(&compat),
+        Err(_) => false,
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -930,7 +945,10 @@ fn resolve_pinned_gpu_with_compatibility<'a>(
                 .iter()
                 .filter(|gpu| !gpu_pinnable_ids(gpu).is_empty())
                 .collect::<Vec<_>>();
-            if accept_single_pinnable_gpu_fallback && let [gpu] = pinnable_gpus.as_slice() {
+            if let (true, [gpu]) = (
+                accept_single_pinnable_gpu_fallback,
+                pinnable_gpus.as_slice(),
+            ) {
                 tracing::warn!(
                     "configured gpu_id '{}' did not match the single available pinnable GPU; accepting '{}' for compatibility",
                     configured_id,

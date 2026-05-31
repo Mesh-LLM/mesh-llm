@@ -64,7 +64,11 @@ mesh-llm client --auto
 Runtime switches:
 
 - `--join <TOKEN>`: join a specific mesh using an invite token (repeatable).
-- `--discover [NAME]`: discover a mesh via Nostr and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
+- `--discover [NAME]`: discover a mesh and join it. With a name, joins the mesh matching that name. Without a name, behaves like `--auto`.
+- `--mesh-discovery-mode <nostr|mdns>`: choose the discovery provider. `nostr`
+  is the default public/WAN-capable mode. `mdns` browses LAN DNS-SD records,
+  requires a supplied matching invite token for join material, and disables
+  public iroh relays plus raw STUN startup probing.
 - `--auto`: auto-join the best discovered mesh.
 - `--model <MODEL>`: model to serve (catalog id from `models recommended`, HF ref/URL, or path).
 - `--gguf <GGUF>`: serve a specific local GGUF file directly (repeatable).
@@ -72,9 +76,11 @@ Runtime switches:
 - `--client`: API-only mode (no GPU/model serving).
 - `--console <CONSOLE>`: console/API management port (default `3131`).
 - `--headless`: disable the embedded web UI; keep the management API on the `--console` port.
-- `--bind-ip <IP>`: bind mesh QUIC to a specific local IP address and advertise
-  only that selected direct IP, plus relay/public candidates. Use this on
-  multi-interface hosts where Docker/CNI bridge addresses overlap across nodes.
+- `--bind-ip <IP>`: bind mesh QUIC to a specific local IP address. In default
+  Nostr discovery mode the invite can still include relay/public candidates.
+  In `--mesh-discovery-mode mdns`, only LAN/direct candidates are advertised.
+  Use this on multi-interface hosts where Docker/CNI bridge addresses overlap
+  across nodes.
 - `--bind-port <PORT>`: bind mesh QUIC to a fixed UDP port, usually paired
   with `--bind-ip` for firewall or NAT rules.
 - `--swarm-capture <DIR>`: write passive local mesh membership and connection
@@ -429,7 +435,9 @@ curl -s localhost:3131/api/status | jq '.runtime.openai_guardrails'
 
 ### `discover`
 
-Use this to discover meshes via Nostr and optionally select one automatically.
+Use this to discover meshes through the selected discovery provider and
+optionally select one automatically. The default provider is Nostr; pass the
+global `--mesh-discovery-mode mdns` before the command for LAN mDNS discovery.
 
 Switches:
 
@@ -438,7 +446,8 @@ Switches:
 - `--min-vram <MIN_VRAM>`: filter by minimum VRAM (GB).
 - `--region <REGION>`: filter by region.
 - `--auto`: print best invite token (useful for piping).
-- `--relay <RELAY>`: custom relay URL(s).
+- `--relay <RELAY>`: custom Nostr relay URL(s). Only valid with
+  `--mesh-discovery-mode nostr`.
 
 ### `goose`
 

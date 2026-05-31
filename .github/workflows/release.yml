@@ -801,9 +801,27 @@ jobs:
           overwrite_files: true
           files: release-artifacts/*
 
+  publish_crates_preflight:
+    name: Preflight crates.io packages
+    needs: [metadata, publish]
+    if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+      - name: Check crates.io publish-chain consistency
+        run: cargo run -p xtask -- repo-consistency publish-crates
+      - name: Dry-run crates.io package chain
+        run: scripts/publish-crates.sh --dry-run --allow-dirty --sleep-seconds 0
+
   publish_crates:
     name: Publish crates.io packages
-    needs: [metadata, publish]
+    needs: [metadata, publish, publish_crates_preflight]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:

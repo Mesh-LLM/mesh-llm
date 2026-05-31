@@ -180,10 +180,14 @@ fn per_gpu_names(hw: &HardwareSurvey) -> Vec<String> {
         }
 
         // Handle summarized "N× name" form (e.g., "8× NVIDIA A100").
-        if let Some((count_str, name)) = part_trimmed.split_once('×')
-            && let Ok(count) = count_str.trim().parse::<usize>()
-        {
-            let name_trimmed = name.trim();
+        let counted_name = part_trimmed.split_once('×').and_then(|(count_str, name)| {
+            count_str
+                .trim()
+                .parse::<usize>()
+                .ok()
+                .map(|count| (count, name.trim()))
+        });
+        if let Some((count, name_trimmed)) = counted_name {
             for _ in 0..count {
                 names.push(name_trimmed.to_string());
             }
@@ -336,30 +340,31 @@ pub fn run_or_load(
     let path = fingerprint_path();
 
     // Cache-hit path
-    if let Some(ref cached) = load_fingerprint(&path)
-        && !hardware_changed(cached, hw)
-    {
-        let mem_bandwidth: Vec<f64> = cached.gpus.iter().map(|g| g.p90_gbps).collect();
-        let compute_tflops_fp32 = cached
-            .gpus
-            .iter()
-            .map(|g| g.compute_tflops_fp32)
-            .collect::<Option<Vec<f64>>>();
-        let compute_tflops_fp16 = cached
-            .gpus
-            .iter()
-            .map(|g| g.compute_tflops_fp16)
-            .collect::<Option<Vec<f64>>>();
-        let result = BenchmarkResult {
-            mem_bandwidth_gbps: mem_bandwidth,
-            compute_tflops_fp32,
-            compute_tflops_fp16,
-        };
-        tracing::info!(
-            "Using cached bandwidth fingerprint: {} GPUs",
-            result.mem_bandwidth_gbps.len()
-        );
-        return Some(result);
+    match load_fingerprint(&path) {
+        Some(ref cached) if !hardware_changed(cached, hw) => {
+            let mem_bandwidth: Vec<f64> = cached.gpus.iter().map(|g| g.p90_gbps).collect();
+            let compute_tflops_fp32 = cached
+                .gpus
+                .iter()
+                .map(|g| g.compute_tflops_fp32)
+                .collect::<Option<Vec<f64>>>();
+            let compute_tflops_fp16 = cached
+                .gpus
+                .iter()
+                .map(|g| g.compute_tflops_fp16)
+                .collect::<Option<Vec<f64>>>();
+            let result = BenchmarkResult {
+                mem_bandwidth_gbps: mem_bandwidth,
+                compute_tflops_fp32,
+                compute_tflops_fp16,
+            };
+            tracing::info!(
+                "Using cached bandwidth fingerprint: {} GPUs",
+                result.mem_bandwidth_gbps.len()
+            );
+            return Some(result);
+        }
+        _ => {}
     }
 
     tracing::info!("Hardware changed or no cache — running memory bandwidth benchmark");

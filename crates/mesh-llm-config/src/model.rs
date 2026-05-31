@@ -44,10 +44,40 @@ pub struct GpuConfig {
     pub parallel: Option<usize>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub const DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS: u64 = 2;
+pub const DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS: u64 = 60 * 60;
+
+fn default_model_target_demand_upgrade_min_requests() -> u64 {
+    DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS
+}
+
+fn default_model_target_demand_upgrade_max_age_secs() -> u64 {
+    DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct RuntimeConfig {
     #[serde(default)]
     pub reconcile_model_targets: bool,
+    #[serde(default)]
+    pub reconcile_model_target_demand_upgrades: bool,
+    #[serde(default = "default_model_target_demand_upgrade_min_requests")]
+    pub model_target_demand_upgrade_min_requests: u64,
+    #[serde(default = "default_model_target_demand_upgrade_max_age_secs")]
+    pub model_target_demand_upgrade_max_age_secs: u64,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            reconcile_model_targets: false,
+            reconcile_model_target_demand_upgrades: false,
+            model_target_demand_upgrade_min_requests:
+                DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MIN_REQUESTS,
+            model_target_demand_upgrade_max_age_secs:
+                DEFAULT_MODEL_TARGET_DEMAND_UPGRADE_MAX_AGE_SECS,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

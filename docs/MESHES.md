@@ -129,7 +129,8 @@ mesh-llm serve --split --join <token> --model Qwen3-8B-Q4_K_M
 ```
 
 `--bind-ip` binds mesh QUIC to that local address and filters the invite/gossip
-direct-address set to the selected IP while keeping relay/public candidates.
+direct-address set to the selected IP. Default Nostr mode can still keep
+relay/public candidates; `--mesh-discovery-mode mdns` keeps startup LAN-only.
 Use `--listen-all` only for the local HTTP API/console listener; it does not
 select the mesh QUIC interface.
 
@@ -236,8 +237,12 @@ mesh-llm auth trust remove <owner-id>
 ## Networking notes
 
 - Discovery uses Nostr relays by default.
+- `--mesh-discovery-mode mdns` is LAN-only discovery and transport startup:
+  it does not contact Nostr relays, does not register with public iroh relays,
+  and does not run raw public STUN probing. mDNS TXT records contain only a
+  token fingerprint; joins still require a matching supplied invite token.
 - Mesh connectivity uses managed iroh relay infrastructure by default when
-  direct paths are unavailable.
+  direct paths are unavailable in Nostr mode.
 - Hidden relay override flags exist for lab/debug deployments, but normal users
   should not need to run their own relay.
 - `/v1` request routing and Skippy stage traffic are separate paths. HTTP

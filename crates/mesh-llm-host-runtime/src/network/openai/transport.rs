@@ -979,11 +979,21 @@ pub(crate) fn request_budget_tokens_from_parts(
         return None;
     }
     let prompt_tokens = ceil_div_u32(saturating_u32(body_len_bytes), 4);
+    let completion_tokens = completion_tokens.unwrap_or(0);
+    let requested_tokens = prompt_tokens.saturating_add(completion_tokens);
     Some(
         prompt_tokens
-            .saturating_add(completion_tokens.unwrap_or(0))
-            .saturating_add(REQUEST_TOKEN_MARGIN),
+            .saturating_add(completion_tokens)
+            .saturating_add(request_token_margin(requested_tokens)),
     )
+}
+
+fn request_token_margin(requested_tokens: u32) -> u32 {
+    const MIN_REQUEST_TOKEN_MARGIN: u32 = 16;
+    if requested_tokens == 0 {
+        return 0;
+    }
+    ceil_div_u32(requested_tokens, 4).clamp(MIN_REQUEST_TOKEN_MARGIN, REQUEST_TOKEN_MARGIN)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1064,23 +1074,7 @@ fn reorder_candidates_by_context_and_throughput<T: Clone>(
     }
 
     if adequate.is_empty() && unknown.is_empty() {
-        let mut fallback = candidates
-            .iter()
-            .enumerate()
-            .map(
-                |(index, (candidate, context_length, throughput))| RankedTarget {
-                    index,
-                    candidate: candidate.clone(),
-                    context_length: *context_length,
-                    throughput: *throughput,
-                },
-            )
-            .collect::<Vec<_>>();
-        sort_ranked_targets(&mut fallback);
-        return fallback
-            .into_iter()
-            .map(|ranked| ranked.candidate)
-            .collect();
+        return Vec::new();
     }
 
     sort_ranked_targets(&mut adequate);
@@ -3588,6 +3582,15 @@ enum RouteModelDisposition {
     Return(bool),
 }
 
+fn no_context_eligible_target_reason(model: &str, required_tokens: Option<u32>) -> String {
+    match required_tokens {
+        Some(tokens) => format!(
+            "no context-compatible target for model '{model}' can fit approximately {tokens} tokens"
+        ),
+        None => format!("no eligible target for model '{model}'"),
+    }
+}
+
 async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
     let RouteModelRequestArgs {
         node,
@@ -3605,7 +3608,9 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
     let ordered_candidates = affinity.route_eligible_candidates(model, &ordered_candidates);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(&node, model, 0);
-        return false;
+        let reason = no_context_eligible_target_reason(model, required_tokens);
+        let _ = send_503(tcp_stream, &reason).await;
+        return true;
     }
 
     let selection = crate::network::affinity::select_model_target_from_candidates(
@@ -5601,7 +5606,7 @@ mod tests {
     }
 
     #[test]
-    fn test_request_budget_tokens_includes_output_budget_and_margin() {
+    fn test_request_budget_tokens_includes_output_budget_and_scaled_margin() {
         let body = serde_json::json!({
             "model": "qwen",
             "max_tokens": 512,
@@ -5609,7 +5614,28 @@ mod tests {
         });
 
         let budget = request_budget_tokens(&body).unwrap();
-        assert!(budget >= 512 + REQUEST_TOKEN_MARGIN);
+        let prompt_tokens = ceil_div_u32(serde_json::to_vec(&body).unwrap().len() as u32, 4);
+        assert_eq!(
+            budget,
+            prompt_tokens + 512 + request_token_margin(prompt_tokens + 512)
+        );
+    }
+
+    #[test]
+    fn test_request_budget_tokens_uses_bounded_margin_for_small_requests() {
+        let budget = request_budget_tokens_from_parts(128, Some(4)).unwrap();
+
+        assert!(
+            budget <= 256,
+            "small smoke requests should fit a tiny CI context: {budget}"
+        );
+    }
+
+    #[test]
+    fn test_request_budget_tokens_keeps_full_margin_for_large_requests() {
+        let budget = request_budget_tokens_from_parts(10_000, Some(512)).unwrap();
+
+        assert_eq!(budget, 2_500 + 512 + REQUEST_TOKEN_MARGIN);
     }
 
     #[test]
@@ -5640,13 +5666,23 @@ mod tests {
     }
 
     #[test]
-    fn test_reorder_candidates_by_context_falls_back_when_all_known_too_small() {
+    fn test_reorder_candidates_by_context_rejects_all_known_too_small() {
         let ordered = reorder_candidates_by_context_and_throughput(
             &[(1u8, Some(4096), None), (2u8, Some(6144), None)],
             Some(8192),
         );
 
-        assert_eq!(ordered, vec![1, 2]);
+        assert!(ordered.is_empty());
+    }
+
+    #[test]
+    fn test_reorder_candidates_by_context_keeps_unknown_when_known_too_small() {
+        let ordered = reorder_candidates_by_context_and_throughput(
+            &[(1u8, Some(4096), None), (2u8, None, None)],
+            Some(8192),
+        );
+
+        assert_eq!(ordered, vec![2]);
     }
 
     #[test]

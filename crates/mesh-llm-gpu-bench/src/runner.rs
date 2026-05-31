@@ -85,9 +85,14 @@ pub fn parse_benchmark_output(stdout: &[u8]) -> Option<Vec<BenchmarkOutput>> {
             None
         }
         Err(err) => {
-            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(stdout)
-                && let Some(msg) = val.get("error").and_then(|v| v.as_str())
-            {
+            let error_message = serde_json::from_slice::<serde_json::Value>(stdout)
+                .ok()
+                .and_then(|val| {
+                    val.get("error")
+                        .and_then(|v| v.as_str())
+                        .map(ToOwned::to_owned)
+                });
+            if let Some(msg) = error_message {
                 tracing::warn!("benchmark reported error: {msg}");
                 return None;
             }
