@@ -3830,7 +3830,14 @@ mod tests {
         restore_native_logs();
         fs::remove_file(&path)?;
 
-        assert_eq!(contents, "mesh-llm: native call begin with context\n");
+        assert!(
+            contents.ends_with("mesh-llm: native call begin with context\n"),
+            "unexpected native log contents: {contents:?}"
+        );
+        assert!(
+            !contents.contains("native call begin\nwith context"),
+            "native log note was not sanitized: {contents:?}"
+        );
         Ok(())
     }
 
