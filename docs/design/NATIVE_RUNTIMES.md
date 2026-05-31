@@ -124,10 +124,13 @@ MeshLLM host binary, then delegate native runtime selection to MeshLLM:
 mesh-llm runtime install
 ```
 
-That command installs the recommended compatible native runtime for the active
-MeshLLM version. Shell and PowerShell installers should use the same command as
-manual users and autoupdate flows, so CUDA, CUDA Blackwell, ROCm, Vulkan, CPU,
-verification, cache layout, and progress UX stay in one implementation.
+The current implementation installs from an explicit release manifest or bundled
+runtime directory. The intended release path is for that command to install the
+recommended compatible native runtime for the active MeshLLM version without the
+caller duplicating flavor detection. Shell and PowerShell installers should use
+the same command as manual users and autoupdate flows, so CUDA, CUDA Blackwell,
+ROCm, Vulkan, CPU, verification, cache layout, and progress UX stay in one
+implementation.
 
 ## Consumer Shape
 
@@ -187,8 +190,9 @@ mesh-llm runtime prune --active-only
 ```
 
 With no runtime argument, `mesh-llm runtime install` detects the host and
-installs the recommended compatible native runtime. Explicit flavor or runtime
-ID arguments are overrides for advanced users, CI, and prepared images.
+selects the recommended compatible native runtime from the supplied release
+manifest or bundle directories. Explicit flavor or runtime ID arguments are
+overrides for advanced users, CI, and prepared images.
 
 Selected-runtime diagnostics belong in `mesh-llm doctor`, not in a separate
 `mesh-llm runtime doctor` command. Doctor output should include the active

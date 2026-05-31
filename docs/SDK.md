@@ -235,9 +235,10 @@ process.
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "<commit>", default-features = false, features = ["client"] }
 ```
 
-`default-features = false` keeps the embedded web console assets out of the
-consumer binary. The local management API still runs for status and lifecycle
-checks.
+Use `features = ["client", "serve"]` when the app also needs to serve local
+models from the embedded node. `default-features = false` keeps the embedded web
+console assets out of the consumer binary. The local management API still runs
+for status and lifecycle checks.
 
 To include the web console in the embedded Rust node, enable `web-ui` and turn
 on `console_ui`:
@@ -246,6 +247,8 @@ on `console_ui`:
 [dependencies]
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "<commit>", default-features = false, features = ["client", "web-ui"] }
 ```
+
+For serving with the embedded console included, enable `serve` as well.
 
 SDK packages that ship the built console as package resources can enable the
 `console` feature and use the file-backed console server without embedding
