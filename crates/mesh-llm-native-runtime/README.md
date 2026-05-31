@@ -274,8 +274,8 @@ The host runtime crate wraps this API in:
 ```bash
 mesh-llm runtime list --installed
 mesh-llm runtime list --available --manifest native-runtimes.json
-mesh-llm runtime install
-mesh-llm runtime install cuda
+mesh-llm runtime install --manifest native-runtimes.json
+mesh-llm runtime install cuda --manifest native-runtimes.json
 mesh-llm runtime remove meshllm-native-runtime-linux-x86_64-cuda
 mesh-llm runtime prune --active-only
 mesh-llm doctor --json
@@ -284,6 +284,10 @@ mesh-llm doctor --json
 The CLI owns network downloads, archive extraction, progress output, and
 checksum verification. This crate owns the manifest, compatibility, cache, and
 load-plan semantics those commands use.
+
+TODO: teach the CLI/SDK to discover the release manifest automatically for the
+running MeshLLM version. Until then, install/list available flows need an
+explicit `--manifest` or packaged `--bundle-dir`.
 
 ## Current Boundaries
 

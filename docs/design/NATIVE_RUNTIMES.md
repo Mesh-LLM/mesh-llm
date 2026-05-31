@@ -134,6 +134,10 @@ implementation.
 
 ## Consumer Shape
 
+Status: design/TODO. The current Rust SDK can run an embedded node from a git
+revision and can source-build the native runtime through Cargo. It does not yet
+expose the resolver builder shown below.
+
 A crates.io SDK consumer that wants dynamic local serving should configure the
 resolver instead of depending on a platform-specific source build. The API
 shape should be equivalent to:

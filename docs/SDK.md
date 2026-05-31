@@ -462,6 +462,13 @@ The accepted packaging direction is documented in
 runtimes are release artifacts, not implicit Cargo builds, and the native
 runtime version must exactly match the MeshLLM version that loads it.
 
+Status: native runtime artifact packaging is in place, but the Rust SDK does
+not yet expose a first-class runtime resolver/downloader API. Current
+Sprout-style Rust integrations should depend on `mesh-llm-sdk` by git revision
+and use the source-build path shown above. The binary-runtime SDK flow below is
+the intended packaging direction and remains TODO before it should be presented
+as a supported Rust SDK install path.
+
 Swift and Kotlin load MeshLLM through `libmeshllm_ffi`, not through a public
 `libllama` contract. Flavor-specific llama.cpp builds are an implementation
 detail of the native runtime artifact.
@@ -527,6 +534,9 @@ scripts/verify-native-sdk-package.sh dist/native-sdk/*.tar.gz
 
 ## Selecting a Runtime From Cargo
 
+Status: planned. Generated native runtime crates are not published as part of
+the current Rust SDK flow.
+
 Native runtime crates are generated from verified native runtime artifacts.
 They package release artifacts; they do not build native code implicitly:
 
@@ -587,8 +597,8 @@ fn main() {
 }
 ```
 
-At runtime, set one of these environment variables or pass the artifact
-directory directly to the SDK resolver:
+At runtime, set one of these environment variables or, once the TODO resolver
+API exists, pass the artifact directory directly to that SDK resolver:
 
 ```text
 MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR
