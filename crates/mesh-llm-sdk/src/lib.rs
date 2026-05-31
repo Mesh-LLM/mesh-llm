@@ -7,6 +7,9 @@ use std::time::Duration;
 #[cfg(any(feature = "client", feature = "serve"))]
 use anyhow::Result;
 
+/// Smallest mesh protocol generation that makes an originator emit signed bootstrap tokens.
+pub const SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION: u32 = 1;
+
 #[cfg(feature = "console")]
 pub mod console {
     pub use mesh_llm_console_server::{
@@ -26,6 +29,15 @@ pub enum LogFormat {
     Pretty,
     #[default]
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TrustPolicy {
+    #[default]
+    Off,
+    PreferOwned,
+    RequireOwned,
+    Allowlist,
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +109,26 @@ impl Default for StorageConfig {
             isolated_config: true,
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MeshRequirementsConfig {
+    pub min_node_version: Option<String>,
+    pub max_node_version: Option<String>,
+    pub min_protocol_version: Option<u32>,
+    pub max_protocol_version: Option<u32>,
+    pub require_release_attestation: bool,
+    pub release_signer_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AdmissionConfig {
+    pub owner_key: Option<PathBuf>,
+    pub owner_required: bool,
+    pub node_label: Option<String>,
+    pub trust_policy: Option<TrustPolicy>,
+    pub trusted_owners: Vec<String>,
+    pub mesh_requirements: MeshRequirementsConfig,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -227,6 +259,106 @@ macro_rules! impl_common_builder_methods {
             self
         }
 
+        pub fn owner_key(mut self, path: impl Into<PathBuf>) -> Self {
+            self.config.admission.owner_key = Some(path.into());
+            self
+        }
+
+        pub fn owner_required(mut self, required: bool) -> Self {
+            self.config.admission.owner_required = required;
+            self
+        }
+
+        pub fn node_label(mut self, label: impl Into<String>) -> Self {
+            self.config.admission.node_label = Some(label.into());
+            self
+        }
+
+        pub fn trust_policy(mut self, policy: TrustPolicy) -> Self {
+            self.config.admission.trust_policy = Some(policy);
+            self
+        }
+
+        pub fn trust_owner(mut self, owner_id: impl Into<String>) -> Self {
+            self.config.admission.trusted_owners.push(owner_id.into());
+            self
+        }
+
+        pub fn trust_owners<I, S>(mut self, owner_ids: I) -> Self
+        where
+            I: IntoIterator<Item = S>,
+            S: Into<String>,
+        {
+            self.config.admission.trusted_owners = owner_ids.into_iter().map(Into::into).collect();
+            self
+        }
+
+        pub fn min_node_version(mut self, version: impl Into<String>) -> Self {
+            self.config.admission.mesh_requirements.min_node_version = Some(version.into());
+            self
+        }
+
+        pub fn max_node_version(mut self, version: impl Into<String>) -> Self {
+            self.config.admission.mesh_requirements.max_node_version = Some(version.into());
+            self
+        }
+
+        pub fn min_protocol_version(mut self, version: u32) -> Self {
+            self.config.admission.mesh_requirements.min_protocol_version = Some(version);
+            self
+        }
+
+        /// Make mesh originators emit signed bootstrap tokens instead of legacy endpoint tokens.
+        pub fn signed_join_tokens(mut self, enabled: bool) -> Self {
+            if enabled {
+                self.config.admission.mesh_requirements.min_protocol_version = Some(
+                    self.config
+                        .admission
+                        .mesh_requirements
+                        .min_protocol_version
+                        .unwrap_or(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+                        .max(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION),
+                );
+            } else if self.config.admission.mesh_requirements.min_protocol_version
+                == Some(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+            {
+                self.config.admission.mesh_requirements.min_protocol_version = None;
+            }
+            self
+        }
+
+        pub fn max_protocol_version(mut self, version: u32) -> Self {
+            self.config.admission.mesh_requirements.max_protocol_version = Some(version);
+            self
+        }
+
+        pub fn require_release_attestation(mut self, required: bool) -> Self {
+            self.config
+                .admission
+                .mesh_requirements
+                .require_release_attestation = required;
+            self
+        }
+
+        pub fn release_signer_key(mut self, key: impl Into<String>) -> Self {
+            self.config
+                .admission
+                .mesh_requirements
+                .release_signer_keys
+                .push(key.into());
+            self
+        }
+
+        pub fn release_signer_keys<I, S>(mut self, keys: I) -> Self
+        where
+            I: IntoIterator<Item = S>,
+            S: Into<String>,
+        {
+            self.config.admission.mesh_requirements.release_signer_keys =
+                keys.into_iter().map(Into::into).collect();
+            self
+        }
+
         pub fn config_path(mut self, path: impl Into<PathBuf>) -> Self {
             self.config.storage.config_path = Some(path.into());
             self
@@ -306,6 +438,7 @@ pub mod client {
     pub struct EmbeddedClientConfig {
         pub http: HttpConfig,
         pub network: NetworkConfig,
+        pub admission: AdmissionConfig,
         pub storage: StorageConfig,
         pub log_format: LogFormat,
         pub startup_timeout: Duration,
@@ -316,6 +449,7 @@ pub mod client {
             Self {
                 http: HttpConfig::default(),
                 network: NetworkConfig::default(),
+                admission: AdmissionConfig::default(),
                 storage: StorageConfig::default(),
                 log_format: LogFormat::default(),
                 startup_timeout: Duration::from_secs(30),
@@ -347,6 +481,7 @@ pub mod client {
             mode: EmbeddedMode::Client,
             http: config.http,
             network: config.network,
+            admission: config.admission,
             storage: config.storage,
             serving: ServingConfig::default(),
             log_format: config.log_format,
@@ -364,6 +499,7 @@ pub mod serve {
     pub struct EmbeddedServeConfig {
         pub http: HttpConfig,
         pub network: NetworkConfig,
+        pub admission: AdmissionConfig,
         pub storage: StorageConfig,
         pub serving: ServingConfig,
         pub log_format: LogFormat,
@@ -375,6 +511,7 @@ pub mod serve {
             Self {
                 http: HttpConfig::default(),
                 network: NetworkConfig::default(),
+                admission: AdmissionConfig::default(),
                 storage: StorageConfig::default(),
                 serving: ServingConfig::default(),
                 log_format: LogFormat::default(),
@@ -426,6 +563,7 @@ pub mod serve {
             mode: EmbeddedMode::Serve,
             http: config.http,
             network: config.network,
+            admission: config.admission,
             storage: config.storage,
             serving: config.serving,
             log_format: config.log_format,
@@ -449,6 +587,7 @@ struct EmbeddedNodeParts {
     mode: EmbeddedMode,
     http: HttpConfig,
     network: NetworkConfig,
+    admission: AdmissionConfig,
     storage: StorageConfig,
     serving: ServingConfig,
     log_format: LogFormat,
@@ -502,6 +641,35 @@ fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_host_runtime::sdk::Embedded
             listen_all: parts.network.listen_all,
             enumerate_host: parts.network.enumerate_host,
         },
+        admission: mesh_llm_host_runtime::sdk::EmbeddedMeshAdmissionConfig {
+            owner_key: parts.admission.owner_key,
+            owner_required: parts.admission.owner_required,
+            node_label: parts.admission.node_label,
+            trust_policy: parts.admission.trust_policy.map(|policy| match policy {
+                TrustPolicy::Off => mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::Off,
+                TrustPolicy::PreferOwned => {
+                    mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::PreferOwned
+                }
+                TrustPolicy::RequireOwned => {
+                    mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::RequireOwned
+                }
+                TrustPolicy::Allowlist => {
+                    mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::Allowlist
+                }
+            }),
+            trusted_owners: parts.admission.trusted_owners,
+            mesh_requirements: mesh_llm_host_runtime::sdk::EmbeddedMeshRequirementsConfig {
+                min_node_version: parts.admission.mesh_requirements.min_node_version,
+                max_node_version: parts.admission.mesh_requirements.max_node_version,
+                min_protocol_version: parts.admission.mesh_requirements.min_protocol_version,
+                max_protocol_version: parts.admission.mesh_requirements.max_protocol_version,
+                require_release_attestation: parts
+                    .admission
+                    .mesh_requirements
+                    .require_release_attestation,
+                release_signer_keys: parts.admission.mesh_requirements.release_signer_keys,
+            },
+        },
         storage: mesh_llm_host_runtime::sdk::EmbeddedMeshStorageConfig {
             config_path: parts.storage.config_path,
             isolated_config: parts.storage.isolated_config,
@@ -553,5 +721,94 @@ mod tests {
         );
         assert_eq!(config.serving.max_vram_gb, Some(6.0));
         assert_eq!(config.network.mesh_name.as_deref(), Some("sprout"));
+    }
+
+    #[test]
+    #[cfg(feature = "serve")]
+    fn serve_builder_sets_admission_fields() {
+        let config = serve::EmbeddedServeConfig::builder()
+            .owner_key("/tmp/sprout-owner.json")
+            .owner_required(true)
+            .node_label("sprout-desktop")
+            .trust_policy(TrustPolicy::RequireOwned)
+            .trust_owner("owner-a")
+            .trust_owner("owner-b")
+            .min_node_version("0.65.0")
+            .max_node_version("0.66.0")
+            .signed_join_tokens(true)
+            .max_protocol_version(2)
+            .require_release_attestation(false)
+            .release_signer_keys(["ed25519:abc"])
+            .build();
+
+        assert_eq!(
+            config.admission.owner_key.as_deref(),
+            Some(std::path::Path::new("/tmp/sprout-owner.json"))
+        );
+        assert!(config.admission.owner_required);
+        assert_eq!(
+            config.admission.node_label.as_deref(),
+            Some("sprout-desktop")
+        );
+        assert_eq!(
+            config.admission.trust_policy,
+            Some(TrustPolicy::RequireOwned)
+        );
+        assert_eq!(config.admission.trusted_owners, vec!["owner-a", "owner-b"]);
+        assert_eq!(
+            config
+                .admission
+                .mesh_requirements
+                .min_node_version
+                .as_deref(),
+            Some("0.65.0")
+        );
+        assert_eq!(
+            config
+                .admission
+                .mesh_requirements
+                .max_node_version
+                .as_deref(),
+            Some("0.66.0")
+        );
+        assert_eq!(
+            config.admission.mesh_requirements.min_protocol_version,
+            Some(1)
+        );
+        assert_eq!(
+            config.admission.mesh_requirements.max_protocol_version,
+            Some(2)
+        );
+        assert!(
+            !config
+                .admission
+                .mesh_requirements
+                .require_release_attestation
+        );
+        assert_eq!(
+            config.admission.mesh_requirements.release_signer_keys,
+            vec!["ed25519:abc"]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "serve")]
+    fn signed_join_tokens_sets_genesis_requirement_without_lowering_existing_bound() {
+        let config = serve::EmbeddedServeConfig::builder()
+            .signed_join_tokens(true)
+            .build();
+        assert_eq!(
+            config.admission.mesh_requirements.min_protocol_version,
+            Some(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+        );
+
+        let config = serve::EmbeddedServeConfig::builder()
+            .min_protocol_version(2)
+            .signed_join_tokens(true)
+            .build();
+        assert_eq!(
+            config.admission.mesh_requirements.min_protocol_version,
+            Some(2)
+        );
     }
 }

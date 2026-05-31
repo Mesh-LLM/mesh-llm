@@ -32,6 +32,8 @@ pub mod config {
 
 const DEFAULT_EMBEDDED_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 const EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Smallest mesh protocol generation that makes an originator emit signed bootstrap tokens.
+pub const SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EmbeddedMeshNodeMode {
@@ -55,11 +57,31 @@ pub enum EmbeddedMeshLogFormat {
     Json,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum EmbeddedTrustPolicy {
+    #[default]
+    Off,
+    PreferOwned,
+    RequireOwned,
+    Allowlist,
+}
+
 impl From<EmbeddedMeshLogFormat> for crate::cli::LogFormat {
     fn from(format: EmbeddedMeshLogFormat) -> Self {
         match format {
             EmbeddedMeshLogFormat::Pretty => Self::Pretty,
             EmbeddedMeshLogFormat::Json => Self::Json,
+        }
+    }
+}
+
+impl From<EmbeddedTrustPolicy> for crate::crypto::TrustPolicy {
+    fn from(policy: EmbeddedTrustPolicy) -> Self {
+        match policy {
+            EmbeddedTrustPolicy::Off => Self::Off,
+            EmbeddedTrustPolicy::PreferOwned => Self::PreferOwned,
+            EmbeddedTrustPolicy::RequireOwned => Self::RequireOwned,
+            EmbeddedTrustPolicy::Allowlist => Self::Allowlist,
         }
     }
 }
@@ -126,6 +148,26 @@ impl Default for EmbeddedMeshNetworkConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EmbeddedMeshRequirementsConfig {
+    pub min_node_version: Option<String>,
+    pub max_node_version: Option<String>,
+    pub min_protocol_version: Option<u32>,
+    pub max_protocol_version: Option<u32>,
+    pub require_release_attestation: bool,
+    pub release_signer_keys: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EmbeddedMeshAdmissionConfig {
+    pub owner_key: Option<PathBuf>,
+    pub owner_required: bool,
+    pub node_label: Option<String>,
+    pub trust_policy: Option<EmbeddedTrustPolicy>,
+    pub trusted_owners: Vec<String>,
+    pub mesh_requirements: EmbeddedMeshRequirementsConfig,
+}
+
 #[derive(Clone, Debug)]
 pub struct EmbeddedMeshStorageConfig {
     pub config_path: Option<PathBuf>,
@@ -147,6 +189,7 @@ pub struct EmbeddedMeshNodeConfig {
     pub http: EmbeddedMeshHttpConfig,
     pub serving: EmbeddedMeshServingConfig,
     pub network: EmbeddedMeshNetworkConfig,
+    pub admission: EmbeddedMeshAdmissionConfig,
     pub storage: EmbeddedMeshStorageConfig,
     pub log_format: EmbeddedMeshLogFormat,
     pub startup_timeout: Duration,
@@ -159,6 +202,7 @@ impl Default for EmbeddedMeshNodeConfig {
             http: EmbeddedMeshHttpConfig::default(),
             serving: EmbeddedMeshServingConfig::default(),
             network: EmbeddedMeshNetworkConfig::default(),
+            admission: EmbeddedMeshAdmissionConfig::default(),
             storage: EmbeddedMeshStorageConfig::default(),
             log_format: EmbeddedMeshLogFormat::default(),
             startup_timeout: Duration::from_secs(30),
@@ -331,6 +375,106 @@ impl EmbeddedMeshNodeBuilder {
         self
     }
 
+    pub fn owner_key(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config.admission.owner_key = Some(path.into());
+        self
+    }
+
+    pub fn owner_required(mut self, required: bool) -> Self {
+        self.config.admission.owner_required = required;
+        self
+    }
+
+    pub fn node_label(mut self, label: impl Into<String>) -> Self {
+        self.config.admission.node_label = Some(label.into());
+        self
+    }
+
+    pub fn trust_policy(mut self, policy: EmbeddedTrustPolicy) -> Self {
+        self.config.admission.trust_policy = Some(policy);
+        self
+    }
+
+    pub fn trust_owner(mut self, owner_id: impl Into<String>) -> Self {
+        self.config.admission.trusted_owners.push(owner_id.into());
+        self
+    }
+
+    pub fn trust_owners<I, S>(mut self, owner_ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.config.admission.trusted_owners = owner_ids.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn min_node_version(mut self, version: impl Into<String>) -> Self {
+        self.config.admission.mesh_requirements.min_node_version = Some(version.into());
+        self
+    }
+
+    pub fn max_node_version(mut self, version: impl Into<String>) -> Self {
+        self.config.admission.mesh_requirements.max_node_version = Some(version.into());
+        self
+    }
+
+    pub fn min_protocol_version(mut self, version: u32) -> Self {
+        self.config.admission.mesh_requirements.min_protocol_version = Some(version);
+        self
+    }
+
+    /// Make mesh originators emit signed bootstrap tokens instead of legacy endpoint tokens.
+    pub fn signed_join_tokens(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.config.admission.mesh_requirements.min_protocol_version = Some(
+                self.config
+                    .admission
+                    .mesh_requirements
+                    .min_protocol_version
+                    .unwrap_or(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+                    .max(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION),
+            );
+        } else if self.config.admission.mesh_requirements.min_protocol_version
+            == Some(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+        {
+            self.config.admission.mesh_requirements.min_protocol_version = None;
+        }
+        self
+    }
+
+    pub fn max_protocol_version(mut self, version: u32) -> Self {
+        self.config.admission.mesh_requirements.max_protocol_version = Some(version);
+        self
+    }
+
+    pub fn require_release_attestation(mut self, required: bool) -> Self {
+        self.config
+            .admission
+            .mesh_requirements
+            .require_release_attestation = required;
+        self
+    }
+
+    pub fn release_signer_key(mut self, key: impl Into<String>) -> Self {
+        self.config
+            .admission
+            .mesh_requirements
+            .release_signer_keys
+            .push(key.into());
+        self
+    }
+
+    pub fn release_signer_keys<I, S>(mut self, keys: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.config.admission.mesh_requirements.release_signer_keys =
+            keys.into_iter().map(Into::into).collect();
+        self
+    }
+
     pub fn config_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.config.storage.config_path = Some(path.into());
         self
@@ -378,6 +522,7 @@ pub struct EmbeddedServeConfig {
     pub listen_all: bool,
     pub enumerate_host: bool,
     pub console_ui: bool,
+    pub admission: EmbeddedMeshAdmissionConfig,
     pub config_path: Option<PathBuf>,
     pub isolated_config: bool,
     pub log_format: EmbeddedMeshLogFormat,
@@ -407,6 +552,7 @@ impl Default for EmbeddedServeConfig {
             listen_all: false,
             enumerate_host: true,
             console_ui: false,
+            admission: EmbeddedMeshAdmissionConfig::default(),
             config_path: None,
             isolated_config: true,
             log_format: EmbeddedMeshLogFormat::default(),
@@ -444,6 +590,7 @@ impl From<EmbeddedServeConfig> for EmbeddedMeshNodeConfig {
                 listen_all: config.listen_all,
                 enumerate_host: config.enumerate_host,
             },
+            admission: config.admission,
             storage: EmbeddedMeshStorageConfig {
                 config_path: config.config_path,
                 isolated_config: config.isolated_config,
@@ -477,6 +624,7 @@ impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
             listen_all: config.network.listen_all,
             enumerate_host: config.network.enumerate_host,
             console_ui: config.http.console_ui,
+            admission: config.admission,
             config_path: config.storage.config_path,
             isolated_config: config.storage.isolated_config,
             log_format: config.log_format,
@@ -659,6 +807,26 @@ fn embedded_runtime_options(
         bind_port: config.network.bind_port,
         listen_all: config.network.listen_all,
         enumerate_host: config.network.enumerate_host,
+        owner_key: config.admission.owner_key.clone(),
+        owner_required: config.admission.owner_required,
+        node_label: config.admission.node_label.clone(),
+        trust_policy: config.admission.trust_policy.map(Into::into),
+        trust_owner: config.admission.trusted_owners.clone(),
+        mesh_requirements: crate::plugin::MeshRequirementsConfig {
+            min_node_version: config.admission.mesh_requirements.min_node_version.clone(),
+            max_node_version: config.admission.mesh_requirements.max_node_version.clone(),
+            min_protocol_version: config.admission.mesh_requirements.min_protocol_version,
+            max_protocol_version: config.admission.mesh_requirements.max_protocol_version,
+            require_release_attestation: config
+                .admission
+                .mesh_requirements
+                .require_release_attestation,
+            release_signer_keys: config
+                .admission
+                .mesh_requirements
+                .release_signer_keys
+                .clone(),
+        },
         config_path: config.storage.config_path.clone(),
         log_format: config.log_format.into(),
         headless: !config.http.console_ui,
@@ -1139,6 +1307,14 @@ mod tests {
             .iroh_relay_auth("https://relay.example", "token")
             .nostr_relay("wss://nostr.example")
             .bind_port(17777)
+            .owner_key("/tmp/sprout-owner.json")
+            .owner_required(true)
+            .node_label("sprout-desktop")
+            .trust_policy(EmbeddedTrustPolicy::RequireOwned)
+            .trust_owner("owner-a")
+            .trust_owner("owner-b")
+            .min_node_version("0.65.0")
+            .signed_join_tokens(true)
             .build();
         let options = embedded_runtime_options(&config, None);
 
@@ -1155,8 +1331,45 @@ mod tests {
         );
         assert_eq!(options.nostr_relay, vec!["wss://nostr.example".to_string()]);
         assert_eq!(options.bind_port, Some(17777));
+        assert_eq!(
+            options.owner_key.as_deref(),
+            Some(std::path::Path::new("/tmp/sprout-owner.json"))
+        );
+        assert!(options.owner_required);
+        assert_eq!(options.node_label.as_deref(), Some("sprout-desktop"));
+        assert_eq!(
+            options.trust_policy,
+            Some(crate::crypto::TrustPolicy::RequireOwned)
+        );
+        assert_eq!(options.trust_owner, vec!["owner-a", "owner-b"]);
+        assert_eq!(
+            options.mesh_requirements.min_node_version.as_deref(),
+            Some("0.65.0")
+        );
+        assert_eq!(options.mesh_requirements.min_protocol_version, Some(1));
+        assert!(!options.mesh_requirements.require_release_attestation);
         assert_eq!(options.log_format, crate::cli::LogFormat::Json);
         assert!(options.headless);
+    }
+
+    #[test]
+    fn signed_join_tokens_sets_genesis_requirement_without_lowering_existing_bound() {
+        let config = EmbeddedMeshNodeConfig::builder()
+            .signed_join_tokens(true)
+            .build();
+        assert_eq!(
+            config.admission.mesh_requirements.min_protocol_version,
+            Some(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+        );
+
+        let config = EmbeddedMeshNodeConfig::builder()
+            .min_protocol_version(2)
+            .signed_join_tokens(true)
+            .build();
+        assert_eq!(
+            config.admission.mesh_requirements.min_protocol_version,
+            Some(2)
+        );
     }
 
     #[test]

@@ -178,6 +178,12 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) bind_port: Option<u16>,
     pub(crate) listen_all: bool,
     pub(crate) enumerate_host: bool,
+    pub(crate) owner_key: Option<PathBuf>,
+    pub(crate) owner_required: bool,
+    pub(crate) node_label: Option<String>,
+    pub(crate) trust_policy: Option<crate::crypto::TrustPolicy>,
+    pub(crate) trust_owner: Vec<String>,
+    pub(crate) mesh_requirements: crate::plugin::MeshRequirementsConfig,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) log_format: LogFormat,
     pub(crate) headless: bool,
@@ -3511,6 +3517,17 @@ fn cli_from_embedded_options(options: EmbeddedRuntimeOptions) -> Cli {
     cli.bind_port = options.bind_port;
     cli.listen_all = options.listen_all;
     cli.no_enumerate_host = !options.enumerate_host;
+    cli.owner_key = options.owner_key;
+    cli.owner_required = options.owner_required;
+    cli.node_label = options.node_label;
+    cli.trust_policy = options.trust_policy;
+    cli.trust_owner = options.trust_owner;
+    cli.min_node_version = options.mesh_requirements.min_node_version;
+    cli.max_node_version = options.mesh_requirements.max_node_version;
+    cli.min_protocol_version = options.mesh_requirements.min_protocol_version;
+    cli.max_protocol_version = options.mesh_requirements.max_protocol_version;
+    cli.require_release_attestation = options.mesh_requirements.require_release_attestation;
+    cli.release_signer_key = options.mesh_requirements.release_signer_keys;
     cli.config = options.config_path;
     cli
 }
