@@ -1324,6 +1324,13 @@ mod tests {
         assert_eq!(options.console_port, 13131);
         assert_eq!(options.mesh_name.as_deref(), Some("sprout"));
         assert_eq!(options.max_vram_gb, Some(3.0));
+        assert_embedded_runtime_network_options(&options);
+        assert_embedded_runtime_admission_options(&options);
+        assert_eq!(options.log_format, crate::cli::LogFormat::Json);
+        assert!(options.headless);
+    }
+
+    fn assert_embedded_runtime_network_options(options: &crate::runtime::EmbeddedRuntimeOptions) {
         assert_eq!(options.relay, vec!["https://relay.example".to_string()]);
         assert_eq!(
             options.relay_auth,
@@ -1331,6 +1338,9 @@ mod tests {
         );
         assert_eq!(options.nostr_relay, vec!["wss://nostr.example".to_string()]);
         assert_eq!(options.bind_port, Some(17777));
+    }
+
+    fn assert_embedded_runtime_admission_options(options: &crate::runtime::EmbeddedRuntimeOptions) {
         assert_eq!(
             options.owner_key.as_deref(),
             Some(std::path::Path::new("/tmp/sprout-owner.json"))
@@ -1348,8 +1358,6 @@ mod tests {
         );
         assert_eq!(options.mesh_requirements.min_protocol_version, Some(1));
         assert!(!options.mesh_requirements.require_release_attestation);
-        assert_eq!(options.log_format, crate::cli::LogFormat::Json);
-        assert!(options.headless);
     }
 
     #[test]
