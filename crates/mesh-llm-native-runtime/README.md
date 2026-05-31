@@ -281,9 +281,60 @@ mesh-llm runtime prune --active-only
 mesh-llm doctor --json
 ```
 
-The CLI owns network downloads, archive extraction, progress output, and
-checksum verification. This crate owns the manifest, compatibility, cache, and
-load-plan semantics those commands use.
+`mesh-llm runtime install` does not require `--manifest` in normal release
+usage. It resolves `native-runtimes.json` for the running MeshLLM version from
+the release URL, or from `MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL` when that
+environment variable is set. `--manifest` and `--bundle-dir` remain available
+for CI, offline packages, and local artifact testing. Passing only
+`--bundle-dir` does not fetch the default release manifest.
+
+The host runtime's SDK layer owns network downloads, archive extraction,
+progress callbacks, checksum verification, and cache installation. This crate
+owns the manifest, compatibility, cache, and load-plan semantics those flows
+use.
+
+## Rust SDK Integration
+
+Rust SDK consumers use `mesh_llm::sdk::native_runtime` for first-class install
+and resolver access:
+
+```rust
+use mesh_llm::sdk::native_runtime::{
+    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
+};
+
+# async fn example(cache_dir: std::path::PathBuf) -> anyhow::Result<()> {
+let outcome = install_native_runtime(NativeRuntimeInstallOptions {
+    selection: RuntimeSelection::Recommended,
+    cache_dir: Some(cache_dir),
+    progress: Some(std::sync::Arc::new(|event| {
+        eprintln!(
+            "{}: {} bytes",
+            event.native_runtime_id,
+            event.downloaded_bytes
+        );
+    })),
+    ..Default::default()
+})
+.await?;
+
+println!("installed {}", outcome.runtime.native_runtime_id);
+# Ok(())
+# }
+```
+
+The SDK module also re-exports the lower-level manifest, resolver, cache, and
+load-plan types from this crate for callers that need to query available
+runtimes, inspect candidate rejections, remove cached runtimes, or prune older
+MeshLLM versions.
+
+## Verification
+
+Release downloads require `sha256` metadata and fail if the archive digest does
+not match the release manifest. The SDK exposes
+`NativeRuntimeVerificationPolicy::RequireChecksumAndSignature`, but that policy
+currently fails closed because signature verification keys and attestation
+format are not implemented yet.
 
 TODO: teach the CLI/SDK to discover the release manifest automatically for the
 running MeshLLM version. Until then, install/list available flows need an
@@ -300,3 +351,6 @@ explicit `--manifest` or packaged `--bundle-dir`.
 - Dynamic loading is intentionally outside this crate; the shipped host runtime
   consumes `load_plan()` and loads the declared libraries through `skippy-ffi`
   when built with `dynamic-native-runtime`.
+- Generated runtime crates are not the supported distribution story for native
+  runtimes in this PR. The supported path is release artifacts plus
+  `native-runtimes.json`.

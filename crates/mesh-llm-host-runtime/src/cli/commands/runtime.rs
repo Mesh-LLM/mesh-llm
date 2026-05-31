@@ -16,13 +16,16 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             bundle_dirs,
             cache_dir,
             json,
-        }) => runtime_native::run_native_runtime_list(
-            *available,
-            manifest.as_deref(),
-            bundle_dirs,
-            cache_dir.as_deref(),
-            *json,
-        ),
+        }) => {
+            runtime_native::run_native_runtime_list(
+                *available,
+                manifest.as_deref(),
+                bundle_dirs,
+                cache_dir.as_deref(),
+                *json,
+            )
+            .await
+        }
         Some(RuntimeCommand::Install {
             runtime,
             manifest,

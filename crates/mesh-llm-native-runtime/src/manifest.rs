@@ -123,15 +123,20 @@ impl NativeRuntimeReleaseManifest {
     pub fn read_from_path(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("read native runtime release manifest {}", path.display()))?;
-        let mut value: Value = serde_json::from_str(&text)
-            .with_context(|| format!("parse native runtime release manifest {}", path.display()))?;
+        Self::from_json_str(&text)
+            .with_context(|| format!("parse native runtime release manifest {}", path.display()))
+    }
+
+    pub fn from_json_str(text: &str) -> Result<Self> {
+        let mut value: Value =
+            serde_json::from_str(text).context("parse native runtime release manifest JSON")?;
         if let Some(artifacts) = value.get_mut("artifacts").and_then(Value::as_array_mut) {
             for artifact in artifacts {
                 normalize_legacy_aliases(artifact)?;
             }
         }
-        let manifest: Self = serde_json::from_value(value)
-            .with_context(|| format!("parse native runtime release manifest {}", path.display()))?;
+        let manifest: Self =
+            serde_json::from_value(value).context("parse native runtime release manifest")?;
         manifest.validate()?;
         Ok(manifest)
     }

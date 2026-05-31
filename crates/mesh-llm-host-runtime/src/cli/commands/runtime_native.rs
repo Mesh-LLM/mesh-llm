@@ -1,22 +1,17 @@
-use anyhow::{Context, Result, bail};
-use futures_util::StreamExt;
-use mesh_llm_native_runtime::{
-    HostGpuProfile, HostRuntimeProfile, NativeRuntimeCache, NativeRuntimeFlavor,
-    NativeRuntimeManifest, NativeRuntimePruneMode, NativeRuntimeReleaseManifest,
-    NativeRuntimeResolver, NativeRuntimeSource, RuntimeSelection,
+use crate::system::native_runtime_install::{
+    CURRENT_MESH_VERSION, NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
+    NativeRuntimeInstallStatus, NativeRuntimeManifestOptions, host_runtime_profile,
+    install_native_runtime, load_release_manifest, native_runtime_cache,
 };
+use anyhow::Result;
+use mesh_llm_native_runtime::{HostRuntimeProfile, NativeRuntimePruneMode, RuntimeSelection};
 use serde::Serialize;
 use serde_json::json;
-use sha2::Digest;
-use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
 
-const CURRENT_MESH_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-pub(crate) fn run_native_runtime_list(
+pub(crate) async fn run_native_runtime_list(
     available: bool,
     manifest_path: Option<&Path>,
     bundle_dirs: &[PathBuf],
@@ -25,7 +20,15 @@ pub(crate) fn run_native_runtime_list(
 ) -> Result<()> {
     let cache = native_runtime_cache(cache_dir)?;
     if available {
-        let manifest = load_release_manifest(manifest_path, bundle_dirs)?;
+        if !json_output && manifest_path.is_none() && bundle_dirs.is_empty() {
+            eprintln!("🔎 Loading native runtime release manifest");
+        }
+        let manifest = load_release_manifest(NativeRuntimeManifestOptions {
+            manifest_path: manifest_path.map(Path::to_path_buf),
+            bundle_dirs: bundle_dirs.to_vec(),
+            ..Default::default()
+        })
+        .await?;
         let profile = host_runtime_profile();
         let rows = manifest
             .artifacts
@@ -71,196 +74,92 @@ pub(crate) async fn run_native_runtime_install(
     json_output: bool,
 ) -> Result<()> {
     let selection = RuntimeSelection::parse(requested_runtime)?;
-    let manifest = load_release_manifest(manifest_path, bundle_dirs)?;
-    if manifest.artifacts.is_empty() {
-        bail!(
-            "no native runtime manifest entries found; pass --manifest or --bundle-dir before installing"
-        );
+    if !json_output && manifest_path.is_none() && bundle_dirs.is_empty() {
+        eprintln!("🔎 Loading native runtime release manifest");
     }
-
     if !json_output {
         eprintln!("🔎 Detecting host runtime profile");
     }
-    let profile = host_runtime_profile();
-    let cache = native_runtime_cache(cache_dir)?;
-    let resolution =
-        NativeRuntimeResolver::new(CURRENT_MESH_VERSION, profile, manifest, cache.clone())
-            .with_bundle_dirs(bundle_dirs.to_vec())
-            .resolve(&selection)?;
-
-    match &resolution.source {
-        NativeRuntimeSource::Installed { path } => {
+    let outcome = install_native_runtime(NativeRuntimeInstallOptions {
+        selection,
+        manifest_path: manifest_path.map(Path::to_path_buf),
+        bundle_dirs: bundle_dirs.to_vec(),
+        cache_dir: cache_dir.map(Path::to_path_buf),
+        progress: cli_download_progress(json_output),
+        ..Default::default()
+    })
+    .await?;
+    match outcome.status {
+        NativeRuntimeInstallStatus::AlreadyInstalled => {
             if json_output {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&json!({
                         "status": "already_installed",
-                        "runtime": resolution.selected,
-                        "path": path,
+                        "runtime": outcome.runtime,
+                        "resolution": outcome.resolution,
                     }))?
                 );
             } else {
                 eprintln!(
                     "✅ Native runtime already installed: {}",
-                    resolution.selected.native_runtime_id
+                    outcome.runtime.native_runtime_id
                 );
-                eprintln!("   path: {}", path.display());
+                eprintln!("   path: {}", outcome.runtime.path.display());
             }
         }
-        NativeRuntimeSource::Bundle { path } => {
-            if !json_output {
-                eprintln!(
-                    "📦 Installing native runtime {}",
-                    resolution.selected.native_runtime_id
-                );
-            }
-            let installed = cache.install_from_dir(path)?;
+        NativeRuntimeInstallStatus::Installed => {
             if json_output {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&json!({
                         "status": "installed",
-                        "runtime": installed,
+                        "runtime": outcome.runtime,
+                        "resolution": outcome.resolution,
                     }))?
                 );
             } else {
-                eprintln!("✅ Installed {}", installed.native_runtime_id);
-                eprintln!("   version: {}", installed.mesh_version);
-                eprintln!("   flavor: {}", installed.flavor);
-                eprintln!("   path: {}", installed.path.display());
+                eprintln!("✅ Installed {}", outcome.runtime.native_runtime_id);
+                eprintln!("   version: {}", outcome.runtime.mesh_version);
+                eprintln!("   flavor: {}", outcome.runtime.flavor);
+                eprintln!("   path: {}", outcome.runtime.path.display());
             }
-        }
-        NativeRuntimeSource::Download { url } => {
-            let installed =
-                download_and_install_runtime(&cache, &resolution.selected, url, json_output)
-                    .await?;
-            if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json!({
-                        "status": "installed",
-                        "runtime": installed,
-                    }))?
-                );
-            } else {
-                eprintln!("✅ Installed {}", installed.native_runtime_id);
-                eprintln!("   version: {}", installed.mesh_version);
-                eprintln!("   flavor: {}", installed.flavor);
-                eprintln!("   path: {}", installed.path.display());
-            }
-        }
-        NativeRuntimeSource::Missing => {
-            bail!(
-                "selected native runtime {} is not installed and no bundle or download URL was available",
-                resolution.selected.native_runtime_id
-            );
-        }
-    }
-    Ok(())
-}
-
-async fn download_and_install_runtime(
-    cache: &NativeRuntimeCache,
-    artifact: &mesh_llm_native_runtime::NativeRuntimeArtifact,
-    url: &str,
-    json_output: bool,
-) -> Result<mesh_llm_native_runtime::InstalledNativeRuntime> {
-    let temp = tempfile::Builder::new()
-        .prefix("mesh-native-runtime-")
-        .tempdir()
-        .context("create native runtime download workspace")?;
-    let archive = temp
-        .path()
-        .join(format!("{}.tar.gz", artifact.native_runtime_id));
-    if !json_output {
-        eprintln!(
-            "⬇️  Downloading native runtime {}",
-            artifact.native_runtime_id
-        );
-    }
-    download_runtime_archive(url, &archive, artifact.sha256.as_deref(), json_output).await?;
-    let extracted = temp.path().join("extracted");
-    fs::create_dir_all(&extracted).with_context(|| {
-        format!(
-            "create native runtime extraction dir {}",
-            extracted.display()
-        )
-    })?;
-    extract_runtime_archive(&archive, &extracted)?;
-    let bundle_dir = find_extracted_runtime_dir(&extracted)?;
-    cache.install_from_dir(&bundle_dir)
-}
-
-async fn download_runtime_archive(
-    url: &str,
-    path: &Path,
-    expected_sha256: Option<&str>,
-    json_output: bool,
-) -> Result<()> {
-    let response = reqwest::Client::builder()
-        .timeout(Duration::from_secs(600))
-        .build()
-        .context("build native runtime download HTTP client")?
-        .get(url)
-        .header("User-Agent", "mesh-llm")
-        .send()
-        .await
-        .with_context(|| format!("download native runtime {url}"))?
-        .error_for_status()
-        .with_context(|| format!("native runtime request failed for {url}"))?;
-    let total = response.content_length();
-    let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(path)
-        .await
-        .with_context(|| format!("create native runtime archive {}", path.display()))?;
-    let mut downloaded = 0_u64;
-    let mut hasher = sha2::Sha256::new();
-    let mut progress = DownloadProgress::new(total, json_output);
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.with_context(|| format!("read native runtime body from {url}"))?;
-        file.write_all(&chunk)
-            .await
-            .with_context(|| format!("write native runtime archive {}", path.display()))?;
-        downloaded += chunk.len() as u64;
-        sha2::Digest::update(&mut hasher, &chunk);
-        progress.tick(downloaded);
-    }
-    file.flush()
-        .await
-        .with_context(|| format!("flush native runtime archive {}", path.display()))?;
-    progress.finish(downloaded);
-    if let Some(expected) = expected_sha256 {
-        let expected = normalize_sha256(expected)?;
-        let actual = hex::encode(sha2::Digest::finalize(hasher));
-        if actual != expected {
-            bail!("native runtime checksum mismatch: expected {expected}, got {actual}");
         }
     }
     Ok(())
 }
 
 struct DownloadProgress {
-    total: Option<u64>,
-    quiet: bool,
+    native_runtime_id: Option<String>,
     last_percent: Option<u64>,
     last_tick: Instant,
 }
 
 impl DownloadProgress {
-    fn new(total: Option<u64>, quiet: bool) -> Self {
+    fn new() -> Self {
         Self {
-            total,
-            quiet,
+            native_runtime_id: None,
             last_percent: None,
             last_tick: Instant::now(),
         }
     }
 
-    fn tick(&mut self, downloaded: u64) {
-        if self.quiet {
+    fn tick(
+        &mut self,
+        native_runtime_id: &str,
+        downloaded: u64,
+        total: Option<u64>,
+        finished: bool,
+    ) {
+        if self.native_runtime_id.is_none() {
+            self.native_runtime_id = Some(native_runtime_id.to_string());
+            eprintln!("⬇️  Downloading native runtime {native_runtime_id}");
+        }
+        if finished {
+            self.finish(downloaded);
             return;
         }
-        let should_print = match self.total {
+        let should_print = match total {
             Some(total) if total > 0 => {
                 let percent = downloaded.saturating_mul(100) / total;
                 let crossed_step = self
@@ -278,7 +177,7 @@ impl DownloadProgress {
         };
         if should_print {
             self.last_tick = Instant::now();
-            match self.total {
+            match total {
                 Some(total) if total > 0 => eprintln!(
                     "   downloaded {} / {} ({})",
                     human_bytes(downloaded),
@@ -291,10 +190,26 @@ impl DownloadProgress {
     }
 
     fn finish(&mut self, downloaded: u64) {
-        if !self.quiet {
-            eprintln!("   downloaded {}", human_bytes(downloaded));
-        }
+        eprintln!("   downloaded {}", human_bytes(downloaded));
     }
+}
+
+fn cli_download_progress(json_output: bool) -> Option<NativeRuntimeDownloadProgressCallback> {
+    if json_output {
+        return None;
+    }
+    let progress = Arc::new(Mutex::new(DownloadProgress::new()));
+    Some(Arc::new(move |event| {
+        let Ok(mut progress) = progress.lock() else {
+            return;
+        };
+        progress.tick(
+            &event.native_runtime_id,
+            event.downloaded_bytes,
+            event.total_bytes,
+            event.finished,
+        );
+    }))
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -313,61 +228,6 @@ fn human_bytes(bytes: u64) -> String {
     } else {
         format!("{value:.1} {unit}")
     }
-}
-
-fn normalize_sha256(value: &str) -> Result<String> {
-    let trimmed = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
-    let digest = trimmed
-        .split_whitespace()
-        .next()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if digest.len() == 64 && digest.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        Ok(digest)
-    } else {
-        bail!("native runtime manifest contains invalid sha256: {value}");
-    }
-}
-
-fn extract_runtime_archive(archive: &Path, extracted: &Path) -> Result<()> {
-    let file = fs::File::open(archive)
-        .with_context(|| format!("open native runtime archive {}", archive.display()))?;
-    let decoder = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(decoder);
-    archive.unpack(extracted).with_context(|| {
-        format!(
-            "extract native runtime archive into {}",
-            extracted.display()
-        )
-    })
-}
-
-fn find_extracted_runtime_dir(extracted: &Path) -> Result<PathBuf> {
-    let mut matches = Vec::new();
-    collect_runtime_manifest_dirs(extracted, &mut matches)?;
-    match matches.len() {
-        1 => Ok(matches.remove(0)),
-        0 => bail!("downloaded native runtime archive did not contain a manifest.json"),
-        count => bail!("downloaded native runtime archive contained {count} manifest.json files"),
-    }
-}
-
-fn collect_runtime_manifest_dirs(dir: &Path, matches: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in fs::read_dir(dir).with_context(|| format!("read {}", dir.display()))? {
-        let entry = entry?;
-        let path = entry.path();
-        if entry.file_type()?.is_dir() {
-            if path
-                .join(mesh_llm_native_runtime::NATIVE_RUNTIME_MANIFEST_FILE)
-                .is_file()
-            {
-                matches.push(path);
-            } else {
-                collect_runtime_manifest_dirs(&path, matches)?;
-            }
-        }
-    }
-    Ok(())
 }
 
 pub(crate) fn run_native_runtime_remove(
@@ -467,97 +327,6 @@ struct NativeRuntimeDoctorReport {
     selected_runtime_path: Option<PathBuf>,
     installed_count: usize,
     current_version_installed_count: usize,
-}
-
-fn native_runtime_cache(cache_dir: Option<&Path>) -> Result<NativeRuntimeCache> {
-    let root = match cache_dir {
-        Some(path) => path.to_path_buf(),
-        None => dirs::cache_dir()
-            .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
-            .context("cannot determine native runtime cache directory")?
-            .join("mesh-llm")
-            .join("native-runtimes"),
-    };
-    Ok(NativeRuntimeCache::new(root))
-}
-
-fn load_release_manifest(
-    manifest_path: Option<&Path>,
-    bundle_dirs: &[PathBuf],
-) -> Result<NativeRuntimeReleaseManifest> {
-    let mut artifacts = Vec::new();
-    let mut mesh_version = CURRENT_MESH_VERSION.to_string();
-    if let Some(path) = manifest_path {
-        let manifest = NativeRuntimeReleaseManifest::read_from_path(path)?;
-        mesh_version = manifest.mesh_version.clone();
-        artifacts.extend(manifest.artifacts);
-    }
-    for dir in bundle_dirs {
-        let manifest = NativeRuntimeManifest::read_from_dir(dir)
-            .with_context(|| format!("read bundled native runtime {}", dir.display()))?;
-        mesh_version = manifest.artifact.mesh_version.clone();
-        artifacts.push(manifest.artifact);
-    }
-    Ok(NativeRuntimeReleaseManifest {
-        mesh_version,
-        artifacts,
-    })
-}
-
-fn host_runtime_profile() -> HostRuntimeProfile {
-    let survey = crate::system::hardware::survey();
-    let gpus = survey
-        .gpus
-        .iter()
-        .map(|gpu| HostGpuProfile {
-            display_name: gpu.display_name.clone(),
-            backend_device: gpu.backend_device.clone(),
-            stable_id: gpu.stable_id.clone(),
-            vram_bytes: Some(gpu.vram_bytes),
-            unified_memory: gpu.unified_memory,
-        })
-        .collect::<Vec<_>>();
-    HostRuntimeProfile {
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        target_triple: option_env!("TARGET").map(str::to_string),
-        available_flavors: detected_native_runtime_flavors(&survey.gpus),
-        gpus,
-    }
-}
-
-fn detected_native_runtime_flavors(
-    gpus: &[crate::system::hardware::GpuFacts],
-) -> BTreeSet<NativeRuntimeFlavor> {
-    let mut flavors = BTreeSet::from([NativeRuntimeFlavor::Cpu]);
-    if cfg!(target_os = "macos") {
-        flavors.insert(NativeRuntimeFlavor::Metal);
-    }
-    for gpu in gpus {
-        let label = format!(
-            "{} {}",
-            gpu.display_name,
-            gpu.backend_device.as_deref().unwrap_or_default()
-        )
-        .to_ascii_lowercase();
-        if label.contains("cuda") || label.contains("nvidia") {
-            flavors.insert(NativeRuntimeFlavor::Cuda);
-        }
-        if label.contains("blackwell")
-            || label.contains("gb200")
-            || label.contains("b200")
-            || label.contains("rtx 50")
-        {
-            flavors.insert(NativeRuntimeFlavor::CudaBlackwell);
-        }
-        if label.contains("rocm") || label.contains("hip") || label.contains("amd") {
-            flavors.insert(NativeRuntimeFlavor::Rocm);
-        }
-        if label.contains("vulkan") {
-            flavors.insert(NativeRuntimeFlavor::Vulkan);
-        }
-    }
-    flavors
 }
 
 fn print_available_runtimes(rows: &[serde_json::Value]) {

@@ -462,46 +462,36 @@ The accepted packaging direction is documented in
 runtimes are release artifacts, not implicit Cargo builds, and the native
 runtime version must exactly match the MeshLLM version that loads it.
 
-Status: native runtime artifact packaging is in place, but the Rust SDK does
-not yet expose a first-class runtime resolver/downloader API. Current
-Sprout-style Rust integrations should depend on `mesh-llm-sdk` by git revision
-and use the source-build path shown above. The binary-runtime SDK flow below is
-the intended packaging direction and remains TODO before it should be presented
-as a supported Rust SDK install path.
-
-Swift and Kotlin load MeshLLM through `libmeshllm_ffi`, not through a public
-`libllama` contract. Flavor-specific llama.cpp builds are an implementation
-detail of the native runtime artifact.
-
 Native runtime artifacts use this layout:
 
 ```text
-meshllm-native-<platform>-<flavor>/
+meshllm-native-runtime-<platform>-<flavor>/
   manifest.json
   README.md
   lib/
-    libmeshllm_ffi.{dylib|so}
+    libllama.{dylib|so|dll}
+    libggml*.{dylib|so|dll}
 ```
 
 The manifest records the MeshLLM version, target triple, runtime flavor,
-library checksum, llama.cpp upstream SHA, patched SHA, and patch digest. SDK
-loaders verify the MeshLLM version and library checksum before loading the
-dynamic library.
+Skippy ABI metadata, load-order library paths, release URL, checksum, and
+optional signature metadata. SDK loaders reject runtimes whose `mesh_version`
+does not exactly match the running MeshLLM version.
 
 Baseline artifact names:
 
 | Artifact directory | Target | Flavor |
 |---|---|---|
-| `meshllm-native-darwin-aarch64-metal` | `aarch64-apple-darwin` | Metal |
-| `meshllm-native-darwin-aarch64-cpu` | `aarch64-apple-darwin` | CPU |
-| `meshllm-native-linux-x86_64-cpu` | `x86_64-unknown-linux-gnu` | CPU |
-| `meshllm-native-linux-x86_64-cuda` | `x86_64-unknown-linux-gnu` | CUDA |
-| `meshllm-native-linux-x86_64-vulkan` | `x86_64-unknown-linux-gnu` | Vulkan |
-| `meshllm-native-linux-x86_64-rocm` | `x86_64-unknown-linux-gnu` | ROCm/HIP |
-| `meshllm-native-windows-x86_64-cpu` | `x86_64-pc-windows-msvc` | CPU |
-| `meshllm-native-windows-x86_64-cuda` | `x86_64-pc-windows-msvc` | CUDA |
-| `meshllm-native-windows-x86_64-vulkan` | `x86_64-pc-windows-msvc` | Vulkan |
-| `meshllm-native-windows-x86_64-rocm` | `x86_64-pc-windows-msvc` | ROCm/HIP |
+| `meshllm-native-runtime-darwin-aarch64-metal` | `aarch64-apple-darwin` | Metal |
+| `meshllm-native-runtime-darwin-aarch64-cpu` | `aarch64-apple-darwin` | CPU |
+| `meshllm-native-runtime-linux-x86_64-cpu` | `x86_64-unknown-linux-gnu` | CPU |
+| `meshllm-native-runtime-linux-x86_64-cuda` | `x86_64-unknown-linux-gnu` | CUDA |
+| `meshllm-native-runtime-linux-x86_64-vulkan` | `x86_64-unknown-linux-gnu` | Vulkan |
+| `meshllm-native-runtime-linux-x86_64-rocm` | `x86_64-unknown-linux-gnu` | ROCm/HIP |
+| `meshllm-native-runtime-windows-x86_64-cpu` | `x86_64-pc-windows-msvc` | CPU |
+| `meshllm-native-runtime-windows-x86_64-cuda` | `x86_64-pc-windows-msvc` | CUDA |
+| `meshllm-native-runtime-windows-x86_64-vulkan` | `x86_64-pc-windows-msvc` | Vulkan |
+| `meshllm-native-runtime-windows-x86_64-rocm` | `x86_64-pc-windows-msvc` | ROCm/HIP |
 
 CUDA and ROCm artifacts may include hardware-specific flavor suffixes such as
 `cuda-sm80`, `cuda-blackwell`, or `rocm-gfx1100` when
@@ -511,94 +501,69 @@ CUDA and ROCm artifacts may include hardware-specific flavor suffixes such as
 Build and package one flavor:
 
 ```bash
-scripts/package-native-sdk.sh \
+scripts/package-native-runtime.sh \
   --build \
   --backend metal \
   --target aarch64-apple-darwin \
-  --out dist/native-sdk
-```
-
-Package an already-built `mesh-llm-ffi` library:
-
-```bash
-scripts/package-native-sdk.sh \
-  --backend cpu \
-  --target x86_64-unknown-linux-gnu
+  --out dist/native-runtimes
 ```
 
 Verify produced artifacts:
 
 ```bash
-scripts/verify-native-sdk-package.sh dist/native-sdk/*.tar.gz
+scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
 ```
 
 ## Selecting a Runtime From Cargo
 
-Status: planned. Generated native runtime crates are not published as part of
-the current Rust SDK flow.
+Cargo dependencies provide the MeshLLM Rust SDK. Native runtimes are resolved
+at install or application startup from release artifacts, not built implicitly
+by Cargo.
 
-Native runtime crates are generated from verified native runtime artifacts.
-They package release artifacts; they do not build native code implicitly:
+Normal online install:
 
 ```bash
-scripts/package-native-sdk-crate.sh \
-  dist/native-sdk/meshllm-native-darwin-aarch64-metal.tar.gz
+mesh-llm runtime install
 ```
 
-Generated crates contain the native runtime under `native/`, copy it into
-Cargo's `OUT_DIR/native` during the crate build, and use:
+Offline or packaged install:
 
-```toml
-links = "meshllm_native_runtime"
+```bash
+mesh-llm runtime install --bundle-dir path/to/meshllm-native-runtime-darwin-aarch64-metal
 ```
 
-Cargo exposes these paths to dependent build scripts:
-
-```text
-DEP_MESHLLM_NATIVE_RUNTIME_ARTIFACT_ID
-DEP_MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR
-DEP_MESHLLM_NATIVE_RUNTIME_MANIFEST
-DEP_MESHLLM_NATIVE_RUNTIME_LIB_DIR
-DEP_MESHLLM_NATIVE_RUNTIME_LIBRARY
-```
-
-Rust applications that want Cargo to select a runtime should depend on exactly
-one runtime crate for each target:
-
-```toml
-[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-meshllm-native-darwin-aarch64-metal = "0.68.0"
-
-[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
-meshllm-native-linux-x86-64-cpu = "0.68.0"
-```
-
-Because all runtime crates share `links = "meshllm_native_runtime"`, Cargo
-rejects selecting more than one for the same build. Apps that need to ship
-multiple runtime flavors in one installer should package multiple verified
-tarball artifacts explicitly and choose between those artifact directories at
-runtime.
-
-An app build script can copy the selected artifact into its final bundle,
-installer, container image, or package resource directory:
+Rust SDK consumers can use the same resolver/downloader path directly:
 
 ```rust
-use std::{env, fs, path::PathBuf};
+use mesh_llm::sdk::native_runtime::{
+    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
+};
 
-fn main() {
-    let artifact_dir = PathBuf::from(
-        env::var("DEP_MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR")
-            .expect("meshllm native runtime dependency"),
-    );
-    let package_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"))
-        .join("meshllm-native");
-    fs::create_dir_all(&package_dir).expect("create native runtime output dir");
-    // Copy artifact_dir recursively into package_dir with the app's packaging helper.
-}
+let outcome = install_native_runtime(NativeRuntimeInstallOptions {
+    selection: RuntimeSelection::Recommended,
+    cache_dir: Some(app_cache_dir.join("mesh-llm-native-runtimes")),
+    bundle_dirs: vec![app_resources.join("meshllm-native-runtime")],
+    progress: Some(std::sync::Arc::new(|event| {
+        update_progress(event.downloaded_bytes, event.total_bytes);
+    })),
+    ..Default::default()
+})
+.await?;
 ```
 
-At runtime, set one of these environment variables or, once the TODO resolver
-API exists, pass the artifact directory directly to that SDK resolver:
+Manifest discovery order:
+
+1. explicit manifest path
+2. explicit manifest URL
+3. `MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL`
+4. GitHub release `native-runtimes.json` for the running MeshLLM version
+
+Generated runtime crates are not the supported distribution story for native
+runtimes in this PR. The supported path is release artifacts plus the release
+manifest, shared by the CLI, SDK, and autoupdater.
+
+At runtime, set one of these environment variables or pass the artifact
+directory directly to the SDK resolver for offline packages:
 
 ```text
 MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR
@@ -612,12 +577,12 @@ MESH_SDK_NATIVE_RUNTIME_DIR
 
 ```bash
 ./sdk/swift/scripts/build-xcframework.sh
-scripts/package-native-sdk.sh \
+scripts/package-native-runtime.sh \
   --backend metal \
   --target aarch64-apple-darwin \
-  --out dist/native-sdk
+  --out dist/native-runtimes
 
-MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-sdk/meshllm-native-darwin-aarch64-metal \
+MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-runtimes/meshllm-native-runtime-darwin-aarch64-metal \
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 swift run --package-path sdk/swift/example/MeshExampleApp
 ```
@@ -627,7 +592,7 @@ Useful environment variables:
 | Variable | Meaning |
 |---|---|
 | `MESH_SDK_MODEL_REF` | Catalog, Hugging Face, or local model reference to download/load. |
-| `MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR` | Verified `meshllm-native-*` artifact directory for local serving. |
+| `MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR` | Verified `meshllm-native-runtime-*` artifact directory for local serving. |
 | `MESH_SDK_CACHE_DIR` | Hugging Face cache location. |
 | `MESH_SDK_RUNTIME_DIR` | Runtime scratch directory. |
 | `MESH_SDK_SKIP_DOWNLOAD=1` | Skip download when the model is already installed. |
@@ -636,12 +601,12 @@ Useful environment variables:
 ### Kotlin JVM Example
 
 ```bash
-scripts/package-native-sdk.sh \
+scripts/package-native-runtime.sh \
   --backend metal \
   --target aarch64-apple-darwin \
-  --out dist/native-sdk
+  --out dist/native-runtimes
 
-MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-sdk/meshllm-native-darwin-aarch64-metal \
+MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-runtimes/meshllm-native-runtime-darwin-aarch64-metal \
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 ./gradlew --no-daemon run -p sdk/kotlin/example/example-jvm
 ```
@@ -653,7 +618,7 @@ cd sdk/node
 npm run build:native
 cd ../..
 
-MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-sdk/meshllm-native-linux-x86_64-cuda \
+MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-runtimes/meshllm-native-runtime-linux-x86_64-cuda \
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 node sdk/node/example/local-inference.js
 ```
@@ -701,7 +666,7 @@ Run the SDK package checks:
 
 ```bash
 scripts/check-sdk-contract.sh
-scripts/verify-native-sdk-package.sh dist/native-sdk/*.tar.gz
+scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
 cargo test -p mesh-llm-ffi
 swift build --package-path sdk/swift/example/MeshExampleApp
 ./gradlew --no-daemon compileKotlin -p sdk/kotlin/example/example-jvm

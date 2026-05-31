@@ -33,6 +33,9 @@ pub mod config {
     };
 }
 
+#[path = "sdk/native_runtime.rs"]
+pub mod native_runtime;
+
 const DEFAULT_EMBEDDED_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 const EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 

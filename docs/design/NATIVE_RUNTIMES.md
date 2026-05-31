@@ -1,6 +1,6 @@
 # Native Runtimes
 
-Status: accepted SDK packaging direction.
+Status: accepted direction with an implemented resolver/install foundation.
 
 ## Terminology
 
@@ -20,9 +20,12 @@ version must match the MeshLLM crate, SDK, or binary version that loads it. The
 Skippy ABI version is useful diagnostic metadata, but it is not a substitute
 for the MeshLLM version match.
 
-Release CI owns the normal native runtime build. It builds, verifies, signs,
-and publishes the runtime artifacts for supported target/flavor combinations
-alongside the MeshLLM release.
+Release CI owns the normal native runtime build. It builds, verifies, and
+publishes the runtime artifacts for supported target/flavor combinations
+alongside the MeshLLM release. Downloaded artifacts require checksum metadata
+today. The API already has a policy knob for requiring signatures, but
+signature verification intentionally fails closed until signing keys and
+attestation format are implemented.
 
 ## Artifact Identity
 
@@ -63,13 +66,14 @@ The resolver flow is:
 
 1. Detect the local OS, architecture, available GPU devices, drivers, and
    supported runtime flavors.
-2. Load the signed release manifest for the exact running MeshLLM version.
+2. Load the release manifest for the exact running MeshLLM version.
 3. Filter artifacts to those compatible with the host.
 4. Rank compatible artifacts by flavor and hardware fit.
 5. Prefer an explicitly configured artifact directory when provided.
 6. Check the local cache for the selected runtime.
 7. If allowed, download the missing artifact while reporting progress.
-8. Verify checksum and signature before use.
+8. Verify the archive checksum before use, and require signature verification
+   when the caller selects that stricter policy.
 9. Return a `NativeRuntime` descriptor with paths, identity, manifest metadata,
    and diagnostics.
 
@@ -98,6 +102,24 @@ Packaged application mode should not require network access. An app can provide
 a bundled runtime directory, set downloads to false, and still use the same
 resolver path as a downloading SDK consumer.
 
+## Release Manifest Discovery
+
+The CLI and Rust SDK install API resolve manifests in this order:
+
+1. explicit manifest path
+2. explicit manifest URL
+3. `MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL`
+4. the default release URL:
+
+```text
+https://github.com/Mesh-LLM/mesh-llm/releases/download/v<mesh_version>/native-runtimes.json
+```
+
+Bundled runtime directories are always appended to the candidate manifest. When
+only bundle directories are provided, the default release URL is not fetched.
+This lets packaged apps stay offline while the same code path can still inspect
+or install release artifacts for normal crates.io consumers.
+
 ## Upgrade And Pruning
 
 An updater must install and verify the new version-matched native runtime
@@ -124,49 +146,67 @@ MeshLLM host binary, then delegate native runtime selection to MeshLLM:
 mesh-llm runtime install
 ```
 
-The current implementation installs from an explicit release manifest or bundled
-runtime directory. The intended release path is for that command to install the
-recommended compatible native runtime for the active MeshLLM version without the
-caller duplicating flavor detection. Shell and PowerShell installers should use
-the same command as manual users and autoupdate flows, so CUDA, CUDA Blackwell,
-ROCm, Vulkan, CPU, verification, cache layout, and progress UX stay in one
-implementation.
+That command installs the recommended compatible native runtime for the active
+MeshLLM version without the caller duplicating flavor detection. Shell and
+PowerShell installers should use the same command as manual users and
+autoupdate flows, so CUDA, CUDA Blackwell, ROCm, Vulkan, CPU, verification,
+cache layout, and progress UX stay in one implementation.
 
 ## Consumer Shape
 
-Status: design/TODO. The current Rust SDK can run an embedded node from a git
-revision and can source-build the native runtime through Cargo. It does not yet
-expose the resolver builder shown below.
-
-A crates.io SDK consumer that wants dynamic local serving should configure the
-resolver instead of depending on a platform-specific source build. The API
-shape should be equivalent to:
+A crates.io SDK consumer that wants dynamic local serving should use
+`mesh_llm::sdk::native_runtime` instead of depending on a platform-specific
+source build:
 
 ```rust
-let runtime = NativeRuntimeResolver::builder()
-    .cache_dir(app_cache_dir.join("mesh-llm"))
-    .bundle_dir(app_resources.join("meshllm-native"))
-    .allow_download(true)
-    .on_progress(|event| {
+use mesh_llm::sdk::native_runtime::{
+    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
+};
+
+let runtime = install_native_runtime(NativeRuntimeInstallOptions {
+    selection: RuntimeSelection::Recommended,
+    cache_dir: Some(app_cache_dir.join("mesh-llm-native-runtimes")),
+    bundle_dirs: vec![app_resources.join("meshllm-native-runtime")],
+    progress: Some(std::sync::Arc::new(|event| {
         update_download_progress(event.downloaded_bytes, event.total_bytes);
-    })
-    .resolve_best()
-    .await?;
+    })),
+    ..Default::default()
+})
+.await?;
 
 let node = MeshNode::builder()
-    .native_runtime(runtime)
+    .native_runtime(runtime.runtime)
     .build()?;
 ```
 
 An offline packaged app uses the same path with downloads disabled:
 
 ```rust
-let runtime = NativeRuntimeResolver::builder()
-    .bundle_dir(app_resources.join("meshllm-native"))
-    .allow_download(false)
-    .resolve_best()
-    .await?;
+let runtime = install_native_runtime(NativeRuntimeInstallOptions {
+    bundle_dirs: vec![app_resources.join("meshllm-native-runtime")],
+    allow_download: false,
+    ..Default::default()
+})
+.await?;
 ```
+
+The API returns the installed runtime, the selected release artifact, and the
+full candidate evaluation so callers can show diagnostics or record why another
+runtime was rejected.
+
+## Verification Policy
+
+Downloaded native runtime artifacts are fail-closed:
+
+- `sha256` metadata is required for downloads.
+- the downloaded archive digest must match the manifest digest.
+- `RequireChecksumAndSignature` requires signature metadata and then returns an
+  explicit unsupported-signature-verification error until signature verification
+  is implemented.
+
+This avoids silently presenting unsigned downloads as stronger than they are.
+Checksum-only verification is the default policy for the first release artifact
+lane.
 
 ## Query And Management API
 
@@ -188,15 +228,15 @@ mesh-llm runtime list --available
 mesh-llm runtime list --installed
 mesh-llm runtime install
 mesh-llm runtime install cuda
-mesh-llm runtime remove meshllm-native-linux-x86_64-cuda
+mesh-llm runtime remove meshllm-native-runtime-linux-x86_64-cuda
 mesh-llm runtime prune
 mesh-llm runtime prune --active-only
 ```
 
 With no runtime argument, `mesh-llm runtime install` detects the host and
-selects the recommended compatible native runtime from the supplied release
-manifest or bundle directories. Explicit flavor or runtime ID arguments are
-overrides for advanced users, CI, and prepared images.
+installs the recommended compatible native runtime from the release manifest,
+an explicit manifest, or bundle directories. Explicit flavor or runtime ID
+arguments are overrides for advanced users, CI, and prepared images.
 
 Selected-runtime diagnostics belong in `mesh-llm doctor`, not in a separate
 `mesh-llm runtime doctor` command. Doctor output should include the active
@@ -240,6 +280,28 @@ The source-build features are explicit escape hatches for developers and CI
 jobs. They should not be default features. Build scripts should reject multiple
 `native-build-*` features in one package build unless a crate is deliberately
 designed to produce a multi-runtime artifact.
+
+## Generated Runtime Crates
+
+Generated Cargo crates are not the supported native runtime distribution story
+for this PR. The supported path is release artifacts plus
+`native-runtimes.json`, resolved by the CLI, SDK, and autoupdater. Generated
+runtime crates should not be published as a user-facing API until they package
+the same native runtime artifact format and the release team explicitly decides
+Cargo-target selection is a product requirement.
+
+## Initial Release Matrix
+
+The initial release workflow packages native runtimes only where the current CI
+environment can build and smoke them reliably:
+
+- macOS `aarch64` Metal
+- Linux `x86_64` CPU
+
+CUDA, CUDA Blackwell, ROCm, Vulkan, Windows, and additional architecture lanes
+use the same manifest/flavor model but still need dedicated runner/toolchain
+work before the release matrix can claim coverage. The resolver is designed so
+adding these artifacts is manifest data plus release jobs, not SDK API churn.
 
 ## Dynamic Loading Shape
 
