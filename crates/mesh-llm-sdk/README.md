@@ -12,6 +12,27 @@ The SDK does not depend on `mesh-llm-host-runtime`. Native runtimes are release
 artifacts selected and installed at runtime; Cargo does not build them from
 source as part of SDK compilation.
 
+Applications that need a full in-process Mesh LLM node should depend on
+`mesh-llm-embedded-runtime` directly while the host runtime is being split into
+publishable layers:
+
+```toml
+[dependencies]
+mesh-llm-embedded-runtime = "0.68.0"
+```
+
+```rust,no_run
+use mesh_llm_embedded_runtime::{EmbeddedMeshNodeConfig, start_embedded_node};
+
+let node = start_embedded_node(
+    EmbeddedMeshNodeConfig::builder()
+        .serve()
+        .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
+        .build(),
+)
+.await?;
+```
+
 ## Native Runtime Install Example
 
 ```rust,no_run
@@ -31,4 +52,3 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
-

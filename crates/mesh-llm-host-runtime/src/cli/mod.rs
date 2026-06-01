@@ -7,6 +7,7 @@ use crate::cli::benchmark::BenchmarkCommand;
 use crate::cli::runtime::RuntimeCommand;
 use crate::crypto::TrustPolicy;
 use crate::network::discovery::MeshDiscoveryMode;
+pub use mesh_llm_cli::LogFormat;
 
 /// Parse a `URL=TOKEN` pair for `--relay-auth`. Splits on the first `=` only,
 /// so tokens may contain `=` (base64 padding, JWTs).
@@ -313,13 +314,6 @@ pub(crate) mod pager;
 pub(crate) mod runtime;
 pub(crate) mod shell;
 pub(crate) mod terminal_progress;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum LogFormat {
-    #[default]
-    Pretty,
-    Json,
-}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub(crate) enum MeshGuardrailCliMode {

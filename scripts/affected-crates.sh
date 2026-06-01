@@ -9,6 +9,7 @@ set -euo pipefail
 # Hardcoded workspace members (fallback for fail-open)
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-cli"
   "mesh-llm-config"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
@@ -23,6 +24,8 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-system"
   "mesh-llm-types"
   "mesh-llm-console-server"
+  "mesh-llm-embedded-runtime"
+  "mesh-llm-tui"
   "mesh-llm-ui"
   "mesh-llm-plugin"
   "mesh-llm-skills"

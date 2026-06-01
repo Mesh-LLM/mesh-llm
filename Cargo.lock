@@ -3791,6 +3791,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-cli"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-tui",
+]
+
+[[package]]
 name = "mesh-llm-client"
 version = "0.68.0"
 dependencies = [
@@ -3846,6 +3854,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-embedded-runtime"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-host-runtime",
+ "serde_json",
+]
+
+[[package]]
 name = "mesh-llm-ffi"
 version = "0.68.0"
 dependencies = [
@@ -3889,9 +3906,7 @@ dependencies = [
 name = "mesh-llm-host-runtime"
 version = "0.68.0"
 dependencies = [
- "ansi-to-tui",
  "anyhow",
- "arboard",
  "argon2",
  "async-trait",
  "axum",
@@ -3918,6 +3933,7 @@ dependencies = [
  "libc",
  "mdns-sd",
  "mesh-llm-api-server",
+ "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-config",
  "mesh-llm-guardrails",
@@ -3930,6 +3946,7 @@ dependencies = [
  "mesh-llm-routing",
  "mesh-llm-runtime-install",
  "mesh-llm-system",
+ "mesh-llm-tui",
  "mesh-llm-types",
  "mesh-llm-ui",
  "mesh-mixture-of-agents",
@@ -3944,7 +3961,6 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "rand 0.10.1",
- "ratatui",
  "regex-lite",
  "reqwest 0.12.28",
  "rmcp",
@@ -4151,6 +4167,22 @@ dependencies = [
  "reqwest 0.12.28",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mesh-llm-tui"
+version = "0.68.0"
+dependencies = [
+ "ansi-to-tui",
+ "anyhow",
+ "arboard",
+ "chrono",
+ "clap",
+ "crossterm 0.28.1",
+ "ratatui",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

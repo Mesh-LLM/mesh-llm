@@ -3,6 +3,9 @@ name = "skippy-protocol"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Wire protocol types for Skippy staged runtime serving"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [dependencies]
 prost = "0.14"

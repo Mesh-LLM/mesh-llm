@@ -1,4 +1,4 @@
-use crate::cli::LogFormat;
+use crate::LogFormat;
 use ansi_to_tui::IntoText as _;
 use anyhow::Error as AnyhowError;
 use chrono::{Local, SecondsFormat, Utc};
@@ -4265,7 +4265,7 @@ fn variant_name_looks_like_model_file(value: &str) -> bool {
     value.matches('-').count() >= 2
 }
 
-pub(crate) fn sort_dashboard_endpoint_rows(rows: &mut [DashboardEndpointRow]) {
+pub fn sort_dashboard_endpoint_rows(rows: &mut [DashboardEndpointRow]) {
     rows.sort_by(|left, right| {
         dashboard_endpoint_sort_bucket(left)
             .cmp(&dashboard_endpoint_sort_bucket(right))
@@ -8980,7 +8980,7 @@ fn write_tui_redraw_start_to_writer<W: Write>(writer: &mut W) -> io::Result<()> 
     execute!(writer, Hide, MoveTo(0, 0)).map_err(io::Error::other)
 }
 
-pub(crate) fn force_restore_tui_terminal() -> io::Result<()> {
+pub fn force_restore_tui_terminal() -> io::Result<()> {
     // Emergency restore path for panic/unwind and failed worker cleanup. This
     // intentionally bypasses the OutputManager so terminal recovery still has a
     // chance if its worker is wedged; SIGKILL cannot be recovered in-process.
@@ -9061,122 +9061,122 @@ impl DashboardFormatter {
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_lifecycle_transitions_pending_partial_ready_failed() {
+pub fn assert_startup_lifecycle_transitions_pending_partial_ready_failed() {
     tests::assert_startup_lifecycle_transitions_pending_partial_ready_failed();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_lifecycle_keeps_runtime_ready_as_final_edge() {
+pub fn assert_startup_lifecycle_keeps_runtime_ready_as_final_edge() {
     tests::assert_startup_lifecycle_keeps_runtime_ready_as_final_edge();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_failures_surface_in_tui_events_and_status() {
+pub fn assert_startup_failures_surface_in_tui_events_and_status() {
     tests::assert_startup_failures_surface_in_tui_events_and_status();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_failure_summary_sanitizes_multiline_detail() {
+pub fn assert_startup_failure_summary_sanitizes_multiline_detail() {
     tests::assert_startup_failure_summary_sanitizes_multiline_detail();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_rpc_and_llama_startup_failures_mark_components_failed() {
+pub fn assert_rpc_and_llama_startup_failures_mark_components_failed() {
     tests::assert_rpc_and_llama_startup_failures_mark_components_failed();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_discovery_and_join_failures_mark_startup_mesh_component_failed() {
+pub fn assert_discovery_and_join_failures_mark_startup_mesh_component_failed() {
     tests::assert_discovery_and_join_failures_mark_startup_mesh_component_failed();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_post_ready_peer_churn_does_not_reopen_startup_failure() {
+pub fn assert_post_ready_peer_churn_does_not_reopen_startup_failure() {
     tests::assert_post_ready_peer_churn_does_not_reopen_startup_failure();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_history_is_visible_after_late_tui_attach() {
+pub fn assert_startup_history_is_visible_after_late_tui_attach() {
     tests::assert_startup_history_is_visible_after_late_tui_attach();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_history_keeps_order_when_tui_attaches_late() {
+pub fn assert_startup_history_keeps_order_when_tui_attaches_late() {
     tests::assert_startup_history_keeps_order_when_tui_attaches_late();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_endpoint_rows_remain_starting_until_ready_events() {
+pub fn assert_endpoint_rows_remain_starting_until_ready_events() {
     tests::assert_endpoint_rows_remain_starting_until_ready_events();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_launch_plan_renders_not_ready_rows_before_actions() {
+pub fn assert_startup_launch_plan_renders_not_ready_rows_before_actions() {
     tests::assert_startup_launch_plan_renders_not_ready_rows_before_actions();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_startup_progress_after_launch_plan_shows_dashboard_not_loader() {
+pub fn assert_startup_progress_after_launch_plan_shows_dashboard_not_loader() {
     tests::assert_startup_progress_after_launch_plan_shows_dashboard_not_loader();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_tui_model_progress_renders_dashboard_without_loading_screen() {
+pub fn assert_tui_model_progress_renders_dashboard_without_loading_screen() {
     tests::assert_tui_model_progress_renders_dashboard_without_loading_screen();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_tui_startup_progress_continues_in_dashboard_after_model_download_ready() {
+pub fn assert_tui_startup_progress_continues_in_dashboard_after_model_download_ready() {
     tests::assert_tui_startup_progress_continues_in_dashboard_after_model_download_ready();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_planned_rows_transition_from_not_ready_to_ready_events() {
+pub fn assert_planned_rows_transition_from_not_ready_to_ready_events() {
     tests::assert_planned_rows_transition_from_not_ready_to_ready_events();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_launch_plan_rows_survive_empty_startup_snapshot() {
+pub fn assert_launch_plan_rows_survive_empty_startup_snapshot() {
     tests::assert_launch_plan_rows_survive_empty_startup_snapshot();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_launch_plan_preserves_distinct_port_zero_endpoint_rows() {
+pub fn assert_launch_plan_preserves_distinct_port_zero_endpoint_rows() {
     tests::assert_launch_plan_preserves_distinct_port_zero_endpoint_rows();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_snapshot_upsert_preserves_distinct_port_zero_endpoint_rows() {
+pub fn assert_snapshot_upsert_preserves_distinct_port_zero_endpoint_rows() {
     tests::assert_snapshot_upsert_preserves_distinct_port_zero_endpoint_rows();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_planned_port_zero_process_rows_bind_to_concrete_startup_events() {
+pub fn assert_planned_port_zero_process_rows_bind_to_concrete_startup_events() {
     tests::assert_planned_port_zero_process_rows_bind_to_concrete_startup_events();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_fallback_mode_surfaces_startup_failures_without_tui() {
+pub fn assert_fallback_mode_surfaces_startup_failures_without_tui() {
     tests::assert_fallback_mode_surfaces_startup_failures_without_tui();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_shutdown_suppresses_late_ready_render() {
+pub fn assert_shutdown_suppresses_late_ready_render() {
     tests::assert_shutdown_suppresses_late_ready_render();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_interactive_preterminal_render_uses_plain_event_output() {
+pub fn assert_interactive_preterminal_render_uses_plain_event_output() {
     tests::assert_interactive_preterminal_render_uses_plain_event_output();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_interactive_post_terminal_exit_resumes_plain_event_output() {
+pub fn assert_interactive_post_terminal_exit_resumes_plain_event_output() {
     tests::assert_interactive_post_terminal_exit_resumes_plain_event_output();
 }
 
 #[cfg(test)]
-pub(crate) fn assert_tui_model_card_separates_name_from_metadata_columns() {
+pub fn assert_tui_model_card_separates_name_from_metadata_columns() {
     tests::assert_tui_model_card_separates_name_from_metadata_columns();
 }
 
@@ -12409,7 +12409,7 @@ mod tests {
         );
     }
 
-    pub(crate) fn assert_tui_model_progress_renders_dashboard_without_loading_screen() {
+    pub fn assert_tui_model_progress_renders_dashboard_without_loading_screen() {
         tui_model_progress_renders_dashboard_without_loading_screen();
     }
 
@@ -12456,7 +12456,7 @@ mod tests {
         assert!(!rendered.contains('█'));
     }
 
-    pub(crate) fn assert_tui_startup_progress_continues_in_dashboard_after_model_download_ready() {
+    pub fn assert_tui_startup_progress_continues_in_dashboard_after_model_download_ready() {
         tui_startup_progress_continues_in_dashboard_after_model_download_ready();
     }
 
@@ -14103,83 +14103,83 @@ tail line"
         assert!(!title.contains('\n'));
     }
 
-    pub(crate) fn assert_startup_lifecycle_transitions_pending_partial_ready_failed() {
+    pub fn assert_startup_lifecycle_transitions_pending_partial_ready_failed() {
         startup_lifecycle_transitions_pending_partial_ready_failed();
     }
 
-    pub(crate) fn assert_startup_lifecycle_keeps_runtime_ready_as_final_edge() {
+    pub fn assert_startup_lifecycle_keeps_runtime_ready_as_final_edge() {
         startup_lifecycle_keeps_runtime_ready_as_final_edge();
     }
 
-    pub(crate) fn assert_startup_failures_surface_in_tui_events_and_status() {
+    pub fn assert_startup_failures_surface_in_tui_events_and_status() {
         startup_failures_surface_in_tui_events_and_status();
     }
 
-    pub(crate) fn assert_startup_failure_summary_sanitizes_multiline_detail() {
+    pub fn assert_startup_failure_summary_sanitizes_multiline_detail() {
         startup_failure_summary_sanitizes_multiline_detail();
     }
 
-    pub(crate) fn assert_rpc_and_llama_startup_failures_mark_components_failed() {
+    pub fn assert_rpc_and_llama_startup_failures_mark_components_failed() {
         llama_startup_failures_mark_components_failed();
     }
 
-    pub(crate) fn assert_discovery_and_join_failures_mark_startup_mesh_component_failed() {
+    pub fn assert_discovery_and_join_failures_mark_startup_mesh_component_failed() {
         discovery_and_join_failures_mark_startup_mesh_component_failed();
     }
 
-    pub(crate) fn assert_post_ready_peer_churn_does_not_reopen_startup_failure() {
+    pub fn assert_post_ready_peer_churn_does_not_reopen_startup_failure() {
         post_ready_peer_churn_does_not_reopen_startup_failure();
     }
 
-    pub(crate) fn assert_startup_history_is_visible_after_late_tui_attach() {
+    pub fn assert_startup_history_is_visible_after_late_tui_attach() {
         startup_history_is_visible_after_late_tui_attach();
     }
 
-    pub(crate) fn assert_startup_history_keeps_order_when_tui_attaches_late() {
+    pub fn assert_startup_history_keeps_order_when_tui_attaches_late() {
         startup_history_keeps_order_when_tui_attaches_late();
     }
 
-    pub(crate) fn assert_endpoint_rows_remain_starting_until_ready_events() {
+    pub fn assert_endpoint_rows_remain_starting_until_ready_events() {
         endpoint_rows_remain_starting_until_ready_events();
     }
 
-    pub(crate) fn assert_startup_launch_plan_renders_not_ready_rows_before_actions() {
+    pub fn assert_startup_launch_plan_renders_not_ready_rows_before_actions() {
         startup_launch_plan_renders_not_ready_rows_before_actions();
     }
 
-    pub(crate) fn assert_startup_progress_after_launch_plan_shows_dashboard_not_loader() {
+    pub fn assert_startup_progress_after_launch_plan_shows_dashboard_not_loader() {
         startup_progress_after_launch_plan_shows_dashboard_not_loader();
     }
 
-    pub(crate) fn assert_planned_rows_transition_from_not_ready_to_ready_events() {
+    pub fn assert_planned_rows_transition_from_not_ready_to_ready_events() {
         planned_rows_transition_from_not_ready_to_ready_events();
     }
 
-    pub(crate) fn assert_launch_plan_rows_survive_empty_startup_snapshot() {
+    pub fn assert_launch_plan_rows_survive_empty_startup_snapshot() {
         launch_plan_rows_survive_empty_startup_snapshot();
     }
 
-    pub(crate) fn assert_launch_plan_preserves_distinct_port_zero_endpoint_rows() {
+    pub fn assert_launch_plan_preserves_distinct_port_zero_endpoint_rows() {
         launch_plan_preserves_distinct_port_zero_endpoint_rows();
     }
 
-    pub(crate) fn assert_snapshot_upsert_preserves_distinct_port_zero_endpoint_rows() {
+    pub fn assert_snapshot_upsert_preserves_distinct_port_zero_endpoint_rows() {
         snapshot_upsert_preserves_distinct_port_zero_endpoint_rows();
     }
 
-    pub(crate) fn assert_planned_port_zero_process_rows_bind_to_concrete_startup_events() {
+    pub fn assert_planned_port_zero_process_rows_bind_to_concrete_startup_events() {
         planned_port_zero_process_rows_bind_to_concrete_startup_events();
     }
 
-    pub(crate) fn assert_fallback_mode_surfaces_startup_failures_without_tui() {
+    pub fn assert_fallback_mode_surfaces_startup_failures_without_tui() {
         fallback_mode_surfaces_startup_failures_without_tui();
     }
 
-    pub(crate) fn assert_shutdown_suppresses_late_ready_render() {
+    pub fn assert_shutdown_suppresses_late_ready_render() {
         shutdown_suppresses_late_ready_render();
     }
 
-    pub(crate) fn assert_interactive_post_terminal_exit_resumes_plain_event_output() {
+    pub fn assert_interactive_post_terminal_exit_resumes_plain_event_output() {
         interactive_post_terminal_exit_resumes_plain_event_output();
     }
 
@@ -14652,7 +14652,7 @@ tail line"
         );
     }
 
-    pub(crate) fn assert_tui_model_card_separates_name_from_metadata_columns() {
+    pub fn assert_tui_model_card_separates_name_from_metadata_columns() {
         tui_model_card_separates_name_from_metadata_columns();
     }
 
@@ -15099,7 +15099,7 @@ tail line"
         assert!(!rendered.contains("Running models"));
     }
 
-    pub(crate) fn assert_interactive_preterminal_render_uses_plain_event_output() {
+    pub fn assert_interactive_preterminal_render_uses_plain_event_output() {
         interactive_preterminal_render_uses_plain_event_output();
     }
 

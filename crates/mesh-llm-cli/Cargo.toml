@@ -1,16 +1,18 @@
 [package]
-name = "mesh-llm-guardrails"
+name = "mesh-llm-cli"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
-description = "Reusable guardrail and compaction primitives for mesh-llm OpenAI-compatible paths"
+description = "Reusable CLI support surface for mesh-llm"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
+keywords = ["llm", "mesh", "cli"]
+categories = ["command-line-interface"]
 
 [lints]
 workspace = true
 
 [dependencies]
-serde.workspace = true
-serde_json.workspace = true
+anyhow.workspace = true
+mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.68.0" }

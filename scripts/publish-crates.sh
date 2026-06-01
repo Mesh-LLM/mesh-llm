@@ -359,6 +359,10 @@ unpublished_registry_deps() {
             printf '%s\n' \
                 mesh-llm-ui
             ;;
+        mesh-llm-cli)
+            printf '%s\n' \
+                mesh-llm-tui
+            ;;
         mesh-llm-sdk)
             printf '%s\n' \
                 mesh-llm-api-client \
@@ -394,23 +398,25 @@ should_skip_initial_dry_run() {
 }
 
 publish_crates=(
-    model-ref
     mesh-llm-identity
-    mesh-llm-native-runtime
-    mesh-llm-hardware-profile
-    mesh-llm-runtime-install
     mesh-llm-protocol
     mesh-llm-routing
     mesh-llm-types
+    model-ref
     model-artifact
-    model-hf
     mesh-llm-client
     mesh-llm-api-client
     mesh-llm-ui
     mesh-llm-console-server
-    mesh-llm-sdk
+    mesh-llm-tui
+    mesh-llm-cli
+    model-hf
     mesh-llm-node
     mesh-llm-api-server
+    mesh-llm-native-runtime
+    mesh-llm-hardware-profile
+    mesh-llm-runtime-install
+    mesh-llm-sdk
 )
 
 for index in "${!publish_crates[@]}"; do

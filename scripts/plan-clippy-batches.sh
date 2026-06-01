@@ -12,6 +12,7 @@ set -euo pipefail
 
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-cli"
   "mesh-llm-config"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
@@ -26,6 +27,8 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-system"
   "mesh-llm-types"
   "mesh-llm-console-server"
+  "mesh-llm-embedded-runtime"
+  "mesh-llm-tui"
   "mesh-llm-ui"
   "mesh-llm-plugin"
   "mesh-llm-skills"
@@ -124,6 +127,7 @@ crates = json.loads(sys.argv[2])
 # Unknown crates intentionally default to 1 so new crates still get scheduled.
 weights = {
     "mesh-llm": 10,
+    "mesh-llm-cli": 1,
     "mesh-llm-host-runtime": 8,
     "mesh-llm-client": 6,
     "mesh-llm-ffi": 5,
@@ -152,6 +156,8 @@ weights = {
     "mesh-llm-protocol": 2,
     "mesh-llm-types": 2,
     "mesh-llm-console-server": 2,
+    "mesh-llm-embedded-runtime": 8,
+    "mesh-llm-tui": 3,
     "mesh-llm-ui": 2,
     "mesh-llm-plugin": 2,
     "mesh-llm-skills": 1,
