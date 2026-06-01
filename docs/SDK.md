@@ -21,16 +21,20 @@ needs a matching native runtime artifact or an embedded Rust `ServingController`
 
 ### Rust
 
-Add the Rust SDK crate:
+Add the Rust SDK facade crate:
 
 ```toml
 [dependencies]
-mesh-llm-api-client = "0.68.0" # connect to an existing mesh
-mesh-llm-api-server = "0.68.0"
+mesh-llm-sdk = "0.68.0"
 ```
 
-For client-only mesh inference, depend on `mesh-llm-api-client`. For model
-management and serving, depend on `mesh-llm-api-server`.
+The default Rust SDK features expose client-side mesh APIs and native runtime
+install/cache management without depending on the full `mesh-llm-host-runtime`
+application crate.
+
+For lower-level use, depend on `mesh-llm-api-client` directly to connect to an
+existing mesh, or `mesh-llm-api-server` for platform-neutral node/model
+management APIs.
 
 For local serving in a Rust app, the node must be built with a
 `ServingController`. The plain `mesh-llm-api-server` crate intentionally does
@@ -223,36 +227,27 @@ If no controller is attached, `serving.load()` returns an unsupported error.
 This is intentional: `mesh-llm-api-server` is platform-neutral and does not silently
 choose a native runtime.
 
-### Embedded full node from a Rust app
+### Rust SDK facade
 
-Rust apps that want to run a full mesh node in-process should depend on the
-dedicated Rust SDK crate. This is the shape used by Sprout-style integrations
-that want the local OpenAI-compatible `/v1` endpoint without spawning a sidecar
-process.
+`mesh-llm-sdk` re-exports `mesh-llm-api-client` on its default `client`
+feature:
 
-```toml
-[dependencies]
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "<commit>", default-features = false, features = ["client"] }
+```rust
+use mesh_llm_sdk::{ClientBuilder, InviteToken, OwnerKeypair};
 ```
 
-Use `features = ["client", "serve"]` when the app also needs to serve local
-models from the embedded node. `default-features = false` keeps the embedded web
-console assets out of the consumer binary. The local management API still runs
-for status and lifecycle checks.
+Enable the `native-runtime` feature, enabled by default, to install and manage
+version-matched native runtimes:
 
-To include the web console in the embedded Rust node, enable `web-ui` and turn
-on `console_ui`:
-
-```toml
-[dependencies]
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "<commit>", default-features = false, features = ["client", "web-ui"] }
+```rust
+use mesh_llm_sdk::native_runtime::{
+    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
+};
 ```
-
-For serving with the embedded console included, enable `serve` as well.
 
 SDK packages that ship the built console as package resources can enable the
-`console` feature and use the file-backed console server without embedding
-those assets into the native runtime:
+optional `console` feature and use the file-backed console server without
+depending on `mesh-llm-host-runtime`:
 
 ```rust
 let console = mesh_llm_sdk::console::start_file_console(
@@ -264,40 +259,9 @@ let console = mesh_llm_sdk::console::start_file_console(
 ).await?;
 ```
 
-```rust
-use mesh_llm_sdk::client::{self, EmbeddedClientConfig};
-
-let config = EmbeddedClientConfig::builder()
-    .auto_join(true)
-    .api_port(9337)
-    .console_port(3131)
-    .console_ui(false)
-    .build();
-
-let node = client::start(config).await?;
-let api_base = node.api_base_url(); // http://127.0.0.1:9337/v1
-let status = node.status().await?;
-
-node.stop().await?;
-```
-
-To serve local models from the same process, use serve mode and add one or more
-model refs:
-
-```rust
-use mesh_llm_sdk::serve::{self, EmbeddedServeConfig};
-
-let config = EmbeddedServeConfig::builder()
-    .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
-    .mesh_name("sprout")
-    .max_vram_gb(6.0)
-    .api_port(9337)
-    .console_port(3131)
-    .console_ui(false)
-    .build();
-
-let node = serve::start(config).await?;
-```
+The crates.io SDK does not expose an in-process full host node. That host
+composition remains in `mesh-llm-host-runtime` and should not be pulled into
+normal SDK consumers.
 
 ## Swift Usage
 
@@ -535,7 +499,7 @@ mesh-llm runtime install --bundle-dir path/to/meshllm-native-runtime-darwin-aarc
 Rust SDK consumers can use the same resolver/downloader path directly:
 
 ```rust
-use mesh_llm::sdk::native_runtime::{
+use mesh_llm_sdk::native_runtime::{
     NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
 };
 

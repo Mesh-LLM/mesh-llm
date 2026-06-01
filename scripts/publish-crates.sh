@@ -334,6 +334,15 @@ unpublished_registry_deps() {
                 model-artifact \
                 model-ref
             ;;
+        mesh-llm-hardware-profile)
+            printf '%s\n' \
+                mesh-llm-native-runtime
+            ;;
+        mesh-llm-runtime-install)
+            printf '%s\n' \
+                mesh-llm-hardware-profile \
+                mesh-llm-native-runtime
+            ;;
         mesh-llm-client)
             printf '%s\n' \
                 model-artifact \
@@ -345,6 +354,16 @@ unpublished_registry_deps() {
         mesh-llm-api-client)
             printf '%s\n' \
                 mesh-llm-client
+            ;;
+        mesh-llm-console-server)
+            printf '%s\n' \
+                mesh-llm-ui
+            ;;
+        mesh-llm-sdk)
+            printf '%s\n' \
+                mesh-llm-api-client \
+                mesh-llm-console-server \
+                mesh-llm-runtime-install
             ;;
         mesh-llm-node)
             printf '%s\n' \
@@ -378,6 +397,8 @@ publish_crates=(
     model-ref
     mesh-llm-identity
     mesh-llm-native-runtime
+    mesh-llm-hardware-profile
+    mesh-llm-runtime-install
     mesh-llm-protocol
     mesh-llm-routing
     mesh-llm-types
@@ -385,6 +406,9 @@ publish_crates=(
     model-hf
     mesh-llm-client
     mesh-llm-api-client
+    mesh-llm-ui
+    mesh-llm-console-server
+    mesh-llm-sdk
     mesh-llm-node
     mesh-llm-api-server
 )

@@ -159,7 +159,7 @@ A crates.io SDK consumer that wants dynamic local serving should use
 source build:
 
 ```rust
-use mesh_llm::sdk::native_runtime::{
+use mesh_llm_sdk::native_runtime::{
     NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
 };
 

@@ -30,6 +30,7 @@ mesh-llm-plugin = { path = "../mesh-llm-plugin" }
 mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager" }
 mesh-llm-identity = { path = "../mesh-llm-identity" }
 mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime" }
+mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install" }
 mesh-llm-guardrails = { path = "../mesh-llm-guardrails" }
 mesh-llm-protocol = { path = "../mesh-llm-protocol" }
 mesh-llm-routing = { path = "../mesh-llm-routing" }

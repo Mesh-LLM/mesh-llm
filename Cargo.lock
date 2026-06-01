@@ -3879,6 +3879,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-hardware-profile"
+version = "0.68.0"
+dependencies = [
+ "mesh-llm-native-runtime",
+]
+
+[[package]]
 name = "mesh-llm-host-runtime"
 version = "0.68.0"
 dependencies = [
@@ -3921,6 +3928,7 @@ dependencies = [
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
  "mesh-llm-routing",
+ "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-types",
  "mesh-llm-ui",
@@ -4075,13 +4083,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "mesh-llm-sdk"
+name = "mesh-llm-runtime-install"
 version = "0.68.0"
 dependencies = [
  "anyhow",
- "mesh-llm-console-server",
- "mesh-llm-host-runtime",
+ "dirs",
+ "flate2",
+ "futures-util",
+ "hex",
+ "mesh-llm-hardware-profile",
+ "mesh-llm-native-runtime",
+ "reqwest 0.12.28",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "mesh-llm-sdk"
+version = "0.68.0"
+dependencies = [
+ "mesh-llm-api-client",
+ "mesh-llm-console-server",
+ "mesh-llm-runtime-install",
 ]
 
 [[package]]

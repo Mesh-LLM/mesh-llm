@@ -15,10 +15,12 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-config"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
+  "mesh-llm-hardware-profile"
   "mesh-llm-identity"
   "mesh-llm-native-runtime"
   "mesh-llm-protocol"
   "mesh-llm-routing"
+  "mesh-llm-runtime-install"
   "mesh-llm-sdk"
   "mesh-llm-guardrails"
   "mesh-llm-system"
@@ -142,7 +144,9 @@ weights = {
     "llama-spec-bench": 3,
     "skippy-prompt": 3,
     "mesh-llm-system": 3,
+    "mesh-llm-runtime-install": 2,
     "mesh-llm-native-runtime": 2,
+    "mesh-llm-hardware-profile": 1,
     "mesh-llm-routing": 2,
     "mesh-llm-sdk": 2,
     "mesh-llm-protocol": 2,
