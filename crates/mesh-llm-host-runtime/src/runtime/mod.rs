@@ -5869,12 +5869,23 @@ async fn build_run_auto_node_setup(
 async fn attempt_run_auto_join(
     node: &mesh::Node,
     join_attempts: &[(String, Option<String>)],
+    is_client: bool,
 ) -> RunAutoJoinOutcome {
     let mut outcome = RunAutoJoinOutcome {
         joined: false,
         last_join_error: None,
         successful_join: None,
     };
+
+    if is_client {
+        match attempt_fast_client_auto_join(node, join_attempts).await {
+            Some(Ok(successful_join)) => {
+                return build_successful_run_auto_join(node, successful_join).await;
+            }
+            Some(Err(err)) => outcome.last_join_error = Some(format!("{err:#}")),
+            None => {}
+        }
+    }
 
     for (token, mesh_name) in join_attempts {
         match node.join_with_retry(token).await {
@@ -5898,6 +5909,38 @@ async fn attempt_run_auto_join(
     }
 
     outcome
+}
+
+async fn attempt_fast_client_auto_join(
+    node: &mesh::Node,
+    join_attempts: &[(String, Option<String>)],
+) -> Option<Result<(String, Option<String>)>> {
+    match node.join_first_responsive_candidate(join_attempts).await {
+        Ok(Some(successful_join)) => Some(Ok(successful_join)),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!("Fast auto-join probe failed: {err:#}");
+            Some(Err(err))
+        }
+    }
+}
+
+async fn build_successful_run_auto_join(
+    node: &mesh::Node,
+    successful_join: (String, Option<String>),
+) -> RunAutoJoinOutcome {
+    if node.mesh_id().await.is_some() {
+        record_first_joined_mesh_ts(node).await;
+    }
+    let _ = emit_event(OutputEvent::Info {
+        message: "Connected to bootstrap peer; awaiting mesh admission".to_string(),
+        context: None,
+    });
+    RunAutoJoinOutcome {
+        joined: true,
+        last_join_error: None,
+        successful_join: Some(successful_join),
+    }
 }
 
 fn update_cli_with_successful_run_auto_join(
@@ -5933,7 +5976,7 @@ async fn run_auto_join_existing_mesh(
     } else {
         auto_join_candidates.to_vec()
     };
-    let outcome = attempt_run_auto_join(node, &join_attempts).await;
+    let outcome = attempt_run_auto_join(node, &join_attempts, cli.client).await;
     update_cli_with_successful_run_auto_join(cli, outcome.successful_join);
 
     if !outcome.joined {
