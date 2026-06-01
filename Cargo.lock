@@ -3765,6 +3765,7 @@ dependencies = [
  "hex",
  "mesh-llm-cli",
  "mesh-llm-client",
+ "mesh-llm-commands",
  "mesh-llm-host-runtime",
  "mesh-llm-tui",
  "reqwest 0.12.28",
@@ -3833,6 +3834,19 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "mesh-llm-commands"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-cli",
+ "mesh-llm-native-runtime",
+ "mesh-llm-runtime-install",
+ "mesh-llm-system",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3949,6 +3963,7 @@ dependencies = [
  "mesh-llm-api-server",
  "mesh-llm-cli",
  "mesh-llm-client",
+ "mesh-llm-commands",
  "mesh-llm-config",
  "mesh-llm-events",
  "mesh-llm-guardrails",

@@ -51,10 +51,18 @@ pub async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_host_runtime()?;
+    run_cli_initialized(cli, explicit_surface, legacy_warning).await
+}
+
+pub async fn run_cli_initialized(
+    cli: mesh_llm_cli::Cli,
+    explicit_surface: Option<mesh_llm_cli::RuntimeSurface>,
+    legacy_warning: Option<String>,
+) -> Result<()> {
     runtime::run_cli(cli, explicit_surface, legacy_warning).await
 }
 
-fn initialize_host_runtime() -> Result<()> {
+pub fn initialize_host_runtime() -> Result<()> {
     #[cfg(feature = "dynamic-native-runtime")]
     if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime()? {
         tracing::info!(

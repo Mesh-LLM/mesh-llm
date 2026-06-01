@@ -17,10 +17,10 @@ pub mod runtime {
 }
 
 pub use mesh_llm_cli::{
-    AuthCommand, BinaryFlavor, Cli, Command, DoctorCommand, GpuCommand, LogFormat,
-    MeshGuardrailCliMode, NormalizedRuntimeArgs, PluginCommand, RuntimeSurface, SkillAgentArg,
-    SkillCommand, TrustCommand, TrustPolicy, legacy_runtime_surface_warning,
-    normalize_runtime_surface_args, validate_discovery_mode_args,
+    AuthCommand, BinaryFlavor, Cli, Command, DoctorCommand, LogFormat, MeshGuardrailCliMode,
+    NormalizedRuntimeArgs, PluginCommand, RuntimeSurface, SkillAgentArg, SkillCommand,
+    TrustCommand, TrustPolicy, legacy_runtime_surface_warning, normalize_runtime_surface_args,
+    validate_discovery_mode_args,
 };
 
 impl From<TrustPolicy> for crate::crypto::TrustPolicy {

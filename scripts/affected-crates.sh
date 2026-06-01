@@ -10,6 +10,7 @@ set -euo pipefail
 WORKSPACE_MEMBERS=(
   "mesh-llm"
   "mesh-llm-cli"
+  "mesh-llm-commands"
   "mesh-llm-config"
   "mesh-llm-events"
   "mesh-llm-gpu-bench"

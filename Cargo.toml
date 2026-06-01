@@ -2,6 +2,7 @@
 members = [
     "crates/mesh-llm",
     "crates/mesh-llm-cli",
+    "crates/mesh-llm-commands",
     "crates/mesh-llm-config",
     "crates/mesh-llm-events",
     "crates/mesh-llm-gpu-bench",

@@ -1,0 +1,24 @@
+[package]
+name = "mesh-llm-commands"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "User-facing command handlers for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "cli"]
+categories = ["command-line-interface"]
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.68.0" }
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.68.0" }
+mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.68.0" }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.68.0", features = ["skippy-devices"] }
+serde.workspace = true
+serde_json.workspace = true

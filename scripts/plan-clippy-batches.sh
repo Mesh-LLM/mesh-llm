@@ -13,6 +13,7 @@ set -euo pipefail
 WORKSPACE_MEMBERS=(
   "mesh-llm"
   "mesh-llm-cli"
+  "mesh-llm-commands"
   "mesh-llm-config"
   "mesh-llm-events"
   "mesh-llm-gpu-bench"
@@ -129,6 +130,7 @@ crates = json.loads(sys.argv[2])
 weights = {
     "mesh-llm": 10,
     "mesh-llm-cli": 1,
+    "mesh-llm-commands": 1,
     "mesh-llm-events": 1,
     "mesh-llm-host-runtime": 8,
     "mesh-llm-client": 6,

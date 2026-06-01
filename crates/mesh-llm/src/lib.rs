@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use clap::Parser;
 
+mod commands;
+
 pub use mesh_llm_host_runtime::*;
 
 pub async fn run_main() -> i32 {
@@ -26,5 +28,10 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         normalized_args.explicit_surface,
     );
 
-    mesh_llm_host_runtime::run_cli(cli, normalized_args.explicit_surface, warning).await
+    mesh_llm_host_runtime::initialize_host_runtime()?;
+    if commands::dispatch(&cli).await? {
+        return Ok(());
+    }
+
+    mesh_llm_host_runtime::run_cli_initialized(cli, normalized_args.explicit_surface, warning).await
 }
