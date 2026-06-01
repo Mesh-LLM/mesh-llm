@@ -4,12 +4,12 @@ use super::formatters::{
     format_relative_timestamp, format_source_label, huggingface_cache_dir, huggingface_repo_url,
     installed_model_kind, model_kind_code, sort_label, variant_selector_label,
 };
-use crate::models::{
+use anyhow::Result;
+use mesh_llm_host_runtime::command_support::models::{
     DeleteResult as CliDeleteResult, ModelDetails, ResolvedModel as CliResolvedModel,
     SearchArtifactFilter, SearchHit, SearchSort, remote_catalog, remote_catalog_model_draft_ref,
     remote_catalog_model_ref,
 };
-use anyhow::Result;
 use std::fmt::Write as FmtWrite;
 use std::io::Write;
 use tabwriter::TabWriter;
@@ -69,7 +69,7 @@ impl SearchFormatter for ConsoleFormatter {
             }
             writeln!(&mut output)?;
         }
-        crate::cli::pager::print_or_page(&output)
+        mesh_llm_cli::pager::print_or_page(&output)
     }
 
     fn render_hf_empty(
@@ -176,7 +176,7 @@ impl SearchFormatter for ConsoleFormatter {
             }
             writeln!(&mut output)?;
         }
-        crate::cli::pager::print_or_page(&output)
+        mesh_llm_cli::pager::print_or_page(&output)
     }
 }
 
@@ -208,7 +208,7 @@ impl ModelsFormatter for ConsoleFormatter {
             }
             writeln!(&mut output)?;
         }
-        crate::cli::pager::print_or_page(&output)
+        mesh_llm_cli::pager::print_or_page(&output)
     }
 
     fn render_installed(&self, rows: &[InstalledRow]) -> Result<()> {
@@ -294,7 +294,7 @@ impl ModelsFormatter for ConsoleFormatter {
             }
             writeln!(&mut output)?;
         }
-        crate::cli::pager::print_or_page(&output)
+        mesh_llm_cli::pager::print_or_page(&output)
     }
 
     fn render_show(&self, details: &ModelDetails, variants: Option<&[ModelDetails]>) -> Result<()> {

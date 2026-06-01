@@ -946,7 +946,7 @@ fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStat
         Some(format!(
             "mesh-llm pi --host 127.0.0.1:{} --model {}",
             input.api_port,
-            crate::cli::shell::single_quote(&display_model_name)
+            mesh_llm_cli::shell::single_quote(&display_model_name)
         ))
     } else {
         None

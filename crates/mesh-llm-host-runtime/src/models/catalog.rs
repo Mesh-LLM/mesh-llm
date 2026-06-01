@@ -1,12 +1,12 @@
 //! Managed model acquisition helpers.
 
 use super::track_managed_model_usage;
-use crate::cli::output::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
-use crate::cli::terminal_progress::{SpinnerHandle, start_spinner};
 use anyhow::{Context, Result};
 use hf_hub::progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler};
 #[cfg(test)]
 use hf_hub::progress::{FileProgress, FileStatus};
+use mesh_llm_tui::output::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
+use mesh_llm_tui::terminal_progress::{SpinnerHandle, start_spinner};
 #[cfg(test)]
 use std::collections::HashMap;
 use std::io::Write;

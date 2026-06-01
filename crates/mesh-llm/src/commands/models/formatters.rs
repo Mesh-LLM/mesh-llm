@@ -1,11 +1,13 @@
-use crate::models::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
-use crate::models::{
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use mesh_llm_host_runtime::command_support::models::{
+    DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel,
+};
+use mesh_llm_host_runtime::command_support::models::{
     ModelCapabilities, ModelDetails, SearchArtifactFilter, SearchHit, SearchSort, capabilities,
     catalog, huggingface_hub_cache_dir, remote_catalog,
 };
-use crate::system::hardware;
-use anyhow::Result;
-use chrono::{DateTime, Utc};
+use mesh_llm_system::hardware;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 

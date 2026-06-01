@@ -52,14 +52,14 @@ const SIGNED_BOOTSTRAP_TOKEN_LIFETIME_MS: u64 = 24 * 60 * 60 * 1000;
 const RECENT_MESH_REJECTION_LIMIT: usize = 16;
 
 fn emit_mesh_info(message: String) {
-    let _ = crate::cli::output::emit_event(crate::cli::output::OutputEvent::Info {
+    let _ = mesh_llm_tui::output::emit_event(mesh_llm_tui::output::OutputEvent::Info {
         message,
         context: None,
     });
 }
 
 fn emit_mesh_warning(message: String) {
-    let _ = crate::cli::output::emit_event(crate::cli::output::OutputEvent::Warning {
+    let _ = mesh_llm_tui::output::emit_event(mesh_llm_tui::output::OutputEvent::Warning {
         message,
         context: None,
     });

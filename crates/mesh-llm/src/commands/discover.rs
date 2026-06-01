@@ -1,9 +1,7 @@
 use anyhow::Result;
 
-use crate::mesh;
-use crate::network::{discovery, nostr};
-use crate::runtime;
-use crate::system::backend;
+use mesh_llm_host_runtime::command_support::discovery::{self, nostr};
+use mesh_llm_system::backend;
 
 pub(crate) struct DiscoverOptions {
     pub(crate) name: Option<String>,
@@ -12,7 +10,7 @@ pub(crate) struct DiscoverOptions {
     pub(crate) region: Option<String>,
     pub(crate) auto_join: bool,
     pub(crate) relays: Vec<String>,
-    pub(crate) discovery_mode: discovery::MeshDiscoveryMode,
+    pub(crate) discovery_mode: mesh_llm_cli::MeshDiscoveryMode,
     pub(crate) supplied_join_tokens: Vec<String>,
 }
 
@@ -31,10 +29,10 @@ pub(crate) async fn run_discover(options: DiscoverOptions) -> Result<()> {
     let filter = options.filter();
 
     match options.discovery_mode {
-        discovery::MeshDiscoveryMode::Nostr => {
+        mesh_llm_cli::MeshDiscoveryMode::Nostr => {
             run_nostr_discover(filter, options.auto_join, options.relays).await
         }
-        discovery::MeshDiscoveryMode::Mdns => {
+        mesh_llm_cli::MeshDiscoveryMode::Mdns => {
             run_lan_discover(filter, options.auto_join, options.supplied_join_tokens).await
         }
     }
@@ -45,7 +43,7 @@ async fn run_nostr_discover(
     auto_join: bool,
     relays: Vec<String>,
 ) -> Result<()> {
-    let relays = runtime::nostr_relays(&relays);
+    let relays = discovery::nostr_relays(&relays);
 
     eprintln!("🔍 Searching Nostr relays for mesh-llm meshes...");
     let meshes = nostr::discover(&relays, &filter, None).await?;
@@ -67,7 +65,7 @@ async fn run_nostr_discover(
         .unwrap_or_default()
         .as_secs();
 
-    let last_mesh_id = mesh::load_last_mesh_id();
+    let last_mesh_id = discovery::load_last_mesh_id();
     eprintln!("Found {} mesh(es):\n", meshes.len());
     for (i, mesh) in meshes.iter().enumerate() {
         let score = nostr::score_mesh(mesh, now, last_mesh_id.as_deref());
@@ -202,7 +200,7 @@ async fn run_lan_discover(
 
 /// Stop all mesh-llm instances tracked in the runtime root.
 pub(crate) fn run_stop() -> Result<()> {
-    let root = match crate::runtime::instance::runtime_root() {
+    let root = match discovery::runtime_root() {
         Ok(root) => root,
         Err(_) => {
             eprintln!("Nothing running.");
@@ -210,7 +208,7 @@ pub(crate) fn run_stop() -> Result<()> {
         }
     };
 
-    let targets = crate::runtime::instance::collect_runtime_stop_targets(&root)?;
+    let targets = discovery::collect_runtime_stop_targets(&root)?;
     let mut killed = 0u32;
     for target in targets {
         let outcome = backend::terminate_process_blocking(

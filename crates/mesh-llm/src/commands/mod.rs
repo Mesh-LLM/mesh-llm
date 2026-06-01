@@ -6,17 +6,16 @@ mod plugin_cli;
 mod runtime;
 
 use anyhow::Result;
+use mesh_llm_cli::{Cli, Command};
 
-use crate::cli::commands::discover::{DiscoverOptions, run_discover, run_stop};
-use crate::cli::commands::doctor::dispatch_doctor_command;
-use crate::cli::commands::download::dispatch_download_command;
-use crate::cli::commands::models::dispatch_models_command;
-use crate::cli::commands::plugin_cli::run_external_plugin_command;
-use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
-use crate::cli::{Cli, Command};
-use crate::network::nostr;
+use self::discover::{DiscoverOptions, run_discover, run_stop};
+use self::doctor::dispatch_doctor_command;
+use self::download::dispatch_download_command;
+use self::models::dispatch_models_command;
+use self::plugin_cli::run_external_plugin_command;
+use self::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 
-pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
+pub async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
         return Ok(false);
     };
@@ -72,7 +71,9 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
             })
             .await
         }
-        Command::RotateKey => nostr::rotate_keys(),
+        Command::RotateKey => {
+            mesh_llm_host_runtime::command_support::discovery::nostr::rotate_keys()
+        }
         Command::Goose { model, port } => {
             mesh_llm_commands::agent_cli::run_goose(model.clone(), *port).await
         }
@@ -144,10 +145,35 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
 
 async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) -> Result<()> {
     let rows = if matches!(command, mesh_llm_cli::PluginCommand::List) {
-        Some(crate::resolved_plugin_list_rows(cli)?)
+        Some(resolved_plugin_list_rows(cli)?)
     } else {
         None
     };
     mesh_llm_commands::plugin::run_plugin_command(command, rows.as_ref()).await?;
     Ok(())
+}
+
+fn resolved_plugin_list_rows(cli: &Cli) -> Result<mesh_llm_commands::plugin::PluginListRows> {
+    let resolved = mesh_llm_host_runtime::command_support::plugin::load_resolved_plugins(cli)?;
+    Ok(mesh_llm_commands::plugin::PluginListRows {
+        externals: resolved
+            .externals
+            .into_iter()
+            .map(|spec| mesh_llm_commands::plugin::RuntimePluginRow {
+                name: spec.name,
+                command: spec.command,
+                args: spec.args,
+            })
+            .collect(),
+        inactive: resolved
+            .inactive
+            .into_iter()
+            .map(|summary| mesh_llm_commands::plugin::InactivePluginRow {
+                name: summary.name,
+                kind: summary.kind,
+                status: summary.status,
+                error: summary.error,
+            })
+            .collect(),
+    })
 }

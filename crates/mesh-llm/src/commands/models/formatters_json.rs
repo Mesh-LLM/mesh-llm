@@ -4,13 +4,15 @@ use super::formatters::{
     format_installed_size, huggingface_cache_dir, installed_model_kind_code, local_capacity_json,
     model_kind_code, print_json,
 };
-use crate::models::{DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel};
-use crate::models::{
+use anyhow::Result;
+use mesh_llm_host_runtime::command_support::models::{
+    DeleteResult as CliDeleteResult, ResolvedModel as CliResolvedModel,
+};
+use mesh_llm_host_runtime::command_support::models::{
     ModelDetails, SearchArtifactFilter, SearchHit, SearchSort, remote_catalog,
     remote_catalog_model_draft_ref, remote_catalog_model_ref, search_catalog_json_payload,
     search_huggingface_json_payload,
 };
-use anyhow::Result;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -253,7 +255,7 @@ impl ModelsFormatter for JsonFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ModelCapabilities;
+    use mesh_llm_host_runtime::command_support::models::ModelCapabilities;
 
     #[test]
     fn show_payload_includes_variants_for_selected_gguf_ref() {

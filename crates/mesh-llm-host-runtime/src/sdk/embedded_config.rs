@@ -37,7 +37,7 @@ pub enum EmbeddedTrustPolicy {
     Allowlist,
 }
 
-impl From<EmbeddedMeshLogFormat> for crate::cli::LogFormat {
+impl From<EmbeddedMeshLogFormat> for mesh_llm_cli::LogFormat {
     fn from(format: EmbeddedMeshLogFormat) -> Self {
         match format {
             EmbeddedMeshLogFormat::Pretty => Self::Pretty,

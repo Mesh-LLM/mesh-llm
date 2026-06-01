@@ -41,13 +41,6 @@ use self::proxy::{api_proxy, bootstrap_proxy};
 pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use crate::MeshRequirements;
 use crate::api;
-use crate::cli::output::{
-    ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
-    DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
-    DashboardSnapshotFuture, DashboardSnapshotProvider, OutputEvent, RuntimeStatus, emit_event,
-    flush_output, sort_dashboard_endpoint_rows,
-};
-use crate::cli::{Cli, Command, LogFormat, RuntimeSurface};
 use crate::crypto::{
     OwnerKeychainLoadError, default_keystore_path, default_trust_store_path, keystore_exists,
     keystore_metadata, load_keystore, load_owner_keypair_from_keychain, load_trust_store,
@@ -61,7 +54,14 @@ use crate::plugin;
 use crate::system::{autoupdate, backend, benchmark, hardware};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser};
+use mesh_llm_cli::{BinaryFlavor, Cli, Command, LogFormat, RuntimeSurface, TrustPolicy};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+use mesh_llm_tui::output::{
+    ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
+    DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
+    DashboardSnapshotFuture, DashboardSnapshotProvider, OutputEvent, RuntimeStatus, emit_event,
+    flush_output, sort_dashboard_endpoint_rows,
+};
 use skippy_protocol::FlashAttentionType;
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -86,6 +86,35 @@ type DashboardContextUsage =
     Arc<tokio::sync::Mutex<HashMap<String, HashMap<DashboardContextUsageSource, u64>>>>;
 type RuntimeInstanceRegistry =
     Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, Option<u32>>>>>;
+
+fn trust_policy_to_crypto(value: TrustPolicy) -> crate::crypto::TrustPolicy {
+    match value {
+        TrustPolicy::Off => crate::crypto::TrustPolicy::Off,
+        TrustPolicy::PreferOwned => crate::crypto::TrustPolicy::PreferOwned,
+        TrustPolicy::RequireOwned => crate::crypto::TrustPolicy::RequireOwned,
+        TrustPolicy::Allowlist => crate::crypto::TrustPolicy::Allowlist,
+    }
+}
+
+fn binary_flavor_to_backend(flavor: Option<BinaryFlavor>) -> Option<backend::BinaryFlavor> {
+    flavor.map(|flavor| match flavor {
+        BinaryFlavor::Cpu => backend::BinaryFlavor::Cpu,
+        BinaryFlavor::Cuda => backend::BinaryFlavor::Cuda,
+        BinaryFlavor::Rocm => backend::BinaryFlavor::Rocm,
+        BinaryFlavor::Vulkan => backend::BinaryFlavor::Vulkan,
+        BinaryFlavor::Metal => backend::BinaryFlavor::Metal,
+    })
+}
+
+fn mesh_guardrail_mode_to_openai(
+    mode: mesh_llm_cli::MeshGuardrailCliMode,
+) -> openai_frontend::GuardrailMode {
+    match mode {
+        mesh_llm_cli::MeshGuardrailCliMode::Disabled => openai_frontend::GuardrailMode::Disabled,
+        mesh_llm_cli::MeshGuardrailCliMode::Metrics => openai_frontend::GuardrailMode::MetricsOnly,
+        mesh_llm_cli::MeshGuardrailCliMode::Enforce => openai_frontend::GuardrailMode::Enforce,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct DashboardContextUsageSource {
@@ -262,7 +291,7 @@ impl MeshTracingStderrWriter {
 
     fn should_route_to_dashboard(&self) -> bool {
         !self.target.starts_with("mesh_llm::cli::output")
-            && crate::cli::output::interactive_tui_active()
+            && mesh_llm_tui::output::interactive_tui_active()
     }
 
     fn route_line_to_dashboard(&self, message: String) -> io::Result<()> {
@@ -273,21 +302,21 @@ impl MeshTracingStderrWriter {
 
             routing.set(true);
             let event = match self.level {
-                tracing::Level::ERROR => crate::cli::output::OutputEvent::Error {
+                tracing::Level::ERROR => mesh_llm_tui::output::OutputEvent::Error {
                     message: message.clone(),
                     context: Some("stderr".to_string()),
                 },
-                tracing::Level::WARN => crate::cli::output::OutputEvent::Warning {
+                tracing::Level::WARN => mesh_llm_tui::output::OutputEvent::Warning {
                     message: message.clone(),
                     context: Some("stderr".to_string()),
                 },
-                _ => crate::cli::output::OutputEvent::Info {
+                _ => mesh_llm_tui::output::OutputEvent::Info {
                     message: message.clone(),
                     context: Some("stderr".to_string()),
                 },
             };
             let result =
-                crate::cli::output::emit_event(event).or_else(|_| write_stderr_line(&message));
+                mesh_llm_tui::output::emit_event(event).or_else(|_| write_stderr_line(&message));
             routing.set(false);
             result
         })
@@ -2247,7 +2276,7 @@ fn maybe_spawn_startup_interactive_handler(
         interactive::spawn_handler(
             interactive_control_tx,
             cs,
-            crate::cli::output::OutputManager::global(),
+            mesh_llm_tui::output::OutputManager::global(),
             InitialPromptMode::Deferred,
         );
     }
@@ -2670,7 +2699,7 @@ impl StartupReadyReporter {
         let pi_command = Some(format!(
             "mesh-llm pi --host 127.0.0.1:{} --model {}",
             self.api_port,
-            crate::cli::shell::single_quote(&self.primary_model)
+            mesh_llm_cli::shell::single_quote(&self.primary_model)
         ));
         let goose_command = Some(format!(
             "GOOSE_PROVIDER=openai OPENAI_HOST={} OPENAI_API_KEY=mesh GOOSE_MODEL={} goose session",
@@ -2692,7 +2721,7 @@ impl StartupReadyReporter {
             return;
         };
         let _ = emit_event(event);
-        let _ = crate::cli::output::OutputManager::global().schedule_ready_prompt();
+        let _ = mesh_llm_tui::output::OutputManager::global().schedule_ready_prompt();
     }
 }
 
@@ -2807,7 +2836,7 @@ fn owner_runtime_config(
         .merged_with_trusted_owners(&cli.trust_owner);
     let trust_policy = cli
         .trust_policy
-        .map(crate::cli::trust_policy_to_crypto)
+        .map(trust_policy_to_crypto)
         .unwrap_or(trust_store.policy);
 
     let keypair = match resolve_runtime_owner_key_path(cli)? {
@@ -3435,7 +3464,7 @@ async fn prepare_runtime_startup(
         config,
         &startup_specs,
         &mut startup_models,
-        crate::cli::binary_flavor_to_backend(cli.llama_flavor),
+        binary_flavor_to_backend(cli.llama_flavor),
         None,
     )?;
     let resolved_models: Vec<PathBuf> = startup_models
@@ -3471,7 +3500,7 @@ async fn prepare_runtime_startup(
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
 
-    let normalized_args = crate::cli::normalize_runtime_surface_args(std::env::args_os());
+    let normalized_args = mesh_llm_cli::normalize_runtime_surface_args(std::env::args_os());
     run_normalized_runtime_args(normalized_args).await
 }
 
@@ -3494,10 +3523,10 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 }
 
 async fn run_normalized_runtime_args(
-    normalized_args: crate::cli::NormalizedRuntimeArgs,
+    normalized_args: mesh_llm_cli::NormalizedRuntimeArgs,
 ) -> Result<()> {
     let cli = Cli::parse_from(normalized_args.normalized.clone());
-    let warning = crate::cli::legacy_runtime_surface_warning(
+    let warning = mesh_llm_cli::legacy_runtime_surface_warning(
         &cli,
         &normalized_args.original,
         normalized_args.explicit_surface,
@@ -3536,10 +3565,10 @@ fn cli_from_embedded_options(options: EmbeddedRuntimeOptions) -> Cli {
     cli.owner_required = options.owner_required;
     cli.node_label = options.node_label;
     cli.trust_policy = options.trust_policy.map(|policy| match policy {
-        crate::crypto::TrustPolicy::Off => crate::cli::TrustPolicy::Off,
-        crate::crypto::TrustPolicy::PreferOwned => crate::cli::TrustPolicy::PreferOwned,
-        crate::crypto::TrustPolicy::RequireOwned => crate::cli::TrustPolicy::RequireOwned,
-        crate::crypto::TrustPolicy::Allowlist => crate::cli::TrustPolicy::Allowlist,
+        crate::crypto::TrustPolicy::Off => mesh_llm_cli::TrustPolicy::Off,
+        crate::crypto::TrustPolicy::PreferOwned => mesh_llm_cli::TrustPolicy::PreferOwned,
+        crate::crypto::TrustPolicy::RequireOwned => mesh_llm_cli::TrustPolicy::RequireOwned,
+        crate::crypto::TrustPolicy::Allowlist => mesh_llm_cli::TrustPolicy::Allowlist,
     });
     cli.trust_owner = options.trust_owner;
     cli.min_node_version = options.mesh_requirements.min_node_version;
@@ -3558,8 +3587,8 @@ async fn run_runtime_cli(
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 ) -> Result<()> {
-    crate::cli::validate_discovery_mode_args(&cli)?;
-    crate::cli::output::OutputManager::init_global(
+    mesh_llm_cli::validate_discovery_mode_args(&cli)?;
+    mesh_llm_tui::output::OutputManager::init_global(
         cli.log_format,
         initial_console_session_mode(explicit_surface),
     );
@@ -3579,7 +3608,7 @@ async fn run_runtime_cli(
         auto_update: cli.auto_update,
         plugin_requested: cli.plugin.is_some(),
         command_is_update: matches!(cli.command, Some(Command::Update { .. })),
-        llama_flavor: crate::cli::binary_flavor_to_backend(cli.llama_flavor),
+        llama_flavor: binary_flavor_to_backend(cli.llama_flavor),
         current_version: crate::VERSION,
     })
     .await?;
@@ -3590,10 +3619,6 @@ async fn run_runtime_cli(
         && !command_uses_machine_output(cli.command.as_ref())
     {
         autoupdate::check_for_update(crate::VERSION).await;
-    }
-
-    if should_short_circuit_after_dispatch(crate::cli::commands::dispatch(&cli).await?) {
-        return Ok(());
     }
 
     let config = plugin::load_config(cli.config.as_deref())?;
@@ -3658,10 +3683,10 @@ fn command_uses_machine_output(command: Option<&Command>) -> bool {
             command: None,
         }) | Some(Command::Runtime {
             command: Some(
-                crate::cli::runtime::RuntimeCommand::List { json: true, .. }
-                    | crate::cli::runtime::RuntimeCommand::Install { json: true, .. }
-                    | crate::cli::runtime::RuntimeCommand::Remove { json: true, .. }
-                    | crate::cli::runtime::RuntimeCommand::Prune { json: true, .. },
+                mesh_llm_cli::runtime::RuntimeCommand::List { json: true, .. }
+                    | mesh_llm_cli::runtime::RuntimeCommand::Install { json: true, .. }
+                    | mesh_llm_cli::runtime::RuntimeCommand::Remove { json: true, .. }
+                    | mesh_llm_cli::runtime::RuntimeCommand::Prune { json: true, .. },
             ),
         })
     )
@@ -4244,10 +4269,6 @@ fn should_show_serve_config_help(
         && cli.discover.is_none()
 }
 
-fn should_short_circuit_after_dispatch(dispatched: bool) -> bool {
-    dispatched
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InteractiveSpawnRequest {
     prompt_mode: InitialPromptMode,
@@ -4546,32 +4567,6 @@ pub(crate) fn assert_passive_path_immediate_spawn_behavior() {
         ),
         None,
         "stdin must still be a TTY before passive/client startup requests interactive input"
-    );
-}
-
-#[cfg(test)]
-pub(crate) async fn assert_non_serving_dispatch_short_circuit_behavior() {
-    let cli = Cli::parse_from(["mesh-llm", "models", "installed"]);
-
-    assert!(matches!(
-        cli.command.as_ref(),
-        Some(Command::Models {
-            command: crate::cli::models::ModelsCommand::Installed { json: false }
-        })
-    ));
-
-    let dispatched = crate::cli::commands::dispatch(&cli)
-        .await
-        .expect("models installed should stay on the plain dispatch path");
-    assert!(dispatched);
-    assert_eq!(
-        initial_console_session_mode_for_surface(None, ConsoleSessionMode::InteractiveDashboard,),
-        ConsoleSessionMode::None,
-        "non-serving commands must keep the plain output surface instead of interactive startup"
-    );
-    assert!(
-        should_short_circuit_after_dispatch(dispatched),
-        "non-serving commands must return before runtime startup can reach interactive setup"
     );
 }
 
@@ -5440,7 +5435,7 @@ async fn check_unserved_model(node: &mesh::Node, local_models: &[String]) -> Opt
     None
 }
 
-pub(crate) fn load_resolved_plugins(cli: &Cli) -> Result<plugin::ResolvedPlugins> {
+pub fn load_resolved_plugins(cli: &Cli) -> Result<plugin::ResolvedPlugins> {
     let config = plugin::load_config(cli.config.as_deref())?;
     resolve_plugins_from_config(&config, cli)
 }
@@ -5700,7 +5695,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     plugin::mcp::run_mcp_server(plugin_manager).await
 }
 
-pub(crate) use self::discovery::nostr_relays;
+pub use self::discovery::nostr_relays;
 
 async fn store_benchmark_metrics(
     mem_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
@@ -6593,12 +6588,12 @@ fn initialize_run_auto_runtime_state(cli: &Cli) -> RunAutoRuntimeState {
         next_runtime_instance_sequence: 1_u64,
         dashboard_processes: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         dashboard_context_usage: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        input_handler_enabled: crate::cli::output::OutputManager::global()
+        input_handler_enabled: mesh_llm_tui::output::OutputManager::global()
             .console_session_mode()
             .is_some(),
-        openai_guardrail_policy: openai_guardrail_policy_handle(
-            crate::cli::mesh_guardrail_mode_to_openai(cli.mesh_guardrails),
-        ),
+        openai_guardrail_policy: openai_guardrail_policy_handle(mesh_guardrail_mode_to_openai(
+            cli.mesh_guardrails,
+        )),
     }
 }
 
@@ -7875,7 +7870,7 @@ async fn wait_for_run_auto_first_paint(ctx: &RunAutoServingSurfaceContext<'_>) {
     interactive::spawn_handler_with_first_paint_ack(
         ctx.control_tx.clone(),
         cs,
-        crate::cli::output::OutputManager::global(),
+        mesh_llm_tui::output::OutputManager::global(),
         request.prompt_mode,
         Some(first_paint_tx),
     );
@@ -8188,7 +8183,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     )
     .await;
 
-    crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
+    mesh_llm_tui::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
         RuntimeDashboardSnapshotProvider::new(
             node.clone(),
             runtime_state.dashboard_processes.clone(),
@@ -8208,7 +8203,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
             console_port,
             cli.headless,
             config.gpu.parallel,
-            startup_default_backend_device(crate::cli::binary_flavor_to_backend(cli.llama_flavor)),
+            startup_default_backend_device(binary_flavor_to_backend(cli.llama_flavor)),
         ),
     });
 
@@ -8385,7 +8380,7 @@ async fn setup_passive_console_runtime(
         )
         .await;
     }));
-    crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
+    mesh_llm_tui::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
         RuntimeDashboardSnapshotProvider::new(
             node.clone(),
             dashboard_processes,
@@ -8397,13 +8392,13 @@ async fn setup_passive_console_runtime(
         ),
     ));
     if let Some(request) = passive_path_interactive_spawn_request(
-        crate::cli::output::OutputManager::global().console_session_mode(),
+        mesh_llm_tui::output::OutputManager::global().console_session_mode(),
         std::io::stdin().is_terminal(),
     ) {
         interactive::spawn_handler(
             control_tx.clone(),
             console_state,
-            crate::cli::output::OutputManager::global(),
+            mesh_llm_tui::output::OutputManager::global(),
             request.prompt_mode,
         );
     }
@@ -10033,11 +10028,6 @@ mod tests {
         assert_interactive_handler_spawns_once_across_startup_callbacks();
     }
 
-    #[tokio::test]
-    async fn non_serving_subcommands_retain_plain_output() {
-        assert_non_serving_dispatch_short_circuit_behavior().await;
-    }
-
     #[test]
     fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
         let cli = Cli::parse_from(["mesh-llm"]);
@@ -10967,13 +10957,13 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     /// Helper to build a minimal `Cli` for publication-state tests.
-    fn make_cli(args: &[&str]) -> crate::cli::Cli {
-        crate::cli::Cli::try_parse_from(args).unwrap()
+    fn make_cli(args: &[&str]) -> mesh_llm_cli::Cli {
+        mesh_llm_cli::Cli::try_parse_from(args).unwrap()
     }
 
-    fn make_runtime_cli(args: &[&str]) -> crate::cli::Cli {
-        let normalized = crate::cli::normalize_runtime_surface_args(args.iter().copied());
-        crate::cli::Cli::try_parse_from(normalized.normalized).unwrap()
+    fn make_runtime_cli(args: &[&str]) -> mesh_llm_cli::Cli {
+        let normalized = mesh_llm_cli::normalize_runtime_surface_args(args.iter().copied());
+        mesh_llm_cli::Cli::try_parse_from(normalized.normalized).unwrap()
     }
 
     #[test]
@@ -11147,7 +11137,7 @@ mod tests {
 
     #[test]
     fn test_console_session_mode_serve_uses_interactive_mode() {
-        use crate::cli::RuntimeSurface;
+        use mesh_llm_cli::RuntimeSurface;
 
         // When explicit_surface is Some(RuntimeSurface::Serve), should preserve current mode
         let result = initial_console_session_mode_for_surface(
@@ -11159,7 +11149,7 @@ mod tests {
 
     #[test]
     fn test_console_session_mode_client_uses_interactive_mode() {
-        use crate::cli::RuntimeSurface;
+        use mesh_llm_cli::RuntimeSurface;
 
         // Explicit client mode is a runtime surface, so it should inherit the
         // detected terminal mode and start the passive/client dashboard.

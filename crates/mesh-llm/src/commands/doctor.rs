@@ -3,8 +3,10 @@ use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::cli::DoctorCommand;
-use crate::runtime::instance::{LocalInstanceSnapshot, runtime_root, scan_local_instances};
+use mesh_llm_cli::DoctorCommand;
+use mesh_llm_host_runtime::command_support::runtime_instances::{
+    LocalInstanceSnapshot, runtime_root, scan_local_instances,
+};
 
 const SKIPPY_NATIVE_LOG_FILE: &str = "skippy-native.log";
 const SKIPPY_DIAGNOSTIC_ENDPOINTS: &[(&str, &str, &str)] = &[
@@ -316,7 +318,7 @@ mod tests {
         capture_skippy_native_log, select_runtime_instance, split_readiness_lines,
         write_split_readiness_report,
     };
-    use crate::runtime::instance::LocalInstanceSnapshot;
+    use mesh_llm_host_runtime::command_support::runtime_instances::LocalInstanceSnapshot;
     use serde_json::json;
     use std::path::PathBuf;
 

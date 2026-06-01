@@ -2,14 +2,14 @@ mod formatters;
 mod formatters_console;
 mod formatters_json;
 
-use crate::cli::models::ModelSearchSort;
-use crate::cli::models::ModelsCommand;
-use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
-use crate::inference::skippy::{
+use anyhow::{Result, anyhow, bail};
+use mesh_llm_cli::models::ModelSearchSort;
+use mesh_llm_cli::models::ModelsCommand;
+use mesh_llm_host_runtime::command_support::models::skippy::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
     identity_from_layer_package, is_layer_package_ref, resolve_hf_package_to_local,
 };
-use crate::models::{
+use mesh_llm_host_runtime::command_support::models::{
     ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter, SearchProgress, SearchSort,
     ShowVariantsProgress, delete, download_model_ref_with_progress_details,
     find_remote_catalog_model_exact, installed_model_capabilities,
@@ -17,7 +17,7 @@ use crate::models::{
     remote_catalog_model_ref, scan_installed_models, search_catalog_models, search_huggingface,
     show_exact_model, show_model_variants_with_progress,
 };
-use anyhow::{Result, anyhow, bail};
+use mesh_llm_tui::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
 use serde_json::json;
 use std::io::IsTerminal;
 use std::time::Duration;
@@ -143,16 +143,16 @@ fn build_installed_rows() -> Vec<InstalledRow> {
     scan_installed_models()
         .into_iter()
         .map(|name| {
-            let path = crate::models::find_model_path(&name);
-            let display_name = crate::models::installed_model_display_name(&name);
+            let path = mesh_llm_host_runtime::command_support::models::find_model_path(&name);
+            let display_name = mesh_llm_host_runtime::command_support::models::installed_model_display_name(&name);
             let catalog_model = find_remote_catalog_model_exact(&name);
-            let layer_count = crate::models::layered_package_layer_count_for_path(&path);
+            let layer_count = mesh_llm_host_runtime::command_support::models::layered_package_layer_count_for_path(&path);
             let model_ref = if layer_count.is_some() {
                 name.clone()
             } else if let Some(model) = catalog_model.as_ref() {
                 remote_catalog_model_ref(model)
-            } else if let Some(identity) = crate::models::huggingface_identity_for_path(&path) {
-                crate::models::installed_model_huggingface_ref(&identity)
+            } else if let Some(identity) = mesh_llm_host_runtime::command_support::models::huggingface_identity_for_path(&path) {
+                mesh_llm_host_runtime::command_support::models::installed_model_huggingface_ref(&identity)
             } else {
                 name.clone()
             };
@@ -164,14 +164,14 @@ fn build_installed_rows() -> Vec<InstalledRow> {
                 .then(|| format!("mesh-llm models download {model_ref}"));
             let delete_command = format!("mesh-llm models delete {model_ref}");
             let size =
-                if let Some(bytes) = crate::models::layered_package_total_bytes_for_path(&path) {
+                if let Some(bytes) = mesh_llm_host_runtime::command_support::models::layered_package_total_bytes_for_path(&path) {
                     Some(bytes)
                 } else if path
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
                 {
-                    Some(crate::inference::election::total_model_bytes(&path))
+                    Some(mesh_llm_host_runtime::command_support::models::election::total_model_bytes(&path))
                 } else {
                     std::fs::metadata(&path).map(|meta| meta.len()).ok()
                 };
@@ -302,7 +302,8 @@ pub fn run_model_cleanup(unused_since: Option<&str>, yes: bool, json_output: boo
     let unused_duration = unused_since.map(parse_cleanup_age).transpose()?;
     let plan = plan_model_cleanup(unused_duration)?;
     if yes {
-        let result = crate::models::execute_model_cleanup(unused_duration)?;
+        let result =
+            mesh_llm_host_runtime::command_support::models::execute_model_cleanup(unused_duration)?;
         if json_output {
             render_cleanup_json(unused_since, &plan, Some(&result))?;
         } else {
@@ -550,7 +551,11 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
             let all = *all;
             let check = *check;
             tokio::task::spawn_blocking(move || {
-                crate::models::run_update(repo_for_update.as_deref(), all, check)
+                mesh_llm_host_runtime::command_support::models::run_update(
+                    repo_for_update.as_deref(),
+                    all,
+                    check,
+                )
             })
             .await
             .map_err(anyhow::Error::from)??;
@@ -567,7 +572,8 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
 }
 
 fn run_model_prune(yes: bool, json_output: bool) -> Result<()> {
-    let cache_dir = crate::inference::skippy::materialized_stage_cache_dir();
+    let cache_dir =
+        mesh_llm_host_runtime::command_support::models::skippy::materialized_stage_cache_dir();
     if !yes {
         if json_output {
             println!(
@@ -586,7 +592,9 @@ fn run_model_prune(yes: bool, json_output: bool) -> Result<()> {
         }
         return Ok(());
     }
-    let removed = crate::inference::skippy::prune_unpinned_materialized_stages()?;
+    let removed =
+        mesh_llm_host_runtime::command_support::models::skippy::prune_unpinned_materialized_stages(
+        )?;
     if json_output {
         println!(
             "{}",
@@ -641,7 +649,7 @@ fn render_cleanup_console(
     }
     println!(
         "📁 HF cache: {}",
-        crate::models::huggingface_hub_cache_dir().display()
+        mesh_llm_host_runtime::command_support::models::huggingface_hub_cache_dir().display()
     );
     println!("📁 Mesh cache: {}", model_usage_cache_dir().display());
     println!("🛡️ Scope: mesh-managed records only");
@@ -734,7 +742,7 @@ fn render_cleanup_json(
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
-            "hf_cache_dir": crate::models::huggingface_hub_cache_dir(),
+            "hf_cache_dir": mesh_llm_host_runtime::command_support::models::huggingface_hub_cache_dir(),
             "mesh_cache_dir": model_usage_cache_dir(),
             "mesh_managed_only": true,
             "unused_since": unused_since,
@@ -758,14 +766,14 @@ pub async fn run_model_delete(model: &str, yes: bool, json_output: bool) -> Resu
 
     if !yes {
         let derived_stage_paths =
-            crate::inference::skippy::materialized_stages_for_sources(&paths)?;
+            mesh_llm_host_runtime::command_support::models::skippy::materialized_stages_for_sources(&paths)?;
         let resolved = build_delete_preview_model(model, &paths, derived_stage_paths);
         let formatter = models_formatter(json_output);
         return formatter.render_delete_preview(&resolved);
     }
 
     let removed_derived_cache_files =
-        crate::inference::skippy::remove_materialized_stages_for_sources(&paths)?;
+        mesh_llm_host_runtime::command_support::models::skippy::remove_materialized_stages_for_sources(&paths)?;
     let mut result = delete::delete_model_by_identifier(model).await?;
     result.removed_derived_cache_files = removed_derived_cache_files;
     let formatter = models_formatter(json_output);
@@ -776,7 +784,7 @@ fn build_delete_preview_model(
     model: &str,
     paths: &[std::path::PathBuf],
     derived_stage_paths: Vec<std::path::PathBuf>,
-) -> crate::models::ResolvedModel {
+) -> mesh_llm_host_runtime::command_support::models::ResolvedModel {
     let primary_path = paths[0].clone();
     let display_name = if paths.len() > 1 {
         format!("{model} ({} files)", paths.len())
@@ -788,7 +796,7 @@ fn build_delete_preview_model(
             .to_string()
     };
 
-    crate::models::ResolvedModel {
+    mesh_llm_host_runtime::command_support::models::ResolvedModel {
         path: primary_path,
         paths: paths.to_vec(),
         derived_stage_paths,
@@ -943,7 +951,7 @@ mod tests {
     #[test]
     #[serial]
     fn model_download_without_package_mapping_falls_back_to_model_download() {
-        let _catalog = crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+        let _catalog = mesh_llm_host_runtime::command_support::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
         assert_eq!(
             resolve_download_layer_package_ref("plain-local-model"),
             None

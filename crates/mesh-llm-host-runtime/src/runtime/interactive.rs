@@ -1,12 +1,12 @@
 use crate::api::{MeshApi, RuntimeControlRequest};
-use crate::cli::output::{
-    ConsoleSessionMode, OutputManager, TuiControlFlow, TuiEvent, TuiKeyEvent,
-};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
+use mesh_llm_tui::output::{
+    ConsoleSessionMode, OutputManager, TuiControlFlow, TuiEvent, TuiKeyEvent,
+};
 use std::fmt;
 #[cfg(test)]
 use std::io::Write;
@@ -369,7 +369,7 @@ fn run_tui_loop(
 
     let (exit_result, raw_result) = restore_tui_terminal_after_loop(
         runtime_handle.block_on(output_manager.exit_tui()),
-        crate::cli::output::force_restore_tui_terminal,
+        mesh_llm_tui::output::force_restore_tui_terminal,
         || disable_raw_mode().map_err(std::io::Error::other),
     );
     cleanup_guard.disarm();
@@ -461,7 +461,7 @@ impl Drop for TuiTerminalCleanupGuard {
     fn drop(&mut self) {
         if self.armed {
             tracing::warn!("interactive pretty loop unwound before normal terminal cleanup");
-            let _ = crate::cli::output::force_restore_tui_terminal();
+            let _ = mesh_llm_tui::output::force_restore_tui_terminal();
             let _ = disable_raw_mode();
         }
     }
@@ -545,8 +545,8 @@ mod tests {
         maybe_write_initial_prompt, parse_command, read_tui_event, restore_tui_terminal_after_loop,
         write_ready_prompt,
     };
-    use crate::cli::output::{ConsoleSessionMode, TuiEvent, TuiKeyEvent};
     use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use mesh_llm_tui::output::{ConsoleSessionMode, TuiEvent, TuiKeyEvent};
 
     #[test]
     fn parse_command_accepts_supported_shortcuts() {

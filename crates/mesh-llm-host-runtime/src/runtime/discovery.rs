@@ -1,7 +1,7 @@
-use crate::cli::Cli;
-use crate::cli::output::{OutputEvent, emit_event};
 use crate::mesh;
 use crate::network::nostr;
+use mesh_llm_cli::Cli;
+use mesh_llm_tui::output::{OutputEvent, emit_event};
 use std::cmp::Reverse;
 
 /// Health probe: try QUIC connect to the mesh's bootstrap node.
@@ -275,7 +275,7 @@ pub(super) fn start_new_mesh(
     });
 }
 
-pub(crate) fn nostr_relays(cli_relays: &[String]) -> Vec<String> {
+pub fn nostr_relays(cli_relays: &[String]) -> Vec<String> {
     if cli_relays.is_empty() {
         nostr::DEFAULT_RELAYS
             .iter()

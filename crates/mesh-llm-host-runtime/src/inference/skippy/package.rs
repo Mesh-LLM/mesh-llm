@@ -9,23 +9,23 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SkippyPackageIdentity {
-    pub(crate) package_ref: String,
-    pub(crate) manifest_sha256: String,
-    pub(crate) source_model_path: PathBuf,
-    pub(crate) source_model_sha256: String,
-    pub(crate) source_model_bytes: u64,
-    pub(crate) source_files: Vec<SkippyPackageSourceFile>,
-    pub(crate) layer_count: u32,
-    pub(crate) activation_width: u32,
-    pub(crate) tensor_count: u64,
+pub struct SkippyPackageIdentity {
+    pub package_ref: String,
+    pub manifest_sha256: String,
+    pub source_model_path: PathBuf,
+    pub source_model_sha256: String,
+    pub source_model_bytes: u64,
+    pub source_files: Vec<SkippyPackageSourceFile>,
+    pub layer_count: u32,
+    pub activation_width: u32,
+    pub tensor_count: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub(crate) struct SkippyPackageSourceFile {
-    pub(crate) path: PathBuf,
-    pub(crate) bytes: u64,
-    pub(crate) sha256: String,
+pub struct SkippyPackageSourceFile {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub sha256: String,
 }
 
 #[derive(Serialize)]
@@ -52,7 +52,7 @@ struct SyntheticGgufManifestFile {
     sha256: String,
 }
 
-pub(crate) fn synthetic_direct_gguf_package(
+pub fn synthetic_direct_gguf_package(
     model_id: &str,
     model_path: &Path,
 ) -> Result<SkippyPackageIdentity> {
@@ -300,7 +300,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// the manifest and shared metadata that the resolver requires, but not layer
 /// files. Layer artifacts are fetched later by the node that materializes or
 /// loads its assigned stage.
-pub(crate) fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIdentity> {
+pub fn identity_from_layer_package(package_ref: &str) -> Result<SkippyPackageIdentity> {
     // Resolve hf:// to a local package dir for lightweight package inspection.
     let local_ref =
         super::materialization::resolve_hf_package_to_local(package_ref, 0, 0, false, false)?;

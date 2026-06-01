@@ -4,9 +4,9 @@ use super::{
     capabilities, catalog, find_model_path, format_size_bytes, huggingface_identity_for_path,
     remote_catalog, track_model_usage,
 };
-use crate::cli::terminal_progress::start_spinner;
 use crate::models::usage::ModelUsageRecord;
 use anyhow::{Context, Result, bail};
+use mesh_llm_tui::terminal_progress::start_spinner;
 use model_artifact::{ModelArtifactFile, select_primary_artifact_file};
 use serde::Deserialize;
 use std::cmp::Ordering;

@@ -6,8 +6,8 @@ use mesh_llm_plugin_manager::{PluginStore, default_store_root};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-use crate::cli::Cli;
-use crate::{plugin, runtime};
+use mesh_llm_cli::Cli;
+use mesh_llm_host_runtime::command_support::plugin;
 
 const CLI_RUN_OPERATION: &str = "cli.run";
 
@@ -109,7 +109,7 @@ fn resolve_configured_cli_plugin(
         if !entry.enabled.unwrap_or(true) {
             return plugin::bundled_cli_plugin_spec(command);
         }
-        let resolved = runtime::load_resolved_plugins(cli)?;
+        let resolved = plugin::load_resolved_plugins(cli)?;
         let spec = resolved
             .externals
             .into_iter()

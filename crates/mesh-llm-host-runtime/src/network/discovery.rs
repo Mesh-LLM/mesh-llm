@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crate::network::nostr;
 
-pub(crate) const LAN_SERVICE_TYPE: &str = "_mesh-llm._tcp.local.";
+pub const LAN_SERVICE_TYPE: &str = "_mesh-llm._tcp.local.";
 const TXT_SCHEMA_VERSION: u8 = 1;
 const TXT_LIST_SEPARATOR: char = '|';
 const TXT_VALUE_LIMIT: usize = 220;
@@ -17,7 +17,7 @@ pub(crate) use mesh_llm_cli::{DiscoveryScope, MeshDiscoveryMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum LanJoinMaterial {
+pub enum LanJoinMaterial {
     RequiresSuppliedToken,
 }
 
@@ -33,9 +33,9 @@ pub(crate) struct LanMeshAdvertisement {
     pub(crate) node_count: usize,
     pub(crate) client_count: usize,
     pub(crate) max_clients: usize,
-    pub(crate) token_fingerprint: Option<String>,
+    pub token_fingerprint: Option<String>,
     pub(crate) app_version: Option<String>,
-    pub(crate) join_material: LanJoinMaterial,
+    pub join_material: LanJoinMaterial,
 }
 
 impl LanMeshAdvertisement {
@@ -165,27 +165,27 @@ impl LanMeshAdvertisement {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct LanDiscoveredMesh {
-    pub(crate) mode: &'static str,
-    pub(crate) scope: DiscoveryScope,
-    pub(crate) source: &'static str,
-    pub(crate) service_type: &'static str,
-    pub(crate) instance_name: String,
-    pub(crate) host: String,
-    pub(crate) port: u16,
-    pub(crate) addresses: Vec<String>,
-    pub(crate) listing: nostr::MeshListing,
+pub struct LanDiscoveredMesh {
+    pub mode: &'static str,
+    pub scope: DiscoveryScope,
+    pub source: &'static str,
+    pub service_type: &'static str,
+    pub instance_name: String,
+    pub host: String,
+    pub port: u16,
+    pub addresses: Vec<String>,
+    pub listing: nostr::MeshListing,
     pub(crate) token_fingerprint: Option<String>,
     pub(crate) join_material: LanJoinMaterial,
-    pub(crate) joinable_with_supplied_token: bool,
-    pub(crate) published_version: Option<String>,
-    pub(crate) discovered_at: u64,
+    pub joinable_with_supplied_token: bool,
+    pub published_version: Option<String>,
+    pub discovered_at: u64,
     #[serde(skip)]
     join_token: Option<String>,
 }
 
 impl LanDiscoveredMesh {
-    pub(crate) fn join_token(&self) -> Option<&str> {
+    pub fn join_token(&self) -> Option<&str> {
         self.join_token.as_deref()
     }
 
@@ -343,7 +343,7 @@ fn register_lan_service(
     }
 }
 
-pub(crate) async fn discover_lan(
+pub async fn discover_lan(
     filter: &nostr::MeshFilter,
     supplied_invite_token: Option<&str>,
     timeout: Duration,

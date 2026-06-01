@@ -2,9 +2,9 @@ use anyhow::{Context, Result, bail};
 use serde_json::json;
 use std::path::Path;
 
-use crate::cli::MeshGuardrailCliMode;
-use crate::cli::runtime::RuntimeCommand;
-use crate::plugin::{MeshConfig, load_config};
+use mesh_llm_cli::MeshGuardrailCliMode;
+use mesh_llm_cli::runtime::RuntimeCommand;
+use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
 
 pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -> Result<()> {
     match command {
@@ -510,8 +510,8 @@ mod tests {
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
         control_bootstrap_lines, runtime_success_lines, yes_no,
     };
-    use crate::cli::MeshGuardrailCliMode;
-    use crate::plugin::{GpuAssignment, GpuConfig, MeshConfig};
+    use mesh_llm_cli::MeshGuardrailCliMode;
+    use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
     use serde_json::json;
 
     #[test]

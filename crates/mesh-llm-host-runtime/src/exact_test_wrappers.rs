@@ -8,11 +8,6 @@ fn passive_path_tui_still_starts_immediately() {
     runtime::assert_passive_path_immediate_spawn_behavior();
 }
 
-#[tokio::test]
-async fn non_serving_subcommands_retain_plain_output() {
-    runtime::assert_non_serving_dispatch_short_circuit_behavior().await;
-}
-
 #[test]
 fn interactive_handler_spawns_once_across_startup_callbacks() {
     runtime::assert_interactive_handler_spawns_once_across_startup_callbacks();

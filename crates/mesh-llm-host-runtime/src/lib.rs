@@ -2,13 +2,13 @@
 
 mod api;
 mod capture;
-mod cli;
+pub mod command_support;
 pub mod crypto;
-mod inference;
+pub mod inference;
 mod mesh;
-mod models;
+pub mod models;
 mod network;
-mod plugin;
+pub mod plugin;
 mod plugins;
 mod protocol;
 mod runtime;
@@ -60,33 +60,6 @@ pub async fn run_cli_initialized(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     runtime::run_cli(cli, explicit_surface, legacy_warning).await
-}
-
-pub fn resolved_plugin_list_rows(
-    cli: &mesh_llm_cli::Cli,
-) -> Result<mesh_llm_commands::plugin::PluginListRows> {
-    let resolved = runtime::load_resolved_plugins(cli)?;
-    Ok(mesh_llm_commands::plugin::PluginListRows {
-        externals: resolved
-            .externals
-            .into_iter()
-            .map(|spec| mesh_llm_commands::plugin::RuntimePluginRow {
-                name: spec.name,
-                command: spec.command,
-                args: spec.args,
-            })
-            .collect(),
-        inactive: resolved
-            .inactive
-            .into_iter()
-            .map(|summary| mesh_llm_commands::plugin::InactivePluginRow {
-                name: summary.name,
-                kind: summary.kind,
-                status: summary.status,
-                error: summary.error,
-            })
-            .collect(),
-    })
 }
 
 pub fn initialize_host_runtime() -> Result<()> {

@@ -36,19 +36,19 @@ use skippy_server::{
     embedded_openai_backend, telemetry::Telemetry, telemetry::TelemetryLevel,
 };
 
-pub(crate) use certification::{
+pub use certification::{
     CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
 };
 pub(crate) use family_policy::{family_policy_for_model_path, family_policy_for_stage_config};
 pub(crate) use hooks::MeshAutoHookPolicy;
 pub(crate) use kv_cache::KvCachePolicy;
-pub(crate) use materialization::{
+pub use materialization::{
     configure_materialized_stage_cache, is_layer_package_ref, materialize_stage_config,
     materialized_stage_cache_dir, materialized_stages_for_sources,
     prune_unpinned_materialized_stages, remove_materialized_stages_for_sources,
     resolve_hf_package_to_local,
 };
-pub(crate) use package::{
+pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, synthetic_direct_gguf_package,
 };
 #[allow(unused_imports)]
