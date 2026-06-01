@@ -2,7 +2,6 @@ mod formatters;
 mod formatters_console;
 mod formatters_json;
 
-use crate::cli::commands::model_package;
 use crate::cli::models::ModelSearchSort;
 use crate::cli::models::ModelsCommand;
 use crate::cli::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
@@ -475,24 +474,26 @@ pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
             update_script,
             json,
         } => {
-            model_package::dispatch_model_package(model_package::ModelPrepareArgs {
-                source_repo: source_repo.as_deref(),
-                quant: quant.as_deref(),
-                target: target.as_deref(),
-                model_id: model_id.as_deref(),
-                flavor,
-                timeout,
-                mesh_llm_ref,
-                dry_run: *dry_run,
-                confirm: *confirm,
-                follow: *follow,
-                json: *json,
-                status: status.as_deref(),
-                logs: logs.as_deref(),
-                cancel: cancel.as_deref(),
-                list: *list,
-                update_script: *update_script,
-            })
+            mesh_llm_commands::model_package::dispatch_model_package(
+                mesh_llm_commands::model_package::ModelPrepareArgs {
+                    source_repo: source_repo.as_deref(),
+                    quant: quant.as_deref(),
+                    target: target.as_deref(),
+                    model_id: model_id.as_deref(),
+                    flavor,
+                    timeout,
+                    mesh_llm_ref,
+                    dry_run: *dry_run,
+                    confirm: *confirm,
+                    follow: *follow,
+                    json: *json,
+                    status: status.as_deref(),
+                    logs: logs.as_deref(),
+                    cancel: cancel.as_deref(),
+                    list: *list,
+                    update_script: *update_script,
+                },
+            )
             .await?;
         }
         ModelsCommand::Recommended { json } | ModelsCommand::List { json } => {

@@ -1,14 +1,14 @@
 use anyhow::{Context, Result, bail};
 use tokio_stream::StreamExt;
 
-use model_package::jobs::HfJobsClient;
-use model_package::permissions;
-use model_package::prepare::{self, DiscoveredQuant, PrepareParams};
-use model_package::script;
+use ::model_package::jobs::HfJobsClient;
+use ::model_package::permissions;
+use ::model_package::prepare::{self, DiscoveredQuant, PrepareParams};
+use ::model_package::script;
 use serde_json::json;
 
 /// All CLI arguments for `model-package`, bundled to avoid too-many-arguments.
-pub(crate) struct ModelPrepareArgs<'a> {
+pub struct ModelPrepareArgs<'a> {
     pub source_repo: Option<&'a str>,
     pub quant: Option<&'a str>,
     pub target: Option<&'a str>,
@@ -28,7 +28,7 @@ pub(crate) struct ModelPrepareArgs<'a> {
 }
 
 /// Dispatch the model-package command.
-pub(crate) async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
+pub async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result<()> {
     let ModelPrepareArgs {
         source_repo,
         quant,
@@ -90,7 +90,7 @@ pub(crate) async fn dispatch_model_package(args: ModelPrepareArgs<'_>) -> Result
     };
 
     // Build HF client for API calls.
-    let hf_client = model_package::build_hf_client()?;
+    let hf_client = ::model_package::build_hf_client()?;
 
     // If no quant specified, list available quants and exit.
     // This path doesn't need HF_TOKEN — works for public repos.
@@ -309,7 +309,7 @@ fn print_quant_table(quants: &[DiscoveredQuant]) {
 
 async fn run_update_script() -> Result<()> {
     eprintln!("📤 Uploading embedded script to meshllm/layer-split-output bucket...");
-    let client = model_package::build_hf_client()?;
+    let client = ::model_package::build_hf_client()?;
 
     // Check permissions first.
     let perms = permissions::check_permissions(&client).await?;
@@ -354,7 +354,7 @@ async fn run_status(client: &HfJobsClient, job_id: &str, json_output: bool) -> R
 }
 
 async fn run_logs(client: &HfJobsClient, job_id: &str, json_output: bool) -> Result<()> {
-    use model_package::jobs::JobStage;
+    use ::model_package::jobs::JobStage;
 
     let (namespace, id) = parse_job_id(job_id).await?;
 
@@ -403,7 +403,7 @@ async fn run_cancel(client: &HfJobsClient, job_id: &str, json_output: bool) -> R
 
 async fn run_list(client: &HfJobsClient, json_output: bool) -> Result<()> {
     // We need to know the namespace — resolve via whoami.
-    let hf_client = model_package::build_hf_client()?;
+    let hf_client = ::model_package::build_hf_client()?;
     let perms = permissions::check_permissions(&hf_client).await?;
 
     let jobs = client.list(&perms.namespace).await?;
@@ -433,7 +433,7 @@ async fn run_list(client: &HfJobsClient, json_output: bool) -> Result<()> {
 
 /// Follow job logs until the job reaches a terminal state.
 async fn follow_until_done(client: &HfJobsClient, namespace: &str, job_id: &str) -> Result<()> {
-    use model_package::jobs::JobStage;
+    use ::model_package::jobs::JobStage;
 
     loop {
         loop {
@@ -523,7 +523,7 @@ async fn ensure_bucket_script_current(client: &hf_hub::HFClient) -> Result<()> {
     }
 }
 
-fn redacted_spec(spec: &model_package::jobs::JobSpec) -> model_package::jobs::JobSpec {
+fn redacted_spec(spec: &::model_package::jobs::JobSpec) -> ::model_package::jobs::JobSpec {
     let mut redacted = spec.clone();
     for value in redacted.secrets.values_mut() {
         if value.len() > 8 {
@@ -557,7 +557,7 @@ async fn parse_job_id(job_id: &str) -> Result<(String, String)> {
         Ok((ns.to_string(), id.to_string()))
     } else {
         // Need to figure out namespace from the user's identity.
-        let hf_client = model_package::build_hf_client()?;
+        let hf_client = ::model_package::build_hf_client()?;
         let perms = permissions::check_permissions(&hf_client).await?;
         Ok((perms.namespace, job_id.to_string()))
     }

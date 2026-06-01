@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::cli::DoctorCommand;
-use crate::cli::commands::runtime_native;
 use crate::runtime::instance::{LocalInstanceSnapshot, runtime_root, scan_local_instances};
 
 const SKIPPY_NATIVE_LOG_FILE: &str = "skippy-native.log";
@@ -30,7 +29,7 @@ pub(crate) async fn dispatch_doctor_command(
             json,
             output_dir,
         }) => run_split_doctor(model_ref, *port, *json, output_dir.as_deref()).await,
-        None => runtime_native::run_native_runtime_doctor(json_output),
+        None => mesh_llm_commands::runtime_native::run_native_runtime_doctor(json_output),
     }
 }
 

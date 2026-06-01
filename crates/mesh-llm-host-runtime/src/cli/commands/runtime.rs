@@ -3,7 +3,6 @@ use serde_json::json;
 use std::path::Path;
 
 use crate::cli::MeshGuardrailCliMode;
-use crate::cli::commands::runtime_native;
 use crate::cli::runtime::RuntimeCommand;
 use crate::plugin::{MeshConfig, load_config};
 
@@ -17,7 +16,7 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             cache_dir,
             json,
         }) => {
-            runtime_native::run_native_runtime_list(
+            mesh_llm_commands::runtime_native::run_native_runtime_list(
                 *available,
                 manifest.as_deref(),
                 bundle_dirs,
@@ -33,7 +32,7 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             cache_dir,
             json,
         }) => {
-            runtime_native::run_native_runtime_install(
+            mesh_llm_commands::runtime_native::run_native_runtime_install(
                 runtime.as_deref(),
                 manifest.as_deref(),
                 bundle_dirs,
@@ -47,7 +46,7 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             mesh_version,
             cache_dir,
             json,
-        }) => runtime_native::run_native_runtime_remove(
+        }) => mesh_llm_commands::runtime_native::run_native_runtime_remove(
             native_runtime_id,
             mesh_version.as_deref(),
             cache_dir.as_deref(),
@@ -58,7 +57,7 @@ pub(crate) async fn dispatch_runtime_command(command: Option<&RuntimeCommand>) -
             mesh_version,
             cache_dir,
             json,
-        }) => runtime_native::run_native_runtime_prune(
+        }) => mesh_llm_commands::runtime_native::run_native_runtime_prune(
             *active_only,
             mesh_version.as_deref(),
             cache_dir.as_deref(),

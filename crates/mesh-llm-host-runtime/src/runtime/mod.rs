@@ -5700,7 +5700,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     plugin::mcp::run_mcp_server(plugin_manager).await
 }
 
-pub(crate) use self::discovery::{check_mesh, nostr_relays};
+pub(crate) use self::discovery::nostr_relays;
 
 async fn store_benchmark_metrics(
     mem_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,

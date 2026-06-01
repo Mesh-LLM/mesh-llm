@@ -24,6 +24,27 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
             mesh_llm_commands::benchmark::dispatch_benchmark_command(command).await?;
             Ok(true)
         }
+        Command::Goose { model, port } => {
+            mesh_llm_commands::agent_cli::run_goose(model.clone(), *port).await?;
+            Ok(true)
+        }
+        Command::Claude { model, port } => {
+            mesh_llm_commands::agent_cli::run_claude(model.clone(), *port).await?;
+            Ok(true)
+        }
+        Command::Pi { model, host, write } => {
+            mesh_llm_commands::agent_cli::run_pi(model.clone(), host, *write).await?;
+            Ok(true)
+        }
+        Command::Opencode { model, host, write } => {
+            mesh_llm_commands::agent_cli::run_opencode(model.clone(), host, *write).await?;
+            Ok(true)
+        }
+        Command::Skills { command } => {
+            mesh_llm_commands::skills::run_skills_command(command)?;
+            Ok(true)
+        }
+        Command::ModelPrepare { .. } => dispatch_model_package(command).await,
         Command::Plugin { command } => {
             let rows = if matches!(command, mesh_llm_cli::PluginCommand::List) {
                 Some(mesh_llm_host_runtime::resolved_plugin_list_rows(cli)?)
@@ -34,6 +55,53 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
         }
         _ => Ok(false),
     }
+}
+
+async fn dispatch_model_package(command: &Command) -> Result<bool> {
+    let Command::ModelPrepare {
+        source_repo,
+        quant,
+        target,
+        model_id,
+        flavor,
+        timeout,
+        mesh_llm_ref,
+        dry_run,
+        confirm,
+        follow,
+        json,
+        status,
+        logs,
+        cancel,
+        list,
+        update_script,
+    } = command
+    else {
+        unreachable!("dispatch_model_package called for non-model-package command");
+    };
+
+    mesh_llm_commands::model_package::dispatch_model_package(
+        mesh_llm_commands::model_package::ModelPrepareArgs {
+            source_repo: source_repo.as_deref(),
+            quant: quant.as_deref(),
+            target: target.as_deref(),
+            model_id: model_id.as_deref(),
+            flavor,
+            timeout,
+            mesh_llm_ref,
+            dry_run: *dry_run,
+            confirm: *confirm,
+            follow: *follow,
+            json: *json,
+            status: status.as_deref(),
+            logs: logs.as_deref(),
+            cancel: cancel.as_deref(),
+            list: *list,
+            update_script: *update_script,
+        },
+    )
+    .await?;
+    Ok(true)
 }
 
 async fn dispatch_runtime_command(

@@ -4,9 +4,10 @@ use mesh_llm_plugin_manager::{
     install_available_skills,
 };
 
-use crate::cli::{SkillAgentArg, SkillCommand, output::json_mode_enabled};
+use mesh_llm_cli::{SkillAgentArg, SkillCommand};
+use mesh_llm_tui::json_mode_enabled;
 
-pub(crate) fn run_skills_command(command: &SkillCommand) -> Result<()> {
+pub fn run_skills_command(command: &SkillCommand) -> Result<()> {
     match command {
         SkillCommand::Install {
             agent,
@@ -17,7 +18,7 @@ pub(crate) fn run_skills_command(command: &SkillCommand) -> Result<()> {
     }
 }
 
-pub(crate) fn install_skills_for_agent(agent: SkillAgent) {
+pub fn install_skills_for_agent(agent: SkillAgent) {
     match PluginSkillInstallOptions::for_agent(agent).and_then(|options| {
         let report = install_available_skills(&options)?;
         Ok(report)
@@ -44,13 +45,24 @@ fn install(agents: &[SkillAgentArg], all: bool, dry_run: bool, force: bool) -> R
         options.skill_options.agents = agents
             .iter()
             .copied()
-            .map(crate::cli::skill_agent_arg_to_manager)
+            .map(skill_agent_arg_to_manager)
             .collect();
         options.skill_options.detected_only = false;
     }
     let report = install_available_skills(&options)?;
     print_install_report(&report, dry_run)?;
     Ok(())
+}
+
+fn skill_agent_arg_to_manager(agent: SkillAgentArg) -> mesh_llm_plugin_manager::SkillAgent {
+    match agent {
+        SkillAgentArg::Global => mesh_llm_plugin_manager::SkillAgent::Global,
+        SkillAgentArg::Goose => mesh_llm_plugin_manager::SkillAgent::Goose,
+        SkillAgentArg::Pi => mesh_llm_plugin_manager::SkillAgent::Pi,
+        SkillAgentArg::Codex => mesh_llm_plugin_manager::SkillAgent::Codex,
+        SkillAgentArg::Opencode => mesh_llm_plugin_manager::SkillAgent::Opencode,
+        SkillAgentArg::Claude => mesh_llm_plugin_manager::SkillAgent::Claude,
+    }
 }
 
 fn print_agent_install_summary(agent: SkillAgent, report: &SkillInstallReport) {

@@ -14,8 +14,8 @@ pub mod runtime {
 
 pub use mesh_llm_cli::{
     BinaryFlavor, Cli, Command, DoctorCommand, LogFormat, MeshGuardrailCliMode,
-    NormalizedRuntimeArgs, PluginCommand, RuntimeSurface, SkillAgentArg, SkillCommand, TrustPolicy,
-    legacy_runtime_surface_warning, normalize_runtime_surface_args, validate_discovery_mode_args,
+    NormalizedRuntimeArgs, RuntimeSurface, TrustPolicy, legacy_runtime_surface_warning,
+    normalize_runtime_surface_args, validate_discovery_mode_args,
 };
 
 pub(crate) fn trust_policy_to_crypto(value: TrustPolicy) -> crate::crypto::TrustPolicy {
@@ -37,19 +37,6 @@ pub(crate) fn binary_flavor_to_backend(
         BinaryFlavor::Vulkan => crate::system::backend::BinaryFlavor::Vulkan,
         BinaryFlavor::Metal => crate::system::backend::BinaryFlavor::Metal,
     })
-}
-
-pub(crate) fn skill_agent_arg_to_manager(
-    agent: SkillAgentArg,
-) -> mesh_llm_plugin_manager::SkillAgent {
-    match agent {
-        SkillAgentArg::Global => mesh_llm_plugin_manager::SkillAgent::Global,
-        SkillAgentArg::Goose => mesh_llm_plugin_manager::SkillAgent::Goose,
-        SkillAgentArg::Pi => mesh_llm_plugin_manager::SkillAgent::Pi,
-        SkillAgentArg::Codex => mesh_llm_plugin_manager::SkillAgent::Codex,
-        SkillAgentArg::Opencode => mesh_llm_plugin_manager::SkillAgent::Opencode,
-        SkillAgentArg::Claude => mesh_llm_plugin_manager::SkillAgent::Claude,
-    }
 }
 
 pub(crate) fn mesh_guardrail_mode_to_openai(
