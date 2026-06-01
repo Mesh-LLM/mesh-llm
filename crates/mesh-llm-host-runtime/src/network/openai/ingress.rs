@@ -5,8 +5,8 @@ use crate::network::affinity;
 use crate::network::openai::auto_route;
 use crate::network::openai::transport as proxy;
 use crate::network::router;
+use mesh_llm_events::{OutputEvent, emit_event};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
-use mesh_llm_tui::output::{OutputEvent, emit_event};
 use mesh_mixture_of_agents as moa;
 
 enum AutoRouteResolution {

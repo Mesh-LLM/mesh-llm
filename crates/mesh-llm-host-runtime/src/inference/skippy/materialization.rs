@@ -15,8 +15,8 @@ use skippy_runtime::package::{
     self, LayerPackageInfo, PackageIntegrityOptions, PackageStageRequest,
 };
 
-use mesh_llm_tui::output::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
-use mesh_llm_tui::terminal_progress::{SpinnerHandle, start_spinner};
+use mesh_llm_events::terminal_progress::{SpinnerHandle, start_spinner};
+use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
 
 use super::StageLoadRequest;
 

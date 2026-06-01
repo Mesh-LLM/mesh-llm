@@ -750,7 +750,7 @@ mod tests {
         assert_eq!(options.max_vram_gb, Some(3.0));
         assert_embedded_runtime_network_options(&options);
         assert_embedded_runtime_admission_options(&options);
-        assert_eq!(options.log_format, mesh_llm_cli::LogFormat::Json);
+        assert_eq!(options.log_format, mesh_llm_events::LogFormat::Json);
         assert!(options.headless);
     }
 

@@ -10,8 +10,8 @@ pub use mesh_llm_events::{
     ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
     DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
     DashboardSnapshotFuture, DashboardSnapshotProvider, LlamaInstanceKind, LogFormat,
-    ModelProgressStatus, OutputEvent, OutputLevel, RuntimeStatus, TuiControlFlow, TuiEvent,
-    TuiKeyEvent,
+    ModelProgressStatus, OutputEvent, OutputLevel, OutputSink, OutputSinkFuture, RuntimeStatus,
+    TuiControlFlow, TuiEvent, TuiKeyEvent,
 };
 #[cfg(test)]
 use ratatui::backend::TestBackend;
@@ -7899,6 +7899,71 @@ pub struct OutputManager {
     state: RwLock<OutputManagerState>,
 }
 
+struct OutputManagerSink {
+    output_manager: &'static OutputManager,
+}
+
+impl OutputManagerSink {
+    fn new(output_manager: &'static OutputManager) -> Self {
+        Self { output_manager }
+    }
+}
+
+impl OutputSink for OutputManagerSink {
+    fn emit_event(&self, event: OutputEvent) -> io::Result<()> {
+        self.output_manager.emit_event(event)
+    }
+
+    fn schedule_ready_prompt(&self) -> io::Result<()> {
+        self.output_manager.schedule_ready_prompt()
+    }
+
+    fn write_ready_prompt(&self) -> io::Result<()> {
+        self.output_manager.write_ready_prompt()
+    }
+
+    fn ready_prompt_active(&self) -> bool {
+        self.output_manager.ready_prompt_active()
+    }
+
+    fn flush(&self) -> OutputSinkFuture<'_, ()> {
+        Box::pin(self.output_manager.flush())
+    }
+
+    fn mode(&self) -> LogFormat {
+        self.output_manager.mode()
+    }
+
+    fn console_session_mode(&self) -> Option<ConsoleSessionMode> {
+        self.output_manager.console_session_mode()
+    }
+
+    fn register_dashboard_snapshot_provider(&self, provider: Arc<dyn DashboardSnapshotProvider>) {
+        self.output_manager
+            .register_dashboard_snapshot_provider(provider);
+    }
+
+    fn enter_tui(&self) -> OutputSinkFuture<'_, ()> {
+        Box::pin(self.output_manager.enter_tui())
+    }
+
+    fn exit_tui(&self) -> OutputSinkFuture<'_, ()> {
+        Box::pin(self.output_manager.exit_tui())
+    }
+
+    fn dispatch_tui_event(&self, event: TuiEvent) -> OutputSinkFuture<'_, TuiControlFlow> {
+        Box::pin(self.output_manager.dispatch_tui_event(event))
+    }
+
+    fn render_tui_if_dirty(&self) -> OutputSinkFuture<'_, bool> {
+        Box::pin(self.output_manager.render_tui_if_dirty())
+    }
+
+    fn force_restore_tui_terminal(&self) -> io::Result<()> {
+        force_restore_tui_terminal()
+    }
+}
+
 enum OutputCommand {
     Event(OutputEvent),
     ActivateReadyPrompt,
@@ -7919,12 +7984,14 @@ impl OutputManager {
         mode: LogFormat,
         console_session_mode: ConsoleSessionMode,
     ) -> &'static OutputManager {
-        if let Some(output_manager) = GLOBAL_OUTPUT_MANAGER.get() {
+        let output_manager = if let Some(output_manager) = GLOBAL_OUTPUT_MANAGER.get() {
             output_manager.reset(mode, console_session_mode);
             output_manager
         } else {
             GLOBAL_OUTPUT_MANAGER.get_or_init(|| Self::new(mode, console_session_mode))
-        }
+        };
+        mesh_llm_events::set_output_sink(Arc::new(OutputManagerSink::new(output_manager)));
+        output_manager
     }
 
     pub fn global() -> &'static OutputManager {

@@ -4,6 +4,7 @@ mod api;
 mod capture;
 pub mod command_support;
 pub mod crypto;
+pub mod discovery;
 pub mod inference;
 mod mesh;
 pub mod models;
@@ -40,26 +41,30 @@ use anyhow::Result;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub use runtime::{
+    MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,
+};
+
 pub async fn run() -> Result<()> {
     initialize_host_runtime()?;
     runtime::run().await
 }
 
-pub async fn run_cli(
-    cli: mesh_llm_cli::Cli,
-    explicit_surface: Option<mesh_llm_cli::RuntimeSurface>,
+pub async fn run_runtime(
+    options: RuntimeOptions,
+    explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_host_runtime()?;
-    run_cli_initialized(cli, explicit_surface, legacy_warning).await
+    run_runtime_initialized(options, explicit_surface, legacy_warning).await
 }
 
-pub async fn run_cli_initialized(
-    cli: mesh_llm_cli::Cli,
-    explicit_surface: Option<mesh_llm_cli::RuntimeSurface>,
+pub async fn run_runtime_initialized(
+    options: RuntimeOptions,
+    explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
 ) -> Result<()> {
-    runtime::run_cli(cli, explicit_surface, legacy_warning).await
+    runtime::run_cli(options, explicit_surface, legacy_warning).await
 }
 
 pub fn initialize_host_runtime() -> Result<()> {

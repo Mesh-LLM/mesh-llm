@@ -3,7 +3,11 @@
 use clap::ValueEnum;
 use serde_json::Value;
 use std::future::Future;
+use std::io::{self, IsTerminal};
 use std::pin::Pin;
+use std::sync::{Arc, OnceLock, RwLock};
+
+pub mod terminal_progress;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum LogFormat {
@@ -160,6 +164,168 @@ pub type DashboardSnapshotFuture<'a> = Pin<Box<dyn Future<Output = DashboardSnap
 #[allow(dead_code)]
 pub trait DashboardSnapshotProvider: Send + Sync {
     fn snapshot(&self) -> DashboardSnapshotFuture<'_>;
+}
+
+pub type OutputSinkFuture<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + 'a>>;
+
+pub trait OutputSink: Send + Sync {
+    fn emit_event(&self, event: OutputEvent) -> io::Result<()>;
+
+    fn schedule_ready_prompt(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn write_ready_prompt(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn ready_prompt_active(&self) -> bool {
+        false
+    }
+
+    fn flush(&self) -> OutputSinkFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn mode(&self) -> LogFormat {
+        LogFormat::Pretty
+    }
+
+    fn console_session_mode(&self) -> Option<ConsoleSessionMode> {
+        None
+    }
+
+    fn register_dashboard_snapshot_provider(&self, _provider: Arc<dyn DashboardSnapshotProvider>) {}
+
+    fn enter_tui(&self) -> OutputSinkFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn exit_tui(&self) -> OutputSinkFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn dispatch_tui_event(&self, _event: TuiEvent) -> OutputSinkFuture<'_, TuiControlFlow> {
+        Box::pin(async { Ok(TuiControlFlow::Continue) })
+    }
+
+    fn render_tui_if_dirty(&self) -> OutputSinkFuture<'_, bool> {
+        Box::pin(async { Ok(false) })
+    }
+
+    fn force_restore_tui_terminal(&self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+static OUTPUT_SINK: OnceLock<RwLock<Option<Arc<dyn OutputSink>>>> = OnceLock::new();
+
+fn output_sink_slot() -> &'static RwLock<Option<Arc<dyn OutputSink>>> {
+    OUTPUT_SINK.get_or_init(|| RwLock::new(None))
+}
+
+pub fn set_output_sink(sink: Arc<dyn OutputSink>) {
+    if let Ok(mut slot) = output_sink_slot().write() {
+        *slot = Some(sink);
+    }
+}
+
+pub fn clear_output_sink() {
+    if let Ok(mut slot) = output_sink_slot().write() {
+        *slot = None;
+    }
+}
+
+pub fn output_sink() -> Option<Arc<dyn OutputSink>> {
+    output_sink_slot()
+        .read()
+        .ok()
+        .and_then(|slot| slot.as_ref().cloned())
+}
+
+pub fn emit_event(event: OutputEvent) -> io::Result<()> {
+    match output_sink() {
+        Some(sink) => sink.emit_event(event),
+        None => Ok(()),
+    }
+}
+
+pub async fn flush_output() -> io::Result<()> {
+    match output_sink() {
+        Some(sink) => sink.flush().await,
+        None => Ok(()),
+    }
+}
+
+pub fn schedule_ready_prompt() -> io::Result<()> {
+    match output_sink() {
+        Some(sink) => sink.schedule_ready_prompt(),
+        None => Ok(()),
+    }
+}
+
+pub fn json_mode_enabled() -> bool {
+    output_sink().is_some_and(|sink| matches!(sink.mode(), LogFormat::Json))
+}
+
+pub fn interactive_tui_active() -> bool {
+    output_sink().is_some_and(|sink| {
+        matches!(sink.mode(), LogFormat::Pretty)
+            && matches!(
+                sink.console_session_mode(),
+                Some(ConsoleSessionMode::InteractiveDashboard)
+            )
+    })
+}
+
+pub fn current_console_session_mode() -> ConsoleSessionMode {
+    console_session_mode(
+        std::io::stdin().is_terminal(),
+        std::io::stderr().is_terminal(),
+    )
+}
+
+pub fn console_session_mode(stdin_is_tty: bool, stderr_is_tty: bool) -> ConsoleSessionMode {
+    console_session_mode_for_term(
+        stdin_is_tty,
+        stderr_is_tty,
+        std::env::var("TERM").ok().as_deref(),
+    )
+}
+
+pub fn console_session_mode_for_term(
+    stdin_is_tty: bool,
+    stderr_is_tty: bool,
+    term: Option<&str>,
+) -> ConsoleSessionMode {
+    if stdin_is_tty && stderr_is_tty && terminal_supports_dashboard(term) {
+        ConsoleSessionMode::InteractiveDashboard
+    } else {
+        ConsoleSessionMode::Fallback
+    }
+}
+
+fn terminal_supports_dashboard(term: Option<&str>) -> bool {
+    match term.map(str::trim).filter(|term| !term.is_empty()) {
+        Some(term) => term != "dumb",
+        None => false,
+    }
+}
+
+pub fn sort_dashboard_endpoint_rows(rows: &mut [DashboardEndpointRow]) {
+    rows.sort_by(|left, right| {
+        dashboard_endpoint_sort_bucket(left)
+            .cmp(&dashboard_endpoint_sort_bucket(right))
+            .then_with(|| left.label.cmp(&right.label))
+    });
+}
+
+fn dashboard_endpoint_sort_bucket(row: &DashboardEndpointRow) -> u8 {
+    if row.label.starts_with("Plugin: ") {
+        1
+    } else {
+        0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

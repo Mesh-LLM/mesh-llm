@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Duration;
 
+pub(crate) use crate::discovery::{DiscoveryScope, MeshDiscoveryMode};
 use crate::network::nostr;
 
 pub const LAN_SERVICE_TYPE: &str = "_mesh-llm._tcp.local.";
@@ -12,8 +13,6 @@ const TXT_SCHEMA_VERSION: u8 = 1;
 const TXT_LIST_SEPARATOR: char = '|';
 const TXT_VALUE_LIMIT: usize = 220;
 const DAEMON_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
-
-pub(crate) use mesh_llm_cli::{DiscoveryScope, MeshDiscoveryMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey, TransportAddr};
+use mesh_llm_events::OutputEvent;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -52,14 +53,14 @@ const SIGNED_BOOTSTRAP_TOKEN_LIFETIME_MS: u64 = 24 * 60 * 60 * 1000;
 const RECENT_MESH_REJECTION_LIMIT: usize = 16;
 
 fn emit_mesh_info(message: String) {
-    let _ = mesh_llm_tui::output::emit_event(mesh_llm_tui::output::OutputEvent::Info {
+    let _ = mesh_llm_events::emit_event(OutputEvent::Info {
         message,
         context: None,
     });
 }
 
 fn emit_mesh_warning(message: String) {
-    let _ = mesh_llm_tui::output::emit_event(mesh_llm_tui::output::OutputEvent::Warning {
+    let _ = mesh_llm_events::emit_event(OutputEvent::Warning {
         message,
         context: None,
     });

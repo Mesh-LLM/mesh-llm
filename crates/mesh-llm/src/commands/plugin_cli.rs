@@ -109,7 +109,8 @@ fn resolve_configured_cli_plugin(
         if !entry.enabled.unwrap_or(true) {
             return plugin::bundled_cli_plugin_spec(command);
         }
-        let resolved = plugin::load_resolved_plugins(cli)?;
+        let options = plugin_runtime_options_from_cli(cli);
+        let resolved = plugin::load_resolved_plugins(&options)?;
         let spec = resolved
             .externals
             .into_iter()
@@ -163,6 +164,15 @@ fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
         } else {
             mesh_llm_plugin::MeshVisibility::Private
         },
+    }
+}
+
+fn plugin_runtime_options_from_cli(cli: &Cli) -> mesh_llm_host_runtime::RuntimeOptions {
+    mesh_llm_host_runtime::RuntimeOptions {
+        config: cli.config.clone(),
+        publish: cli.publish,
+        nostr_discovery: cli.nostr_discovery,
+        ..mesh_llm_host_runtime::RuntimeOptions::default()
     }
 }
 

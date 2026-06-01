@@ -6,7 +6,7 @@ use super::{
 };
 use crate::models::usage::ModelUsageRecord;
 use anyhow::{Context, Result, bail};
-use mesh_llm_tui::terminal_progress::start_spinner;
+use mesh_llm_events::terminal_progress::start_spinner;
 use model_artifact::{ModelArtifactFile, select_primary_artifact_file};
 use serde::Deserialize;
 use std::cmp::Ordering;

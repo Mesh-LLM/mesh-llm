@@ -1,7 +1,7 @@
 use crate::mesh;
 use crate::network::nostr;
-use mesh_llm_cli::Cli;
-use mesh_llm_tui::output::{OutputEvent, emit_event};
+use crate::runtime::RuntimeOptions;
+use mesh_llm_events::{OutputEvent, emit_event};
 use std::cmp::Reverse;
 
 /// Health probe: try QUIC connect to the mesh's bootstrap node.
@@ -247,21 +247,21 @@ fn current_unix_secs() -> u64 {
 
 /// Helper for StartNew path — configure CLI to start a new mesh.
 pub(super) fn start_new_mesh(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     models: &[String],
     my_vram_gb: f64,
     has_startup_models: bool,
 ) {
     let primary = models.first().cloned().unwrap_or_default();
-    if !has_startup_models && cli.model.is_empty() {
-        cli.model.push(primary.clone().into());
+    if !has_startup_models && options.model.is_empty() {
+        options.model.push(primary.clone().into());
     }
     let detail = if has_startup_models {
         "using configured startup models".to_string()
     } else {
         format!("serving: {primary}")
     };
-    let discovery = if cli.publish {
+    let discovery = if options.publish {
         "publishing for discovery"
     } else {
         "mesh is private — add --publish to advertise it for discovery"

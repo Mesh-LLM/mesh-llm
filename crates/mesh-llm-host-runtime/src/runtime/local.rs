@@ -20,7 +20,7 @@ use crate::runtime_data::{
     RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot,
 };
 use anyhow::{Context, Result};
-use mesh_llm_tui::output::{OutputEvent, emit_event};
+use mesh_llm_events::{OutputEvent, emit_event};
 use sha2::{Digest, Sha256};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use std::collections::HashMap;

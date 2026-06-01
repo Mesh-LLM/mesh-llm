@@ -154,7 +154,8 @@ async fn run_plugin_command(command: &mesh_llm_cli::PluginCommand, cli: &Cli) ->
 }
 
 fn resolved_plugin_list_rows(cli: &Cli) -> Result<mesh_llm_commands::plugin::PluginListRows> {
-    let resolved = mesh_llm_host_runtime::command_support::plugin::load_resolved_plugins(cli)?;
+    let options = plugin_runtime_options_from_cli(cli);
+    let resolved = mesh_llm_host_runtime::command_support::plugin::load_resolved_plugins(&options)?;
     Ok(mesh_llm_commands::plugin::PluginListRows {
         externals: resolved
             .externals
@@ -176,4 +177,13 @@ fn resolved_plugin_list_rows(cli: &Cli) -> Result<mesh_llm_commands::plugin::Plu
             })
             .collect(),
     })
+}
+
+fn plugin_runtime_options_from_cli(cli: &Cli) -> mesh_llm_host_runtime::RuntimeOptions {
+    mesh_llm_host_runtime::RuntimeOptions {
+        config: cli.config.clone(),
+        publish: cli.publish,
+        nostr_discovery: cli.nostr_discovery,
+        ..mesh_llm_host_runtime::RuntimeOptions::default()
+    }
 }

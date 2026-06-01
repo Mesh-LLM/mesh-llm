@@ -3914,6 +3914,7 @@ dependencies = [
 name = "mesh-llm-events"
 version = "0.68.0"
 dependencies = [
+ "anyhow",
  "clap",
  "serde_json",
 ]
@@ -3989,7 +3990,6 @@ dependencies = [
  "libc",
  "mdns-sd",
  "mesh-llm-api-server",
- "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-config",
  "mesh-llm-events",
@@ -4003,7 +4003,6 @@ dependencies = [
  "mesh-llm-routing",
  "mesh-llm-runtime-install",
  "mesh-llm-system",
- "mesh-llm-tui",
  "mesh-llm-types",
  "mesh-llm-ui",
  "mesh-mixture-of-agents",
