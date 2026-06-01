@@ -10,7 +10,31 @@ use reqwest::Client;
 use mesh_llm_cli::PluginCommand;
 use mesh_llm_tui::terminal_progress::{SpinnerHandle, clear_stderr_line, start_spinner};
 
-pub async fn run_plugin_command(command: &PluginCommand) -> Result<bool> {
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PluginListRows {
+    pub externals: Vec<RuntimePluginRow>,
+    pub inactive: Vec<InactivePluginRow>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimePluginRow {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InactivePluginRow {
+    pub name: String,
+    pub kind: String,
+    pub status: String,
+    pub error: Option<String>,
+}
+
+pub async fn run_plugin_command(
+    command: &PluginCommand,
+    runtime_rows: Option<&PluginListRows>,
+) -> Result<bool> {
     match command {
         PluginCommand::Install { reference } => install(reference).await?,
         PluginCommand::Update { name } => update(name).await?,
@@ -19,7 +43,12 @@ pub async fn run_plugin_command(command: &PluginCommand) -> Result<bool> {
         PluginCommand::Delete { name } => delete(name)?,
         PluginCommand::Info { name } => info(name)?,
         PluginCommand::Search { query } => search(query.as_deref()).await?,
-        PluginCommand::List => return Ok(false),
+        PluginCommand::List => {
+            let Some(runtime_rows) = runtime_rows else {
+                return Ok(false);
+            };
+            list(runtime_rows)?;
+        }
     }
     Ok(true)
 }
@@ -107,6 +136,40 @@ async fn search(query: Option<&str>) -> Result<()> {
         println!(
             "{}\t{}\t{}\t{} <{}>",
             entry.name, entry.description, entry.github_url, entry.author_name, entry.author_email
+        );
+    }
+    Ok(())
+}
+
+fn list(runtime_rows: &PluginListRows) -> Result<()> {
+    let store = PluginStore::new(default_store_root()?);
+    for metadata in store.list()? {
+        let state = if metadata.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
+        println!(
+            "{}\tversion={}\tstate={}\tsource={}",
+            metadata.name, metadata.installed_version, state, metadata.source_repository
+        );
+    }
+
+    for spec in &runtime_rows.externals {
+        println!(
+            "{}\tkind=runtime\tcommand={}\targs={}",
+            spec.name,
+            spec.command,
+            spec.args.join(" ")
+        );
+    }
+    for summary in &runtime_rows.inactive {
+        println!(
+            "{}\tkind={}\tstate={}\terror={}",
+            summary.name,
+            summary.kind,
+            summary.status,
+            summary.error.clone().unwrap_or_default()
         );
     }
     Ok(())

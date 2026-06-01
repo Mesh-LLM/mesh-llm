@@ -20,7 +20,14 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
             mesh_llm_commands::benchmark::dispatch_benchmark_command(command).await?;
             Ok(true)
         }
-        Command::Plugin { command } => mesh_llm_commands::plugin::run_plugin_command(command).await,
+        Command::Plugin { command } => {
+            let rows = if matches!(command, mesh_llm_cli::PluginCommand::List) {
+                Some(mesh_llm_host_runtime::resolved_plugin_list_rows(cli)?)
+            } else {
+                None
+            };
+            mesh_llm_commands::plugin::run_plugin_command(command, rows.as_ref()).await
+        }
         _ => Ok(false),
     }
 }
