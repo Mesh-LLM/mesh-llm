@@ -2807,7 +2807,7 @@ fn owner_runtime_config(
         .merged_with_trusted_owners(&cli.trust_owner);
     let trust_policy = cli
         .trust_policy
-        .map(Into::into)
+        .map(crate::cli::trust_policy_to_crypto)
         .unwrap_or(trust_store.policy);
 
     let keypair = match resolve_runtime_owner_key_path(cli)? {

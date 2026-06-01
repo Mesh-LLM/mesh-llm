@@ -274,10 +274,7 @@ fn build_encrypted_keystore(
     })
 }
 
-pub(crate) fn write_keystore_bytes_atomically(
-    path: &Path,
-    bytes: &[u8],
-) -> Result<(), CryptoError> {
+pub fn write_keystore_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<(), CryptoError> {
     let parent = path.parent().ok_or_else(|| {
         CryptoError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

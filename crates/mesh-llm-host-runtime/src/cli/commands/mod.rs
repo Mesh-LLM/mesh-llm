@@ -1,5 +1,4 @@
 mod agent_cli;
-mod auth;
 mod benchmark;
 mod discover;
 mod doctor;
@@ -28,7 +27,7 @@ use crate::cli::commands::plugin_cli::run_external_plugin_command;
 use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 use crate::cli::commands::skills::run_skills_command;
 use crate::cli::commands::update::run_update;
-use crate::cli::{AuthCommand, Cli, Command};
+use crate::cli::{Cli, Command};
 use crate::network::nostr;
 
 pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
@@ -41,7 +40,7 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
 
 async fn dispatch_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
-        Command::Auth { command } => dispatch_auth_command(command),
+        Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
         _ => dispatch_general_command(cli, cmd).await,
     }
@@ -96,7 +95,7 @@ async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
         Command::Plugin { command } => run_plugin_command(command, cli).await,
         Command::Benchmark { command } => dispatch_benchmark_command(command).await,
         Command::ModelPrepare { .. } => dispatch_model_prepare(cmd).await,
-        Command::Auth { command } => dispatch_auth_command(command),
+        Command::Auth { command } => mesh_llm_commands::auth::run_auth_command(command),
         Command::ExternalPlugin(args) => run_external_plugin_command(cli, args).await,
     }
 }
@@ -143,110 +142,4 @@ async fn dispatch_model_prepare(cmd: &Command) -> Result<()> {
         update_script: *update_script,
     })
     .await
-}
-
-fn dispatch_auth_command(command: &AuthCommand) -> Result<()> {
-    match command {
-        AuthCommand::Init {
-            owner_key,
-            force,
-            no_passphrase,
-            keychain,
-        } => auth::run_init(owner_key.clone(), *force, *no_passphrase, *keychain),
-        AuthCommand::Status {
-            owner_key,
-            node_key,
-            node_ownership,
-            trust_store,
-        } => auth::run_status(
-            owner_key.clone(),
-            node_key.clone(),
-            node_ownership.clone(),
-            trust_store.clone(),
-        ),
-        AuthCommand::SignNode {
-            owner_key,
-            node_key,
-            out,
-            hostname_hint,
-            node_label,
-            expires_in_hours,
-        } => auth::run_sign_node(
-            owner_key.clone(),
-            node_key.clone(),
-            out.clone(),
-            node_label.clone(),
-            hostname_hint.clone(),
-            *expires_in_hours,
-        ),
-        AuthCommand::RenewNode {
-            owner_key,
-            node_key,
-            out,
-            hostname_hint,
-            node_label,
-            expires_in_hours,
-        } => auth::run_renew_node(
-            owner_key.clone(),
-            node_key.clone(),
-            out.clone(),
-            node_label.clone(),
-            hostname_hint.clone(),
-            *expires_in_hours,
-        ),
-        AuthCommand::VerifyNode {
-            file,
-            node_id,
-            trust_store,
-            trust_policy,
-        } => auth::run_verify_node(
-            file.clone(),
-            node_id.clone(),
-            trust_store.clone(),
-            trust_policy.map(Into::into),
-        ),
-        AuthCommand::RotateNode {
-            owner_key,
-            node_key,
-            out,
-            hostname_hint,
-            node_label,
-            expires_in_hours,
-            revoke_current,
-            reason,
-            trust_store,
-        } => auth::run_rotate_node(
-            owner_key.clone(),
-            node_key.clone(),
-            out.clone(),
-            node_label.clone(),
-            hostname_hint.clone(),
-            *expires_in_hours,
-            *revoke_current,
-            reason.clone(),
-            trust_store.clone(),
-        ),
-        AuthCommand::RevokeOwner {
-            owner_id,
-            reason,
-            trust_store,
-        } => auth::run_revoke_owner(owner_id.clone(), reason.clone(), trust_store.clone()),
-        AuthCommand::RevokeNode {
-            cert_id,
-            node_id,
-            reason,
-            trust_store,
-        } => auth::run_revoke_node(
-            cert_id.clone(),
-            node_id.clone(),
-            reason.clone(),
-            trust_store.clone(),
-        ),
-        AuthCommand::RotateOwner {
-            owner_key,
-            no_passphrase,
-            force,
-        } => auth::run_rotate_owner(owner_key.clone(), *no_passphrase, *force),
-        AuthCommand::Trust { command } => auth::run_trust_command(command),
-    }
 }

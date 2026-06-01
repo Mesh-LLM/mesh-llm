@@ -10212,19 +10212,8 @@ pub fn clear_public_identity() {
 /// Load secret key from ~/.mesh-llm/key, or create a new one and save it.
 async fn load_or_create_key() -> Result<SecretKey> {
     let key_path = default_node_key_path()?;
-    let dir = key_path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Invalid node key path {}", key_path.display()))?;
-    ensure_private_node_key_dir(dir)?;
-
     if key_path.exists() {
-        ensure_private_node_key_file(&key_path)?;
-        let hex = tokio::fs::read_to_string(&key_path).await?;
-        let bytes = hex::decode(hex.trim())?;
-        if bytes.len() != 32 {
-            anyhow::bail!("Invalid key length in {}", key_path.display());
-        }
-        let key = SecretKey::from_bytes(&bytes.try_into().unwrap());
+        let key = load_node_key_from_path(&key_path)?;
         tracing::info!("Loaded key from {}", key_path.display());
         return Ok(key);
     }
@@ -10236,75 +10225,17 @@ async fn load_or_create_key() -> Result<SecretKey> {
 }
 
 pub fn default_node_key_path() -> Result<std::path::PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(home.join(".mesh-llm").join("key"))
+    Ok(mesh_llm_identity::default_node_key_path()?)
 }
 
 pub fn load_node_key_from_path(path: &std::path::Path) -> Result<SecretKey> {
-    let hex = std::fs::read_to_string(path)?;
-    let bytes = hex::decode(hex.trim())?;
-    if bytes.len() != 32 {
-        anyhow::bail!("Invalid key length in {}", path.display());
-    }
-    Ok(SecretKey::from_bytes(&bytes.try_into().unwrap()))
+    Ok(SecretKey::from_bytes(
+        &mesh_llm_identity::load_node_key_bytes_from_path(path)?,
+    ))
 }
 
 pub fn save_node_key_to_path(path: &std::path::Path, key: &SecretKey) -> Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("Invalid node key path {}", path.display()))?;
-    ensure_private_node_key_dir(parent)?;
-    if path.exists() {
-        ensure_private_node_key_file(path)?;
-    }
-    crate::crypto::write_keystore_bytes_atomically(path, hex::encode(key.to_bytes()).as_bytes())?;
-    ensure_private_node_key_file(path)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn ensure_private_node_key_dir(dir: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    std::fs::create_dir_all(dir)?;
-    let metadata = std::fs::metadata(dir)?;
-    let mut perms = metadata.permissions();
-    if perms.mode() & 0o077 != 0 {
-        perms.set_mode(0o700);
-        std::fs::set_permissions(dir, perms)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_private_node_key_dir(dir: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(dir)?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn ensure_private_node_key_file(path: &std::path::Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
-        anyhow::bail!("Node key path is not a regular file");
-    }
-    let mut perms = metadata.permissions();
-    if perms.mode() & 0o077 != 0 {
-        perms.set_mode(0o600);
-        std::fs::set_permissions(path, perms)?;
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_private_node_key_file(path: &std::path::Path) -> Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.file_type().is_file() {
-        anyhow::bail!("Node key path is not a regular file");
-    }
+    mesh_llm_identity::save_node_key_bytes_to_path(path, &key.to_bytes())?;
     Ok(())
 }
 

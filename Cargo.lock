@@ -3841,15 +3841,23 @@ name = "mesh-llm-commands"
 version = "0.68.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "hex",
+ "iroh",
  "mesh-llm-cli",
+ "mesh-llm-identity",
  "mesh-llm-native-runtime",
  "mesh-llm-plugin-manager",
  "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-tui",
+ "rand 0.10.1",
  "reqwest 0.12.28",
+ "rpassword",
  "serde",
  "serde_json",
+ "serial_test",
+ "zeroize",
 ]
 
 [[package]]
@@ -4030,14 +4038,22 @@ dependencies = [
 name = "mesh-llm-identity"
 version = "0.68.0"
 dependencies = [
+ "argon2",
+ "base64",
+ "chacha20poly1305",
+ "chrono",
  "crypto_box",
+ "dirs",
  "ed25519-dalek",
  "hex",
+ "keyring",
  "rand 0.10.1",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2 0.10.9",
  "thiserror 2.0.18",
+ "zeroize",
 ]
 
 [[package]]

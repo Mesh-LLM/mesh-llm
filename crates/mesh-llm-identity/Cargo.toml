@@ -9,11 +9,21 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
 
 [dependencies]
+argon2 = "0.5"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
 crypto_box = "0.9"
+dirs = "6.0.0"
 ed25519-dalek = { version = "=3.0.0-pre.7", features = ["rand_core"] }
 hex = "0.4"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust", "vendored"] }
 rand = "0.10"
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serial_test = "3"

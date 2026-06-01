@@ -13,20 +13,17 @@ pub mod runtime {
 }
 
 pub use mesh_llm_cli::{
-    AuthCommand, BinaryFlavor, Cli, Command, DoctorCommand, LogFormat, MeshGuardrailCliMode,
-    NormalizedRuntimeArgs, PluginCommand, RuntimeSurface, SkillAgentArg, SkillCommand,
-    TrustCommand, TrustPolicy, legacy_runtime_surface_warning, normalize_runtime_surface_args,
-    validate_discovery_mode_args,
+    BinaryFlavor, Cli, Command, DoctorCommand, LogFormat, MeshGuardrailCliMode,
+    NormalizedRuntimeArgs, PluginCommand, RuntimeSurface, SkillAgentArg, SkillCommand, TrustPolicy,
+    legacy_runtime_surface_warning, normalize_runtime_surface_args, validate_discovery_mode_args,
 };
 
-impl From<TrustPolicy> for crate::crypto::TrustPolicy {
-    fn from(value: TrustPolicy) -> Self {
-        match value {
-            TrustPolicy::Off => Self::Off,
-            TrustPolicy::PreferOwned => Self::PreferOwned,
-            TrustPolicy::RequireOwned => Self::RequireOwned,
-            TrustPolicy::Allowlist => Self::Allowlist,
-        }
+pub(crate) fn trust_policy_to_crypto(value: TrustPolicy) -> crate::crypto::TrustPolicy {
+    match value {
+        TrustPolicy::Off => crate::crypto::TrustPolicy::Off,
+        TrustPolicy::PreferOwned => crate::crypto::TrustPolicy::PreferOwned,
+        TrustPolicy::RequireOwned => crate::crypto::TrustPolicy::RequireOwned,
+        TrustPolicy::Allowlist => crate::crypto::TrustPolicy::Allowlist,
     }
 }
 

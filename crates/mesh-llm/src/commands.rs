@@ -7,6 +7,10 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
     };
 
     match command {
+        Command::Auth { command } => {
+            mesh_llm_commands::auth::run_auth_command(command)?;
+            Ok(true)
+        }
         Command::Gpus { json, command } => {
             mesh_llm_commands::gpus::dispatch_gpu_command(*json, command.as_ref())?;
             Ok(true)
