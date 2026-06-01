@@ -3843,8 +3843,11 @@ dependencies = [
  "anyhow",
  "mesh-llm-cli",
  "mesh-llm-native-runtime",
+ "mesh-llm-plugin-manager",
  "mesh-llm-runtime-install",
  "mesh-llm-system",
+ "mesh-llm-tui",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
 ]

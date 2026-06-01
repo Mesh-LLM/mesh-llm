@@ -16,6 +16,11 @@ pub async fn dispatch(cli: &Cli) -> Result<bool> {
             mesh_llm_commands::update::run_update(cli).await?;
             Ok(true)
         }
+        Command::Benchmark { command } => {
+            mesh_llm_commands::benchmark::dispatch_benchmark_command(command).await?;
+            Ok(true)
+        }
+        Command::Plugin { command } => mesh_llm_commands::plugin::run_plugin_command(command).await,
         _ => Ok(false),
     }
 }

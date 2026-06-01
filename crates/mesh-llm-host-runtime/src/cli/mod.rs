@@ -4,10 +4,6 @@ pub(crate) mod pager;
 pub(crate) mod shell;
 pub(crate) mod terminal_progress;
 
-pub mod benchmark {
-    pub use mesh_llm_cli::benchmark::*;
-}
-
 pub mod models {
     pub use mesh_llm_cli::models::*;
 }
