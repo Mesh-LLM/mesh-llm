@@ -1,10 +1,10 @@
 use clap::Subcommand;
 use std::path::PathBuf;
 
-use crate::cli::MeshGuardrailCliMode;
+use crate::MeshGuardrailCliMode;
 
 #[derive(Subcommand, Debug)]
-pub(crate) enum RuntimeCommand {
+pub enum RuntimeCommand {
     /// List available or installed native runtimes.
     List {
         /// List release-manifest or bundled runtimes instead of installed runtimes.

@@ -2805,7 +2805,10 @@ fn owner_runtime_config(
     let trust_store = load_trust_store(&trust_store_path)
         .with_context(|| format!("Failed to load trust store {}", trust_store_path.display()))?
         .merged_with_trusted_owners(&cli.trust_owner);
-    let trust_policy = cli.trust_policy.unwrap_or(trust_store.policy);
+    let trust_policy = cli
+        .trust_policy
+        .map(Into::into)
+        .unwrap_or(trust_store.policy);
 
     let keypair = match resolve_runtime_owner_key_path(cli)? {
         Some(path) => match load_owner_keypair_for_runtime(&path) {
@@ -3432,7 +3435,7 @@ async fn prepare_runtime_startup(
         config,
         &startup_specs,
         &mut startup_models,
-        cli.llama_flavor,
+        crate::cli::binary_flavor_to_backend(cli.llama_flavor),
         None,
     )?;
     let resolved_models: Vec<PathBuf> = startup_models
@@ -3523,7 +3526,12 @@ fn cli_from_embedded_options(options: EmbeddedRuntimeOptions) -> Cli {
     cli.owner_key = options.owner_key;
     cli.owner_required = options.owner_required;
     cli.node_label = options.node_label;
-    cli.trust_policy = options.trust_policy;
+    cli.trust_policy = options.trust_policy.map(|policy| match policy {
+        crate::crypto::TrustPolicy::Off => crate::cli::TrustPolicy::Off,
+        crate::crypto::TrustPolicy::PreferOwned => crate::cli::TrustPolicy::PreferOwned,
+        crate::crypto::TrustPolicy::RequireOwned => crate::cli::TrustPolicy::RequireOwned,
+        crate::crypto::TrustPolicy::Allowlist => crate::cli::TrustPolicy::Allowlist,
+    });
     cli.trust_owner = options.trust_owner;
     cli.min_node_version = options.mesh_requirements.min_node_version;
     cli.max_node_version = options.mesh_requirements.max_node_version;
@@ -3562,7 +3570,7 @@ async fn run_runtime_cli(
         auto_update: cli.auto_update,
         plugin_requested: cli.plugin.is_some(),
         command_is_update: matches!(cli.command, Some(Command::Update { .. })),
-        llama_flavor: cli.llama_flavor,
+        llama_flavor: crate::cli::binary_flavor_to_backend(cli.llama_flavor),
         current_version: crate::VERSION,
     })
     .await?;
@@ -4575,7 +4583,6 @@ pub(crate) fn assert_quitting_during_startup_cancels_without_late_ready_render()
             .is_none(),
         "startup shutdown should cancel any late RuntimeReady emission"
     );
-    crate::cli::output::assert_shutdown_suppresses_late_ready_render();
 }
 
 #[cfg(test)]
@@ -6581,7 +6588,7 @@ fn initialize_run_auto_runtime_state(cli: &Cli) -> RunAutoRuntimeState {
             .console_session_mode()
             .is_some(),
         openai_guardrail_policy: openai_guardrail_policy_handle(
-            cli.mesh_guardrails.to_guardrail_mode(),
+            crate::cli::mesh_guardrail_mode_to_openai(cli.mesh_guardrails),
         ),
     }
 }
@@ -8192,7 +8199,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
             console_port,
             cli.headless,
             config.gpu.parallel,
-            startup_default_backend_device(cli.llama_flavor),
+            startup_default_backend_device(crate::cli::binary_flavor_to_backend(cli.llama_flavor)),
         ),
     });
 

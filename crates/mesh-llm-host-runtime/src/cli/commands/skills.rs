@@ -41,7 +41,11 @@ fn install(agents: &[SkillAgentArg], all: bool, dry_run: bool, force: bool) -> R
         options.skill_options.detected_only = false;
     }
     if !agents.is_empty() {
-        options.skill_options.agents = agents.iter().copied().map(Into::into).collect();
+        options.skill_options.agents = agents
+            .iter()
+            .copied()
+            .map(crate::cli::skill_agent_arg_to_manager)
+            .collect();
         options.skill_options.detected_only = false;
     }
     let report = install_available_skills(&options)?;

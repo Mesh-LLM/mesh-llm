@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use clap::ValueEnum;
 use mdns_sd::{DaemonStatus, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -14,51 +13,7 @@ const TXT_LIST_SEPARATOR: char = '|';
 const TXT_VALUE_LIMIT: usize = 220;
 const DAEMON_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub(crate) enum MeshDiscoveryMode {
-    #[default]
-    Nostr,
-    Mdns,
-}
-
-impl MeshDiscoveryMode {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Nostr => "nostr",
-            Self::Mdns => "mdns",
-        }
-    }
-
-    pub(crate) fn source(self) -> &'static str {
-        match self {
-            Self::Nostr => "nostr-relay",
-            Self::Mdns => "mdns-sd",
-        }
-    }
-
-    pub(crate) fn scope(self) -> DiscoveryScope {
-        match self {
-            Self::Nostr => DiscoveryScope::Public,
-            Self::Mdns => DiscoveryScope::Lan,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum DiscoveryScope {
-    Public,
-    Lan,
-}
-
-impl DiscoveryScope {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Public => "public",
-            Self::Lan => "lan",
-        }
-    }
-}
+pub(crate) use mesh_llm_cli::{DiscoveryScope, MeshDiscoveryMode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

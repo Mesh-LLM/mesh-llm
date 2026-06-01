@@ -10,7 +10,11 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
             version,
             flavor,
             detect_flavor,
-        }) => (version.as_deref(), *flavor, *detect_flavor),
+        }) => (
+            version.as_deref(),
+            crate::cli::binary_flavor_to_backend(*flavor),
+            *detect_flavor,
+        ),
         _ => (None, None, false),
     };
     autoupdate::run_update_command(autoupdate::UpdateCommandOptions {

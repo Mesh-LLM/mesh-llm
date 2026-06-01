@@ -203,7 +203,7 @@ fn dispatch_auth_command(command: &AuthCommand) -> Result<()> {
             file.clone(),
             node_id.clone(),
             trust_store.clone(),
-            *trust_policy,
+            trust_policy.map(Into::into),
         ),
         AuthCommand::RotateNode {
             owner_key,

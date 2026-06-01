@@ -2,7 +2,7 @@ use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Subcommand, Debug)]
-pub(crate) enum BenchmarkCommand {
+pub enum BenchmarkCommand {
     /// Import a prompt corpus from a supported online source into local JSONL.
     #[command(name = "import-prompts")]
     ImportPrompts {
@@ -27,7 +27,7 @@ pub(crate) enum BenchmarkCommand {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum GpuBenchmarkBackend {
+pub enum GpuBenchmarkBackend {
     Metal,
     Cuda,
     Hip,
@@ -35,7 +35,7 @@ pub(crate) enum GpuBenchmarkBackend {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum PromptImportSource {
+pub enum PromptImportSource {
     MtBench,
     Gsm8k,
     Humaneval,

@@ -15,4 +15,6 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+clap.workspace = true
 mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.68.0" }
+serde.workspace = true

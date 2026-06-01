@@ -3795,7 +3795,9 @@ name = "mesh-llm-cli"
 version = "0.68.0"
 dependencies = [
  "anyhow",
+ "clap",
  "mesh-llm-tui",
+ "serde",
 ]
 
 [[package]]
