@@ -18,7 +18,11 @@ dynamic-native-runtime = ["mesh-llm-host-runtime/dynamic-native-runtime"]
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
+clap.workspace = true
+mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.68.0" }
 mesh-llm-host-runtime = { path = "../mesh-llm-host-runtime", default-features = false }
+mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.68.0" }
 tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]

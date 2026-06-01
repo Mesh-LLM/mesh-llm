@@ -3475,6 +3475,15 @@ pub(crate) async fn run() -> Result<()> {
     run_normalized_runtime_args(normalized_args).await
 }
 
+pub(crate) async fn run_cli(
+    cli: Cli,
+    explicit_surface: Option<RuntimeSurface>,
+    legacy_warning: Option<String>,
+) -> Result<()> {
+    initialize_runtime_entrypoint()?;
+    run_runtime_cli(cli, explicit_surface, legacy_warning, None).await
+}
+
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
     initialize_embedded_runtime_entrypoint()?;
 

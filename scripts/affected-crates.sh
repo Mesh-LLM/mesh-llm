@@ -11,6 +11,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm"
   "mesh-llm-cli"
   "mesh-llm-config"
+  "mesh-llm-events"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
   "mesh-llm-hardware-profile"

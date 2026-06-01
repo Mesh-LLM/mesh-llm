@@ -37,11 +37,24 @@ pub use mesh::requirements::{
 };
 
 use anyhow::Result;
-use std::time::Duration;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub async fn run() -> Result<()> {
+    initialize_host_runtime()?;
+    runtime::run().await
+}
+
+pub async fn run_cli(
+    cli: mesh_llm_cli::Cli,
+    explicit_surface: Option<mesh_llm_cli::RuntimeSurface>,
+    legacy_warning: Option<String>,
+) -> Result<()> {
+    initialize_host_runtime()?;
+    runtime::run_cli(cli, explicit_surface, legacy_warning).await
+}
+
+fn initialize_host_runtime() -> Result<()> {
     #[cfg(feature = "dynamic-native-runtime")]
     if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime()? {
         tracing::info!(
@@ -50,18 +63,7 @@ pub async fn run() -> Result<()> {
             "Loaded MeshLLM native runtime"
         );
     }
-    runtime::run().await
-}
-
-pub async fn run_main() -> i32 {
-    match run().await {
-        Ok(()) => 0,
-        Err(err) => {
-            let _ = cli::output::emit_fatal_error(&err);
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            1
-        }
-    }
+    Ok(())
 }
 
 #[cfg(test)]

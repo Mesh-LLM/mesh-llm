@@ -361,7 +361,11 @@ unpublished_registry_deps() {
             ;;
         mesh-llm-cli)
             printf '%s\n' \
-                mesh-llm-tui
+                mesh-llm-events
+            ;;
+        mesh-llm-tui)
+            printf '%s\n' \
+                mesh-llm-events
             ;;
         mesh-llm-sdk)
             printf '%s\n' \
@@ -406,6 +410,7 @@ publish_crates=(
     model-artifact
     mesh-llm-client
     mesh-llm-api-client
+    mesh-llm-events
     mesh-llm-ui
     mesh-llm-console-server
     mesh-llm-tui

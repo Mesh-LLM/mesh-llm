@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 pub fn clear_stderr_line() -> Result<()> {
-    if mesh_llm_tui::json_mode_enabled() {
+    if crate::json_mode_enabled() {
         return Ok(());
     }
     eprint!("\r\x1b[2K");
@@ -40,7 +40,7 @@ impl Drop for SpinnerHandle {
 }
 
 pub fn start_spinner(message: &str) -> SpinnerHandle {
-    if mesh_llm_tui::json_mode_enabled() {
+    if crate::json_mode_enabled() {
         return SpinnerHandle {
             done: Arc::new(AtomicBool::new(true)),
             thread: None,
@@ -88,7 +88,7 @@ impl DeterminateProgressLine {
         total: usize,
         detail: Option<&str>,
     ) -> Result<()> {
-        if mesh_llm_tui::json_mode_enabled() {
+        if crate::json_mode_enabled() {
             return Ok(());
         }
         let percent = if total > 0 {

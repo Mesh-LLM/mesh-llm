@@ -6,9 +6,8 @@ pub mod pager;
 pub mod parser;
 pub mod runtime;
 pub mod shell;
-pub mod terminal_progress;
 
-pub use mesh_llm_tui::LogFormat;
+pub use mesh_llm_events::LogFormat;
 
 pub use parser::{
     AuthCommand, BinaryFlavor, Cli, Command, DiscoveryScope, DoctorCommand, GpuCommand,

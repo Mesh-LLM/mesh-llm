@@ -1,14 +1,7 @@
 #![forbid(unsafe_code)]
 
-use clap::ValueEnum;
-
 pub mod output;
+pub mod terminal_progress;
 
+pub use mesh_llm_events::*;
 pub use output::*;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum LogFormat {
-    #[default]
-    Pretty,
-    Json,
-}

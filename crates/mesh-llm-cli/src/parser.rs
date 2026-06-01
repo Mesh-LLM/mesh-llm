@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::benchmark::BenchmarkCommand;
 use crate::models;
 use crate::runtime::RuntimeCommand;
-use mesh_llm_tui::LogFormat;
+use mesh_llm_events::LogFormat;
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]

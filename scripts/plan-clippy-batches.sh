@@ -14,6 +14,7 @@ WORKSPACE_MEMBERS=(
   "mesh-llm"
   "mesh-llm-cli"
   "mesh-llm-config"
+  "mesh-llm-events"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
   "mesh-llm-hardware-profile"
@@ -128,6 +129,7 @@ crates = json.loads(sys.argv[2])
 weights = {
     "mesh-llm": 10,
     "mesh-llm-cli": 1,
+    "mesh-llm-events": 1,
     "mesh-llm-host-runtime": 8,
     "mesh-llm-client": 6,
     "mesh-llm-ffi": 5,

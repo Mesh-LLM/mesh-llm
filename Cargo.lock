@@ -3759,10 +3759,14 @@ dependencies = [
 name = "mesh-llm"
 version = "0.68.0"
 dependencies = [
+ "anyhow",
  "axum",
+ "clap",
  "hex",
+ "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-host-runtime",
+ "mesh-llm-tui",
  "reqwest 0.12.28",
  "serde_json",
  "serial_test",
@@ -3796,7 +3800,7 @@ version = "0.68.0"
 dependencies = [
  "anyhow",
  "clap",
- "mesh-llm-tui",
+ "mesh-llm-events",
  "serde",
 ]
 
@@ -3861,6 +3865,14 @@ version = "0.68.0"
 dependencies = [
  "anyhow",
  "mesh-llm-host-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "mesh-llm-events"
+version = "0.68.0"
+dependencies = [
+ "clap",
  "serde_json",
 ]
 
@@ -3938,6 +3950,7 @@ dependencies = [
  "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-config",
+ "mesh-llm-events",
  "mesh-llm-guardrails",
  "mesh-llm-identity",
  "mesh-llm-native-runtime",
@@ -4179,8 +4192,8 @@ dependencies = [
  "anyhow",
  "arboard",
  "chrono",
- "clap",
  "crossterm 0.28.1",
+ "mesh-llm-events",
  "ratatui",
  "serde_json",
  "tokio",

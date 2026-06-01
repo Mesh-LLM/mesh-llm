@@ -64,6 +64,7 @@ jobs:
           for path in \
             crates/mesh-llm/ \
             crates/mesh-llm-cli/ \
+            crates/mesh-llm-events/ \
             crates/mesh-llm-hardware-profile/ \
             crates/mesh-llm-identity/ \
             crates/mesh-llm-native-runtime/ \
