@@ -1091,6 +1091,39 @@ impl SplitParticipantExclusionReason {
             Self::MissingModelSource => "missing_model_source",
         }
     }
+
+    const fn recommendation(self) -> &'static str {
+        match self {
+            Self::Client => "Run this peer in serve mode if it should contribute compute.",
+            Self::MissingVram => {
+                "Check GPU visibility or lower --max-vram only after confirming backend/device detection."
+            }
+            Self::MissingModelInterest => {
+                "Start the peer with the same --model value or explicit split model interest."
+            }
+            Self::StageProtocolGeneration => {
+                "Upgrade this peer so it advertises current stage protocol support."
+            }
+            Self::MissingStagePath => {
+                "Wait for direct peer latency to be measured or fix direct QUIC connectivity."
+            }
+            Self::StagePathRelayOnly => {
+                "Fix firewall/NAT/direct-path connectivity; relay-only stage paths are not admitted."
+            }
+            Self::StagePathTooSlow => "Use a lower-latency peer or network path for split serving.",
+            Self::MissingModelSource => {
+                "Start the peer with a resolvable package source or wait for stage inventory to prove the package is available."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SplitParticipantBlockerSummary {
+    reason: &'static str,
+    count: usize,
+    short_node_ids: Vec<String>,
+    recommendation: &'static str,
 }
 
 struct SplitGenerationLoadSpec<'a> {
@@ -2701,14 +2734,96 @@ fn ensure_split_participant_timeout_has_quorum(
     best: &[SplitParticipant],
     best_excluded: &[SplitParticipantExclusion],
 ) -> Result<()> {
-    anyhow::ensure!(
-        best.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS,
-        "split runtime needs at least two participating nodes for {model_ref}; found {} eligible [{}]; excluded [{}]",
+    if best.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "split runtime needs at least two participating nodes for {model_ref}; found {} eligible [{}]; excluded [{}]; blockers [{}]; next_step: {}",
         best.len(),
         split_participant_labels(best).join(", "),
-        split_participant_exclusion_labels(best_excluded).join(", ")
-    );
-    Ok(())
+        split_participant_exclusion_labels(best_excluded).join(", "),
+        split_participant_blocker_labels(best_excluded).join("; "),
+        split_participant_next_step(best_excluded)
+    )
+}
+
+fn split_participant_blocker_labels(excluded: &[SplitParticipantExclusion]) -> Vec<String> {
+    split_participant_blockers(excluded)
+        .into_iter()
+        .map(|blocker| {
+            format!(
+                "{}={} nodes=[{}]",
+                blocker.reason,
+                blocker.count,
+                blocker.short_node_ids.join(", ")
+            )
+        })
+        .collect()
+}
+
+fn split_participant_next_step(excluded: &[SplitParticipantExclusion]) -> &'static str {
+    split_participant_blockers(excluded)
+        .first()
+        .map(|blocker| blocker.recommendation)
+        .unwrap_or("Start at least one more worker/host with the same --model value and --split.")
+}
+
+fn split_participant_blockers(
+    excluded: &[SplitParticipantExclusion],
+) -> Vec<SplitParticipantBlockerSummary> {
+    let mut blockers = split_participant_exclusion_reason_order()
+        .into_iter()
+        .filter_map(|reason| split_participant_blocker(excluded, reason))
+        .collect::<Vec<_>>();
+    blockers.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| blocker_reason_rank(left.reason).cmp(&blocker_reason_rank(right.reason)))
+    });
+    blockers
+}
+
+fn split_participant_blocker(
+    excluded: &[SplitParticipantExclusion],
+    reason: SplitParticipantExclusionReason,
+) -> Option<SplitParticipantBlockerSummary> {
+    let matching = excluded
+        .iter()
+        .filter(|item| item.reason == reason)
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+    Some(SplitParticipantBlockerSummary {
+        reason: reason.as_str(),
+        count: matching.len(),
+        short_node_ids: matching
+            .into_iter()
+            .map(|item| item.node_id.fmt_short().to_string())
+            .collect(),
+        recommendation: reason.recommendation(),
+    })
+}
+
+const fn split_participant_exclusion_reason_order() -> [SplitParticipantExclusionReason; 8] {
+    [
+        SplitParticipantExclusionReason::MissingModelSource,
+        SplitParticipantExclusionReason::MissingStagePath,
+        SplitParticipantExclusionReason::StagePathRelayOnly,
+        SplitParticipantExclusionReason::StagePathTooSlow,
+        SplitParticipantExclusionReason::StageProtocolGeneration,
+        SplitParticipantExclusionReason::MissingVram,
+        SplitParticipantExclusionReason::MissingModelInterest,
+        SplitParticipantExclusionReason::Client,
+    ]
+}
+
+fn blocker_reason_rank(reason: &str) -> usize {
+    split_participant_exclusion_reason_order()
+        .iter()
+        .position(|candidate| candidate.as_str() == reason)
+        .unwrap_or(usize::MAX)
 }
 
 fn best_split_participant_snapshot(
@@ -4358,6 +4473,38 @@ max_tokens = 222
         };
 
         assert!(signal.can_stage_with(&package, false));
+    }
+
+    #[test]
+    fn split_participant_timeout_error_reports_blocker_summary() {
+        let participants = vec![SplitParticipant::new(make_id(1), 2_000_000_000, None)];
+        let excluded = vec![
+            SplitParticipantExclusion {
+                node_id: make_id(2),
+                reason: SplitParticipantExclusionReason::MissingModelSource,
+            },
+            SplitParticipantExclusion {
+                node_id: make_id(3),
+                reason: SplitParticipantExclusionReason::MissingModelSource,
+            },
+            SplitParticipantExclusion {
+                node_id: make_id(4),
+                reason: SplitParticipantExclusionReason::MissingModelInterest,
+            },
+        ];
+
+        let error = ensure_split_participant_timeout_has_quorum(
+            "meshllm/Qwen3-layers",
+            &participants,
+            &excluded,
+        )
+        .expect_err("one participant should not satisfy split quorum")
+        .to_string();
+
+        assert!(error.contains("found 1 eligible"));
+        assert!(error.contains("blockers [missing_model_source=2 nodes=["));
+        assert!(error.contains("missing_model_interest=1 nodes=["));
+        assert!(error.contains("next_step: Start the peer with a resolvable package source"));
     }
 
     #[test]

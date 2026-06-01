@@ -70,6 +70,7 @@ pub(crate) struct SplitReadinessReport {
     pub(crate) capacity_advice: Option<ModelTargetCapacityAdvicePayload>,
     pub(crate) participants: Vec<SplitReadinessParticipant>,
     pub(crate) exclusions: Vec<SplitReadinessExclusion>,
+    pub(crate) blockers: Vec<SplitReadinessBlocker>,
     pub(crate) recommendations: Vec<String>,
 }
 
@@ -95,6 +96,14 @@ pub(crate) struct SplitReadinessExclusion {
     pub(crate) reason: &'static str,
     pub(crate) recommendation: &'static str,
     pub(crate) vram_bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct SplitReadinessBlocker {
+    pub(crate) reason: &'static str,
+    pub(crate) count: usize,
+    pub(crate) short_node_ids: Vec<String>,
+    pub(crate) recommendation: &'static str,
 }
 
 impl MeshApi {
@@ -164,6 +173,7 @@ pub(crate) fn build_split_readiness_report(input: SplitReadinessInput) -> SplitR
         participants.len(),
         capacity_advice.as_ref(),
     );
+    let blockers = split_readiness_blockers(&exclusions);
     let recommendations = split_readiness_recommendations(&input.model_ref, verdict, &exclusions);
     SplitReadinessReport {
         model_ref: input.model_ref,
@@ -175,6 +185,7 @@ pub(crate) fn build_split_readiness_report(input: SplitReadinessInput) -> SplitR
         capacity_advice,
         participants,
         exclusions,
+        blockers,
         recommendations,
     }
 }
@@ -483,6 +494,62 @@ fn split_readiness_recommendations(
         ));
     }
     recommendations
+}
+
+fn split_readiness_blockers(exclusions: &[SplitReadinessExclusion]) -> Vec<SplitReadinessBlocker> {
+    let mut blockers = split_readiness_exclusion_reason_order()
+        .into_iter()
+        .filter_map(|reason| split_readiness_blocker(exclusions, reason))
+        .collect::<Vec<_>>();
+    blockers.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| blocker_rank(left.reason).cmp(&blocker_rank(right.reason)))
+    });
+    blockers
+}
+
+fn split_readiness_blocker(
+    exclusions: &[SplitReadinessExclusion],
+    reason: SplitReadinessExclusionReason,
+) -> Option<SplitReadinessBlocker> {
+    let matching = exclusions
+        .iter()
+        .filter(|item| item.reason == reason.as_str())
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+    Some(SplitReadinessBlocker {
+        reason: reason.as_str(),
+        count: matching.len(),
+        short_node_ids: matching
+            .into_iter()
+            .map(|item| item.short_node_id.clone())
+            .collect(),
+        recommendation: reason.recommendation(),
+    })
+}
+
+const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 8] {
+    [
+        SplitReadinessExclusionReason::MissingModelSource,
+        SplitReadinessExclusionReason::MissingStagePath,
+        SplitReadinessExclusionReason::StagePathRelayOnly,
+        SplitReadinessExclusionReason::StagePathTooSlow,
+        SplitReadinessExclusionReason::StageProtocolGeneration,
+        SplitReadinessExclusionReason::MissingVram,
+        SplitReadinessExclusionReason::MissingModelInterest,
+        SplitReadinessExclusionReason::Client,
+    ]
+}
+
+fn blocker_rank(reason: &str) -> usize {
+    split_readiness_exclusion_reason_order()
+        .iter()
+        .position(|candidate| candidate.as_str() == reason)
+        .unwrap_or(usize::MAX)
 }
 
 fn node_wants_model(model_ref: &str, node: &SplitReadinessNodeInput) -> bool {
@@ -794,6 +861,15 @@ mod tests {
         assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
         assert_eq!(report.participant_count, 1);
         assert_eq!(report.exclusions[0].reason, "missing_model_source");
+        assert_eq!(
+            report.blockers,
+            vec![SplitReadinessBlocker {
+                reason: "missing_model_source",
+                count: 1,
+                short_node_ids: vec!["peer0000".to_string()],
+                recommendation: "Ensure this peer can resolve or inventory the layer package before split serving.",
+            }]
+        );
         assert!(
             report
                 .recommendations
@@ -824,6 +900,8 @@ mod tests {
         assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
         assert_eq!(report.participant_count, 1);
         assert_eq!(report.exclusions[0].reason, "missing_stage_path");
+        assert_eq!(report.blockers[0].reason, "missing_stage_path");
+        assert_eq!(report.blockers[0].count, 1);
         assert!(
             report
                 .recommendations
@@ -885,5 +963,47 @@ mod tests {
         assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
         assert_eq!(report.participant_count, 1);
         assert_eq!(report.exclusions[0].reason, "stage_path_relay_only");
+        assert_eq!(report.blockers[0].reason, "stage_path_relay_only");
+    }
+
+    #[test]
+    fn split_readiness_blockers_prioritize_largest_actionable_group() {
+        let mut missing_source_a = node(
+            "missinga000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        missing_source_a.artifact_transfer_supported = false;
+        let mut missing_source_b = node(
+            "missingb000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        missing_source_b.artifact_transfer_supported = false;
+        let mut slow_path = node(
+            "slowpath000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        slow_path.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        slow_path.stage_path =
+            crate::mesh::SplitStagePathSnapshot::direct(Some(crate::mesh::MAX_SPLIT_RTT_MS + 1));
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![slow_path, missing_source_a, missing_source_b],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.blockers[0].reason, "missing_model_source");
+        assert_eq!(report.blockers[0].count, 2);
+        assert_eq!(
+            report.blockers[0].short_node_ids,
+            vec!["missinga".to_string(), "missingb".to_string()]
+        );
+        assert_eq!(report.blockers[1].reason, "stage_path_too_slow");
     }
 }

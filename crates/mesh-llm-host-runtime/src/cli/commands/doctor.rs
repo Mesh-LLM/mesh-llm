@@ -303,6 +303,15 @@ fn split_readiness_lines(report: &Value) -> Vec<String> {
         format!("Excluded peers: {exclusions}"),
     ];
 
+    if let Some(items) = report["blockers"].as_array() {
+        let blockers = split_readiness_blocker_lines(items);
+        if !blockers.is_empty() {
+            lines.push(String::new());
+            lines.push("Blockers:".to_string());
+            lines.extend(blockers);
+        }
+    }
+
     if let Some(items) = report["recommendations"].as_array() {
         let recommendations = items
             .iter()
@@ -322,6 +331,42 @@ fn split_readiness_lines(report: &Value) -> Vec<String> {
     lines
 }
 
+fn split_readiness_blocker_lines(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(split_readiness_blocker_line)
+        .collect()
+}
+
+fn split_readiness_blocker_line(item: &Value) -> Option<String> {
+    let reason = item["reason"].as_str()?;
+    let count = item["count"].as_u64().unwrap_or_default();
+    let nodes = item["short_node_ids"]
+        .as_array()
+        .map(|items| split_readiness_short_node_list(items.as_slice()))
+        .unwrap_or_else(|| "unknown nodes".to_string());
+    let recommendation = item["recommendation"].as_str().unwrap_or_default();
+    let suffix = if recommendation.is_empty() {
+        String::new()
+    } else {
+        format!(" - {recommendation}")
+    };
+    Some(format!("  - {reason}: {count} peer(s), {nodes}{suffix}"))
+}
+
+fn split_readiness_short_node_list(items: &[Value]) -> String {
+    let nodes = items
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
+        "unknown nodes".to_string()
+    } else {
+        format!("nodes [{}]", nodes.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -339,6 +384,14 @@ mod tests {
             "verdict": "waiting_for_peers",
             "participant_count": 1,
             "exclusion_count": 1,
+            "blockers": [
+                {
+                    "reason": "missing_model_source",
+                    "count": 1,
+                    "short_node_ids": ["peer0000"],
+                    "recommendation": "Ensure this peer can resolve or inventory the layer package before split serving."
+                }
+            ],
             "recommendations": [
                 "Start at least one more worker/host with --model meshllm/Qwen3-8B-Q4_K_M-layers --split and join it to this mesh."
             ]
@@ -352,6 +405,12 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Eligible participants: 1"))
         );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("missing_model_source"))
+        );
+        assert!(lines.iter().any(|line| line.contains("peer0000")));
         assert!(
             lines
                 .iter()
