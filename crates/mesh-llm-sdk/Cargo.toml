@@ -6,11 +6,12 @@ license.workspace = true
 
 [features]
 default = ["client", "serve"]
-client = ["dep:anyhow", "dep:mesh-llm-host-runtime", "dep:serde_json"]
-serve = ["dep:anyhow", "dep:mesh-llm-host-runtime", "dep:serde_json"]
+client = ["dep:anyhow", "native-runtime", "dep:serde_json"]
+serve = ["dep:anyhow", "native-runtime", "dep:serde_json"]
 console = ["dep:mesh-llm-console-server"]
 web-ui = ["console", "mesh-llm-host-runtime?/web-ui"]
-dynamic-native-runtime = ["mesh-llm-host-runtime?/dynamic-native-runtime"]
+native-runtime = ["dep:mesh-llm-host-runtime"]
+dynamic-native-runtime = ["native-runtime", "mesh-llm-host-runtime/dynamic-native-runtime"]
 
 [lints]
 workspace = true

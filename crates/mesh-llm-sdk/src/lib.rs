@@ -17,6 +17,11 @@ pub mod console {
     };
 }
 
+#[cfg(feature = "native-runtime")]
+pub mod native_runtime {
+    pub use mesh_llm_host_runtime::sdk::native_runtime::*;
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum MeshDiscoveryMode {
     #[default]
