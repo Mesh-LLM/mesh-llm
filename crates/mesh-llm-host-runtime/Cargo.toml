@@ -49,6 +49,7 @@ mesh-llm-node = { path = "../mesh-llm-node", version = "0.68.0"  }
 mesh-llm-api-server = { path = "../mesh-llm-api-server", version = "0.68.0"  }
 mesh-client = { package = "mesh-llm-client", path = "../mesh-client", version = "0.68.0", features = ["host-io"]  }
 model-artifact = { path = "../model-artifact", version = "0.68.0"  }
+model-hf = { path = "../model-hf", version = "0.68.0"  }
 model-package = { path = "../model-package", version = "0.68.0"  }
 model-ref = { path = "../model-ref", version = "0.68.0"  }
 model-resolver = { path = "../model-resolver", version = "0.68.0"  }

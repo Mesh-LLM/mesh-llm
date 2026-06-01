@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 
 use serial_test::serial;
 
-use crate::models::delete::{delete_model_by_identifier, resolve_model_identifier};
-use crate::models::resolve::resolve_huggingface_file_from_sibling_entries;
+use crate::models::delete::{
+    delete_model_by_identifier, resolve_huggingface_file_from_sibling_entries,
+    resolve_model_identifier,
+};
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
