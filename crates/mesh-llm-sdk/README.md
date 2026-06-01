@@ -8,29 +8,31 @@ The default feature set intentionally depends only on publishable SDK crates:
 - `mesh-llm-runtime-install` for native runtime manifest resolution,
   downloads, cache management, and pruning
 
-The SDK does not depend on `mesh-llm-host-runtime`. Native runtimes are release
-artifacts selected and installed at runtime; Cargo does not build them from
-source as part of SDK compilation.
+Native runtimes are release artifacts selected and installed at runtime; Cargo
+does not build them from source as part of SDK compilation.
 
-Applications that need a full in-process Mesh LLM node should depend on
-`mesh-llm-embedded-runtime` directly while the host runtime is being split into
-publishable layers:
+## Embedded Node Example
 
 ```toml
 [dependencies]
-mesh-llm-embedded-runtime = "0.68.0"
+mesh-llm-sdk = { version = "0.68.0", features = ["embedded-node"] }
 ```
 
 ```rust,no_run
-use mesh_llm_embedded_runtime::{EmbeddedMeshNodeConfig, start_embedded_node};
+use mesh_llm_sdk::MeshNode;
 
-let node = start_embedded_node(
-    EmbeddedMeshNodeConfig::builder()
-        .serve()
-        .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
-        .build(),
-)
-.await?;
+let node = MeshNode::builder()
+    .serve()
+    .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
+    .auto_join_public_mesh()
+    .start()
+    .await?;
+
+let openai = node.openai_client();
+let models = openai.models().await?;
+let status = node.status().await?;
+
+node.shutdown().await?;
 ```
 
 ## Native Runtime Install Example

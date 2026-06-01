@@ -9,7 +9,7 @@ repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [features]
-default = []
+default = ["dynamic-runtime"]
 dynamic-runtime = ["dep:libloading"]
 
 [dependencies]

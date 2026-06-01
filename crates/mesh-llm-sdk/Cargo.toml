@@ -14,12 +14,27 @@ categories = ["api-bindings", "network-programming"]
 default = ["client", "native-runtime"]
 client = ["dep:mesh-llm-api-client"]
 console = ["dep:mesh-llm-console-server"]
+embedded-node = [
+    "dep:anyhow",
+    "dep:mesh-llm-embedded-runtime",
+    "mesh-llm-embedded-runtime/dynamic-native-runtime",
+    "dep:reqwest",
+    "dep:serde",
+    "dep:serde_json",
+]
+embedded-node-dynamic-native-runtime = ["embedded-node"]
+embedded-node-web-ui = ["embedded-node", "mesh-llm-embedded-runtime/web-ui"]
 native-runtime = ["dep:mesh-llm-runtime-install"]
 
 [lints]
 workspace = true
 
 [dependencies]
+anyhow = { workspace = true, optional = true }
 mesh-llm-api-client = { path = "../mesh-llm-api-client", version = "0.68.0", optional = true }
 mesh-llm-console-server = { path = "../mesh-llm-console-server", version = "0.68.0", optional = true }
+mesh-llm-embedded-runtime = { path = "../mesh-llm-embedded-runtime", version = "0.68.0", optional = true }
 mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.68.0", optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }

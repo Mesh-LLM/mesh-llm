@@ -367,11 +367,95 @@ unpublished_registry_deps() {
             printf '%s\n' \
                 mesh-llm-events
             ;;
+        mesh-llm-plugin-manager)
+            printf '%s\n' \
+                mesh-llm-skills
+            ;;
+        mesh-llm-system)
+            printf '%s\n' \
+                mesh-llm-gpu-bench \
+                skippy-runtime
+            ;;
+        mesh-llm-config)
+            printf '%s\n' \
+                mesh-llm-types \
+                skippy-protocol
+            ;;
+        mesh-mixture-of-agents)
+            printf '%s\n' \
+                mesh-llm-guardrails
+            ;;
+        model-resolver)
+            printf '%s\n' \
+                model-artifact \
+                model-ref
+            ;;
+        model-package)
+            printf '%s\n' \
+                model-hf \
+                model-ref
+            ;;
+        openai-frontend)
+            printf '%s\n' \
+                mesh-llm-guardrails
+            ;;
+        skippy-cache)
+            printf '%s\n' \
+                skippy-protocol
+            ;;
+        skippy-runtime)
+            printf '%s\n' \
+                skippy-ffi
+            ;;
+        skippy-server)
+            printf '%s\n' \
+                openai-frontend \
+                skippy-cache \
+                skippy-metrics \
+                skippy-protocol \
+                skippy-runtime
+            ;;
+        mesh-llm-host-runtime)
+            printf '%s\n' \
+                mesh-llm-api-server \
+                mesh-llm-client \
+                mesh-llm-config \
+                mesh-llm-events \
+                mesh-llm-guardrails \
+                mesh-llm-identity \
+                mesh-llm-native-runtime \
+                mesh-llm-node \
+                mesh-llm-plugin \
+                mesh-llm-plugin-manager \
+                mesh-llm-protocol \
+                mesh-llm-routing \
+                mesh-llm-runtime-install \
+                mesh-llm-system \
+                mesh-llm-types \
+                mesh-llm-ui \
+                mesh-mixture-of-agents \
+                model-artifact \
+                model-hf \
+                model-package \
+                model-ref \
+                model-resolver \
+                openai-frontend \
+                skippy-coordinator \
+                skippy-protocol \
+                skippy-runtime \
+                skippy-server \
+                skippy-topology
+            ;;
         mesh-llm-sdk)
             printf '%s\n' \
                 mesh-llm-api-client \
                 mesh-llm-console-server \
+                mesh-llm-embedded-runtime \
                 mesh-llm-runtime-install
+            ;;
+        mesh-llm-embedded-runtime)
+            printf '%s\n' \
+                mesh-llm-host-runtime
             ;;
         mesh-llm-node)
             printf '%s\n' \
@@ -406,21 +490,42 @@ publish_crates=(
     mesh-llm-protocol
     mesh-llm-routing
     mesh-llm-types
+    mesh-llm-guardrails
+    mesh-llm-plugin
+    mesh-llm-skills
+    mesh-llm-gpu-bench
+    skippy-ffi
+    skippy-protocol
+    skippy-coordinator
+    skippy-topology
+    skippy-metrics
+    skippy-cache
     model-ref
     model-artifact
+    model-resolver
     mesh-llm-client
     mesh-llm-api-client
     mesh-llm-events
+    mesh-llm-config
     mesh-llm-ui
     mesh-llm-console-server
     mesh-llm-tui
     mesh-llm-cli
     model-hf
+    model-package
     mesh-llm-node
     mesh-llm-api-server
     mesh-llm-native-runtime
     mesh-llm-hardware-profile
+    skippy-runtime
+    openai-frontend
+    skippy-server
+    mesh-llm-plugin-manager
+    mesh-mixture-of-agents
+    mesh-llm-system
     mesh-llm-runtime-install
+    mesh-llm-host-runtime
+    mesh-llm-embedded-runtime
     mesh-llm-sdk
 )
 

@@ -4187,9 +4187,14 @@ dependencies = [
 name = "mesh-llm-sdk"
 version = "0.68.0"
 dependencies = [
+ "anyhow",
  "mesh-llm-api-client",
  "mesh-llm-console-server",
+ "mesh-llm-embedded-runtime",
  "mesh-llm-runtime-install",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
