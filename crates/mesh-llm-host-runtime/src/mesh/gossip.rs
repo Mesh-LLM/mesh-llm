@@ -1227,9 +1227,20 @@ impl Node {
             .apply_gossip_announcements(peer_id, rtt_ms, &announcements, false)
             .await
         {
+            // Drop the tracked entry AND close the QUIC connection. The
+            // dispatcher task above holds its own `conn` clone, so removing the
+            // map entry alone would leave a live, keep-alive'd connection and a
+            // running dispatcher for a peer nobody tracks (and one whose
+            // close-recovery path could even reconnect it). Closing here makes
+            // the dispatcher's `accept_*` calls error so it unwinds cleanly.
             self.state.lock().await.connections.remove(&peer_id);
+            conn.close(0u32.into(), b"join announcement-apply failed");
             return Err(error);
         }
+
+        // Match `connect_to_peer`: the probe gossip RTT above likely reflects
+        // relay latency, so refresh the selected-path/RTT after holepunch.
+        self.schedule_selected_path_recheck(peer_id);
         self.spawn_discovered_peer_connects(announcements, true, false);
 
         tracing::info!(

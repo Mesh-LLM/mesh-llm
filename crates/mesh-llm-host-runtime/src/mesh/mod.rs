@@ -8750,6 +8750,17 @@ impl Node {
         // (high RTT) because direct holepunch hasn't completed yet. After a few
         // seconds the direct path is usually ready, so re-check path info to get
         // the real RTT and potentially trigger a re-election for split mode.
+        self.schedule_selected_path_recheck(peer_id);
+        Ok(())
+    }
+
+    /// Spawn a delayed task that re-reads the currently-selected QUIC path for
+    /// `peer_id` after the relay→direct transition typically completes, and
+    /// updates the tracked selected-path/RTT observation. The first gossip
+    /// round-trip often runs over the relay (inflated RTT) before holepunch
+    /// finishes; this refresh records the real direct RTT and can trigger a
+    /// re-election for split mode.
+    pub(super) fn schedule_selected_path_recheck(&self, peer_id: EndpointId) {
         let node_for_recheck = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -8760,40 +8771,41 @@ impl Node {
                 .connections
                 .get(&peer_id)
                 .cloned();
-            if let Some(conn) = conn {
-                let path_list = conn.paths();
-                for path_info in &path_list {
-                    if path_info.is_selected() {
-                        let rtt_ms = path_info.rtt().as_millis() as u32;
-                        let rtt_ms = (rtt_ms != 0).then_some(rtt_ms);
-                        let path_type = if path_info.is_ip() { "direct" } else { "relay" };
-                        if let Some(rtt_ms) = rtt_ms {
-                            emit_mesh_info(format!(
-                                "📡 Peer {} RTT recheck: {}ms ({})",
-                                peer_id.fmt_short(),
-                                rtt_ms,
-                                path_type
-                            ));
-                        }
-                        node_for_recheck
-                            .update_peer_selected_path(
-                                peer_id,
-                                SelectedPathObservation {
-                                    path_type,
-                                    rtt_ms,
-                                    observed_direct_remote_addr: match path_info.remote_addr() {
-                                        TransportAddr::Ip(addr) => Some(*addr),
-                                        _ => None,
-                                    },
-                                },
-                            )
-                            .await;
-                        break;
-                    }
+            let Some(conn) = conn else {
+                return;
+            };
+            let path_list = conn.paths();
+            for path_info in &path_list {
+                if !path_info.is_selected() {
+                    continue;
                 }
+                let rtt_ms = path_info.rtt().as_millis() as u32;
+                let rtt_ms = (rtt_ms != 0).then_some(rtt_ms);
+                let path_type = if path_info.is_ip() { "direct" } else { "relay" };
+                if let Some(rtt_ms) = rtt_ms {
+                    emit_mesh_info(format!(
+                        "📡 Peer {} RTT recheck: {}ms ({})",
+                        peer_id.fmt_short(),
+                        rtt_ms,
+                        path_type
+                    ));
+                }
+                node_for_recheck
+                    .update_peer_selected_path(
+                        peer_id,
+                        SelectedPathObservation {
+                            path_type,
+                            rtt_ms,
+                            observed_direct_remote_addr: match path_info.remote_addr() {
+                                TransportAddr::Ip(addr) => Some(*addr),
+                                _ => None,
+                            },
+                        },
+                    )
+                    .await;
+                break;
             }
         });
-        Ok(())
     }
 
     async fn handle_tunnel_map_stream(
