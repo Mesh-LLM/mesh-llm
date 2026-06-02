@@ -17,6 +17,16 @@ fn load_gemma_live_fixture() -> HfRepoFixture {
     .expect("parse live Hugging Face fixture")
 }
 
+/// Isolates a parser test from the live remote catalog by installing an empty
+/// catalog override. `parse_exact_model_ref` consults the catalog before the
+/// Hugging Face parser branches, so without this a live catalog entry (e.g. a
+/// real `unsloth/gemma-4-31B-it-GGUF` package) would be returned as
+/// `ExactModelRef::Catalog` instead of the `HuggingFace` ref these tests
+/// assert. Tests using this must be `#[serial]` because the override is global.
+fn empty_catalog_guard() -> crate::models::remote_catalog::CatalogEntriesOverrideGuard {
+    crate::models::remote_catalog::set_catalog_entries_for_test(Vec::new())
+}
+
 fn remote_catalog_entry(
     variant_name: &str,
     curated_name: &str,
@@ -512,7 +522,9 @@ fn repo_name_can_signal_gguf_intent() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_repo_ref() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
@@ -529,7 +541,9 @@ fn parse_exact_model_ref_accepts_unsloth_gemma_repo_ref() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed =
         parse_exact_model_ref("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF").unwrap();
     match parsed {
@@ -547,7 +561,9 @@ fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
@@ -564,7 +580,9 @@ fn parse_exact_model_ref_accepts_unsloth_gemma_quant_selector() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_revisioned_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("unsloth/gemma-4-31B-it-GGUF@main:UD-Q4_K_XL").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
@@ -605,7 +623,9 @@ fn simulated_name_and_repo_quant_inputs_converge_to_same_ref() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_unsloth_gemma_repo_url_with_quant_selector() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed =
         parse_exact_model_ref("https://huggingface.co/unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL")
             .unwrap();
@@ -835,7 +855,9 @@ fn format_huggingface_display_ref_prefers_repo_form_for_mlx() {
 }
 
 #[test]
+#[serial]
 fn parse_exact_model_ref_accepts_legacy_mlx_model_path_shape() {
+    let _catalog_guard = empty_catalog_guard();
     let parsed = parse_exact_model_ref("mlx-community/SmolLM-135M-8bit/model").unwrap();
     match parsed {
         ExactModelRef::HuggingFace {
