@@ -25,7 +25,7 @@ fn ffi_client_runs_against_live_mesh() {
     let owner_keypair_hex = env::var("MESH_SDK_OWNER_KEYPAIR_HEX")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| mesh_llm_api_server::OwnerKeypair::generate().to_hex());
+        .unwrap_or_else(|| mesh_llm_sdk::OwnerKeypair::generate().to_hex());
     let handle =
         create_node(owner_keypair_hex, invite_token, None, None, false).expect("create_node");
     handle.start().expect("start");

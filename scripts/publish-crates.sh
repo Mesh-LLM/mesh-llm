@@ -450,6 +450,7 @@ unpublished_registry_deps() {
         mesh-llm-sdk)
             printf '%s\n' \
                 mesh-llm-api-client \
+                mesh-llm-api-server \
                 mesh-llm-console-server \
                 mesh-llm-embedded-runtime \
                 mesh-llm-runtime-install

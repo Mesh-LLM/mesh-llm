@@ -10,11 +10,30 @@ pub mod console {
     };
 }
 
+#[cfg(feature = "node")]
+pub mod node {
+    pub use mesh_llm_api_server::*;
+}
+
 #[cfg(feature = "serving")]
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
 pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
+
+#[cfg(feature = "serving")]
+pub mod embedded_runtime {
+    pub use mesh_llm_embedded_runtime::{
+        EmbeddedChatMessage, EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode,
+        EmbeddedMeshHttpConfig, EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig,
+        EmbeddedMeshNodeBuilder, EmbeddedMeshNodeConfig, EmbeddedMeshNodeHandle,
+        EmbeddedMeshNodeMode, EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig,
+        EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedServeConfig,
+        EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
+        EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, start_embedded_node,
+        start_embedded_serve,
+    };
+}
 
 #[cfg(feature = "serving")]
 pub mod native_runtime {

@@ -2,26 +2,73 @@
 
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const fs = require('node:fs')
-const os = require('node:os')
-const path = require('node:path')
-const crypto = require('node:crypto')
-const { validateNativeRuntime } = require('../native-runtime')
+const runtime = require('../native-runtime')
 
-test('validateNativeRuntime accepts a single-library artifact', () => {
-  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'meshllm-native-test-'))
-  const libDir = path.join(artifactDir, 'lib')
-  fs.mkdirSync(libDir)
-  const library = path.join(libDir, process.platform === 'win32' ? 'meshllm_ffi.dll' : 'libmeshllm_ffi.so')
-  fs.writeFileSync(library, 'native runtime')
-  const sha = crypto.createHash('sha256').update(fs.readFileSync(library)).digest('hex')
-  fs.writeFileSync(path.join(artifactDir, 'manifest.json'), JSON.stringify({
-    artifact_id: 'meshllm-native-test-cpu',
-    library: `lib/${path.basename(library)}`,
-    library_sha256: sha
-  }))
+test('installNativeRuntime delegates to native SDK installer', async () => {
+  const calls = []
+  const progress = []
+  runtime.configureNativeRuntimeBinding({
+    installNativeRuntimeJson: async (json, onProgress) => {
+      calls.push(JSON.parse(json))
+      onProgress?.(JSON.stringify({
+        nativeRuntimeId: 'meshllm-native-runtime-linux-x86_64-cpu',
+        url: 'https://example.invalid/runtime.tar.gz',
+        downloadedBytes: 128,
+        totalBytes: 256,
+        finished: false
+      }))
+      return JSON.stringify({
+        status: 'installed',
+        runtime: {
+          meshVersion: '0.68.0',
+          nativeRuntimeId: 'meshllm-native-runtime-linux-x86_64-cpu',
+          flavor: 'cpu',
+          path: '/cache/runtime',
+          skippyAbiVersion: '1.2.3'
+        },
+        selectedNativeRuntimeId: 'meshllm-native-runtime-linux-x86_64-cpu',
+        selectedSource: 'download'
+      })
+    }
+  })
 
-  const artifact = validateNativeRuntime(artifactDir)
-  assert.equal(artifact.artifactId, 'meshllm-native-test-cpu')
-  assert.equal(artifact.library, library)
+  const outcome = await runtime.installNativeRuntime({
+    selection: 'cpu',
+    cacheDir: '/cache',
+    allowDownload: false,
+    onProgress: (event) => progress.push(event)
+  })
+
+  assert.equal(calls[0].selection, 'cpu')
+  assert.equal(calls[0].cacheDir, '/cache')
+  assert.equal(calls[0].allowDownload, false)
+  assert.equal(outcome.runtime.nativeRuntimeId, 'meshllm-native-runtime-linux-x86_64-cpu')
+  assert.equal(progress[0].downloadedBytes, 128)
+})
+
+test('validateNativeRuntime resolves a bundled runtime without download', async () => {
+  let installOptions = null
+  runtime.configureNativeRuntimeBinding({
+    installNativeRuntimeJson: async (json) => {
+      installOptions = JSON.parse(json)
+      return JSON.stringify({
+        status: 'installed',
+        runtime: {
+          meshVersion: '0.68.0',
+          nativeRuntimeId: 'meshllm-native-runtime-darwin-aarch64-metal',
+          flavor: 'metal',
+          path: '/cache/runtime',
+          skippyAbiVersion: '1.2.3'
+        },
+        selectedNativeRuntimeId: 'meshllm-native-runtime-darwin-aarch64-metal',
+        selectedSource: 'bundle'
+      })
+    }
+  })
+
+  const installed = await runtime.validateNativeRuntime('/app/native')
+
+  assert.deepEqual(installOptions.bundleDirs, ['/app/native'])
+  assert.equal(installOptions.allowDownload, false)
+  assert.equal(installed.flavor, 'metal')
 })

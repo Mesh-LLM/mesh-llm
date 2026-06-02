@@ -1,128 +1,123 @@
 package ai.meshllm
 
 import java.io.File
-import java.security.MessageDigest
+import uniffi.mesh_ffi.InstalledNativeRuntimeNative
+import uniffi.mesh_ffi.NativeRuntimeDownloadProgressNative
+import uniffi.mesh_ffi.NativeRuntimeInstallOptionsNative
+import uniffi.mesh_ffi.NativeRuntimeInstallOutcomeNative
+import uniffi.mesh_ffi.NativeRuntimeProgressListener
+import uniffi.mesh_ffi.NativeRuntimePruneModeNative
+import uniffi.mesh_ffi.NativeRuntimePruneResultNative
+import uniffi.mesh_ffi.NativeRuntimeVerificationPolicyNative
+import uniffi.mesh_ffi.currentMeshVersion
+import uniffi.mesh_ffi.currentSkippyAbiVersion
+import uniffi.mesh_ffi.installNativeRuntime
+import uniffi.mesh_ffi.installedNativeRuntimes
+import uniffi.mesh_ffi.pruneNativeRuntimes
+import uniffi.mesh_ffi.removeNativeRuntime
 
-data class NativeRuntimeConfig(
+typealias NativeRuntimeInstallOptions = NativeRuntimeInstallOptionsNative
+typealias NativeRuntimeInstallOutcome = NativeRuntimeInstallOutcomeNative
+typealias NativeRuntimeDownloadProgress = NativeRuntimeDownloadProgressNative
+typealias InstalledNativeRuntime = InstalledNativeRuntimeNative
+typealias NativeRuntimePruneMode = NativeRuntimePruneModeNative
+typealias NativeRuntimePruneResult = NativeRuntimePruneResultNative
+typealias NativeRuntimeVerificationPolicy = NativeRuntimeVerificationPolicyNative
+
+data class NativeRuntimeResolveOptions(
     val artifactDir: File? = null,
     val searchDirs: List<File> = emptyList(),
-)
-
-data class NativeRuntimeArtifact(
-    val artifactId: String,
-    val artifactDir: File,
-    val manifest: File,
-    val library: File,
+    val cacheDir: File? = null,
+    val allowDownload: Boolean = false,
+    val selection: String = "recommended",
 )
 
 object NativeRuntime {
-    private const val COMPONENT_LIBRARY_OVERRIDE = "uniffi.component.mesh_ffi.libraryOverride"
+    val meshVersion: String
+        get() = currentMeshVersion()
 
-    fun configure(config: NativeRuntimeConfig = NativeRuntimeConfig()): NativeRuntimeArtifact {
-        val artifact = resolve(config)
-        System.setProperty(COMPONENT_LIBRARY_OVERRIDE, artifact.library.absolutePath)
-        return artifact
+    val skippyAbiVersion: String
+        get() = currentSkippyAbiVersion()
+
+    fun install(
+        options: NativeRuntimeInstallOptions = defaultInstallOptions(),
+        onProgress: ((NativeRuntimeDownloadProgress) -> Unit)? = null,
+    ): NativeRuntimeInstallOutcome =
+        installNativeRuntime(options, onProgress?.let(::ProgressListener))
+
+    fun resolve(
+        options: NativeRuntimeResolveOptions = NativeRuntimeResolveOptions(),
+        onProgress: ((NativeRuntimeDownloadProgress) -> Unit)? = null,
+    ): InstalledNativeRuntime {
+        val bundleDirs = buildList {
+            options.artifactDir?.let { add(it.path) }
+            addAll(options.searchDirs.map(File::getPath))
+        }
+        return install(
+            defaultInstallOptions(
+                selection = options.selection,
+                bundleDirs = bundleDirs,
+                cacheDir = options.cacheDir?.path,
+                allowDownload = options.allowDownload,
+            ),
+            onProgress,
+        ).runtime
     }
 
-    fun resolve(config: NativeRuntimeConfig = NativeRuntimeConfig()): NativeRuntimeArtifact {
-        val candidates = buildList {
-            config.artifactDir?.let(::add)
-            systemPath("meshllm.nativeRuntime.artifactDir")?.let(::add)
-            systemPath("meshllm.nativeRuntime.dir")?.let(::add)
-            envPath("MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR")?.let(::add)
-            envPath("MESHLLM_NATIVE_RUNTIME_DIR")?.let(::add)
-            envPath("MESH_SDK_NATIVE_RUNTIME_DIR")?.let(::add)
-            envPath("MESHLLM_NATIVE_RUNTIME_LIBRARY")?.parentFile?.parentFile?.let(::add)
-            addAll(config.searchDirs)
-            add(File(System.getProperty("user.dir"), "meshllm-native"))
-            add(File(System.getProperty("user.dir"), "native"))
-        }
-
-        val errors = mutableListOf<String>()
-        for (candidate in candidates.distinctBy { it.normalized().path }) {
-            for (artifactDir in artifactCandidates(candidate)) {
-                val result = runCatching { validate(artifactDir) }
-                result.getOrNull()?.let { return it }
-                result.exceptionOrNull()?.message?.let { errors.add("${artifactDir.path}: $it") }
-            }
-        }
-
-        val detail = if (errors.isEmpty()) {
-            "no candidate runtime artifact directories were configured"
-        } else {
-            errors.joinToString("; ")
-        }
-        throw IllegalStateException("MeshLLM native runtime artifact not found: $detail")
-    }
-
-    fun validate(artifactDir: File): NativeRuntimeArtifact {
-        val normalizedDir = artifactDir.normalized()
-        val manifest = normalizedDir.resolve("manifest.json")
-        require(normalizedDir.isDirectory) { "artifact directory does not exist" }
-        require(manifest.isFile) { "manifest.json does not exist" }
-
-        val manifestText = manifest.readText()
-        val artifactId = stringField(manifestText, "artifact_id")
-        val libraryRelativePath = stringField(manifestText, "library")
-        val expectedSha256 = stringField(manifestText, "library_sha256").lowercase()
-
-        val library = normalizedDir.resolve(libraryRelativePath).normalized()
-        require(library.isFile) { "native library does not exist: ${library.path}" }
-
-        val actualLibrarySha256 = sha256(library)
-        require(actualLibrarySha256 == expectedSha256) {
-            "native library checksum mismatch for ${library.path}"
-        }
-
-        return NativeRuntimeArtifact(
-            artifactId = artifactId,
-            artifactDir = normalizedDir,
-            manifest = manifest,
-            library = library,
+    fun validate(artifactDir: File, cacheDir: File? = null): InstalledNativeRuntime =
+        resolve(
+            NativeRuntimeResolveOptions(
+                artifactDir = artifactDir,
+                cacheDir = cacheDir,
+                allowDownload = false,
+            )
         )
+
+    fun installed(cacheDir: File? = null): List<InstalledNativeRuntime> =
+        installedNativeRuntimes(cacheDir?.path)
+
+    fun remove(
+        meshVersion: String,
+        nativeRuntimeId: String,
+        cacheDir: File? = null,
+    ): Boolean =
+        removeNativeRuntime(cacheDir?.path, meshVersion, nativeRuntimeId)
+
+    fun prune(
+        cacheDir: File? = null,
+        activeMeshVersion: String? = null,
+        mode: NativeRuntimePruneMode = NativeRuntimePruneMode.KEEP_ACTIVE_AND_PREVIOUS,
+    ): NativeRuntimePruneResult =
+        pruneNativeRuntimes(cacheDir?.path, activeMeshVersion, mode)
+
+    fun defaultInstallOptions(
+        meshVersion: String? = null,
+        skippyAbiVersion: String? = null,
+        selection: String = "recommended",
+        manifestPath: String? = null,
+        manifestUrl: String? = null,
+        bundleDirs: List<String> = emptyList(),
+        cacheDir: String? = null,
+        verificationPolicy: NativeRuntimeVerificationPolicy = NativeRuntimeVerificationPolicy.REQUIRE_CHECKSUM,
+        allowDownload: Boolean = true,
+    ): NativeRuntimeInstallOptions =
+        NativeRuntimeInstallOptions(
+            meshVersion = meshVersion,
+            skippyAbiVersion = skippyAbiVersion,
+            selection = selection,
+            manifestPath = manifestPath,
+            manifestUrl = manifestUrl,
+            bundleDirs = bundleDirs,
+            cacheDir = cacheDir,
+            verificationPolicy = verificationPolicy,
+            allowDownload = allowDownload,
+        )
+}
+
+private class ProgressListener(
+    private val onProgress: (NativeRuntimeDownloadProgress) -> Unit,
+) : NativeRuntimeProgressListener {
+    override fun onProgress(event: NativeRuntimeDownloadProgressNative) {
+        onProgress.invoke(event)
     }
-
-    private fun systemPath(name: String): File? =
-        System.getProperty(name)?.takeIf(String::isNotBlank)?.let(::File)
-
-    private fun envPath(name: String): File? =
-        System.getenv(name)?.takeIf(String::isNotBlank)?.let(::File)
-
-    private fun artifactCandidates(candidate: File): List<File> {
-        val normalized = candidate.normalized()
-        if (normalized.resolve("manifest.json").isFile) {
-            return listOf(normalized)
-        }
-        val children = normalized.listFiles()
-            ?.filter { it.isDirectory && it.name.startsWith("meshllm-native-") }
-            ?.sortedBy(File::getName)
-            .orEmpty()
-        return listOf(normalized) + children
-    }
-
-    private fun stringField(json: String, key: String): String {
-        val pattern = Regex("\"${Regex.escape(key)}\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"")
-        val match = pattern.find(json) ?: error("manifest field missing or not a string: $key")
-        return match.groupValues[1]
-            .replace("\\/", "/")
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-    }
-
-    private fun sha256(file: File): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) {
-                    break
-                }
-                digest.update(buffer, 0, read)
-            }
-        }
-        return digest.digest().joinToString("") { "%02x".format(it) }
-    }
-
-    private fun File.normalized(): File = absoluteFile.toPath().normalize().toFile()
 }

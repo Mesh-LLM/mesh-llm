@@ -24,6 +24,33 @@ namespace mesh_ffi {
     sequence<PublicMesh> discover_public_meshes(PublicMeshQuery query);
 
     string generate_owner_keypair_hex();
+
+    string current_mesh_version();
+
+    string current_skippy_abi_version();
+
+    [Throws=FfiError]
+    NativeRuntimeInstallOutcomeNative install_native_runtime(
+        NativeRuntimeInstallOptionsNative options,
+        NativeRuntimeProgressListener? progress
+    );
+
+    [Throws=FfiError]
+    sequence<InstalledNativeRuntimeNative> installed_native_runtimes(string? cache_dir);
+
+    [Throws=FfiError]
+    boolean remove_native_runtime(
+        string? cache_dir,
+        string mesh_version,
+        string native_runtime_id
+    );
+
+    [Throws=FfiError]
+    NativeRuntimePruneResultNative prune_native_runtimes(
+        string? cache_dir,
+        string? active_mesh_version,
+        NativeRuntimePruneModeNative mode
+    );
 };
 
 [Error]
@@ -41,6 +68,7 @@ enum FfiError {
     "ServingFailed",
     "ServingUnsupported",
     "ConsoleFailed",
+    "NativeRuntimeFailed",
 };
 
 dictionary ConsoleOptionsNative {
@@ -157,6 +185,10 @@ interface MeshNodeHandle {
 
 callback interface EventListener {
     void on_event(ClientEvent event);
+};
+
+callback interface NativeRuntimeProgressListener {
+    void on_progress(NativeRuntimeDownloadProgressNative event);
 };
 
 dictionary ModelNative {
@@ -372,4 +404,55 @@ interface ClientEvent {
     Completed(string request_id);
     Failed(string request_id, string error);
     Disconnected(string reason);
+};
+
+[Enum]
+interface NativeRuntimeVerificationPolicyNative {
+    RequireChecksum();
+    RequireChecksumAndSignature();
+};
+
+[Enum]
+interface NativeRuntimePruneModeNative {
+    KeepActiveAndPrevious();
+    ActiveOnly();
+};
+
+dictionary NativeRuntimeInstallOptionsNative {
+    string? mesh_version;
+    string? skippy_abi_version;
+    string selection;
+    string? manifest_path;
+    string? manifest_url;
+    sequence<string> bundle_dirs;
+    string? cache_dir;
+    NativeRuntimeVerificationPolicyNative verification_policy;
+    boolean allow_download;
+};
+
+dictionary NativeRuntimeDownloadProgressNative {
+    string native_runtime_id;
+    string url;
+    u64 downloaded_bytes;
+    u64? total_bytes;
+    boolean finished;
+};
+
+dictionary InstalledNativeRuntimeNative {
+    string mesh_version;
+    string native_runtime_id;
+    string flavor;
+    string path;
+    string? skippy_abi_version;
+};
+
+dictionary NativeRuntimeInstallOutcomeNative {
+    string status;
+    InstalledNativeRuntimeNative runtime;
+    string selected_native_runtime_id;
+    string selected_source;
+};
+
+dictionary NativeRuntimePruneResultNative {
+    sequence<string> removed_dirs;
 };

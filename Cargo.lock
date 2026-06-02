@@ -3923,10 +3923,8 @@ dependencies = [
 name = "mesh-llm-ffi"
 version = "0.68.0"
 dependencies = [
- "mesh-llm-api-server",
- "mesh-llm-console-server",
- "mesh-llm-host-runtime",
  "mesh-llm-node",
+ "mesh-llm-sdk",
  "thiserror 2.0.18",
  "tokio",
  "uniffi",
@@ -4101,9 +4099,7 @@ dependencies = [
 name = "mesh-llm-nodejs"
 version = "0.68.0"
 dependencies = [
- "mesh-llm-api-server",
- "mesh-llm-console-server",
- "mesh-llm-host-runtime",
+ "mesh-llm-sdk",
  "napi",
  "napi-build",
  "napi-derive",
@@ -4190,6 +4186,7 @@ version = "0.68.0"
 dependencies = [
  "anyhow",
  "mesh-llm-api-client",
+ "mesh-llm-api-server",
  "mesh-llm-console-server",
  "mesh-llm-embedded-runtime",
  "mesh-llm-runtime-install",

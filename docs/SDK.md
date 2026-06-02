@@ -8,9 +8,8 @@ MeshLLM exposes two SDK roles across Rust, Swift, Kotlin, and Node.js:
 
 The SDK is split into two parts:
 
-- **Language SDKs** provide the public API: Rust `mesh-llm-api-client` for
-  client-only apps, Rust `mesh-llm-api-server` for node/serving apps, Swift `MeshLLM`,
-  Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
+- **Language SDKs** provide the public API: Rust `mesh-llm-sdk`, Swift
+  `MeshLLM`, Kotlin `ai.meshllm`, and Node.js `@meshllm/sdk`.
 - **Native runtime artifacts** provide local serving for a specific
   platform/runtime flavor, such as macOS Metal or Linux CUDA.
 
@@ -28,17 +27,21 @@ Add the Rust SDK facade crate:
 mesh-llm-sdk = "0.68.0"
 ```
 
-The default Rust SDK features expose client-side mesh APIs without depending on
+The default Rust SDK feature exposes client-side mesh APIs without depending on
 the full `mesh-llm-host-runtime` application crate or the native-runtime
 installer.
 
-For lower-level use, depend on `mesh-llm-api-client` directly to connect to an
-existing mesh, or `mesh-llm-api-server` for platform-neutral node/model
-management APIs.
+Use `mesh-llm-sdk` features to opt into larger surfaces:
 
-For local serving in a Rust app, the node must be built with a
-`ServingController`. The plain `mesh-llm-api-server` crate intentionally does
-not pick a Metal, CUDA, ROCm, Vulkan, or CPU runtime for you.
+| Feature | Surface |
+|---|---|
+| `client` | client-only mesh inference, enabled by default |
+| `node` | platform-neutral node/model management APIs |
+| `serving` | full in-process serving plus native runtime install, cache, and prune APIs |
+| `console` | embedded console server facade for packaged console assets |
+
+For lower-level use, `mesh-llm-api-client` and `mesh-llm-api-server` remain
+implementation crates, but Rust application code should prefer the SDK facade.
 
 ### Swift
 
@@ -127,7 +130,7 @@ stop
 Local serving use:
 
 ```text
-configure a native runtime artifact
+resolve or install a native runtime
 create or load an owner keypair
 create Node with an invite token
 search or show a model
@@ -144,7 +147,7 @@ stop
 Create a client and join a mesh:
 
 ```rust
-use mesh_llm_api_client::{ClientBuilder, InviteToken, OwnerKeypair};
+use mesh_llm_sdk::{ClientBuilder, InviteToken, OwnerKeypair};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -167,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
 Create a node when the app also needs model management or local serving:
 
 ```rust
-use mesh_llm_api_server::{InviteToken, MeshNode, OwnerKeypair};
+use mesh_llm_sdk::{InviteToken, MeshNode, OwnerKeypair};
 
 let owner = OwnerKeypair::generate();
 let invite = "your-invite-token".parse::<InviteToken>()?;
@@ -181,7 +184,7 @@ let node = MeshNode::builder()
 Model management APIs are available on `MeshNode` without local serving:
 
 ```rust
-use mesh_llm_api_server::{DownloadOptions, ModelSearchQuery};
+use mesh_llm_sdk::node::{DownloadOptions, ModelSearchQuery};
 
 let matches = node.models().search(ModelSearchQuery {
     query: "Qwen2.5 3B instruct GGUF".to_string(),
@@ -197,10 +200,10 @@ let downloaded = node.models()
 To serve from Rust, attach a real controller:
 
 ```rust
-use mesh_llm_api_server::{DevicePolicy, LoadModelOptions, MeshNode, UnloadModelOptions};
+use mesh_llm_sdk::node::{DevicePolicy, LoadModelOptions, MeshNode, UnloadModelOptions};
 use std::sync::Arc;
 
-let controller: Arc<dyn mesh_llm_api_server::ServingController> = build_controller();
+let controller: Arc<dyn mesh_llm_sdk::node::ServingController> = build_controller();
 
 let node = MeshNode::builder()
     .identity(owner)
@@ -224,8 +227,8 @@ node.serving()
 ```
 
 If no controller is attached, `serving.load()` returns an unsupported error.
-This is intentional: `mesh-llm-api-server` is platform-neutral and does not silently
-choose a native runtime.
+This is intentional: the platform-neutral node API does not silently choose a
+native runtime.
 
 ### Rust SDK facade
 
@@ -279,13 +282,13 @@ serve bundled web console assets.
 
 ## Swift Usage
 
-Configure a native runtime before local serving:
+Resolve or install a native runtime before local serving:
 
 ```swift
 import MeshLLM
 
-let runtime = try NativeRuntime.prepare()
-print("using \(runtime.artifactId) from \(runtime.artifactDirectory.path)")
+let runtime = try await NativeRuntime.resolve()
+print("using \(runtime.nativeRuntimeId) from \(runtime.path)")
 ```
 
 Create a client and run inference:
@@ -343,13 +346,13 @@ if let instanceId = served.instanceId {
 
 ## Kotlin Usage
 
-Configure the native runtime before any generated UniFFI symbol is used:
+Resolve or install the native runtime before local serving:
 
 ```kotlin
 import ai.meshllm.NativeRuntime
 
-val runtime = NativeRuntime.configure()
-println("using ${runtime.artifactId} from ${runtime.artifactDir}")
+val runtime = NativeRuntime.resolve()
+println("using ${runtime.nativeRuntimeId} from ${runtime.path}")
 ```
 
 Create a client:
@@ -407,13 +410,24 @@ const models = await client.inference.listModels()
 await client.stop()
 ```
 
-Use local serving by enabling serving and packaging a matching native runtime
-artifact:
+Use local serving by resolving or installing a matching native runtime first:
 
 ```js
+const {
+  Node,
+  generateOwnerKeypairHex,
+  resolveNativeRuntime
+} = require('@meshllm/sdk')
+
+const runtime = await resolveNativeRuntime({
+  artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
+  allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1'
+})
+console.log(`using ${runtime.nativeRuntimeId} from ${runtime.path}`)
+
 const node = Node.create({
-  ownerKeypairHex,
-  inviteToken,
+  ownerKeypairHex: generateOwnerKeypairHex(),
+  inviteToken: 'local-node-app',
   servingEnabled: true,
   cacheDir: process.env.MESH_SDK_CACHE_DIR,
   runtimeDir: process.env.MESH_SDK_RUNTIME_DIR
@@ -437,8 +451,9 @@ await node.stop()
 
 The accepted packaging direction is documented in
 [design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md). In short: native
-runtimes are release artifacts, not implicit Cargo builds, and the native
-runtime version must exactly match the MeshLLM version that loads it.
+runtimes are release artifacts, not implicit Cargo builds. Runtime selection
+defaults to the running MeshLLM release manifest, but compatibility is enforced
+against the exact Skippy ABI version supported by the loader.
 
 Native runtime artifacts use this layout:
 
@@ -453,8 +468,9 @@ meshllm-native-runtime-<platform>-<flavor>/
 
 The manifest records the MeshLLM version, target triple, runtime flavor,
 Skippy ABI metadata, load-order library paths, release URL, checksum, and
-optional signature metadata. SDK loaders reject runtimes whose `mesh_version`
-does not exactly match the running MeshLLM version.
+optional signature metadata. SDK loaders prefer manifests for the running
+MeshLLM version and reject runtimes whose Skippy ABI version does not exactly
+match the loader.
 
 Baseline artifact names:
 

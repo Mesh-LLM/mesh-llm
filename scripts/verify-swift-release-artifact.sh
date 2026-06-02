@@ -177,10 +177,10 @@ cat > "$CONSUMER_DIR/Sources/Consumer/main.swift" <<'EOF'
 import MeshLLM
 
 let token = InviteToken("release-artifact-smoke")
-let runtimeConfig = NativeRuntimeConfig()
+let runtimeOptions = NativeRuntimeResolveOptions()
 let ownerKeypair = generateOwnerKeypairHex()
 precondition(!ownerKeypair.isEmpty)
-print("consumer-ok \(token.value) \(runtimeConfig.searchDirectories.count) \(ownerKeypair.prefix(8))")
+print("consumer-ok \(token.value) \(runtimeOptions.searchDirectories.count) \(ownerKeypair.prefix(8))")
 EOF
 
 swift build --package-path "$CONSUMER_DIR"
