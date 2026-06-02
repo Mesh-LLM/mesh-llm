@@ -97,6 +97,7 @@ jobs:
               - 'Package.swift'
               - 'scripts/ci-rust-sdk-smoke.sh'
               - 'scripts/ci-prepare-native-runtime.sh'
+              - 'scripts/ci-install-native-runtime.sh'
               - 'scripts/package-sdk-console-assets.sh'
               - 'scripts/verify-sdk-console-assets.sh'
               - 'scripts/ci-kotlin-sdk-smoke.sh'

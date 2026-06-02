@@ -12,6 +12,7 @@ set -euo pipefail
 MESH_LLM="${1:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
 BIN_DIR="${2:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
 MODEL="${3:?Usage: $0 <mesh-llm-binary> <bin-dir> <model-path>}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 HOST_API_PORT="${MESH_TWO_NODE_HOST_API_PORT:-9357}"
 HOST_CONSOLE_PORT="${MESH_TWO_NODE_HOST_CONSOLE_PORT:-3151}"
@@ -42,6 +43,9 @@ if [[ ! -f "$MODEL" ]]; then
     echo "Missing model: $MODEL" >&2
     exit 1
 fi
+
+RUNTIME_CACHE="$("$REPO_ROOT/scripts/ci-install-native-runtime.sh" "$MESH_LLM" "$REPO_ROOT/target/two-node-client-serving-native-runtime" cpu)"
+export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$RUNTIME_CACHE"
 
 descendant_pids() {
     local pid="$1"

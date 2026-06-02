@@ -134,7 +134,7 @@ main() {
     if [[ "$file" =~ ^Cargo\.lock$ ]] || \
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
        [[ "$file" =~ ^third_party/llama\.cpp/ ]] || \
-       [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-mac|build-windows|skippy-ci-smoke)\. ]] || \
+       [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
        [[ "$file" =~ ^Justfile$ ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \
        [[ "$file" =~ ^scripts/plan-clippy-batches\.sh$ ]] || \
