@@ -49,11 +49,8 @@ LLAMA_STAGE_BUILD_DIR="$REPO_ROOT/.deps/llama-build/build-stage-abi-ci-kotlin-cp
         --profile debug \
         --out "$native_sdk_out"
 scripts/verify-native-sdk-package.sh "$native_sdk_out"/meshllm-native-*.tar.gz
-native_runtime_dir="$(find "$native_sdk_out" -mindepth 1 -maxdepth 1 -type d -name 'meshllm-native-*' -print -quit)"
-if [[ -z "$native_runtime_dir" ]]; then
-    echo "native SDK runtime artifact directory was not produced" >&2
-    exit 1
-fi
+native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/kotlin-native-runtime" cpu)"
+export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '
@@ -66,7 +63,6 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
             export ORG_GRADLE_JAVA_HOME="${ORG_GRADLE_JAVA_HOME:-$JAVA_HOME}"
             export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.java.installations.auto-detect=false -Dorg.gradle.java.installations.paths=$ORG_GRADLE_JAVA_HOME"
         fi
-        export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR='"$native_runtime_dir"'
         cd '"$REPO_ROOT"'/sdk/kotlin/example/example-jvm
         ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN"
     '

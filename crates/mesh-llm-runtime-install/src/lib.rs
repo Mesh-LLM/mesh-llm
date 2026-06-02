@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 pub const CURRENT_MESH_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const NATIVE_RUNTIME_CACHE_DIR_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR";
 pub const NATIVE_RUNTIME_MANIFEST_URL_ENV: &str = "MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL";
 
 pub type NativeRuntimeDownloadProgressCallback =
@@ -129,11 +130,14 @@ pub fn default_native_runtime_cache() -> Result<NativeRuntimeCache> {
 pub fn native_runtime_cache(cache_dir: Option<&Path>) -> Result<NativeRuntimeCache> {
     let root = match cache_dir {
         Some(path) => path.to_path_buf(),
-        None => dirs::cache_dir()
-            .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
-            .context("cannot determine native runtime cache directory")?
-            .join("mesh-llm")
-            .join("native-runtimes"),
+        None => match std::env::var_os(NATIVE_RUNTIME_CACHE_DIR_ENV) {
+            Some(path) => PathBuf::from(path),
+            None => dirs::cache_dir()
+                .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
+                .context("cannot determine native runtime cache directory")?
+                .join("mesh-llm")
+                .join("native-runtimes"),
+        },
     };
     Ok(NativeRuntimeCache::new(root))
 }

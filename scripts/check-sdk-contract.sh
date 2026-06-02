@@ -136,7 +136,12 @@ done
 node_type_patterns=(
     "export declare class Client"
     "export declare class Node"
-    "type NativeRuntimeArtifact"
+    "export type InstalledNativeRuntime"
+    "export type NativeRuntimeDownloadProgress"
+    "export type NativeRuntimeInstallOptions"
+    "export type NativeRuntimeResolveOptions"
+    "export declare function installNativeRuntime"
+    "export declare function resolveNativeRuntime"
     "servingEnabled?: boolean"
     "load(modelRef: string"
 )

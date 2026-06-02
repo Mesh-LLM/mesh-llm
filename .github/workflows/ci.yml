@@ -91,7 +91,8 @@ jobs:
               - 'crates/mesh-llm-types/**'
               - 'sdk/**'
               - 'Package.swift'
-              - 'scripts/ci-native-sdk-smoke.sh'
+              - 'scripts/ci-rust-sdk-smoke.sh'
+              - 'scripts/ci-prepare-native-runtime.sh'
               - 'scripts/ci-kotlin-sdk-smoke.sh'
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
@@ -436,12 +437,12 @@ jobs:
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
       timeout_minutes: 20
 
-  native_sdk_smoke:
+  rust_sdk_smoke:
     needs: [changes, linux, inference_smoke_tests]
     if: ${{ needs.inference_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.sdk == 'true') && needs.changes.outputs.docs_only != 'true' }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
-      sdk_kind: native
+      sdk_kind: rust
       artifact_name: ci-linux-inference-binaries
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/debug/mesh-llm

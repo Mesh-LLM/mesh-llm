@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v6
-        if: ${{ inputs.sdk_kind == 'native' }}
+        if: ${{ inputs.sdk_kind == 'rust' }}
         with:
           python-version: "3.12"
 
@@ -106,9 +106,9 @@ jobs:
           cache_key_prefix: ${{ inputs.cache_key_prefix }}
           save_model_cache: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Native SDK smoke test
-        if: ${{ inputs.sdk_kind == 'native' }}
-        run: scripts/ci-native-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}"
+      - name: Rust SDK smoke test
+        if: ${{ inputs.sdk_kind == 'rust' }}
+        run: scripts/ci-rust-sdk-smoke.sh "${{ inputs.staged_binary_path }}" "${{ inputs.artifact_path }}" "$HOME/.models/${{ inputs.model_file }}"
 
       - name: Kotlin SDK smoke test
         if: ${{ inputs.sdk_kind == 'kotlin' }}

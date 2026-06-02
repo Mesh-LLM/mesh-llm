@@ -23,6 +23,7 @@ API_PORT="${MESH_SDK_API_PORT:-9347}"
 CONSOLE_PORT="${MESH_SDK_CONSOLE_PORT:-3141}"
 MAX_WAIT="${MESH_SDK_MAX_WAIT:-180}"
 LOG="${MESH_SDK_LOG:-/tmp/mesh-llm-sdk-ci.log}"
+RUNTIME_CACHE="${MESH_SDK_NATIVE_RUNTIME_CACHE_DIR:-${RUNNER_TEMP:-/tmp}/mesh-llm-sdk-native-runtimes}"
 
 echo "=== SDK Fixture ==="
 echo "  mesh-llm:  $MESH_LLM"
@@ -30,6 +31,7 @@ echo "  bin-dir:   $BIN_DIR (compatibility placeholder)"
 echo "  model:     $MODEL"
 echo "  api port:  $API_PORT"
 echo "  console:   $CONSOLE_PORT"
+echo "  runtimes:  $RUNTIME_CACHE"
 
 if [[ ! -x "$MESH_LLM" ]]; then
     echo "Missing executable mesh-llm binary: $MESH_LLM" >&2
@@ -38,6 +40,19 @@ fi
 if [[ ! -f "$MODEL" ]]; then
     echo "Missing model: $MODEL" >&2
     exit 1
+fi
+
+export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="$RUNTIME_CACHE"
+if [[ -n "${MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR:-}" ]]; then
+    if [[ ! -d "$MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" ]]; then
+        echo "Missing native runtime artifact directory: $MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" >&2
+        exit 1
+    fi
+    echo "Installing native runtime artifact:"
+    echo "  artifact: $MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR"
+    "$MESH_LLM" runtime install \
+        --bundle-dir "$MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR" \
+        --cache-dir "$RUNTIME_CACHE"
 fi
 
 "$MESH_LLM" \

@@ -61,12 +61,7 @@ mod dynamic {
     }
 
     fn default_native_runtime_cache() -> Result<NativeRuntimeCache> {
-        let root = dirs::cache_dir()
-            .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
-            .context("cannot determine native runtime cache directory")?
-            .join("mesh-llm")
-            .join("native-runtimes");
-        Ok(NativeRuntimeCache::new(root))
+        crate::system::native_runtime_install::default_native_runtime_cache()
     }
 
     fn host_runtime_profile() -> HostRuntimeProfile {
