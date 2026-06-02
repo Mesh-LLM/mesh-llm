@@ -3,7 +3,7 @@ name = "mesh-llm-sdk"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Rust SDK facade for Mesh LLM clients and native runtime management"
+description = "Rust SDK facade for Mesh LLM clients and embedded serving"
 repository = "https://github.com/Mesh-LLM/mesh-llm"
 homepage = "https://github.com/Mesh-LLM/mesh-llm"
 readme = "README.md"
@@ -12,7 +12,7 @@ categories = ["api-bindings", "network-programming"]
 
 [features]
 default = ["client"]
-client = ["dep:mesh-llm-api-client", "dep:mesh-llm-runtime-install"]
+client = ["dep:mesh-llm-api-client"]
 console = ["dep:mesh-llm-console-server", "mesh-llm-embedded-runtime?/web-ui"]
 serving = [
     "dep:anyhow",

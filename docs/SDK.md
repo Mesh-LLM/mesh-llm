@@ -28,9 +28,9 @@ Add the Rust SDK facade crate:
 mesh-llm-sdk = "0.68.0"
 ```
 
-The default Rust SDK features expose client-side mesh APIs and native runtime
-install/cache management without depending on the full `mesh-llm-host-runtime`
-application crate.
+The default Rust SDK features expose client-side mesh APIs without depending on
+the full `mesh-llm-host-runtime` application crate or the native-runtime
+installer.
 
 For lower-level use, depend on `mesh-llm-api-client` directly to connect to an
 existing mesh, or `mesh-llm-api-server` for platform-neutral node/model
@@ -236,8 +236,13 @@ feature:
 use mesh_llm_sdk::{ClientBuilder, InviteToken, OwnerKeypair};
 ```
 
-The default `client` feature also includes native-runtime install APIs for
-installing and managing version-matched native runtimes:
+Enable the optional `serving` feature to install and manage version-matched
+native runtimes for local in-process serving:
+
+```toml
+[dependencies]
+mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
+```
 
 ```rust
 use mesh_llm_sdk::native_runtime::{

@@ -16,7 +16,7 @@ pub mod embedded_node;
 #[cfg(feature = "serving")]
 pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
 
-#[cfg(any(feature = "client", feature = "serving"))]
+#[cfg(feature = "serving")]
 pub mod native_runtime {
     pub use mesh_llm_runtime_install::*;
 }

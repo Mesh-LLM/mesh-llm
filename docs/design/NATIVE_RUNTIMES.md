@@ -266,15 +266,15 @@ dynamic hardware-selection mechanism for crates.io consumers.
 
 Recommended SDK feature shape:
 
-- `client`: OpenAI/Mesh client API facade. This also exposes native-runtime
-  manifest selection, download, cache management, and pruning APIs.
+- `client`: OpenAI/Mesh client API facade.
 - `console`: embeddable console server facade.
 - `serving`: full in-process node embedding with dynamic native-runtime
   loading. This also exposes native-runtime manifest selection, download,
   cache management, and pruning APIs.
 
 `serving` and `console` together enable the embedded node plus bundled web
-console assets. Native runtime source builds are not SDK features; native
+console assets. Client-only applications should not pull native-runtime
+install/update APIs. Native runtime source builds are not SDK features; native
 runtimes are release artifacts resolved at install/update time.
 
 ## Generated Runtime Crates

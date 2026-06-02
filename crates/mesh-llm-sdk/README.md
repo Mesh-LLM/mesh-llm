@@ -2,12 +2,13 @@
 
 `mesh-llm-sdk` is the public Rust SDK facade for Mesh LLM applications.
 
-The default feature set intentionally depends only on publishable SDK crates:
+The default `client` feature intentionally depends only on publishable SDK
+client crates:
 
 - `mesh-llm-api-client` for client-side mesh discovery and request APIs
-- `mesh-llm-runtime-install` for native runtime manifest resolution,
-  downloads, cache management, and pruning
 
+Native runtime install/update APIs are exposed by the `serving` feature because
+they are only needed by applications that manage local in-process serving.
 Native runtimes are release artifacts selected and installed at runtime; Cargo
 does not build them from source as part of SDK compilation.
 
@@ -36,6 +37,13 @@ node.shutdown().await?;
 ```
 
 ## Native Runtime Install Example
+
+Enable `serving` to use native-runtime install/update APIs:
+
+```toml
+[dependencies]
+mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
+```
 
 ```rust,no_run
 use mesh_llm_sdk::native_runtime::{
