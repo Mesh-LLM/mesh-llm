@@ -83,6 +83,22 @@ impl EmbeddedServeHandle {
         })
     }
 
+    pub async fn join_token(&self, invite_token: impl Into<String>) -> Result<()> {
+        let control_tx = self
+            .control_tx
+            .as_ref()
+            .context("embedded mesh runtime control channel is unavailable")?;
+        let (resp, rx) = tokio::sync::oneshot::channel();
+        control_tx
+            .send(crate::api::RuntimeControlRequest::Join {
+                invite_token: invite_token.into(),
+                resp,
+            })
+            .map_err(|_| anyhow::anyhow!("embedded mesh runtime control channel is closed"))?;
+        rx.await
+            .context("embedded mesh runtime join response dropped")?
+    }
+
     pub async fn stop(mut self) -> Result<()> {
         if !self.request_shutdown("sdk") && !self.task_finished() {
             anyhow::bail!("embedded mesh runtime control channel is unavailable");
@@ -200,6 +216,7 @@ fn embedded_runtime_options(
             EmbeddedMeshDiscoveryMode::Mdns => crate::runtime::EmbeddedRuntimeDiscoveryMode::Mdns,
         },
         relay: config.network.iroh_relays.clone(),
+        disable_iroh_relays: config.network.disable_iroh_relays,
         relay_auth: config
             .network
             .iroh_relay_auth
@@ -711,6 +728,7 @@ mod tests {
             .max_vram_gb(3.0)
             .iroh_relay("https://relay.example")
             .iroh_relay_auth("https://relay.example", "token")
+            .disable_iroh_relays(true)
             .nostr_relay("wss://nostr.example")
             .bind_port(17777)
             .owner_key("/tmp/sprout-owner.json")
@@ -742,6 +760,7 @@ mod tests {
             options.relay_auth,
             vec![("https://relay.example".to_string(), "token".to_string())]
         );
+        assert!(options.disable_iroh_relays);
         assert_eq!(options.nostr_relay, vec!["wss://nostr.example".to_string()]);
         assert_eq!(options.bind_port, Some(17777));
     }

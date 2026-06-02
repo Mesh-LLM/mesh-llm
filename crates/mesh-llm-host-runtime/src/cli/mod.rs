@@ -536,6 +536,10 @@ pub(crate) struct Cli {
     #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
     pub(crate) relay_auth: Vec<(String, String)>,
 
+    /// Disable iroh relay registration. Direct addresses and explicit EndpointAddr dials still work.
+    #[arg(long, hide = true)]
+    pub(crate) disable_iroh_relays: bool,
+
     /// Bind QUIC to a fixed UDP port (for NAT port forwarding).
     #[arg(long, hide = true)]
     pub(crate) bind_port: Option<u16>,

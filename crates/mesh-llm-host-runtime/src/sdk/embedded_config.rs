@@ -91,6 +91,7 @@ pub struct EmbeddedMeshNetworkConfig {
     pub node_name: Option<String>,
     pub iroh_relays: Vec<String>,
     pub iroh_relay_auth: BTreeMap<String, String>,
+    pub disable_iroh_relays: bool,
     pub nostr_relays: Vec<String>,
     pub bind_ip: Option<IpAddr>,
     pub bind_port: Option<u16>,
@@ -110,6 +111,7 @@ impl Default for EmbeddedMeshNetworkConfig {
             node_name: None,
             iroh_relays: Vec::new(),
             iroh_relay_auth: BTreeMap::new(),
+            disable_iroh_relays: false,
             nostr_relays: Vec::new(),
             bind_ip: None,
             bind_port: None,
@@ -312,6 +314,11 @@ impl EmbeddedMeshNodeBuilder {
         self
     }
 
+    pub fn disable_iroh_relays(mut self, disabled: bool) -> Self {
+        self.config.network.disable_iroh_relays = disabled;
+        self
+    }
+
     pub fn nostr_relay(mut self, url: impl Into<String>) -> Self {
         self.config.network.nostr_relays.push(url.into());
         self
@@ -485,6 +492,7 @@ pub struct EmbeddedServeConfig {
     pub discovery_mode: EmbeddedMeshDiscoveryMode,
     pub relay: Vec<String>,
     pub relay_auth: BTreeMap<String, String>,
+    pub disable_iroh_relays: bool,
     pub nostr_relay: Vec<String>,
     pub region: Option<String>,
     pub node_name: Option<String>,
@@ -515,6 +523,7 @@ impl Default for EmbeddedServeConfig {
             discovery_mode: EmbeddedMeshDiscoveryMode::Nostr,
             relay: Vec::new(),
             relay_auth: BTreeMap::new(),
+            disable_iroh_relays: false,
             nostr_relay: Vec::new(),
             region: None,
             node_name: None,
@@ -555,6 +564,7 @@ impl From<EmbeddedServeConfig> for EmbeddedMeshNodeConfig {
                 node_name: config.node_name,
                 iroh_relays: config.relay,
                 iroh_relay_auth: config.relay_auth,
+                disable_iroh_relays: config.disable_iroh_relays,
                 nostr_relays: config.nostr_relay,
                 bind_ip: config.bind_ip,
                 bind_port: config.bind_port,
@@ -587,6 +597,7 @@ impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
             discovery_mode: config.network.discovery_mode,
             relay: config.network.iroh_relays,
             relay_auth: config.network.iroh_relay_auth,
+            disable_iroh_relays: config.network.disable_iroh_relays,
             nostr_relay: config.network.nostr_relays,
             region: config.network.region,
             node_name: config.network.node_name,

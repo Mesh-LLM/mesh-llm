@@ -172,6 +172,7 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) discovery_mode: EmbeddedRuntimeDiscoveryMode,
     pub(crate) relay: Vec<String>,
     pub(crate) relay_auth: Vec<(String, String)>,
+    pub(crate) disable_iroh_relays: bool,
     pub(crate) nostr_relay: Vec<String>,
     pub(crate) region: Option<String>,
     pub(crate) node_name: Option<String>,
@@ -3511,6 +3512,7 @@ fn cli_from_embedded_options(options: EmbeddedRuntimeOptions) -> Cli {
     };
     cli.relay = options.relay;
     cli.relay_auth = options.relay_auth;
+    cli.disable_iroh_relays = options.disable_iroh_relays;
     cli.nostr_relay = options.nostr_relay;
     cli.region = options.region;
     cli.name = options.node_name;
@@ -5646,7 +5648,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
         mesh::RelayConfig {
             urls: &cli.relay,
             auths: &relay_auths,
-            policy: relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode),
+            policy: relay_policy_for_runtime(cli),
         },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
@@ -5884,7 +5886,7 @@ async fn start_run_auto_node_and_plugins(
         mesh::RelayConfig {
             urls: &cli.relay,
             auths: &relay_auths,
-            policy: relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode),
+            policy: relay_policy_for_runtime(cli),
         },
         mesh::QuicBindSelection {
             ip: cli.bind_ip,
@@ -5913,6 +5915,14 @@ async fn start_run_auto_node_and_plugins(
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
+}
+
+fn relay_policy_for_runtime(cli: &Cli) -> mesh::RelayPolicy {
+    if cli.disable_iroh_relays {
+        mesh::RelayPolicy::ExplicitlyDisabled
+    } else {
+        relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode)
+    }
 }
 
 fn relay_policy_for_mesh_discovery_mode(
@@ -7367,6 +7377,11 @@ async fn run_auto_handle_control_request(
     cmd: api::RuntimeControlRequest,
 ) -> bool {
     match cmd {
+        api::RuntimeControlRequest::Join { invite_token, resp } => {
+            let result = ctx.node.join_with_retry(&invite_token).await;
+            let _ = resp.send(result);
+            false
+        }
         api::RuntimeControlRequest::Load { spec, resp } => {
             let result = run_auto_load_runtime_model(ctx, spec).await;
             let _ = resp.send(result);
@@ -8410,15 +8425,22 @@ async fn run_passive_listener_loop(
                 return Ok(Some(model_name));
             }
             Some(cmd) = control_rx.recv() => {
-                if let api::RuntimeControlRequest::Shutdown { source } = cmd {
-                    shutdown_passive_runtime(
-                        &node,
-                        &plugin_manager,
-                        &mut console_server_handle,
-                        source,
-                    )
-                    .await;
-                    return Ok(None);
+                match cmd {
+                    api::RuntimeControlRequest::Shutdown { source } => {
+                        shutdown_passive_runtime(
+                            &node,
+                            &plugin_manager,
+                            &mut console_server_handle,
+                            source,
+                        )
+                        .await;
+                        return Ok(None);
+                    }
+                    api::RuntimeControlRequest::Join { invite_token, resp } => {
+                        let result = node.join_with_retry(&invite_token).await;
+                        let _ = resp.send(result);
+                    }
+                    _ => {}
                 }
             }
             signal = wait_shutdown_signal() => {
@@ -8926,6 +8948,19 @@ mod tests {
             relay_policy_for_mesh_discovery_mode(mesh_discovery::MeshDiscoveryMode::Nostr),
             mesh::RelayPolicy::DefaultPublic
         );
+    }
+
+    #[test]
+    fn explicit_disable_iroh_relays_overrides_nostr_relay_policy() {
+        let mut cli = Cli::parse_from(["mesh-llm"]);
+        cli.mesh_discovery_mode = mesh_discovery::MeshDiscoveryMode::Nostr;
+        cli.disable_iroh_relays = true;
+
+        assert_eq!(
+            relay_policy_for_runtime(&cli),
+            mesh::RelayPolicy::ExplicitlyDisabled
+        );
+        assert!(!relay_policy_for_runtime(&cli).uses_relay());
     }
 
     #[test]
