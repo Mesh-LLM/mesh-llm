@@ -80,13 +80,6 @@ impl ClientBuilder {
         self
     }
 
-    pub fn with_api_base_url(mut self, api_base_url: impl Into<String>) -> Self {
-        self.config.transport = ClientTransport::OpenAiHttp {
-            api_base_url: api_base_url.into(),
-        };
-        self
-    }
-
     pub fn build(self) -> Result<MeshClient, MeshApiError> {
         let mut builder = mesh_client::ClientBuilder::new(
             self.config.owner_keypair.into_inner(),
@@ -287,12 +280,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builder_accepts_explicit_api_base_url_as_http_transport() {
+    fn builder_accepts_explicit_openai_http_transport() {
         let owner = OwnerKeypair::generate();
         let invite = "mesh-test:token".parse::<InviteToken>().unwrap();
 
-        let builder =
-            ClientBuilder::new(owner, invite).with_api_base_url("http://127.0.0.1:9337/v1");
+        let builder = ClientBuilder::new(owner, invite)
+            .with_openai_http_transport("http://127.0.0.1:9337/v1");
 
         assert_eq!(
             builder.config.transport,

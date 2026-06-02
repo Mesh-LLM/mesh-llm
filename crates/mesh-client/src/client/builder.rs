@@ -106,11 +106,6 @@ impl ClientBuilder {
         self
     }
 
-    pub fn with_api_base_url(mut self, api_base_url: String) -> Self {
-        self.config.transport = ClientTransport::OpenAiHttp { api_base_url };
-        self
-    }
-
     pub fn build(self) -> Result<MeshClient, ClientError> {
         let runtime = CoreRuntime::new()?;
         Ok(MeshClient {

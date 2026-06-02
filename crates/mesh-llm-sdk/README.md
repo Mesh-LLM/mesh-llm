@@ -9,9 +9,8 @@ client crates:
 
 Client requests use direct mesh transport by default, so SDK consumers do not
 need a local OpenAI `/v1` HTTP listener. Applications that intentionally want
-to call an existing HTTP endpoint can opt in with
-`ClientBuilder::with_openai_http_transport(...)` or the compatibility
-`ClientBuilder::with_api_base_url(...)` method.
+to call an existing HTTP endpoint can opt in with the explicit
+`ClientBuilder::with_openai_http_transport(...)` method.
 
 Native runtime install/update APIs are exposed by the `serving` feature because
 they are only needed by applications that manage local in-process serving.
