@@ -48,7 +48,7 @@ pub mod worker;
 pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
 
 use backend::call_backend;
-use fanout::gather_workers_incremental;
+use fanout::{GraceMode, gather_workers_incremental};
 use mesh_llm_guardrails::tool_arguments_wire_string;
 use normalize::WorkerOutput;
 use reducer::{hedged_reducer_call, reducer_candidates};
@@ -255,6 +255,7 @@ async fn handle_query(
         has_tools,
         allowed_tools,
         config.first_answer_grace,
+        grace_mode_for_turn(session, has_tools),
     )
     .await;
 
@@ -301,6 +302,52 @@ async fn handle_query(
         turn_kind,
         elapsed_ms: start.elapsed().as_millis() as u64,
     }
+}
+
+fn grace_mode_for_turn(session: &Session, has_tools: bool) -> GraceMode {
+    if !has_tools {
+        return GraceMode::Answer;
+    }
+    if looks_like_tool_intent(&session.last_user_text()) {
+        GraceMode::Tool
+    } else {
+        GraceMode::Answer
+    }
+}
+
+fn looks_like_tool_intent(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    let tool_intent_phrases = [
+        "use a tool",
+        "using a tool",
+        "read ",
+        "inspect ",
+        "open ",
+        "fetch ",
+        "search ",
+        "look up",
+        "browse",
+        "web",
+        "url",
+        "http://",
+        "https://",
+        "file",
+        "directory",
+        "folder",
+        "list ",
+        "run ",
+        "execute",
+        "terminal",
+        "shell",
+        "github",
+        "issue",
+        "pull request",
+        "pr ",
+        "weather",
+    ];
+    tool_intent_phrases
+        .iter()
+        .any(|phrase| text.contains(phrase))
 }
 
 // ─── Tool result handling ────────────────────────────────────────────
@@ -764,5 +811,38 @@ mod response_builder_tests {
             .and_then(serde_json::Value::as_u64)
             .expect("completion_tokens is u64");
         assert!(tokens > 0);
+    }
+
+    #[test]
+    fn tool_enabled_chat_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "How are you?"})],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "read"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
+    fn tool_intent_uses_tool_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use a tool to read /tmp/openclaw-tool-baseline.txt",
+            })],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "read"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Tool);
+    }
+
+    #[test]
+    fn no_tools_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Reply OK"})],
+            &None,
+        );
+        assert_eq!(grace_mode_for_turn(&session, false), GraceMode::Answer);
     }
 }
