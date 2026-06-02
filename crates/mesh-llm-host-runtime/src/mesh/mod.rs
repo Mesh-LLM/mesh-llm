@@ -399,6 +399,7 @@ pub struct RelayConfig<'a> {
 pub enum RelayPolicy {
     #[default]
     DefaultPublic,
+    ExplicitlyDisabled,
     Disabled,
 }
 
@@ -408,7 +409,7 @@ impl RelayPolicy {
     }
 
     fn uses_raw_stun(self) -> bool {
-        matches!(self, Self::DefaultPublic)
+        matches!(self, Self::DefaultPublic | Self::ExplicitlyDisabled)
     }
 }
 
@@ -557,7 +558,7 @@ fn filter_endpoint_addr_for_bind_ip(
 
 fn effective_relay_urls(policy: RelayPolicy, relay_urls: &[String]) -> Vec<String> {
     match policy {
-        RelayPolicy::Disabled => Vec::new(),
+        RelayPolicy::Disabled | RelayPolicy::ExplicitlyDisabled => Vec::new(),
         RelayPolicy::DefaultPublic if relay_urls.is_empty() => vec![
             "https://usw1-2.relay.michaelneale.mesh-llm.iroh.link./".into(),
             "https://aps1-1.relay.michaelneale.mesh-llm.iroh.link./".into(),
@@ -588,12 +589,15 @@ mod relay_policy_tests {
     }
 
     #[test]
-    fn disabled_policy_uses_no_relays_or_raw_stun() {
+    fn disabled_policy_uses_no_relays_but_explicit_disable_keeps_raw_stun() {
         let custom = vec!["https://relay.example/".to_string()];
 
         assert!(effective_relay_urls(RelayPolicy::Disabled, &custom).is_empty());
+        assert!(effective_relay_urls(RelayPolicy::ExplicitlyDisabled, &custom).is_empty());
         assert!(!RelayPolicy::Disabled.uses_relay());
+        assert!(!RelayPolicy::ExplicitlyDisabled.uses_relay());
         assert!(!RelayPolicy::Disabled.uses_raw_stun());
+        assert!(RelayPolicy::ExplicitlyDisabled.uses_raw_stun());
     }
 }
 
@@ -2032,7 +2036,12 @@ fn relay_mode_for_startup(relay: RelayConfig<'_>) -> iroh::endpoint::RelayMode {
         tracing::info!("Relay: {:?}", urls);
         iroh::endpoint::RelayMode::Custom(relay_map_from_urls(&urls, relay.auths))
     } else {
-        tracing::info!("Relay: disabled by LAN-only discovery mode");
+        let reason = match relay.policy {
+            RelayPolicy::ExplicitlyDisabled => "disabled by embedded config",
+            RelayPolicy::Disabled => "disabled by LAN-only discovery mode",
+            RelayPolicy::DefaultPublic => unreachable!("default public uses relays"),
+        };
+        tracing::info!("Relay: {reason}");
         iroh::endpoint::RelayMode::Disabled
     }
 }

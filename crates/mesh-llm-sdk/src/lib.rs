@@ -73,6 +73,7 @@ pub struct NetworkConfig {
     pub node_name: Option<String>,
     pub iroh_relays: Vec<String>,
     pub iroh_relay_auth: BTreeMap<String, String>,
+    pub disable_iroh_relays: bool,
     pub nostr_relays: Vec<String>,
     pub bind_ip: Option<IpAddr>,
     pub bind_port: Option<u16>,
@@ -92,6 +93,7 @@ impl Default for NetworkConfig {
             node_name: None,
             iroh_relays: Vec::new(),
             iroh_relay_auth: BTreeMap::new(),
+            disable_iroh_relays: false,
             nostr_relays: Vec::new(),
             bind_ip: None,
             bind_port: None,
@@ -227,6 +229,11 @@ macro_rules! impl_common_builder_methods {
                 .network
                 .iroh_relay_auth
                 .insert(relay_url.into(), bearer_token.into());
+            self
+        }
+
+        pub fn disable_iroh_relays(mut self, disabled: bool) -> Self {
+            self.config.network.disable_iroh_relays = disabled;
             self
         }
 
@@ -407,6 +414,10 @@ impl EmbeddedNodeHandle {
 
     pub async fn status(&self) -> Result<EmbeddedNodeStatus> {
         self.inner.status().await.map(EmbeddedNodeStatus::from)
+    }
+
+    pub async fn join_token(&self, token: impl Into<String>) -> Result<()> {
+        self.inner.join_token(token).await
     }
 
     pub async fn stop(self) -> Result<()> {
@@ -640,6 +651,7 @@ fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_host_runtime::sdk::Embedded
             node_name: parts.network.node_name,
             iroh_relays: parts.network.iroh_relays,
             iroh_relay_auth: parts.network.iroh_relay_auth,
+            disable_iroh_relays: parts.network.disable_iroh_relays,
             nostr_relays: parts.network.nostr_relays,
             bind_ip: parts.network.bind_ip,
             bind_port: parts.network.bind_port,
@@ -700,6 +712,7 @@ mod tests {
             .api_port(19337)
             .console_port(13131)
             .discovery_mode(MeshDiscoveryMode::Mdns)
+            .disable_iroh_relays(true)
             .log_format(LogFormat::Pretty)
             .build();
 
@@ -708,6 +721,7 @@ mod tests {
         assert_eq!(config.http.api_port, 19337);
         assert_eq!(config.http.console_port, 13131);
         assert_eq!(config.network.discovery_mode, MeshDiscoveryMode::Mdns);
+        assert!(config.network.disable_iroh_relays);
         assert_eq!(config.log_format, LogFormat::Pretty);
     }
 
