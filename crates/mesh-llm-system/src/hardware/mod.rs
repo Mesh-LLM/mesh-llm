@@ -333,25 +333,27 @@ impl Collector for DefaultCollector {
             if metrics.contains(&Metric::IsSoc) {
                 survey.is_soc = true;
             }
-            if metrics.contains(&Metric::VramBytes) {
-                if let Some((vram_bytes, reserved_bytes)) =
-                    macos_metal_gpu_budget(query_metal_recommended_working_set_bytes())
-                {
-                    survey.vram_bytes = vram_bytes;
-                    survey.gpu_vram = vec![vram_bytes];
-                    survey.gpu_reserved = vec![reserved_bytes];
-                }
+            let metal_budget = if metrics.contains(&Metric::VramBytes) {
+                macos_metal_gpu_budget(query_metal_recommended_working_set_bytes())
+            } else {
+                None
+            };
+            if let Some((vram_bytes, reserved_bytes)) = metal_budget {
+                survey.vram_bytes = vram_bytes;
+                survey.gpu_vram = vec![vram_bytes];
+                survey.gpu_reserved = vec![reserved_bytes];
             }
-            if metrics.contains(&Metric::GpuName) {
-                let out = std::process::Command::new("sysctl")
+            let macos_gpu_name = if metrics.contains(&Metric::GpuName) {
+                std::process::Command::new("sysctl")
                     .args(["-n", "machdep.cpu.brand_string"])
                     .output()
-                    .ok();
-                if let Some(out) = out {
-                    if let Ok(s) = String::from_utf8(out.stdout) {
-                        survey.gpu_name = parse_macos_cpu_brand(&s);
-                    }
-                }
+                    .ok()
+                    .and_then(|out| String::from_utf8(out.stdout).ok())
+            } else {
+                None
+            };
+            if let Some(gpu_name) = macos_gpu_name {
+                survey.gpu_name = parse_macos_cpu_brand(&gpu_name);
             }
             if metrics.contains(&Metric::GpuCount) {
                 survey.gpu_count = 1;

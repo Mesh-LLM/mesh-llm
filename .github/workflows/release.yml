@@ -35,7 +35,7 @@ env:
 jobs:
   metadata:
     name: Resolve release metadata
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
@@ -82,13 +82,13 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15
             artifact_name: release-macos
             build_recipe: release-build
             bundle_recipe: release-bundle
             backend: metal
           - name: Linux x86_64 CPU
-            os: blacksmith-4vcpu-ubuntu-2404
+            os: ubuntu-24.04
             artifact_name: release-linux
             build_recipe: release-build
             bundle_recipe: release-bundle
@@ -185,12 +185,12 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15
             backend: metal
             target: aarch64-apple-darwin
             artifact_suffix: darwin-aarch64-metal
           - name: Linux x86_64 CPU
-            os: blacksmith-4vcpu-ubuntu-2404
+            os: ubuntu-24.04
             backend: cpu
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64-cpu
@@ -245,7 +245,7 @@ jobs:
   build_swift_sdk_artifact:
     name: Build Swift SDK XCFramework
     needs: metadata
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: macos-15
     env:
       LLAMA_STAGE_BACKEND: metal
     steps:
@@ -305,7 +305,7 @@ jobs:
   build_linux_arm64:
     name: Build Linux ARM64 CPU
     needs: metadata
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04-arm
     env:
       LLAMA_STAGE_BACKEND: cpu
       MESH_RELEASE_ARCH: aarch64
@@ -352,7 +352,7 @@ jobs:
     name: Build Linux aarch64 CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -405,7 +405,7 @@ jobs:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -472,7 +472,7 @@ jobs:
     name: Build Linux ROCm
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     container:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
@@ -532,7 +532,7 @@ jobs:
     name: Build Linux Vulkan
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       LLAMA_STAGE_BACKEND: vulkan
     steps:
@@ -577,7 +577,7 @@ jobs:
   build_windows_cpu:
     name: Build Windows CPU
     needs: metadata
-    runs-on: blacksmith-8vcpu-windows-2025
+    runs-on: windows-2025
     env:
       LLAMA_STAGE_BACKEND: cpu
     steps:
@@ -625,7 +625,7 @@ jobs:
     name: Build Windows ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-8vcpu-windows-2025
+    runs-on: windows-2025
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
       # Pin Windows CUDA to a version sccache 0.15.0 supports.
@@ -743,7 +743,7 @@ jobs:
       - build_windows_cpu
       - build_windows_gpu
     if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         if: github.event_name == 'workflow_dispatch'
@@ -805,7 +805,7 @@ jobs:
     name: Preflight crates.io packages
     needs: [metadata, publish]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -823,7 +823,7 @@ jobs:
     name: Publish crates.io packages
     needs: [metadata, publish, publish_crates_preflight]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

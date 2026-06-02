@@ -5,7 +5,7 @@ on:
     inputs:
       runs_on:
         required: false
-        default: '"blacksmith-4vcpu-ubuntu-2404"'
+        default: '"ubuntu-24.04"'
         type: string
       timeout_minutes:
         required: false

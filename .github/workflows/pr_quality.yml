@@ -18,7 +18,7 @@ env:
 
 jobs:
   changes:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: read
@@ -49,7 +49,7 @@ jobs:
   rust-fmt:
     needs: changes
     if: needs.changes.outputs.rust_changed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -61,7 +61,7 @@ jobs:
   rust-clippy:
     needs: changes
     if: needs.changes.outputs.rust_changed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -116,7 +116,7 @@ jobs:
   ui-quality:
     needs: changes
     if: needs.changes.outputs.ui_changed == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: crates/mesh-llm-ui
@@ -142,7 +142,7 @@ jobs:
   summary:
     needs: [changes, rust-fmt, rust-clippy, ui-quality]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Check quality gate
         env:

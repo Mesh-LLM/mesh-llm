@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   latest-upstream:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       LLAMA_UPSTREAM_CANARY_SMOKE: ${{ vars.LLAMA_UPSTREAM_CANARY_SMOKE || '1' }}
       SCCACHE_GHA_ENABLED: "true"

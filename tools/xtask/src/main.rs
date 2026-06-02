@@ -1343,7 +1343,7 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     )?;
     ensure_contains(
         &release_workflow,
-        "runs-on: blacksmith-4vcpu-ubuntu-2404-arm",
+        "runs-on: ubuntu-24.04-arm",
         "release workflow ARM64 runner",
     )?;
     ensure_contains(
@@ -1943,7 +1943,7 @@ fn check_publish_workflow_invariants(repo_root: &Path) -> DynResult<()> {
           name: Preflight crates.io packages
           needs: [metadata, publish]
           if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-          runs-on: blacksmith-4vcpu-ubuntu-2404
+          runs-on: ubuntu-24.04
           steps:
             - uses: actions/checkout@v5
             - uses: dtolnay/rust-toolchain@stable
