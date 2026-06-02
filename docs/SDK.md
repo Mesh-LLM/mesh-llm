@@ -236,8 +236,8 @@ feature:
 use mesh_llm_sdk::{ClientBuilder, InviteToken, OwnerKeypair};
 ```
 
-Enable the `native-runtime` feature, enabled by default, to install and manage
-version-matched native runtimes:
+The default `client` feature also includes native-runtime install APIs for
+installing and managing version-matched native runtimes:
 
 ```rust
 use mesh_llm_sdk::native_runtime::{
@@ -259,9 +259,18 @@ let console = mesh_llm_sdk::console::start_file_console(
 ).await?;
 ```
 
-The crates.io SDK does not expose an in-process full host node. That host
-composition remains in `mesh-llm-host-runtime` and should not be pulled into
-normal SDK consumers.
+Enable the optional `serving` feature for an in-process full node. This pulls
+in the embedded runtime and host runtime with dynamic native-runtime loading,
+so Cargo still resolves native runtimes as release artifacts instead of
+building them implicitly from source:
+
+```toml
+[dependencies]
+mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
+```
+
+Enable `serving` and `console` together when the embedded node should also
+serve bundled web console assets.
 
 ## Swift Usage
 

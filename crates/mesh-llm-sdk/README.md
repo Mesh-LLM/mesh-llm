@@ -15,7 +15,7 @@ does not build them from source as part of SDK compilation.
 
 ```toml
 [dependencies]
-mesh-llm-sdk = { version = "0.68.0", features = ["embedded-node"] }
+mesh-llm-sdk = { version = "0.68.0", features = ["serving"] }
 ```
 
 ```rust,no_run

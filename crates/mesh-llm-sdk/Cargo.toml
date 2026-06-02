@@ -11,20 +11,18 @@ keywords = ["llm", "mesh", "sdk", "inference"]
 categories = ["api-bindings", "network-programming"]
 
 [features]
-default = ["client", "native-runtime"]
-client = ["dep:mesh-llm-api-client"]
-console = ["dep:mesh-llm-console-server"]
-embedded-node = [
+default = ["client"]
+client = ["dep:mesh-llm-api-client", "dep:mesh-llm-runtime-install"]
+console = ["dep:mesh-llm-console-server", "mesh-llm-embedded-runtime?/web-ui"]
+serving = [
     "dep:anyhow",
     "dep:mesh-llm-embedded-runtime",
+    "dep:mesh-llm-runtime-install",
     "mesh-llm-embedded-runtime/dynamic-native-runtime",
     "dep:reqwest",
     "dep:serde",
     "dep:serde_json",
 ]
-embedded-node-dynamic-native-runtime = ["embedded-node"]
-embedded-node-web-ui = ["embedded-node", "mesh-llm-embedded-runtime/web-ui"]
-native-runtime = ["dep:mesh-llm-runtime-install"]
 
 [lints]
 workspace = true

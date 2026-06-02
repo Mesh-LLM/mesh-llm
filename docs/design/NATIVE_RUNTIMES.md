@@ -266,20 +266,16 @@ dynamic hardware-selection mechanism for crates.io consumers.
 
 Recommended SDK feature shape:
 
-- `native-runtime`: enable native runtime loading APIs
-- `native-download`: enable release artifact download support
-- `native-build-cpu`: opt into source-building a CPU runtime
-- `native-build-metal`: opt into source-building a Metal runtime
-- `native-build-cuda`: opt into source-building a CUDA runtime
-- `native-build-cuda-blackwell`: opt into source-building a Blackwell-tuned
-  CUDA runtime
-- `native-build-rocm`: opt into source-building a ROCm runtime
-- `native-build-vulkan`: opt into source-building a Vulkan runtime
+- `client`: OpenAI/Mesh client API facade. This also exposes native-runtime
+  manifest selection, download, cache management, and pruning APIs.
+- `console`: embeddable console server facade.
+- `serving`: full in-process node embedding with dynamic native-runtime
+  loading. This also exposes native-runtime manifest selection, download,
+  cache management, and pruning APIs.
 
-The source-build features are explicit escape hatches for developers and CI
-jobs. They should not be default features. Build scripts should reject multiple
-`native-build-*` features in one package build unless a crate is deliberately
-designed to produce a multi-runtime artifact.
+`serving` and `console` together enable the embedded node plus bundled web
+console assets. Native runtime source builds are not SDK features; native
+runtimes are release artifacts resolved at install/update time.
 
 ## Generated Runtime Crates
 

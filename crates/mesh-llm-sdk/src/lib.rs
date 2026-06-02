@@ -10,13 +10,13 @@ pub mod console {
     };
 }
 
-#[cfg(feature = "embedded-node")]
+#[cfg(feature = "serving")]
 pub mod embedded_node;
 
-#[cfg(feature = "embedded-node")]
+#[cfg(feature = "serving")]
 pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
 
-#[cfg(feature = "native-runtime")]
+#[cfg(any(feature = "client", feature = "serving"))]
 pub mod native_runtime {
     pub use mesh_llm_runtime_install::*;
 }
