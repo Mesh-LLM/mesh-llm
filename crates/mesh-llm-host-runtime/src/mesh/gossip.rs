@@ -38,12 +38,38 @@ struct JoinProbeCandidate {
     addr: EndpointAddr,
 }
 
-struct JoinProbeSuccess {
+pub(super) struct JoinProbeSuccess {
     candidate: JoinProbeCandidate,
     conn: Connection,
     announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
     rtt_ms: u32,
     elapsed: std::time::Duration,
+}
+
+#[cfg(test)]
+impl JoinProbeSuccess {
+    /// Test-only constructor so sibling test modules can drive
+    /// `commit_join_probe_success` against a real QUIC connection.
+    pub(super) fn new_for_tests(
+        token: String,
+        mesh_name: Option<String>,
+        addr: EndpointAddr,
+        conn: Connection,
+        announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+        rtt_ms: u32,
+    ) -> Self {
+        Self {
+            candidate: JoinProbeCandidate {
+                token,
+                mesh_name,
+                addr,
+            },
+            conn,
+            announcements,
+            rtt_ms,
+            elapsed: std::time::Duration::from_millis(0),
+        }
+    }
 }
 
 fn emit_join_probe_race_started(candidate_count: usize) {
@@ -1197,7 +1223,7 @@ impl Node {
         })
     }
 
-    async fn commit_join_probe_success(
+    pub(super) async fn commit_join_probe_success(
         &self,
         success: JoinProbeSuccess,
     ) -> Result<(String, Option<String>)> {

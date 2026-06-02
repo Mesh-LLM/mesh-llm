@@ -296,6 +296,11 @@ fn requirement_aware_mesh_without_attestation_rejects_missing_direct_proof() {
 }
 
 #[test]
+fn fast_join_apply_failure_closes_connection_and_propagates_err() {
+    mesh::tests::assert_fast_join_apply_failure_closes_connection_and_propagates_err();
+}
+
+#[test]
 fn requirement_aware_mesh_without_attestation_rejects_invalid_direct_proof() {
     mesh::tests::assert_requirement_aware_mesh_without_attestation_rejects_invalid_direct_proof();
 }
