@@ -1,8 +1,8 @@
 pub mod builder;
 pub mod control_plane;
 pub use builder::{
-    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, ClientError, InviteToken, MeshClient,
-    Model, RequestId, ResponsesRequest, Status,
+    ChatMessage, ChatRequest, ClientBuilder, ClientConfig, ClientError, ClientTransport,
+    InviteToken, MeshClient, Model, RequestId, ResponsesRequest, Status,
 };
 pub use control_plane::{
     ConfigTransportSelection, ControlPlaneBootstrapOptions, ControlPlaneClientError,

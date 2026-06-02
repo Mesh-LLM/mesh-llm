@@ -2459,11 +2459,15 @@ pub(crate) fn is_peer_admitted(peers: &HashMap<EndpointId, PeerInfo>, id: &Endpo
 /// - `STREAM_GOSSIP (0x01)`: the admission handshake itself.
 /// - `STREAM_ROUTE_REQUEST (0x05)`: passive/client request-only path — caller
 ///   is NEVER promoted to `state.peers`.
+/// - `STREAM_TUNNEL_HTTP (0x04)`: passive SDK inference path for callers that
+///   have an invite token but should not need a local `/v1` HTTP listener.
 ///
-/// Every other stream — including tunnel (0x02 / 0x04) — requires the
-/// remote to have completed gossip first.
+/// Every other stream — including raw tunnel (0x02) — requires the remote to
+/// have completed gossip first.
 pub(crate) fn stream_allowed_before_admission(stream_type: u8) -> bool {
-    stream_type == STREAM_GOSSIP || stream_type == STREAM_ROUTE_REQUEST
+    stream_type == STREAM_GOSSIP
+        || stream_type == STREAM_ROUTE_REQUEST
+        || stream_type == STREAM_TUNNEL_HTTP
 }
 
 pub(crate) fn ingest_tunnel_map(

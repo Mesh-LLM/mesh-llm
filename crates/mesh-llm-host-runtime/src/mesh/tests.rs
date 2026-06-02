@@ -3241,13 +3241,14 @@ fn incoming_peer_promoted_after_valid_gossip() {
         "peer must NOT be admitted before gossip"
     );
 
-    for &tunnel_stream in &[STREAM_TUNNEL, STREAM_TUNNEL_HTTP] {
-        assert!(
-            !stream_allowed_before_admission(tunnel_stream),
-            "stream {:#04x} must be gated until after admission — unadmitted peers must not reach tunnel paths",
-            tunnel_stream
-        );
-    }
+    assert!(
+        !stream_allowed_before_admission(STREAM_TUNNEL),
+        "raw tunnel streams must be gated until after admission"
+    );
+    assert!(
+        stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
+        "HTTP tunnel streams must be allowed for passive SDK clients"
+    );
 
     assert!(
         stream_allowed_before_admission(STREAM_GOSSIP),
@@ -3296,7 +3297,6 @@ fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
 
     for stream_type in [
         STREAM_TUNNEL,
-        STREAM_TUNNEL_HTTP,
         STREAM_TUNNEL_MAP,
         STREAM_PEER_DOWN,
         STREAM_PEER_LEAVING,
@@ -3318,6 +3318,10 @@ fn incoming_peer_rejected_on_legacy_or_malformed_gossip() {
     assert!(
         stream_allowed_before_admission(STREAM_ROUTE_REQUEST),
         "STREAM_ROUTE_REQUEST must bypass the gate (passive/client request-only path)"
+    );
+    assert!(
+        stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
+        "STREAM_TUNNEL_HTTP must bypass the gate (passive/client inference path)"
     );
 
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xcd; 32]).public());
@@ -3345,7 +3349,6 @@ fn passive_route_table_request_does_not_admit_peer() {
 
     for &gated in &[
         STREAM_TUNNEL,
-        STREAM_TUNNEL_HTTP,
         STREAM_TUNNEL_MAP,
         STREAM_PEER_DOWN,
         STREAM_PEER_LEAVING,
@@ -5186,18 +5189,16 @@ fn dead_peer_ttl_expires() {
 /// Verifies that non-scope tunnel streams (0x02 STREAM_TUNNEL and 0x04
 /// STREAM_TUNNEL_HTTP) are NOT subject to protobuf frame validation — they are
 /// raw byte pass-throughs and must not be accidentally broken by the cut-over.
-/// Also verifies they are correctly gated by admission policy.
+/// Also verifies their admission policy.
 #[test]
 fn non_scope_tunnel_streams_pass_through_without_proto_validation() {
-    // 0x02 and 0x04 must NOT be allowed before admission (they are raw TCP tunnels,
-    // quarantined until the peer is admitted via gossip).
     assert!(
         !stream_allowed_before_admission(STREAM_TUNNEL),
         "STREAM_TUNNEL (0x02) must be gated until after gossip admission"
     );
     assert!(
-        !stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
-        "STREAM_TUNNEL_HTTP (0x04) must be gated until after gossip admission"
+        stream_allowed_before_admission(STREAM_TUNNEL_HTTP),
+        "STREAM_TUNNEL_HTTP (0x04) must be allowed for passive SDK inference"
     );
 
     // After admission these streams are live. Verify that the stream type constants
@@ -5241,15 +5242,10 @@ fn non_scope_tunnel_streams_pass_through_without_proto_validation() {
         err
     );
 
-    // Verify that all admission-gated streams besides tunnels are also gated
-    // (completeness check for non-scope stream policy)
-    for stream in [STREAM_TUNNEL, STREAM_TUNNEL_HTTP] {
-        assert!(
-            !stream_allowed_before_admission(stream),
-            "stream {:#04x} must require admission (raw tunnel security boundary)",
-            stream
-        );
-    }
+    assert!(
+        !stream_allowed_before_admission(STREAM_TUNNEL),
+        "STREAM_TUNNEL must require admission (raw tunnel security boundary)"
+    );
 }
 
 /// Proves the behavioral contract introduced in the reconnect fix:

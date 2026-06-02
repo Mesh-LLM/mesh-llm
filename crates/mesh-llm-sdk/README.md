@@ -7,10 +7,40 @@ client crates:
 
 - `mesh-llm-api-client` for client-side mesh discovery and request APIs
 
+Client requests use direct mesh transport by default, so SDK consumers do not
+need a local OpenAI `/v1` HTTP listener. Applications that intentionally want
+to call an existing HTTP endpoint can opt in with
+`ClientBuilder::with_openai_http_transport(...)` or the compatibility
+`ClientBuilder::with_api_base_url(...)` method.
+
 Native runtime install/update APIs are exposed by the `serving` feature because
 they are only needed by applications that manage local in-process serving.
 Native runtimes are release artifacts selected and installed at runtime; Cargo
-does not build them from source as part of SDK compilation.
+does not build them from source as part of SDK compilation. Runtime artifacts
+are fetched from Mesh LLM release manifests by default, but compatibility is
+checked against the exact Skippy ABI version.
+
+## Client Transport Example
+
+```toml
+[dependencies]
+mesh-llm-sdk = "0.68.0"
+```
+
+```rust,no_run
+use mesh_llm_sdk::{ClientBuilder, InviteToken, OwnerKeypair};
+
+let owner = OwnerKeypair::generate();
+let invite = std::env::var("MESH_INVITE_TOKEN")?.parse::<InviteToken>()?;
+
+let mut client = ClientBuilder::new(owner, invite)
+    .with_direct_mesh_transport()
+    .build()?;
+
+client.join().await?;
+let models = client.list_models().await?;
+client.disconnect().await;
+```
 
 ## Embedded Node Example
 

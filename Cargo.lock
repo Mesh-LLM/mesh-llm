@@ -4178,6 +4178,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "skippy-ffi",
  "tar",
  "tempfile",
  "tokio",

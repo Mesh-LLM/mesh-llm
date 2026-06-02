@@ -53,6 +53,7 @@ pub struct NativeRuntimeManifestOptions {
 #[derive(Clone)]
 pub struct NativeRuntimeInstallOptions {
     pub mesh_version: String,
+    pub skippy_abi_version: String,
     pub selection: RuntimeSelection,
     pub manifest_path: Option<PathBuf>,
     pub manifest_url: Option<String>,
@@ -93,6 +94,7 @@ impl Default for NativeRuntimeInstallOptions {
     fn default() -> Self {
         Self {
             mesh_version: CURRENT_MESH_VERSION.to_string(),
+            skippy_abi_version: current_skippy_abi_version(),
             selection: RuntimeSelection::Recommended,
             manifest_path: None,
             manifest_url: None,
@@ -108,6 +110,15 @@ impl Default for NativeRuntimeInstallOptions {
 pub fn default_release_manifest_url(mesh_version: &str) -> String {
     format!(
         "https://github.com/Mesh-LLM/mesh-llm/releases/download/v{mesh_version}/native-runtimes.json"
+    )
+}
+
+pub fn current_skippy_abi_version() -> String {
+    format!(
+        "{}.{}.{}",
+        skippy_ffi::ABI_VERSION_MAJOR,
+        skippy_ffi::ABI_VERSION_MINOR,
+        skippy_ffi::ABI_VERSION_PATCH
     )
 }
 
@@ -173,6 +184,7 @@ pub async fn install_native_runtime(
         manifest,
         cache.clone(),
     )
+    .with_skippy_abi_version(options.skippy_abi_version.clone())
     .with_bundle_dirs(options.bundle_dirs.clone())
     .resolve(&options.selection)?;
     install_resolved_runtime(&cache, resolution, &options).await

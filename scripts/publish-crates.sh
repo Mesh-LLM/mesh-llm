@@ -341,7 +341,8 @@ unpublished_registry_deps() {
         mesh-llm-runtime-install)
             printf '%s\n' \
                 mesh-llm-hardware-profile \
-                mesh-llm-native-runtime
+                mesh-llm-native-runtime \
+                skippy-ffi
             ;;
         mesh-llm-client)
             printf '%s\n' \

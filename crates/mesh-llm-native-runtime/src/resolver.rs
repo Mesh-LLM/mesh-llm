@@ -17,7 +17,8 @@ pub enum RuntimeSelection {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateRejection {
-    MeshVersionMismatch { expected: String, actual: String },
+    SkippyAbiVersionMissing { expected: String },
+    SkippyAbiVersionMismatch { expected: String, actual: String },
     OsMismatch { expected: String, actual: String },
     ArchMismatch { expected: String, actual: String },
     TargetTripleMismatch { expected: String, actual: String },
@@ -54,6 +55,7 @@ pub struct NativeRuntimeResolution {
 
 pub struct NativeRuntimeResolver {
     mesh_version: String,
+    skippy_abi_version: Option<String>,
     profile: HostRuntimeProfile,
     release_manifest: NativeRuntimeReleaseManifest,
     cache: NativeRuntimeCache,
@@ -85,6 +87,7 @@ impl NativeRuntimeResolver {
     ) -> Self {
         Self {
             mesh_version: mesh_version.into(),
+            skippy_abi_version: None,
             profile,
             release_manifest,
             cache,
@@ -97,20 +100,34 @@ impl NativeRuntimeResolver {
         self
     }
 
+    pub fn with_skippy_abi_version(mut self, skippy_abi_version: impl Into<String>) -> Self {
+        self.skippy_abi_version = Some(skippy_abi_version.into());
+        self
+    }
+
     pub fn resolve(&self, selection: &RuntimeSelection) -> Result<NativeRuntimeResolution> {
         let evaluated = evaluate_candidates(
             &self.release_manifest.artifacts,
             &self.profile,
-            &self.mesh_version,
+            self.skippy_abi_version.as_deref(),
             selection,
         );
         let Some(selected) = best_candidate(&evaluated) else {
-            bail!(
-                "no compatible native runtime found for {} on {}/{}",
-                self.mesh_version,
-                self.profile.os,
-                self.profile.arch
-            );
+            if let Some(skippy_abi_version) = &self.skippy_abi_version {
+                bail!(
+                    "no compatible native runtime found for Skippy ABI {} on {}/{}",
+                    skippy_abi_version,
+                    self.profile.os,
+                    self.profile.arch
+                );
+            } else {
+                bail!(
+                    "no compatible native runtime found for {} on {}/{}",
+                    self.mesh_version,
+                    self.profile.os,
+                    self.profile.arch
+                );
+            }
         };
         Ok(NativeRuntimeResolution {
             source: self.source_for_artifact(&selected.artifact)?,
@@ -149,13 +166,24 @@ impl NativeRuntimeResolver {
 pub fn select_native_runtime(
     release_manifest: &NativeRuntimeReleaseManifest,
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    _mesh_version: &str,
+    selection: &RuntimeSelection,
+) -> Option<CandidateEvaluation> {
+    let evaluated = evaluate_candidates(&release_manifest.artifacts, profile, None, selection);
+    best_candidate(&evaluated).cloned()
+}
+
+pub fn select_native_runtime_for_skippy_abi(
+    release_manifest: &NativeRuntimeReleaseManifest,
+    profile: &HostRuntimeProfile,
+    _mesh_version: &str,
+    skippy_abi_version: &str,
     selection: &RuntimeSelection,
 ) -> Option<CandidateEvaluation> {
     let evaluated = evaluate_candidates(
         &release_manifest.artifacts,
         profile,
-        mesh_version,
+        Some(skippy_abi_version),
         selection,
     );
     best_candidate(&evaluated).cloned()
@@ -164,27 +192,33 @@ pub fn select_native_runtime(
 fn evaluate_candidates(
     artifacts: &[NativeRuntimeArtifact],
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    skippy_abi_version: Option<&str>,
     selection: &RuntimeSelection,
 ) -> Vec<CandidateEvaluation> {
     artifacts
         .iter()
-        .map(|artifact| evaluate_artifact(artifact, profile, mesh_version, selection))
+        .map(|artifact| evaluate_artifact(artifact, profile, skippy_abi_version, selection))
         .collect()
 }
 
 fn evaluate_artifact(
     artifact: &NativeRuntimeArtifact,
     profile: &HostRuntimeProfile,
-    mesh_version: &str,
+    skippy_abi_version: Option<&str>,
     selection: &RuntimeSelection,
 ) -> CandidateEvaluation {
     let mut reasons = Vec::new();
-    if artifact.mesh_version != mesh_version {
-        reasons.push(CandidateRejection::MeshVersionMismatch {
-            expected: mesh_version.to_string(),
-            actual: artifact.mesh_version.clone(),
-        });
+    if let Some(expected) = skippy_abi_version {
+        match artifact.skippy_abi_version.as_deref() {
+            Some(actual) if actual == expected => {}
+            Some(actual) => reasons.push(CandidateRejection::SkippyAbiVersionMismatch {
+                expected: expected.to_string(),
+                actual: actual.to_string(),
+            }),
+            None => reasons.push(CandidateRejection::SkippyAbiVersionMissing {
+                expected: expected.to_string(),
+            }),
+        }
     }
     if artifact.os != profile.os {
         reasons.push(CandidateRejection::OsMismatch {
@@ -279,7 +313,7 @@ mod tests {
             arch: "x86_64".to_string(),
             flavor,
             priority: 0,
-            skippy_abi_version: None,
+            skippy_abi_version: Some("0.1.24".to_string()),
             url: None,
             sha256: None,
             signature: None,
@@ -327,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_version_mismatch_rejects_candidate() {
+    fn mesh_version_mismatch_does_not_reject_matching_skippy_abi_candidate() {
         let manifest = NativeRuntimeReleaseManifest {
             mesh_version: "0.67.0".to_string(),
             artifacts: vec![NativeRuntimeArtifact {
@@ -338,14 +372,67 @@ mod tests {
                 )
             }],
         };
+        let selected = select_native_runtime_for_skippy_abi(
+            &manifest,
+            &profile(),
+            "0.68.0",
+            "0.1.24",
+            &RuntimeSelection::Recommended,
+        )
+        .unwrap();
+        assert_eq!(
+            selected.artifact.native_runtime_id,
+            "meshllm-native-linux-x86_64-cuda"
+        );
+    }
+
+    #[test]
+    fn skippy_abi_mismatch_rejects_candidate() {
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            artifacts: vec![NativeRuntimeArtifact {
+                skippy_abi_version: Some("0.1.23".to_string()),
+                ..artifact(
+                    "meshllm-native-linux-x86_64-cuda",
+                    NativeRuntimeFlavor::Cuda,
+                )
+            }],
+        };
         assert!(
-            select_native_runtime(
+            select_native_runtime_for_skippy_abi(
                 &manifest,
                 &profile(),
                 "0.68.0",
+                "0.1.24",
                 &RuntimeSelection::Recommended
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn missing_skippy_abi_rejects_candidate_when_required() {
+        let manifest = NativeRuntimeReleaseManifest {
+            mesh_version: "0.68.0".to_string(),
+            artifacts: vec![NativeRuntimeArtifact {
+                skippy_abi_version: None,
+                ..artifact(
+                    "meshllm-native-linux-x86_64-cuda",
+                    NativeRuntimeFlavor::Cuda,
+                )
+            }],
+        };
+        let evaluated = evaluate_candidates(
+            &manifest.artifacts,
+            &profile(),
+            Some("0.1.24"),
+            &RuntimeSelection::Recommended,
+        );
+
+        assert!(!evaluated[0].compatible);
+        assert!(matches!(
+            evaluated[0].rejection_reasons[0],
+            CandidateRejection::SkippyAbiVersionMissing { .. }
+        ));
     }
 }

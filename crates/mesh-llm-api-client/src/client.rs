@@ -6,6 +6,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = mesh_client::client::builder::MAX_RECONNECT_ATTEMPTS;
+pub type ClientTransport = mesh_client::ClientTransport;
 
 #[derive(Debug, Error)]
 pub enum MeshApiError {
@@ -33,7 +34,7 @@ pub struct ClientConfig {
     pub invite_token: InviteToken,
     pub user_agent: String,
     pub connect_timeout: Duration,
-    pub api_base_url: Option<String>,
+    pub transport: ClientTransport,
 }
 
 pub struct ClientBuilder {
@@ -48,7 +49,7 @@ impl ClientBuilder {
                 invite_token,
                 user_agent: format!("mesh-llm-api-client/{}", env!("CARGO_PKG_VERSION")),
                 connect_timeout: Duration::from_secs(30),
-                api_base_url: None,
+                transport: ClientTransport::DirectMesh,
             },
         }
     }
@@ -63,8 +64,26 @@ impl ClientBuilder {
         self
     }
 
+    pub fn with_transport(mut self, transport: ClientTransport) -> Self {
+        self.config.transport = transport;
+        self
+    }
+
+    pub fn with_direct_mesh_transport(self) -> Self {
+        self.with_transport(ClientTransport::DirectMesh)
+    }
+
+    pub fn with_openai_http_transport(mut self, api_base_url: impl Into<String>) -> Self {
+        self.config.transport = ClientTransport::OpenAiHttp {
+            api_base_url: api_base_url.into(),
+        };
+        self
+    }
+
     pub fn with_api_base_url(mut self, api_base_url: impl Into<String>) -> Self {
-        self.config.api_base_url = Some(api_base_url.into());
+        self.config.transport = ClientTransport::OpenAiHttp {
+            api_base_url: api_base_url.into(),
+        };
         self
     }
 
@@ -76,9 +95,7 @@ impl ClientBuilder {
         .with_user_agent(self.config.user_agent.clone())
         .with_connect_timeout(self.config.connect_timeout);
 
-        if let Some(api_base_url) = self.config.api_base_url {
-            builder = builder.with_api_base_url(api_base_url);
-        }
+        builder = builder.with_transport(self.config.transport);
 
         let inner = builder.build()?;
 
@@ -270,7 +287,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builder_accepts_explicit_api_base_url() {
+    fn builder_accepts_explicit_api_base_url_as_http_transport() {
         let owner = OwnerKeypair::generate();
         let invite = "mesh-test:token".parse::<InviteToken>().unwrap();
 
@@ -278,8 +295,19 @@ mod tests {
             ClientBuilder::new(owner, invite).with_api_base_url("http://127.0.0.1:9337/v1");
 
         assert_eq!(
-            builder.config.api_base_url.as_deref(),
-            Some("http://127.0.0.1:9337/v1")
+            builder.config.transport,
+            ClientTransport::OpenAiHttp {
+                api_base_url: "http://127.0.0.1:9337/v1".to_string()
+            }
         );
+    }
+
+    #[test]
+    fn builder_defaults_to_direct_mesh_transport() {
+        let owner = OwnerKeypair::generate();
+        let invite = "mesh-test:token".parse::<InviteToken>().unwrap();
+        let builder = ClientBuilder::new(owner, invite);
+
+        assert_eq!(builder.config.transport, ClientTransport::DirectMesh);
     }
 }
