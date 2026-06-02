@@ -38,6 +38,7 @@ pub async fn try_handle_moa(
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
     targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
 ) -> Option<TcpStream> {
     if effective_model != Some(moa::VIRTUAL_MODEL_NAME) {
         return Some(tcp_stream);
@@ -51,7 +52,7 @@ pub async fn try_handle_moa(
 
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
-    let Some(mut config) = build_moa_config(node, targets).await else {
+    let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
         let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
         return None;
     };
@@ -74,6 +75,9 @@ pub async fn try_handle_moa(
 fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
     extract_enable_thinking_override(body).or(Some(false))
 }
+
+pub(in crate::network::openai) mod context_selection;
+mod progress;
 
 /// Pull the caller's "disable / enable thinking" preference out of an
 /// inbound chat-completion or responses JSON body. Mirrors the same
@@ -137,8 +141,6 @@ fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
 
     result
 }
-
-mod progress;
 
 /// Run a turn through the gateway and write the response with x-moa-* headers.
 ///
@@ -361,6 +363,7 @@ fn build_moa_headers(result: &moa::TurnResult) -> Vec<(&'static str, String)> {
 pub async fn build_moa_config(
     node: &mesh::Node,
     targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
 ) -> Option<moa::GatewayConfig> {
     let http = reqwest::Client::new();
     let mut backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
@@ -390,6 +393,7 @@ pub async fn build_moa_config(
             targets,
             &http,
             &aliases,
+            required_tokens,
             &mut backends,
             &mut models,
             &mut local_count,
@@ -407,6 +411,7 @@ pub async fn build_moa_config(
     }
 
     tracing::info!(
+        required_tokens = ?required_tokens,
         "MoA config: {} workers ({} local, {} remote): {:?}",
         models.len(),
         local_count,
@@ -472,12 +477,24 @@ async fn resolve_one_worker_from_aliases(
     targets: Option<&election::ModelTargets>,
     http: &reqwest::Client,
     aliases: &[String],
+    required_tokens: Option<u32>,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
 ) {
     for name in aliases {
-        if add_worker_backend(node, targets, http, name, backends, models, local_count).await {
+        if add_worker_backend(
+            node,
+            targets,
+            http,
+            name,
+            required_tokens,
+            backends,
+            models,
+            local_count,
+        )
+        .await
+        {
             return;
         }
     }
@@ -559,6 +576,7 @@ async fn add_worker_backend(
     targets: Option<&election::ModelTargets>,
     http: &reqwest::Client,
     name: &str,
+    required_tokens: Option<u32>,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
@@ -573,6 +591,15 @@ async fn add_worker_backend(
         })
     });
     if let Some(port) = local_port {
+        let context_length = node.local_model_context_length(name).await;
+        if !context_selection::context_can_satisfy(required_tokens, context_length) {
+            tracing::info!(
+                "MoA: skipping local worker {name}; context {:?} cannot fit {:?} required tokens",
+                context_length,
+                required_tokens
+            );
+            return false;
+        }
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(LocalModelBackend {
             port,
@@ -587,9 +614,11 @@ async fn add_worker_backend(
     }
 
     // Otherwise find a remote host. hosts_for_model returns peers in
-    // hash-preferred order; take the first.
+    // hash-preferred order; prefer hosts with enough advertised context.
     let remote_hosts = node.hosts_for_model(name).await;
-    if let Some(peer_id) = remote_hosts.into_iter().next() {
+    if let Some(peer_id) =
+        context_selection::select_remote_host(node, name, required_tokens, remote_hosts).await
+    {
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(RemoteModelBackend {
             node: node.clone(),

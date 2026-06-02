@@ -692,6 +692,7 @@ async fn try_handle_moa_intercept(
         request,
         decision.effective_model.as_deref(),
         Some(ctx.route.targets),
+        decision.required_tokens,
     )
     .await;
     proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;

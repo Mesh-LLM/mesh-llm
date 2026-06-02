@@ -2807,12 +2807,15 @@ pub async fn handle_mesh_request(
     // back unchanged if this isn't a MoA request, so we can call it
     // unconditionally here.
     let moa_model_name = request.model_name.clone();
+    let moa_required_tokens =
+        request_budget_tokens_from_parts(request.body_len_bytes, request.completion_tokens);
     let tcp_stream = match crate::network::openai::moa_gateway::try_handle_moa(
         &node,
         tcp_stream,
         &mut request,
         moa_model_name.as_deref(),
         None, // passive path has no local targets table
+        moa_required_tokens,
     )
     .await
     {
@@ -4079,7 +4082,7 @@ fn models_list_json(
     runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> serde_json::Value {
     let mut seen = std::collections::HashSet::new();
-    let data: Vec<serde_json::Value> = models
+    let mut data: Vec<serde_json::Value> = models
         .iter()
         .filter_map(|m| {
             let descriptor = descriptor_for_model(descriptors, m);
@@ -4128,6 +4131,35 @@ fn models_list_json(
             Some(model)
         })
         .collect();
+
+    if crate::network::openai::moa_gateway::context_selection::should_advertise_virtual_mesh(models)
+        && seen.insert(mesh_mixture_of_agents::VIRTUAL_MODEL_NAME.to_string())
+    {
+        let mut model = serde_json::json!({
+            "id": mesh_mixture_of_agents::VIRTUAL_MODEL_NAME,
+            "display_name": "Mesh (MoA)",
+            "object": "model",
+            "owned_by": "mesh-llm",
+            "capabilities": ["text"],
+            "multimodal_status": "unsupported",
+            "vision_status": "unsupported",
+            "audio_status": "unsupported",
+            "reasoning_status": "unknown",
+        });
+        if let Some(context_length) =
+            crate::network::openai::moa_gateway::context_selection::virtual_mesh_context_length(
+                models, runtimes,
+            )
+        {
+            if let Some(object) = model.as_object_mut() {
+                object.insert(
+                    "metadata".to_string(),
+                    serde_json::json!({ "context_length": context_length }),
+                );
+            }
+        }
+        data.push(model);
+    }
 
     serde_json::json!({ "object": "list", "data": data })
 }
@@ -5070,6 +5102,51 @@ mod tests {
         assert_eq!(metadata["kv_head_count"], 8);
         assert_eq!(metadata["expert_count"], 128);
         assert_eq!(metadata["active_expert_count"], 8);
+    }
+
+    #[test]
+    fn models_list_advertises_virtual_mesh_when_moa_has_two_models() {
+        let models = vec!["fast-8b".to_string(), "strong-32b".to_string()];
+        let runtimes = vec![
+            mesh::ModelRuntimeDescriptor {
+                model_name: "fast-8b".to_string(),
+                identity_hash: None,
+                context_length: Some(16_384),
+                ready: true,
+            },
+            mesh::ModelRuntimeDescriptor {
+                model_name: "strong-32b".to_string(),
+                identity_hash: None,
+                context_length: Some(65_536),
+                ready: true,
+            },
+        ];
+
+        let body = models_list_json(&models, &[], &runtimes);
+        let mesh = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
+            .expect("virtual mesh model should be listed");
+
+        assert_eq!(mesh["display_name"], "Mesh (MoA)");
+        assert_eq!(mesh["metadata"]["context_length"], 16_384);
+    }
+
+    #[test]
+    fn models_list_does_not_invent_virtual_mesh_context() {
+        let models = vec!["unknown-a".to_string(), "unknown-b".to_string()];
+
+        let body = models_list_json(&models, &[], &[]);
+        let mesh = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|model| model["id"] == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
+            .expect("virtual mesh model should be listed");
+
+        assert!(mesh.get("metadata").is_none());
     }
 
     #[test]
