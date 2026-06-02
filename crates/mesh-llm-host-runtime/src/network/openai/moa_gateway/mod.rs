@@ -482,19 +482,14 @@ async fn resolve_one_worker_from_aliases(
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
 ) {
+    let resolution = WorkerBackendResolution {
+        node,
+        targets,
+        http,
+        required_tokens,
+    };
     for name in aliases {
-        if add_worker_backend(
-            node,
-            targets,
-            http,
-            name,
-            required_tokens,
-            backends,
-            models,
-            local_count,
-        )
-        .await
-        {
+        if add_worker_backend(&resolution, name, backends, models, local_count).await {
             return;
         }
     }
@@ -571,18 +566,22 @@ fn is_locally_served(name: &str, targets: Option<&election::ModelTargets>) -> bo
 /// Resolve `name` to a backend (local skippy port if available, else first
 /// remote host) and append it to `backends`/`models`. Returns true if a
 /// backend was added.
-async fn add_worker_backend(
-    node: &mesh::Node,
-    targets: Option<&election::ModelTargets>,
-    http: &reqwest::Client,
-    name: &str,
+struct WorkerBackendResolution<'a> {
+    node: &'a mesh::Node,
+    targets: Option<&'a election::ModelTargets>,
+    http: &'a reqwest::Client,
     required_tokens: Option<u32>,
+}
+
+async fn add_worker_backend(
+    resolution: &WorkerBackendResolution<'_>,
+    name: &str,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
 ) -> bool {
     // Prefer local skippy port when this node serves the model.
-    let local_port = targets.and_then(|t| {
+    let local_port = resolution.targets.and_then(|t| {
         t.targets.get(name).and_then(|tv| {
             tv.iter().find_map(|t| match t {
                 election::InferenceTarget::Local(p) => Some(*p),
@@ -591,19 +590,19 @@ async fn add_worker_backend(
         })
     });
     if let Some(port) = local_port {
-        let context_length = node.local_model_context_length(name).await;
-        if !context_selection::context_can_satisfy(required_tokens, context_length) {
+        let context_length = resolution.node.local_model_context_length(name).await;
+        if !context_selection::context_can_satisfy(resolution.required_tokens, context_length) {
             tracing::info!(
                 "MoA: skipping local worker {name}; context {:?} cannot fit {:?} required tokens",
                 context_length,
-                required_tokens
+                resolution.required_tokens
             );
             return false;
         }
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(LocalModelBackend {
             port,
-            http: http.clone(),
+            http: resolution.http.clone(),
         }));
         models.push(moa::ModelEntry {
             name: name.to_string(),
@@ -615,13 +614,18 @@ async fn add_worker_backend(
 
     // Otherwise find a remote host. hosts_for_model returns peers in
     // hash-preferred order; prefer hosts with enough advertised context.
-    let remote_hosts = node.hosts_for_model(name).await;
-    if let Some(peer_id) =
-        context_selection::select_remote_host(node, name, required_tokens, remote_hosts).await
+    let remote_hosts = resolution.node.hosts_for_model(name).await;
+    if let Some(peer_id) = context_selection::select_remote_host(
+        resolution.node,
+        name,
+        resolution.required_tokens,
+        remote_hosts,
+    )
+    .await
     {
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(RemoteModelBackend {
-            node: node.clone(),
+            node: resolution.node.clone(),
             peer_id,
         }));
         models.push(moa::ModelEntry {

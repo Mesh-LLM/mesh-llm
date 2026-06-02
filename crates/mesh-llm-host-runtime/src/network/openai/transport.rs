@@ -4150,13 +4150,12 @@ fn models_list_json(
             crate::network::openai::moa_gateway::context_selection::virtual_mesh_context_length(
                 models, runtimes,
             )
+            && let Some(object) = model.as_object_mut()
         {
-            if let Some(object) = model.as_object_mut() {
-                object.insert(
-                    "metadata".to_string(),
-                    serde_json::json!({ "context_length": context_length }),
-                );
-            }
+            object.insert(
+                "metadata".to_string(),
+                serde_json::json!({ "context_length": context_length }),
+            );
         }
         data.push(model);
     }
