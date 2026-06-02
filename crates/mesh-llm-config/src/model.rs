@@ -978,4 +978,24 @@ pub struct PluginConfigEntry {
     /// Optional URL passed to the plugin as `MESH_LLM_PLUGIN_URL`.
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "PluginStartupConfig::is_default")]
+    pub startup: PluginStartupConfig,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct PluginStartupConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect_timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub init_timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub lazy_start: bool,
+}
+
+impl PluginStartupConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
 }

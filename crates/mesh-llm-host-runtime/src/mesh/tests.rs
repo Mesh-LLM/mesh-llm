@@ -6300,6 +6300,88 @@ pub(crate) fn assert_requirement_aware_mesh_without_attestation_rejects_missing_
     });
 }
 
+/// On the fast auto-join probe, if `apply_gossip_announcements` fails after the
+/// dispatcher has already been spawned, the winning candidate must be both
+/// dropped from `state.connections` AND have its QUIC connection closed (so the
+/// dispatcher unwinds and no orphaned, keep-alive'd connection lingers), and the
+/// `Err` must propagate so the caller falls back to the serial join path.
+pub(crate) fn assert_fast_join_apply_failure_closes_connection_and_propagates_err() {
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    runtime.block_on(async {
+        // Joiner enforces a release-attestation requirement.
+        let trusted_signer = test_release_signer_key_id(9);
+        let policy = requirement_policy(&trusted_signer);
+        let joiner = make_test_node(super::NodeRole::Worker)
+            .await
+            .expect("joiner test node");
+        configure_requirement_node(&joiner, &policy, Some(&trusted_signer))
+            .await
+            .expect("configure joiner policy");
+
+        // Bootstrap peer accepts a real QUIC connection from the joiner.
+        let bootstrap = make_test_node(super::NodeRole::Worker)
+            .await
+            .expect("bootstrap test node");
+        bootstrap.start_accepting();
+        joiner.start_accepting();
+
+        let bootstrap_id = bootstrap.id();
+        let bootstrap_addr = bootstrap.endpoint_addr_for_advertisement();
+        let conn = connect_mesh(&joiner.endpoint, bootstrap_addr.clone())
+            .await
+            .expect("joiner connects to bootstrap");
+
+        // Self-announcement from the bootstrap peer carrying NO release
+        // attestation. `apply_announced_peer` hits the `peer_id == remote`
+        // branch, `validate_direct_peer_requirements` rejects it, and
+        // `apply_gossip_announcements` returns `Err`.
+        let mut self_ann = requirement_peer_announcement(0x00, &policy, None, None);
+        self_ann.addr = super::EndpointAddr {
+            id: bootstrap_id,
+            addrs: Default::default(),
+        };
+        let announcements = vec![(self_ann.addr.clone(), self_ann.clone())];
+
+        let success = super::gossip::JoinProbeSuccess::new_for_tests(
+            joiner.invite_token().await,
+            None,
+            super::EndpointAddr {
+                id: bootstrap_id,
+                addrs: Default::default(),
+            },
+            conn.clone(),
+            announcements,
+            42,
+        );
+
+        let result = joiner.commit_join_probe_success(success).await;
+        assert!(
+            result.is_err(),
+            "apply failure must propagate Err so the caller falls back to serial join"
+        );
+
+        // The tracked entry must be gone.
+        assert!(
+            !joiner
+                .state
+                .lock()
+                .await
+                .connections
+                .contains_key(&bootstrap_id),
+            "failed candidate must be removed from tracked connections"
+        );
+
+        // The QUIC connection must be closed, not merely untracked. If it were
+        // only untracked, `closed()` would hang here because the keep-alive
+        // would hold the orphaned connection open.
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(2), conn.closed()).await;
+        assert!(
+            closed.is_ok(),
+            "QUIC connection must be closed on apply failure, not left orphaned"
+        );
+    });
+}
+
 pub(crate) fn assert_requirement_aware_mesh_without_attestation_rejects_invalid_direct_proof() {
     let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
     runtime.block_on(async {
@@ -7764,6 +7846,56 @@ fn active_stage_topology_replaces_previous_generation_for_model() {
 }
 
 #[test]
+fn stage_topology_withdraw_removes_active_topology_and_statuses() {
+    let host_id = EndpointId::from(SecretKey::from_bytes(&[0x41; 32]).public());
+    let worker_id = EndpointId::from(SecretKey::from_bytes(&[0x42; 32]).public());
+    let mut state = StageTopologyState::default();
+    state.activate_topology(StageTopologyInstance {
+        topology_id: "topology-a".to_string(),
+        run_id: "run-a".to_string(),
+        model_id: "model-a".to_string(),
+        package_ref: "gguf:///model.gguf".to_string(),
+        manifest_sha256: "direct-gguf:1:model.gguf".to_string(),
+        stages: vec![
+            StageAssignment {
+                stage_id: "stage-0".to_string(),
+                stage_index: 0,
+                node_id: host_id,
+                layer_start: 0,
+                layer_end: 12,
+                endpoint: StageEndpoint {
+                    bind_addr: "127.0.0.1:50000".to_string(),
+                },
+            },
+            StageAssignment {
+                stage_id: "stage-1".to_string(),
+                stage_index: 1,
+                node_id: worker_id,
+                layer_start: 12,
+                layer_end: 24,
+                endpoint: StageEndpoint {
+                    bind_addr: "127.0.0.1:0".to_string(),
+                },
+            },
+        ],
+    });
+    state.record_status(test_stage_status(
+        worker_id,
+        "stage-1",
+        1,
+        "127.0.0.1:51234",
+        crate::inference::skippy::StageRuntimeState::Ready,
+    ));
+
+    assert_eq!(state.visible_topologies().len(), 1);
+    assert_eq!(state.runtime_statuses().len(), 1);
+    assert!(state.withdraw_topology("topology-a", "run-a"));
+    assert!(state.visible_topologies().is_empty());
+    assert!(state.runtime_statuses().is_empty());
+    assert!(!state.withdraw_topology("topology-a", "run-a"));
+}
+
+#[test]
 fn empty_stage_status_snapshots_are_ignored() {
     let node_id = EndpointId::from(SecretKey::from_bytes(&[0x39; 32]).public());
     let mut state = StageTopologyState::default();
@@ -7812,5 +7944,31 @@ fn active_stage_refresh_marks_missing_stage_failed() {
     assert_eq!(
         status.error.as_deref(),
         Some("stage status missing from runtime")
+    );
+}
+
+#[test]
+fn active_stage_refresh_timeout_marks_cached_stage_failed() {
+    let node_id = EndpointId::from(SecretKey::from_bytes(&[0x43; 32]).public());
+    let mut state = StageTopologyState::default();
+    state.record_status(test_stage_status(
+        node_id,
+        "stage-1",
+        1,
+        "127.0.0.1:51234",
+        crate::inference::skippy::StageRuntimeState::Ready,
+    ));
+    let cached = state.active_statuses().into_iter().next().unwrap();
+
+    state.record_status_refresh_failure(&cached, "stage status refresh timed out".to_string());
+
+    let status = state.runtime_statuses().into_iter().next().unwrap();
+    assert_eq!(
+        status.state,
+        crate::inference::skippy::StageRuntimeState::Failed
+    );
+    assert_eq!(
+        status.error.as_deref(),
+        Some("stage status refresh timed out")
     );
 }

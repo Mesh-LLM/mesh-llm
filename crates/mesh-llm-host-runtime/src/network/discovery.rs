@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use mdns_sd::{DaemonStatus, ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -9,9 +9,14 @@ use std::time::Duration;
 use crate::network::nostr;
 
 pub(crate) const LAN_SERVICE_TYPE: &str = "_mesh-llm._tcp.local.";
+pub(crate) const LAN_DETAILS_PATH: &str = "/api/discovery/lan-details";
 const TXT_SCHEMA_VERSION: u8 = 1;
 const TXT_LIST_SEPARATOR: char = '|';
 const TXT_VALUE_LIMIT: usize = 220;
+const LAN_DETAILS_CHALLENGE_WINDOW_SECS: u64 = 300;
+const LAN_INVITE_TOKEN_FINGERPRINT_DOMAIN: &[u8] = b"mesh-llm-lan-invite-token-v1\0";
+const LAN_DETAILS_CHALLENGE_DOMAIN: &[u8] = b"mesh-llm-lan-details-challenge-v1\0";
+const LAN_DETAILS_TOKEN_PROOF_DOMAIN: &[u8] = b"mesh-llm-lan-details-proof-v1\0";
 const DAEMON_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -79,6 +84,8 @@ pub(crate) struct LanMeshAdvertisement {
     pub(crate) client_count: usize,
     pub(crate) max_clients: usize,
     pub(crate) token_fingerprint: Option<String>,
+    pub(crate) details_path: Option<String>,
+    pub(crate) proof_challenge: Option<String>,
     pub(crate) app_version: Option<String>,
     pub(crate) join_material: LanJoinMaterial,
 }
@@ -88,6 +95,7 @@ impl LanMeshAdvertisement {
         listing: &nostr::MeshListing,
         supplied_invite_token: Option<&str>,
         app_version: Option<&str>,
+        details_reachable: bool,
     ) -> Self {
         // LAN discovery intentionally publishes only a fingerprint of the join
         // token so mDNS remains an untrusted pointer surface rather than a
@@ -99,6 +107,16 @@ impl LanMeshAdvertisement {
                 (!listing.invite_token.trim().is_empty())
                     .then(|| lan_token_fingerprint(&listing.invite_token))
             });
+        let proof_challenge = if details_reachable {
+            token_fingerprint
+                .as_deref()
+                .map(|fingerprint| lan_details_challenge(fingerprint, current_unix_secs()))
+        } else {
+            None
+        };
+        let details_path = proof_challenge
+            .as_ref()
+            .map(|_| LAN_DETAILS_PATH.to_string());
 
         Self {
             mesh_id: listing.mesh_id.clone(),
@@ -112,6 +130,8 @@ impl LanMeshAdvertisement {
             client_count: listing.client_count,
             max_clients: listing.max_clients,
             token_fingerprint,
+            details_path,
+            proof_challenge,
             app_version: app_version.map(str::to_owned),
             join_material: LanJoinMaterial::RequiresSuppliedToken,
         }
@@ -145,6 +165,8 @@ impl LanMeshAdvertisement {
         push_optional_txt(&mut txt, "name", self.mesh_name.as_deref());
         push_optional_txt(&mut txt, "region", self.region.as_deref());
         push_optional_txt(&mut txt, "tok_fp", self.token_fingerprint.as_deref());
+        push_optional_txt(&mut txt, "details", self.details_path.as_deref());
+        push_optional_txt(&mut txt, "proof_challenge", self.proof_challenge.as_deref());
         push_optional_txt(&mut txt, "version", self.app_version.as_deref());
 
         for (key, value) in &txt {
@@ -182,6 +204,8 @@ impl LanMeshAdvertisement {
             "name",
             "region",
             "tok_fp",
+            "details",
+            "proof_challenge",
             "version",
         ]
         .into_iter()
@@ -221,6 +245,8 @@ pub(crate) struct LanDiscoveredMesh {
     pub(crate) addresses: Vec<String>,
     pub(crate) listing: nostr::MeshListing,
     pub(crate) token_fingerprint: Option<String>,
+    pub(crate) details_path: Option<String>,
+    pub(crate) proof_challenge: Option<String>,
     pub(crate) join_material: LanJoinMaterial,
     pub(crate) joinable_with_supplied_token: bool,
     pub(crate) published_version: Option<String>,
@@ -255,8 +281,55 @@ pub(crate) struct LanPublishConfig {
     pub(crate) region: Option<String>,
     pub(crate) max_clients: Option<usize>,
     pub(crate) api_port: u16,
+    pub(crate) details_reachable: bool,
     pub(crate) interval_secs: u64,
     pub(crate) status_tx: Option<tokio::sync::watch::Sender<Option<nostr::PublishStateUpdate>>>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub(crate) struct LanDetailsProofRequest {
+    pub(crate) token_fingerprint: String,
+    pub(crate) challenge: String,
+    pub(crate) proof: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct LanDetailsResponse {
+    pub(crate) mode: &'static str,
+    pub(crate) scope: DiscoveryScope,
+    pub(crate) source: &'static str,
+    pub(crate) service_type: &'static str,
+    pub(crate) listing: nostr::MeshListing,
+    pub(crate) token_fingerprint: String,
+    pub(crate) join_material: LanJoinMaterial,
+    pub(crate) joinable_with_supplied_token: bool,
+    pub(crate) details_path: &'static str,
+    pub(crate) proof_challenge: String,
+    pub(crate) published_version: Option<String>,
+}
+
+impl LanDetailsResponse {
+    pub(crate) fn from_local_listing(
+        mut listing: nostr::MeshListing,
+        token_fingerprint: String,
+        proof_challenge: String,
+        published_version: Option<&str>,
+    ) -> Self {
+        listing.invite_token.clear();
+        Self {
+            mode: MeshDiscoveryMode::Mdns.as_str(),
+            scope: MeshDiscoveryMode::Mdns.scope(),
+            source: MeshDiscoveryMode::Mdns.source(),
+            service_type: LAN_SERVICE_TYPE,
+            listing,
+            token_fingerprint,
+            join_material: LanJoinMaterial::RequiresSuppliedToken,
+            joinable_with_supplied_token: true,
+            details_path: LAN_DETAILS_PATH,
+            proof_challenge,
+            published_version: published_version.map(str::to_string),
+        }
+    }
 }
 
 pub(crate) async fn publish_lan_loop(node: crate::mesh::Node, config: LanPublishConfig) {
@@ -277,6 +350,7 @@ pub(crate) async fn publish_lan_loop(node: crate::mesh::Node, config: LanPublish
             region: config.region.clone(),
             max_clients: config.max_clients,
             api_port: config.api_port,
+            details_reachable: config.details_reachable,
             status_tx: &config.status_tx,
             last_reported: &mut last_reported,
             instance_name: &instance_name,
@@ -307,6 +381,7 @@ struct LanPublishAttempt<'a> {
     region: Option<String>,
     max_clients: Option<usize>,
     api_port: u16,
+    details_reachable: bool,
     status_tx: &'a Option<tokio::sync::watch::Sender<Option<nostr::PublishStateUpdate>>>,
     last_reported: &'a mut Option<nostr::PublishStateUpdate>,
     instance_name: &'a str,
@@ -321,6 +396,7 @@ async fn publish_lan_advertisement(attempt: LanPublishAttempt<'_>) {
         region,
         max_clients,
         api_port,
+        details_reachable,
         status_tx,
         last_reported,
         instance_name,
@@ -331,6 +407,7 @@ async fn publish_lan_advertisement(attempt: LanPublishAttempt<'_>) {
         &listing,
         Some(&listing.invite_token),
         Some(crate::VERSION),
+        details_reachable,
     );
     let Some(service_info) = encode_lan_service_info(
         &advert,
@@ -497,10 +574,76 @@ pub(crate) async fn discover_lan_join_candidates(
 
 pub(crate) fn lan_token_fingerprint(token: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"mesh-llm-lan-invite-token-v1\0");
+    hasher.update(LAN_INVITE_TOKEN_FINGERPRINT_DOMAIN);
     hasher.update(token.trim().as_bytes());
     let digest = hasher.finalize();
     hex::encode(&digest[..16])
+}
+
+pub(crate) fn lan_details_challenge(token_fingerprint: &str, now_secs: u64) -> String {
+    lan_details_challenge_for_bucket(
+        token_fingerprint,
+        now_secs / LAN_DETAILS_CHALLENGE_WINDOW_SECS,
+    )
+}
+
+pub(crate) fn lan_details_token_proof(invite_token: &str, challenge: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(LAN_DETAILS_TOKEN_PROOF_DOMAIN);
+    hasher.update(invite_token.trim().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(challenge.trim().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+pub(crate) fn verify_lan_details_token_proof(
+    expected_invite_token: &str,
+    token_fingerprint: &str,
+    challenge: &str,
+    proof: &str,
+    now_secs: u64,
+) -> bool {
+    let token_fingerprint = token_fingerprint.trim();
+    if lan_token_fingerprint(expected_invite_token) != token_fingerprint {
+        return false;
+    }
+    let Some(challenge_bucket) = lan_details_challenge_bucket(challenge.trim()) else {
+        return false;
+    };
+    if !lan_details_challenge_bucket_is_recent(challenge_bucket, now_secs) {
+        return false;
+    }
+    if lan_details_challenge_for_bucket(token_fingerprint, challenge_bucket) != challenge.trim() {
+        return false;
+    }
+    lan_details_token_proof(expected_invite_token, challenge).eq_ignore_ascii_case(proof.trim())
+}
+
+fn lan_details_challenge_for_bucket(token_fingerprint: &str, bucket: u64) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(LAN_DETAILS_CHALLENGE_DOMAIN);
+    hasher.update(token_fingerprint.trim().as_bytes());
+    hasher.update(b"\0");
+    hasher.update(bucket.to_string().as_bytes());
+    let digest = hasher.finalize();
+    format!("v1:{bucket}:{}", hex::encode(&digest[..16]))
+}
+
+fn lan_details_challenge_bucket(challenge: &str) -> Option<u64> {
+    let mut parts = challenge.split(':');
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("v1"), Some(bucket), Some(digest), None)
+            if digest.len() == 32 && digest.chars().all(|ch| ch.is_ascii_hexdigit()) =>
+        {
+            bucket.parse().ok()
+        }
+        _ => None,
+    }
+}
+
+fn lan_details_challenge_bucket_is_recent(bucket: u64, now_secs: u64) -> bool {
+    let current = now_secs / LAN_DETAILS_CHALLENGE_WINDOW_SECS;
+    bucket.abs_diff(current) <= 1
 }
 
 pub(crate) fn discovery_source_label(mode: MeshDiscoveryMode, operation: &str) -> String {
@@ -510,7 +653,7 @@ pub(crate) fn discovery_source_label(mode: MeshDiscoveryMode, operation: &str) -
     }
 }
 
-async fn build_local_mesh_listing(
+pub(crate) async fn build_local_mesh_listing(
     node: &crate::mesh::Node,
     name: Option<String>,
     region: Option<String>,
@@ -614,6 +757,8 @@ fn lan_discovered_mesh(
             .collect(),
         listing,
         token_fingerprint: advert.token_fingerprint,
+        details_path: advert.details_path,
+        proof_challenge: advert.proof_challenge,
         join_material: advert.join_material,
         joinable_with_supplied_token: joinable,
         published_version: advert.app_version,
@@ -758,6 +903,8 @@ fn parse_txt_properties(props: &HashMap<&str, &str>) -> Result<LanMeshAdvertisem
         client_count: parse_txt_number(props, "clients").unwrap_or(0),
         max_clients: parse_txt_number(props, "max_clients").unwrap_or(0),
         token_fingerprint: optional_txt(props, "tok_fp"),
+        details_path: optional_txt(props, "details"),
+        proof_challenge: optional_txt(props, "proof_challenge"),
         app_version: optional_txt(props, "version"),
         join_material: LanJoinMaterial::RequiresSuppliedToken,
     })
@@ -931,8 +1078,12 @@ mod tests {
     fn lan_advertisement_txt_round_trips_without_raw_invite_token() {
         let invite_token = "invite-token-that-must-not-leak";
         let listing = sample_listing(invite_token);
-        let advert =
-            LanMeshAdvertisement::from_listing(&listing, Some(invite_token), Some(crate::VERSION));
+        let advert = LanMeshAdvertisement::from_listing(
+            &listing,
+            Some(invite_token),
+            Some(crate::VERSION),
+            true,
+        );
 
         let txt = advert.to_txt_properties().expect("txt should encode");
         let serialized = txt
@@ -959,12 +1110,119 @@ mod tests {
     }
 
     #[test]
+    fn lan_advertisement_exposes_token_gated_details_without_raw_invite_token() {
+        let invite_token = "invite-token-for-details-proof";
+        let listing = sample_listing(invite_token);
+        let advert = LanMeshAdvertisement::from_listing(
+            &listing,
+            Some(invite_token),
+            Some(crate::VERSION),
+            true,
+        );
+
+        let txt = advert.to_txt_properties().expect("txt should encode");
+        let serialized = txt
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(";");
+
+        assert!(!serialized.contains(invite_token));
+        assert!(serialized.contains("details=/api/discovery/lan-details"));
+        assert!(serialized.contains("proof_challenge="));
+
+        let decoded = LanMeshAdvertisement::from_txt_properties(&txt).expect("txt should decode");
+        assert_eq!(decoded.details_path.as_deref(), Some(LAN_DETAILS_PATH));
+        assert!(decoded.proof_challenge.is_some());
+    }
+
+    #[test]
+    fn lan_advertisement_omits_details_when_management_api_is_loopback_only() {
+        let invite_token = "invite-token-for-loopback-only-console";
+        let listing = sample_listing(invite_token);
+        let advert = LanMeshAdvertisement::from_listing(
+            &listing,
+            Some(invite_token),
+            Some(crate::VERSION),
+            false,
+        );
+
+        let txt = advert.to_txt_properties().expect("txt should encode");
+        let serialized = txt
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join(";");
+
+        assert!(serialized.contains("tok_fp="));
+        assert!(!serialized.contains("details="));
+        assert!(!serialized.contains("proof_challenge="));
+        assert_eq!(
+            advert.token_fingerprint.as_deref(),
+            Some(lan_token_fingerprint(invite_token).as_str())
+        );
+        assert!(advert.details_path.is_none());
+        assert!(advert.proof_challenge.is_none());
+    }
+
+    #[test]
+    fn lan_details_proof_accepts_matching_token_and_recent_challenge() {
+        let invite_token = "invite-token-for-proof";
+        let token_fingerprint = lan_token_fingerprint(invite_token);
+        let challenge = lan_details_challenge(&token_fingerprint, current_unix_secs());
+        let proof = lan_details_token_proof(invite_token, &challenge);
+
+        assert!(verify_lan_details_token_proof(
+            invite_token,
+            &token_fingerprint,
+            &challenge,
+            &proof,
+            current_unix_secs(),
+        ));
+    }
+
+    #[test]
+    fn lan_details_proof_rejects_public_fingerprint_without_token_secret() {
+        let invite_token = "invite-token-for-proof";
+        let token_fingerprint = lan_token_fingerprint(invite_token);
+        let challenge = lan_details_challenge(&token_fingerprint, current_unix_secs());
+        let attacker_proof = lan_details_token_proof("wrong-token", &challenge);
+
+        assert!(!verify_lan_details_token_proof(
+            invite_token,
+            &token_fingerprint,
+            &challenge,
+            &attacker_proof,
+            current_unix_secs(),
+        ));
+    }
+
+    #[test]
+    fn lan_details_response_sanitizes_invite_token() {
+        let invite_token = "invite-token-that-response-must-not-return";
+        let token_fingerprint = lan_token_fingerprint(invite_token);
+        let challenge = lan_details_challenge(&token_fingerprint, current_unix_secs());
+        let response = LanDetailsResponse::from_local_listing(
+            sample_listing(invite_token),
+            token_fingerprint.clone(),
+            challenge.clone(),
+            Some(crate::VERSION),
+        );
+
+        assert!(response.listing.invite_token.is_empty());
+        assert_eq!(response.token_fingerprint, token_fingerprint);
+        assert_eq!(response.details_path, LAN_DETAILS_PATH);
+        assert_eq!(response.proof_challenge, challenge);
+    }
+
+    #[test]
     fn lan_advertisement_requires_matching_supplied_join_token() {
         let invite_token = "invite-token-for-lab-mesh";
         let advert = LanMeshAdvertisement::from_listing(
             &sample_listing(invite_token),
             Some(invite_token),
             Some(crate::VERSION),
+            true,
         );
 
         assert!(advert.matches_supplied_token(Some(invite_token)));

@@ -70,6 +70,7 @@ pub(crate) struct SplitReadinessReport {
     pub(crate) capacity_advice: Option<ModelTargetCapacityAdvicePayload>,
     pub(crate) participants: Vec<SplitReadinessParticipant>,
     pub(crate) exclusions: Vec<SplitReadinessExclusion>,
+    pub(crate) blockers: Vec<SplitReadinessBlocker>,
     pub(crate) recommendations: Vec<String>,
 }
 
@@ -95,6 +96,14 @@ pub(crate) struct SplitReadinessExclusion {
     pub(crate) reason: &'static str,
     pub(crate) recommendation: &'static str,
     pub(crate) vram_bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct SplitReadinessBlocker {
+    pub(crate) reason: &'static str,
+    pub(crate) count: usize,
+    pub(crate) short_node_ids: Vec<String>,
+    pub(crate) recommendation: &'static str,
 }
 
 impl MeshApi {
@@ -164,6 +173,12 @@ pub(crate) fn build_split_readiness_report(input: SplitReadinessInput) -> SplitR
         participants.len(),
         capacity_advice.as_ref(),
     );
+    let blockers = split_readiness_blockers(
+        &exclusions,
+        verdict,
+        capacity_advice.as_ref(),
+        &participants,
+    );
     let recommendations = split_readiness_recommendations(&input.model_ref, verdict, &exclusions);
     SplitReadinessReport {
         model_ref: input.model_ref,
@@ -175,6 +190,7 @@ pub(crate) fn build_split_readiness_report(input: SplitReadinessInput) -> SplitR
         capacity_advice,
         participants,
         exclusions,
+        blockers,
         recommendations,
     }
 }
@@ -230,8 +246,10 @@ fn split_node_exclusion_reason(
     {
         return Some(split_readiness_stage_path_rejection(rejection));
     }
-    if node.source == SplitReadinessNodeSource::Peer && !node_has_stage_source(model_ref, node) {
-        return Some(SplitReadinessExclusionReason::MissingModelSource);
+    if node.source == SplitReadinessNodeSource::Peer
+        && let Some(reason) = split_stage_source_exclusion_reason(model_ref, node)
+    {
+        return Some(reason);
     }
     None
 }
@@ -457,6 +475,47 @@ fn split_readiness_recommendations(
     }
     if exclusions
         .iter()
+        .any(|item| item.reason == SplitReadinessExclusionReason::StageControlUnreachable.as_str())
+    {
+        recommendations.push(
+            "Check excluded peer runtime logs and stage-control connectivity; preflight passed but inventory/control did not return usable data."
+                .to_string(),
+        );
+    }
+    if exclusions.iter().any(|item| {
+        item.reason == SplitReadinessExclusionReason::ArtifactTransferUnavailable.as_str()
+    }) {
+        recommendations.push(
+            "Enable artifact transfer, use an HF-resolvable package, or choose peers that already have the requested package cached."
+                .to_string(),
+        );
+    }
+    if exclusions
+        .iter()
+        .any(|item| item.reason == SplitReadinessExclusionReason::StageInventoryEmpty.as_str())
+    {
+        recommendations.push(
+            "Wait for stage inventory refresh or prepare the requested package on excluded peers."
+                .to_string(),
+        );
+    }
+    if exclusions
+        .iter()
+        .any(|item| item.reason == SplitReadinessExclusionReason::PackageManifestMismatch.as_str())
+    {
+        recommendations.push(
+            "Refresh stale layer packages so excluded peers advertise the package manifest requested by this split."
+                .to_string(),
+        );
+    }
+    if verdict == SplitReadinessVerdict::InsufficientCapacity {
+        recommendations.push(
+            "Add split-capable workers with enough aggregate VRAM, lower the requested context, or choose a smaller package before retrying split serving."
+                .to_string(),
+        );
+    }
+    if exclusions
+        .iter()
         .any(|item| item.reason == SplitReadinessExclusionReason::MissingStagePath.as_str())
     {
         recommendations.push(
@@ -483,6 +542,106 @@ fn split_readiness_recommendations(
         ));
     }
     recommendations
+}
+
+fn split_readiness_blockers(
+    exclusions: &[SplitReadinessExclusion],
+    verdict: SplitReadinessVerdict,
+    capacity_advice: Option<&ModelTargetCapacityAdvicePayload>,
+    participants: &[SplitReadinessParticipant],
+) -> Vec<SplitReadinessBlocker> {
+    let mut blockers = split_readiness_exclusion_reason_order()
+        .into_iter()
+        .filter_map(|reason| split_readiness_blocker(exclusions, reason))
+        .collect::<Vec<_>>();
+    if let Some(blocker) = split_capacity_shortfall_blocker(verdict, capacity_advice, participants)
+    {
+        blockers.push(blocker);
+    }
+    blockers.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| blocker_rank(left.reason).cmp(&blocker_rank(right.reason)))
+    });
+    blockers
+}
+
+fn split_readiness_blocker(
+    exclusions: &[SplitReadinessExclusion],
+    reason: SplitReadinessExclusionReason,
+) -> Option<SplitReadinessBlocker> {
+    let matching = exclusions
+        .iter()
+        .filter(|item| item.reason == reason.as_str())
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+    Some(SplitReadinessBlocker {
+        reason: reason.as_str(),
+        count: matching.len(),
+        short_node_ids: matching
+            .into_iter()
+            .map(|item| item.short_node_id.clone())
+            .collect(),
+        recommendation: reason.recommendation(),
+    })
+}
+
+fn split_capacity_shortfall_blocker(
+    verdict: SplitReadinessVerdict,
+    capacity_advice: Option<&ModelTargetCapacityAdvicePayload>,
+    participants: &[SplitReadinessParticipant],
+) -> Option<SplitReadinessBlocker> {
+    if verdict != SplitReadinessVerdict::InsufficientCapacity {
+        return None;
+    }
+    let advice = capacity_advice?;
+    if !matches!(
+        advice.state,
+        ModelTargetCapacityAdviceState::InsufficientCapacity
+            | ModelTargetCapacityAdviceState::NoEligibleHosts
+            | ModelTargetCapacityAdviceState::UnknownCapacity
+    ) {
+        return None;
+    }
+    Some(SplitReadinessBlocker {
+        reason: "split_capacity_shortfall",
+        count: participants.len(),
+        short_node_ids: participants
+            .iter()
+            .map(|participant| participant.short_node_id.clone())
+            .collect(),
+        recommendation: "Add split-capable workers with enough aggregate VRAM, lower the requested context, or choose a smaller package before retrying split serving.",
+    })
+}
+
+const fn split_readiness_exclusion_reason_order() -> [SplitReadinessExclusionReason; 12] {
+    [
+        SplitReadinessExclusionReason::StageControlUnreachable,
+        SplitReadinessExclusionReason::PackageManifestMismatch,
+        SplitReadinessExclusionReason::ArtifactTransferUnavailable,
+        SplitReadinessExclusionReason::StageInventoryEmpty,
+        SplitReadinessExclusionReason::MissingModelSource,
+        SplitReadinessExclusionReason::MissingStagePath,
+        SplitReadinessExclusionReason::StagePathRelayOnly,
+        SplitReadinessExclusionReason::StagePathTooSlow,
+        SplitReadinessExclusionReason::StageProtocolGeneration,
+        SplitReadinessExclusionReason::MissingVram,
+        SplitReadinessExclusionReason::MissingModelInterest,
+        SplitReadinessExclusionReason::Client,
+    ]
+}
+
+fn blocker_rank(reason: &str) -> usize {
+    if reason == "split_capacity_shortfall" {
+        return 0;
+    }
+    split_readiness_exclusion_reason_order()
+        .iter()
+        .position(|candidate| candidate.as_str() == reason)
+        .unwrap_or(usize::MAX)
 }
 
 fn node_wants_model(model_ref: &str, node: &SplitReadinessNodeInput) -> bool {
@@ -538,6 +697,58 @@ fn node_has_stage_source(model_ref: &str, node: &SplitReadinessNodeInput) -> boo
     )
 }
 
+fn split_stage_source_exclusion_reason(
+    model_ref: &str,
+    node: &SplitReadinessNodeInput,
+) -> Option<SplitReadinessExclusionReason> {
+    if node_has_stage_source(model_ref, node) {
+        return None;
+    }
+    if node_has_package_manifest_mismatch_signal(model_ref, node) {
+        return Some(SplitReadinessExclusionReason::PackageManifestMismatch);
+    }
+    if !node.artifact_transfer_supported {
+        return Some(SplitReadinessExclusionReason::ArtifactTransferUnavailable);
+    }
+    if node_has_stage_inventory_surface(node) {
+        return Some(SplitReadinessExclusionReason::StageInventoryEmpty);
+    }
+    Some(SplitReadinessExclusionReason::MissingModelSource)
+}
+
+fn node_has_package_manifest_mismatch_signal(
+    model_ref: &str,
+    node: &SplitReadinessNodeInput,
+) -> bool {
+    node.model_source
+        .as_deref()
+        .is_some_and(|source| non_matching_model_signal(source, model_ref))
+        || node
+            .serving_models
+            .iter()
+            .chain(node.hosted_models.iter())
+            .chain(node.available_models.iter())
+            .any(|candidate| non_matching_model_signal(candidate, model_ref))
+}
+
+fn node_has_stage_inventory_surface(node: &SplitReadinessNodeInput) -> bool {
+    node.artifact_transfer_supported
+        || node
+            .model_source
+            .as_deref()
+            .is_some_and(|source| !source.trim().is_empty())
+        || node
+            .serving_models
+            .iter()
+            .chain(node.hosted_models.iter())
+            .chain(node.available_models.iter())
+            .any(|candidate| !candidate.trim().is_empty())
+}
+
+fn non_matching_model_signal(candidate: &str, model_ref: &str) -> bool {
+    !candidate.trim().is_empty() && !model_matches(candidate, model_ref)
+}
+
 fn model_matches(candidate: &str, model_ref: &str) -> bool {
     let candidate = candidate.trim();
     let model_ref = model_ref.trim();
@@ -558,6 +769,10 @@ enum SplitReadinessExclusionReason {
     MissingStagePath,
     StagePathRelayOnly,
     StagePathTooSlow,
+    StageControlUnreachable,
+    ArtifactTransferUnavailable,
+    StageInventoryEmpty,
+    PackageManifestMismatch,
     MissingModelSource,
 }
 
@@ -571,6 +786,10 @@ impl SplitReadinessExclusionReason {
             Self::MissingStagePath => "missing_stage_path",
             Self::StagePathRelayOnly => "stage_path_relay_only",
             Self::StagePathTooSlow => "stage_path_too_slow",
+            Self::StageControlUnreachable => "stage_control_unreachable",
+            Self::ArtifactTransferUnavailable => "artifact_transfer_unavailable",
+            Self::StageInventoryEmpty => "stage_inventory_empty",
+            Self::PackageManifestMismatch => "package_manifest_mismatch",
             Self::MissingModelSource => "missing_model_source",
         }
     }
@@ -595,6 +814,18 @@ impl SplitReadinessExclusionReason {
             }
             Self::StagePathTooSlow => {
                 "Use a lower-latency path or peer before admitting this peer to split serving."
+            }
+            Self::StageControlUnreachable => {
+                "Check stage-control connectivity and peer runtime logs before retrying."
+            }
+            Self::ArtifactTransferUnavailable => {
+                "Enable artifact transfer, use an HF-resolvable package, or choose a peer with the package already cached."
+            }
+            Self::StageInventoryEmpty => {
+                "Wait for inventory refresh or prepare the requested package on this peer."
+            }
+            Self::PackageManifestMismatch => {
+                "Refresh stale layer packages so this peer advertises the requested package manifest."
             }
             Self::MissingModelSource => {
                 "Ensure this peer can resolve or inventory the layer package before split serving."
@@ -748,6 +979,12 @@ mod tests {
             ModelTargetCapacityAdviceState::InsufficientCapacity
         );
         assert_eq!(capacity.shortfall_bytes, Some(2_000_000_000));
+        assert!(
+            report
+                .blockers
+                .iter()
+                .any(|blocker| blocker.reason == "split_capacity_shortfall")
+        );
     }
 
     #[test]
@@ -774,7 +1011,7 @@ mod tests {
     }
 
     #[test]
-    fn split_readiness_excludes_interested_peer_with_unknown_model_source() {
+    fn split_readiness_excludes_peer_without_transfer_or_cached_artifacts() {
         let mut peer = node(
             "peer000000000000000000000000000000000",
             SplitReadinessNodeRole::Worker,
@@ -793,12 +1030,78 @@ mod tests {
 
         assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
         assert_eq!(report.participant_count, 1);
-        assert_eq!(report.exclusions[0].reason, "missing_model_source");
+        assert_eq!(report.exclusions[0].reason, "artifact_transfer_unavailable");
+        assert_eq!(
+            report.blockers,
+            vec![SplitReadinessBlocker {
+                reason: "artifact_transfer_unavailable",
+                count: 1,
+                short_node_ids: vec!["peer0000".to_string()],
+                recommendation: "Enable artifact transfer, use an HF-resolvable package, or choose a peer with the package already cached.",
+            }]
+        );
         assert!(
             report
                 .recommendations
                 .iter()
-                .any(|item| item.contains("resolvable package source"))
+                .any(|item| item.contains("Enable artifact transfer"))
+        );
+    }
+
+    #[test]
+    fn split_readiness_excludes_peer_with_empty_stage_inventory_surface() {
+        let peer = node(
+            "peer000000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![peer],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
+        assert_eq!(report.exclusions[0].reason, "stage_inventory_empty");
+        assert_eq!(report.blockers[0].reason, "stage_inventory_empty");
+        assert!(
+            report
+                .recommendations
+                .iter()
+                .any(|item| item.contains("inventory refresh"))
+        );
+    }
+
+    #[test]
+    fn split_readiness_excludes_peer_with_package_manifest_mismatch() {
+        let mut peer = node(
+            "peer000000000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        peer.available_models = vec!["meshllm/OtherModel-Q4_K_M-layers".to_string()];
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![peer],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
+        assert_eq!(report.exclusions[0].reason, "package_manifest_mismatch");
+        assert_eq!(report.blockers[0].reason, "package_manifest_mismatch");
+        assert!(
+            report
+                .recommendations
+                .iter()
+                .any(|item| item.contains("stale layer packages"))
         );
     }
 
@@ -824,6 +1127,8 @@ mod tests {
         assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
         assert_eq!(report.participant_count, 1);
         assert_eq!(report.exclusions[0].reason, "missing_stage_path");
+        assert_eq!(report.blockers[0].reason, "missing_stage_path");
+        assert_eq!(report.blockers[0].count, 1);
         assert!(
             report
                 .recommendations
@@ -885,5 +1190,47 @@ mod tests {
         assert_eq!(report.verdict, SplitReadinessVerdict::WaitingForPeers);
         assert_eq!(report.participant_count, 1);
         assert_eq!(report.exclusions[0].reason, "stage_path_relay_only");
+        assert_eq!(report.blockers[0].reason, "stage_path_relay_only");
+    }
+
+    #[test]
+    fn split_readiness_blockers_prioritize_largest_actionable_group() {
+        let mut missing_source_a = node(
+            "missinga000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        missing_source_a.artifact_transfer_supported = false;
+        let mut missing_source_b = node(
+            "missingb000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        missing_source_b.artifact_transfer_supported = false;
+        let mut slow_path = node(
+            "slowpath000000000000000000000000000",
+            SplitReadinessNodeRole::Worker,
+            &["meshllm/Qwen3-8B-Q4_K_M-layers"],
+        );
+        slow_path.available_models = vec!["meshllm/Qwen3-8B-Q4_K_M-layers".to_string()];
+        slow_path.stage_path =
+            crate::mesh::SplitStagePathSnapshot::direct(Some(crate::mesh::MAX_SPLIT_RTT_MS + 1));
+
+        let report = build_split_readiness_report(SplitReadinessInput {
+            model_ref: "meshllm/Qwen3-8B-Q4_K_M-layers".to_string(),
+            local: local_node(&["meshllm/Qwen3-8B-Q4_K_M-layers"]),
+            peers: vec![slow_path, missing_source_a, missing_source_b],
+            capacity_advice: Some(advice(ModelTargetCapacityAdviceState::SplitCandidate)),
+            active_topology_count: 0,
+            active_stage_count: 0,
+        });
+
+        assert_eq!(report.blockers[0].reason, "artifact_transfer_unavailable");
+        assert_eq!(report.blockers[0].count, 2);
+        assert_eq!(
+            report.blockers[0].short_node_ids,
+            vec!["missinga".to_string(), "missingb".to_string()]
+        );
+        assert_eq!(report.blockers[1].reason, "stage_path_too_slow");
     }
 }

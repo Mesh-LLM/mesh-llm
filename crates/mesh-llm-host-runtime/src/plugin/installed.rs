@@ -1,13 +1,20 @@
 use super::PluginSummary;
 use super::config::{ExternalPluginSpec, PluginConfigEntry};
+use super::startup::PluginStartupOptions;
 use anyhow::{Context, Result, bail};
 use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub(crate) enum ConfiguredExternalPlugin {
+    Active(ExternalPluginSpec),
+    Inactive(PluginSummary),
+}
+
 pub(crate) fn configured_external_plugin_spec(
     entry: &PluginConfigEntry,
-) -> Result<ExternalPluginSpec> {
+) -> Result<ConfiguredExternalPlugin> {
+    let startup = PluginStartupOptions::from_config(&entry.startup);
     let command = entry
         .command
         .as_deref()
@@ -17,16 +24,25 @@ pub(crate) fn configured_external_plugin_spec(
 
     let command = match command {
         Some(command) => command,
-        None => installed_plugin_command_for_name(&entry.name)?,
+        None => match installed_plugin_command_for_name(&entry.name) {
+            Ok(command) => command,
+            Err(error) if startup.optional => {
+                return Ok(ConfiguredExternalPlugin::Inactive(
+                    optional_configured_plugin_summary(entry, &startup, error),
+                ));
+            }
+            Err(error) => return Err(error),
+        },
     };
 
-    Ok(ExternalPluginSpec {
+    Ok(ConfiguredExternalPlugin::Active(ExternalPluginSpec {
         name: entry.name.clone(),
         command,
         args: entry.args.clone(),
         url: entry.url.clone(),
         env: BTreeMap::new(),
-    })
+        startup,
+    }))
 }
 
 pub(crate) fn append_installed_plugins(
@@ -97,6 +113,29 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         args: Vec::new(),
         url: None,
         env: BTreeMap::new(),
+        startup: PluginStartupOptions::default(),
+    }
+}
+
+fn optional_configured_plugin_summary(
+    entry: &PluginConfigEntry,
+    startup: &PluginStartupOptions,
+    error: anyhow::Error,
+) -> PluginSummary {
+    PluginSummary {
+        name: entry.name.clone(),
+        kind: "external".to_string(),
+        enabled: true,
+        status: "missing".to_string(),
+        pid: None,
+        version: None,
+        capabilities: Vec::new(),
+        command: entry.command.clone(),
+        args: entry.args.clone(),
+        tools: Vec::new(),
+        manifest: None,
+        startup: Some(startup.summary()),
+        error: Some(format!("optional plugin not loaded: {error}")),
     }
 }
 
@@ -135,6 +174,7 @@ fn installed_store_error_summary(error: anyhow::Error) -> PluginSummary {
         args: Vec::new(),
         tools: Vec::new(),
         manifest: None,
+        startup: None,
         error: Some(error.to_string()),
     }
 }
@@ -156,6 +196,7 @@ fn installed_plugin_summary(
         args: Vec::new(),
         tools: Vec::new(),
         manifest: None,
+        startup: None,
         error,
     }
 }

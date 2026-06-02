@@ -21,6 +21,8 @@ use crate::models::append_external_inference_models;
 /// targeted bypass.
 const MIN_REBROADCAST_VERSION_MAJOR: u64 = 0;
 const MIN_REBROADCAST_VERSION_MINOR: u64 = 60;
+const CLIENT_AUTO_JOIN_PROBE_LIMIT: usize = 4;
+const CLIENT_AUTO_JOIN_PROBE_TIMEOUT: std::time::Duration = PEER_CONNECT_AND_GOSSIP_TIMEOUT;
 
 #[derive(Clone, Copy)]
 struct AnnouncedPeerContext {
@@ -28,6 +30,68 @@ struct AnnouncedPeerContext {
     rtt_ms: Option<u32>,
     negotiated_protocol_generation: Option<u32>,
     direct_peer_requirements_validated: bool,
+}
+
+struct JoinProbeCandidate {
+    token: String,
+    mesh_name: Option<String>,
+    addr: EndpointAddr,
+}
+
+pub(super) struct JoinProbeSuccess {
+    candidate: JoinProbeCandidate,
+    conn: Connection,
+    announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+    rtt_ms: u32,
+    elapsed: std::time::Duration,
+}
+
+#[cfg(test)]
+impl JoinProbeSuccess {
+    /// Test-only constructor so sibling test modules can drive
+    /// `commit_join_probe_success` against a real QUIC connection.
+    pub(super) fn new_for_tests(
+        token: String,
+        mesh_name: Option<String>,
+        addr: EndpointAddr,
+        conn: Connection,
+        announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+        rtt_ms: u32,
+    ) -> Self {
+        Self {
+            candidate: JoinProbeCandidate {
+                token,
+                mesh_name,
+                addr,
+            },
+            conn,
+            announcements,
+            rtt_ms,
+            elapsed: std::time::Duration::from_millis(0),
+        }
+    }
+}
+
+fn emit_join_probe_race_started(candidate_count: usize) {
+    tracing::info!(
+        candidates = candidate_count,
+        timeout_ms = CLIENT_AUTO_JOIN_PROBE_TIMEOUT.as_millis(),
+        "Racing auto-join bootstrap candidates"
+    );
+    emit_mesh_info(format!(
+        "Racing {candidate_count} auto-join bootstrap candidates"
+    ));
+}
+
+fn emit_join_probe_fallback(last_error: Option<&anyhow::Error>) {
+    if let Some(error) = last_error {
+        tracing::debug!(
+            "No auto-join candidate completed the fast probe; falling back to serial join: {error:#}"
+        );
+    }
+    emit_mesh_info(
+        "No auto-join candidate completed the fast probe; falling back to serial join".to_string(),
+    );
 }
 
 /// Returns `true` if `version` is recent enough to include in outbound
@@ -446,6 +510,42 @@ impl Node {
                 );
             }
         }
+    }
+
+    async fn connect_discovered_peers(
+        &self,
+        their_announcements: &[(EndpointAddr, PeerAnnouncement)],
+        known_peer_check_uses_connections: bool,
+        log_discovery_failure_as_warning: bool,
+    ) {
+        let my_role = self.role.lock().await.clone();
+        for (addr, ann) in their_announcements {
+            self.maybe_connect_discovered_peer(
+                &my_role,
+                addr.clone(),
+                ann,
+                known_peer_check_uses_connections,
+                log_discovery_failure_as_warning,
+            )
+            .await;
+        }
+    }
+
+    fn spawn_discovered_peer_connects(
+        &self,
+        their_announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
+        known_peer_check_uses_connections: bool,
+        log_discovery_failure_as_warning: bool,
+    ) {
+        let node = self.clone();
+        tokio::spawn(async move {
+            node.connect_discovered_peers(
+                &their_announcements,
+                known_peer_check_uses_connections,
+                log_discovery_failure_as_warning,
+            )
+            .await;
+        });
     }
 
     /// Returns `true` if the announcement would be rejected by the same
@@ -973,6 +1073,217 @@ impl Node {
         }
     }
 
+    pub(crate) async fn join_first_responsive_candidate(
+        &self,
+        join_attempts: &[(String, Option<String>)],
+    ) -> Result<Option<(String, Option<String>)>> {
+        let candidates = self.collect_join_probe_candidates(join_attempts).await;
+        if candidates.len() <= 1 {
+            tracing::debug!(
+                valid_candidates = candidates.len(),
+                "auto-join probe skipped"
+            );
+            return Ok(None);
+        }
+
+        emit_join_probe_race_started(candidates.len());
+        match self.race_join_probe_candidates(candidates).await {
+            Some(success) => self.commit_join_probe_success(success).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    async fn collect_join_probe_candidates(
+        &self,
+        join_attempts: &[(String, Option<String>)],
+    ) -> Vec<JoinProbeCandidate> {
+        if join_attempts.len() <= 1 {
+            return Vec::new();
+        }
+
+        let mut candidates = Vec::new();
+        let mut invalid = 0usize;
+        for (token, mesh_name) in join_attempts.iter().take(CLIENT_AUTO_JOIN_PROBE_LIMIT) {
+            match self
+                .prepare_join_probe_candidate(token, mesh_name.clone())
+                .await
+            {
+                Ok(Some(candidate)) => candidates.push(candidate),
+                Ok(None) => {}
+                Err(error) => {
+                    invalid += 1;
+                    tracing::debug!("Skipping invalid auto-join candidate: {error:#}");
+                }
+            }
+        }
+        tracing::debug!(
+            valid_candidates = candidates.len(),
+            invalid_candidates = invalid,
+            "collected auto-join probe candidates"
+        );
+        candidates
+    }
+
+    async fn race_join_probe_candidates(
+        &self,
+        candidates: Vec<JoinProbeCandidate>,
+    ) -> Option<JoinProbeSuccess> {
+        let mut probes = tokio::task::JoinSet::new();
+        for candidate in candidates {
+            let node = self.clone();
+            probes.spawn(async move { node.probe_join_candidate(candidate).await });
+        }
+
+        let mut last_error = None;
+        while let Some(result) = probes.join_next().await {
+            match result {
+                Ok(Ok(success)) => {
+                    probes.abort_all();
+                    return Some(success);
+                }
+                Ok(Err(error)) => {
+                    tracing::debug!("auto-join candidate probe failed: {error:#}");
+                    last_error = Some(error);
+                }
+                Err(error) => {
+                    tracing::debug!("auto-join candidate probe task failed: {error:#}");
+                }
+            }
+        }
+
+        emit_join_probe_fallback(last_error.as_ref());
+        None
+    }
+
+    async fn prepare_join_probe_candidate(
+        &self,
+        token: &str,
+        mesh_name: Option<String>,
+    ) -> Result<Option<JoinProbeCandidate>> {
+        let addr = match parse_invite_token(token)
+            .map_err(|reason| anyhow::anyhow!("join rejected: {}", reason.code()))?
+        {
+            InviteTokenMaterial::Legacy(addr) => addr,
+            // Requirement-aware bootstrap tokens may require installing the
+            // signed policy before gossip. Keep those on the established
+            // serial join path rather than probing them out-of-band.
+            InviteTokenMaterial::Signed(_) => return Ok(None),
+        };
+
+        if addr.id == self.endpoint.id() {
+            return Ok(None);
+        }
+
+        let state = self.state.lock().await;
+        if state.connections.contains_key(&addr.id) {
+            return Ok(None);
+        }
+        if state
+            .dead_peers
+            .get(&addr.id)
+            .is_some_and(|t| t.elapsed() < DEAD_PEER_TTL)
+        {
+            return Ok(None);
+        }
+        drop(state);
+
+        Ok(Some(JoinProbeCandidate {
+            token: token.to_string(),
+            mesh_name,
+            addr,
+        }))
+    }
+
+    async fn probe_join_candidate(
+        &self,
+        candidate: JoinProbeCandidate,
+    ) -> Result<JoinProbeSuccess> {
+        let peer_id = candidate.addr.id;
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(CLIENT_AUTO_JOIN_PROBE_TIMEOUT, async {
+            let conn = connect_mesh(&self.endpoint, candidate.addr.clone()).await?;
+            let (announcements, rtt_ms) = self.gossip_round_trip(&conn, peer_id).await?;
+            Ok::<_, anyhow::Error>((conn, announcements, rtt_ms))
+        })
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "candidate {} timed out after {}s",
+                peer_id.fmt_short(),
+                CLIENT_AUTO_JOIN_PROBE_TIMEOUT.as_secs()
+            )
+        })??;
+
+        Ok(JoinProbeSuccess {
+            candidate,
+            conn: result.0,
+            announcements: result.1,
+            rtt_ms: result.2,
+            elapsed: started.elapsed(),
+        })
+    }
+
+    pub(super) async fn commit_join_probe_success(
+        &self,
+        success: JoinProbeSuccess,
+    ) -> Result<(String, Option<String>)> {
+        let JoinProbeSuccess {
+            candidate,
+            conn,
+            announcements,
+            rtt_ms,
+            elapsed,
+        } = success;
+        let peer_id = candidate.addr.id;
+
+        {
+            let mut state = self.state.lock().await;
+            state.dead_peers.remove(&peer_id);
+            state.connections.insert(peer_id, conn.clone());
+        }
+        let node_for_dispatch = self.clone();
+        let conn_for_dispatch = conn.clone();
+        tokio::spawn(async move {
+            node_for_dispatch
+                .dispatch_streams(conn_for_dispatch, peer_id)
+                .await;
+        });
+
+        if let Err(error) = self
+            .apply_gossip_announcements(peer_id, rtt_ms, &announcements, false)
+            .await
+        {
+            // Drop the tracked entry AND close the QUIC connection. The
+            // dispatcher task above holds its own `conn` clone, so removing the
+            // map entry alone would leave a live, keep-alive'd connection and a
+            // running dispatcher for a peer nobody tracks (and one whose
+            // close-recovery path could even reconnect it). Closing here makes
+            // the dispatcher's `accept_*` calls error so it unwinds cleanly.
+            self.state.lock().await.connections.remove(&peer_id);
+            conn.close(0u32.into(), b"join announcement-apply failed");
+            return Err(error);
+        }
+
+        // Match `connect_to_peer`: the probe gossip RTT above likely reflects
+        // relay latency, so refresh the selected-path/RTT after holepunch.
+        self.schedule_selected_path_recheck(peer_id);
+        self.spawn_discovered_peer_connects(announcements, true, false);
+
+        tracing::info!(
+            peer = %peer_id.fmt_short(),
+            elapsed_ms = elapsed_ms_u64(elapsed),
+            rtt_ms,
+            "Fast auto-join probe selected bootstrap candidate"
+        );
+        emit_mesh_info(format!(
+            "Fast auto-join selected peer {} in {}ms",
+            peer_id.fmt_short(),
+            elapsed_ms_u64(elapsed)
+        ));
+
+        Ok((candidate.token, candidate.mesh_name))
+    }
+
     pub(super) async fn initiate_gossip_inner(
         &self,
         conn: Connection,
@@ -1028,20 +1339,13 @@ impl Node {
         self.refresh_gossip_path_rtt(remote, Some(rtt_ms)).await;
 
         if discover_peers {
-            let my_role = self.role.lock().await.clone();
-            for (addr, ann) in their_announcements {
-                self.maybe_connect_discovered_peer(&my_role, addr.clone(), ann, true, false)
-                    .await;
-            }
+            self.connect_discovered_peers(their_announcements, true, false)
+                .await;
         }
 
         Ok(())
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "gossip stream handling keeps protocol validation, response, and peer discovery ordered in one flow"
-    )]
     pub(super) async fn handle_gossip_stream(
         &self,
         remote: EndpointId,
@@ -1142,11 +1446,8 @@ impl Node {
         .await?;
         self.refresh_gossip_path_rtt(remote, None).await;
 
-        let my_role = self.role.lock().await.clone();
-        for (addr, ann) in their_announcements {
-            self.maybe_connect_discovered_peer(&my_role, addr, &ann, false, true)
-                .await;
-        }
+        self.connect_discovered_peers(&their_announcements, false, true)
+            .await;
 
         Ok(())
     }
@@ -2131,5 +2432,47 @@ mod tests {
             !state.peers.contains_key(&idle_id),
             "idle transitive client must not be added (this path is dial-only)"
         );
+    }
+
+    #[tokio::test]
+    async fn client_auto_join_probe_returns_none_for_single_candidate() {
+        let node = Node::new_for_tests(NodeRole::Client).await.unwrap();
+        let token = encode_endpoint_addr_token(&test_addr(0x42));
+
+        let selected = node
+            .join_first_responsive_candidate(&[(token, Some("single".to_string()))])
+            .await
+            .unwrap();
+
+        assert!(selected.is_none());
+    }
+
+    #[tokio::test]
+    async fn client_auto_join_probe_candidate_collection_filters_unusable_tokens() {
+        let node = Node::new_for_tests(NodeRole::Client).await.unwrap();
+        let valid_addr = test_addr(0x42);
+        let dead_addr = test_addr(0x43);
+        let self_token = encode_endpoint_addr_token(&node.endpoint_addr_for_advertisement());
+        let dead_token = encode_endpoint_addr_token(&dead_addr);
+        let valid_token = encode_endpoint_addr_token(&valid_addr);
+
+        node.state
+            .lock()
+            .await
+            .dead_peers
+            .insert(dead_addr.id, std::time::Instant::now());
+
+        let candidates = node
+            .collect_join_probe_candidates(&[
+                ("not-an-invite-token".to_string(), None),
+                (self_token, None),
+                (dead_token, None),
+                (valid_token, Some("usable".to_string())),
+            ])
+            .await;
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].addr.id, valid_addr.id);
+        assert_eq!(candidates[0].mesh_name.as_deref(), Some("usable"));
     }
 }

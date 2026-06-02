@@ -245,6 +245,7 @@ pub(super) struct SplitCoordinatorLocalFallbackEvent {
     pub(super) reason: &'static str,
     pub(super) generation: u64,
     pub(super) topology_id: String,
+    pub(super) run_id: String,
     pub(super) unavailable_stage_nodes: Vec<iroh::EndpointId>,
     pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
 }
@@ -253,6 +254,7 @@ pub(super) struct SplitCoordinatorWithdrawEvent {
     pub(super) reason: &'static str,
     pub(super) generation: u64,
     pub(super) topology_id: String,
+    pub(super) run_id: String,
     pub(super) unavailable_stage_nodes: Vec<iroh::EndpointId>,
     pub(super) ack: tokio::sync::oneshot::Sender<SplitCoordinatorAck>,
 }
@@ -1073,6 +1075,10 @@ pub(super) enum SplitParticipantExclusionReason {
     MissingStagePath,
     StagePathRelayOnly,
     StagePathTooSlow,
+    StageControlUnreachable,
+    ArtifactTransferUnavailable,
+    StageInventoryEmpty,
+    PackageManifestMismatch,
     MissingModelSource,
 }
 
@@ -1086,9 +1092,58 @@ impl SplitParticipantExclusionReason {
             Self::MissingStagePath => "missing_stage_path",
             Self::StagePathRelayOnly => "stage_path_relay_only",
             Self::StagePathTooSlow => "stage_path_too_slow",
+            Self::StageControlUnreachable => "stage_control_unreachable",
+            Self::ArtifactTransferUnavailable => "artifact_transfer_unavailable",
+            Self::StageInventoryEmpty => "stage_inventory_empty",
+            Self::PackageManifestMismatch => "package_manifest_mismatch",
             Self::MissingModelSource => "missing_model_source",
         }
     }
+
+    const fn recommendation(self) -> &'static str {
+        match self {
+            Self::Client => "Run this peer in serve mode if it should contribute compute.",
+            Self::MissingVram => {
+                "Check GPU visibility or lower --max-vram only after confirming backend/device detection."
+            }
+            Self::MissingModelInterest => {
+                "Start the peer with the same --model value or explicit split model interest."
+            }
+            Self::StageProtocolGeneration => {
+                "Upgrade this peer so it advertises current stage protocol support."
+            }
+            Self::MissingStagePath => {
+                "Wait for direct peer latency to be measured or fix direct QUIC connectivity."
+            }
+            Self::StagePathRelayOnly => {
+                "Fix firewall/NAT/direct-path connectivity; relay-only stage paths are not admitted."
+            }
+            Self::StagePathTooSlow => "Use a lower-latency peer or network path for split serving.",
+            Self::StageControlUnreachable => {
+                "Check stage-control connectivity and peer runtime logs before retrying split serving."
+            }
+            Self::ArtifactTransferUnavailable => {
+                "Enable artifact transfer, use an HF-resolvable package, or choose a peer with the package already cached."
+            }
+            Self::StageInventoryEmpty => {
+                "Wait for stage inventory refresh or prepare the requested package on this peer."
+            }
+            Self::PackageManifestMismatch => {
+                "Refresh stale layer packages so this peer advertises the requested package manifest."
+            }
+            Self::MissingModelSource => {
+                "Start the peer with a resolvable package source or wait for stage inventory to prove the package is available."
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SplitParticipantBlockerSummary {
+    reason: &'static str,
+    count: usize,
+    short_node_ids: Vec<String>,
+    recommendation: &'static str,
 }
 
 struct SplitGenerationLoadSpec<'a> {
@@ -2310,6 +2365,7 @@ impl SplitTopologyCoordinator {
             reason,
             generation: self.active.generation,
             topology_id: self.active.topology_id.clone(),
+            run_id: self.active.run_id.clone(),
             unavailable_stage_nodes,
             ack: ack_tx,
         });
@@ -2332,6 +2388,7 @@ impl SplitTopologyCoordinator {
             reason,
             generation: self.active.generation,
             topology_id: self.active.topology_id.clone(),
+            run_id: self.active.run_id.clone(),
             unavailable_stage_nodes,
             ack: ack_tx,
         });
@@ -2697,14 +2754,100 @@ fn ensure_split_participant_timeout_has_quorum(
     best: &[SplitParticipant],
     best_excluded: &[SplitParticipantExclusion],
 ) -> Result<()> {
-    anyhow::ensure!(
-        best.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS,
-        "split runtime needs at least two participating nodes for {model_ref}; found {} eligible [{}]; excluded [{}]",
+    if best.len() >= SPLIT_DEFAULT_MIN_PARTICIPANTS {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "split runtime needs at least two participating nodes for {model_ref}; found {} eligible [{}]; excluded [{}]; blockers [{}]; next_step: {}",
         best.len(),
         split_participant_labels(best).join(", "),
-        split_participant_exclusion_labels(best_excluded).join(", ")
-    );
-    Ok(())
+        split_participant_exclusion_labels(best_excluded).join(", "),
+        split_participant_blocker_labels(best_excluded).join("; "),
+        split_participant_next_step(best_excluded)
+    )
+}
+
+fn split_participant_blocker_labels(excluded: &[SplitParticipantExclusion]) -> Vec<String> {
+    split_participant_blockers(excluded)
+        .into_iter()
+        .map(|blocker| {
+            format!(
+                "{}={} nodes=[{}]",
+                blocker.reason,
+                blocker.count,
+                blocker.short_node_ids.join(", ")
+            )
+        })
+        .collect()
+}
+
+fn split_participant_next_step(excluded: &[SplitParticipantExclusion]) -> &'static str {
+    split_participant_blockers(excluded)
+        .first()
+        .map(|blocker| blocker.recommendation)
+        .unwrap_or("Start at least one more worker/host with the same --model value and --split.")
+}
+
+fn split_participant_blockers(
+    excluded: &[SplitParticipantExclusion],
+) -> Vec<SplitParticipantBlockerSummary> {
+    let mut blockers = split_participant_exclusion_reason_order()
+        .into_iter()
+        .filter_map(|reason| split_participant_blocker(excluded, reason))
+        .collect::<Vec<_>>();
+    blockers.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| blocker_reason_rank(left.reason).cmp(&blocker_reason_rank(right.reason)))
+    });
+    blockers
+}
+
+fn split_participant_blocker(
+    excluded: &[SplitParticipantExclusion],
+    reason: SplitParticipantExclusionReason,
+) -> Option<SplitParticipantBlockerSummary> {
+    let matching = excluded
+        .iter()
+        .filter(|item| item.reason == reason)
+        .collect::<Vec<_>>();
+    if matching.is_empty() {
+        return None;
+    }
+    Some(SplitParticipantBlockerSummary {
+        reason: reason.as_str(),
+        count: matching.len(),
+        short_node_ids: matching
+            .into_iter()
+            .map(|item| item.node_id.fmt_short().to_string())
+            .collect(),
+        recommendation: reason.recommendation(),
+    })
+}
+
+const fn split_participant_exclusion_reason_order() -> [SplitParticipantExclusionReason; 12] {
+    [
+        SplitParticipantExclusionReason::StageControlUnreachable,
+        SplitParticipantExclusionReason::PackageManifestMismatch,
+        SplitParticipantExclusionReason::ArtifactTransferUnavailable,
+        SplitParticipantExclusionReason::StageInventoryEmpty,
+        SplitParticipantExclusionReason::MissingModelSource,
+        SplitParticipantExclusionReason::MissingStagePath,
+        SplitParticipantExclusionReason::StagePathRelayOnly,
+        SplitParticipantExclusionReason::StagePathTooSlow,
+        SplitParticipantExclusionReason::StageProtocolGeneration,
+        SplitParticipantExclusionReason::MissingVram,
+        SplitParticipantExclusionReason::MissingModelInterest,
+        SplitParticipantExclusionReason::Client,
+    ]
+}
+
+fn blocker_reason_rank(reason: &str) -> usize {
+    split_participant_exclusion_reason_order()
+        .iter()
+        .position(|candidate| candidate.as_str() == reason)
+        .unwrap_or(usize::MAX)
 }
 
 fn best_split_participant_snapshot(
@@ -2759,11 +2902,17 @@ async fn collect_split_participants(
             continue;
         }
 
-        if let Some(package_signal) =
-            split_peer_package_signal(node, peer.id, model_ref, package).await
+        let artifact_transfer_allowed = node.artifact_transfer_allowed_for_peer(&peer).await;
+        match split_peer_package_signal(
+            node,
+            peer.id,
+            model_ref,
+            package,
+            artifact_transfer_allowed,
+        )
+        .await
         {
-            let artifact_transfer_allowed = node.artifact_transfer_allowed_for_peer(&peer).await;
-            if package_signal.can_stage_with(package, artifact_transfer_allowed) {
+            Ok(package_signal) => {
                 participants.push(
                     SplitParticipant::new(peer.id, peer.vram_bytes, peer.first_joined_mesh_ts)
                         .with_package_signals(
@@ -2772,17 +2921,13 @@ async fn collect_split_participants(
                             artifact_transfer_allowed,
                         ),
                 );
-            } else {
+            }
+            Err(reason) => {
                 excluded.push(SplitParticipantExclusion {
                     node_id: peer.id,
-                    reason: SplitParticipantExclusionReason::MissingModelSource,
+                    reason,
                 });
             }
-        } else {
-            excluded.push(SplitParticipantExclusion {
-                node_id: peer.id,
-                reason: SplitParticipantExclusionReason::MissingModelSource,
-            });
         }
     }
     participants.sort_by_key(|participant| participant.node_id.to_string());
@@ -2865,7 +3010,8 @@ async fn split_peer_package_signal(
     peer_id: iroh::EndpointId,
     model_ref: &str,
     package: &skippy::SkippyPackageIdentity,
-) -> Option<SplitParticipantPackageSignal> {
+    artifact_transfer_supported: bool,
+) -> std::result::Result<SplitParticipantPackageSignal, SplitParticipantExclusionReason> {
     let request = skippy::StageInventoryRequest {
         model_id: model_ref.to_string(),
         package_ref: package.package_ref.clone(),
@@ -2874,10 +3020,56 @@ async fn split_peer_package_signal(
     let result = node
         .send_stage_control(peer_id, skippy::StageControlRequest::Inventory(request))
         .await;
-    let Ok(skippy::StageControlResponse::Inventory(inventory)) = result else {
-        return None;
+    let Ok(response) = result else {
+        return Err(SplitParticipantExclusionReason::StageControlUnreachable);
     };
-    Some(split_inventory_package_signal(&inventory, package))
+    let skippy::StageControlResponse::Inventory(inventory) = response else {
+        return Err(SplitParticipantExclusionReason::StageControlUnreachable);
+    };
+    split_inventory_package_signal_result(&inventory, package, artifact_transfer_supported)
+}
+
+fn split_inventory_package_signal_result(
+    inventory: &skippy::StageLayerInventory,
+    package: &skippy::SkippyPackageIdentity,
+    artifact_transfer_supported: bool,
+) -> std::result::Result<SplitParticipantPackageSignal, SplitParticipantExclusionReason> {
+    if split_inventory_manifest_mismatch(inventory, package) {
+        return Err(SplitParticipantExclusionReason::PackageManifestMismatch);
+    }
+    if split_inventory_has_no_stage_surface(inventory) {
+        return Err(SplitParticipantExclusionReason::StageInventoryEmpty);
+    }
+    let signal = split_inventory_package_signal(inventory, package);
+    if signal.can_stage_with(package, artifact_transfer_supported) {
+        return Ok(signal);
+    }
+    if signal.missing_artifact_bytes > 0 && !artifact_transfer_supported {
+        return Err(SplitParticipantExclusionReason::ArtifactTransferUnavailable);
+    }
+    Err(SplitParticipantExclusionReason::MissingModelSource)
+}
+
+fn split_inventory_manifest_mismatch(
+    inventory: &skippy::StageLayerInventory,
+    package: &skippy::SkippyPackageIdentity,
+) -> bool {
+    inventory.package_ref != package.package_ref
+        || inventory.manifest_sha256 != package.manifest_sha256
+}
+
+fn split_inventory_has_no_stage_surface(inventory: &skippy::StageLayerInventory) -> bool {
+    inventory.layer_count == 0
+        && inventory.ready_ranges.is_empty()
+        && inventory.available_ranges.is_empty()
+        && inventory.missing_ranges.is_empty()
+        && inventory.preparing_ranges.is_empty()
+        && inventory.source_model_path.is_none()
+        && inventory.source_model_bytes.is_none()
+        && matches!(
+            inventory.source_model_kind,
+            skippy::SourceModelKind::Unknown
+        )
 }
 
 fn split_inventory_package_signal(
@@ -3101,23 +3293,30 @@ async fn prepare_split_stage(
         load,
         coordinator_id: Some(node.id()),
     };
+    let prepare_stage_id = prepare.load.stage_id.clone();
     let response = if stage_node_id == node.id() {
         node.send_local_stage_control(skippy::StageControlRequest::Prepare(prepare))
             .await
     } else {
         node.send_stage_control(stage_node_id, skippy::StageControlRequest::Prepare(prepare))
             .await
-    }?;
+    }
+    .with_context(|| stage_control_unreachable_message(&prepare_stage_id, stage_node_id))?;
     let skippy::StageControlResponse::PrepareAccepted(accepted) = response else {
-        anyhow::bail!("unexpected response while preparing split stage");
+        anyhow::bail!(
+            "{}",
+            stage_control_unreachable_message(&prepare_stage_id, stage_node_id)
+        );
     };
     anyhow::ensure!(
         accepted.accepted,
-        "stage {} rejected prepare: {}",
-        accepted.status.stage_id,
-        accepted
-            .error
-            .unwrap_or_else(|| "unknown error".to_string())
+        "{}",
+        stage_source_prepare_failed_message(
+            &accepted.status.stage_id,
+            &accepted
+                .error
+                .unwrap_or_else(|| "unknown error".to_string())
+        )
     );
     Ok(())
 }
@@ -3130,7 +3329,9 @@ async fn wait_for_split_stage_source(
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let inventory = query_stage_inventory(node, stage_node_id, load).await?;
+        let inventory = query_stage_inventory(node, stage_node_id, load)
+            .await
+            .with_context(|| stage_control_unreachable_message(&load.stage_id, stage_node_id))?;
         if split_stage_source_is_ready(&inventory, load) {
             tracing::info!(
                 topology_id = %load.topology_id,
@@ -3146,20 +3347,39 @@ async fn wait_for_split_stage_source(
                 && matches!(status.state, skippy::StagePreparationState::Failed)
         }) {
             anyhow::bail!(
-                "stage {} source prepare failed: {}",
-                load.stage_id,
-                failed.error.as_deref().unwrap_or("unknown error")
+                "{}",
+                stage_source_prepare_failed_message(
+                    &load.stage_id,
+                    failed.error.as_deref().unwrap_or("unknown error")
+                )
             );
         }
         if tokio::time::Instant::now() >= deadline {
             anyhow::bail!(
-                "timed out waiting for stage {} source availability after {:?}",
-                load.stage_id,
-                timeout
+                "{}",
+                stage_source_prepare_timeout_message(&load.stage_id, timeout)
             );
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
     }
+}
+
+fn stage_control_unreachable_message(stage_id: &str, stage_node_id: iroh::EndpointId) -> String {
+    format!(
+        "stage_control_unreachable: inventory/control request failed for stage {} on {}",
+        stage_id,
+        stage_node_id.fmt_short()
+    )
+}
+
+fn stage_source_prepare_failed_message(stage_id: &str, error: &str) -> String {
+    format!("stage_source_prepare_failed: stage {stage_id} source prepare failed: {error}")
+}
+
+fn stage_source_prepare_timeout_message(stage_id: &str, timeout: Duration) -> String {
+    format!(
+        "stage_source_prepare_timeout: timed out waiting for stage {stage_id} source availability after {timeout:?}"
+    )
 }
 
 fn split_stage_source_is_ready(
@@ -4357,6 +4577,38 @@ max_tokens = 222
     }
 
     #[test]
+    fn split_participant_timeout_error_reports_blocker_summary() {
+        let participants = vec![SplitParticipant::new(make_id(1), 2_000_000_000, None)];
+        let excluded = vec![
+            SplitParticipantExclusion {
+                node_id: make_id(2),
+                reason: SplitParticipantExclusionReason::MissingModelSource,
+            },
+            SplitParticipantExclusion {
+                node_id: make_id(3),
+                reason: SplitParticipantExclusionReason::MissingModelSource,
+            },
+            SplitParticipantExclusion {
+                node_id: make_id(4),
+                reason: SplitParticipantExclusionReason::MissingModelInterest,
+            },
+        ];
+
+        let error = ensure_split_participant_timeout_has_quorum(
+            "meshllm/Qwen3-layers",
+            &participants,
+            &excluded,
+        )
+        .expect_err("one participant should not satisfy split quorum")
+        .to_string();
+
+        assert!(error.contains("found 1 eligible"));
+        assert!(error.contains("blockers [missing_model_source=2 nodes=["));
+        assert!(error.contains("missing_model_interest=1 nodes=["));
+        assert!(error.contains("next_step: Start the peer with a resolvable package source"));
+    }
+
+    #[test]
     fn split_peer_preflight_requires_current_stage_protocol_generation() {
         let mut peer = split_test_peer(0x61, "Qwen3-Coder", false);
         peer.rtt_ms = Some(crate::mesh::MAX_SPLIT_RTT_MS);
@@ -4568,6 +4820,112 @@ max_tokens = 222
                 availability_score: 0,
             }
         );
+    }
+
+    #[test]
+    fn split_inventory_package_signal_result_classifies_empty_inventory() {
+        let package = skippy::SkippyPackageIdentity {
+            source_model_bytes: 1_000,
+            layer_count: 10,
+            ..package(10)
+        };
+        let inventory = skippy::StageLayerInventory {
+            model_id: "model-a".to_string(),
+            package_ref: package.package_ref.clone(),
+            manifest_sha256: package.manifest_sha256.clone(),
+            layer_count: 0,
+            ready_ranges: Vec::new(),
+            available_ranges: Vec::new(),
+            missing_ranges: Vec::new(),
+            preparing_ranges: Vec::new(),
+            source_model_path: None,
+            source_model_bytes: None,
+            source_model_kind: skippy::SourceModelKind::Unknown,
+        };
+
+        assert_eq!(
+            split_inventory_package_signal_result(&inventory, &package, true),
+            Err(SplitParticipantExclusionReason::StageInventoryEmpty)
+        );
+    }
+
+    #[test]
+    fn split_inventory_package_signal_result_classifies_manifest_mismatch() {
+        let package = skippy::SkippyPackageIdentity {
+            source_model_bytes: 1_000,
+            layer_count: 10,
+            ..package(10)
+        };
+        let mut inventory = skippy::StageLayerInventory {
+            model_id: "model-a".to_string(),
+            package_ref: package.package_ref.clone(),
+            manifest_sha256: package.manifest_sha256.clone(),
+            layer_count: 10,
+            ready_ranges: Vec::new(),
+            available_ranges: vec![skippy::LayerRange {
+                layer_start: 0,
+                layer_end: 10,
+            }],
+            missing_ranges: Vec::new(),
+            preparing_ranges: Vec::new(),
+            source_model_path: Some("/cache/layer-package".to_string()),
+            source_model_bytes: Some(1_000),
+            source_model_kind: skippy::SourceModelKind::LayerPackage,
+        };
+        inventory.manifest_sha256 = "other-manifest".to_string();
+
+        assert_eq!(
+            split_inventory_package_signal_result(&inventory, &package, true),
+            Err(SplitParticipantExclusionReason::PackageManifestMismatch)
+        );
+    }
+
+    #[test]
+    fn split_inventory_package_signal_result_requires_transfer_for_partial_package() {
+        let package = skippy::SkippyPackageIdentity {
+            source_model_bytes: 1_000,
+            layer_count: 10,
+            ..package(10)
+        };
+        let inventory = skippy::StageLayerInventory {
+            model_id: "model-a".to_string(),
+            package_ref: package.package_ref.clone(),
+            manifest_sha256: package.manifest_sha256.clone(),
+            layer_count: 10,
+            ready_ranges: Vec::new(),
+            available_ranges: vec![skippy::LayerRange {
+                layer_start: 0,
+                layer_end: 4,
+            }],
+            missing_ranges: vec![skippy::LayerRange {
+                layer_start: 4,
+                layer_end: 10,
+            }],
+            preparing_ranges: Vec::new(),
+            source_model_path: Some("/cache/layer-package".to_string()),
+            source_model_bytes: Some(1_000),
+            source_model_kind: skippy::SourceModelKind::LayerPackage,
+        };
+
+        assert_eq!(
+            split_inventory_package_signal_result(&inventory, &package, false),
+            Err(SplitParticipantExclusionReason::ArtifactTransferUnavailable)
+        );
+        assert!(split_inventory_package_signal_result(&inventory, &package, true).is_ok());
+    }
+
+    #[test]
+    fn split_startup_error_messages_include_specific_blocker_tokens() {
+        let control = stage_control_unreachable_message("stage-1", make_id(2));
+        let failed = stage_source_prepare_failed_message("stage-1", "package missing");
+        let timeout = stage_source_prepare_timeout_message("stage-1", Duration::from_secs(30));
+
+        assert!(control.contains("stage_control_unreachable"));
+        assert!(control.contains(&make_id(2).fmt_short().to_string()));
+        assert!(failed.contains("stage_source_prepare_failed"));
+        assert!(failed.contains("package missing"));
+        assert!(timeout.contains("stage_source_prepare_timeout"));
+        assert!(timeout.contains("30s"));
     }
 
     #[test]

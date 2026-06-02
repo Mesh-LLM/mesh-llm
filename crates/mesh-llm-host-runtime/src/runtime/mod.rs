@@ -17,7 +17,7 @@ use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
     model_fits_runtime_capacity,
 };
-use self::discovery::{nostr_rediscovery, start_new_mesh};
+use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
     LocalRuntimeModelHandle, LocalRuntimeModelStartSpec, ManagedModelController,
@@ -1766,6 +1766,10 @@ async fn startup_handle_local_fallback_event(
     let unavailable_stage_nodes =
         startup_split_unavailable_stage_nodes(&event.unavailable_stage_nodes);
     let old_loaded_name = state.loaded_name.clone();
+    let withdrew_topology = ctx
+        .node
+        .withdraw_stage_topology(&event.topology_id, &event.run_id)
+        .await;
     let Some(old_handle) = state.handle.take() else {
         let _ = event.ack.send(SplitCoordinatorAck::Accepted);
         return StartupLoopControl::Break;
@@ -1889,9 +1893,11 @@ async fn startup_handle_local_fallback_event(
             event.topology_id, state.loaded_name
         ),
         context: Some(format!(
-            "reason={} generation={} unavailable_stage_nodes=[{}] previous_port={} new_port={} new_ctx={}",
+            "reason={} generation={} run_id={} topology_withdrawn={} unavailable_stage_nodes=[{}] previous_port={} new_port={} new_ctx={}",
             event.reason,
             event.generation,
+            event.run_id,
+            withdrew_topology,
             unavailable_stage_nodes,
             old_port,
             new_port,
@@ -1998,14 +2004,22 @@ async fn startup_handle_split_event(
         SplitCoordinatorEvent::Withdraw(event) => {
             let unavailable_stage_nodes =
                 startup_split_unavailable_stage_nodes(&event.unavailable_stage_nodes);
+            let withdrew_topology = ctx
+                .node
+                .withdraw_stage_topology(&event.topology_id, &event.run_id)
+                .await;
             let _ = emit_event(OutputEvent::Warning {
                 message: format!(
                     "Split runtime topology '{}' lost required stage peer(s); withdrawing model '{}'",
                     event.topology_id, state.loaded_name
                 ),
                 context: Some(format!(
-                    "reason={} generation={} unavailable_stage_nodes=[{}]",
-                    event.reason, event.generation, unavailable_stage_nodes
+                    "reason={} generation={} run_id={} topology_withdrawn={} unavailable_stage_nodes=[{}]",
+                    event.reason,
+                    event.generation,
+                    event.run_id,
+                    withdrew_topology,
+                    unavailable_stage_nodes
                 )),
             });
             let _ = event.ack.send(SplitCoordinatorAck::Accepted);
@@ -5941,6 +5955,14 @@ fn should_start_relay_health_monitor(mode: mesh_discovery::MeshDiscoveryMode) ->
     )
 }
 
+fn should_start_lan_rediscovery(
+    mode: mesh_discovery::MeshDiscoveryMode,
+    join_tokens: &[String],
+) -> bool {
+    mode == mesh_discovery::MeshDiscoveryMode::Mdns
+        && join_tokens.iter().any(|token| !token.trim().is_empty())
+}
+
 fn start_relay_health_monitor_for_discovery_mode(
     node: &mesh::Node,
     mode: mesh_discovery::MeshDiscoveryMode,
@@ -6026,12 +6048,23 @@ async fn build_run_auto_node_setup(
 async fn attempt_run_auto_join(
     node: &mesh::Node,
     join_attempts: &[(String, Option<String>)],
+    is_client: bool,
 ) -> RunAutoJoinOutcome {
     let mut outcome = RunAutoJoinOutcome {
         joined: false,
         last_join_error: None,
         successful_join: None,
     };
+
+    if is_client {
+        match attempt_fast_client_auto_join(node, join_attempts).await {
+            Some(Ok(successful_join)) => {
+                return build_successful_run_auto_join(node, successful_join).await;
+            }
+            Some(Err(err)) => outcome.last_join_error = Some(format!("{err:#}")),
+            None => {}
+        }
+    }
 
     for (token, mesh_name) in join_attempts {
         match node.join_with_retry(token).await {
@@ -6055,6 +6088,38 @@ async fn attempt_run_auto_join(
     }
 
     outcome
+}
+
+async fn attempt_fast_client_auto_join(
+    node: &mesh::Node,
+    join_attempts: &[(String, Option<String>)],
+) -> Option<Result<(String, Option<String>)>> {
+    match node.join_first_responsive_candidate(join_attempts).await {
+        Ok(Some(successful_join)) => Some(Ok(successful_join)),
+        Ok(None) => None,
+        Err(err) => {
+            tracing::warn!("Fast auto-join probe failed: {err:#}");
+            Some(Err(err))
+        }
+    }
+}
+
+async fn build_successful_run_auto_join(
+    node: &mesh::Node,
+    successful_join: (String, Option<String>),
+) -> RunAutoJoinOutcome {
+    if node.mesh_id().await.is_some() {
+        record_first_joined_mesh_ts(node).await;
+    }
+    let _ = emit_event(OutputEvent::Info {
+        message: "Connected to bootstrap peer; awaiting mesh admission".to_string(),
+        context: None,
+    });
+    RunAutoJoinOutcome {
+        joined: true,
+        last_join_error: None,
+        successful_join: Some(successful_join),
+    }
 }
 
 fn update_cli_with_successful_run_auto_join(
@@ -6090,7 +6155,7 @@ async fn run_auto_join_existing_mesh(
     } else {
         auto_join_candidates.to_vec()
     };
-    let outcome = attempt_run_auto_join(node, &join_attempts).await;
+    let outcome = attempt_run_auto_join(node, &join_attempts, cli.client).await;
     update_cli_with_successful_run_auto_join(cli, outcome.successful_join);
 
     if !outcome.joined {
@@ -6150,6 +6215,17 @@ async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
             rediscover_relays,
             rediscover_relay_urls,
             rediscover_mesh_name,
+        )));
+    } else if should_start_lan_rediscovery(cli.mesh_discovery_mode, &cli.join) {
+        let rediscover_node = node.clone();
+        let rediscover_join_tokens = cli.join.clone();
+        let rediscover_mesh_name = cli.mesh_name.clone();
+        let rediscover_region = cli.region.clone();
+        tokio::spawn(Box::pin(lan_rediscovery(
+            rediscover_node,
+            rediscover_join_tokens,
+            rediscover_mesh_name,
+            rediscover_region,
         )));
     }
 }
@@ -7601,9 +7677,13 @@ async fn setup_run_auto_console_state(
             .to_string();
         console_state.set_draft_name(dn).await;
     }
-    if let Some(ref name) = ctx.cli.mesh_name {
-        console_state.set_mesh_name(name.clone()).await;
-    }
+    console_state
+        .set_mesh_publication_metadata(
+            ctx.cli.mesh_name.clone(),
+            ctx.cli.region.clone(),
+            ctx.cli.max_clients,
+        )
+        .await;
     Ok(Some(console_state))
 }
 
@@ -7698,6 +7778,7 @@ fn spawn_run_auto_mdns_publisher(
     let pub_region = cli.region.clone();
     let pub_max_clients = cli.max_clients;
     let pub_api_port = cli.console;
+    let pub_details_reachable = cli.listen_all;
     let (status_tx, status_rx) = tokio::sync::watch::channel(None);
     if let Some(cs) = console_state {
         bridge_publication_state(cs.clone(), status_rx);
@@ -7709,6 +7790,7 @@ fn spawn_run_auto_mdns_publisher(
             region: pub_region,
             max_clients: pub_max_clients,
             api_port: pub_api_port,
+            details_reachable: pub_details_reachable,
             interval_secs: 60,
             status_tx: Some(status_tx),
         },
@@ -8335,6 +8417,9 @@ async fn setup_passive_console_runtime(
         .set_mesh_discovery_mode(cli.mesh_discovery_mode)
         .await;
     console_state.set_nostr_discovery(cli.nostr_discovery).await;
+    console_state
+        .set_mesh_publication_metadata(cli.mesh_name.clone(), cli.region.clone(), cli.max_clients)
+        .await;
     if is_client {
         console_state.set_client(true).await;
         if cli.nostr_discovery {
@@ -8646,6 +8731,7 @@ async fn setup_passive_publication(
                 let pub_region = cli.region.clone();
                 let pub_max_clients = cli.max_clients;
                 let pub_api_port = cli.console;
+                let pub_details_reachable = cli.listen_all;
                 let (status_tx, status_rx) = tokio::sync::watch::channel(None);
                 setup.status_rx = Some(status_rx);
                 tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
@@ -8655,6 +8741,7 @@ async fn setup_passive_publication(
                         region: pub_region,
                         max_clients: pub_max_clients,
                         api_port: pub_api_port,
+                        details_reachable: pub_details_reachable,
                         interval_secs: 60,
                         status_tx: Some(status_tx),
                     },
@@ -8977,6 +9064,22 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn mdns_discovery_starts_lan_rediscovery_only_with_join_token() {
+        assert!(should_start_lan_rediscovery(
+            mesh_discovery::MeshDiscoveryMode::Mdns,
+            &["join-token".to_string()]
+        ));
+        assert!(!should_start_lan_rediscovery(
+            mesh_discovery::MeshDiscoveryMode::Mdns,
+            &[]
+        ));
+        assert!(!should_start_lan_rediscovery(
+            mesh_discovery::MeshDiscoveryMode::Nostr,
+            &["join-token".to_string()]
+        ));
+    }
+
     #[tokio::test]
     async fn model_target_reconciliation_replacement_unloads_before_loading() {
         let (control_tx, mut control_rx) =
@@ -9276,6 +9379,7 @@ mod tests {
             args: Vec::new(),
             tools: Vec::new(),
             manifest: None,
+            startup: None,
             error: None,
         };
 

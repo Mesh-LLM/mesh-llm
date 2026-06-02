@@ -9,7 +9,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     sync::{Mutex, RwLock},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 #[cfg(test)]
@@ -43,6 +43,17 @@ pub use model_resolver::{
 
 static CATALOG_ENTRIES: RwLock<Option<Vec<CatalogEntry>>> = RwLock::new(None);
 static CATALOG_ENSURE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Tracks the most recent failed catalog refresh so we don't re-attempt a slow
+/// network refresh on every request when the cache is already loaded but the
+/// staleness marker can't be refreshed (e.g. a download error). Without this,
+/// a persistently failing refresh turns every `/api/models` call into a fresh
+/// multi-second download attempt.
+static CATALOG_REFRESH_BACKOFF_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long to suppress repeated refresh attempts after a failure when a stale
+/// cached catalog is already available.
+const CATALOG_REFRESH_BACKOFF: Duration = Duration::from_secs(5 * 60);
 
 #[cfg(test)]
 static CATALOG_ENTRIES_OVERRIDE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -269,12 +280,25 @@ pub fn ensure_catalog() -> Result<()> {
     }
 
     if is_catalog_stale() {
+        // If a recent refresh failed and we already have a (stale) catalog
+        // loaded, don't hammer the network on every request — serve the loaded
+        // catalog until the backoff window elapses.
+        if catalog_entries().is_some() && refresh_in_backoff() {
+            return Ok(());
+        }
+
         match refresh_catalog() {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                clear_refresh_backoff();
+                Ok(())
+            }
             Err(refresh_err) => {
                 if catalog_entries().is_some() {
+                    set_refresh_backoff();
                     tracing::warn!(
-                        "failed to refresh stale meshllm/catalog; using already-loaded stale catalog: {refresh_err:#}"
+                        "failed to refresh stale meshllm/catalog; using already-loaded stale catalog \
+                         (suppressing retries for {}s): {refresh_err:#}",
+                        CATALOG_REFRESH_BACKOFF.as_secs()
                     );
                     return Ok(());
                 }
@@ -288,6 +312,31 @@ pub fn ensure_catalog() -> Result<()> {
         }
     } else {
         load_catalog_from_disk()
+    }
+}
+
+/// Returns true if a recent refresh failure means we should skip another
+/// refresh attempt for now.
+fn refresh_in_backoff() -> bool {
+    let guard = CATALOG_REFRESH_BACKOFF_UNTIL.lock();
+    match guard {
+        Ok(until) => until.map(|t| Instant::now() < t).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Records that a refresh just failed, suppressing retries for the backoff
+/// window.
+fn set_refresh_backoff() {
+    if let Ok(mut guard) = CATALOG_REFRESH_BACKOFF_UNTIL.lock() {
+        *guard = Some(Instant::now() + CATALOG_REFRESH_BACKOFF);
+    }
+}
+
+/// Clears any active refresh backoff after a successful refresh.
+fn clear_refresh_backoff() {
+    if let Ok(mut guard) = CATALOG_REFRESH_BACKOFF_UNTIL.lock() {
+        *guard = None;
     }
 }
 
@@ -793,6 +842,33 @@ mod tests {
     use std::collections::HashMap;
 
     use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn refresh_backoff_suppresses_then_clears() {
+        clear_refresh_backoff();
+        assert!(!refresh_in_backoff(), "no backoff initially");
+
+        set_refresh_backoff();
+        assert!(refresh_in_backoff(), "backoff active after a failure");
+
+        clear_refresh_backoff();
+        assert!(!refresh_in_backoff(), "backoff cleared after success");
+    }
+
+    /// Hits the network: verifies that the live meshllm/catalog dataset
+    /// downloads successfully with the patched hf-hub (redirect Content-Length
+    /// no longer mistaken for the file size). Run with:
+    ///   cargo test -p mesh-llm-host-runtime refresh_catalog_live -- --ignored --nocapture
+    #[test]
+    #[ignore = "network: downloads the live meshllm/catalog dataset"]
+    #[serial]
+    fn refresh_catalog_live() {
+        refresh_catalog().expect("live catalog refresh should succeed");
+        let entries = catalog_entries().expect("catalog entries loaded");
+        assert!(!entries.is_empty(), "expected at least one catalog entry");
+        println!("refresh_catalog_live: {} entries", entries.len());
+    }
 
     #[test]
     fn deserializes_catalog_entry() {

@@ -3963,6 +3963,58 @@ data: [DONE]
 }
 
 #[tokio::test]
+async fn lan_details_uses_same_publication_metadata_as_mdns_advertisement() {
+    let state = build_test_mesh_api().await;
+    state
+        .set_mesh_discovery_mode(crate::network::discovery::MeshDiscoveryMode::Mdns)
+        .await;
+    state
+        .set_mesh_publication_metadata(
+            Some("garage-mesh".to_string()),
+            Some("workshop".to_string()),
+            Some(7),
+        )
+        .await;
+
+    let invite_token = state.node().await.invite_token().await;
+    let token_fingerprint = crate::network::discovery::lan_token_fingerprint(&invite_token);
+    let challenge = crate::network::discovery::lan_details_challenge(
+        &token_fingerprint,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
+    );
+    let proof = crate::network::discovery::lan_details_token_proof(&invite_token, &challenge);
+    let body = serde_json::json!({
+        "token_fingerprint": token_fingerprint,
+        "challenge": challenge,
+        "proof": proof,
+    })
+    .to_string();
+    let request = format!(
+        "POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        crate::network::discovery::LAN_DETAILS_PATH,
+        body.len(),
+        body,
+    );
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let response = send_management_request(addr, request).await;
+
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK"),
+        "expected LAN details success, got: {response}"
+    );
+    let payload = json_body(&response);
+    assert_eq!(payload["listing"]["name"], "garage-mesh");
+    assert_eq!(payload["listing"]["region"], "workshop");
+    assert_eq!(payload["listing"]["max_clients"], 7);
+    assert_eq!(payload["listing"]["invite_token"], "");
+
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn status_payload_populates_local_instances_from_scanner() {
     use crate::runtime::instance::LocalInstanceSnapshot;
     use std::path::PathBuf;

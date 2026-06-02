@@ -16,7 +16,23 @@ const SKIPPY_DIAGNOSTIC_ENDPOINTS: &[(&str, &str, &str)] = &[
         "/api/runtime/stages",
         "runtime-stages.json",
     ),
+    (
+        "runtime_endpoints",
+        "/api/runtime/endpoints",
+        "runtime-endpoints.json",
+    ),
     ("runtime_llama", "/api/runtime/llama", "runtime-llama.json"),
+    ("plugins", "/api/plugins", "plugins.json"),
+    (
+        "plugin_endpoints",
+        "/api/plugins/endpoints",
+        "plugin-endpoints.json",
+    ),
+    (
+        "plugin_providers",
+        "/api/plugins/providers",
+        "plugin-providers.json",
+    ),
 ];
 
 pub(crate) async fn dispatch_doctor_command(
@@ -292,6 +308,15 @@ fn split_readiness_lines(report: &Value) -> Vec<String> {
         format!("Excluded peers: {exclusions}"),
     ];
 
+    if let Some(items) = report["blockers"].as_array() {
+        let blockers = split_readiness_blocker_lines(items);
+        if !blockers.is_empty() {
+            lines.push(String::new());
+            lines.push("Blockers:".to_string());
+            lines.extend(blockers);
+        }
+    }
+
     if let Some(items) = report["recommendations"].as_array() {
         let recommendations = items
             .iter()
@@ -311,11 +336,47 @@ fn split_readiness_lines(report: &Value) -> Vec<String> {
     lines
 }
 
+fn split_readiness_blocker_lines(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter_map(split_readiness_blocker_line)
+        .collect()
+}
+
+fn split_readiness_blocker_line(item: &Value) -> Option<String> {
+    let reason = item["reason"].as_str()?;
+    let count = item["count"].as_u64().unwrap_or_default();
+    let nodes = item["short_node_ids"]
+        .as_array()
+        .map(|items| split_readiness_short_node_list(items.as_slice()))
+        .unwrap_or_else(|| "unknown nodes".to_string());
+    let recommendation = item["recommendation"].as_str().unwrap_or_default();
+    let suffix = if recommendation.is_empty() {
+        String::new()
+    } else {
+        format!(" - {recommendation}")
+    };
+    Some(format!("  - {reason}: {count} peer(s), {nodes}{suffix}"))
+}
+
+fn split_readiness_short_node_list(items: &[Value]) -> String {
+    let nodes = items
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .collect::<Vec<_>>();
+    if nodes.is_empty() {
+        "unknown nodes".to_string()
+    } else {
+        format!("nodes [{}]", nodes.join(", "))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_skippy_native_log, select_runtime_instance, split_readiness_lines,
-        write_split_readiness_report,
+        SKIPPY_DIAGNOSTIC_ENDPOINTS, capture_skippy_native_log, select_runtime_instance,
+        split_readiness_lines, write_split_readiness_report,
     };
     use crate::runtime::instance::LocalInstanceSnapshot;
     use serde_json::json;
@@ -328,6 +389,14 @@ mod tests {
             "verdict": "waiting_for_peers",
             "participant_count": 1,
             "exclusion_count": 1,
+            "blockers": [
+                {
+                    "reason": "missing_model_source",
+                    "count": 1,
+                    "short_node_ids": ["peer0000"],
+                    "recommendation": "Ensure this peer can resolve or inventory the layer package before split serving."
+                }
+            ],
             "recommendations": [
                 "Start at least one more worker/host with --model meshllm/Qwen3-8B-Q4_K_M-layers --split and join it to this mesh."
             ]
@@ -341,6 +410,12 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("Eligible participants: 1"))
         );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("missing_model_source"))
+        );
+        assert!(lines.iter().any(|line| line.contains("peer0000")));
         assert!(
             lines
                 .iter()
@@ -361,6 +436,18 @@ mod tests {
         );
         let written = std::fs::read_to_string(path).expect("read report");
         assert!(written.contains("\"verdict\": \"ready\""));
+    }
+
+    #[test]
+    fn split_doctor_captures_plugin_startup_surfaces() {
+        let paths = SKIPPY_DIAGNOSTIC_ENDPOINTS
+            .iter()
+            .map(|(_, path, _)| *path)
+            .collect::<Vec<_>>();
+
+        assert!(paths.contains(&"/api/runtime/endpoints"));
+        assert!(paths.contains(&"/api/plugins"));
+        assert!(paths.contains(&"/api/plugins/providers"));
     }
 
     #[test]
