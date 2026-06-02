@@ -2555,7 +2555,7 @@ dependencies = [
 [[package]]
 name = "hf-hub"
 version = "1.0.0"
-source = "git+https://github.com/Mesh-LLM/hf-hub?branch=micn%2Ffix-redirect-content-length-size#27573dc6036a273992a4334d9eb371ecd7359e16"
+source = "git+https://github.com/Mesh-LLM/hf-hub?branch=mesh-llm#fd3bfcabba1b9b827e685649cbcc8bf45ec6b310"
 dependencies = [
  "base64",
  "bon",
