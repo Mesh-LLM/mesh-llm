@@ -151,6 +151,24 @@ The generated XCFramework is built with embedded serving support for Apple
 targets. `build-host-macos-xcframework.sh` remains as a faster macOS-only smoke
 artifact for local development; it is not the platform SDK contract.
 
+## Optional Console Assets
+
+Published Swift packages include the built console as SwiftPM resources under
+`Resources/Console`. Use `ConsoleOptions.packaged()` when those package
+resources are present:
+
+```swift
+let console = try await node.startConsole(.packaged(port: 3131))
+print(console.url)
+```
+
+Release packages prepare those resources with:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk swift
+scripts/verify-sdk-console-assets.sh --sdk swift
+```
+
 ## Platform Status
 
 | Target | Mesh inference | Model management | Local serving |

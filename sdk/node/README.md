@@ -99,6 +99,13 @@ For development builds, pass an explicit asset directory:
 await node.startConsole({ assetDir: 'crates/mesh-llm-ui/dist', port: 3131 })
 ```
 
+Release packages prepare that directory with:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk node
+scripts/verify-sdk-console-assets.sh --sdk node
+```
+
 ## Windows
 
 Windows is supported through the same N-API addon shape:

@@ -216,6 +216,7 @@ export declare class Node {
 export declare function generateOwnerKeypairHex(): string
 export declare function currentMeshVersion(): string
 export declare function currentSkippyAbiVersion(): string
+export declare function defaultConsoleAssetDir(): string
 export declare function installNativeRuntime(options?: NativeRuntimeInstallOptions): Promise<NativeRuntimeInstallOutcome>
 export declare function installedNativeRuntimes(options?: { cacheDir?: string }): Promise<InstalledNativeRuntime[]>
 export declare function removeNativeRuntime(options: {

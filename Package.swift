@@ -55,6 +55,9 @@ let package = Package(
             dependencies: meshLLMDependencies,
             path: "sdk/swift/Sources/MeshLLM",
             exclude: hasFFIBinaryTarget ? [] : ["Generated"],
+            resources: [
+                .copy("Resources/Console"),
+            ],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),

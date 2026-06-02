@@ -43,6 +43,15 @@ Use `mesh-llm-sdk` features to opt into larger surfaces:
 For lower-level use, `mesh-llm-api-client` and `mesh-llm-api-server` remain
 implementation crates, but Rust application code should prefer the SDK facade.
 
+Published SDK packages that advertise console support include the built web
+console as package resources. Source checkouts can regenerate those resources
+with:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk all
+scripts/verify-sdk-console-assets.sh --sdk all
+```
+
 ### Swift
 
 Add the repo Swift package from a tagged release:
@@ -374,14 +383,14 @@ use mesh_llm_sdk::native_runtime::{
 };
 ```
 
-SDK packages that ship the built console as package resources can enable the
-optional `console` feature and use the file-backed console server without
-depending on `mesh-llm-host-runtime`:
+Rust applications that package the built console can enable the optional
+`console` feature and use the file-backed console server without depending on
+`mesh-llm-host-runtime`:
 
 ```rust
 let console = mesh_llm_sdk::console::start_file_console(
     mesh_llm_sdk::console::ConsoleServerOptions {
-        asset_dir: "/path/to/packaged/console/dist".into(),
+        asset_dir: "/path/to/packaged/console".into(),
         port: 0,
         listen_all: false,
     },

@@ -134,3 +134,22 @@ MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-runtimes/meshllm-native-runtime-
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 ./gradlew --no-daemon run -p sdk/kotlin/example/example-jvm
 ```
+
+## Optional Console Assets
+
+Published Kotlin/JVM and Android packages include the built console resources
+under `mesh-llm/console`. Because those resources may live inside a JAR or APK,
+use `ConsoleAssets.packagedOptions()` to extract them to a filesystem directory
+before starting the static console server:
+
+```kotlin
+val console = node.startConsole(ConsoleAssets.packagedOptions(port = 3131u.toUShort()))
+println(console.url())
+```
+
+Release packages prepare those resources with:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk kotlin
+scripts/verify-sdk-console-assets.sh --sdk kotlin
+```

@@ -65,6 +65,16 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: crates/mesh-llm-ui/pnpm-lock.yaml
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux SDK dependencies

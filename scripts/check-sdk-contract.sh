@@ -69,6 +69,7 @@ swift_patterns=(
     "public func unloadModel(_ modelId: String"
     "public func unloadInstance(_ instanceId: String"
     "public func setDevicePolicy(_ policy: DevicePolicy)"
+    "public static func packaged"
 )
 
 for pattern in "${swift_patterns[@]}"; do
@@ -105,6 +106,8 @@ kotlin_patterns=(
     "suspend fun unloadModel(modelId: String"
     "suspend fun unloadInstance(instanceId: String"
     "suspend fun setDevicePolicy(policy: DevicePolicy)"
+    "object ConsoleAssets"
+    "fun packagedOptions("
 )
 
 for pattern in "${kotlin_patterns[@]}"; do
@@ -142,6 +145,7 @@ node_type_patterns=(
     "export type NativeRuntimeResolveOptions"
     "export declare function installNativeRuntime"
     "export declare function resolveNativeRuntime"
+    "export declare function defaultConsoleAssetDir"
     "servingEnabled?: boolean"
     "load(modelRef: string"
 )

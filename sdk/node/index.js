@@ -237,6 +237,7 @@ module.exports = {
   generateOwnerKeypairHex: native.generateOwnerKeypairHex,
   currentMeshVersion: nativeRuntime.currentMeshVersion,
   currentSkippyAbiVersion: nativeRuntime.currentSkippyAbiVersion,
+  defaultConsoleAssetDir,
   installNativeRuntime: nativeRuntime.installNativeRuntime,
   installedNativeRuntimes: nativeRuntime.installedNativeRuntimes,
   removeNativeRuntime: nativeRuntime.removeNativeRuntime,

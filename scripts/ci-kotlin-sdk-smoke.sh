@@ -30,6 +30,8 @@ retry_transient() {
 }
 
 scripts/check-sdk-contract.sh
+scripts/package-sdk-console-assets.sh --sdk kotlin
+scripts/verify-sdk-console-assets.sh --sdk kotlin
 
 scripts/prepare-llama.sh "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
 LLAMA_STAGE_BACKEND=cpu \

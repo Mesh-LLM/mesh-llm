@@ -10,6 +10,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 scripts/check-sdk-contract.sh
+scripts/package-sdk-console-assets.sh --sdk node
+scripts/verify-sdk-console-assets.sh --sdk node
 
 native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/rust-native-runtime" cpu)"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
