@@ -51,6 +51,23 @@ LLAMA_STAGE_BUILD_DIR="$REPO_ROOT/.deps/llama-build/build-stage-abi-ci-kotlin-cp
         --profile debug \
         --out "$native_sdk_out"
 scripts/verify-native-sdk-package.sh "$native_sdk_out"/meshllm-native-*.tar.gz
+native_sdk_artifact_dir="$(find "$native_sdk_out" -mindepth 1 -maxdepth 1 -type d -name 'meshllm-native-*' -print -quit)"
+if [[ -z "$native_sdk_artifact_dir" ]]; then
+    echo "native SDK artifact directory not found under $native_sdk_out" >&2
+    exit 1
+fi
+native_sdk_uniffi_library="$(
+    python3 - "$native_sdk_artifact_dir/manifest.json" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    manifest = json.load(fh)
+print(os.path.dirname(manifest.get("uniffi_library") or manifest["library"]))
+PY
+)"
+export MESHLLM_KOTLIN_JNA_LIBRARY_PATH="$native_sdk_artifact_dir/$native_sdk_uniffi_library"
 native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/kotlin-native-runtime" cpu)"
 export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
@@ -65,6 +82,8 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
             export ORG_GRADLE_JAVA_HOME="${ORG_GRADLE_JAVA_HOME:-$JAVA_HOME}"
             export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.java.installations.auto-detect=false -Dorg.gradle.java.installations.paths=$ORG_GRADLE_JAVA_HOME"
         fi
+        export JNA_LIBRARY_PATH="${MESHLLM_KOTLIN_JNA_LIBRARY_PATH}${JNA_LIBRARY_PATH:+:$JNA_LIBRARY_PATH}"
+        export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djna.library.path=$MESHLLM_KOTLIN_JNA_LIBRARY_PATH"
         cd '"$REPO_ROOT"'/sdk/kotlin/example/example-jvm
         ./gradlew --no-daemon run --args="$MESH_SDK_INVITE_TOKEN"
     '

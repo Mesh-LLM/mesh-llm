@@ -134,6 +134,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         tensor_split: cli.tensor_split,
         relay: cli.relay,
         relay_auth: cli.relay_auth,
+        disable_iroh_relays: cli.disable_iroh_relays,
         bind_port: cli.bind_port,
         bind_ip: cli.bind_ip,
         listen_all: cli.listen_all,

@@ -578,6 +578,10 @@ pub struct Cli {
     #[arg(long = "relay-auth", value_parser = parse_relay_auth_pair, hide = true)]
     pub relay_auth: Vec<(String, String)>,
 
+    /// Disable iroh relays even when public mesh discovery would normally use them.
+    #[arg(long = "disable-iroh-relays", hide = true)]
+    pub disable_iroh_relays: bool,
+
     /// Bind QUIC to a fixed UDP port (for NAT port forwarding).
     #[arg(long, hide = true)]
     pub bind_port: Option<u16>,

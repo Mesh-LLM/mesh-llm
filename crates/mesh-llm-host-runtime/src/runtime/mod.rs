@@ -3497,6 +3497,7 @@ fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOpt
         },
         relay: embedded.relay,
         relay_auth: embedded.relay_auth,
+        disable_iroh_relays: embedded.disable_iroh_relays,
         nostr_relay: embedded.nostr_relay,
         region: embedded.region,
         name: embedded.node_name,
@@ -5660,7 +5661,7 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
         mesh::RelayConfig {
             urls: &options.relay,
             auths: &relay_auths,
-            policy: relay_policy_for_mesh_discovery_mode(options.mesh_discovery_mode),
+            policy: relay_policy_for_runtime_options(options),
         },
         mesh::QuicBindSelection {
             ip: options.bind_ip,
@@ -5904,7 +5905,7 @@ async fn start_run_auto_node_and_plugins(
         mesh::RelayConfig {
             urls: &options.relay,
             auths: &relay_auths,
-            policy: relay_policy_for_mesh_discovery_mode(options.mesh_discovery_mode),
+            policy: relay_policy_for_runtime_options(options),
         },
         mesh::QuicBindSelection {
             ip: options.bind_ip,
@@ -5936,11 +5937,11 @@ async fn start_run_auto_node_and_plugins(
     Ok((node, channels, plugin_manager))
 }
 
-fn relay_policy_for_runtime(cli: &Cli) -> mesh::RelayPolicy {
-    if cli.disable_iroh_relays {
+fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPolicy {
+    if options.disable_iroh_relays {
         mesh::RelayPolicy::ExplicitlyDisabled
     } else {
-        relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode)
+        relay_policy_for_mesh_discovery_mode(options.mesh_discovery_mode)
     }
 }
 
@@ -8983,15 +8984,17 @@ mod tests {
 
     #[test]
     fn explicit_disable_iroh_relays_overrides_nostr_relay_policy() {
-        let mut cli = Cli::parse_from(["mesh-llm"]);
-        cli.mesh_discovery_mode = mesh_discovery::MeshDiscoveryMode::Nostr;
-        cli.disable_iroh_relays = true;
+        let options = RuntimeOptions {
+            mesh_discovery_mode: mesh_discovery::MeshDiscoveryMode::Nostr,
+            disable_iroh_relays: true,
+            ..RuntimeOptions::default()
+        };
 
         assert_eq!(
-            relay_policy_for_runtime(&cli),
+            relay_policy_for_runtime_options(&options),
             mesh::RelayPolicy::ExplicitlyDisabled
         );
-        assert!(!relay_policy_for_runtime(&cli).uses_relay());
+        assert!(!relay_policy_for_runtime_options(&options).uses_relay());
     }
 
     #[test]

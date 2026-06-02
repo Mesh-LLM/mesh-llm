@@ -144,6 +144,9 @@ let package = Package(
             name: "MeshLLM",
             dependencies: ["MeshLLMFFI"],
             path: "Sources/MeshLLM",
+            resources: [
+                .copy("Resources/Console"),
+            ],
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),

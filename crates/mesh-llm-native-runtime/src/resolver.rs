@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, path::PathBuf};
+use std::{cmp::Ordering, collections::BTreeSet, path::PathBuf};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -106,8 +106,9 @@ impl NativeRuntimeResolver {
     }
 
     pub fn resolve(&self, selection: &RuntimeSelection) -> Result<NativeRuntimeResolution> {
+        let artifacts = self.candidate_artifacts()?;
         let evaluated = evaluate_candidates(
-            &self.release_manifest.artifacts,
+            &artifacts,
             &self.profile,
             self.skippy_abi_version.as_deref(),
             selection,
@@ -136,6 +137,22 @@ impl NativeRuntimeResolver {
         })
     }
 
+    fn candidate_artifacts(&self) -> Result<Vec<NativeRuntimeArtifact>> {
+        let mut seen = BTreeSet::new();
+        let mut artifacts = Vec::new();
+        for artifact in &self.release_manifest.artifacts {
+            seen.insert(artifact_key(artifact));
+            artifacts.push(artifact.clone());
+        }
+        for installed in self.cache.installed()? {
+            let artifact = installed.manifest.artifact;
+            if seen.insert(artifact_key(&artifact)) {
+                artifacts.push(artifact);
+            }
+        }
+        Ok(artifacts)
+    }
+
     fn source_for_artifact(&self, artifact: &NativeRuntimeArtifact) -> Result<NativeRuntimeSource> {
         let installed = self
             .cache
@@ -161,6 +178,13 @@ impl NativeRuntimeResolver {
             .map(|url| NativeRuntimeSource::Download { url: url.clone() })
             .unwrap_or(NativeRuntimeSource::Missing))
     }
+}
+
+fn artifact_key(artifact: &NativeRuntimeArtifact) -> (String, String) {
+    (
+        artifact.mesh_version.clone(),
+        artifact.native_runtime_id.clone(),
+    )
 }
 
 pub fn select_native_runtime(
@@ -232,13 +256,14 @@ fn evaluate_artifact(
             actual: artifact.arch.clone(),
         });
     }
-    if let (Some(expected), Some(actual)) = (&artifact.target_triple, &profile.target_triple)
-        && expected != actual
-    {
-        reasons.push(CandidateRejection::TargetTripleMismatch {
-            expected: expected.clone(),
-            actual: actual.clone(),
-        });
+    match (&artifact.target_triple, &profile.target_triple) {
+        (Some(expected), Some(actual)) if expected != actual => {
+            reasons.push(CandidateRejection::TargetTripleMismatch {
+                expected: expected.clone(),
+                actual: actual.clone(),
+            });
+        }
+        _ => {}
     }
     if !profile.supports_flavor(&artifact.flavor) {
         reasons.push(CandidateRejection::FlavorNotSupported {
@@ -301,7 +326,10 @@ fn compare_candidates(left: &&CandidateEvaluation, right: &&CandidateEvaluation)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeFlavor};
+    use crate::{
+        HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeCache, NativeRuntimeFlavor,
+        NativeRuntimeManifest,
+    };
     use std::collections::BTreeSet;
 
     fn artifact(id: &str, flavor: NativeRuntimeFlavor) -> NativeRuntimeArtifact {
@@ -384,6 +412,45 @@ mod tests {
             selected.artifact.native_runtime_id,
             "meshllm-native-linux-x86_64-cuda"
         );
+    }
+
+    #[test]
+    fn resolve_can_select_installed_runtime_without_release_manifest_entry() {
+        let source = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let cache = NativeRuntimeCache::new(cache_root.path());
+        let installed_artifact = artifact(
+            "meshllm-native-runtime-linux-x86_64-cpu",
+            NativeRuntimeFlavor::Cpu,
+        );
+        NativeRuntimeManifest {
+            artifact: installed_artifact.clone(),
+        }
+        .write_to_dir(source.path())
+        .unwrap();
+        cache.install_from_dir(source.path()).unwrap();
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            profile(),
+            NativeRuntimeReleaseManifest {
+                mesh_version: "0.68.0".to_string(),
+                artifacts: Vec::new(),
+            },
+            cache,
+        )
+        .with_skippy_abi_version("0.1.24")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(
+            resolution.selected.native_runtime_id,
+            installed_artifact.native_runtime_id
+        );
+        assert!(matches!(
+            resolution.source,
+            NativeRuntimeSource::Installed { .. }
+        ));
     }
 
     #[test]
