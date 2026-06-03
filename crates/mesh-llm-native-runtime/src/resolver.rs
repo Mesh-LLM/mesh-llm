@@ -144,6 +144,13 @@ impl NativeRuntimeResolver {
             seen.insert(artifact_key(artifact));
             artifacts.push(artifact.clone());
         }
+        for dir in &self.bundle_dirs {
+            let manifest = crate::NativeRuntimeManifest::read_from_dir(dir)?;
+            let artifact = manifest.artifact;
+            if seen.insert(artifact_key(&artifact)) {
+                artifacts.push(artifact);
+            }
+        }
         for installed in self.cache.installed()? {
             let artifact = installed.manifest.artifact;
             if seen.insert(artifact_key(&artifact)) {
@@ -450,6 +457,44 @@ mod tests {
         assert!(matches!(
             resolution.source,
             NativeRuntimeSource::Installed { .. }
+        ));
+    }
+
+    #[test]
+    fn resolve_can_select_bundle_runtime_without_release_manifest_entry() {
+        let bundle = tempfile::tempdir().unwrap();
+        let cache_root = tempfile::tempdir().unwrap();
+        let bundled_artifact = artifact(
+            "meshllm-native-runtime-linux-x86_64-cpu",
+            NativeRuntimeFlavor::Cpu,
+        );
+        NativeRuntimeManifest {
+            artifact: bundled_artifact.clone(),
+        }
+        .write_to_dir(bundle.path())
+        .unwrap();
+
+        let resolution = NativeRuntimeResolver::new(
+            "0.68.0",
+            profile(),
+            NativeRuntimeReleaseManifest {
+                mesh_version: "0.68.0".to_string(),
+                artifacts: Vec::new(),
+            },
+            NativeRuntimeCache::new(cache_root.path()),
+        )
+        .with_bundle_dirs(vec![bundle.path().to_path_buf()])
+        .with_skippy_abi_version("0.1.24")
+        .resolve(&RuntimeSelection::Recommended)
+        .unwrap();
+
+        assert_eq!(
+            resolution.selected.native_runtime_id,
+            bundled_artifact.native_runtime_id
+        );
+        assert!(matches!(
+            resolution.source,
+            NativeRuntimeSource::Bundle { .. }
         ));
     }
 
