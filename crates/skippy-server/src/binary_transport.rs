@@ -50,6 +50,8 @@ pub use self::direct_return::PredictionReturnHub;
 pub use self::direct_return::PredictionReturnListener;
 pub(crate) use self::direct_return::PredictionReturnReceiver;
 pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_message_timed};
+#[cfg(test)]
+use self::kv_eviction::BinaryProactiveEviction;
 use self::kv_eviction::{
     BinaryProactiveEvictionPlan, binary_proactive_eviction_plan,
     evict_binary_resident_prefix_for_decode,
@@ -897,7 +899,7 @@ fn handle_binary_connection(
                         kv,
                         &session_key,
                         eviction_plan,
-                    ));
+                    )?);
                 }
                 let result = run_binary_stage_message(
                     &mut runtime,
@@ -2125,7 +2127,7 @@ fn handle_binary_restore_prefill_decode_control(
                 required: true,
                 ensure_session_before_eviction: false,
             },
-        );
+        )?;
         let (predicted, _, output) = run_binary_stage_message(
             &mut runtime,
             session_id,

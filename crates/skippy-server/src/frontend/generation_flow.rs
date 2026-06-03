@@ -320,6 +320,7 @@ impl StageOpenAiBackend {
         let mut proactive_eviction_target_tokens = 0_u64;
         let mut proactive_evicted_entries = 0_usize;
         let mut proactive_evicted_tokens = 0_u64;
+        let mut proactive_eviction_error = None;
         if let Some(kv) = self.kv.as_ref() {
             match self.runtime.lock() {
                 Ok(mut runtime) => {
@@ -338,12 +339,16 @@ impl StageOpenAiBackend {
                             proactive_eviction_status = "error";
                             proactive_eviction_error_kind_attr =
                                 Some(proactive_eviction_error_kind(&error));
+                            proactive_eviction_error = Some(error.context(
+                                "evict resident-prefix KV before multimodal OpenAI decode",
+                            ));
                         }
                     }
                 }
                 Err(_) => {
                     proactive_eviction_status = "error";
                     proactive_eviction_error_kind_attr = Some("runtime_lock_poisoned");
+                    proactive_eviction_error = Some(anyhow!("runtime lock poisoned"));
                 }
             }
         }
@@ -357,6 +362,9 @@ impl StageOpenAiBackend {
                 proactive_evicted_tokens,
             ),
         );
+        if let Some(error) = proactive_eviction_error {
+            return Err(openai_backend_error(error));
+        }
 
         let mut collector =
             TextGenerationCollector::new(self.runtime.clone(), stop_values, on_text_chunk);

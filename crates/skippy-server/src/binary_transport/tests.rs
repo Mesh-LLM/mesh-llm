@@ -12,12 +12,20 @@ use std::{
 };
 
 use crate::kv_integration::KvStageIntegration;
+use crate::runtime_state::RuntimeState;
 use skippy_protocol::binary::{
     StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
 };
 use skippy_protocol::{
     LoadMode, PeerConfig, StageConfig, StageKvCacheConfig, StageKvCacheMode, StageKvCachePayload,
 };
+
+type BinaryEvictionFn = fn(
+    &mut RuntimeState,
+    Option<&std::sync::Arc<KvStageIntegration>>,
+    &str,
+    super::BinaryProactiveEvictionPlan,
+) -> anyhow::Result<super::BinaryProactiveEviction>;
 
 #[test]
 fn accepted_binary_stage_connection_is_blocking() {
@@ -114,6 +122,13 @@ fn one_chunk_prefill_final_admits_session_before_proactive_eviction() {
 
     assert!(plan.required);
     assert!(plan.ensure_session_before_eviction);
+}
+
+#[test]
+fn required_binary_proactive_eviction_is_fallible_before_decode() {
+    fn accepts_fallible_eviction(_evict: BinaryEvictionFn) {}
+
+    accepts_fallible_eviction(super::evict_binary_resident_prefix_for_decode);
 }
 
 fn prefix_cache_test_config() -> StageConfig {

@@ -1,10 +1,11 @@
 use std::{collections::BTreeMap, sync::Arc};
 
+use anyhow::{Context, Result};
 use serde_json::Value;
 use skippy_protocol::binary::WireMessageKind;
 
 use crate::{
-    kv_integration::{KvStageIntegration, proactive_eviction_attrs, proactive_eviction_error_kind},
+    kv_integration::{KvStageIntegration, proactive_eviction_attrs},
     runtime_state::RuntimeState,
 };
 
@@ -22,16 +23,6 @@ impl BinaryProactiveEviction {
         Self {
             status: "disabled",
             error_kind: None,
-            target_tokens: 0,
-            evicted_entries: 0,
-            evicted_tokens: 0,
-        }
-    }
-
-    fn from_error(error: &anyhow::Error) -> Self {
-        Self {
-            status: "error",
-            error_kind: Some(proactive_eviction_error_kind(error)),
             target_tokens: 0,
             evicted_entries: 0,
             evicted_tokens: 0,
@@ -96,30 +87,32 @@ pub(super) fn evict_binary_resident_prefix_for_decode(
     kv: Option<&Arc<KvStageIntegration>>,
     session_id: &str,
     plan: BinaryProactiveEvictionPlan,
-) -> BinaryProactiveEviction {
+) -> Result<BinaryProactiveEviction> {
     let Some(kv) = kv else {
-        return BinaryProactiveEviction::disabled();
+        return Ok(BinaryProactiveEviction::disabled());
     };
     if plan.ensure_session_before_eviction {
         // One-chunk final-prefill can reach eviction before the prefill call
         // has activated a runtime session. Eviction needs that session for
         // both n_batch discovery and native resident-prefix sequence drops.
-        if let Err(error) = runtime.ensure_session_active(session_id) {
-            return BinaryProactiveEviction::from_error(&error);
-        }
+        runtime.ensure_session_active(session_id).with_context(|| {
+            format!("activate binary session {session_id} before resident-prefix eviction")
+        })?;
     }
-    match kv.evict_resident_prefix_for_decode_batch(runtime, session_id) {
-        Ok(eviction) => BinaryProactiveEviction {
-            status: if eviction.evicted_entries > 0 {
-                "evicted"
-            } else {
-                "noop"
-            },
-            error_kind: None,
-            target_tokens: eviction.target_tokens,
-            evicted_entries: eviction.evicted_entries,
-            evicted_tokens: eviction.evicted_tokens,
+    let eviction = kv
+        .evict_resident_prefix_for_decode_batch(runtime, session_id)
+        .with_context(|| {
+            format!("evict resident-prefix KV before binary decode for session {session_id}")
+        })?;
+    Ok(BinaryProactiveEviction {
+        status: if eviction.evicted_entries > 0 {
+            "evicted"
+        } else {
+            "noop"
         },
-        Err(error) => BinaryProactiveEviction::from_error(&error),
-    }
+        error_kind: None,
+        target_tokens: eviction.target_tokens,
+        evicted_entries: eviction.evicted_entries,
+        evicted_tokens: eviction.evicted_tokens,
+    })
 }

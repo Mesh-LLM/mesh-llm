@@ -1322,7 +1322,9 @@ impl OpenAiBackendMode {
     }
 
     fn reserves_local_kv_tokens(&self) -> bool {
-        !matches!(self, Self::BinaryChain { .. })
+        match self {
+            Self::LocalRuntime | Self::EmbeddedStageZero { .. } => true,
+        }
     }
 }
 

@@ -87,55 +87,6 @@ pub(super) fn openai_io_error(error: std::io::Error) -> OpenAiError {
     OpenAiError::backend(error.to_string())
 }
 
-pub(super) fn proactive_eviction_error_kind(error: &anyhow::Error) -> &'static str {
-    let message = error.to_string();
-    if message.contains("is not active") {
-        "inactive_session"
-    } else if message.contains("batch size") {
-        "invalid_batch_size"
-    } else {
-        "native_drop_failed"
-    }
-}
-
-pub(super) fn proactive_eviction_attrs(
-    status: &str,
-    error_kind: Option<&str>,
-    target_tokens: u64,
-    evicted_entries: usize,
-    evicted_tokens: u64,
-) -> BTreeMap<String, Value> {
-    let mut attrs = BTreeMap::from([
-        (
-            "skippy.kv.decision".to_string(),
-            json!("proactive_eviction"),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTION_STATUS.to_string(),
-            json!(status),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTION_TARGET_TOKENS.to_string(),
-            json!(target_tokens),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTED_ENTRIES.to_string(),
-            json!(evicted_entries),
-        ),
-        (
-            attr_key::KV_PROACTIVE_EVICTED_TOKENS.to_string(),
-            json!(evicted_tokens),
-        ),
-    ]);
-    if let Some(error_kind) = error_kind {
-        attrs.insert(
-            attr_key::KV_PROACTIVE_EVICTION_ERROR_KIND.to_string(),
-            json!(error_kind),
-        );
-    }
-    attrs
-}
-
 #[cfg(test)]
 pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
     let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
