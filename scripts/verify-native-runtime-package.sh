@@ -10,8 +10,8 @@ Usage: scripts/verify-native-runtime-package.sh <artifact-dir-or-tar.gz> [...]
 
 Verifies MeshLLM native runtime artifacts:
   - manifest schema and resolver fields
-  - artifact directory name matches native_runtime_id
-  - primary library and all library_paths exist
+  - artifact directory name matches runtime.id
+  - all runtime.libraries exist
   - library_sha256 matches the primary library
   - archive checksum sidecar when present
 EOF
@@ -92,58 +92,49 @@ artifact_dir, manifest_path = sys.argv[1:3]
 with open(manifest_path, encoding="utf-8") as fh:
     manifest = json.load(fh)
 
+if "runtime" not in manifest:
+    raise SystemExit("missing manifest field: runtime")
+runtime = manifest["runtime"]
 required = {
-    "schema_version",
-    "artifact_id",
-    "native_runtime_id",
+    "id",
     "mesh_version",
-    "target_triple",
+    "skippy_abi",
     "platform",
-    "os",
-    "arch",
     "backend",
-    "flavor",
-    "library",
-    "library_paths",
-    "library_sha256",
-    "requirements",
-    "skippy_abi_version",
+    "libraries",
 }
-missing = sorted(required - manifest.keys())
+missing = sorted(required - runtime.keys())
 if missing:
-    raise SystemExit(f"missing manifest field(s): {', '.join(missing)}")
-if manifest["schema_version"] != 1:
-    raise SystemExit(f"unsupported schema_version: {manifest['schema_version']!r}")
-if manifest["artifact_id"] != manifest["native_runtime_id"]:
-    raise SystemExit("artifact_id must match native_runtime_id")
-if os.path.basename(os.path.normpath(artifact_dir)) != manifest["native_runtime_id"]:
-    raise SystemExit("artifact directory name must match native_runtime_id")
-if not isinstance(manifest["library_paths"], list) or not manifest["library_paths"]:
-    raise SystemExit("library_paths must be a non-empty list")
-if manifest["library"] not in manifest["library_paths"]:
-    raise SystemExit("library_paths must include the primary library")
-if not isinstance(manifest["requirements"], list):
-    raise SystemExit("requirements must be a list")
+    raise SystemExit(f"missing runtime manifest field(s): {', '.join(missing)}")
+if os.path.basename(os.path.normpath(artifact_dir)) != runtime["id"]:
+    raise SystemExit("artifact directory name must match runtime id")
+if not isinstance(runtime["libraries"], list) or not runtime["libraries"]:
+    raise SystemExit("runtime libraries must be a non-empty list")
+platform = runtime["platform"]
+if not isinstance(platform, dict) or not platform.get("os") or not platform.get("arch"):
+    raise SystemExit("runtime platform must declare os and arch")
+backend = runtime["backend"]
+if not isinstance(backend, dict) or not backend.get("kind"):
+    raise SystemExit("runtime backend must declare kind")
 
-for key in ("library",):
-    rel_path = manifest[key]
-    if os.path.isabs(rel_path) or ".." in rel_path.split(os.sep):
-        raise SystemExit(f"{key} must be a relative path inside the artifact: {rel_path}")
-
-for rel_path in manifest["library_paths"]:
+for rel_path in runtime["libraries"]:
     if os.path.isabs(rel_path) or ".." in rel_path.split(os.sep):
         raise SystemExit(f"library path must be relative inside the artifact: {rel_path}")
     path = os.path.join(artifact_dir, rel_path)
     if not os.path.isfile(path):
         raise SystemExit(f"missing library: {path}")
 
-primary = os.path.join(artifact_dir, manifest["library"])
-with open(primary, "rb") as fh:
-    actual = hashlib.sha256(fh.read()).hexdigest()
-if actual != manifest["library_sha256"]:
-    raise SystemExit(
-        f"library_sha256 mismatch for {manifest['library']}: {actual} != {manifest['library_sha256']}"
-    )
+build = manifest.get("build") or {}
+library_sha256 = build.get("library_sha256")
+primary_library = build.get("primary_library") or runtime["libraries"][0]
+if library_sha256:
+    primary = os.path.join(artifact_dir, primary_library)
+    with open(primary, "rb") as fh:
+        actual = hashlib.sha256(fh.read()).hexdigest()
+    if actual != library_sha256:
+        raise SystemExit(
+            f"library_sha256 mismatch for {primary_library}: {actual} != {library_sha256}"
+        )
 PY
     echo "verified native runtime artifact: $artifact_dir"
 }

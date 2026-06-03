@@ -1408,7 +1408,7 @@ impl From<mesh_llm_sdk::native_runtime::InstalledNativeRuntime> for InstalledNat
             native_runtime_id: value.native_runtime_id,
             flavor: value.flavor,
             path: path_to_string(value.path),
-            skippy_abi_version: value.manifest.artifact.skippy_abi_version,
+            skippy_abi_version: Some(value.manifest.runtime.skippy_abi),
         }
     }
 }
@@ -1427,7 +1427,7 @@ impl From<mesh_llm_sdk::native_runtime::NativeRuntimeInstallOutcome>
                 }
             },
             runtime: value.runtime.into(),
-            selected_native_runtime_id: value.resolution.selected.native_runtime_id,
+            selected_native_runtime_id: value.resolution.selected.id,
             selected_source: native_runtime_source_name(&value.resolution.source),
         }
     }

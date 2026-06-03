@@ -95,10 +95,12 @@ impl NativeRuntimeCache {
     pub fn install_from_dir(&self, source_dir: &Path) -> Result<InstalledNativeRuntime> {
         let manifest = NativeRuntimeManifest::read_from_dir(source_dir)?;
         manifest.validate()?;
-        let target = self.runtime_dir(
-            &manifest.artifact.mesh_version,
-            &manifest.artifact.native_runtime_id,
-        );
+        let mesh_version = manifest
+            .runtime
+            .mesh_version
+            .as_deref()
+            .unwrap_or("unknown");
+        let target = self.runtime_dir(mesh_version, manifest.runtime.native_runtime_id());
         if target.exists() {
             fs::remove_dir_all(&target)
                 .with_context(|| format!("replace native runtime {}", target.display()))?;
@@ -181,10 +183,15 @@ fn installed_runtime_from_dir(dir: &Path) -> Result<Option<InstalledNativeRuntim
         return Ok(None);
     }
     let manifest = NativeRuntimeManifest::read_from_dir(dir)?;
+    let mesh_version = manifest
+        .runtime
+        .mesh_version
+        .clone()
+        .unwrap_or_else(|| "unknown".to_string());
     Ok(Some(InstalledNativeRuntime {
-        mesh_version: manifest.artifact.mesh_version.clone(),
-        native_runtime_id: manifest.artifact.native_runtime_id.clone(),
-        flavor: manifest.artifact.flavor.to_string(),
+        mesh_version,
+        native_runtime_id: manifest.runtime.id.clone(),
+        flavor: manifest.runtime.backend.kind.to_string(),
         path: dir.to_path_buf(),
         manifest,
     }))
@@ -214,26 +221,29 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{NativeRuntimeArtifact, NativeRuntimeFlavor};
+    use crate::{
+        NativeRuntimeArtifact, NativeRuntimeBackend, NativeRuntimeManifest, NativeRuntimePlatform,
+    };
 
     fn write_runtime(dir: &Path, version: &str, id: &str) {
         fs::create_dir_all(dir.join("lib")).unwrap();
         fs::write(dir.join("lib/libmeshllm_ffi.so"), b"native runtime").unwrap();
         let manifest = NativeRuntimeManifest {
-            artifact: NativeRuntimeArtifact {
-                native_runtime_id: id.to_string(),
-                mesh_version: version.to_string(),
-                target_triple: None,
-                os: "linux".to_string(),
-                arch: "x86_64".to_string(),
-                flavor: NativeRuntimeFlavor::Cpu,
-                priority: 0,
-                skippy_abi_version: None,
+            runtime: NativeRuntimeArtifact {
+                id: id.to_string(),
+                mesh_version: Some(version.to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                },
+                backend: NativeRuntimeBackend::cpu(),
+                rank: 0,
+                libraries: vec!["lib/libmeshllm_ffi.so".to_string()],
                 url: None,
                 sha256: None,
                 signature: None,
-                library_paths: vec!["lib/libmeshllm_ffi.so".to_string()],
-                requirements: Vec::new(),
             },
         };
         manifest.write_to_dir(dir).unwrap();

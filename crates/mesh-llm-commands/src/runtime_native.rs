@@ -1,5 +1,7 @@
 use anyhow::Result;
-use mesh_llm_native_runtime::{HostRuntimeProfile, NativeRuntimePruneMode, RuntimeSelection};
+use mesh_llm_native_runtime::{
+    HostRuntimeProfile, NativeRuntimePruneMode, NativeRuntimeResolver, RuntimeSelection,
+};
 use mesh_llm_runtime_install::{
     CURRENT_MESH_VERSION, NativeRuntimeDownloadProgressCallback, NativeRuntimeInstallOptions,
     NativeRuntimeInstallStatus, NativeRuntimeManifestOptions, host_runtime_profile,
@@ -30,21 +32,35 @@ pub async fn run_native_runtime_list(
         })
         .await?;
         let profile = host_runtime_profile();
+        let cache = native_runtime_cache(cache_dir)?;
+        let resolution = NativeRuntimeResolver::new(
+            CURRENT_MESH_VERSION,
+            profile.clone(),
+            manifest.clone(),
+            cache,
+        )
+        .resolve(&RuntimeSelection::Recommended)
+        .ok();
         let rows = manifest
             .artifacts
             .iter()
             .map(|artifact| {
-                let supported = artifact.mesh_version == CURRENT_MESH_VERSION
-                    && artifact.os == profile.os
-                    && artifact.arch == profile.arch
-                    && profile.supports_flavor(&artifact.flavor);
+                let evaluation = resolution.as_ref().and_then(|resolution| {
+                    resolution
+                        .evaluated
+                        .iter()
+                        .find(|candidate| candidate.artifact.id == artifact.id)
+                });
+                let supported = evaluation.is_some_and(|candidate| candidate.compatible);
                 json!({
-                    "id": artifact.native_runtime_id,
-                    "mesh_version": artifact.mesh_version,
-                    "flavor": artifact.flavor.to_string(),
-                    "os": artifact.os,
-                    "arch": artifact.arch,
+                    "id": artifact.id,
+                    "mesh_version": artifact.mesh_version.as_deref(),
+                    "skippy_abi": artifact.skippy_abi,
+                    "backend": artifact.backend.kind.to_string(),
+                    "os": artifact.platform.os,
+                    "arch": artifact.platform.arch,
                     "supported": supported,
+                    "rejection_reasons": evaluation.map(|candidate| &candidate.rejection_reasons),
                     "url": artifact.url.as_deref(),
                 })
             })
@@ -296,7 +312,7 @@ pub fn run_native_runtime_doctor(json_output: bool) -> Result<()> {
         .collect::<Vec<_>>();
     let selected = current_version_runtimes
         .iter()
-        .max_by_key(|runtime| runtime.manifest.artifact.flavor.default_rank());
+        .max_by_key(|runtime| runtime.manifest.runtime.backend.kind.default_rank());
 
     let report = NativeRuntimeDoctorReport {
         mesh_version: CURRENT_MESH_VERSION.to_string(),
@@ -346,7 +362,7 @@ fn print_available_runtimes(rows: &[serde_json::Value]) {
             "  - {} {} ({}, {}/{})",
             row["id"].as_str().unwrap_or("unknown"),
             status,
-            row["flavor"].as_str().unwrap_or("unknown"),
+            row["backend"].as_str().unwrap_or("unknown"),
             row["os"].as_str().unwrap_or("unknown"),
             row["arch"].as_str().unwrap_or("unknown")
         );

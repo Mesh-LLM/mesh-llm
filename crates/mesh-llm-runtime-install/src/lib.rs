@@ -5,9 +5,8 @@ pub use mesh_llm_native_runtime::{
     InstalledNativeRuntime, NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact,
     NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimeFlavor, NativeRuntimeFlavorParseError,
     NativeRuntimeLoadPlan, NativeRuntimeManifest, NativeRuntimePruneMode,
-    NativeRuntimeReleaseManifest, NativeRuntimeRequirement, NativeRuntimeResolution,
-    NativeRuntimeResolver, NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root,
-    select_native_runtime,
+    NativeRuntimeReleaseManifest, NativeRuntimeResolution, NativeRuntimeResolver,
+    NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root, select_native_runtime,
 };
 
 use serde::{Deserialize, Serialize};
@@ -151,18 +150,27 @@ pub async fn load_release_manifest(
 ) -> Result<NativeRuntimeReleaseManifest> {
     let mut artifacts = Vec::new();
     let mut mesh_version = options.mesh_version.clone();
+    let mut skippy_abi = current_skippy_abi_version();
     if let Some(path) = options.manifest_path {
         let manifest = NativeRuntimeReleaseManifest::read_from_path(&path)?;
         mesh_version = manifest.mesh_version.clone();
+        skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
     } else if let Some(url) = manifest_url(&mesh_version, &options) {
         let manifest = download_release_manifest(&url).await?;
         mesh_version = manifest.mesh_version.clone();
+        skippy_abi = manifest.skippy_abi.clone();
         artifacts.extend(manifest.artifacts);
     }
-    append_bundle_artifacts(&mut artifacts, &mut mesh_version, &options.bundle_dirs)?;
+    append_bundle_artifacts(
+        &mut artifacts,
+        &mut mesh_version,
+        &mut skippy_abi,
+        &options.bundle_dirs,
+    )?;
     Ok(NativeRuntimeReleaseManifest {
         mesh_version,
+        skippy_abi,
         artifacts,
     })
 }
@@ -224,7 +232,7 @@ async fn install_resolved_runtime(
         NativeRuntimeSource::Missing => {
             bail!(
                 "selected native runtime {} is not installed and no bundle or download URL was available",
-                resolution.selected.native_runtime_id
+                resolution.selected.id
             )
         }
     }
@@ -236,8 +244,8 @@ fn installed_outcome(
 ) -> Result<NativeRuntimeInstallOutcome> {
     let runtime = cache
         .find_installed(
-            &resolution.selected.mesh_version,
-            &resolution.selected.native_runtime_id,
+            resolution.selected.mesh_version_or(CURRENT_MESH_VERSION),
+            resolution.selected.native_runtime_id(),
         )?
         .context("selected native runtime was not found in cache")?;
     Ok(NativeRuntimeInstallOutcome {
@@ -278,7 +286,7 @@ async fn download_and_install_runtime(
         .context("create native runtime download workspace")?;
     let archive = temp
         .path()
-        .join(format!("{}.tar.gz", artifact.native_runtime_id));
+        .join(format!("{}.tar.gz", artifact.native_runtime_id()));
     download_runtime_archive(url, &archive, artifact, options).await?;
     let extracted = temp.path().join("extracted");
     fs::create_dir_all(&extracted).with_context(|| {
@@ -341,7 +349,7 @@ fn verify_download_policy_before_fetch(
     if artifact.sha256.is_none() {
         bail!(
             "native runtime {} is missing required sha256 verification metadata",
-            artifact.native_runtime_id
+            artifact.native_runtime_id()
         );
     }
     if policy == NativeRuntimeVerificationPolicy::RequireChecksumAndSignature {
@@ -349,7 +357,7 @@ fn verify_download_policy_before_fetch(
         if signature.trim().is_empty() {
             bail!(
                 "native runtime {} is missing required signature metadata",
-                artifact.native_runtime_id
+                artifact.native_runtime_id()
             );
         }
         bail!("native runtime signature verification is not implemented yet");
@@ -382,7 +390,7 @@ fn emit_download_progress(
         return;
     };
     progress(NativeRuntimeDownloadProgress {
-        native_runtime_id: artifact.native_runtime_id.clone(),
+        native_runtime_id: artifact.id.clone(),
         url: url.to_string(),
         downloaded_bytes,
         total_bytes,
@@ -408,13 +416,17 @@ fn manifest_url(mesh_version: &str, options: &NativeRuntimeManifestOptions) -> O
 fn append_bundle_artifacts(
     artifacts: &mut Vec<NativeRuntimeArtifact>,
     mesh_version: &mut String,
+    skippy_abi: &mut String,
     bundle_dirs: &[PathBuf],
 ) -> Result<()> {
     for dir in bundle_dirs {
         let manifest = NativeRuntimeManifest::read_from_dir(dir)
             .with_context(|| format!("read bundled native runtime {}", dir.display()))?;
-        *mesh_version = manifest.artifact.mesh_version.clone();
-        artifacts.push(manifest.artifact);
+        if let Some(version) = &manifest.runtime.mesh_version {
+            *mesh_version = version.clone();
+        }
+        *skippy_abi = manifest.runtime.skippy_abi.clone();
+        artifacts.push(manifest.runtime);
     }
     Ok(())
 }
@@ -477,22 +489,24 @@ fn collect_runtime_manifest_dirs(dir: &Path, matches: &mut Vec<PathBuf>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mesh_llm_native_runtime::{NativeRuntimeBackend, NativeRuntimePlatform};
 
     fn artifact_with_sha(signature: Option<&str>) -> NativeRuntimeArtifact {
         NativeRuntimeArtifact {
-            native_runtime_id: "meshllm-native-runtime-linux-x86_64-cpu".to_string(),
-            mesh_version: CURRENT_MESH_VERSION.to_string(),
-            target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
-            os: "linux".to_string(),
-            arch: "x86_64".to_string(),
-            flavor: NativeRuntimeFlavor::Cpu,
-            priority: 0,
-            skippy_abi_version: None,
+            id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
+            mesh_version: Some(CURRENT_MESH_VERSION.to_string()),
+            skippy_abi: current_skippy_abi_version(),
+            platform: NativeRuntimePlatform {
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                target: Some("x86_64-unknown-linux-gnu".to_string()),
+            },
+            backend: NativeRuntimeBackend::cpu(),
+            rank: 0,
+            libraries: vec!["lib/libllama.so".to_string()],
             url: Some("https://example.invalid/runtime.tar.gz".to_string()),
             sha256: Some("a".repeat(64)),
             signature: signature.map(str::to_string),
-            library_paths: Vec::new(),
-            requirements: Vec::new(),
         }
     }
 

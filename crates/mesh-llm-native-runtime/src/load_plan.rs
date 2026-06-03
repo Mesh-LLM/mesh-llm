@@ -15,8 +15,8 @@ impl InstalledNativeRuntime {
     pub fn load_plan(&self) -> Result<NativeRuntimeLoadPlan> {
         let libraries = self
             .manifest
-            .artifact
-            .library_paths
+            .runtime
+            .libraries
             .iter()
             .map(|path| self.path.join(path))
             .collect::<Vec<_>>();

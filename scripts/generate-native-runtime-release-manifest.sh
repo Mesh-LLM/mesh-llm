@@ -69,15 +69,15 @@ import tarfile
 out, repo, tag, tmp_root, *archives = sys.argv[1:]
 artifacts = []
 mesh_version = None
+skippy_abi = None
 
 required = {
-    "native_runtime_id",
+    "id",
     "mesh_version",
-    "target_triple",
-    "os",
-    "arch",
-    "flavor",
-    "library_paths",
+    "skippy_abi",
+    "platform",
+    "backend",
+    "libraries",
 }
 
 for archive in archives:
@@ -99,18 +99,27 @@ for archive in archives:
 
     with open(manifest_paths[0], encoding="utf-8") as fh:
         manifest = json.load(fh)
-    missing = sorted(required - manifest.keys())
+    runtime = manifest.get("runtime")
+    if not isinstance(runtime, dict):
+        raise SystemExit(f"{archive} is missing runtime manifest")
+    missing = sorted(required - runtime.keys())
     if missing:
         raise SystemExit(f"{archive} is missing native runtime field(s): {', '.join(missing)}")
 
     if mesh_version is None:
-        mesh_version = manifest["mesh_version"]
-    elif manifest["mesh_version"] != mesh_version:
+        mesh_version = runtime["mesh_version"]
+    elif runtime["mesh_version"] != mesh_version:
         raise SystemExit(
-            f"mixed mesh versions in native runtime artifacts: {manifest['mesh_version']} != {mesh_version}"
+            f"mixed mesh versions in native runtime artifacts: {runtime['mesh_version']} != {mesh_version}"
+        )
+    if skippy_abi is None:
+        skippy_abi = runtime["skippy_abi"]
+    elif runtime["skippy_abi"] != skippy_abi:
+        raise SystemExit(
+            f"mixed Skippy ABI versions in native runtime artifacts: {runtime['skippy_abi']} != {skippy_abi}"
         )
 
-    artifact = dict(manifest)
+    artifact = dict(runtime)
     artifact["url"] = (
         f"https://github.com/{repo}/releases/download/{tag}/{os.path.basename(archive)}"
     )
@@ -120,9 +129,10 @@ for archive in archives:
 if mesh_version is None:
     raise SystemExit("no native runtime artifacts supplied")
 
-artifacts.sort(key=lambda item: item["native_runtime_id"])
+artifacts.sort(key=lambda item: item["id"])
 release_manifest = {
     "mesh_version": mesh_version,
+    "skippy_abi": skippy_abi,
     "artifacts": artifacts,
 }
 os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)

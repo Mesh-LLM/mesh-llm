@@ -7,7 +7,7 @@ Status: accepted direction with an implemented resolver/install foundation.
 Use **native runtime** for the platform-specific serving artifact that contains
 the native libraries, metadata, and loader inputs needed for local inference.
 Avoid backend terminology for these artifacts. Names such as `cuda`, `rocm`,
-`metal`, `vulkan`, and `cpu` describe runtime flavors.
+`metal`, `vulkan`, and `cpu` describe runtime backend lanes.
 
 ## Decision
 
@@ -15,10 +15,10 @@ Native runtimes are release artifacts, not implicit Cargo builds. A MeshLLM SDK
 consumer should be able to source Rust crates from crates.io without compiling
 llama.cpp or Skippy native code as a default side effect.
 
-Every native runtime is tied to exactly one MeshLLM version. The native runtime
-version must match the MeshLLM crate, SDK, or binary version that loads it. The
-Skippy ABI version is useful diagnostic metadata, but it is not a substitute
-for the MeshLLM version match.
+Every native runtime declares the exact Skippy ABI it supports. Exact Skippy ABI
+is the compatibility boundary for loading. MeshLLM version is still recorded so
+release manifests, cache layout, and pruning can prefer the current release, but
+runtime loading must reject by Skippy ABI rather than by MeshLLM semver alone.
 
 Release CI owns the normal native runtime build. It builds, verifies, and
 publishes the runtime artifacts for supported target/flavor combinations
@@ -32,29 +32,27 @@ attestation format are implemented.
 A native runtime is identified by:
 
 - MeshLLM version, for example `0.68.0`
+- Skippy ABI, for example `0.1.25`
 - target operating system and architecture
-- runtime flavor, for example `cpu`, `metal`, `cuda`, `cuda-blackwell`,
-  `rocm`, or `vulkan`
-- optional hardware constraints, for example CUDA compute capability, ROCm GPU
-  target, driver/runtime minimums, and priority
+- backend kind, for example `cpu`, `metal`, `cuda`, `rocm`, or `vulkan`
+- backend requirements, for example CUDA toolkit major, CUDA SM architecture,
+  ROCm GPU target, driver/runtime minimums, and priority
 
 The artifact manifest should include at least:
 
+- `id`
 - `mesh_version`
-- `native_runtime_id`
-- `target_triple`
-- `os`
-- `arch`
-- `flavor`
-- `skippy_abi_version`
-- native library paths
+- `skippy_abi`
+- `platform`
+- `backend`
+- `libraries`
 - checksums
 - signature or attestation metadata
 - release URL
 - ranking and compatibility metadata
 
-The resolver must reject an artifact whose `mesh_version` does not exactly
-match the running MeshLLM version.
+The resolver must reject an artifact whose `skippy_abi` does not exactly match
+the running loader ABI.
 
 ## Resolver
 
@@ -65,10 +63,10 @@ platforms, GPU families, and runtime flavors are expected to arrive over time.
 The resolver flow is:
 
 1. Detect the local OS, architecture, available GPU devices, drivers, and
-   supported runtime flavors.
-2. Load the release manifest for the exact running MeshLLM version.
+   supported backend lanes.
+2. Load the release manifest for the running MeshLLM version.
 3. Filter artifacts to those compatible with the host.
-4. Rank compatible artifacts by flavor and hardware fit.
+4. Rank compatible artifacts by backend lane and hardware fit.
 5. Prefer an explicitly configured artifact directory when provided.
 6. Check the local cache for the selected runtime.
 7. If allowed, download the missing artifact while reporting progress.
@@ -78,8 +76,9 @@ The resolver flow is:
    and diagnostics.
 
 The ranking policy is shared policy, not SDK-specific glue. For example, a
-Linux NVIDIA host may rank `cuda-blackwell` above generic `cuda`, and generic
-`cuda` above `vulkan` or `cpu`, when all compatibility checks pass.
+Linux NVIDIA host with CUDA 13 and `sm_120` support may rank
+`cuda13-sm120` above generic `cuda13`, and accelerated runtimes above `cpu`,
+when all compatibility checks pass.
 
 ## Cache And Progress
 
@@ -227,20 +226,22 @@ The `mesh-llm runtime` CLI should own inventory and cache management:
 mesh-llm runtime list --available
 mesh-llm runtime list --installed
 mesh-llm runtime install
-mesh-llm runtime install cuda
-mesh-llm runtime remove meshllm-native-runtime-linux-x86_64-cuda
+mesh-llm runtime install cuda12
+mesh-llm runtime install cuda13
+mesh-llm runtime install exact:meshllm-native-runtime-linux-x86_64-cuda13-sm120
+mesh-llm runtime remove meshllm-native-runtime-linux-x86_64-cuda13
 mesh-llm runtime prune
 mesh-llm runtime prune --active-only
 ```
 
 With no runtime argument, `mesh-llm runtime install` detects the host and
 installs the recommended compatible native runtime from the release manifest,
-an explicit manifest, or bundle directories. Explicit flavor or runtime ID
+an explicit manifest, or bundle directories. Explicit backend policy or runtime ID
 arguments are overrides for advanced users, CI, and prepared images.
 
 Selected-runtime diagnostics belong in `mesh-llm doctor`, not in a separate
 `mesh-llm runtime doctor` command. Doctor output should include the active
-MeshLLM version, selected native runtime ID, runtime flavor, runtime path,
+MeshLLM version, selected native runtime ID, backend lane, runtime path,
 cache path, manifest version, verification status, and any rejected compatible
 candidates with reasons.
 
@@ -252,7 +253,7 @@ as the rest of the MeshLLM CLI:
 - byte and percent progress while downloading native runtime artifacts
 - clear status transitions for resolving, downloading, verifying, installing,
   pruning, and already-current outcomes
-- concise success output that names the selected runtime flavor and version
+- concise success output that names the selected runtime backend and version
 - structured output for JSON/non-interactive modes without terminal control
   characters
 
@@ -294,8 +295,8 @@ environment can build and smoke them reliably:
 - macOS `aarch64` Metal
 - Linux `x86_64` CPU
 
-CUDA, CUDA Blackwell, ROCm, Vulkan, Windows, and additional architecture lanes
-use the same manifest/flavor model but still need dedicated runner/toolchain
+CUDA 12, CUDA 13, Blackwell-specific CUDA, ROCm, Vulkan, Windows, and additional architecture lanes
+use the same manifest/backend model but still need dedicated runner/toolchain
 work before the release matrix can claim coverage. The resolver is designed so
 adding these artifacts is manifest data plus release jobs, not SDK API churn.
 
@@ -307,5 +308,5 @@ library loaded by the SDK resolver. A sidecar binary remains a possible
 packaging option, but it is less appropriate for consumers that want an
 embedded in-process node.
 
-The loader must treat the exact MeshLLM version match as the compatibility
-boundary, then use native runtime metadata for diagnostics and selection.
+The loader must treat the exact Skippy ABI match as the compatibility boundary,
+then use native runtime metadata for diagnostics and selection.

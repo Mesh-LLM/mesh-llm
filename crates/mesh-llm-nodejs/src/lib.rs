@@ -825,7 +825,7 @@ fn native_runtime_install_outcome_json(
             mesh_llm_sdk::native_runtime::NativeRuntimeInstallStatus::Installed => "installed",
         },
         "runtime": installed_native_runtime_json(outcome.runtime),
-        "selectedNativeRuntimeId": outcome.resolution.selected.native_runtime_id,
+        "selectedNativeRuntimeId": outcome.resolution.selected.id,
         "selectedSource": native_runtime_source_name(&outcome.resolution.source),
     })
 }
@@ -861,7 +861,7 @@ fn installed_native_runtime_json(
         "nativeRuntimeId": runtime.native_runtime_id,
         "flavor": runtime.flavor,
         "path": path_to_string(runtime.path),
-        "skippyAbiVersion": runtime.manifest.artifact.skippy_abi_version,
+        "skippyAbiVersion": runtime.manifest.runtime.skippy_abi,
     })
 }
 

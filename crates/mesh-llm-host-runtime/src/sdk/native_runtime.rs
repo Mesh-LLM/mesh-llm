@@ -12,7 +12,6 @@ pub use mesh_llm_native_runtime::{
     InstalledNativeRuntime, NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact,
     NativeRuntimeCache, NativeRuntimeCacheRoot, NativeRuntimeFlavor, NativeRuntimeFlavorParseError,
     NativeRuntimeLoadPlan, NativeRuntimeManifest, NativeRuntimePruneMode,
-    NativeRuntimeReleaseManifest, NativeRuntimeRequirement, NativeRuntimeResolution,
-    NativeRuntimeResolver, NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root,
-    select_native_runtime,
+    NativeRuntimeReleaseManifest, NativeRuntimeResolution, NativeRuntimeResolver,
+    NativeRuntimeSource, RuntimeSelection, native_runtime_cache_root, select_native_runtime,
 };

@@ -11,12 +11,17 @@ pub use cache::{
     CachePrunePlan, InstalledNativeRuntime, NativeRuntimeCache, NativeRuntimeCacheRoot,
     NativeRuntimePruneMode, native_runtime_cache_root,
 };
-pub use flavor::{NativeRuntimeFlavor, NativeRuntimeFlavorParseError};
-pub use host::{HostGpuProfile, HostRuntimeProfile};
+pub use flavor::{
+    CudaRuntimeRequirements, NativeRuntimeBackend, NativeRuntimeBackendKind, NativeRuntimeFlavor,
+    NativeRuntimeFlavorParseError, RocmRuntimeRequirements, VulkanRuntimeRequirements,
+};
+pub use host::{
+    HostCudaProfile, HostGpuProfile, HostRocmProfile, HostRuntimeProfile, HostVulkanProfile,
+};
 pub use load_plan::NativeRuntimeLoadPlan;
 pub use manifest::{
     NATIVE_RUNTIME_MANIFEST_FILE, NativeRuntimeArtifact, NativeRuntimeManifest,
-    NativeRuntimeReleaseManifest, NativeRuntimeRequirement,
+    NativeRuntimePlatform, NativeRuntimeReleaseManifest,
 };
 pub use resolver::{
     CandidateEvaluation, CandidateRejection, NativeRuntimeResolution, NativeRuntimeResolver,

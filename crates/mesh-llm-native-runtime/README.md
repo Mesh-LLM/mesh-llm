@@ -1,132 +1,118 @@
 # mesh-llm-native-runtime
 
-Shared native runtime manifest, resolver, cache, and loading-plan policy for
-MeshLLM.
+Shared native runtime manifest, host profile, resolver, cache, and load-plan
+policy for MeshLLM.
 
-This crate owns the code that decides which native runtime artifact should be
-used for the current host. It is intentionally small and dependency-light so the
-same policy can be reused by the CLI, installers, autoupdate, and future SDK
-entry points.
+This crate is the source of truth for selecting native runtimes. CLI install,
+SDK serving install, dynamic loading, and autoupdate should all use this same
+contract instead of carrying their own CUDA/ROCm/Vulkan detection logic.
 
-## Concepts
+## Native Runtimes
 
-A **native runtime** is a version-matched release artifact that contains the
-platform-specific patched llama.cpp/Skippy shared libraries needed by MeshLLM,
-such as a CPU, Metal, CUDA, CUDA Blackwell, ROCm, or Vulkan runtime.
+A native runtime is a release artifact containing patched llama.cpp/Skippy
+shared libraries for one platform/backend lane. The `mesh-llm` binary can stay
+one artifact per OS/architecture; native runtimes carry the backend-specific
+matrix:
 
-Native runtimes are separate from the `mesh-llm` binary:
+- `cpu`
+- `metal`
+- `cuda` with a CUDA toolkit major such as 12 or 13
+- `rocm` with optional GFX targets
+- `vulkan`
 
-- `mesh-llm` is released once per OS/architecture.
-- Native runtimes are released per MeshLLM version, OS/architecture, and
-  runtime flavor.
-- The native runtime `mesh_version` must match the running MeshLLM version.
-- Runtime selection is based on a host profile and the release manifest, not on
-  shell installer heuristics.
-
-The resolver never builds native runtimes. It only selects, locates, installs,
-or describes released artifacts.
+The hard compatibility boundary is exact Skippy ABI. `mesh_version` is still
+recorded and used for cache/prune layout, but a runtime is selected by
+`skippy_abi`, platform, and backend requirements.
 
 ## Artifact Manifest
 
-Each packaged runtime directory contains `manifest.json`. The crate accepts two
-equivalent shapes:
+Each packaged runtime directory contains `manifest.json`:
 
 ```json
 {
-  "artifact": {
-    "native_runtime_id": "meshllm-native-runtime-linux-x86_64-cuda",
+  "runtime": {
+    "id": "meshllm-native-runtime-linux-x86_64-cuda13-sm120",
     "mesh_version": "0.68.0",
-    "target_triple": "x86_64-unknown-linux-gnu",
-    "os": "linux",
-    "arch": "x86_64",
-    "flavor": "cuda",
-    "library_paths": ["lib/libggml.so", "lib/libllama-common.so", "lib/libmtmd.so", "lib/libllama.so"]
+    "skippy_abi": "0.1.25",
+    "platform": {
+      "os": "linux",
+      "arch": "x86_64",
+      "target": "x86_64-unknown-linux-gnu"
+    },
+    "backend": {
+      "kind": "cuda",
+      "cuda": {
+        "toolkit_major": 13,
+        "min_driver": "580.0",
+        "gpu_arches": ["sm_120"]
+      }
+    },
+    "rank": 0,
+    "libraries": ["lib/libllama.so"]
   }
 }
 ```
 
-Release-packaged native runtime artifacts use the direct shape:
+CPU uses:
 
 ```json
-{
-  "schema_version": 1,
-  "artifact_id": "meshllm-native-runtime-linux-x86_64-cuda",
-  "native_runtime_id": "meshllm-native-runtime-linux-x86_64-cuda",
-  "mesh_version": "0.68.0",
-  "target_triple": "x86_64-unknown-linux-gnu",
-  "platform": "linux-x86_64",
-  "os": "linux",
-  "arch": "x86_64",
-  "backend": "cuda",
-  "flavor": "cuda",
-  "library": "lib/libllama.so",
-  "library_paths": ["lib/libggml.so", "lib/libllama-common.so", "lib/libmtmd.so", "lib/libllama.so"],
-  "library_sha256": "7c2b...",
-  "skippy_abi_version": "0.1.24",
-  "requirements": []
+"backend": { "kind": "cpu" }
+```
+
+ROCm uses:
+
+```json
+"backend": {
+  "kind": "rocm",
+  "rocm": {
+    "version": "6.4",
+    "gpu_arches": ["gfx1100"]
+  }
 }
 ```
 
 Important fields:
 
-- `native_runtime_id`: stable artifact ID used for cache paths and explicit
-  selection.
-- `mesh_version`: required exact MeshLLM version for this runtime.
-- `target_triple`: optional Rust target triple. When both the artifact and host
-  profile have a target triple, they must match exactly.
-- `os` and `arch`: compared against `std::env::consts::OS` and
-  `std::env::consts::ARCH` values from the host profile, for example `linux` /
-  `x86_64` or `macos` / `aarch64`.
-- `flavor`: runtime flavor. Built-in flavors are `cpu`, `metal`, `cuda`,
-  `cuda-blackwell`, `rocm`, and `vulkan`. Unknown flavor strings are preserved
-  as `NativeRuntimeFlavor::Other`.
-- `priority`: optional rank adjustment. Higher compatible ranks win.
-- `url`: optional archive URL used when the runtime is not already installed or
-  supplied as a bundle directory.
-- `sha256`: optional archive SHA-256 used by callers that download artifacts.
-- `library_paths`: runtime-relative library paths used by the load-plan
-  boundary.
-- `requirements`: optional host requirements. Today this supports GPU display
-  name matching through `gpu_name_contains`; compute capability and driver
-  fields are reserved in the schema for stricter future checks.
+- `id`: stable runtime ID used for explicit selection and cache paths.
+- `skippy_abi`: exact ABI version required by the loader.
+- `platform`: OS/arch/optional Rust target triple.
+- `backend`: structured backend requirements.
+- `rank`: optional rank adjustment. Higher compatible ranks win.
+- `libraries`: runtime-relative load-order library paths.
+- `url` and `sha256`: populated in release manifests for downloads.
 
 ## Release Manifest
 
-Release manifests list the runtime artifacts available for a MeshLLM release:
+Release jobs publish `native-runtimes.json`:
 
 ```json
 {
   "mesh_version": "0.68.0",
+  "skippy_abi": "0.1.25",
   "artifacts": [
     {
-      "native_runtime_id": "meshllm-native-runtime-linux-x86_64-cpu",
+      "id": "meshllm-native-runtime-linux-x86_64-cpu",
       "mesh_version": "0.68.0",
-      "target_triple": "x86_64-unknown-linux-gnu",
-      "os": "linux",
-      "arch": "x86_64",
-      "flavor": "cpu",
+      "skippy_abi": "0.1.25",
+      "platform": { "os": "linux", "arch": "x86_64" },
+      "backend": { "kind": "cpu" },
+      "rank": 0,
+      "libraries": ["lib/libllama.so"],
       "url": "https://github.com/Mesh-LLM/mesh-llm/releases/download/v0.68.0/meshllm-native-runtime-linux-x86_64-cpu.tar.gz",
-      "sha256": "2f1c...",
-      "library_paths": ["lib/libggml.so", "lib/libllama-common.so", "lib/libmtmd.so", "lib/libllama.so"]
+      "sha256": "2f1c..."
     }
   ]
 }
 ```
 
-`NativeRuntimeReleaseManifest::validate` enforces that every artifact has the
-same `mesh_version` as the release manifest. This is the compatibility boundary:
-new MeshLLM versions install matching native runtimes rather than reusing older
-ones.
-
-The release workflow generates this file as `native-runtimes.json` from native
-runtime archives.
-
 ## Host Profile
 
-Selection runs against `HostRuntimeProfile`:
+Selection evaluates artifacts against `HostRuntimeProfile`:
 
 ```rust
-use mesh_llm_native_runtime::{HostRuntimeProfile, NativeRuntimeFlavor};
+use mesh_llm_native_runtime::{
+    HostCudaProfile, HostRuntimeProfile, NativeRuntimeBackendKind,
+};
 use std::collections::BTreeSet;
 
 let profile = HostRuntimeProfile {
@@ -134,16 +120,25 @@ let profile = HostRuntimeProfile {
     arch: "x86_64".to_string(),
     target_triple: Some("x86_64-unknown-linux-gnu".to_string()),
     available_flavors: BTreeSet::from([
-        NativeRuntimeFlavor::Cpu,
-        NativeRuntimeFlavor::Cuda,
+        NativeRuntimeBackendKind::Cpu,
+        NativeRuntimeBackendKind::Cuda,
     ]),
     gpus: Vec::new(),
+    cuda: Some(HostCudaProfile {
+        toolkit_majors: BTreeSet::from([12]),
+        driver_version: None,
+        gpu_arches: BTreeSet::from(["sm_90".to_string()]),
+    }),
+    rocm: None,
+    vulkan: None,
 };
 ```
 
-`HostRuntimeProfile::current_without_gpu_probe()` only reports CPU plus Metal on
-macOS. Production callers that can inspect hardware should build a richer
-profile and set `available_flavors` from detected devices.
+`mesh-llm-hardware-profile` builds this profile for real hosts. It supports
+explicit environment overrides for CI/release testing, including
+`MESH_LLM_CUDA_TOOLKIT_MAJOR`, `MESH_LLM_CUDA_TOOLKIT_MAJORS`,
+`MESH_LLM_CUDA_GPU_ARCHES`, `MESH_LLM_ROCM_GPU_ARCHES`, and
+`MESH_LLM_VULKAN_AVAILABLE`.
 
 ## Resolution
 
@@ -158,100 +153,66 @@ use mesh_llm_native_runtime::{
 use std::path::PathBuf;
 
 # fn example(
-#     mesh_version: &str,
 #     profile: mesh_llm_native_runtime::HostRuntimeProfile,
 #     manifest: NativeRuntimeReleaseManifest,
 # ) -> anyhow::Result<()> {
 let cache = NativeRuntimeCache::new("/tmp/mesh-llm/native-runtimes");
-let resolution = NativeRuntimeResolver::new(mesh_version, profile, manifest, cache)
-    .with_bundle_dirs(vec![PathBuf::from("./dist/native-runtimes/meshllm-native-runtime-linux-x86_64-cpu")])
+let resolution = NativeRuntimeResolver::new("0.68.0", profile, manifest, cache)
+    .with_skippy_abi_version("0.1.25")
+    .with_bundle_dirs(vec![PathBuf::from("./meshllm-native-runtime-linux-x86_64-cpu")])
     .resolve(&RuntimeSelection::Recommended)?;
 
-match resolution.source {
-    mesh_llm_native_runtime::NativeRuntimeSource::Installed { path } => {
-        println!("already installed at {}", path.display());
-    }
-    mesh_llm_native_runtime::NativeRuntimeSource::Bundle { path } => {
-        println!("install from bundled runtime {}", path.display());
-    }
-    mesh_llm_native_runtime::NativeRuntimeSource::Download { url } => {
-        println!("download from {url}");
-    }
-    mesh_llm_native_runtime::NativeRuntimeSource::Missing => {
-        println!("selected runtime has no local source or URL");
-    }
-}
+println!("selected {}", resolution.selected.id);
 # Ok(())
 # }
 ```
 
-Use `select_native_runtime` when a caller only needs the best compatible
-candidate and does not need source lookup.
+Selection strings accepted by `RuntimeSelection::parse`:
 
-Selection modes:
-
-- `RuntimeSelection::Recommended`: choose the highest-ranked compatible runtime.
-- `RuntimeSelection::Flavor(NativeRuntimeFlavor::Cuda)`: require a specific
-  flavor.
-- `RuntimeSelection::Id("meshllm-native-runtime-linux-x86_64-cuda".to_string())`:
-  require a specific artifact ID.
+- `recommended`
+- `cpu`
+- `metal`
+- `cuda`
+- `cuda12`
+- `cuda13`
+- `rocm`
+- `vulkan`
+- `exact:<runtime-id>`
 
 Compatibility checks:
 
-- exact MeshLLM version match
-- OS match
-- architecture match
-- target triple match when both sides declare it
-- host support for the artifact flavor
-- artifact requirements, such as required GPU name fragments
-- explicit flavor or ID selection match
-
-Ranking is `artifact.priority + artifact.flavor.default_rank()`. Default flavor
-ranking prefers accelerated runtimes over CPU, with CUDA Blackwell ranked above
-general CUDA.
+- exact Skippy ABI
+- OS/arch/target triple
+- backend kind support
+- CUDA toolkit major
+- CUDA SM architecture
+- ROCm GFX architecture
+- Vulkan availability
+- explicit selection policy
 
 Every candidate is returned in `NativeRuntimeResolution::evaluated` with
-structured `CandidateRejection` reasons, so CLIs and diagnostics can explain why
-an artifact was skipped.
+structured rejection reasons for `mesh-llm runtime list`, `mesh-llm doctor`, SDK
+diagnostics, and support output.
 
 ## Cache Layout
 
-`NativeRuntimeCache` stores installed runtimes under:
+Installed runtimes are stored under:
 
 ```text
-<cache-root>/<mesh_version>/<native_runtime_id>/
+<cache-root>/<mesh_version>/<runtime-id>/
   manifest.json
   lib/...
 ```
 
-The default cache root is chosen by callers. The `native_runtime_cache_root`
-helper maps a base cache directory to:
-
-```text
-<base-cache-dir>/mesh-llm/native-runtimes
-```
-
-Important cache operations:
-
-- `installed()`: enumerate installed runtimes.
-- `find_installed(mesh_version, native_runtime_id)`: find one runtime.
-- `install_from_dir(source_dir)`: copy a packaged runtime directory into the
-  versioned cache, replacing any existing runtime with the same ID and version.
-- `remove(mesh_version, native_runtime_id)`: delete one runtime.
-- `prune(active_mesh_version, NativeRuntimePruneMode::KeepActiveAndPrevious)`:
-  keep the active MeshLLM version and the most recent previous version.
-- `prune(active_mesh_version, NativeRuntimePruneMode::ActiveOnly)`: remove every
-  runtime that does not match the active MeshLLM version.
-
-Install and autoupdate flows should normally prune with `ActiveOnly` after a
-successful runtime install for the upgraded MeshLLM version.
+`mesh_version` remains part of the cache layout and prune policy so upgrading
+MeshLLM can install the newly selected runtime, switch to it, and remove older
+runtime caches after success.
 
 ## Load Plan Boundary
 
-This crate does not load dynamic libraries itself. It exposes
-`InstalledNativeRuntime` as a cache record and
-`InstalledNativeRuntime::load_plan()` as the boundary consumed by the Skippy FFI
-dynamic loader in the host runtime.
+This crate does not load dynamic libraries. `InstalledNativeRuntime::load_plan`
+validates `runtime.libraries` and returns absolute paths for the Skippy FFI
+loader:
 
 ```rust
 # fn example(installed: mesh_llm_native_runtime::InstalledNativeRuntime) -> anyhow::Result<()> {
@@ -263,94 +224,28 @@ for library in plan.libraries {
 # }
 ```
 
-`load_plan()` validates that the manifest declares at least one library and that
-each declared path exists under the installed runtime directory. The caller
-still owns ABI checks and actual dynamic loading.
+## Packaging
 
-## CLI Integration
-
-The host runtime crate wraps this API in:
+Package and verify a runtime:
 
 ```bash
-mesh-llm runtime list --installed
-mesh-llm runtime list --available --manifest native-runtimes.json
-mesh-llm runtime install --manifest native-runtimes.json
-mesh-llm runtime install cuda --manifest native-runtimes.json
-mesh-llm runtime remove meshllm-native-runtime-linux-x86_64-cuda
-mesh-llm runtime prune --active-only
-mesh-llm doctor --json
+scripts/package-native-runtime.sh \
+  --build \
+  --backend cuda \
+  --target x86_64-unknown-linux-gnu \
+  --out dist/native-runtimes
+
+scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
 ```
 
-`mesh-llm runtime install` does not require `--manifest` in normal release
-usage. It resolves `native-runtimes.json` for the running MeshLLM version from
-the release URL, or from `MESH_LLM_NATIVE_RUNTIME_MANIFEST_URL` when that
-environment variable is set. `--manifest` and `--bundle-dir` remain available
-for CI, offline packages, and local artifact testing. Passing only
-`--bundle-dir` does not fetch the default release manifest.
+CUDA lanes use `MESH_LLM_CUDA_TOOLKIT_MAJOR` to emit IDs such as `cuda12` or
+`cuda13`. `--backend cuda-blackwell` defaults to `cuda13-sm120`.
 
-The host runtime's SDK layer owns network downloads, archive extraction,
-progress callbacks, checksum verification, and cache installation. This crate
-owns the manifest, compatibility, cache, and load-plan semantics those flows
-use.
+Generate the release manifest:
 
-## Rust SDK Integration
-
-Rust SDK consumers use `mesh_llm::sdk::native_runtime` for first-class install
-and resolver access:
-
-```rust
-use mesh_llm::sdk::native_runtime::{
-    NativeRuntimeInstallOptions, RuntimeSelection, install_native_runtime,
-};
-
-# async fn example(cache_dir: std::path::PathBuf) -> anyhow::Result<()> {
-let outcome = install_native_runtime(NativeRuntimeInstallOptions {
-    selection: RuntimeSelection::Recommended,
-    cache_dir: Some(cache_dir),
-    progress: Some(std::sync::Arc::new(|event| {
-        eprintln!(
-            "{}: {} bytes",
-            event.native_runtime_id,
-            event.downloaded_bytes
-        );
-    })),
-    ..Default::default()
-})
-.await?;
-
-println!("installed {}", outcome.runtime.native_runtime_id);
-# Ok(())
-# }
+```bash
+scripts/generate-native-runtime-release-manifest.sh \
+  --tag v0.68.0 \
+  --out dist/native-runtimes/native-runtimes.json \
+  dist/native-runtimes/*.tar.gz
 ```
-
-The SDK module also re-exports the lower-level manifest, resolver, cache, and
-load-plan types from this crate for callers that need to query available
-runtimes, inspect candidate rejections, remove cached runtimes, or prune older
-MeshLLM versions.
-
-## Verification
-
-Release downloads require `sha256` metadata and fail if the archive digest does
-not match the release manifest. The SDK exposes
-`NativeRuntimeVerificationPolicy::RequireChecksumAndSignature`, but that policy
-currently fails closed because signature verification keys and attestation
-format are not implemented yet.
-
-TODO: teach the CLI/SDK to discover the release manifest automatically for the
-running MeshLLM version. Until then, install/list available flows need an
-explicit `--manifest` or packaged `--bundle-dir`.
-
-## Current Boundaries
-
-- Native runtimes are release artifacts. Cargo does not implicitly build them
-  for consumers.
-- Runtime versioning is strict: `mesh_version` must match the running MeshLLM
-  version.
-- The crate preserves unknown flavors so new platform-specific flavor names can
-  be added without changing the manifest schema.
-- Dynamic loading is intentionally outside this crate; the shipped host runtime
-  consumes `load_plan()` and loads the declared libraries through `skippy-ffi`
-  when built with `dynamic-native-runtime`.
-- Generated runtime crates are not the supported distribution story for native
-  runtimes in this PR. The supported path is release artifacts plus
-  `native-runtimes.json`.

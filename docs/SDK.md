@@ -223,7 +223,7 @@ against the exact Skippy ABI version supported by the loader.
 Native runtime artifacts use this layout:
 
 ```text
-meshllm-native-runtime-<platform>-<flavor>/
+meshllm-native-runtime-<platform>-<backend-lane>/
   manifest.json
   README.md
   lib/
@@ -231,40 +231,46 @@ meshllm-native-runtime-<platform>-<flavor>/
     libggml*.{dylib|so|dll}
 ```
 
-The manifest records the MeshLLM version, target triple, runtime flavor,
-Skippy ABI metadata, load-order library paths, release URL, checksum, and
-optional signature metadata. SDK loaders prefer manifests for the running
-MeshLLM version and reject runtimes whose Skippy ABI version does not exactly
-match the loader.
+The manifest records the MeshLLM version, exact Skippy ABI, platform,
+structured backend requirements, load-order library paths, release URL,
+checksum, and optional signature metadata. Runtime compatibility is exact
+Skippy ABI plus platform/backend requirements; MeshLLM version remains part of
+cache layout and pruning.
 
 Baseline artifact names:
 
-| Artifact directory | Target | Flavor |
+| Artifact directory | Target | Backend lane |
 |---|---|---|
 | `meshllm-native-runtime-darwin-aarch64-metal` | `aarch64-apple-darwin` | Metal |
 | `meshllm-native-runtime-darwin-aarch64-cpu` | `aarch64-apple-darwin` | CPU |
 | `meshllm-native-runtime-linux-x86_64-cpu` | `x86_64-unknown-linux-gnu` | CPU |
-| `meshllm-native-runtime-linux-x86_64-cuda` | `x86_64-unknown-linux-gnu` | CUDA |
+| `meshllm-native-runtime-linux-x86_64-cuda12` | `x86_64-unknown-linux-gnu` | CUDA 12 |
+| `meshllm-native-runtime-linux-x86_64-cuda13` | `x86_64-unknown-linux-gnu` | CUDA 13 |
+| `meshllm-native-runtime-linux-x86_64-cuda13-sm120` | `x86_64-unknown-linux-gnu` | CUDA 13 Blackwell |
 | `meshllm-native-runtime-linux-x86_64-vulkan` | `x86_64-unknown-linux-gnu` | Vulkan |
 | `meshllm-native-runtime-linux-x86_64-rocm` | `x86_64-unknown-linux-gnu` | ROCm/HIP |
 | `meshllm-native-runtime-windows-x86_64-cpu` | `x86_64-pc-windows-msvc` | CPU |
-| `meshllm-native-runtime-windows-x86_64-cuda` | `x86_64-pc-windows-msvc` | CUDA |
+| `meshllm-native-runtime-windows-x86_64-cuda12` | `x86_64-pc-windows-msvc` | CUDA 12 |
+| `meshllm-native-runtime-windows-x86_64-cuda13` | `x86_64-pc-windows-msvc` | CUDA 13 |
 | `meshllm-native-runtime-windows-x86_64-vulkan` | `x86_64-pc-windows-msvc` | Vulkan |
 | `meshllm-native-runtime-windows-x86_64-rocm` | `x86_64-pc-windows-msvc` | ROCm/HIP |
 
-CUDA and ROCm artifacts may include hardware-specific flavor suffixes such as
-`cuda-sm80`, `cuda-blackwell`, or `rocm-gfx1100` when
-`LLAMA_STAGE_CUDA_ARCHITECTURES` or `LLAMA_STAGE_AMDGPU_TARGETS` is set.
+CUDA and ROCm compatibility is encoded as structured backend metadata, not as
+free-form flavor matching. CUDA runtimes declare a toolkit major and optional
+SM architectures; ROCm runtimes can declare GFX targets.
 
 Build and package one flavor:
 
 ```bash
 scripts/package-native-runtime.sh \
   --build \
-  --backend metal \
-  --target aarch64-apple-darwin \
+  --backend cuda \
+  --target x86_64-unknown-linux-gnu \
   --out dist/native-runtimes
 ```
+
+Set `MESH_LLM_CUDA_TOOLKIT_MAJOR=13` to emit a CUDA 13 lane. Use
+`--backend cuda-blackwell` for the CUDA 13 `sm120` lane.
 
 Verify produced artifacts:
 
@@ -282,6 +288,14 @@ Normal online install:
 
 ```bash
 mesh-llm runtime install
+```
+
+Explicit backend policy examples:
+
+```bash
+mesh-llm runtime install cuda12
+mesh-llm runtime install cuda13
+mesh-llm runtime install exact:meshllm-native-runtime-linux-x86_64-cuda13-sm120
 ```
 
 Offline or packaged install:
