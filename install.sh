@@ -642,11 +642,13 @@ install_recommended_native_runtime() {
     if [[ ! -x "$binary" ]]; then
         return 0
     fi
+    if ! "$binary" runtime install --help >/dev/null 2>&1; then
+        return 0
+    fi
     if ! manifest_url="$(release_url "native-runtimes.json")"; then
         return 0
     fi
-    if ! curl -fsSL "$manifest_url" -o "$manifest_path"; then
-        echo "Native runtime manifest was not available for this release; skipping runtime install."
+    if ! curl -fsSL "$manifest_url" -o "$manifest_path" 2>/dev/null; then
         return 0
     fi
 
