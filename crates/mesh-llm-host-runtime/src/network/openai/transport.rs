@@ -4184,8 +4184,17 @@ fn model_metadata_json(
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.quant.as_ref()) {
         metadata.insert("quant".to_string(), serde_json::json!(value));
     }
-    if let Some(value) = runtime_context_length_for_model(model_name, runtimes) {
-        metadata.insert("context_length".to_string(), serde_json::json!(value));
+    if let Some(contexts) = runtime_context_lengths_for_model(model_name, runtimes) {
+        metadata.insert(
+            "context_length".to_string(),
+            serde_json::json!(contexts.min),
+        );
+        if contexts.max != contexts.min {
+            metadata.insert(
+                "max_context_length".to_string(),
+                serde_json::json!(contexts.max),
+            );
+        }
     }
     if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.native_context_length) {
         metadata.insert(
@@ -4217,15 +4226,24 @@ fn model_metadata_json(
     (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
 }
 
-fn runtime_context_length_for_model(
+struct RuntimeContextLengths {
+    min: u32,
+    max: u32,
+}
+
+fn runtime_context_lengths_for_model(
     model_name: &str,
     runtimes: &[mesh::ModelRuntimeDescriptor],
-) -> Option<u32> {
-    runtimes
+) -> Option<RuntimeContextLengths> {
+    let mut lengths = runtimes
         .iter()
         .filter(|runtime| runtime.model_name == model_name)
-        .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length)
-        .max()
+        .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length);
+    let first = lengths.next()?;
+    let (min, max) = lengths.fold((first, first), |(min, max), value| {
+        (min.min(value), max.max(value))
+    });
+    Some(RuntimeContextLengths { min, max })
 }
 
 pub fn rewrite_public_model_alias(
@@ -5101,6 +5119,31 @@ mod tests {
         assert_eq!(metadata["kv_head_count"], 8);
         assert_eq!(metadata["expert_count"], 128);
         assert_eq!(metadata["active_expert_count"], 8);
+    }
+
+    #[test]
+    fn models_list_uses_route_safe_context_for_duplicate_runtimes() {
+        let models = vec!["Qwen3.5-9B-Q4_K_M".to_string()];
+        let runtimes = vec![
+            mesh::ModelRuntimeDescriptor {
+                model_name: models[0].clone(),
+                identity_hash: None,
+                context_length: Some(32_768),
+                ready: true,
+            },
+            mesh::ModelRuntimeDescriptor {
+                model_name: models[0].clone(),
+                identity_hash: None,
+                context_length: Some(131_072),
+                ready: true,
+            },
+        ];
+
+        let body = models_list_json(&models, &[], &runtimes);
+        let metadata = &body["data"][0]["metadata"];
+
+        assert_eq!(metadata["context_length"], 32_768);
+        assert_eq!(metadata["max_context_length"], 131_072);
     }
 
     #[test]
