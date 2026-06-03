@@ -1,5 +1,7 @@
-use super::installed::{append_installed_plugins, configured_external_plugin_spec};
-use super::{BLOBSTORE_PLUGIN_ID, PluginSummary};
+use super::installed::{
+    ConfiguredExternalPlugin, append_installed_plugins, configured_external_plugin_spec,
+};
+use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -11,11 +13,11 @@ pub use mesh_llm_config::{
     FlashAttentionType, GpuAssignment, GpuConfig, HardwareConfig, IntegerOrString,
     LocalServingNodeConfig, MeshConfig, MeshRequirementsConfig, ModelConfigDefaults,
     ModelConfigEditor, ModelConfigEntry, ModelDefaultsEditor, ModelFitConfig, ModelRuntimeKind,
-    MultimodalConfig, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry, PrefixCacheConfig,
-    ReasoningBudget, ReasoningEnabled, RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig,
-    SpeculativeConfig, StringOrStringList, TelemetryConfig, TelemetryMetricsConfig,
-    TensorSplitConfig, ThroughputConfig, config_path, config_to_toml, load_config,
-    parse_config_toml, validate_config,
+    MultimodalConfig, OwnerControlConfig, PluginConfigEditor, PluginConfigEntry,
+    PluginStartupConfig, PrefixCacheConfig, ReasoningBudget, ReasoningEnabled,
+    RequestDefaultsConfig, ReservedObjectConfig, SkippyConfig, SpeculativeConfig,
+    StringOrStringList, TelemetryConfig, TelemetryMetricsConfig, TensorSplitConfig,
+    ThroughputConfig, config_path, config_to_toml, load_config, parse_config_toml, validate_config,
 };
 use mesh_llm_plugin::MeshVisibility;
 use std::collections::BTreeMap;
@@ -206,6 +208,7 @@ pub struct ExternalPluginSpec {
     pub url: Option<String>,
     /// Extra environment passed only to the plugin process.
     pub env: BTreeMap<String, String>,
+    pub startup: PluginStartupOptions,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -224,7 +227,11 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         }
         let enabled = entry.enabled.unwrap_or(true);
         if entry.name == BLOBSTORE_PLUGIN_ID {
-            if entry.command.is_some() || !entry.args.is_empty() || entry.url.is_some() {
+            if entry.command.is_some()
+                || !entry.args.is_empty()
+                || entry.url.is_some()
+                || !entry.startup.is_default()
+            {
                 bail!(
                     "Plugin '{}' is served by mesh-llm itself; only `enabled` may be set",
                     BLOBSTORE_PLUGIN_ID
@@ -236,7 +243,10 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         if !enabled {
             continue;
         }
-        externals.push(configured_external_plugin_spec(entry)?);
+        match configured_external_plugin_spec(entry)? {
+            ConfiguredExternalPlugin::Active(spec) => externals.push(spec),
+            ConfiguredExternalPlugin::Inactive(summary) => inactive.push(summary),
+        }
     }
 
     append_installed_plugins(&mut externals, &mut inactive, &mut names);
@@ -267,6 +277,7 @@ pub fn blobstore_plugin_spec() -> Result<ExternalPluginSpec> {
         ],
         url: None,
         env: BTreeMap::new(),
+        startup: PluginStartupOptions::default(),
     })
 }
 

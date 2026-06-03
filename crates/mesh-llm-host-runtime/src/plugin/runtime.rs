@@ -3,8 +3,8 @@ use super::plugin_manifest_overview;
 use super::support::{plugin_error, serialize_params, summarize_capabilities};
 use super::transport::{LocalListener, LocalStream, bind_local_listener, connection_loop};
 use super::{
-    CONNECT_TIMEOUT_SECS, PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary,
-    REQUEST_TIMEOUT_SECS, ToolCallResult, ToolSummary, proto,
+    PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, REQUEST_TIMEOUT_SECS,
+    ToolCallResult, ToolSummary, proto,
 };
 use crate::runtime_data::RuntimeDataProducer;
 use anyhow::{Context, Result, bail};
@@ -67,6 +67,7 @@ impl ExternalPlugin {
                 args: spec.args.clone(),
                 tools: Vec::new(),
                 manifest: None,
+                startup: Some(spec.startup.summary()),
                 error: None,
             })),
             server_info: Arc::new(Mutex::new(None)),
@@ -79,6 +80,10 @@ impl ExternalPlugin {
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
         };
+        if spec.startup.lazy_start {
+            plugin.mark_deferred().await;
+            return Ok(plugin);
+        }
         if let Err(err) = plugin.ensure_running().await {
             if plugin.is_disabled().await {
                 return Ok(plugin);
@@ -115,6 +120,17 @@ impl ExternalPlugin {
             summary.status = "starting".into();
             summary.pid = None;
             summary.error = None;
+        }
+        self.publish_summary().await;
+    }
+
+    async fn mark_deferred(&self) {
+        {
+            let mut summary = self.summary.lock().await;
+            summary.status = "deferred".into();
+            summary.pid = None;
+            summary.error =
+                Some("lazy start enabled; plugin will start on first direct use".to_string());
         }
         self.publish_summary().await;
     }
@@ -161,12 +177,9 @@ impl ExternalPlugin {
     }
 
     async fn await_plugin_connection(&self, listener: LocalListener) -> Result<LocalStream> {
-        tokio::time::timeout(
-            std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            listener.accept(),
-        )
-        .await
-        .with_context(|| format!("Timed out waiting for plugin '{}'", self.spec.name))?
+        tokio::time::timeout(self.spec.startup.connect_timeout(), listener.accept())
+            .await
+            .with_context(|| format!("Timed out waiting for plugin '{}'", self.spec.name))?
     }
 
     async fn install_runtime(
@@ -218,7 +231,7 @@ impl ExternalPlugin {
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                 }),
-                Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
+                Some(self.spec.startup.init_timeout()),
             )
             .await?;
         self.parse_initialize_response(generation, response).await
@@ -299,6 +312,9 @@ impl ExternalPlugin {
 
     pub(crate) async fn supervise(&self) -> Result<()> {
         if self.is_disabled().await {
+            return Ok(());
+        }
+        if self.is_deferred().await {
             return Ok(());
         }
         if self.is_stopping().await {
@@ -412,6 +428,10 @@ impl ExternalPlugin {
     pub(crate) async fn manifest(&self) -> Result<Option<proto::PluginManifest>> {
         self.ensure_running().await?;
         Ok(self.manifest.lock().await.clone())
+    }
+
+    pub(crate) async fn manifest_snapshot(&self) -> Option<proto::PluginManifest> {
+        self.manifest.lock().await.clone()
     }
 
     pub(crate) async fn open_stream(
@@ -775,6 +795,13 @@ impl ExternalPlugin {
 
     async fn is_disabled(&self) -> bool {
         self.disabled_reason().await.is_some()
+    }
+
+    async fn is_deferred(&self) -> bool {
+        if !self.spec.startup.lazy_start || self.runtime.lock().await.is_some() {
+            return false;
+        }
+        self.summary.lock().await.status == "deferred"
     }
 
     async fn is_stopping(&self) -> bool {

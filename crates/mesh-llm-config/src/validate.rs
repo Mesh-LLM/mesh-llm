@@ -1,4 +1,5 @@
 use crate::model::{merge_hardware, merge_model_fit, merge_multimodal, merge_throughput};
+use crate::plugin_validation::validate_plugin_entries;
 use crate::*;
 use anyhow::{Result, bail};
 use semver::{BuildMetadata, Version};
@@ -30,6 +31,7 @@ pub fn validate_config(config: &MeshConfig) -> Result<()> {
     }
     validate_mesh_requirements_config(&config.mesh_requirements)?;
     validate_telemetry_config(&config.telemetry)?;
+    validate_plugin_entries(&config.plugins)?;
     let defaults_hardware = config
         .defaults
         .as_ref()

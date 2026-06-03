@@ -35,7 +35,17 @@ mesh-llm plugins install metrics
 ```toml
 [[plugin]]
 name = "metrics"
+
+[plugin.startup]
+connect_timeout_secs = 75
+init_timeout_secs = 90
+optional = true
+lazy_start = true
 ```
+
+The startup block is optional. It is useful on slow legacy machines where the
+plugin process may take longer than the default startup budget, or where metrics
+should be advertised only after the plugin is actually used.
 
 Endpoint precedence is:
 

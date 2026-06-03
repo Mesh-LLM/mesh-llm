@@ -260,8 +260,8 @@ mesh-join join="" port="9337" gguf=model split="":
     fi
     exec {{ mesh_bin }} $ARGS
 
-# Create a portable tarball with all binaries for deployment to another machine
-bundle output="/tmp/mesh-bundle.tar.gz":
+# Create a portable tarball with all binaries for deployment to another machine.
+bundle output="/tmp/mesh-llm-bundle.tar.gz":
     #!/usr/bin/env bash
     set -euo pipefail
     DIR=$(mktemp -d)

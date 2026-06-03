@@ -2630,6 +2630,15 @@ impl StageTopologyState {
         self.record_topology(topology);
     }
 
+    fn withdraw_topology(&mut self, topology_id: &str, run_id: &str) -> bool {
+        let topology_key = stage_topology_key(topology_id, run_id);
+        let removed_topology = self.topologies.remove(&topology_key).is_some();
+        let old_status_count = self.statuses.len();
+        self.statuses
+            .retain(|_, status| status.topology_id != topology_id || status.run_id != run_id);
+        removed_topology || self.statuses.len() != old_status_count
+    }
+
     fn visible_topologies(&self) -> Vec<StageTopologyInstance> {
         self.topologies
             .values()
@@ -2683,6 +2692,17 @@ impl StageTopologyState {
             ),
             runtime_status,
         );
+    }
+
+    fn record_status_refresh_failure(&mut self, status: &StageRuntimeStatus, error: String) {
+        self.record_status(stage_runtime_status_from_snapshot(
+            status.node_id,
+            stage_snapshot_from_runtime_status(
+                status,
+                crate::inference::skippy::StageRuntimeState::Failed,
+                Some(error),
+            ),
+        ));
     }
 
     fn active_statuses(&self) -> Vec<StageRuntimeStatus> {
@@ -3105,6 +3125,13 @@ impl Node {
             .activate_topology(topology);
     }
 
+    pub async fn withdraw_stage_topology(&self, topology_id: &str, run_id: &str) -> bool {
+        self.stage_topologies
+            .lock()
+            .await
+            .withdraw_topology(topology_id, run_id)
+    }
+
     pub async fn stage_topologies(&self) -> Vec<StageTopologyInstance> {
         self.stage_topologies.lock().await.visible_topologies()
     }
@@ -3143,15 +3170,13 @@ impl Node {
             match tokio::time::timeout(timeout, refresh).await {
                 Ok(Ok(crate::inference::skippy::StageControlResponse::Status(statuses))) => {
                     if statuses.is_empty() {
-                        self.record_stage_status(
-                            Some(peer_id),
-                            stage_snapshot_from_runtime_status(
+                        self.stage_topologies
+                            .lock()
+                            .await
+                            .record_status_refresh_failure(
                                 &status,
-                                crate::inference::skippy::StageRuntimeState::Failed,
-                                Some("stage status missing from runtime".to_string()),
-                            ),
-                        )
-                        .await;
+                                "stage status missing from runtime".to_string(),
+                            );
                     } else {
                         for status in statuses {
                             self.record_stage_status(Some(peer_id), status).await;
@@ -3163,23 +3188,25 @@ impl Node {
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(error)) => {
-                    self.record_stage_status(
-                        Some(peer_id),
-                        stage_snapshot_from_runtime_status(
-                            &status,
-                            crate::inference::skippy::StageRuntimeState::Failed,
-                            Some(error.to_string()),
-                        ),
-                    )
-                    .await;
+                    self.stage_topologies
+                        .lock()
+                        .await
+                        .record_status_refresh_failure(&status, error.to_string());
                 }
                 Err(_) => {
+                    self.stage_topologies
+                        .lock()
+                        .await
+                        .record_status_refresh_failure(
+                            &status,
+                            "stage status refresh timed out".to_string(),
+                        );
                     tracing::debug!(
                         topology_id = %status.topology_id,
                         run_id = %status.run_id,
                         stage_id = %status.stage_id,
                         peer = %peer_id.fmt_short(),
-                        "stage status refresh timed out; preserving last known status"
+                        "stage status refresh timed out; marking stage failed"
                     );
                 }
             }
@@ -8737,6 +8764,17 @@ impl Node {
         // (high RTT) because direct holepunch hasn't completed yet. After a few
         // seconds the direct path is usually ready, so re-check path info to get
         // the real RTT and potentially trigger a re-election for split mode.
+        self.schedule_selected_path_recheck(peer_id);
+        Ok(())
+    }
+
+    /// Spawn a delayed task that re-reads the currently-selected QUIC path for
+    /// `peer_id` after the relay→direct transition typically completes, and
+    /// updates the tracked selected-path/RTT observation. The first gossip
+    /// round-trip often runs over the relay (inflated RTT) before holepunch
+    /// finishes; this refresh records the real direct RTT and can trigger a
+    /// re-election for split mode.
+    pub(super) fn schedule_selected_path_recheck(&self, peer_id: EndpointId) {
         let node_for_recheck = self.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -8747,40 +8785,41 @@ impl Node {
                 .connections
                 .get(&peer_id)
                 .cloned();
-            if let Some(conn) = conn {
-                let path_list = conn.paths();
-                for path_info in &path_list {
-                    if path_info.is_selected() {
-                        let rtt_ms = path_info.rtt().as_millis() as u32;
-                        let rtt_ms = (rtt_ms != 0).then_some(rtt_ms);
-                        let path_type = if path_info.is_ip() { "direct" } else { "relay" };
-                        if let Some(rtt_ms) = rtt_ms {
-                            emit_mesh_info(format!(
-                                "📡 Peer {} RTT recheck: {}ms ({})",
-                                peer_id.fmt_short(),
-                                rtt_ms,
-                                path_type
-                            ));
-                        }
-                        node_for_recheck
-                            .update_peer_selected_path(
-                                peer_id,
-                                SelectedPathObservation {
-                                    path_type,
-                                    rtt_ms,
-                                    observed_direct_remote_addr: match path_info.remote_addr() {
-                                        TransportAddr::Ip(addr) => Some(*addr),
-                                        _ => None,
-                                    },
-                                },
-                            )
-                            .await;
-                        break;
-                    }
+            let Some(conn) = conn else {
+                return;
+            };
+            let path_list = conn.paths();
+            for path_info in &path_list {
+                if !path_info.is_selected() {
+                    continue;
                 }
+                let rtt_ms = path_info.rtt().as_millis() as u32;
+                let rtt_ms = (rtt_ms != 0).then_some(rtt_ms);
+                let path_type = if path_info.is_ip() { "direct" } else { "relay" };
+                if let Some(rtt_ms) = rtt_ms {
+                    emit_mesh_info(format!(
+                        "📡 Peer {} RTT recheck: {}ms ({})",
+                        peer_id.fmt_short(),
+                        rtt_ms,
+                        path_type
+                    ));
+                }
+                node_for_recheck
+                    .update_peer_selected_path(
+                        peer_id,
+                        SelectedPathObservation {
+                            path_type,
+                            rtt_ms,
+                            observed_direct_remote_addr: match path_info.remote_addr() {
+                                TransportAddr::Ip(addr) => Some(*addr),
+                                _ => None,
+                            },
+                        },
+                    )
+                    .await;
+                break;
             }
         });
-        Ok(())
     }
 
     async fn handle_tunnel_map_stream(

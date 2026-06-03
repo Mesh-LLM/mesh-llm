@@ -35,6 +35,10 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                     discover::handle(stream, state).await?;
                     Ok(true)
                 }
+                ("POST", p) if p == crate::network::discovery::LAN_DETAILS_PATH => {
+                    discover::handle_lan_details(stream, state, body).await?;
+                    Ok(true)
+                }
                 ("GET", "/api/diagnostics/split-readiness") => {
                     diagnostics::handle(stream, state, path).await?;
                     Ok(true)

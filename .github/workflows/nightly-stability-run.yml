@@ -29,7 +29,7 @@ on:
         type: string
       runs_on:
         required: false
-        default: '"self-hosted"'
+        default: '"ubuntu-24.04"'
         type: string
       output_dir:
         required: false

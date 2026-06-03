@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   docker-client:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - name: Setup Blacksmith Builder

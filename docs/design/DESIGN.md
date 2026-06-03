@@ -261,7 +261,8 @@ and the embedded web dashboard.
 | `/api/model-interests/{model_ref}` | DELETE | Clear local explicit interest for one canonical model ref |
 | `/api/model-targets` | GET | Ranked model targets from explicit interest, active demand, and serving visibility |
 | `/api/events` | GET | SSE stream of status updates (2s interval + on change) |
-| `/api/discover` | GET | Browse Nostr-published meshes |
+| `/api/discover` | GET | Browse Nostr-published meshes, or LAN mDNS advertisements when `--mesh-discovery-mode mdns` is active |
+| `/api/discovery/lan-details` | POST | Return local LAN discovery detail after invite-token proof; advertised only when the management API is LAN-reachable, and the raw token is never returned |
 | `/api/chat` | POST | Proxy to inference API (`/v1/chat/completions`) |
 | `/` | GET | Embedded web dashboard |
 
@@ -410,6 +411,14 @@ By default, nodes broadcast their GPU name, hostname, VRAM capacity, and reserve
 ```
 
 For ROCm and Intel hosts, `reserved_bytes` is omitted because their standard CLI telemetry exposes live used-memory counters rather than a true reserved/system-memory value.
+
+Routing health in `/api/status.routing_affinity.target_reputation` is local to
+the process that served the management API. It records behavioral routing
+signals such as penalized targets and routes reordered away from penalized
+targets. This is a local availability/reliability aid only: it is not gossiped,
+not a cross-mesh trust score, and not a replacement for owner attestation or
+model-output verification. The operator-facing behavior is specified in
+[Local Node Reputation](../NODE_REP.md).
 
 `peers[]` entries (only when peer has not passed `--no-enumerate-host`):
 ```json

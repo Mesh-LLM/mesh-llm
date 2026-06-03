@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   reset:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Require explicit confirmation
         env:

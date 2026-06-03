@@ -418,6 +418,8 @@ pub(crate) struct PeerPayload {
     pub(crate) serving_models: Vec<String>,
     pub(crate) hosted_models: Vec<String>,
     pub(crate) hosted_models_known: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) advertised_model_throughput: Vec<metrics::ModelThroughputHint>,
     pub(crate) version: Option<String>,
     pub(crate) rtt_ms: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -987,6 +989,7 @@ mod tests {
             serving_models: vec![],
             hosted_models: vec![],
             hosted_models_known: false,
+            advertised_model_throughput: vec![],
             version: Some("0.56.0".to_string()),
             rtt_ms: None,
             latency_ms: None,
@@ -1001,6 +1004,7 @@ mod tests {
 
         let json = serde_json::to_string(&peer).expect("serialization failed");
         assert!(json.contains("\"version\":\"0.56.0\""));
+        assert!(!json.contains("advertised_model_throughput"));
     }
 
     #[test]
@@ -1018,6 +1022,7 @@ mod tests {
             serving_models: vec![],
             hosted_models: vec![],
             hosted_models_known: false,
+            advertised_model_throughput: vec![],
             version: None,
             rtt_ms: None,
             latency_ms: None,
@@ -1304,6 +1309,7 @@ mod tests {
             serving_models: vec!["Qwen".to_string()],
             hosted_models: vec!["Qwen".to_string()],
             hosted_models_known: true,
+            advertised_model_throughput: vec![],
             version: Some("0.60.2".to_string()),
             rtt_ms: Some(12),
             latency_ms: None,

@@ -27,10 +27,9 @@ The release bundle is now a single `mesh-llm` runtime binary. External
 just bundle
 ```
 
-This creates `/tmp/mesh-bundle.tar.gz` containing the packaged `mesh-llm`
-executable. That packaged binary is the release-attestation source of truth.
-Local and dev builds from `just build` stay unstamped by default, so `missing`
-is expected there.
+This creates `/tmp/mesh-llm-bundle.tar.gz` containing the packaged `mesh-llm`
+executable for local deployment. Platform release archives are named by target,
+such as `mesh-llm-aarch64-apple-darwin.tar.gz`.
 
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
@@ -89,7 +88,7 @@ On native Windows, `just check-release` still runs the Rust/docs/workflow invari
 
 ```bash
 mkdir /tmp/test-bundle
-tar xzf /tmp/mesh-bundle.tar.gz -C /tmp/test-bundle --strip-components=1
+tar xzf /tmp/mesh-llm-bundle.tar.gz -C /tmp/test-bundle --strip-components=1
 /tmp/test-bundle/mesh-llm --model Qwen2.5-3B
 rm -rf /tmp/test-bundle
 ```

@@ -327,7 +327,6 @@ resolve_release_target() {
     effective_flavor="$(effective_release_flavor)"
     BIN_EXT=""
     ARCHIVE_EXT="tar.gz"
-    LEGACY_ASSET=""
 
     case "$support" in
         recognized-unsupported)
@@ -341,7 +340,6 @@ resolve_release_target() {
     case "$normalized" in
         macos/aarch64)
             TARGET_TRIPLE="aarch64-apple-darwin"
-            LEGACY_ASSET="mesh-bundle.tar.gz"
             ;;
         linux/x86_64)
             TARGET_TRIPLE="x86_64-unknown-linux-gnu"
@@ -485,9 +483,8 @@ main() {
     bundle_dir="$_STAGING_DIR/mesh-bundle"
     mkdir -p "$bundle_dir"
 
-bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
+    bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
     cp "$RELEASE_BIN_DIR/mesh-llm${BIN_EXT}" "$bundle_binary"
-
 
     if [[ "$os_name" == "Darwin" && -f "$bundle_binary" ]]; then
         install_name_tool -add_rpath @executable_path/ "$bundle_binary" 2>/dev/null || true
@@ -497,10 +494,6 @@ bundle_binary="$bundle_dir/$(bundle_bin_name mesh-llm)"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
-
-    if [[ -n "$LEGACY_ASSET" ]]; then
-        cp "$output_dir/$STABLE_ASSET" "$output_dir/$LEGACY_ASSET"
-    fi
 
     echo "Created release archives:"
     find "$output_dir" -maxdepth 1 -type f -print | sort
