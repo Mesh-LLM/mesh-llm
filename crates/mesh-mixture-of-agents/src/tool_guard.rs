@@ -7,36 +7,51 @@
 //! get emitted as a `tool_call` to the client.
 
 use crate::normalize::{OutputKind, WorkerOutput};
+use mesh_llm_guardrails::sanitize_tool_arguments_for_tool;
+use serde_json::Value;
 
-/// Demote a `ToolProposal` whose `tool_name` is not in `allowed_tools`
-/// to `Uncertainty`. This guards downstream arbitration from worker
-/// hallucinations like proposing `execute_typescript` when only `shell`
-/// is declared.
+/// Enforce the caller's declared tool contract before arbitration.
 ///
-/// If `allowed_tools` is empty (no tools were declared on the request
-/// body) we leave the proposal as-is — the arbiter will route to the
-/// reducer which has the same call-site policy.
-pub(crate) fn enforce_allowed_tools(
+/// Unknown tool names are demoted to `Uncertainty`, and known tool calls have
+/// their arguments normalized against the declared JSON schema. If cleanup
+/// removes a required argument, the proposal is demoted rather than emitted as
+/// a broken OpenAI `tool_call`.
+pub(crate) fn enforce_tool_call_contract(
     output: &mut WorkerOutput,
     allowed_tools: &[String],
+    tools: Option<&Value>,
     model: &str,
 ) {
-    if allowed_tools.is_empty() {
-        return;
-    }
     if output.kind != OutputKind::ToolProposal {
         return;
     }
     let Some(ref name) = output.tool_name else {
         return;
     };
-    if allowed_tools.iter().any(|t| t == name) {
+
+    if !allowed_tools.is_empty() && !allowed_tools.iter().any(|t| t == name) {
+        tracing::warn!(
+            "moa: worker {model} proposed unknown tool {name:?}, demoting to uncertainty \
+             (allowed: {allowed_tools:?})"
+        );
+        demote_tool_proposal(output);
         return;
     }
-    tracing::warn!(
-        "moa: worker {model} proposed unknown tool {name:?}, demoting to uncertainty \
-         (allowed: {allowed_tools:?})"
-    );
+
+    let args = output.tool_arguments.clone().unwrap_or(Value::Null);
+    match sanitize_tool_arguments_for_tool(name, &args, tools) {
+        Ok(cleaned) => output.tool_arguments = Some(cleaned),
+        Err(err) => {
+            tracing::warn!(
+                "moa: worker {model} proposed invalid arguments for tool {name:?}: {err}; \
+                 demoting to uncertainty"
+            );
+            demote_tool_proposal(output);
+        }
+    }
+}
+
+fn demote_tool_proposal(output: &mut WorkerOutput) {
     output.kind = OutputKind::Uncertainty;
     output.tool_name = None;
     output.tool_arguments = None;
@@ -49,7 +64,7 @@ pub(crate) fn enforce_allowed_tools(
 mod tests {
     use super::*;
     use crate::worker::WorkerRole;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn proposal(tool: &str) -> WorkerOutput {
         WorkerOutput {
@@ -64,10 +79,27 @@ mod tests {
         }
     }
 
+    fn tools() -> Value {
+        json!([{
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        }])
+    }
+
     #[test]
     fn allowed_tool_passes_through() {
         let mut out = proposal("read_file");
-        enforce_allowed_tools(&mut out, &["read_file".into()], "alpha");
+        enforce_tool_call_contract(&mut out, &["read_file".into()], Some(&tools()), "alpha");
         assert_eq!(out.kind, OutputKind::ToolProposal);
         assert_eq!(out.tool_name.as_deref(), Some("read_file"));
         assert!(out.tool_arguments.is_some());
@@ -77,7 +109,7 @@ mod tests {
     #[test]
     fn unknown_tool_is_demoted() {
         let mut out = proposal("execute_typescript");
-        enforce_allowed_tools(&mut out, &["shell".into()], "alpha");
+        enforce_tool_call_contract(&mut out, &["shell".into()], None, "alpha");
         assert_eq!(out.kind, OutputKind::Uncertainty);
         assert!(out.tool_name.is_none());
         assert!(out.tool_arguments.is_none());
@@ -92,9 +124,33 @@ mod tests {
         // No tools declared on the request — don't second-guess the worker
         // here; the reducer applies the same policy downstream.
         let mut out = proposal("anything");
-        enforce_allowed_tools(&mut out, &[], "alpha");
+        enforce_tool_call_contract(&mut out, &[], None, "alpha");
         assert_eq!(out.kind, OutputKind::ToolProposal);
         assert_eq!(out.tool_name.as_deref(), Some("anything"));
+    }
+
+    #[test]
+    fn invalid_schema_arguments_are_demoted() {
+        let mut out = proposal("read_file");
+        out.tool_arguments = Some(json!({"path": 42, "ignored": true}));
+
+        enforce_tool_call_contract(&mut out, &["read_file".into()], Some(&tools()), "alpha");
+
+        assert_eq!(out.kind, OutputKind::Uncertainty);
+        assert!(out.tool_name.is_none());
+        assert!(out.tool_arguments.is_none());
+        assert_eq!(out.confidence, 0.0);
+    }
+
+    #[test]
+    fn extra_schema_arguments_are_stripped() {
+        let mut out = proposal("read_file");
+        out.tool_arguments = Some(json!({"path": "README.md", "ignored": true}));
+
+        enforce_tool_call_contract(&mut out, &["read_file".into()], Some(&tools()), "alpha");
+
+        assert_eq!(out.kind, OutputKind::ToolProposal);
+        assert_eq!(out.tool_arguments, Some(json!({"path": "README.md"})));
     }
 
     #[test]
@@ -109,7 +165,7 @@ mod tests {
             role: WorkerRole::Fast,
             elapsed_ms: 0,
         };
-        enforce_allowed_tools(&mut out, &["read_file".into()], "beta");
+        enforce_tool_call_contract(&mut out, &["read_file".into()], None, "beta");
         assert_eq!(out.kind, OutputKind::Answer);
         assert!((out.confidence - 0.7).abs() < f32::EPSILON);
     }

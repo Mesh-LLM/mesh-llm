@@ -9,10 +9,11 @@
 
 use std::time::{Duration, Instant};
 
-use crate::enforce_allowed_tools;
+use crate::enforce_tool_call_contract;
 use crate::worker::WorkerRole;
 use crate::{WorkerSummary, arbiter, normalize};
 use normalize::WorkerOutput;
+use serde_json::Value;
 
 /// Min confidence for the time-based grace path; matches the consensus rule.
 const GRACE_MIN_CONFIDENCE: f32 = 0.5;
@@ -39,6 +40,7 @@ pub(crate) async fn gather_workers_incremental(
     dispatched: &[DispatchedWorker],
     has_tools: bool,
     allowed_tools: &[String],
+    tools: Option<&Value>,
     first_answer_grace: Duration,
     grace_mode: GraceMode,
 ) -> (
@@ -113,7 +115,7 @@ pub(crate) async fn gather_workers_incremental(
                 total_finished += 1;
                 let mut normalized =
                     normalize::normalize_worker_output(&text, &model, role, elapsed);
-                enforce_allowed_tools(&mut normalized, allowed_tools, &model);
+                enforce_tool_call_contract(&mut normalized, allowed_tools, tools, &model);
                 tracing::info!(
                     "moa: worker {} ({}) → {:?} conf={:.2} ({}ms, {} chars)",
                     model,
@@ -367,6 +369,7 @@ mod tests {
             &dispatched,
             false, // has_tools
             &[],
+            None,
             Duration::from_millis(50),
             GraceMode::Answer,
         )
@@ -419,6 +422,7 @@ mod tests {
             &dispatched,
             true, // has_tools
             &[],
+            None,
             Duration::from_millis(50),
             GraceMode::Answer,
         )
@@ -466,6 +470,7 @@ mod tests {
             &dispatched,
             true,
             &[],
+            None,
             Duration::from_millis(50),
             GraceMode::Disabled,
         )
@@ -505,6 +510,7 @@ mod tests {
             &dispatched,
             true,
             &["read".to_string()],
+            None,
             Duration::from_millis(50),
             GraceMode::Tool,
         )
@@ -559,6 +565,7 @@ mod tests {
             &dispatched,
             false, // has_tools
             &[],
+            None,
             Duration::ZERO,
             GraceMode::Answer,
         )
@@ -606,6 +613,7 @@ mod tests {
             &dispatched,
             false,
             &[],
+            None,
             Duration::from_millis(50),
             GraceMode::Answer,
         )
@@ -658,6 +666,7 @@ mod tests {
             &dispatched,
             false,
             &[],
+            None,
             Duration::from_millis(50),
             GraceMode::Answer,
         )
@@ -718,6 +727,7 @@ mod tests {
             &dispatched,
             false,
             &[],
+            None,
             Duration::from_millis(100),
             GraceMode::Answer,
         )

@@ -55,7 +55,7 @@ use reducer::{hedged_reducer_call, reducer_candidates};
 use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
-use tool_guard::enforce_allowed_tools;
+use tool_guard::enforce_tool_call_contract;
 use worker::WorkerRole;
 pub use worker::{strip_thinking, truncate_chars};
 
@@ -266,6 +266,7 @@ async fn handle_query(
         &dispatched,
         query_uses_tools,
         allowed_tools,
+        session.tools(),
         config.first_answer_grace,
         grace_mode,
     )
@@ -382,11 +383,53 @@ fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> 
         }
     }
 
+    for tool in recent_tool_chain_names(session) {
+        if available.iter().any(|available| available == &tool) && !selected.contains(&tool) {
+            selected.push(tool);
+        }
+    }
+
     if selected.is_empty() && available.len() == 1 {
         available
     } else {
         selected
     }
+}
+
+fn recent_tool_chain_names(session: &Session) -> Vec<String> {
+    let all = session.all_messages();
+    let Some(latest_tool_idx) = all.iter().rposition(|msg| message_role(msg) == "tool") else {
+        return Vec::new();
+    };
+    let start_idx = all[..=latest_tool_idx]
+        .iter()
+        .rposition(|msg| message_role(msg) == "user")
+        .unwrap_or(0);
+
+    let mut names = Vec::new();
+    for msg in &all[start_idx..=latest_tool_idx] {
+        let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) else {
+            continue;
+        };
+        for tool_call in tool_calls {
+            let Some(name) = tool_call
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+
+    names
+}
+
+fn message_role(msg: &Value) -> &str {
+    msg.get("role").and_then(Value::as_str).unwrap_or("")
 }
 
 fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
@@ -464,7 +507,7 @@ async fn handle_tool_result(
         }) => {
             let mut reduced =
                 normalize::normalize_worker_output(&text, &winner, WorkerRole::Reducer, 0);
-            enforce_allowed_tools(&mut reduced, allowed_tools, &winner);
+            enforce_tool_call_contract(&mut reduced, allowed_tools, session.tools(), &winner);
             (spawned, Some((winner, reduced)))
         }
         Err(reducer::HedgedReducerErr {
@@ -582,7 +625,12 @@ async fn resolve_decision(
                 }) => {
                     let mut reduced =
                         normalize::normalize_worker_output(&text, &winner, WorkerRole::Reducer, 0);
-                    enforce_allowed_tools(&mut reduced, allowed_tools, &winner);
+                    enforce_tool_call_contract(
+                        &mut reduced,
+                        allowed_tools,
+                        session.tools(),
+                        &winner,
+                    );
                     (spawned, Some(reduced))
                 }
                 Err(reducer::HedgedReducerErr {
@@ -990,6 +1038,40 @@ mod response_builder_tests {
         assert_eq!(
             selected_tool_names_for_turn(&session, &[]),
             vec!["read".to_string()]
+        );
+    }
+
+    #[test]
+    fn tool_result_turn_keeps_active_tool_selected() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "check local auth"}),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_exec",
+                        "type": "function",
+                        "function": {"name": "exec", "arguments": "{\"command\":\"echo ok\"}"}
+                    }]
+                }),
+                serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": "call_exec",
+                    "content": "logged in"
+                }),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["exec".to_string()]
         );
     }
 
