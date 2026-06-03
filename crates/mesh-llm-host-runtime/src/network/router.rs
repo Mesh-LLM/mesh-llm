@@ -505,6 +505,7 @@ pub struct RoutingCandidate<'a> {
 impl<'a> RoutingCandidate<'a> {
     /// Build a candidate without any throughput hint. Useful for
     /// pre-startup paths or test fixtures.
+    #[cfg(test)]
     pub fn unscored(name: &'a str, caps: crate::models::ModelCapabilities) -> Self {
         Self {
             name,

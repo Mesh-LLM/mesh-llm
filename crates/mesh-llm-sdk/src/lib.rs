@@ -1,14 +1,15 @@
+#![forbid(unsafe_code)]
+
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
-#[cfg(any(feature = "client", feature = "serve"))]
 use std::time::Duration;
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 use anyhow::Result;
 
-/// Smallest mesh protocol generation that makes an originator emit signed bootstrap tokens.
-pub const SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION: u32 = 1;
+#[cfg(feature = "client")]
+pub use mesh_llm_api_client::*;
 
 #[cfg(feature = "console")]
 pub mod console {
@@ -17,9 +18,34 @@ pub mod console {
     };
 }
 
-#[cfg(feature = "native-runtime")]
+#[cfg(feature = "node")]
+pub mod node {
+    pub use mesh_llm_api_server::*;
+}
+
+#[cfg(feature = "serving")]
+pub mod embedded_node;
+
+#[cfg(feature = "serving")]
+pub use embedded_node::{MeshNode, MeshNodeBuilder, MeshNodeStatus, OpenAiClient};
+
+#[cfg(feature = "serving")]
+pub mod embedded_runtime {
+    pub use mesh_llm_embedded_runtime::{
+        EmbeddedChatMessage, EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode,
+        EmbeddedMeshHttpConfig, EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig,
+        EmbeddedMeshNodeBuilder, EmbeddedMeshNodeConfig, EmbeddedMeshNodeHandle,
+        EmbeddedMeshNodeMode, EmbeddedMeshNodeStatus, EmbeddedMeshRequirementsConfig,
+        EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig, EmbeddedServeConfig,
+        EmbeddedServeHandle, EmbeddedServeMode, EmbeddedServeStatus, EmbeddedServingController,
+        EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION, start_embedded_node,
+        start_embedded_serve,
+    };
+}
+
+#[cfg(feature = "serving")]
 pub mod native_runtime {
-    pub use mesh_llm_host_runtime::sdk::native_runtime::*;
+    pub use mesh_llm_runtime_install::*;
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -144,7 +170,7 @@ pub struct ServingConfig {
     pub max_vram_gb: Option<f64>,
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 macro_rules! impl_common_builder_methods {
     () => {
         pub fn api_port(mut self, port: u16) -> Self {
@@ -328,11 +354,11 @@ macro_rules! impl_common_builder_methods {
                         .admission
                         .mesh_requirements
                         .min_protocol_version
-                        .unwrap_or(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
-                        .max(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION),
+                        .unwrap_or(crate::embedded_runtime::SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+                        .max(crate::embedded_runtime::SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION),
                 );
             } else if self.config.admission.mesh_requirements.min_protocol_version
-                == Some(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+                == Some(crate::embedded_runtime::SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
             {
                 self.config.admission.mesh_requirements.min_protocol_version = None;
             }
@@ -393,12 +419,12 @@ macro_rules! impl_common_builder_methods {
     };
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 pub struct EmbeddedNodeHandle {
-    inner: mesh_llm_host_runtime::sdk::EmbeddedMeshNodeHandle,
+    inner: mesh_llm_embedded_runtime::EmbeddedMeshNodeHandle,
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 impl EmbeddedNodeHandle {
     pub fn api_base_url(&self) -> &str {
         self.inner.api_base_url()
@@ -425,7 +451,7 @@ impl EmbeddedNodeHandle {
     }
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 #[derive(Clone, Debug)]
 pub struct EmbeddedNodeStatus {
     pub api_base_url: String,
@@ -434,9 +460,9 @@ pub struct EmbeddedNodeStatus {
     pub payload: serde_json::Value,
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
-impl From<mesh_llm_host_runtime::sdk::EmbeddedMeshNodeStatus> for EmbeddedNodeStatus {
-    fn from(status: mesh_llm_host_runtime::sdk::EmbeddedMeshNodeStatus) -> Self {
+#[cfg(feature = "serving")]
+impl From<mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus> for EmbeddedNodeStatus {
+    fn from(status: mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus) -> Self {
         Self {
             api_base_url: status.api_base_url,
             console_url: status.console_url,
@@ -446,7 +472,7 @@ impl From<mesh_llm_host_runtime::sdk::EmbeddedMeshNodeStatus> for EmbeddedNodeSt
     }
 }
 
-#[cfg(feature = "client")]
+#[cfg(feature = "serving")]
 pub mod client {
     use super::*;
 
@@ -507,7 +533,7 @@ pub mod client {
     }
 }
 
-#[cfg(feature = "serve")]
+#[cfg(feature = "serving")]
 pub mod serve {
     use super::*;
 
@@ -589,16 +615,15 @@ pub mod serve {
     }
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 #[derive(Clone, Copy, Debug)]
 enum EmbeddedMode {
-    #[cfg(feature = "serve")]
+    #[cfg(feature = "serving")]
     Serve,
-    #[cfg(feature = "client")]
     Client,
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 struct EmbeddedNodeParts {
     mode: EmbeddedMode,
     http: HttpConfig,
@@ -610,39 +635,37 @@ struct EmbeddedNodeParts {
     startup_timeout: Duration,
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
+#[cfg(feature = "serving")]
 async fn start_embedded_node(parts: EmbeddedNodeParts) -> Result<EmbeddedNodeHandle> {
-    let handle = mesh_llm_host_runtime::sdk::start_embedded_node(host_config(parts)).await?;
+    let handle = mesh_llm_embedded_runtime::start_embedded_node(host_config(parts)).await?;
     Ok(EmbeddedNodeHandle { inner: handle })
 }
 
-#[cfg(any(feature = "client", feature = "serve"))]
-fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_host_runtime::sdk::EmbeddedMeshNodeConfig {
-    mesh_llm_host_runtime::sdk::EmbeddedMeshNodeConfig {
+#[cfg(feature = "serving")]
+fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_embedded_runtime::EmbeddedMeshNodeConfig {
+    mesh_llm_embedded_runtime::EmbeddedMeshNodeConfig {
         mode: match parts.mode {
-            #[cfg(feature = "serve")]
-            EmbeddedMode::Serve => mesh_llm_host_runtime::sdk::EmbeddedMeshNodeMode::Serve,
-            #[cfg(feature = "client")]
-            EmbeddedMode::Client => mesh_llm_host_runtime::sdk::EmbeddedMeshNodeMode::Client,
+            EmbeddedMode::Serve => mesh_llm_embedded_runtime::EmbeddedMeshNodeMode::Serve,
+            EmbeddedMode::Client => mesh_llm_embedded_runtime::EmbeddedMeshNodeMode::Client,
         },
-        http: mesh_llm_host_runtime::sdk::EmbeddedMeshHttpConfig {
+        http: mesh_llm_embedded_runtime::EmbeddedMeshHttpConfig {
             api_port: parts.http.api_port,
             console_port: parts.http.console_port,
             console_ui: parts.http.console_ui,
         },
-        serving: mesh_llm_host_runtime::sdk::EmbeddedMeshServingConfig {
+        serving: mesh_llm_embedded_runtime::EmbeddedMeshServingConfig {
             models: parts.serving.models,
             max_vram_gb: parts.serving.max_vram_gb,
         },
-        network: mesh_llm_host_runtime::sdk::EmbeddedMeshNetworkConfig {
+        network: mesh_llm_embedded_runtime::EmbeddedMeshNetworkConfig {
             join_tokens: parts.network.join_tokens,
             auto_join: parts.network.auto_join,
             discovery_mode: match parts.network.discovery_mode {
                 MeshDiscoveryMode::Nostr => {
-                    mesh_llm_host_runtime::sdk::EmbeddedMeshDiscoveryMode::Nostr
+                    mesh_llm_embedded_runtime::EmbeddedMeshDiscoveryMode::Nostr
                 }
                 MeshDiscoveryMode::Mdns => {
-                    mesh_llm_host_runtime::sdk::EmbeddedMeshDiscoveryMode::Mdns
+                    mesh_llm_embedded_runtime::EmbeddedMeshDiscoveryMode::Mdns
                 }
             },
             publish: parts.network.publish,
@@ -658,24 +681,22 @@ fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_host_runtime::sdk::Embedded
             listen_all: parts.network.listen_all,
             enumerate_host: parts.network.enumerate_host,
         },
-        admission: mesh_llm_host_runtime::sdk::EmbeddedMeshAdmissionConfig {
+        admission: mesh_llm_embedded_runtime::EmbeddedMeshAdmissionConfig {
             owner_key: parts.admission.owner_key,
             owner_required: parts.admission.owner_required,
             node_label: parts.admission.node_label,
             trust_policy: parts.admission.trust_policy.map(|policy| match policy {
-                TrustPolicy::Off => mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::Off,
+                TrustPolicy::Off => mesh_llm_embedded_runtime::EmbeddedTrustPolicy::Off,
                 TrustPolicy::PreferOwned => {
-                    mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::PreferOwned
+                    mesh_llm_embedded_runtime::EmbeddedTrustPolicy::PreferOwned
                 }
                 TrustPolicy::RequireOwned => {
-                    mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::RequireOwned
+                    mesh_llm_embedded_runtime::EmbeddedTrustPolicy::RequireOwned
                 }
-                TrustPolicy::Allowlist => {
-                    mesh_llm_host_runtime::sdk::EmbeddedTrustPolicy::Allowlist
-                }
+                TrustPolicy::Allowlist => mesh_llm_embedded_runtime::EmbeddedTrustPolicy::Allowlist,
             }),
             trusted_owners: parts.admission.trusted_owners,
-            mesh_requirements: mesh_llm_host_runtime::sdk::EmbeddedMeshRequirementsConfig {
+            mesh_requirements: mesh_llm_embedded_runtime::EmbeddedMeshRequirementsConfig {
                 min_node_version: parts.admission.mesh_requirements.min_node_version,
                 max_node_version: parts.admission.mesh_requirements.max_node_version,
                 min_protocol_version: parts.admission.mesh_requirements.min_protocol_version,
@@ -687,13 +708,13 @@ fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_host_runtime::sdk::Embedded
                 release_signer_keys: parts.admission.mesh_requirements.release_signer_keys,
             },
         },
-        storage: mesh_llm_host_runtime::sdk::EmbeddedMeshStorageConfig {
+        storage: mesh_llm_embedded_runtime::EmbeddedMeshStorageConfig {
             config_path: parts.storage.config_path,
             isolated_config: parts.storage.isolated_config,
         },
         log_format: match parts.log_format {
-            LogFormat::Pretty => mesh_llm_host_runtime::sdk::EmbeddedMeshLogFormat::Pretty,
-            LogFormat::Json => mesh_llm_host_runtime::sdk::EmbeddedMeshLogFormat::Json,
+            LogFormat::Pretty => mesh_llm_embedded_runtime::EmbeddedMeshLogFormat::Pretty,
+            LogFormat::Json => mesh_llm_embedded_runtime::EmbeddedMeshLogFormat::Json,
         },
         startup_timeout: parts.startup_timeout,
     }
@@ -704,7 +725,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "client")]
+    #[cfg(feature = "serving")]
     fn client_builder_sets_network_fields() {
         let config = client::EmbeddedClientConfig::builder()
             .auto_join(true)
@@ -726,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "serve")]
+    #[cfg(feature = "serving")]
     fn serve_builder_sets_model_fields() {
         let config = serve::EmbeddedServeConfig::builder()
             .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
@@ -743,7 +764,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "serve")]
+    #[cfg(feature = "serving")]
     fn serve_builder_sets_admission_fields() {
         let config = serve::EmbeddedServeConfig::builder()
             .owner_key("/tmp/sprout-owner.json")
@@ -811,14 +832,14 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "serve")]
+    #[cfg(feature = "serving")]
     fn signed_join_tokens_sets_genesis_requirement_without_lowering_existing_bound() {
         let config = serve::EmbeddedServeConfig::builder()
             .signed_join_tokens(true)
             .build();
         assert_eq!(
             config.admission.mesh_requirements.min_protocol_version,
-            Some(SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
+            Some(crate::embedded_runtime::SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION)
         );
 
         let config = serve::EmbeddedServeConfig::builder()

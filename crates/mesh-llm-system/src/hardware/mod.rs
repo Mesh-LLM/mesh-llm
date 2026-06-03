@@ -790,7 +790,10 @@ fn detect_collector_impl() -> Box<dyn Collector> {
     Box::new(DefaultCollector)
 }
 
-#[cfg(all(target_os = "linux", not(feature = "skippy-devices")))]
+#[cfg(all(
+    target_os = "linux",
+    any(not(feature = "skippy-devices"), feature = "dynamic-native-runtime")
+))]
 fn is_tegra_host() -> bool {
     if !cfg!(target_arch = "aarch64") {
         return false;

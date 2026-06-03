@@ -26,6 +26,12 @@ dist/llama-stage-static/
 sdk/kotlin/src/main/kotlin/uniffi/
 sdk/kotlin/example/example-jvm/src/main/kotlin/uniffi/
 sdk/node/native/
+sdk/node/console/*
+!sdk/node/console/.gitkeep
+sdk/swift/Sources/MeshLLM/Resources/Console/*
+!sdk/swift/Sources/MeshLLM/Resources/Console/.gitkeep
+sdk/kotlin/src/main/resources/mesh-llm/console/*
+!sdk/kotlin/src/main/resources/mesh-llm/console/.gitkeep
 sdk/swift/Sources/MeshLLM/Generated/*
 !sdk/swift/Sources/MeshLLM/Generated/mesh_ffi.swift
 sdk/swift/Generated/FFI/

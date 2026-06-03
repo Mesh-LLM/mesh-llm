@@ -1,8 +1,7 @@
-use crate::cli::Cli;
-use crate::cli::output::{OutputEvent, emit_event};
 use crate::mesh;
-use crate::network::{discovery as mesh_discovery, nostr, router};
-use anyhow::{Context, Result};
+use crate::network::{discovery as mesh_discovery, nostr};
+use crate::runtime::RuntimeOptions;
+use mesh_llm_events::{OutputEvent, emit_event};
 use std::cmp::Reverse;
 
 /// Health probe: try QUIC connect to the mesh's bootstrap node.
@@ -402,21 +401,21 @@ fn current_unix_secs() -> u64 {
 
 /// Helper for StartNew path — configure CLI to start a new mesh.
 pub(super) fn start_new_mesh(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     models: &[String],
     my_vram_gb: f64,
     has_startup_models: bool,
 ) {
     let primary = models.first().cloned().unwrap_or_default();
-    if !has_startup_models && cli.model.is_empty() {
-        cli.model.push(primary.clone().into());
+    if !has_startup_models && options.model.is_empty() {
+        options.model.push(primary.clone().into());
     }
     let detail = if has_startup_models {
         "using configured startup models".to_string()
     } else {
         format!("serving: {primary}")
     };
-    let discovery = if cli.publish {
+    let discovery = if options.publish {
         "publishing for discovery"
     } else {
         "mesh is private — add --publish to advertise it for discovery"
@@ -430,7 +429,7 @@ pub(super) fn start_new_mesh(
     });
 }
 
-pub(crate) fn nostr_relays(cli_relays: &[String]) -> Vec<String> {
+pub fn nostr_relays(cli_relays: &[String]) -> Vec<String> {
     if cli_relays.is_empty() {
         nostr::DEFAULT_RELAYS
             .iter()
@@ -439,113 +438,6 @@ pub(crate) fn nostr_relays(cli_relays: &[String]) -> Vec<String> {
     } else {
         cli_relays.to_vec()
     }
-}
-
-/// Ensure mesh-llm is running on `port`, then return (available_models, chosen_model, spawned_child).
-///
-/// Launcher behavior: if nothing is listening yet, auto-start `mesh-llm client --auto`
-/// (client node — tunnels to mesh peers without publishing to Nostr).
-/// Returns the child process handle if we spawned one, so callers can clean up on exit.
-pub(crate) async fn check_mesh(
-    client: &reqwest::Client,
-    port: u16,
-    model: &Option<String>,
-) -> Result<(Vec<String>, String, Option<std::process::Child>)> {
-    let url = format!("http://127.0.0.1:{port}/v1/models");
-
-    let mut child: Option<std::process::Child> = None;
-    if client.get(&url).send().await.is_err() {
-        let _ = emit_event(OutputEvent::Info {
-            message: format!("No mesh-llm on port {port} — starting background auto-join node"),
-            context: None,
-        });
-        let exe = std::env::current_exe().unwrap_or_else(|_| "mesh-llm".into());
-        child = Some(
-            std::process::Command::new(&exe)
-                .args(["client", "--auto", "--port", &port.to_string()])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .context("Failed to start mesh-llm node")?,
-        );
-    }
-
-    let mut models: Vec<String> = Vec::new();
-    for i in 0..40 {
-        if let Ok(resp) = client.get(&url).send().await
-            && let Ok(body) = resp.json::<serde_json::Value>().await
-        {
-            models = body["data"]
-                .as_array()
-                .unwrap_or(&vec![])
-                .iter()
-                .filter_map(|m| m["id"].as_str().map(String::from))
-                .collect();
-            if !models.is_empty() {
-                break;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-        if i % 5 == 4 {
-            let _ = emit_event(OutputEvent::Info {
-                message: format!("Waiting for mesh/models... ({:.0}s)", (i + 1) as f64 * 3.0),
-                context: Some(format!("port={port}")),
-            });
-        }
-    }
-
-    if models.is_empty() {
-        if let Some(mut c) = child {
-            let _ = c.kill();
-        }
-        anyhow::bail!(
-            "mesh-llm on port {port} has no models yet (or could not be reached).\n\
-             Ensure at least one serving peer is available on the mesh."
-        );
-    }
-
-    let chosen = if let Some(m) = model {
-        if !models.iter().any(|n| n == m) {
-            if let Some(mut c) = child {
-                let _ = c.kill();
-                let _ = c.wait();
-            }
-            anyhow::bail!(
-                "Model '{}' not available. Available: {}",
-                m,
-                models.join(", ")
-            );
-        }
-        m.clone()
-    } else {
-        // Pre-startup path: no live routing metrics yet, so candidates
-        // are scored as cold (uniform weight).
-        let available: Vec<router::RoutingCandidate<'_>> = models
-            .iter()
-            .map(|n| {
-                let caps = crate::models::installed_model_capabilities(n);
-                router::RoutingCandidate::unscored(n.as_str(), caps)
-            })
-            .collect();
-        let agentic = router::Classification {
-            category: router::Category::Code,
-            complexity: router::Complexity::Deep,
-            needs_tools: true,
-            has_media_inputs: false,
-        };
-        router::pick_model_classified(&agentic, &available)
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| models[0].clone())
-    };
-    let _ = emit_event(OutputEvent::Info {
-        message: format!("Models: {}", models.join(", ")),
-        context: Some(format!("port={port}")),
-    });
-    let _ = emit_event(OutputEvent::Info {
-        message: format!("Using: {chosen}"),
-        context: Some(format!("port={port}")),
-    });
-    Ok((models, chosen, child))
 }
 
 #[cfg(test)]

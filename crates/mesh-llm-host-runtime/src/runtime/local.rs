@@ -10,7 +10,6 @@ use super::split_planning::{
 #[cfg(test)]
 use super::split_planning::{format_aggregate_split_capacity_error, validate_split_capacity};
 use crate::api;
-use crate::cli::output::{OutputEvent, emit_event};
 use crate::inference::{election, skippy};
 use crate::mesh::{self, NodeRole};
 use crate::models;
@@ -21,6 +20,7 @@ use crate::runtime_data::{
     RuntimeLlamaEndpointStatus, RuntimeLlamaSlotSnapshot, RuntimeLlamaSlotsSnapshot,
 };
 use anyhow::{Context, Result};
+use mesh_llm_events::{OutputEvent, emit_event};
 use sha2::{Digest, Sha256};
 use skippy_protocol::{FlashAttentionType, LoadMode, PeerConfig};
 use std::collections::HashMap;

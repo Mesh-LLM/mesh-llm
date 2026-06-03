@@ -112,6 +112,30 @@ cargo run -p xtask -- repo-consistency publish-crates
 scripts/publish-crates.sh --dry-run
 ```
 
+SDK packages that expose the optional console must package the built web
+console before publishing language SDK artifacts:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk all
+scripts/verify-sdk-console-assets.sh --sdk all
+```
+
+The script builds `crates/mesh-llm-ui/dist` in release mode and copies it to
+the canonical SDK resource locations: `sdk/node/console`,
+`sdk/swift/Sources/MeshLLM/Resources/Console`, and
+`sdk/kotlin/src/main/resources/mesh-llm/console`.
+
+These generated directories are ignored during normal development. For a
+manual tag push, force-add them into the release commit before tagging because
+SwiftPM resolves package resources from the Git tag:
+
+```bash
+git add -f sdk/node/console sdk/swift/Sources/MeshLLM/Resources/Console sdk/kotlin/src/main/resources/mesh-llm/console
+```
+
+Workflow-dispatch releases generate and force-add these resources into the
+release tag commit automatically.
+
 The chain currently publishes:
 
 1. `model-ref`

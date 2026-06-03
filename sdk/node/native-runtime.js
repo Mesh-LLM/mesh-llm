@@ -1,107 +1,106 @@
 'use strict'
 
-const fs = require('node:fs')
-const path = require('node:path')
-const crypto = require('node:crypto')
+let nativeBinding = null
 
-const runtimeEnvNames = [
-  'MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR',
-  'MESHLLM_NATIVE_RUNTIME_DIR',
-  'MESH_SDK_NATIVE_RUNTIME_DIR'
-]
-
-function resolveNativeRuntime(options = {}) {
-  const candidates = []
-  if (options.artifactDir) candidates.push(options.artifactDir)
-  for (const name of runtimeEnvNames) {
-    if (process.env[name]) candidates.push(process.env[name])
-  }
-  if (process.env.MESHLLM_NATIVE_RUNTIME_LIBRARY) {
-    candidates.push(path.dirname(path.dirname(process.env.MESHLLM_NATIVE_RUNTIME_LIBRARY)))
-  }
-  for (const dir of options.searchDirs || []) candidates.push(dir)
-  candidates.push(path.join(process.cwd(), 'meshllm-native'))
-  candidates.push(path.join(process.cwd(), 'native'))
-
-  const errors = []
-  const seen = new Set()
-  for (const candidate of candidates) {
-    for (const artifactDir of artifactCandidates(candidate)) {
-      const normalized = path.resolve(artifactDir)
-      if (seen.has(normalized)) continue
-      seen.add(normalized)
-      try {
-        return validateNativeRuntime(normalized)
-      } catch (error) {
-        errors.push(`${normalized}: ${error.message}`)
-      }
-    }
-  }
-
-  const detail = errors.length === 0
-    ? 'no candidate native runtime artifact directories were configured'
-    : errors.join('; ')
-  throw new Error(`MeshLLM native runtime artifact not found: ${detail}`)
+function configureNativeRuntimeBinding(binding) {
+  nativeBinding = binding
 }
 
-function validateNativeRuntime(artifactDir) {
-  const normalized = path.resolve(artifactDir)
-  const manifestPath = path.join(normalized, 'manifest.json')
-  if (!fs.existsSync(normalized) || !fs.statSync(normalized).isDirectory()) {
-    throw new Error('artifact directory does not exist')
-  }
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error('manifest.json does not exist')
-  }
+function currentMeshVersion() {
+  return native().currentMeshVersion()
+}
 
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
-  const library = path.resolve(normalized, requiredString(manifest, 'library'))
-  const expected = requiredString(manifest, 'library_sha256').toLowerCase()
-  if (!fs.existsSync(library)) {
-    throw new Error(`native library does not exist: ${library}`)
-  }
-  const actual = sha256(library)
-  if (actual !== expected) {
-    throw new Error(`native library checksum mismatch for ${library}`)
-  }
+function currentSkippyAbiVersion() {
+  return native().currentSkippyAbiVersion()
+}
 
+async function installNativeRuntime(options = {}) {
+  const onProgress = typeof options.onProgress === 'function'
+    ? (eventJson) => options.onProgress(parse(eventJson))
+    : null
+  return parse(await native().installNativeRuntimeJson(
+    JSON.stringify(normalizeInstallOptions(options)),
+    onProgress
+  ))
+}
+
+async function installedNativeRuntimes(options = {}) {
+  return parse(await native().installedNativeRuntimesJson(options.cacheDir || null))
+}
+
+function removeNativeRuntime(options) {
+  if (!options || !options.meshVersion || !options.nativeRuntimeId) {
+    throw new Error('removeNativeRuntime requires meshVersion and nativeRuntimeId')
+  }
+  return native().removeNativeRuntime(
+    options.cacheDir || null,
+    options.meshVersion,
+    options.nativeRuntimeId
+  )
+}
+
+function pruneNativeRuntimes(options = {}) {
+  return parse(native().pruneNativeRuntimesJson(
+    options.cacheDir || null,
+    options.activeMeshVersion || null,
+    options.mode || null
+  ))
+}
+
+async function resolveNativeRuntime(options = {}) {
+  const bundleDirs = []
+  if (options.artifactDir) bundleDirs.push(options.artifactDir)
+  for (const dir of options.searchDirs || []) bundleDirs.push(dir)
+  const outcome = await installNativeRuntime({
+    ...options,
+    bundleDirs,
+    allowDownload: options.allowDownload === true
+  })
+  return outcome.runtime
+}
+
+async function validateNativeRuntime(artifactDir, options = {}) {
+  const outcome = await installNativeRuntime({
+    ...options,
+    bundleDirs: [artifactDir],
+    allowDownload: false
+  })
+  return outcome.runtime
+}
+
+function normalizeInstallOptions(options) {
   return {
-    artifactId: requiredString(manifest, 'artifact_id'),
-    artifactDir: normalized,
-    manifest: manifestPath,
-    library,
-    metadata: manifest
+    meshVersion: options.meshVersion || null,
+    skippyAbiVersion: options.skippyAbiVersion || null,
+    selection: options.selection || 'recommended',
+    manifestPath: options.manifestPath || null,
+    manifestUrl: options.manifestUrl || null,
+    bundleDirs: options.bundleDirs || [],
+    cacheDir: options.cacheDir || null,
+    verificationPolicy: options.verificationPolicy || 'require_checksum',
+    allowDownload: options.allowDownload !== false
   }
 }
 
-function artifactCandidates(candidate) {
-  if (!candidate) return []
-  const normalized = path.resolve(candidate)
-  if (fs.existsSync(path.join(normalized, 'manifest.json'))) {
-    return [normalized]
+function native() {
+  if (!nativeBinding) {
+    throw new Error('MeshLLM native runtime binding has not been configured')
   }
-  if (!fs.existsSync(normalized) || !fs.statSync(normalized).isDirectory()) {
-    return [normalized]
-  }
-  const children = fs.readdirSync(normalized)
-    .map((entry) => path.join(normalized, entry))
-    .filter((entry) => fs.statSync(entry).isDirectory() && path.basename(entry).startsWith('meshllm-native-'))
-    .sort()
-  return [normalized, ...children]
+  return nativeBinding
 }
 
-function requiredString(object, key) {
-  if (typeof object[key] !== 'string' || object[key].length === 0) {
-    throw new Error(`manifest field missing or not a string: ${key}`)
-  }
-  return object[key]
-}
-
-function sha256(file) {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+function parse(json) {
+  return JSON.parse(json)
 }
 
 module.exports = {
+  configureNativeRuntimeBinding,
+  currentMeshVersion,
+  currentSkippyAbiVersion,
+  installNativeRuntime,
+  installedNativeRuntimes,
+  removeNativeRuntime,
+  pruneNativeRuntimes,
   resolveNativeRuntime,
   validateNativeRuntime
 }

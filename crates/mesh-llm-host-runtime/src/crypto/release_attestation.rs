@@ -9,8 +9,7 @@ use mesh_llm_system::embedded_release_footer::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::CryptoError;
-use super::keystore::write_keystore_bytes_atomically;
+use super::{CryptoError, write_keystore_bytes_atomically};
 
 pub const RELEASE_BUILD_ATTESTATION_VERSION: u32 = 1;
 pub const RELEASE_SIGNER_TRUST_STORE_VERSION: u32 = 1;

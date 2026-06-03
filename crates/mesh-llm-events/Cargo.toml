@@ -1,0 +1,19 @@
+[package]
+name = "mesh-llm-events"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Shared runtime event and output contracts for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "events"]
+categories = ["command-line-interface"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true

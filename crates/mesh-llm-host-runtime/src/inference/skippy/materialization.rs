@@ -15,15 +15,15 @@ use skippy_runtime::package::{
     self, LayerPackageInfo, PackageIntegrityOptions, PackageStageRequest,
 };
 
-use crate::cli::output::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
-use crate::cli::terminal_progress::{SpinnerHandle, start_spinner};
+use mesh_llm_events::terminal_progress::{SpinnerHandle, start_spinner};
+use mesh_llm_events::{ModelProgressStatus, OutputEvent, emit_event, interactive_tui_active};
 
 use super::StageLoadRequest;
 
 mod cache_resolution;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum StagePackageRef {
+pub enum StagePackageRef {
     LocalPackage(PathBuf),
     HuggingFacePackage {
         repo: String,
@@ -33,7 +33,7 @@ pub(crate) enum StagePackageRef {
 }
 
 impl StagePackageRef {
-    pub(crate) fn parse(value: &str) -> Result<Self> {
+    pub fn parse(value: &str) -> Result<Self> {
         if let Some(rest) = value.strip_prefix("hf://") {
             let (repo, revision) = if let Some((repo, revision)) = rest.split_once('@') {
                 (repo, Some(revision.to_string()))
@@ -62,14 +62,14 @@ impl StagePackageRef {
         bail!("not a skippy package ref: {value}");
     }
 
-    pub(crate) fn is_distributable_package(&self) -> bool {
+    pub fn is_distributable_package(&self) -> bool {
         matches!(
             self,
             Self::LocalPackage(_) | Self::HuggingFacePackage { .. }
         )
     }
 
-    pub(crate) fn as_package_ref(&self) -> Option<String> {
+    pub fn as_package_ref(&self) -> Option<String> {
         match self {
             Self::LocalPackage(path) => Some(path.to_string_lossy().to_string()),
             Self::HuggingFacePackage { repo, revision } => Some(match revision {
@@ -82,47 +82,47 @@ impl StagePackageRef {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StagePackageInfo {
-    pub(crate) package_ref: String,
-    pub(crate) package_dir: PathBuf,
-    pub(crate) manifest_sha256: String,
-    pub(crate) model_id: String,
-    pub(crate) source_model_path: String,
-    pub(crate) source_model_sha256: String,
-    pub(crate) source_model_bytes: Option<u64>,
-    pub(crate) layer_count: u32,
-    pub(crate) activation_width: u32,
-    pub(crate) projector_path: Option<String>,
-    pub(crate) layers: Vec<StagePackageLayerInfo>,
+pub struct StagePackageInfo {
+    pub package_ref: String,
+    pub package_dir: PathBuf,
+    pub manifest_sha256: String,
+    pub model_id: String,
+    pub source_model_path: String,
+    pub source_model_sha256: String,
+    pub source_model_bytes: Option<u64>,
+    pub layer_count: u32,
+    pub activation_width: u32,
+    pub projector_path: Option<String>,
+    pub layers: Vec<StagePackageLayerInfo>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct StagePackageLayerInfo {
-    pub(crate) layer_index: u32,
-    pub(crate) tensor_count: usize,
-    pub(crate) tensor_bytes: u64,
-    pub(crate) artifact_bytes: u64,
+pub struct StagePackageLayerInfo {
+    pub layer_index: u32,
+    pub tensor_count: usize,
+    pub tensor_bytes: u64,
+    pub artifact_bytes: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct MaterializedStageArtifact {
-    pub(crate) path: PathBuf,
-    pub(crate) manifest_sha256: String,
-    pub(crate) source_model_path: String,
-    pub(crate) source_model_sha256: String,
-    pub(crate) source_model_bytes: Option<u64>,
+pub struct MaterializedStageArtifact {
+    pub path: PathBuf,
+    pub manifest_sha256: String,
+    pub source_model_path: String,
+    pub source_model_sha256: String,
+    pub source_model_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ResolvedStagePackage {
-    pub(crate) local_ref: String,
-    pub(crate) source_model_path: String,
-    pub(crate) source_model_sha256: String,
-    pub(crate) source_model_bytes: Option<u64>,
+pub struct ResolvedStagePackage {
+    pub local_ref: String,
+    pub source_model_path: String,
+    pub source_model_sha256: String,
+    pub source_model_bytes: Option<u64>,
 }
 
 #[derive(Debug)]
-pub(crate) struct MaterializedStagePin {
+pub struct MaterializedStagePin {
     path: PathBuf,
 }
 
@@ -141,14 +141,14 @@ struct PinFile {
     stage_id: String,
 }
 
-pub(crate) fn configure_materialized_stage_cache() {
+pub fn configure_materialized_stage_cache() {
     if std::env::var_os("SKIPPY_MATERIALIZED_DIR").is_none() {
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::set_var("SKIPPY_MATERIALIZED_DIR", materialized_stage_cache_dir()) };
     }
 }
 
-pub(crate) fn materialized_stage_cache_dir() -> PathBuf {
+pub fn materialized_stage_cache_dir() -> PathBuf {
     crate::models::mesh_llm_cache_dir().join("skippy-stages")
 }
 
@@ -556,7 +556,7 @@ fn draw_layer_package_file_progress(
     }
 }
 
-pub(crate) fn is_layer_package_ref(value: &str) -> bool {
+pub fn is_layer_package_ref(value: &str) -> bool {
     StagePackageRef::parse(value).is_ok_and(|package_ref| package_ref.is_distributable_package())
 }
 
@@ -785,7 +785,7 @@ fn download_layer_package_file(
     Ok(path)
 }
 
-pub(crate) fn resolve_hf_package_to_local(
+pub fn resolve_hf_package_to_local(
     package_ref: &str,
     layer_start: u32,
     layer_end: u32,
@@ -1068,7 +1068,7 @@ fn safe_manifest_file_path(path: &str) -> Result<PathBuf> {
     Ok(path.to_path_buf())
 }
 
-pub(crate) fn ensure_package_manifest_sha(package_ref: &str, expected_sha256: &str) -> Result<()> {
+pub fn ensure_package_manifest_sha(package_ref: &str, expected_sha256: &str) -> Result<()> {
     if expected_sha256.trim().is_empty() {
         return Ok(());
     }
@@ -1086,7 +1086,7 @@ pub(crate) fn ensure_package_manifest_sha(package_ref: &str, expected_sha256: &s
     Ok(())
 }
 
-pub(crate) fn inspect_stage_package(package_ref: &str) -> Result<StagePackageInfo> {
+pub fn inspect_stage_package(package_ref: &str) -> Result<StagePackageInfo> {
     // Resolve hf:// to local for inspection, downloading the manifest and any
     // shared package metadata that resolver path needs.
     let local_ref = resolve_hf_package_to_local(package_ref, 0, 0, false, false)?;
@@ -1098,9 +1098,7 @@ pub(crate) fn inspect_stage_package(package_ref: &str) -> Result<StagePackageInf
 /// Resolve an `hf://` package ref in a stage load request to a local directory.
 /// Returns the resolved local path if the package ref needed resolution, or `None`
 /// if it was already local / not a layer package.
-pub(crate) fn resolve_stage_load_package(
-    load: &StageLoadRequest,
-) -> Result<Option<ResolvedStagePackage>> {
+pub fn resolve_stage_load_package(load: &StageLoadRequest) -> Result<Option<ResolvedStagePackage>> {
     if load.load_mode != LoadMode::LayerPackage {
         return Ok(None);
     }
@@ -1127,7 +1125,7 @@ pub(crate) fn resolve_stage_load_package(
     }))
 }
 
-pub(crate) fn materialize_stage_config(
+pub fn materialize_stage_config(
     config: &StageConfig,
 ) -> Result<Option<(MaterializedStageArtifact, MaterializedStagePin)>> {
     if config.load_mode != LoadMode::LayerPackage {
@@ -1186,7 +1184,7 @@ pub(crate) fn materialize_stage_config(
     Ok(Some((artifact, pin)))
 }
 
-pub(crate) fn prune_unpinned_materialized_stages() -> Result<usize> {
+pub fn prune_unpinned_materialized_stages() -> Result<usize> {
     let root = materialized_stage_cache_dir();
     if !root.is_dir() {
         return Ok(0);
@@ -1229,7 +1227,7 @@ pub(crate) fn prune_unpinned_materialized_stages() -> Result<usize> {
     Ok(removed)
 }
 
-pub(crate) fn remove_materialized_stages_for_sources(sources: &[PathBuf]) -> Result<usize> {
+pub fn remove_materialized_stages_for_sources(sources: &[PathBuf]) -> Result<usize> {
     let candidates = materialized_stage_removal_candidates(sources)?;
     let mut removed = 0usize;
     for candidate in candidates {
@@ -1241,7 +1239,7 @@ pub(crate) fn remove_materialized_stages_for_sources(sources: &[PathBuf]) -> Res
     Ok(removed)
 }
 
-pub(crate) fn materialized_stages_for_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
+pub fn materialized_stages_for_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(materialized_stage_removal_candidates(sources)?
         .into_iter()
         .filter(|candidate| candidate.artifact_path.exists())

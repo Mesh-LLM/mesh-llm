@@ -1,0 +1,20 @@
+[package]
+name = "mesh-llm-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Reusable CLI support surface for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "cli"]
+categories = ["command-line-interface"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.68.0" }
+serde.workspace = true

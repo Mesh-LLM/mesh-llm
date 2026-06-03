@@ -2,11 +2,16 @@
 name = "mesh-llm-console-server"
 version.workspace = true
 edition = "2021"
+description = "Static file server for embedded Mesh LLM console assets"
+license.workspace = true
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
 anyhow.workspace = true
-mesh-llm-ui = { path = "../mesh-llm-ui", default-features = false }
+mesh-llm-ui = { path = "../mesh-llm-ui", version = "0.68.0", default-features = false }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }

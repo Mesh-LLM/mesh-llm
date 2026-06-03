@@ -10,6 +10,10 @@ host runtime and embedded clients:
 - key provider traits for client/runtime integration
 - shared crypto error types
 
-Host-only persistence stays out of this crate. OS keychain access, encrypted
-keystore files, trust-store files, and CLI prompting remain in the host-facing
-crates because they depend on local machine state and interactive policy.
+The default feature set stays pure and does not depend on host filesystem or
+OS keychain crates. This keeps embedded/client dependency graphs free of local
+machine policy.
+
+Enable `host-io` for host-facing binaries and runtime crates that need OS
+keychain access, encrypted keystore files, node key files, ownership
+certificates, or trust-store persistence.

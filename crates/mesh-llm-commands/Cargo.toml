@@ -1,0 +1,47 @@
+[package]
+name = "mesh-llm-commands"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "User-facing command handlers for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+keywords = ["llm", "mesh", "cli"]
+categories = ["command-line-interface"]
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0.0"
+hf_hub = { package = "hf-hub", version = "1.0.0-rc.1", default-features = false, features = ["blocking"] }
+hex = "0.4.3"
+iroh = "1.0.0-rc.0"
+json5 = "1.3.1"
+mesh-llm-cli = { path = "../mesh-llm-cli", version = "0.68.0" }
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.68.0" }
+mesh-llm-plugin-manager = { path = "../mesh-llm-plugin-manager", version = "0.68.0" }
+mesh-llm-identity = { path = "../mesh-llm-identity", version = "0.68.0", features = ["host-io"] }
+mesh-llm-runtime-install = { path = "../mesh-llm-runtime-install", version = "0.68.0" }
+mesh-llm-system = { path = "../mesh-llm-system", version = "0.68.0", features = ["skippy-devices"] }
+mesh-llm-tui = { path = "../mesh-llm-tui", version = "0.68.0" }
+model-package = { path = "../model-package", version = "0.68.0" }
+model-ref = { path = "../model-ref", version = "0.68.0" }
+rpassword = "5"
+reqwest = { version = "0.12", features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+rand = "0.10"
+serial_test = "3"
+tempfile = "3"

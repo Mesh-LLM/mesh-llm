@@ -144,6 +144,13 @@ library_basename() {
     esac
 }
 
+uniffi_library_basename() {
+    case "$1" in
+        dll) printf 'uniffi_mesh_ffi.dll\n' ;;
+        *) printf 'libuniffi_mesh_ffi.%s\n' "$1" ;;
+    esac
+}
+
 sanitize_component() {
     printf '%s' "$1" | tr ';, /:' '_____' | tr -cd 'A-Za-z0-9_.-'
 }
@@ -251,6 +258,7 @@ fi
 
 lib_ext="$(library_extension "$TARGET_TRIPLE")"
 lib_name="$(library_basename "$lib_ext")"
+uniffi_lib_name="$(uniffi_library_basename "$lib_ext")"
 platform="$(target_platform "$TARGET_TRIPLE")"
 runtime_os="$(target_runtime_os "$TARGET_TRIPLE")"
 runtime_arch="$(target_runtime_arch "$TARGET_TRIPLE")"
@@ -285,6 +293,7 @@ rm -rf "$stage_dir"
 mkdir -p "$stage_dir/lib"
 
 cp "$lib_path" "$stage_dir/lib/$lib_name"
+cp "$lib_path" "$stage_dir/lib/$uniffi_lib_name"
 
 patched_sha=""
 upstream_sha=""
@@ -322,6 +331,7 @@ manifest = {
     "cargo_profile": "$PROFILE",
     "library": "lib/$lib_name",
     "library_paths": ["lib/$lib_name"],
+    "uniffi_library": "lib/$uniffi_lib_name",
     "library_sha256": "$lib_sha",
     "url": None,
     "sha256": None,
@@ -357,6 +367,9 @@ This artifact contains the MeshLLM native SDK runtime for:
 
 SDK loaders should read \`manifest.json\`, verify \`library_sha256\`, then load
 \`$lib_name\`.
+
+Kotlin/JVM UniFFI consumers can load \`$uniffi_lib_name\`, which is an alias of
+the same library kept for UniFFI's generated JNA lookup name.
 EOF
 
 mkdir -p "$OUT_DIR"

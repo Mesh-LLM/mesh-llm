@@ -6,6 +6,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = mesh_client::client::builder::MAX_RECONNECT_ATTEMPTS;
+pub type ClientTransport = mesh_client::ClientTransport;
 
 #[derive(Debug, Error)]
 pub enum MeshApiError {
@@ -33,6 +34,7 @@ pub struct ClientConfig {
     pub invite_token: InviteToken,
     pub user_agent: String,
     pub connect_timeout: Duration,
+    pub transport: ClientTransport,
 }
 
 pub struct ClientBuilder {
@@ -47,6 +49,7 @@ impl ClientBuilder {
                 invite_token,
                 user_agent: format!("mesh-llm-api-client/{}", env!("CARGO_PKG_VERSION")),
                 connect_timeout: Duration::from_secs(30),
+                transport: ClientTransport::DirectMesh,
             },
         }
     }
@@ -61,14 +64,33 @@ impl ClientBuilder {
         self
     }
 
+    pub fn with_transport(mut self, transport: ClientTransport) -> Self {
+        self.config.transport = transport;
+        self
+    }
+
+    pub fn with_direct_mesh_transport(self) -> Self {
+        self.with_transport(ClientTransport::DirectMesh)
+    }
+
+    pub fn with_openai_http_transport(mut self, api_base_url: impl Into<String>) -> Self {
+        self.config.transport = ClientTransport::OpenAiHttp {
+            api_base_url: api_base_url.into(),
+        };
+        self
+    }
+
     pub fn build(self) -> Result<MeshClient, MeshApiError> {
-        let inner = mesh_client::ClientBuilder::new(
+        let mut builder = mesh_client::ClientBuilder::new(
             self.config.owner_keypair.into_inner(),
             self.config.invite_token.into_inner(),
         )
         .with_user_agent(self.config.user_agent.clone())
-        .with_connect_timeout(self.config.connect_timeout)
-        .build()?;
+        .with_connect_timeout(self.config.connect_timeout);
+
+        builder = builder.with_transport(self.config.transport);
+
+        let inner = builder.build()?;
 
         Ok(MeshClient { inner })
     }
@@ -250,5 +272,35 @@ impl mesh_client::events::EventListener for EventListenerAdapter {
             }
             mesh_client::events::Event::Disconnected { reason } => Event::Disconnected { reason },
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builder_accepts_explicit_openai_http_transport() {
+        let owner = OwnerKeypair::generate();
+        let invite = "mesh-test:token".parse::<InviteToken>().unwrap();
+
+        let builder = ClientBuilder::new(owner, invite)
+            .with_openai_http_transport("http://127.0.0.1:9337/v1");
+
+        assert_eq!(
+            builder.config.transport,
+            ClientTransport::OpenAiHttp {
+                api_base_url: "http://127.0.0.1:9337/v1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn builder_defaults_to_direct_mesh_transport() {
+        let owner = OwnerKeypair::generate();
+        let invite = "mesh-test:token".parse::<InviteToken>().unwrap();
+        let builder = ClientBuilder::new(owner, invite);
+
+        assert_eq!(builder.config.transport, ClientTransport::DirectMesh);
     }
 }

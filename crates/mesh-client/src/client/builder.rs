@@ -1,5 +1,8 @@
 use crate::crypto::keys::OwnerKeypair;
+use crate::protocol::{ALPN_V1, STREAM_TUNNEL_HTTP};
 use crate::runtime::CoreRuntime;
+use base64::Engine;
+use iroh::{Endpoint, EndpointAddr};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +16,7 @@ type CancelFlagMap =
     Arc<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<dyn crate::events::EventListener>)>>>;
 
 pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
-const MISSING_API_BASE_URL_ERROR: &str =
-    "MESH_CLIENT_API_BASE or ClientBuilder::with_api_base_url is required for inference";
+const MAX_MESH_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -46,12 +48,19 @@ impl std::str::FromStr for InviteToken {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ClientConfig {
     pub owner_keypair: OwnerKeypair,
     pub invite_token: InviteToken,
     pub user_agent: String,
     pub connect_timeout: Duration,
-    pub api_base_url: Option<String>,
+    pub transport: ClientTransport,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClientTransport {
+    DirectMesh,
+    OpenAiHttp { api_base_url: String },
 }
 
 pub struct ClientBuilder {
@@ -66,7 +75,7 @@ impl ClientBuilder {
                 invite_token,
                 user_agent: format!("mesh-client/{}", env!("CARGO_PKG_VERSION")),
                 connect_timeout: Duration::from_secs(30),
-                api_base_url: std::env::var("MESH_CLIENT_API_BASE").ok(),
+                transport: default_client_transport(),
             },
         }
     }
@@ -81,8 +90,19 @@ impl ClientBuilder {
         self
     }
 
-    pub fn with_api_base_url(mut self, api_base_url: String) -> Self {
-        self.config.api_base_url = Some(api_base_url);
+    pub fn with_transport(mut self, transport: ClientTransport) -> Self {
+        self.config.transport = transport;
+        self
+    }
+
+    pub fn with_direct_mesh_transport(self) -> Self {
+        self.with_transport(ClientTransport::DirectMesh)
+    }
+
+    pub fn with_openai_http_transport(mut self, api_base_url: impl Into<String>) -> Self {
+        self.config.transport = ClientTransport::OpenAiHttp {
+            api_base_url: api_base_url.into(),
+        };
         self
     }
 
@@ -123,16 +143,9 @@ impl MeshClient {
 
     /// List available models on the mesh.
     pub async fn list_models(&self) -> Result<Vec<Model>, ClientError> {
-        let Some(base_url) = self.config.api_base_url.as_deref() else {
-            return Err(ClientError::Endpoint(
-                MISSING_API_BASE_URL_ERROR.to_string(),
-            ));
-        };
-
-        let response =
-            http_get_json::<ModelsResponse>(base_url, "/v1/models", &self.config.user_agent)
-                .await
-                .map_err(ClientError::Endpoint)?;
+        let response = get_json::<ModelsResponse>(&self.config, "/v1/models")
+            .await
+            .map_err(ClientError::Endpoint)?;
 
         Ok(response
             .data
@@ -158,57 +171,48 @@ impl MeshClient {
             .unwrap()
             .insert(id.0.clone(), (cancel_flag.clone(), listener.clone()));
         let id_clone = id.0.clone();
-        let api_base_url = self.config.api_base_url.clone();
-        let user_agent = self.config.user_agent.clone();
+        let config = self.config.clone();
         self.runtime.handle().spawn(async move {
-            if let Some(base_url) = api_base_url {
-                let body = serde_json::json!({
-                    "model": request.model,
-                    "messages": request.messages.iter().map(|m| serde_json::json!({
-                        "role": m.role,
-                        "content": m.content,
-                    })).collect::<Vec<_>>(),
-                    "max_tokens": 64,
-                    "temperature": 0,
-                    "stream": false,
-                });
-                match http_post_json::<ChatCompletionResponse>(
-                    &base_url,
-                    "/v1/chat/completions",
-                    &user_agent,
-                    body.to_string(),
-                )
-                .await
-                {
-                    Ok(response) => {
-                        if !cancel_flag.load(Ordering::Relaxed) {
-                            if let Some(content) = response
-                                .choices
-                                .first()
-                                .map(|choice| choice.message.content.clone())
-                            {
-                                listener.on_event(crate::events::Event::TokenDelta {
-                                    request_id: id_clone.clone(),
-                                    delta: content,
-                                });
-                            }
-                            listener.on_event(crate::events::Event::Completed {
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": request.messages.iter().map(|m| serde_json::json!({
+                    "role": m.role,
+                    "content": m.content,
+                })).collect::<Vec<_>>(),
+                "max_tokens": 64,
+                "temperature": 0,
+                "stream": false,
+            });
+            match post_json::<ChatCompletionResponse>(
+                &config,
+                "/v1/chat/completions",
+                body.to_string(),
+            )
+            .await
+            {
+                Ok(response) => {
+                    if !cancel_flag.load(Ordering::Relaxed) {
+                        if let Some(content) = response
+                            .choices
+                            .first()
+                            .map(|choice| choice.message.content.clone())
+                        {
+                            listener.on_event(crate::events::Event::TokenDelta {
                                 request_id: id_clone.clone(),
+                                delta: content,
                             });
                         }
-                    }
-                    Err(error) => {
-                        listener.on_event(crate::events::Event::Failed {
+                        listener.on_event(crate::events::Event::Completed {
                             request_id: id_clone.clone(),
-                            error,
                         });
                     }
                 }
-            } else if !cancel_flag.load(Ordering::Relaxed) {
-                listener.on_event(crate::events::Event::Failed {
-                    request_id: id_clone,
-                    error: MISSING_API_BASE_URL_ERROR.to_string(),
-                });
+                Err(error) => {
+                    listener.on_event(crate::events::Event::Failed {
+                        request_id: id_clone,
+                        error,
+                    });
+                }
             }
         });
         id
@@ -227,57 +231,48 @@ impl MeshClient {
             .unwrap()
             .insert(id.0.clone(), (cancel_flag.clone(), listener.clone()));
         let id_clone = id.0.clone();
-        let api_base_url = self.config.api_base_url.clone();
-        let user_agent = self.config.user_agent.clone();
+        let config = self.config.clone();
         self.runtime.handle().spawn(async move {
-            if let Some(base_url) = api_base_url {
-                let body = serde_json::json!({
-                    "model": request.model,
-                    "messages": [{
-                        "role": "user",
-                        "content": request.input,
-                    }],
-                    "max_tokens": 64,
-                    "temperature": 0,
-                    "stream": false,
-                });
-                match http_post_json::<ChatCompletionResponse>(
-                    &base_url,
-                    "/v1/chat/completions",
-                    &user_agent,
-                    body.to_string(),
-                )
-                .await
-                {
-                    Ok(response) => {
-                        if !cancel_flag.load(Ordering::Relaxed) {
-                            if let Some(content) = response
-                                .choices
-                                .first()
-                                .map(|choice| choice.message.content.clone())
-                            {
-                                listener.on_event(crate::events::Event::TokenDelta {
-                                    request_id: id_clone.clone(),
-                                    delta: content,
-                                });
-                            }
-                            listener.on_event(crate::events::Event::Completed {
+            let body = serde_json::json!({
+                "model": request.model,
+                "messages": [{
+                    "role": "user",
+                    "content": request.input,
+                }],
+                "max_tokens": 64,
+                "temperature": 0,
+                "stream": false,
+            });
+            match post_json::<ChatCompletionResponse>(
+                &config,
+                "/v1/chat/completions",
+                body.to_string(),
+            )
+            .await
+            {
+                Ok(response) => {
+                    if !cancel_flag.load(Ordering::Relaxed) {
+                        if let Some(content) = response
+                            .choices
+                            .first()
+                            .map(|choice| choice.message.content.clone())
+                        {
+                            listener.on_event(crate::events::Event::TokenDelta {
                                 request_id: id_clone.clone(),
+                                delta: content,
                             });
                         }
-                    }
-                    Err(error) => {
-                        listener.on_event(crate::events::Event::Failed {
+                        listener.on_event(crate::events::Event::Completed {
                             request_id: id_clone.clone(),
-                            error,
                         });
                     }
                 }
-            } else if !cancel_flag.load(Ordering::Relaxed) {
-                listener.on_event(crate::events::Event::Failed {
-                    request_id: id_clone,
-                    error: MISSING_API_BASE_URL_ERROR.to_string(),
-                });
+                Err(error) => {
+                    listener.on_event(crate::events::Event::Failed {
+                        request_id: id_clone,
+                        error,
+                    });
+                }
             }
         });
         id
@@ -389,6 +384,14 @@ impl Default for RequestId {
     }
 }
 
+fn default_client_transport() -> ClientTransport {
+    std::env::var("MESH_CLIENT_API_BASE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|api_base_url| ClientTransport::OpenAiHttp { api_base_url })
+        .unwrap_or(ClientTransport::DirectMesh)
+}
+
 #[derive(Deserialize)]
 struct ModelsResponse {
     data: Vec<ModelEntry>,
@@ -414,33 +417,162 @@ struct ChatMessageResponse {
     content: String,
 }
 
-async fn http_get_json<T: for<'de> Deserialize<'de>>(
-    base_url: &str,
+async fn get_json<T: for<'de> Deserialize<'de>>(
+    config: &ClientConfig,
     path: &str,
-    user_agent: &str,
 ) -> Result<T, String> {
-    let request = format!(
-        "GET {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {user_agent}\r\nConnection: close\r\n\r\n",
-        host_header(base_url)?
-    );
-    let response = http_request(base_url, request).await?;
+    let response = request_get_bytes(config, path).await?;
     parse_json_response(&response)
 }
 
-async fn http_post_json<T: for<'de> Deserialize<'de>>(
-    base_url: &str,
+async fn post_json<T: for<'de> Deserialize<'de>>(
+    config: &ClientConfig,
     path: &str,
-    user_agent: &str,
     body: String,
 ) -> Result<T, String> {
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {}\r\nUser-Agent: {user_agent}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        host_header(base_url)?,
+    let response = request_post_bytes(config, path, body).await?;
+    parse_json_response(&response)
+}
+
+async fn request_get_bytes(config: &ClientConfig, path: &str) -> Result<Vec<u8>, String> {
+    match &config.transport {
+        ClientTransport::DirectMesh => {
+            let request = http_get_request(path, "mesh.local", &config.user_agent);
+            direct_mesh_request(&config.invite_token, config.connect_timeout, request).await
+        }
+        ClientTransport::OpenAiHttp { api_base_url } => {
+            let request = http_get_request(path, &host_header(api_base_url)?, &config.user_agent);
+            http_request(api_base_url, request).await
+        }
+    }
+}
+
+async fn request_post_bytes(
+    config: &ClientConfig,
+    path: &str,
+    body: String,
+) -> Result<Vec<u8>, String> {
+    match &config.transport {
+        ClientTransport::DirectMesh => {
+            let request = http_post_request(path, "mesh.local", &config.user_agent, body);
+            direct_mesh_request(&config.invite_token, config.connect_timeout, request).await
+        }
+        ClientTransport::OpenAiHttp { api_base_url } => {
+            let request =
+                http_post_request(path, &host_header(api_base_url)?, &config.user_agent, body);
+            http_request(api_base_url, request).await
+        }
+    }
+}
+
+fn http_get_request(path: &str, host: &str, user_agent: &str) -> String {
+    format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nConnection: close\r\n\r\n",
+    )
+}
+
+fn http_post_request(path: &str, host: &str, user_agent: &str, body: String) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {user_agent}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(),
         body
-    );
-    let response = http_request(base_url, request).await?;
-    parse_json_response(&response)
+    )
+}
+
+async fn direct_mesh_request(
+    invite_token: &InviteToken,
+    connect_timeout: Duration,
+    request: String,
+) -> Result<Vec<u8>, String> {
+    let addr = decode_invite_endpoint_addr(invite_token.as_str())?;
+    let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(iroh::SecretKey::generate())
+        .alpns(vec![ALPN_V1.to_vec()])
+        .bind_addr(std::net::SocketAddr::from(([0, 0, 0, 0], 0)))
+        .map_err(|err| format!("build mesh endpoint: {err}"))?;
+    builder = builder.relay_mode(relay_mode_from_endpoint_addr(&addr));
+    let endpoint = builder
+        .bind()
+        .await
+        .map_err(|err| format!("bind mesh endpoint: {err}"))?;
+    let result = direct_mesh_request_with_endpoint(&endpoint, addr, connect_timeout, request).await;
+    endpoint.close().await;
+    result
+}
+
+async fn direct_mesh_request_with_endpoint(
+    endpoint: &Endpoint,
+    addr: EndpointAddr,
+    connect_timeout: Duration,
+    request: String,
+) -> Result<Vec<u8>, String> {
+    if addr.relay_urls().next().is_some() {
+        let _ = tokio::time::timeout(connect_timeout, endpoint.online()).await;
+    }
+    let connection = tokio::time::timeout(connect_timeout, endpoint.connect(addr, ALPN_V1))
+        .await
+        .map_err(|_| "connect mesh endpoint: timed out".to_string())?
+        .map_err(|err| format!("connect mesh endpoint: {err}"))?;
+    let (mut send, mut recv) = connection
+        .open_bi()
+        .await
+        .map_err(|err| format!("open mesh request stream: {err}"))?;
+    send.write_all(&[STREAM_TUNNEL_HTTP])
+        .await
+        .map_err(|err| format!("write mesh request stream type: {err}"))?;
+    send.write_all(request.as_bytes())
+        .await
+        .map_err(|err| format!("write mesh request: {err}"))?;
+    send.finish()
+        .map_err(|err| format!("finish mesh request: {err}"))?;
+
+    let response = recv
+        .read_to_end(MAX_MESH_RESPONSE_BYTES)
+        .await
+        .map_err(|err| format!("read mesh response: {err}"))?;
+    connection.close(0u32.into(), b"mesh-client-request-complete");
+    Ok(response)
+}
+
+#[derive(Deserialize)]
+struct SignedBootstrapTokenAddrs {
+    serialized_addrs: Vec<Vec<u8>>,
+}
+
+fn decode_invite_endpoint_addr(invite_token: &str) -> Result<EndpointAddr, String> {
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(invite_token)
+        .map_err(|err| format!("invalid invite token encoding: {err}"))?;
+    if let Ok(addr) = serde_json::from_slice::<EndpointAddr>(&payload) {
+        return Ok(addr);
+    }
+    let signed = serde_json::from_slice::<SignedBootstrapTokenAddrs>(&payload)
+        .map_err(|err| format!("invalid invite token payload: {err}"))?;
+    let addr = signed
+        .serialized_addrs
+        .first()
+        .ok_or_else(|| "signed invite token has no endpoint addresses".to_string())?;
+    serde_json::from_slice(addr).map_err(|err| format!("invalid signed invite endpoint: {err}"))
+}
+
+fn relay_mode_from_endpoint_addr(addr: &EndpointAddr) -> iroh::endpoint::RelayMode {
+    match relay_map_from_endpoint_addr(addr) {
+        Some(relay_map) => iroh::endpoint::RelayMode::Custom(relay_map),
+        None => iroh::endpoint::RelayMode::Disabled,
+    }
+}
+
+fn relay_map_from_endpoint_addr(addr: &EndpointAddr) -> Option<iroh::RelayMap> {
+    let configs: Vec<_> = addr
+        .relay_urls()
+        .cloned()
+        .map(|url| iroh::RelayConfig::new(url, None))
+        .collect();
+    if configs.is_empty() {
+        None
+    } else {
+        Some(iroh::RelayMap::from_iter(configs))
+    }
 }
 
 async fn http_request(base_url: &str, request: String) -> Result<Vec<u8>, String> {

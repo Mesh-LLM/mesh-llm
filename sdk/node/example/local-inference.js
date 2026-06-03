@@ -10,8 +10,11 @@ async function main() {
     process.exit(2)
   }
 
-  const runtime = resolveNativeRuntime()
-  console.log(`using native runtime ${runtime.artifactId} from ${runtime.artifactDir}`)
+  const runtime = await resolveNativeRuntime({
+    artifactDir: process.env.MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR,
+    allowDownload: process.env.MESH_SDK_RUNTIME_ALLOW_DOWNLOAD === '1'
+  })
+  console.log(`using native runtime ${runtime.nativeRuntimeId} from ${runtime.path}`)
 
   const node = Node.create({
     ownerKeypairHex: process.env.MESH_SDK_OWNER_KEYPAIR_HEX || generateOwnerKeypairHex(),

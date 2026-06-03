@@ -13,17 +13,17 @@ use super::materialization::{
 const RUNTIME_SMOKE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug)]
-pub(crate) struct SkippyCertificationRequest {
-    pub(crate) model_ref: String,
-    pub(crate) package_only: bool,
-    pub(crate) api_base: Option<String>,
-    pub(crate) prompt: String,
-    pub(crate) max_tokens: u32,
+pub struct SkippyCertificationRequest {
+    pub model_ref: String,
+    pub package_only: bool,
+    pub api_base: Option<String>,
+    pub prompt: String,
+    pub max_tokens: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum CertificationGateStatus {
+pub enum CertificationGateStatus {
     Passed,
     Failed,
     Incomplete,
@@ -31,43 +31,43 @@ pub(crate) enum CertificationGateStatus {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct SkippyCertificationReport {
-    pub(crate) schema_version: u32,
-    pub(crate) status: CertificationGateStatus,
-    pub(crate) input: String,
-    pub(crate) resolved_package_ref: String,
-    pub(crate) local_package_dir: String,
-    pub(crate) model_id: String,
-    pub(crate) manifest_sha256: String,
-    pub(crate) source_model_path: String,
-    pub(crate) source_model_sha256: String,
-    pub(crate) source_model_bytes: Option<u64>,
-    pub(crate) layer_count: u32,
-    pub(crate) package_gate: CertificationGate,
-    pub(crate) materialized_stages: Vec<CertifiedStage>,
-    pub(crate) runtime_gates: Vec<CertificationGate>,
+pub struct SkippyCertificationReport {
+    pub schema_version: u32,
+    pub status: CertificationGateStatus,
+    pub input: String,
+    pub resolved_package_ref: String,
+    pub local_package_dir: String,
+    pub model_id: String,
+    pub manifest_sha256: String,
+    pub source_model_path: String,
+    pub source_model_sha256: String,
+    pub source_model_bytes: Option<u64>,
+    pub layer_count: u32,
+    pub package_gate: CertificationGate,
+    pub materialized_stages: Vec<CertifiedStage>,
+    pub runtime_gates: Vec<CertificationGate>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CertificationGate {
-    pub(crate) name: String,
-    pub(crate) status: CertificationGateStatus,
+pub struct CertificationGate {
+    pub name: String,
+    pub status: CertificationGateStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) details: Option<String>,
+    pub details: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CertifiedStage {
-    pub(crate) stage_id: String,
-    pub(crate) layer_start: u32,
-    pub(crate) layer_end: u32,
-    pub(crate) include_embeddings: bool,
-    pub(crate) include_output: bool,
-    pub(crate) selected_part_count: usize,
-    pub(crate) verified_artifacts: usize,
-    pub(crate) cached_artifacts: usize,
-    pub(crate) materialized_path: String,
-    pub(crate) materialized_bytes: u64,
+pub struct CertifiedStage {
+    pub stage_id: String,
+    pub layer_start: u32,
+    pub layer_end: u32,
+    pub include_embeddings: bool,
+    pub include_output: bool,
+    pub selected_part_count: usize,
+    pub verified_artifacts: usize,
+    pub cached_artifacts: usize,
+    pub materialized_path: String,
+    pub materialized_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -78,7 +78,7 @@ struct CertificationStageRange {
     include_output: bool,
 }
 
-pub(crate) async fn certify_layer_package(
+pub async fn certify_layer_package(
     request: SkippyCertificationRequest,
 ) -> Result<SkippyCertificationReport> {
     let resolved_package_ref = resolve_certification_package_ref(&request.model_ref)?;
@@ -119,7 +119,7 @@ pub(crate) async fn certify_layer_package(
     })
 }
 
-pub(crate) fn resolve_certification_package_ref(input: &str) -> Result<String> {
+pub fn resolve_certification_package_ref(input: &str) -> Result<String> {
     if let Ok(package_ref) = StagePackageRef::parse(input) {
         if let Some(package_ref) = package_ref.as_package_ref() {
             return Ok(package_ref);

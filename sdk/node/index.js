@@ -1,7 +1,7 @@
 'use strict'
 
 const path = require('node:path')
-const { resolveNativeRuntime, validateNativeRuntime } = require('./native-runtime')
+const nativeRuntime = require('./native-runtime')
 const nativeModuleCache = new Map()
 
 function loadNativeAddon() {
@@ -52,6 +52,7 @@ function nativeAddonName() {
 }
 
 const native = loadNativeAddon()
+nativeRuntime.configureNativeRuntimeBinding(native)
 
 class Client {
   constructor(handle) {
@@ -234,6 +235,13 @@ module.exports = {
   Console,
   Node,
   generateOwnerKeypairHex: native.generateOwnerKeypairHex,
-  resolveNativeRuntime,
-  validateNativeRuntime
+  currentMeshVersion: nativeRuntime.currentMeshVersion,
+  currentSkippyAbiVersion: nativeRuntime.currentSkippyAbiVersion,
+  defaultConsoleAssetDir,
+  installNativeRuntime: nativeRuntime.installNativeRuntime,
+  installedNativeRuntimes: nativeRuntime.installedNativeRuntimes,
+  removeNativeRuntime: nativeRuntime.removeNativeRuntime,
+  pruneNativeRuntimes: nativeRuntime.pruneNativeRuntimes,
+  resolveNativeRuntime: nativeRuntime.resolveNativeRuntime,
+  validateNativeRuntime: nativeRuntime.validateNativeRuntime
 }

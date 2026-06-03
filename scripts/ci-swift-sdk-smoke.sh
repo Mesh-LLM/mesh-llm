@@ -10,6 +10,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 scripts/check-sdk-contract.sh
+scripts/package-sdk-console-assets.sh --sdk swift
+scripts/verify-sdk-console-assets.sh --sdk swift
 
 if [[ "${MESH_SWIFT_FULL_XCFRAMEWORK_SMOKE:-0}" == "1" ]]; then
     ./sdk/swift/scripts/build-xcframework.sh
@@ -28,6 +30,9 @@ ditto -c -k --sequesterRsrc --keepParent \
     "$SWIFT_ARTIFACT_SMOKE_DIR/MeshLLMFFI.xcframework.zip"
 scripts/verify-swift-release-artifact.sh \
     "$SWIFT_ARTIFACT_SMOKE_DIR/MeshLLMFFI.xcframework.zip"
+
+native_runtime_dir="$(scripts/ci-prepare-native-runtime.sh "$REPO_ROOT/target/swift-native-runtime" cpu)"
+export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="$native_runtime_dir"
 
 scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
     bash -lc '

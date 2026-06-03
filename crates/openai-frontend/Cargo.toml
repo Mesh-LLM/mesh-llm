@@ -3,13 +3,16 @@ name = "openai-frontend"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "OpenAI-compatible HTTP frontend shared by mesh-llm runtimes"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [dependencies]
 async-trait = "0.1"
 axum = "0.8"
 futures-core = "0.3"
 futures-util = "0.3"
-mesh-llm-guardrails = { path = "../mesh-llm-guardrails" }
+mesh-llm-guardrails = { path = "../mesh-llm-guardrails", version = "0.68.0"  }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["time"] }

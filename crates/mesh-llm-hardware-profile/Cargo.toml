@@ -1,0 +1,16 @@
+[package]
+name = "mesh-llm-hardware-profile"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Host hardware profile detection for Mesh LLM native runtime selection"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.68.0" }
+

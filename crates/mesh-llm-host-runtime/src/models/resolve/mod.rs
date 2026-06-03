@@ -4,9 +4,9 @@ use super::{
     capabilities, catalog, find_model_path, format_size_bytes, huggingface_identity_for_path,
     remote_catalog, track_model_usage,
 };
-use crate::cli::terminal_progress::start_spinner;
 use crate::models::usage::ModelUsageRecord;
 use anyhow::{Context, Result, bail};
+use mesh_llm_events::terminal_progress::start_spinner;
 use model_artifact::{ModelArtifactFile, select_primary_artifact_file};
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -49,16 +49,6 @@ pub enum ShowVariantsProgress {
 #[derive(Clone, Debug)]
 enum ExactModelRef {
     Catalog(Box<remote_catalog::RemoteCatalogModel>),
-    HuggingFace {
-        repo: String,
-        revision: Option<String>,
-        file: String,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum DeleteModelRef {
-    LocalStem(String),
     HuggingFace {
         repo: String,
         revision: Option<String>,
@@ -452,50 +442,6 @@ pub fn installed_model_huggingface_ref(identity: &HuggingFaceModelIdentity) -> S
     format_huggingface_display_ref(&identity.repo_id, None, &identity.file)
 }
 
-pub(crate) async fn parse_delete_model_ref(input: &str) -> Result<DeleteModelRef> {
-    if input.starts_with("http://") || input.starts_with("https://") {
-        bail!("Delete does not support direct URLs. Use a model stem or Hugging Face ref.");
-    }
-    if Path::new(input).is_absolute()
-        || input.contains('\\')
-        || input.starts_with("./")
-        || input.starts_with("../")
-        || input.starts_with("~/")
-    {
-        bail!("Delete does not support filesystem paths. Use a model stem or Hugging Face ref.");
-    }
-
-    if let Some(model) = find_remote_catalog_model_exact(input) {
-        let stem = model.file.trim_end_matches(".gguf");
-        if find_model_path(stem).exists() {
-            return Ok(DeleteModelRef::LocalStem(stem.to_string()));
-        }
-    }
-
-    if !input.contains('/') {
-        let installed_name = input.strip_suffix(".gguf").unwrap_or(input);
-        if find_model_path(installed_name).exists() {
-            return Ok(DeleteModelRef::LocalStem(installed_name.to_string()));
-        }
-    }
-
-    let canonical = canonicalize_model_ref_input(input).await?;
-    match parse_exact_model_ref(&canonical)? {
-        ExactModelRef::Catalog(model) => Ok(DeleteModelRef::LocalStem(
-            model.file.trim_end_matches(".gguf").to_string(),
-        )),
-        ExactModelRef::HuggingFace {
-            repo,
-            revision,
-            file,
-        } => Ok(DeleteModelRef::HuggingFace {
-            repo,
-            revision,
-            file,
-        }),
-    }
-}
-
 pub(super) fn matching_remote_catalog_model_for_huggingface(
     repo: &str,
     revision: Option<&str>,
@@ -537,9 +483,6 @@ fn parse_huggingface_repo_url(input: &str) -> Option<(String, Option<String>, Op
 }
 
 fn parse_exact_model_ref(input: &str) -> Result<ExactModelRef> {
-    if let Some(model) = find_remote_catalog_model_exact(input) {
-        return Ok(ExactModelRef::Catalog(Box::new(model)));
-    }
     if let Some((repo, revision, file)) = parse_huggingface_ref(input) {
         return Ok(ExactModelRef::HuggingFace {
             repo,
@@ -560,6 +503,9 @@ fn parse_exact_model_ref(input: &str) -> Result<ExactModelRef> {
             revision,
             file: selector.unwrap_or_default(),
         });
+    }
+    if let Some(model) = find_remote_catalog_model_exact(input) {
+        return Ok(ExactModelRef::Catalog(Box::new(model)));
     }
     bail!(
         "Expected an exact model ref. Use a catalog id or a Hugging Face ref like org/repo, org/repo@rev:QUANT, org/repo/file.gguf, org/repo/file-stem for split GGUFs, org/repo/model.safetensors, or org/repo/model-00001-of-00048.safetensors."

@@ -6,6 +6,7 @@ pub mod instance;
 mod interactive;
 mod local;
 mod model_target_reconciliation;
+mod options;
 mod proxy;
 mod release_attestation;
 mod split_planning;
@@ -36,18 +37,12 @@ use self::model_target_reconciliation::{
     ModelTargetReconciliationPolicy, ModelTargetReconciliationState,
     plan_model_target_reconciliation,
 };
+pub use self::options::{MeshGuardrailMode, RuntimeOptions, RuntimeSurface};
 use self::proxy::{api_proxy, bootstrap_proxy};
 #[cfg(test)]
 pub(crate) use self::release_attestation::assert_release_attestation_reports_missing_for_unstamped_binary;
 use crate::MeshRequirements;
 use crate::api;
-use crate::cli::output::{
-    ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
-    DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
-    DashboardSnapshotFuture, DashboardSnapshotProvider, OutputEvent, RuntimeStatus, emit_event,
-    flush_output, sort_dashboard_endpoint_rows,
-};
-use crate::cli::{Cli, Command, LogFormat, RuntimeSurface};
 use crate::crypto::{
     OwnerKeychainLoadError, default_keystore_path, default_trust_store_path, keystore_exists,
     keystore_metadata, load_keystore, load_owner_keypair_from_keychain, load_trust_store,
@@ -60,7 +55,12 @@ use crate::network::{affinity, discovery as mesh_discovery, nostr, tunnel};
 use crate::plugin;
 use crate::system::{autoupdate, backend, benchmark, hardware};
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser};
+use mesh_llm_events::{
+    ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
+    DashboardModelLane, DashboardModelRow, DashboardProcessRow, DashboardSnapshot,
+    DashboardSnapshotFuture, DashboardSnapshotProvider, LogFormat, OutputEvent, RuntimeStatus,
+    emit_event, flush_output, output_sink, schedule_ready_prompt, sort_dashboard_endpoint_rows,
+};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
 use skippy_protocol::FlashAttentionType;
 use std::cell::Cell;
@@ -86,6 +86,18 @@ type DashboardContextUsage =
     Arc<tokio::sync::Mutex<HashMap<String, HashMap<DashboardContextUsageSource, u64>>>>;
 type RuntimeInstanceRegistry =
     Arc<tokio::sync::Mutex<HashMap<String, BTreeMap<String, Option<u32>>>>>;
+
+fn single_quote_shell_arg(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn mesh_guardrail_mode_to_openai(mode: MeshGuardrailMode) -> openai_frontend::GuardrailMode {
+    match mode {
+        MeshGuardrailMode::Disabled => openai_frontend::GuardrailMode::Disabled,
+        MeshGuardrailMode::Metrics => openai_frontend::GuardrailMode::MetricsOnly,
+        MeshGuardrailMode::Enforce => openai_frontend::GuardrailMode::Enforce,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct DashboardContextUsageSource {
@@ -261,8 +273,9 @@ impl MeshTracingStderrWriter {
     }
 
     fn should_route_to_dashboard(&self) -> bool {
-        !self.target.starts_with("mesh_llm::cli::output")
-            && crate::cli::output::interactive_tui_active()
+        !self.target.starts_with("mesh_llm_tui::output")
+            && !self.target.starts_with("mesh_llm_events")
+            && mesh_llm_events::interactive_tui_active()
     }
 
     fn route_line_to_dashboard(&self, message: String) -> io::Result<()> {
@@ -273,21 +286,21 @@ impl MeshTracingStderrWriter {
 
             routing.set(true);
             let event = match self.level {
-                tracing::Level::ERROR => crate::cli::output::OutputEvent::Error {
+                tracing::Level::ERROR => OutputEvent::Error {
                     message: message.clone(),
                     context: Some("stderr".to_string()),
                 },
-                tracing::Level::WARN => crate::cli::output::OutputEvent::Warning {
+                tracing::Level::WARN => OutputEvent::Warning {
                     message: message.clone(),
                     context: Some("stderr".to_string()),
                 },
-                _ => crate::cli::output::OutputEvent::Info {
+                _ => OutputEvent::Info {
                     message: message.clone(),
                     context: Some("stderr".to_string()),
                 },
             };
             let result =
-                crate::cli::output::emit_event(event).or_else(|_| write_stderr_line(&message));
+                mesh_llm_events::emit_event(event).or_else(|_| write_stderr_line(&message));
             routing.set(false);
             result
         })
@@ -2258,10 +2271,13 @@ fn maybe_spawn_startup_interactive_handler(
         return;
     }
     if let Some(cs) = interactive_console_state {
+        let Some(sink) = output_sink() else {
+            return;
+        };
         interactive::spawn_handler(
             interactive_control_tx,
             cs,
-            crate::cli::output::OutputManager::global(),
+            sink,
             InitialPromptMode::Deferred,
         );
     }
@@ -2684,7 +2700,7 @@ impl StartupReadyReporter {
         let pi_command = Some(format!(
             "mesh-llm pi --host 127.0.0.1:{} --model {}",
             self.api_port,
-            crate::cli::shell::single_quote(&self.primary_model)
+            single_quote_shell_arg(&self.primary_model)
         ));
         let goose_command = Some(format!(
             "GOOSE_PROVIDER=openai OPENAI_HOST={} OPENAI_API_KEY=mesh GOOSE_MODEL={} goose session",
@@ -2706,7 +2722,7 @@ impl StartupReadyReporter {
             return;
         };
         let _ = emit_event(event);
-        let _ = crate::cli::output::OutputManager::global().schedule_ready_prompt();
+        let _ = schedule_ready_prompt();
     }
 }
 
@@ -2754,8 +2770,8 @@ struct StartupModelPlan {
     flash_attention: FlashAttentionType,
 }
 
-fn resolve_runtime_owner_key_path(cli: &Cli) -> Result<Option<PathBuf>> {
-    if let Some(path) = cli.owner_key.clone() {
+fn resolve_runtime_owner_key_path(options: &RuntimeOptions) -> Result<Option<PathBuf>> {
+    if let Some(path) = options.owner_key.clone() {
         return Ok(Some(path));
     }
 
@@ -2812,19 +2828,19 @@ fn load_owner_keypair_for_runtime(path: &Path) -> Result<crate::crypto::OwnerKey
 }
 
 fn owner_runtime_config(
-    cli: &Cli,
+    options: &RuntimeOptions,
     config: &plugin::MeshConfig,
 ) -> Result<mesh::OwnerRuntimeConfig> {
     let trust_store_path = default_trust_store_path()?;
     let trust_store = load_trust_store(&trust_store_path)
         .with_context(|| format!("Failed to load trust store {}", trust_store_path.display()))?
-        .merged_with_trusted_owners(&cli.trust_owner);
-    let trust_policy = cli.trust_policy.unwrap_or(trust_store.policy);
+        .merged_with_trusted_owners(&options.trust_owner);
+    let trust_policy = options.trust_policy.unwrap_or(trust_store.policy);
 
-    let keypair = match resolve_runtime_owner_key_path(cli)? {
+    let keypair = match resolve_runtime_owner_key_path(options)? {
         Some(path) => match load_owner_keypair_for_runtime(&path) {
             Ok(keypair) => Some(keypair),
-            Err(err) if !cli.owner_required => {
+            Err(err) if !options.owner_required => {
                 let _ = emit_event(OutputEvent::Warning {
                     message: format!(
                         "Owner identity unavailable: {err}. Starting without owner attestation."
@@ -2835,7 +2851,7 @@ fn owner_runtime_config(
             }
             Err(err) => return Err(err),
         },
-        None if cli.owner_required => {
+        None if options.owner_required => {
             anyhow::bail!(
                 "Owner identity is required but no keystore was found. To enable owner control, run `mesh-llm auth init --no-passphrase`, then restart with `mesh-llm serve --owner-required`."
             );
@@ -2845,11 +2861,11 @@ fn owner_runtime_config(
 
     Ok(mesh::OwnerRuntimeConfig {
         keypair,
-        control_bind: cli.control_bind.or(config.owner_control.bind),
-        control_advertise_addr: cli
+        control_bind: options.control_bind.or(config.owner_control.bind),
+        control_advertise_addr: options
             .control_advertise_addr
             .or(config.owner_control.advertise_addr),
-        node_label: cli.node_label.clone(),
+        node_label: options.node_label.clone(),
         trust_store,
         trust_policy,
     })
@@ -2863,30 +2879,30 @@ fn emit_configuration_ui_read_only_hint() {
 }
 
 fn resolve_startup_mesh_creation_state(
-    cli: &Cli,
+    options: &RuntimeOptions,
     config: &plugin::MeshConfig,
 ) -> Result<StartupMeshCreationState> {
     let merged = plugin::MeshRequirementsConfig {
-        min_node_version: cli
+        min_node_version: options
             .min_node_version
             .clone()
             .or_else(|| config.mesh_requirements.min_node_version.clone()),
-        max_node_version: cli
+        max_node_version: options
             .max_node_version
             .clone()
             .or_else(|| config.mesh_requirements.max_node_version.clone()),
-        min_protocol_version: cli
+        min_protocol_version: options
             .min_protocol_version
             .or(config.mesh_requirements.min_protocol_version),
-        max_protocol_version: cli
+        max_protocol_version: options
             .max_protocol_version
             .or(config.mesh_requirements.max_protocol_version),
-        require_release_attestation: cli.require_release_attestation
+        require_release_attestation: options.require_release_attestation
             || config.mesh_requirements.require_release_attestation,
-        release_signer_keys: if cli.release_signer_key.is_empty() {
+        release_signer_keys: if options.release_signer_key.is_empty() {
             config.mesh_requirements.release_signer_keys.clone()
         } else {
-            cli.release_signer_key.clone()
+            options.release_signer_key.clone()
         },
     };
     let requirements = plugin::mesh_requirements_config_to_runtime(&merged);
@@ -2915,23 +2931,23 @@ fn ensure_existing_mesh_requirements_match(
 
 #[cfg(test)]
 pub(crate) fn assert_mesh_requirements_cli_accepts_each_bound_independently() {
-    let min_only = Cli::parse_from(["mesh-llm", "--min-node-version", "0.65.0"]);
+    let min_only = runtime_options_for_test(&["mesh-llm", "--min-node-version", "0.65.0"]);
     assert_eq!(min_only.min_node_version.as_deref(), Some("0.65.0"));
     assert_eq!(min_only.max_node_version, None);
 
-    let max_only = Cli::parse_from(["mesh-llm", "--max-node-version", "0.65.9"]);
+    let max_only = runtime_options_for_test(&["mesh-llm", "--max-node-version", "0.65.9"]);
     assert_eq!(max_only.min_node_version, None);
     assert_eq!(max_only.max_node_version.as_deref(), Some("0.65.9"));
 
-    let min_protocol = Cli::parse_from(["mesh-llm", "--min-protocol-version", "1"]);
+    let min_protocol = runtime_options_for_test(&["mesh-llm", "--min-protocol-version", "1"]);
     assert_eq!(min_protocol.min_protocol_version, Some(1));
     assert_eq!(min_protocol.max_protocol_version, None);
 
-    let max_protocol = Cli::parse_from(["mesh-llm", "--max-protocol-version", "3"]);
+    let max_protocol = runtime_options_for_test(&["mesh-llm", "--max-protocol-version", "3"]);
     assert_eq!(max_protocol.min_protocol_version, None);
     assert_eq!(max_protocol.max_protocol_version, Some(3));
 
-    let attestation = Cli::parse_from([
+    let attestation = runtime_options_for_test(&[
         "mesh-llm",
         "--require-release-attestation",
         "--release-signer-key",
@@ -2948,7 +2964,7 @@ pub(crate) fn assert_mesh_requirements_cli_accepts_each_bound_independently() {
 
 #[cfg(test)]
 pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_genesis() {
-    let cli = Cli::parse_from([
+    let options = runtime_options_for_test(&[
         "mesh-llm",
         "--min-node-version",
         "0.65.3",
@@ -2971,7 +2987,7 @@ pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_gen
         ..plugin::MeshConfig::default()
     };
 
-    let startup_state = resolve_startup_mesh_creation_state(&cli, &config)
+    let startup_state = resolve_startup_mesh_creation_state(&options, &config)
         .expect("merged requirements should validate");
     let policy = crate::MeshGenesisPolicy::new(
         "owner-123",
@@ -3010,7 +3026,7 @@ pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_gen
 
 #[cfg(test)]
 pub(crate) fn assert_mesh_requirements_config_rejects_min_greater_than_max_after_merge() {
-    let cli = Cli::parse_from(["mesh-llm", "--min-node-version", "0.65.5"]);
+    let options = runtime_options_for_test(&["mesh-llm", "--min-node-version", "0.65.5"]);
     let config = plugin::MeshConfig {
         mesh_requirements: plugin::MeshRequirementsConfig {
             max_node_version: Some("0.65.4".into()),
@@ -3019,7 +3035,7 @@ pub(crate) fn assert_mesh_requirements_config_rejects_min_greater_than_max_after
         ..plugin::MeshConfig::default()
     };
 
-    let err = resolve_startup_mesh_creation_state(&cli, &config)
+    let err = resolve_startup_mesh_creation_state(&options, &config)
         .expect_err("merged bounds should be rejected");
     assert!(err.to_string().contains(
         "mesh_requirements.min_node_version must be less than or equal to mesh_requirements.max_node_version"
@@ -3028,7 +3044,7 @@ pub(crate) fn assert_mesh_requirements_config_rejects_min_greater_than_max_after
 
 #[cfg(test)]
 pub(crate) fn assert_mesh_requirements_rejects_local_policy_mutation_on_existing_mesh() {
-    let cli = Cli::parse_from(["mesh-llm", "--max-node-version", "0.65.9"]);
+    let options = runtime_options_for_test(&["mesh-llm", "--max-node-version", "0.65.9"]);
     let config = plugin::MeshConfig {
         mesh_requirements: plugin::MeshRequirementsConfig {
             require_release_attestation: true,
@@ -3039,7 +3055,7 @@ pub(crate) fn assert_mesh_requirements_rejects_local_policy_mutation_on_existing
         },
         ..plugin::MeshConfig::default()
     };
-    let startup_state = resolve_startup_mesh_creation_state(&cli, &config)
+    let startup_state = resolve_startup_mesh_creation_state(&options, &config)
         .expect("local requirements should validate");
     let existing_policy = crate::MeshGenesisPolicy::new(
         "owner-123",
@@ -3114,42 +3130,9 @@ fn init_embedded_runtime_tracing() -> Result<()> {
     Ok(())
 }
 
-fn maybe_print_advanced_help_and_exit() {
-    if !std::env::args().any(|a| a == "--help-advanced") {
-        return;
-    }
-
-    let mut cmd = Cli::command();
-    let args: Vec<clap::Id> = cmd.get_arguments().map(|a| a.get_id().clone()).collect();
-    for id in args {
-        cmd = cmd.mut_arg(id, |a| a.hide(false));
-    }
-    let sub_names: Vec<String> = cmd
-        .get_subcommands()
-        .map(|s| s.get_name().to_string())
-        .collect();
-    for name in sub_names {
-        cmd = cmd.mut_subcommand(name, |s| s.hide(false));
-    }
-    cmd.print_help().ok();
-    write_stderr_newline();
-    std::process::exit(0);
-}
-
-fn maybe_print_usage_and_exit() {
-    if std::env::args_os().len() != 1 {
-        return;
-    }
-
-    Cli::command().print_help().ok();
-    std::process::exit(0);
-}
-
 fn initialize_runtime_entrypoint() -> Result<()> {
     crate::system::backend::clear_runtime_shutting_down();
     init_runtime_tracing()?;
-    maybe_print_advanced_help_and_exit();
-    maybe_print_usage_and_exit();
     Ok(())
 }
 
@@ -3158,8 +3141,10 @@ fn initialize_embedded_runtime_entrypoint() -> Result<()> {
     init_embedded_runtime_tracing()
 }
 
-fn acquire_instance_runtime(cli: &Cli) -> Option<Arc<crate::runtime::instance::InstanceRuntime>> {
-    if cli.client && !swarm_capture_observer_requested(cli) {
+fn acquire_instance_runtime(
+    options: &RuntimeOptions,
+) -> Option<Arc<crate::runtime::instance::InstanceRuntime>> {
+    if options.client && !swarm_capture_observer_requested(options) {
         return None;
     }
 
@@ -3197,11 +3182,11 @@ fn write_runtime_owner_metadata(
     }
 }
 
-fn emit_private_mesh_name_warning(cli: &Cli) {
-    let Some(mesh_name) = cli
+fn emit_private_mesh_name_warning(options: &RuntimeOptions) {
+    let Some(mesh_name) = options
         .mesh_name
         .as_ref()
-        .filter(|_| !cli.publish && !cli.auto && cli.discover.is_none())
+        .filter(|_| !options.publish && !options.auto && options.discover.is_none())
     else {
         return;
     };
@@ -3215,9 +3200,9 @@ fn emit_private_mesh_name_warning(cli: &Cli) {
     });
 }
 
-fn handle_public_identity_transition(cli: &Cli) {
-    let is_public = cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
-        && (cli.auto || cli.publish || cli.discover.is_some());
+fn handle_public_identity_transition(options: &RuntimeOptions) {
+    let is_public = options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
+        && (options.auto || options.publish || options.discover.is_some());
     if is_public {
         mesh::mark_was_public();
         return;
@@ -3233,28 +3218,28 @@ fn handle_public_identity_transition(cli: &Cli) {
 }
 
 async fn maybe_discover_join_candidates(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     has_startup_models: bool,
     auto_join_candidates: &mut Vec<(String, Option<String>)>,
 ) -> Result<()> {
-    let discover_active = cli.auto || cli.discover.is_some();
-    if !discover_active || !cli.join.is_empty() {
+    let discover_active = options.auto || options.discover.is_some();
+    if !discover_active || !options.join.is_empty() {
         return Ok(());
     }
 
-    if let Some(name) = cli.discover.as_ref().filter(|name| !name.is_empty())
-        && cli.mesh_name.is_none()
+    if let Some(name) = options.discover.as_ref().filter(|name| !name.is_empty())
+        && options.mesh_name.is_none()
     {
-        cli.mesh_name = Some(name.clone());
+        options.mesh_name = Some(name.clone());
     }
 
-    let my_vram_gb = mesh::detect_vram_bytes_capped(cli.max_vram) as f64 / 1e9;
-    let target_name = cli.mesh_name.clone();
+    let my_vram_gb = mesh::detect_vram_bytes_capped(options.max_vram) as f64 / 1e9;
+    let target_name = options.mesh_name.clone();
 
-    match cli.mesh_discovery_mode {
+    match options.mesh_discovery_mode {
         mesh_discovery::MeshDiscoveryMode::Nostr => {
             discover_nostr_join_candidates(
-                cli,
+                options,
                 has_startup_models,
                 auto_join_candidates,
                 my_vram_gb,
@@ -3265,18 +3250,18 @@ async fn maybe_discover_join_candidates(
         mesh_discovery::MeshDiscoveryMode::Mdns => {
             let _ = emit_event(OutputEvent::DiscoveryStarting {
                 source: mesh_discovery::discovery_source_label(
-                    cli.mesh_discovery_mode,
+                    options.mesh_discovery_mode,
                     "auto-discovery",
                 ),
             });
             let filter = nostr::MeshFilter {
                 name: target_name.clone(),
-                region: cli.region.clone(),
+                region: options.region.clone(),
                 ..Default::default()
             };
             let candidates = mesh_discovery::discover_lan_join_candidates(
                 &filter,
-                cli.join.first().map(String::as_str),
+                options.join.first().map(String::as_str),
                 std::time::Duration::from_secs(5),
             )
             .await?;
@@ -3288,7 +3273,7 @@ async fn maybe_discover_join_candidates(
                     detail: Some("Pass --join <token> or start a new LAN mesh.".to_string()),
                 });
                 let models = default_models_for_vram_blocking(my_vram_gb).await?;
-                if cli.client {
+                if options.client {
                     let _ = emit_event(OutputEvent::Info {
                         message:
                             "No joinable LAN mesh yet — starting client API; pass --join with a LAN invite token to connect"
@@ -3296,7 +3281,7 @@ async fn maybe_discover_join_candidates(
                         context: None,
                     });
                 } else {
-                    start_new_mesh(cli, &models, my_vram_gb, has_startup_models);
+                    start_new_mesh(options, &models, my_vram_gb, has_startup_models);
                 }
             } else {
                 for (token, mesh) in candidates {
@@ -3320,22 +3305,25 @@ async fn maybe_discover_join_candidates(
 }
 
 async fn discover_nostr_join_candidates(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     has_startup_models: bool,
     auto_join_candidates: &mut Vec<(String, Option<String>)>,
     my_vram_gb: f64,
     target_name: Option<String>,
 ) -> Result<()> {
-    cli.nostr_discovery = true;
+    options.nostr_discovery = true;
     let _ = emit_event(OutputEvent::DiscoveryStarting {
-        source: mesh_discovery::discovery_source_label(cli.mesh_discovery_mode, "auto-discovery"),
+        source: mesh_discovery::discovery_source_label(
+            options.mesh_discovery_mode,
+            "auto-discovery",
+        ),
     });
 
-    let relays = nostr_relays(&cli.nostr_relay);
+    let relays = nostr_relays(&options.nostr_relay);
     let meshes = discover_nostr_meshes(&relays).await?;
     log_nostr_auto_candidates(&meshes, target_name.as_ref());
     handle_auto_decision(
-        cli,
+        options,
         smart_auto_blocking(meshes.clone(), my_vram_gb, target_name).await?,
         auto_join_candidates,
         my_vram_gb,
@@ -3395,14 +3383,14 @@ fn log_nostr_auto_candidates(meshes: &[nostr::DiscoveredMesh], target_name: Opti
     }
 }
 
-fn validate_runtime_cli_model_options(cli: &Cli) -> Result<()> {
-    if cli.client && (!cli.model.is_empty() || !cli.gguf.is_empty()) {
+fn validate_runtime_cli_model_options(options: &RuntimeOptions) -> Result<()> {
+    if options.client && (!options.model.is_empty() || !options.gguf.is_empty()) {
         anyhow::bail!("--client and --model are mutually exclusive");
     }
-    if let Some(mmproj) = &cli.mmproj {
-        anyhow::ensure!(!cli.client, "--mmproj cannot be used with --client");
+    if let Some(mmproj) = &options.mmproj {
+        anyhow::ensure!(!options.client, "--mmproj cannot be used with --client");
         anyhow::ensure!(
-            !cli.model.is_empty() || !cli.gguf.is_empty(),
+            !options.model.is_empty() || !options.gguf.is_empty(),
             "--mmproj requires an explicit primary model via --model or --gguf"
         );
         anyhow::ensure!(
@@ -3415,14 +3403,14 @@ fn validate_runtime_cli_model_options(cli: &Cli) -> Result<()> {
 }
 
 async fn prepare_runtime_startup(
-    cli: &Cli,
+    options: &RuntimeOptions,
     config: &plugin::MeshConfig,
     explicit_surface: Option<RuntimeSurface>,
 ) -> Result<Option<PreparedRuntimeStartup>> {
-    validate_runtime_cli_model_options(cli)?;
-    let startup_specs = build_startup_model_specs(cli, config)?;
-    if should_show_serve_config_help(explicit_surface, cli, &startup_specs) {
-        let config_path = plugin::config_path(cli.config.as_deref()).unwrap_or_else(|_| {
+    validate_runtime_cli_model_options(options)?;
+    let startup_specs = build_startup_model_specs(options, config)?;
+    if should_show_serve_config_help(explicit_surface, options, &startup_specs) {
+        let config_path = plugin::config_path(options.config.as_deref()).unwrap_or_else(|_| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("~"))
                 .join(".mesh-llm")
@@ -3432,13 +3420,15 @@ async fn prepare_runtime_startup(
             message: "`mesh-llm serve` needs at least one startup model. Add `[[models]]` or pass `--model` / `--gguf` explicitly.".to_string(),
             context: Some(config_path.display().to_string()),
         });
-        Cli::command().print_help().ok();
-        write_stderr_newline();
+        if let Some(help_text) = &options.help_text {
+            eprint!("{help_text}");
+            write_stderr_newline();
+        }
         return Ok(None);
     }
 
-    let mut startup_models = resolve_startup_models(&startup_specs, cli.split).await?;
-    let bin_dir = match &cli.bin_dir {
+    let mut startup_models = resolve_startup_models(&startup_specs, options.split).await?;
+    let bin_dir = match &options.bin_dir {
         Some(dir) => dir.clone(),
         None => detect_bin_dir()?,
     };
@@ -3446,7 +3436,7 @@ async fn prepare_runtime_startup(
         config,
         &startup_specs,
         &mut startup_models,
-        cli.llama_flavor,
+        options.llama_flavor,
         None,
     )?;
     let resolved_models: Vec<PathBuf> = startup_models
@@ -3481,9 +3471,16 @@ async fn prepare_runtime_startup(
 
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
+    run_runtime_cli(RuntimeOptions::default(), None, None, None).await
+}
 
-    let normalized_args = crate::cli::normalize_runtime_surface_args(std::env::args_os());
-    run_normalized_runtime_args(normalized_args).await
+pub(crate) async fn run_cli(
+    options: RuntimeOptions,
+    explicit_surface: Option<RuntimeSurface>,
+    legacy_warning: Option<String>,
+) -> Result<()> {
+    initialize_runtime_entrypoint()?;
+    run_runtime_cli(options, explicit_surface, legacy_warning, None).await
 }
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
@@ -3491,75 +3488,60 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
-    let cli = cli_from_embedded_options(options);
-    run_runtime_cli(cli, Some(surface), None, control_rx).await
+    let options = options_from_embedded_options(options);
+    run_runtime_cli(options, Some(surface), None, control_rx).await
 }
 
-async fn run_normalized_runtime_args(
-    normalized_args: crate::cli::NormalizedRuntimeArgs,
-) -> Result<()> {
-    let cli = Cli::parse_from(normalized_args.normalized.clone());
-    let warning = crate::cli::legacy_runtime_surface_warning(
-        &cli,
-        &normalized_args.original,
-        normalized_args.explicit_surface,
-    );
-    run_runtime_cli(cli, normalized_args.explicit_surface, warning, None).await
-}
-
-fn cli_from_embedded_options(options: EmbeddedRuntimeOptions) -> Cli {
-    let mut cli = Cli::parse_from(["mesh-llm"]);
-    cli.log_format = options.log_format;
-    cli.client = matches!(options.mode, EmbeddedRuntimeMode::Client);
-    cli.model = options.models.into_iter().map(PathBuf::from).collect();
-    cli.join = options.join;
-    cli.auto = options.auto;
-    cli.port = options.api_port;
-    cli.console = options.console_port;
-    cli.headless = options.headless;
-    cli.publish = options.publish;
-    cli.mesh_name = options.mesh_name;
-    cli.max_vram = options.max_vram_gb;
-    cli.mesh_discovery_mode = match options.discovery_mode {
-        EmbeddedRuntimeDiscoveryMode::Nostr => mesh_discovery::MeshDiscoveryMode::Nostr,
-        EmbeddedRuntimeDiscoveryMode::Mdns => mesh_discovery::MeshDiscoveryMode::Mdns,
-    };
-    cli.relay = options.relay;
-    cli.relay_auth = options.relay_auth;
-    cli.disable_iroh_relays = options.disable_iroh_relays;
-    cli.nostr_relay = options.nostr_relay;
-    cli.region = options.region;
-    cli.name = options.node_name;
-    cli.bind_ip = options.bind_ip;
-    cli.bind_port = options.bind_port;
-    cli.listen_all = options.listen_all;
-    cli.no_enumerate_host = !options.enumerate_host;
-    cli.owner_key = options.owner_key;
-    cli.owner_required = options.owner_required;
-    cli.node_label = options.node_label;
-    cli.trust_policy = options.trust_policy;
-    cli.trust_owner = options.trust_owner;
-    cli.min_node_version = options.mesh_requirements.min_node_version;
-    cli.max_node_version = options.mesh_requirements.max_node_version;
-    cli.min_protocol_version = options.mesh_requirements.min_protocol_version;
-    cli.max_protocol_version = options.mesh_requirements.max_protocol_version;
-    cli.require_release_attestation = options.mesh_requirements.require_release_attestation;
-    cli.release_signer_key = options.mesh_requirements.release_signer_keys;
-    cli.config = options.config_path;
-    cli
+fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
+    RuntimeOptions {
+        log_format: embedded.log_format,
+        client: matches!(embedded.mode, EmbeddedRuntimeMode::Client),
+        model: embedded.models.into_iter().map(PathBuf::from).collect(),
+        join: embedded.join,
+        auto: embedded.auto,
+        port: embedded.api_port,
+        console: embedded.console_port,
+        headless: embedded.headless,
+        publish: embedded.publish,
+        mesh_name: embedded.mesh_name,
+        max_vram: embedded.max_vram_gb,
+        mesh_discovery_mode: match embedded.discovery_mode {
+            EmbeddedRuntimeDiscoveryMode::Nostr => mesh_discovery::MeshDiscoveryMode::Nostr,
+            EmbeddedRuntimeDiscoveryMode::Mdns => mesh_discovery::MeshDiscoveryMode::Mdns,
+        },
+        relay: embedded.relay,
+        relay_auth: embedded.relay_auth,
+        disable_iroh_relays: embedded.disable_iroh_relays,
+        nostr_relay: embedded.nostr_relay,
+        region: embedded.region,
+        name: embedded.node_name,
+        bind_ip: embedded.bind_ip,
+        bind_port: embedded.bind_port,
+        listen_all: embedded.listen_all,
+        no_enumerate_host: !embedded.enumerate_host,
+        owner_key: embedded.owner_key,
+        owner_required: embedded.owner_required,
+        node_label: embedded.node_label,
+        trust_policy: embedded.trust_policy,
+        trust_owner: embedded.trust_owner,
+        min_node_version: embedded.mesh_requirements.min_node_version,
+        max_node_version: embedded.mesh_requirements.max_node_version,
+        min_protocol_version: embedded.mesh_requirements.min_protocol_version,
+        max_protocol_version: embedded.mesh_requirements.max_protocol_version,
+        require_release_attestation: embedded.mesh_requirements.require_release_attestation,
+        release_signer_key: embedded.mesh_requirements.release_signer_keys,
+        config: embedded.config_path,
+        ..RuntimeOptions::default()
+    }
 }
 
 async fn run_runtime_cli(
-    mut cli: Cli,
+    mut options: RuntimeOptions,
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 ) -> Result<()> {
-    crate::cli::validate_discovery_mode_args(&cli)?;
-    crate::cli::output::OutputManager::init_global(
-        cli.log_format,
-        initial_console_session_mode(explicit_surface),
-    );
+    options.validate_discovery_mode_args()?;
 
     if let Some(warning) = legacy_warning {
         let _ = emit_event(OutputEvent::Warning {
@@ -3568,34 +3550,27 @@ async fn run_runtime_cli(
         });
     }
 
-    if let Some(name) = cli.plugin.clone() {
+    if let Some(name) = options.plugin.clone() {
         return plugin::run_plugin_process(name).await;
     }
 
     let checked_updates = autoupdate::maybe_auto_update(autoupdate::AutoUpdateOptions {
-        auto_update: cli.auto_update,
-        plugin_requested: cli.plugin.is_some(),
-        command_is_update: matches!(cli.command, Some(Command::Update { .. })),
-        llama_flavor: cli.llama_flavor,
+        auto_update: options.auto_update,
+        plugin_requested: options.plugin.is_some(),
+        command_is_update: options.command_is_update,
+        llama_flavor: options.llama_flavor,
         current_version: crate::VERSION,
     })
     .await?;
 
     // Finish the release check before startup continues.
-    if !checked_updates
-        && !matches!(cli.command, Some(Command::Update { .. }))
-        && !command_uses_machine_output(cli.command.as_ref())
-    {
+    if !checked_updates && !options.command_is_update && !options.command_uses_machine_output {
         autoupdate::check_for_update(crate::VERSION).await;
     }
 
-    if should_short_circuit_after_dispatch(crate::cli::commands::dispatch(&cli).await?) {
-        return Ok(());
-    }
-
-    let config = plugin::load_config(cli.config.as_deref())?;
-    let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&cli, &config)?;
-    let cli_has_explicit_models = cli_has_explicit_models(&cli);
+    let config = plugin::load_config(options.config.as_deref())?;
+    let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
+    let cli_has_explicit_models = cli_has_explicit_models(&options);
     let has_config_models = !config.models.is_empty();
     let has_startup_models = cli_has_explicit_models || has_config_models;
 
@@ -3603,10 +3578,10 @@ async fn run_runtime_cli(
     // skips this, but capture observers register so detached runs can be found
     // and stopped by `mesh-llm stop`.
     // Wrap in Arc so it can be cheaply shared with local model tasks.
-    let runtime = acquire_instance_runtime(&cli);
+    let runtime = acquire_instance_runtime(&options);
 
     // Write owner.json into the runtime dir so sibling-instance discovery can find us.
-    write_runtime_owner_metadata(runtime.as_ref(), cli.console);
+    write_runtime_owner_metadata(runtime.as_ref(), options.console);
 
     // Publication intent is now explicit only: --publish gates Nostr discovery.
     // --mesh-name alone never implies publication (Issue #240).
@@ -3614,27 +3589,28 @@ async fn run_runtime_cli(
     // Warn users who set --mesh-name without --publish — but only when they
     // are creating a new mesh, not when they are joining one via --discover
     // or --auto (where --mesh-name is just a filter for which mesh to join).
-    emit_private_mesh_name_warning(&cli);
+    emit_private_mesh_name_warning(&options);
 
     // --- Public-to-private identity transition ---
     // If the previous run was public (--auto or --publish) but this run is
     // private, clear the stored identity so the private mesh gets a fresh key
     // that isn't associated with the old public listing.
-    handle_public_identity_transition(&cli);
+    handle_public_identity_transition(&options);
 
     let mut auto_join_candidates: Vec<(String, Option<String>)> = Vec::new();
-    maybe_discover_join_candidates(&mut cli, has_startup_models, &mut auto_join_candidates).await?;
+    maybe_discover_join_candidates(&mut options, has_startup_models, &mut auto_join_candidates)
+        .await?;
     let Some(PreparedRuntimeStartup {
         startup_models,
         requested_model_names,
         bin_dir,
-    }) = prepare_runtime_startup(&cli, &config, explicit_surface).await?
+    }) = prepare_runtime_startup(&options, &config, explicit_surface).await?
     else {
         return Ok(());
     };
 
     run_auto(RunAutoContext {
-        cli,
+        options,
         config,
         startup_mesh_creation_state,
         startup_models,
@@ -3647,21 +3623,82 @@ async fn run_runtime_cli(
     .await
 }
 
-fn command_uses_machine_output(command: Option<&Command>) -> bool {
-    matches!(
-        command,
-        Some(Command::Doctor {
-            json: true,
-            command: None,
-        }) | Some(Command::Runtime {
-            command: Some(
-                crate::cli::runtime::RuntimeCommand::List { json: true, .. }
-                    | crate::cli::runtime::RuntimeCommand::Install { json: true, .. }
-                    | crate::cli::runtime::RuntimeCommand::Remove { json: true, .. }
-                    | crate::cli::runtime::RuntimeCommand::Prune { json: true, .. },
-            ),
-        })
-    )
+#[cfg(test)]
+fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
+    let mut options = RuntimeOptions::default();
+    let mut iter = args.iter().copied();
+    while let Some(arg) = iter.next() {
+        match arg {
+            "mesh-llm" | "serve" => {}
+            "client" | "--client" => options.client = true,
+            "--auto" => options.auto = true,
+            "--publish" => options.publish = true,
+            "--split" => options.split = true,
+            "--require-release-attestation" => options.require_release_attestation = true,
+            "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
+            "--model" => options.model.push(next_test_arg(&mut iter, arg).into()),
+            "--ctx-size" => {
+                options.ctx_size = Some(
+                    next_test_arg(&mut iter, arg)
+                        .parse()
+                        .expect("valid --ctx-size test value"),
+                );
+            }
+            "--mesh-name" => options.mesh_name = Some(next_test_arg(&mut iter, arg).to_string()),
+            "--swarm-capture" => options.swarm_capture = Some(next_test_arg(&mut iter, arg).into()),
+            "--min-node-version" => {
+                options.min_node_version = Some(next_test_arg(&mut iter, arg).to_string());
+            }
+            "--max-node-version" => {
+                options.max_node_version = Some(next_test_arg(&mut iter, arg).to_string());
+            }
+            "--min-protocol-version" => {
+                options.min_protocol_version = Some(
+                    next_test_arg(&mut iter, arg)
+                        .parse()
+                        .expect("valid --min-protocol-version test value"),
+                );
+            }
+            "--max-protocol-version" => {
+                options.max_protocol_version = Some(
+                    next_test_arg(&mut iter, arg)
+                        .parse()
+                        .expect("valid --max-protocol-version test value"),
+                );
+            }
+            "--release-signer-key" => {
+                options
+                    .release_signer_key
+                    .push(next_test_arg(&mut iter, arg).to_string());
+            }
+            "--config" => options.config = Some(next_test_arg(&mut iter, arg).into()),
+            "--max-vram" => {
+                options.max_vram = Some(
+                    next_test_arg(&mut iter, arg)
+                        .parse()
+                        .expect("valid --max-vram test value"),
+                );
+            }
+            "--port" => {
+                options.port = next_test_arg(&mut iter, arg)
+                    .parse()
+                    .expect("valid --port test value");
+            }
+            "--console" => {
+                options.console = next_test_arg(&mut iter, arg)
+                    .parse()
+                    .expect("valid --console test value");
+            }
+            other => panic!("unsupported runtime_options_for_test arg: {other}"),
+        }
+    }
+    options
+}
+
+#[cfg(test)]
+fn next_test_arg<'a>(iter: &mut impl Iterator<Item = &'a str>, flag: &str) -> &'a str {
+    iter.next()
+        .unwrap_or_else(|| panic!("missing value for {flag}"))
 }
 
 /// Resolve a model path: local file, catalog name, or HuggingFace URL.
@@ -3911,28 +3948,28 @@ fn runtime_unix_secs() -> u64 {
         .unwrap_or_default()
 }
 
-fn cli_has_explicit_models(cli: &Cli) -> bool {
-    !cli.model.is_empty() || !cli.gguf.is_empty()
+fn cli_has_explicit_models(options: &RuntimeOptions) -> bool {
+    !options.model.is_empty() || !options.gguf.is_empty()
 }
 
 fn build_startup_model_specs(
-    cli: &Cli,
+    options: &RuntimeOptions,
     config: &plugin::MeshConfig,
 ) -> Result<Vec<StartupModelSpec>> {
-    if cli.client {
+    if options.client {
         return Ok(Vec::new());
     }
 
     let mut specs = Vec::new();
-    if cli_has_explicit_models(cli) {
-        for path in &cli.gguf {
+    if cli_has_explicit_models(options) {
+        for path in &options.gguf {
             if !path.exists() {
                 anyhow::bail!("GGUF file not found: {}", path.display());
             }
             specs.push(StartupModelSpec {
                 model_ref: path.clone(),
                 mmproj_ref: None,
-                ctx_size: cli.ctx_size,
+                ctx_size: options.ctx_size,
                 gpu_id: None,
                 config_owned: false,
                 parallel: None,
@@ -3943,11 +3980,11 @@ fn build_startup_model_specs(
                 flash_attention: FlashAttentionType::Auto,
             });
         }
-        for model in &cli.model {
+        for model in &options.model {
             specs.push(StartupModelSpec {
                 model_ref: model.clone(),
                 mmproj_ref: None,
-                ctx_size: cli.ctx_size,
+                ctx_size: options.ctx_size,
                 gpu_id: None,
                 config_owned: false,
                 parallel: None,
@@ -3958,7 +3995,7 @@ fn build_startup_model_specs(
                 flash_attention: FlashAttentionType::Auto,
             });
         }
-        if let Some(mmproj) = &cli.mmproj
+        if let Some(mmproj) = &options.mmproj
             && let Some(primary) = specs.first_mut()
         {
             primary.mmproj_ref = Some(mmproj.clone());
@@ -3970,7 +4007,7 @@ fn build_startup_model_specs(
         specs.push(StartupModelSpec {
             model_ref: PathBuf::from(model.model.clone()),
             mmproj_ref: model.mmproj.as_ref().map(PathBuf::from),
-            ctx_size: cli.ctx_size.or(model.ctx_size),
+            ctx_size: options.ctx_size.or(model.ctx_size),
             gpu_id: model.gpu_id.clone(),
             config_owned: true,
             parallel: model.parallel,
@@ -4130,9 +4167,9 @@ fn apply_backend_devices_for_flavor(
     }
 }
 
-fn swarm_capture_observer_requested(cli: &Cli) -> bool {
-    cli.client
-        && (cli.swarm_capture.is_some()
+fn swarm_capture_observer_requested(options: &RuntimeOptions) -> bool {
+    options.client
+        && (options.swarm_capture.is_some()
             || std::env::var_os(crate::capture::SWARM_CAPTURE_ENV)
                 .is_some_and(|value| !value.is_empty()))
 }
@@ -4230,19 +4267,15 @@ fn preflight_config_owned_startup_models_with_gpus(
 
 fn should_show_serve_config_help(
     explicit_surface: Option<RuntimeSurface>,
-    cli: &Cli,
+    options: &RuntimeOptions,
     startup_specs: &[StartupModelSpec],
 ) -> bool {
     explicit_surface == Some(RuntimeSurface::Serve)
-        && !cli.client
+        && !options.client
         && startup_specs.is_empty()
-        && !cli.auto
-        && cli.join.is_empty()
-        && cli.discover.is_none()
-}
-
-fn should_short_circuit_after_dispatch(dispatched: bool) -> bool {
-    dispatched
+        && !options.auto
+        && options.join.is_empty()
+        && options.discover.is_none()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4547,32 +4580,6 @@ pub(crate) fn assert_passive_path_immediate_spawn_behavior() {
 }
 
 #[cfg(test)]
-pub(crate) async fn assert_non_serving_dispatch_short_circuit_behavior() {
-    let cli = Cli::parse_from(["mesh-llm", "models", "installed"]);
-
-    assert!(matches!(
-        cli.command.as_ref(),
-        Some(Command::Models {
-            command: crate::cli::models::ModelsCommand::Installed { json: false }
-        })
-    ));
-
-    let dispatched = crate::cli::commands::dispatch(&cli)
-        .await
-        .expect("models installed should stay on the plain dispatch path");
-    assert!(dispatched);
-    assert_eq!(
-        initial_console_session_mode_for_surface(None, ConsoleSessionMode::InteractiveDashboard,),
-        ConsoleSessionMode::None,
-        "non-serving commands must keep the plain output surface instead of interactive startup"
-    );
-    assert!(
-        should_short_circuit_after_dispatch(dispatched),
-        "non-serving commands must return before runtime startup can reach interactive setup"
-    );
-}
-
-#[cfg(test)]
 pub(crate) fn assert_quitting_during_startup_cancels_without_late_ready_render() {
     let reporter = StartupReadyReporter::new(
         &["Qwen3-8B-Q4_K_M".to_string()],
@@ -4589,7 +4596,6 @@ pub(crate) fn assert_quitting_during_startup_cancels_without_late_ready_render()
             .is_none(),
         "startup shutdown should cancel any late RuntimeReady emission"
     );
-    crate::cli::output::assert_shutdown_suppresses_late_ready_render();
 }
 
 #[cfg(test)]
@@ -4973,8 +4979,14 @@ fn dashboard_lanes_prefer_instance_snapshot_for_duplicate_models() {
 fn initial_console_session_mode(explicit_surface: Option<RuntimeSurface>) -> ConsoleSessionMode {
     initial_console_session_mode_for_surface(
         explicit_surface,
-        interactive::current_console_session_mode(),
+        mesh_llm_events::current_console_session_mode(),
     )
+}
+
+pub fn console_session_mode_for_runtime_surface(
+    explicit_surface: Option<RuntimeSurface>,
+) -> ConsoleSessionMode {
+    initial_console_session_mode(explicit_surface)
 }
 
 fn initial_console_session_mode_for_surface(
@@ -5047,7 +5059,7 @@ async fn smart_auto_blocking(
 }
 
 async fn handle_auto_decision(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     decision: nostr::AutoDecision,
     auto_join_candidates: &mut Vec<(String, Option<String>)>,
     my_vram_gb: f64,
@@ -5055,14 +5067,14 @@ async fn handle_auto_decision(
 ) -> Result<()> {
     match decision {
         nostr::AutoDecision::Join { candidates } => {
-            if cli.client {
+            if options.client {
                 // Clients skip health probe — joining itself is the test.
                 // Queue all candidates so we can fall back if the top one is unreachable.
                 let (_, mesh) = &candidates[0];
-                if cli.mesh_name.is_none()
+                if options.mesh_name.is_none()
                     && let Some(ref name) = mesh.listing.name
                 {
-                    cli.mesh_name = Some(name.clone());
+                    options.mesh_name = Some(name.clone());
                 }
                 let _ = emit_event(OutputEvent::DiscoveryJoined {
                     mesh: mesh
@@ -5073,7 +5085,7 @@ async fn handle_auto_decision(
                         .to_string(),
                 });
                 for (token, _) in &candidates {
-                    cli.join.push(token.clone());
+                    options.join.push(token.clone());
                 }
             } else {
                 // GPU nodes try each candidate directly. The real join path can use relays,
@@ -5099,12 +5111,12 @@ async fn handle_auto_decision(
                         detail: None,
                     });
                     let models = default_models_for_vram_blocking(my_vram_gb).await?;
-                    start_new_mesh(cli, &models, my_vram_gb, has_startup_models);
+                    start_new_mesh(options, &models, my_vram_gb, has_startup_models);
                 }
             }
         }
         nostr::AutoDecision::StartNew { models } => {
-            if cli.client {
+            if options.client {
                 // Client mode should still expose its local proxy and management API while
                 // it waits for a mesh to appear.
                 let _ = emit_event(OutputEvent::Info {
@@ -5113,7 +5125,7 @@ async fn handle_auto_decision(
                     context: None,
                 });
             } else {
-                start_new_mesh(cli, &models, my_vram_gb, has_startup_models);
+                start_new_mesh(options, &models, my_vram_gb, has_startup_models);
             }
         }
     }
@@ -5438,21 +5450,21 @@ async fn check_unserved_model(node: &mesh::Node, local_models: &[String]) -> Opt
     None
 }
 
-pub(crate) fn load_resolved_plugins(cli: &Cli) -> Result<plugin::ResolvedPlugins> {
-    let config = plugin::load_config(cli.config.as_deref())?;
-    resolve_plugins_from_config(&config, cli)
+pub fn load_resolved_plugins(options: &RuntimeOptions) -> Result<plugin::ResolvedPlugins> {
+    let config = plugin::load_config(options.config.as_deref())?;
+    resolve_plugins_from_config(&config, options)
 }
 
 fn resolve_plugins_from_config(
     config: &plugin::MeshConfig,
-    cli: &Cli,
+    options: &RuntimeOptions,
 ) -> Result<plugin::ResolvedPlugins> {
-    plugin::resolve_plugins(config, plugin_host_mode(cli))
+    plugin::resolve_plugins(config, plugin_host_mode(options))
 }
 
-fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
+fn plugin_host_mode(options: &RuntimeOptions) -> plugin::PluginHostMode {
     plugin::PluginHostMode {
-        mesh_visibility: if cli.publish || cli.nostr_discovery {
+        mesh_visibility: if options.publish || options.nostr_discovery {
             mesh_llm_plugin::MeshVisibility::Public
         } else {
             mesh_llm_plugin::MeshVisibility::Private
@@ -5460,8 +5472,9 @@ fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
     }
 }
 
-fn node_display_name(cli: &Cli, node: &mesh::Node) -> String {
-    cli.name
+fn node_display_name(options: &RuntimeOptions, node: &mesh::Node) -> String {
+    options
+        .name
         .clone()
         .or_else(|| std::env::var("USER").ok())
         .or_else(|| std::env::var("USERNAME").ok())
@@ -5469,17 +5482,17 @@ fn node_display_name(cli: &Cli, node: &mesh::Node) -> String {
 }
 
 #[allow(dead_code)]
-async fn join_mesh_for_mcp(cli: &Cli, node: &mesh::Node) -> Result<()> {
-    if !cli.join.is_empty() {
-        return join_mcp_with_tokens(&cli.join, node).await;
+async fn join_mesh_for_mcp(options: &RuntimeOptions, node: &mesh::Node) -> Result<()> {
+    if !options.join.is_empty() {
+        return join_mcp_with_tokens(&options.join, node).await;
     }
 
-    if cli.auto || cli.discover.is_some() {
-        if cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Mdns {
-            return join_mcp_via_lan_discovery(cli, node).await;
+    if options.auto || options.discover.is_some() {
+        if options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Mdns {
+            return join_mcp_via_lan_discovery(options, node).await;
         }
 
-        return join_mcp_via_nostr_discovery(cli, node).await;
+        return join_mcp_via_nostr_discovery(options, node).await;
     }
 
     Ok(())
@@ -5506,23 +5519,23 @@ async fn join_mcp_with_tokens(tokens: &[String], node: &mesh::Node) -> Result<()
 }
 
 #[allow(dead_code)]
-async fn join_mcp_via_lan_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> {
+async fn join_mcp_via_lan_discovery(options: &RuntimeOptions, node: &mesh::Node) -> Result<()> {
     let filter = nostr::MeshFilter {
-        region: cli.region.clone(),
-        name: cli
+        region: options.region.clone(),
+        name: options
             .discover
             .as_deref()
             .filter(|s| !s.is_empty())
-            .or(cli.mesh_name.as_deref())
+            .or(options.mesh_name.as_deref())
             .map(str::to_owned),
         ..Default::default()
     };
     let _ = emit_event(OutputEvent::DiscoveryStarting {
-        source: mesh_discovery::discovery_source_label(cli.mesh_discovery_mode, "discovery"),
+        source: mesh_discovery::discovery_source_label(options.mesh_discovery_mode, "discovery"),
     });
     let candidates = mesh_discovery::discover_lan_join_candidates(
         &filter,
-        cli.join.first().map(String::as_str),
+        options.join.first().map(String::as_str),
         std::time::Duration::from_secs(5),
     )
     .await?;
@@ -5574,17 +5587,17 @@ async fn join_mcp_via_lan_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> 
 }
 
 #[allow(dead_code)]
-async fn join_mcp_via_nostr_discovery(cli: &Cli, node: &mesh::Node) -> Result<()> {
-    let relays = nostr_relays(&cli.nostr_relay);
+async fn join_mcp_via_nostr_discovery(options: &RuntimeOptions, node: &mesh::Node) -> Result<()> {
+    let relays = nostr_relays(&options.nostr_relay);
     let filter = nostr::MeshFilter {
-        region: cli.region.clone(),
+        region: options.region.clone(),
         ..Default::default()
     };
-    let target_name = cli
+    let target_name = options
         .discover
         .as_deref()
         .filter(|s| !s.is_empty())
-        .or(cli.mesh_name.as_deref())
+        .or(options.mesh_name.as_deref())
         .map(str::to_owned);
     let _ = emit_event(OutputEvent::DiscoveryStarting {
         source: "Nostr discovery".to_string(),
@@ -5650,43 +5663,44 @@ async fn join_mcp_via_nostr_discovery(cli: &Cli, node: &mesh::Node) -> Result<()
 }
 
 #[allow(dead_code)]
-pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
-    let resolved_plugins = load_resolved_plugins(cli)?;
-    let config = plugin::load_config(cli.config.as_deref())?;
-    let owner_config = owner_runtime_config(cli, &config)?;
-    let swarm_capture = configure_swarm_capture(cli)?;
+pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
+    let resolved_plugins = load_resolved_plugins(options)?;
+    let config = plugin::load_config(options.config.as_deref())?;
+    let owner_config = owner_runtime_config(options, &config)?;
+    let swarm_capture = configure_swarm_capture(options)?;
     let relay_auths: std::collections::HashMap<String, String> =
-        cli.relay_auth.iter().cloned().collect();
+        options.relay_auth.iter().cloned().collect();
     let (node, _channels) = mesh::Node::start(
         NodeRole::Client,
         mesh::RelayConfig {
-            urls: &cli.relay,
+            urls: &options.relay,
             auths: &relay_auths,
-            policy: relay_policy_for_runtime(cli),
+            policy: relay_policy_for_runtime_options(options),
         },
         mesh::QuicBindSelection {
-            ip: cli.bind_ip,
-            port: cli.bind_port,
+            ip: options.bind_ip,
+            port: options.bind_port,
         },
         Some(0.0),
-        !cli.no_enumerate_host,
+        !options.no_enumerate_host,
         Some(owner_config),
-        cli.config.as_deref(),
+        options.config.as_deref(),
         MeshRequirements::unrestricted(),
     )
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
     attach_local_release_attestation(&node).await?;
     node.start_accepting();
-    node.set_display_name(node_display_name(cli, &node)).await;
+    node.set_display_name(node_display_name(options, &node))
+        .await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    start_relay_health_monitor_for_discovery_mode(&node, cli.mesh_discovery_mode);
-    join_mesh_for_mcp(cli, &node).await?;
+    start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
+    join_mesh_for_mcp(options, &node).await?;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
     let plugin_manager =
-        plugin::PluginManager::start(&resolved_plugins, plugin_host_mode(cli), plugin_mesh_tx)
+        plugin::PluginManager::start(&resolved_plugins, plugin_host_mode(options), plugin_mesh_tx)
             .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
@@ -5698,7 +5712,7 @@ pub(crate) async fn run_plugin_mcp(cli: &Cli) -> Result<()> {
     plugin::mcp::run_mcp_server(plugin_manager).await
 }
 
-pub(crate) use self::discovery::{check_mesh, nostr_relays};
+pub use self::discovery::nostr_relays;
 
 async fn store_benchmark_metrics(
     mem_arc: std::sync::Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
@@ -5767,13 +5781,14 @@ async fn attach_local_release_attestation(node: &mesh::Node) -> Result<()> {
     Ok(())
 }
 
-fn skippy_telemetry_options(cli: &Cli) -> skippy::SkippyTelemetryOptions {
-    if !cli.debug {
+fn skippy_telemetry_options(options: &RuntimeOptions) -> skippy::SkippyTelemetryOptions {
+    if !options.debug {
         return skippy::SkippyTelemetryOptions::off();
     }
 
     skippy::SkippyTelemetryOptions::debug(
-        cli.skippy_metrics_otlp_grpc
+        options
+            .skippy_metrics_otlp_grpc
             .as_deref()
             .map(str::trim)
             .filter(|endpoint| !endpoint.is_empty())
@@ -5782,13 +5797,13 @@ fn skippy_telemetry_options(cli: &Cli) -> skippy::SkippyTelemetryOptions {
 }
 
 fn configure_run_auto_process_state(
-    cli: &Cli,
+    options: &RuntimeOptions,
     runtime: Option<&std::sync::Arc<crate::runtime::instance::InstanceRuntime>>,
 ) {
     // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { std::env::set_var("MESH_API_PORT", cli.console.to_string()) };
+    unsafe { std::env::set_var("MESH_API_PORT", options.console.to_string()) };
 
-    let verbose_native_debug = cli.debug
+    let verbose_native_debug = options.debug
         && std::env::var("MESH_LLM_DEBUG_NATIVE_VERBOSE")
             .ok()
             .as_deref()
@@ -5877,39 +5892,43 @@ fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
 }
 
 async fn start_run_auto_node_and_plugins(
-    cli: &Cli,
+    options: &RuntimeOptions,
     config: &plugin::MeshConfig,
     resolved_plugins: &plugin::ResolvedPlugins,
     swarm_capture: Option<crate::capture::SwarmCaptureRecorder>,
     startup_mesh_creation_state: &StartupMeshCreationState,
 ) -> Result<(mesh::Node, mesh::TunnelChannels, plugin::PluginManager)> {
-    let role = if cli.client {
+    let role = if options.client {
         NodeRole::Client
     } else {
         NodeRole::Worker
     };
-    let owner_config = owner_runtime_config(cli, config)?;
-    if !cli.headless && owner_config.keypair.is_none() {
+    let owner_config = owner_runtime_config(options, config)?;
+    if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
-    let max_vram = if cli.client { Some(0.0) } else { cli.max_vram };
+    let max_vram = if options.client {
+        Some(0.0)
+    } else {
+        options.max_vram
+    };
     let relay_auths: std::collections::HashMap<String, String> =
-        cli.relay_auth.iter().cloned().collect();
+        options.relay_auth.iter().cloned().collect();
     let (node, channels) = mesh::Node::start(
         role,
         mesh::RelayConfig {
-            urls: &cli.relay,
+            urls: &options.relay,
             auths: &relay_auths,
-            policy: relay_policy_for_runtime(cli),
+            policy: relay_policy_for_runtime_options(options),
         },
         mesh::QuicBindSelection {
-            ip: cli.bind_ip,
-            port: cli.bind_port,
+            ip: options.bind_ip,
+            port: options.bind_port,
         },
         max_vram,
-        !cli.no_enumerate_host,
+        !options.no_enumerate_host,
         Some(owner_config),
-        cli.config.as_deref(),
+        options.config.as_deref(),
         startup_mesh_creation_state.requirements.clone(),
     )
     .await?;
@@ -5920,22 +5939,23 @@ async fn start_run_auto_node_and_plugins(
     ))))
     .await;
     node.start_accepting();
-    node.set_display_name(node_display_name(cli, &node)).await;
+    node.set_display_name(node_display_name(options, &node))
+        .await;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
     let plugin_manager =
-        plugin::PluginManager::start(resolved_plugins, plugin_host_mode(cli), plugin_mesh_tx)
+        plugin::PluginManager::start(resolved_plugins, plugin_host_mode(options), plugin_mesh_tx)
             .await?;
     node.set_plugin_manager(plugin_manager.clone()).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
 }
 
-fn relay_policy_for_runtime(cli: &Cli) -> mesh::RelayPolicy {
-    if cli.disable_iroh_relays {
+fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPolicy {
+    if options.disable_iroh_relays {
         mesh::RelayPolicy::ExplicitlyDisabled
     } else {
-        relay_policy_for_mesh_discovery_mode(cli.mesh_discovery_mode)
+        relay_policy_for_mesh_discovery_mode(options.mesh_discovery_mode)
     }
 }
 
@@ -5988,16 +6008,16 @@ fn run_auto_survey_hardware(is_client: bool) -> hardware::HardwareSurvey {
 }
 
 async fn build_run_auto_node_setup(
-    cli: &Cli,
+    options: &RuntimeOptions,
     config: &plugin::MeshConfig,
     resolved_plugins: &plugin::ResolvedPlugins,
     bin_dir: &Path,
     swarm_capture: Option<crate::capture::SwarmCaptureRecorder>,
     startup_mesh_creation_state: &StartupMeshCreationState,
 ) -> Result<AutoRuntimeNodeSetup> {
-    let console_port = Some(cli.console);
-    let is_client = cli.client;
-    let skippy_telemetry = skippy_telemetry_options(cli);
+    let console_port = Some(options.console);
+    let is_client = options.client;
+    let skippy_telemetry = skippy_telemetry_options(options);
     let local_models = if is_client {
         vec![]
     } else {
@@ -6005,7 +6025,7 @@ async fn build_run_auto_node_setup(
     };
     tracing::info!("Local models on disk: {:?}", local_models);
     let (node, channels, plugin_manager) = start_run_auto_node_and_plugins(
-        cli,
+        options,
         config,
         resolved_plugins,
         swarm_capture,
@@ -6025,7 +6045,7 @@ async fn build_run_auto_node_setup(
     node.set_available_models(local_models.clone()).await;
     node.start_heartbeat();
     node.start_rtt_refresh();
-    start_relay_health_monitor_for_discovery_mode(&node, cli.mesh_discovery_mode);
+    start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
 
     if !is_client {
         spawn_node_benchmark_task(&node, bin_dir);
@@ -6123,31 +6143,32 @@ async fn build_successful_run_auto_join(
 }
 
 fn update_cli_with_successful_run_auto_join(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     successful_join: Option<(String, Option<String>)>,
 ) {
-    if !cli.join.is_empty() {
+    if !options.join.is_empty() {
         return;
     }
 
-    cli.join.clear();
+    options.join.clear();
     if let Some((token, mesh_name)) = successful_join {
-        cli.join.push(token);
-        if cli.mesh_name.is_none()
+        options.join.push(token);
+        if options.mesh_name.is_none()
             && let Some(name) = mesh_name
         {
-            cli.mesh_name = Some(name);
+            options.mesh_name = Some(name);
         }
     }
 }
 
 async fn run_auto_join_existing_mesh(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     node: &mesh::Node,
     auto_join_candidates: &[(String, Option<String>)],
 ) {
-    let join_attempts: Vec<(String, Option<String>)> = if !cli.join.is_empty() {
-        cli.join
+    let join_attempts: Vec<(String, Option<String>)> = if !options.join.is_empty() {
+        options
+            .join
             .iter()
             .cloned()
             .map(|token| (token, None))
@@ -6155,8 +6176,8 @@ async fn run_auto_join_existing_mesh(
     } else {
         auto_join_candidates.to_vec()
     };
-    let outcome = attempt_run_auto_join(node, &join_attempts, cli.client).await;
-    update_cli_with_successful_run_auto_join(cli, outcome.successful_join);
+    let outcome = attempt_run_auto_join(node, &join_attempts, options.client).await;
+    update_cli_with_successful_run_auto_join(options, outcome.successful_join);
 
     if !outcome.joined {
         let reason = outcome.last_join_error.as_deref().unwrap_or("unknown");
@@ -6166,10 +6187,10 @@ async fn run_auto_join_existing_mesh(
         });
     }
 
-    spawn_run_auto_post_join_tasks(cli, node).await;
+    spawn_run_auto_post_join_tasks(options, node).await;
 }
 
-async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
+async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, node: &mesh::Node) {
     let save_node = node.clone();
     tokio::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
@@ -6187,11 +6208,11 @@ async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
     let _ = emit_event(OutputEvent::InviteToken {
         token: node.invite_token().await,
         mesh_id,
-        mesh_name: cli.mesh_name.clone(),
+        mesh_name: options.mesh_name.clone(),
     });
 
     let rejoin_node = node.clone();
-    let rejoin_tokens: Vec<String> = cli.join.clone();
+    let rejoin_tokens: Vec<String> = options.join.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
@@ -6203,24 +6224,24 @@ async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
         }
     });
 
-    if cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
-        && (cli.auto || cli.discover.is_some())
+    if options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
+        && (options.auto || options.discover.is_some())
     {
         let rediscover_node = node.clone();
-        let rediscover_relays = nostr_relays(&cli.nostr_relay);
-        let rediscover_relay_urls = cli.relay.clone();
-        let rediscover_mesh_name = cli.mesh_name.clone();
+        let rediscover_relays = nostr_relays(&options.nostr_relay);
+        let rediscover_relay_urls = options.relay.clone();
+        let rediscover_mesh_name = options.mesh_name.clone();
         tokio::spawn(Box::pin(nostr_rediscovery(
             rediscover_node,
             rediscover_relays,
             rediscover_relay_urls,
             rediscover_mesh_name,
         )));
-    } else if should_start_lan_rediscovery(cli.mesh_discovery_mode, &cli.join) {
+    } else if should_start_lan_rediscovery(options.mesh_discovery_mode, &options.join) {
         let rediscover_node = node.clone();
-        let rediscover_join_tokens = cli.join.clone();
-        let rediscover_mesh_name = cli.mesh_name.clone();
-        let rediscover_region = cli.region.clone();
+        let rediscover_join_tokens = options.join.clone();
+        let rediscover_mesh_name = options.mesh_name.clone();
+        let rediscover_region = options.region.clone();
         tokio::spawn(Box::pin(lan_rediscovery(
             rediscover_node,
             rediscover_join_tokens,
@@ -6230,17 +6251,21 @@ async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
     }
 }
 
-async fn run_auto_start_new_mesh(cli: &Cli, node: &mesh::Node) -> Result<()> {
-    let nostr_pubkey =
-        if cli.publish && cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr {
-            nostr::load_or_create_keys()
-                .ok()
-                .map(|k| k.public_key().to_hex())
-        } else {
-            None
-        };
+async fn run_auto_start_new_mesh(options: &RuntimeOptions, node: &mesh::Node) -> Result<()> {
+    let nostr_pubkey = if options.publish
+        && options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
+    {
+        nostr::load_or_create_keys()
+            .ok()
+            .map(|k| k.public_key().to_hex())
+    } else {
+        None
+    };
     let mesh_id = node
-        .initialize_mesh_identity_as_originator(cli.mesh_name.as_deref(), nostr_pubkey.as_deref())
+        .initialize_mesh_identity_as_originator(
+            options.mesh_name.as_deref(),
+            nostr_pubkey.as_deref(),
+        )
         .await?;
     record_first_joined_mesh_ts(node).await;
     mesh::save_last_mesh_id(&mesh_id);
@@ -6248,17 +6273,17 @@ async fn run_auto_start_new_mesh(cli: &Cli, node: &mesh::Node) -> Result<()> {
     let _ = emit_event(OutputEvent::InviteToken {
         token: node.invite_token().await,
         mesh_id: mesh_id.clone(),
-        mesh_name: cli.mesh_name.clone(),
+        mesh_name: options.mesh_name.clone(),
     });
     let _ = emit_event(OutputEvent::WaitingForPeers { detail: None });
 
-    if cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
-        && (cli.auto || cli.discover.is_some())
+    if options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
+        && (options.auto || options.discover.is_some())
     {
         let rediscover_node = node.clone();
-        let rediscover_relays = nostr_relays(&cli.nostr_relay);
-        let rediscover_relay_urls = cli.relay.clone();
-        let rediscover_mesh_name = cli.mesh_name.clone();
+        let rediscover_relays = nostr_relays(&options.nostr_relay);
+        let rediscover_relay_urls = options.relay.clone();
+        let rediscover_mesh_name = options.mesh_name.clone();
         tokio::spawn(Box::pin(nostr_rediscovery(
             rediscover_node,
             rediscover_relays,
@@ -6276,36 +6301,36 @@ async fn run_auto_start_new_mesh(cli: &Cli, node: &mesh::Node) -> Result<()> {
 /// whichever mesh peer can serve them, so the local API stays usable while
 /// this node's GPU loads its model.
 ///
-/// Historically this gated solely on `cli.join` being non-empty, which worked
+/// Historically this gated solely on `options.join` being non-empty, which worked
 /// because both `--client --auto` and `serve --auto` pushed their discovered
-/// token into `cli.join`. Commit 1bd62389 changed the serve path to stage
-/// candidates in `auto_join_candidates` instead, leaving `cli.join` empty and
+/// token into `options.join`. Commit 1bd62389 changed the serve path to stage
+/// candidates in `auto_join_candidates` instead, leaving `options.join` empty and
 /// silently disabling the bootstrap proxy for `serve --auto`. Accepting either
 /// signal restores the original contract without changing any other path:
 ///
-/// - `--join <token>` (any mode): `cli.join` non-empty → fires (unchanged).
-/// - `--client --auto` with discovery hit: `cli.join` populated by
+/// - `--join <token>` (any mode): `options.join` non-empty → fires (unchanged).
+/// - `--client --auto` with discovery hit: `options.join` populated by
 ///   `handle_auto_decision` → fires (unchanged).
 /// - `serve --auto` with discovery hit: `auto_join_candidates` non-empty,
-///   `cli.join` empty → **now fires** (the fix).
+///   `options.join` empty → **now fires** (the fix).
 /// - Anything with no candidates and no join token (bare `mesh-llm`, bare
 ///   `--client`, `--auto` with zero discovery results): both empty → does
 ///   not fire (unchanged — there is nowhere to tunnel to).
 fn should_start_bootstrap_proxy(
-    cli: &Cli,
+    options: &RuntimeOptions,
     auto_join_candidates: &[(String, Option<String>)],
 ) -> bool {
-    !cli.join.is_empty() || !auto_join_candidates.is_empty()
+    !options.join.is_empty() || !auto_join_candidates.is_empty()
 }
 
 fn start_run_auto_bootstrap_proxy(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     api_port: u16,
     affinity_router: &affinity::AffinityRouter,
     auto_join_candidates: &[(String, Option<String>)],
 ) -> Option<BootstrapProxyStopTx> {
-    if !should_start_bootstrap_proxy(cli, auto_join_candidates) {
+    if !should_start_bootstrap_proxy(options, auto_join_candidates) {
         return None;
     }
 
@@ -6314,7 +6339,7 @@ fn start_run_auto_bootstrap_proxy(
     let boot_node = node.clone();
     let boot_port = api_port;
     let boot_affinity = affinity_router.clone();
-    let listen_all = cli.listen_all;
+    let listen_all = options.listen_all;
     tokio::spawn(async move {
         bootstrap_proxy(boot_node, boot_port, stop_rx, listen_all, boot_affinity).await;
     });
@@ -6335,17 +6360,19 @@ async fn select_run_auto_model_path(
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
     let assignment = pick_model_assignment(ctx.node, ctx.local_models).await;
-    let assignment =
-        if assignment.is_none() && (ctx.cli.auto || ctx.cli.discover.is_some()) && !ctx.is_client {
-            let pack = auto_model_pack_blocking(ctx.node.vram_bytes() as f64 / 1e9).await?;
-            if !pack.is_empty() {
-                Some(pack[0].clone())
-            } else {
-                assignment
-            }
+    let assignment = if assignment.is_none()
+        && (ctx.options.auto || ctx.options.discover.is_some())
+        && !ctx.is_client
+    {
+        let pack = auto_model_pack_blocking(ctx.node.vram_bytes() as f64 / 1e9).await?;
+        if !pack.is_empty() {
+            Some(pack[0].clone())
         } else {
             assignment
-        };
+        }
+    } else {
+        assignment
+    };
 
     let Some(model_name) = assignment else {
         let passive_api_listener = match ctx.bootstrap_listener_tx.take() {
@@ -6384,7 +6411,7 @@ async fn select_run_auto_model_path(
             });
         }
         return match run_passive(
-            ctx.cli,
+            ctx.options,
             ctx.node.clone(),
             ctx.is_client,
             ctx.plugin_manager.clone(),
@@ -6424,14 +6451,14 @@ async fn select_run_auto_model_path(
 }
 
 async fn run_auto_join_mesh_phase(
-    cli: &mut Cli,
+    options: &mut RuntimeOptions,
     node: &mesh::Node,
     auto_join_candidates: &[(String, Option<String>)],
 ) -> Result<()> {
-    if !cli.join.is_empty() || !auto_join_candidates.is_empty() {
-        run_auto_join_existing_mesh(cli, node, auto_join_candidates).await;
+    if !options.join.is_empty() || !auto_join_candidates.is_empty() {
+        run_auto_join_existing_mesh(options, node, auto_join_candidates).await;
     } else {
-        run_auto_start_new_mesh(cli, node).await?;
+        run_auto_start_new_mesh(options, node).await?;
     }
     Ok(())
 }
@@ -6464,7 +6491,7 @@ async fn advertise_run_auto_models(
 }
 
 struct RunAutoShutdownContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     node: &'a mesh::Node,
     plugin_manager: &'a plugin::PluginManager,
     api_proxy_handle: tokio::task::JoinHandle<()>,
@@ -6484,7 +6511,7 @@ struct RunAutoShutdownContext<'a> {
 }
 
 struct RunAutoRuntimeLifecycleContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     config: &'a plugin::MeshConfig,
     node: &'a mesh::Node,
     primary_model_name: &'a str,
@@ -6511,7 +6538,7 @@ struct PassiveConsoleRuntime {
 }
 
 struct PassiveConsoleSetupContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     node: &'a mesh::Node,
     is_client: bool,
     plugin_manager: &'a plugin::PluginManager,
@@ -6522,7 +6549,7 @@ struct PassiveConsoleSetupContext<'a> {
 }
 
 struct RunAutoConsoleStateContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     node: &'a mesh::Node,
     console_enabled: bool,
     model_name: &'a str,
@@ -6535,7 +6562,7 @@ struct RunAutoConsoleStateContext<'a> {
 }
 
 struct RunAutoAdditionalModelsContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     config: &'a plugin::MeshConfig,
     node: &'a mesh::Node,
     tunnel_mgr: &'a tunnel::Manager,
@@ -6558,7 +6585,7 @@ struct RunAutoAdditionalModelsContext<'a> {
 }
 
 struct RunAutoServingSurfaceContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     node: &'a mesh::Node,
     api_port: u16,
     console_port: Option<u16>,
@@ -6583,7 +6610,7 @@ struct RunAutoServingSurface {
 }
 
 struct RunAutoRuntimeLoopContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     config: &'a plugin::MeshConfig,
     node: &'a mesh::Node,
     primary_model_name: &'a str,
@@ -6621,7 +6648,7 @@ struct RunAutoRuntimeState {
 }
 
 struct RunAutoStartupTasksContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     config: &'a plugin::MeshConfig,
     node: &'a mesh::Node,
     tunnel_mgr: &'a tunnel::Manager,
@@ -6643,7 +6670,7 @@ struct RunAutoStartupTasksContext<'a> {
     interactive_started: Arc<AtomicBool>,
 }
 
-fn initialize_run_auto_runtime_state(cli: &Cli) -> RunAutoRuntimeState {
+fn initialize_run_auto_runtime_state(options: &RuntimeOptions) -> RunAutoRuntimeState {
     RunAutoRuntimeState {
         runtime_models: HashMap::new(),
         runtime_survey_models: HashMap::new(),
@@ -6653,12 +6680,12 @@ fn initialize_run_auto_runtime_state(cli: &Cli) -> RunAutoRuntimeState {
         next_runtime_instance_sequence: 1_u64,
         dashboard_processes: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         dashboard_context_usage: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-        input_handler_enabled: crate::cli::output::OutputManager::global()
-            .console_session_mode()
+        input_handler_enabled: output_sink()
+            .and_then(|sink| sink.console_session_mode())
             .is_some(),
-        openai_guardrail_policy: openai_guardrail_policy_handle(
-            cli.mesh_guardrails.to_guardrail_mode(),
-        ),
+        openai_guardrail_policy: openai_guardrail_policy_handle(mesh_guardrail_mode_to_openai(
+            options.mesh_guardrails,
+        )),
     }
 }
 
@@ -6666,7 +6693,7 @@ async fn spawn_run_auto_startup_model_tasks(
     ctx: RunAutoStartupTasksContext<'_>,
 ) -> StartupReadyReporter {
     let RunAutoStartupTasksContext {
-        cli,
+        options,
         config,
         node,
         tunnel_mgr,
@@ -6743,7 +6770,7 @@ async fn spawn_run_auto_startup_model_tasks(
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
         openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
-        split: cli.split,
+        split: options.split,
         skippy_telemetry: skippy_telemetry.clone(),
         survey_telemetry: survey_telemetry.clone(),
         survey_launch_kind: survey::SurveyLaunchKind::Startup,
@@ -6770,7 +6797,7 @@ async fn spawn_run_auto_startup_model_tasks(
     );
 
     spawn_run_auto_additional_model_tasks(RunAutoAdditionalModelsContext {
-        cli,
+        options,
         config,
         node,
         tunnel_mgr,
@@ -6798,7 +6825,7 @@ async fn spawn_run_auto_startup_model_tasks(
 
 async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<'_>) {
     let RunAutoRuntimeLifecycleContext {
-        cli,
+        options,
         config,
         node,
         primary_model_name,
@@ -6819,7 +6846,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
         runtime,
     } = ctx;
     let mut loop_ctx = RunAutoRuntimeLoopContext {
-        cli,
+        options,
         config,
         node,
         primary_model_name,
@@ -6845,7 +6872,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
     run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx).await;
 
     shutdown_run_auto_runtime(RunAutoShutdownContext {
-        cli,
+        options,
         node,
         plugin_manager,
         api_proxy_handle,
@@ -6868,7 +6895,7 @@ async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecycleContext<
 
 async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     let RunAutoShutdownContext {
-        cli,
+        options,
         node,
         plugin_manager,
         api_proxy_handle,
@@ -6888,7 +6915,7 @@ async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     } = ctx;
     node.broadcast_leaving().await;
 
-    unpublish_run_auto_nostr_listing(cli).await;
+    unpublish_run_auto_nostr_listing(options).await;
     if let Some(handle) = discovery_publisher {
         handle.abort();
     }
@@ -6923,14 +6950,14 @@ async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     cleanup_run_auto_runtime_dir(runtime);
 }
 
-async fn unpublish_run_auto_nostr_listing(cli: &Cli) {
-    if !cli.publish || cli.mesh_discovery_mode != mesh_discovery::MeshDiscoveryMode::Nostr {
+async fn unpublish_run_auto_nostr_listing(options: &RuntimeOptions) {
+    if !options.publish || options.mesh_discovery_mode != mesh_discovery::MeshDiscoveryMode::Nostr {
         return;
     }
     let Ok(keys) = nostr::load_or_create_keys() else {
         return;
     };
-    let relays = nostr_relays(&cli.nostr_relay);
+    let relays = nostr_relays(&options.nostr_relay);
     let Ok(publisher) = nostr::Publisher::new(keys, &relays).await else {
         return;
     };
@@ -7030,7 +7057,7 @@ async fn run_auto_load_runtime_model(
             model_path: &model_path,
             model_bytes,
             mmproj_override: None,
-            ctx_size_override: ctx.cli.ctx_size,
+            ctx_size_override: ctx.options.ctx_size,
             pinned_gpu: None,
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
@@ -7042,7 +7069,7 @@ async fn run_auto_load_runtime_model(
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
-            skippy_telemetry: skippy_telemetry_options(ctx.cli),
+            skippy_telemetry: skippy_telemetry_options(ctx.options),
             survey_telemetry: ctx.survey_telemetry.clone(),
         },
         &runtime_model_name,
@@ -7060,7 +7087,7 @@ async fn run_auto_load_runtime_model(
                     launch_kind: survey::SurveyLaunchKind::RuntimeLoad,
                     pinned_gpu: None,
                     backend: None,
-                    context_length: ctx.cli.ctx_size.map(u64::from),
+                    context_length: ctx.options.ctx_size.map(u64::from),
                 },
                 launch_started.elapsed(),
                 survey::classify_launch_failure(&err),
@@ -7661,15 +7688,15 @@ async fn setup_run_auto_console_state(
         ))
         .await;
     console_state
-        .set_nostr_relays(nostr_relays(&ctx.cli.nostr_relay))
+        .set_nostr_relays(nostr_relays(&ctx.options.nostr_relay))
         .await;
     console_state
-        .set_mesh_discovery_mode(ctx.cli.mesh_discovery_mode)
+        .set_mesh_discovery_mode(ctx.options.mesh_discovery_mode)
         .await;
     console_state
-        .set_nostr_discovery(ctx.cli.nostr_discovery)
+        .set_nostr_discovery(ctx.options.nostr_discovery)
         .await;
-    if let Some(draft) = &ctx.cli.draft {
+    if let Some(draft) = &ctx.options.draft {
         let dn = draft
             .file_stem()
             .unwrap_or_default()
@@ -7679,9 +7706,9 @@ async fn setup_run_auto_console_state(
     }
     console_state
         .set_mesh_publication_metadata(
-            ctx.cli.mesh_name.clone(),
-            ctx.cli.region.clone(),
-            ctx.cli.max_clients,
+            ctx.options.mesh_name.clone(),
+            ctx.options.region.clone(),
+            ctx.options.max_clients,
         )
         .await;
     Ok(Some(console_state))
@@ -7697,40 +7724,40 @@ async fn run_auto_model_path_or_shutdown(
 }
 
 async fn spawn_run_auto_discovery_publisher(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     console_state: Option<&api::MeshApi>,
 ) -> Option<tokio::task::JoinHandle<()>> {
-    if cli.publish {
-        return match cli.mesh_discovery_mode {
+    if options.publish {
+        return match options.mesh_discovery_mode {
             mesh_discovery::MeshDiscoveryMode::Nostr => {
-                spawn_run_auto_nostr_publisher(cli, node, console_state).await
+                spawn_run_auto_nostr_publisher(options, node, console_state).await
             }
             mesh_discovery::MeshDiscoveryMode::Mdns => {
-                spawn_run_auto_mdns_publisher(cli, node, console_state)
+                spawn_run_auto_mdns_publisher(options, node, console_state)
             }
         };
     }
-    if cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
-        && (cli.auto || cli.discover.is_some())
+    if options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
+        && (options.auto || options.discover.is_some())
     {
-        return Some(spawn_run_auto_nostr_watchdog(cli, node, console_state));
+        return Some(spawn_run_auto_nostr_watchdog(options, node, console_state));
     }
     None
 }
 
 async fn spawn_run_auto_nostr_publisher(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     console_state: Option<&api::MeshApi>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     match nostr::load_or_create_keys() {
         Ok(nostr_keys) => {
-            let relays = nostr_relays(&cli.nostr_relay);
+            let relays = nostr_relays(&options.nostr_relay);
             let pub_node = node.clone();
-            let pub_name = cli.mesh_name.clone();
-            let pub_region = cli.region.clone();
-            let pub_max_clients = cli.max_clients;
+            let pub_name = options.mesh_name.clone();
+            let pub_region = options.region.clone();
+            let pub_max_clients = options.max_clients;
             let (status_tx, status_rx) = tokio::sync::watch::channel(None);
             if let Some(cs) = console_state {
                 bridge_publication_state(cs.clone(), status_rx);
@@ -7753,7 +7780,7 @@ async fn spawn_run_auto_nostr_publisher(
                 message: format!(
                     "Publishing to Nostr failed: {e}. Mesh is running privately — add --publish after fixing the issue to make discoverable."
                 ),
-                context: cli
+                context: options
                     .mesh_name
                     .as_ref()
                     .map(|mesh_name| format!("mesh={mesh_name}")),
@@ -7769,16 +7796,16 @@ async fn spawn_run_auto_nostr_publisher(
 }
 
 fn spawn_run_auto_mdns_publisher(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     console_state: Option<&api::MeshApi>,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let pub_node = node.clone();
-    let pub_name = cli.mesh_name.clone();
-    let pub_region = cli.region.clone();
-    let pub_max_clients = cli.max_clients;
-    let pub_api_port = cli.console;
-    let pub_details_reachable = cli.listen_all;
+    let pub_name = options.mesh_name.clone();
+    let pub_region = options.region.clone();
+    let pub_max_clients = options.max_clients;
+    let pub_api_port = options.console;
+    let pub_details_reachable = options.listen_all;
     let (status_tx, status_rx) = tokio::sync::watch::channel(None);
     if let Some(cs) = console_state {
         bridge_publication_state(cs.clone(), status_rx);
@@ -7798,14 +7825,14 @@ fn spawn_run_auto_mdns_publisher(
 }
 
 fn spawn_run_auto_nostr_watchdog(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     console_state: Option<&api::MeshApi>,
 ) -> tokio::task::JoinHandle<()> {
-    let relays = nostr_relays(&cli.nostr_relay);
+    let relays = nostr_relays(&options.nostr_relay);
     let wd_node = node.clone();
-    let wd_name = cli.mesh_name.clone();
-    let wd_region = cli.region.clone();
+    let wd_name = options.mesh_name.clone();
+    let wd_region = options.region.clone();
     let watchdog_status_rx = console_state.map(|cs| {
         let (status_tx, status_rx) = tokio::sync::watch::channel(None);
         bridge_publication_state(cs.clone(), status_rx);
@@ -7858,7 +7885,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
             flash_attention: extra_model.flash_attention,
             parallel_override: extra_model.parallel.or(ctx.config.gpu.parallel),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
-            split: ctx.cli.split,
+            split: ctx.options.split,
             skippy_telemetry: ctx.skippy_telemetry.clone(),
             survey_telemetry: ctx.survey_telemetry.clone(),
             survey_launch_kind: survey::SurveyLaunchKind::MultiModel,
@@ -7867,7 +7894,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
             dashboard_context_usage: ctx.dashboard_context_usage.clone(),
             runtime_instance_registry: ctx.runtime_instance_registry.clone(),
             console_state: ctx.console_state.cloned(),
-            api_port: ctx.cli.port,
+            api_port: ctx.options.port,
             startup_ready_reporter: ctx.startup_ready_reporter.clone(),
             startup_load_gate: ctx.startup_load_gate.clone(),
             input_handler_enabled: false,
@@ -7891,16 +7918,16 @@ async fn setup_run_auto_serving_surface(
 ) -> Result<RunAutoServingSurface> {
     wait_for_run_auto_first_paint(&ctx).await;
     let api_listener =
-        run_auto_api_listener(ctx.cli, ctx.api_port, ctx.bootstrap_listener_tx).await?;
+        run_auto_api_listener(ctx.options, ctx.api_port, ctx.bootstrap_listener_tx).await?;
     let console_listener =
-        run_auto_console_listener(ctx.cli, ctx.console_port, ctx.console_state).await?;
+        run_auto_console_listener(ctx.options, ctx.console_port, ctx.console_state).await?;
     let (api_ready_url, ready_api_port) =
         listener_http_endpoint(&api_listener, ctx.api_port, "OpenAI-compatible API");
     let (ready_console_url, ready_console_port) =
         run_auto_ready_console_endpoint(&console_listener);
-    emit_run_auto_builtin_endpoint_ready(ctx.cli, &api_ready_url, ready_console_url.as_ref());
+    emit_run_auto_builtin_endpoint_ready(ctx.options, &api_ready_url, ready_console_url.as_ref());
     let api_proxy_handle = spawn_run_auto_api_proxy(
-        ctx.cli,
+        ctx.options,
         ctx.node,
         ctx.api_port,
         api_listener,
@@ -7909,7 +7936,7 @@ async fn setup_run_auto_serving_surface(
         ctx.affinity_router,
     );
     let console_server_handle = spawn_run_auto_console_server(
-        ctx.cli,
+        ctx.options,
         ctx.target_rx,
         console_listener,
         ctx.console_state,
@@ -7938,10 +7965,13 @@ async fn wait_for_run_auto_first_paint(ctx: &RunAutoServingSurfaceContext<'_>) {
         return;
     };
     let (first_paint_tx, first_paint_rx) = tokio::sync::oneshot::channel();
+    let Some(sink) = output_sink() else {
+        return;
+    };
     interactive::spawn_handler_with_first_paint_ack(
         ctx.control_tx.clone(),
         cs,
-        crate::cli::output::OutputManager::global(),
+        sink,
         request.prompt_mode,
         Some(first_paint_tx),
     );
@@ -7949,7 +7979,7 @@ async fn wait_for_run_auto_first_paint(ctx: &RunAutoServingSurfaceContext<'_>) {
 }
 
 async fn run_auto_api_listener(
-    cli: &Cli,
+    options: &RuntimeOptions,
     api_port: u16,
     bootstrap_listener_tx: Option<BootstrapProxyStopTx>,
 ) -> Result<tokio::net::TcpListener> {
@@ -7960,18 +7990,18 @@ async fn run_auto_api_listener(
             .await
             .context("bootstrap API listener handoff was cancelled");
     }
-    bind_runtime_tcp_listener(api_port, cli.listen_all, "OpenAI-compatible API").await
+    bind_runtime_tcp_listener(api_port, options.listen_all, "OpenAI-compatible API").await
 }
 
 async fn run_auto_console_listener(
-    cli: &Cli,
+    options: &RuntimeOptions,
     console_port: Option<u16>,
     console_state: Option<&api::MeshApi>,
 ) -> Result<Option<(u16, tokio::net::TcpListener)>> {
     match (console_port, console_state) {
         (Some(cport), Some(_)) => Ok(Some((
             cport,
-            bind_runtime_tcp_listener(cport, cli.listen_all, "Web console").await?,
+            bind_runtime_tcp_listener(cport, options.listen_all, "Web console").await?,
         ))),
         _ => Ok(None),
     }
@@ -7990,21 +8020,21 @@ fn run_auto_ready_console_endpoint(
 }
 
 fn emit_run_auto_builtin_endpoint_ready(
-    cli: &Cli,
+    options: &RuntimeOptions,
     api_ready_url: &str,
     ready_console_url: Option<&String>,
 ) {
     for event in serve_path_builtin_endpoint_ready_events(
         api_ready_url.to_string(),
         ready_console_url.cloned(),
-        cli.headless,
+        options.headless,
     ) {
         let _ = emit_event(event);
     }
 }
 
 fn spawn_run_auto_api_proxy(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     api_port: u16,
     api_listener: tokio::net::TcpListener,
@@ -8018,13 +8048,13 @@ fn spawn_run_auto_api_proxy(
         target_rx.clone(),
         control_tx.clone(),
         Some(api_listener),
-        cli.listen_all,
+        options.listen_all,
         affinity_router.clone(),
     )))
 }
 
 fn spawn_run_auto_console_server(
-    cli: &Cli,
+    options: &RuntimeOptions,
     target_rx: &tokio::sync::watch::Receiver<election::ModelTargets>,
     console_listener: Option<(u16, tokio::net::TcpListener)>,
     console_state: Option<&api::MeshApi>,
@@ -8034,8 +8064,8 @@ fn spawn_run_auto_console_server(
     let cs2 = cs.clone();
     let console_rx = target_rx.clone();
     let mn = model_name_for_console.to_string();
-    let listen_all = cli.listen_all;
-    let headless = cli.headless;
+    let listen_all = options.listen_all;
+    let headless = options.headless;
     Some(tokio::spawn(async move {
         let (adapted_tx, adapted_rx) = tokio::sync::watch::channel(election::InferenceTarget::None);
         tokio::spawn(async move {
@@ -8083,9 +8113,11 @@ async fn spawn_run_auto_local_instance_scanner(
     );
 }
 
-fn configure_swarm_capture(cli: &Cli) -> Result<Option<crate::capture::SwarmCaptureRecorder>> {
+fn configure_swarm_capture(
+    options: &RuntimeOptions,
+) -> Result<Option<crate::capture::SwarmCaptureRecorder>> {
     let recorder =
-        crate::capture::SwarmCaptureRecorder::from_cli_or_env(cli.swarm_capture.as_deref())?;
+        crate::capture::SwarmCaptureRecorder::from_cli_or_env(options.swarm_capture.as_deref())?;
     if let Some(recorder) = recorder.as_ref() {
         tracing::info!(
             path = %recorder.path().display(),
@@ -8096,7 +8128,7 @@ fn configure_swarm_capture(cli: &Cli) -> Result<Option<crate::capture::SwarmCapt
 }
 
 struct RunAutoModelSelectionContext<'a> {
-    cli: &'a Cli,
+    options: &'a RuntimeOptions,
     node: &'a mesh::Node,
     startup_models: &'a [StartupModelPlan],
     local_models: &'a [String],
@@ -8122,7 +8154,7 @@ async fn select_advertised_run_auto_model(
 
 /// Serve mode: join the mesh and serve local models through the embedded runtime.
 struct RunAutoContext {
-    cli: Cli,
+    options: RuntimeOptions,
     config: plugin::MeshConfig,
     startup_mesh_creation_state: StartupMeshCreationState,
     startup_models: Vec<StartupModelPlan>,
@@ -8139,7 +8171,7 @@ struct RunAutoContext {
 )]
 async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     let RunAutoContext {
-        mut cli,
+        mut options,
         config,
         startup_mesh_creation_state,
         startup_models,
@@ -8149,14 +8181,14 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         auto_join_candidates,
         mut embedded_control_rx,
     } = ctx;
-    let resolved_plugins = resolve_plugins_from_config(&config, &cli)?;
-    let swarm_capture = configure_swarm_capture(&cli)?;
+    let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
+    let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
         mesh_requirements = ?runtime_startup_requirements(&startup_mesh_creation_state),
         "loaded creation-time mesh requirements into runtime startup state"
     );
-    let api_port = cli.port;
-    configure_run_auto_process_state(&cli, runtime.as_ref());
+    let api_port = options.port;
+    configure_run_auto_process_state(&options, runtime.as_ref());
     let _native_log_forwarding = SkippyNativeLogForwardingGuard;
     // Embedded native logs are process-global and are redirected to the runtime log
     // file before model load. We also forward the filtered, aggregated model-loading
@@ -8172,7 +8204,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         plugin_manager,
         survey_telemetry,
     } = build_run_auto_node_setup(
-        &cli,
+        &options,
         &config,
         &resolved_plugins,
         &bin_dir,
@@ -8185,14 +8217,14 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     node.set_requested_models(requested_model_names.clone())
         .await;
 
-    run_auto_join_mesh_phase(&mut cli, &node, &auto_join_candidates).await?;
+    run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates).await?;
 
     let affinity_router = affinity::AffinityRouter::new();
 
     // Start bootstrap proxy if we have somewhere to tunnel to. This gives
     // instant API access via tunnel while our GPU loads.
     let mut bootstrap_listener_tx = start_run_auto_bootstrap_proxy(
-        &cli,
+        &options,
         &node,
         api_port,
         &affinity_router,
@@ -8203,7 +8235,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     let Some((model, model_name)) =
         select_advertised_run_auto_model(RunAutoModelSelectionContext {
-            cli: &cli,
+            options: &options,
             node: &node,
             startup_models: &startup_models,
             local_models: &local_models,
@@ -8231,12 +8263,12 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     spawn_embedded_runtime_control_forwarder(embedded_control_rx.take(), control_tx.clone());
     let (runtime_event_tx, mut runtime_event_rx) =
         tokio::sync::mpsc::unbounded_channel::<RuntimeEvent>();
-    let mut runtime_state = initialize_run_auto_runtime_state(&cli);
+    let mut runtime_state = initialize_run_auto_runtime_state(&options);
 
     let model_name_for_console = model_name.clone();
-    let runtime_owner_key_path = resolve_runtime_owner_key_path(&cli)?;
+    let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;
     let console_state = setup_run_auto_console_state(RunAutoConsoleStateContext {
-        cli: &cli,
+        options: &options,
         node: &node,
         console_enabled: console_port.is_some(),
         model_name: &model_name_for_console,
@@ -8254,17 +8286,17 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
     )
     .await;
 
-    crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
-        RuntimeDashboardSnapshotProvider::new(
+    if let Some(sink) = output_sink() {
+        sink.register_dashboard_snapshot_provider(Arc::new(RuntimeDashboardSnapshotProvider::new(
             node.clone(),
             runtime_state.dashboard_processes.clone(),
             runtime_state.dashboard_context_usage.clone(),
             Some(plugin_manager.clone()),
             api_port,
             console_port,
-            cli.headless,
-        ),
-    ));
+            options.headless,
+        )));
+    }
 
     let _ = emit_event(OutputEvent::LaunchPlan {
         plan: startup_launch_plan(
@@ -8272,9 +8304,9 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
             &model_name,
             api_port,
             console_port,
-            cli.headless,
+            options.headless,
             config.gpu.parallel,
-            startup_default_backend_device(cli.llama_flavor),
+            startup_default_backend_device(options.llama_flavor),
         ),
     });
 
@@ -8287,7 +8319,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
         ready_api_port,
         ready_console_port,
     } = setup_run_auto_serving_surface(RunAutoServingSurfaceContext {
-        cli: &cli,
+        options: &options,
         node: &node,
         api_port,
         console_port,
@@ -8305,7 +8337,7 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     tracing::info!("Starting embedded runtime for model: {model_name}");
     let startup_ready_reporter = spawn_run_auto_startup_model_tasks(RunAutoStartupTasksContext {
-        cli: &cli,
+        options: &options,
         config: &config,
         node: &node,
         tunnel_mgr: &tunnel_mgr,
@@ -8330,11 +8362,11 @@ async fn run_auto(ctx: RunAutoContext) -> Result<()> {
 
     // Discovery publish loop (if --publish) or Nostr watchdog (if --auto, to take over if publisher dies).
     let discovery_publisher =
-        spawn_run_auto_discovery_publisher(&cli, &node, console_state.as_ref()).await;
+        spawn_run_auto_discovery_publisher(&options, &node, console_state.as_ref()).await;
 
     let runtime_data_producer = runtime_data_producer_for_console(console_state.as_ref()).await;
     run_auto_runtime_loop_and_shutdown(RunAutoRuntimeLifecycleContext {
-        cli: &cli,
+        options: &options,
         config: &config,
         node: &node,
         primary_model_name: &model_name,
@@ -8368,7 +8400,7 @@ async fn setup_passive_console_runtime(
     console_listener: tokio::net::TcpListener,
 ) -> Result<PassiveConsoleRuntime> {
     let PassiveConsoleSetupContext {
-        cli,
+        options,
         node,
         is_client,
         plugin_manager,
@@ -8398,7 +8430,7 @@ async fn setup_passive_console_runtime(
         model_name: label,
         api_port: local_port,
         model_size_bytes: 0,
-        owner_key_path: resolve_runtime_owner_key_path(cli)?,
+        owner_key_path: resolve_runtime_owner_key_path(options)?,
         plugin_manager: plugin_manager.clone(),
         affinity_router: affinity_router.clone(),
         runtime_data_collector,
@@ -8411,18 +8443,24 @@ async fn setup_passive_console_runtime(
         ))
         .await;
     console_state
-        .set_nostr_relays(nostr_relays(&cli.nostr_relay))
+        .set_nostr_relays(nostr_relays(&options.nostr_relay))
         .await;
     console_state
-        .set_mesh_discovery_mode(cli.mesh_discovery_mode)
+        .set_mesh_discovery_mode(options.mesh_discovery_mode)
         .await;
-    console_state.set_nostr_discovery(cli.nostr_discovery).await;
     console_state
-        .set_mesh_publication_metadata(cli.mesh_name.clone(), cli.region.clone(), cli.max_clients)
+        .set_nostr_discovery(options.nostr_discovery)
+        .await;
+    console_state
+        .set_mesh_publication_metadata(
+            options.mesh_name.clone(),
+            options.region.clone(),
+            options.max_clients,
+        )
         .await;
     if is_client {
         console_state.set_client(true).await;
-        if cli.nostr_discovery {
+        if options.nostr_discovery {
             console_state
                 .set_publication_state(api::PublicationState::Public)
                 .await;
@@ -8432,7 +8470,7 @@ async fn setup_passive_console_runtime(
     let PassivePublicationSetup {
         state: passive_publication_state,
         status_rx: passive_publication_rx,
-    } = setup_passive_publication(cli, node, is_client).await;
+    } = setup_passive_publication(options, node, is_client).await;
     if let Some(state) = passive_publication_state {
         console_state.set_publication_state(state).await;
     }
@@ -8440,8 +8478,8 @@ async fn setup_passive_console_runtime(
         bridge_publication_state(console_state.clone(), status_rx);
     }
     let (_tx, rx) = tokio::sync::watch::channel(election::InferenceTarget::None);
-    let la = cli.listen_all;
-    let headless = cli.headless;
+    let la = options.listen_all;
+    let headless = options.headless;
     let console_state_for_server = console_state.clone();
     let console_server_handle = Some(tokio::spawn(async move {
         api::start_with_listener(
@@ -8454,8 +8492,8 @@ async fn setup_passive_console_runtime(
         )
         .await;
     }));
-    crate::cli::output::OutputManager::global().register_dashboard_snapshot_provider(Arc::new(
-        RuntimeDashboardSnapshotProvider::new(
+    if let Some(sink) = output_sink() {
+        sink.register_dashboard_snapshot_provider(Arc::new(RuntimeDashboardSnapshotProvider::new(
             node.clone(),
             dashboard_processes,
             Arc::new(tokio::sync::Mutex::new(HashMap::new())),
@@ -8463,18 +8501,14 @@ async fn setup_passive_console_runtime(
             local_port,
             Some(cport),
             headless,
-        ),
-    ));
+        )));
+    }
     if let Some(request) = passive_path_interactive_spawn_request(
-        crate::cli::output::OutputManager::global().console_session_mode(),
+        output_sink().and_then(|sink| sink.console_session_mode()),
         std::io::stdin().is_terminal(),
-    ) {
-        interactive::spawn_handler(
-            control_tx.clone(),
-            console_state,
-            crate::cli::output::OutputManager::global(),
-            request.prompt_mode,
-        );
+    ) && let Some(sink) = output_sink()
+    {
+        interactive::spawn_handler(control_tx.clone(), console_state, sink, request.prompt_mode);
     }
     Ok(PassiveConsoleRuntime {
         control_rx,
@@ -8538,16 +8572,17 @@ async fn run_passive_listener_loop(
 }
 
 async fn run_passive(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: mesh::Node,
     is_client: bool,
     plugin_manager: plugin::PluginManager,
     api_listener: Option<tokio::net::TcpListener>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
 ) -> Result<Option<String>> {
-    let local_port = cli.port;
+    let local_port = options.port;
     let affinity_router = affinity::AffinityRouter::new();
-    node.set_display_name(node_display_name(cli, &node)).await;
+    node.set_display_name(node_display_name(options, &node))
+        .await;
 
     // Wait briefly for gossip to propagate
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -8563,22 +8598,23 @@ async fn run_passive(
     let listener = if let Some(listener) = api_listener {
         listener
     } else {
-        bind_runtime_tcp_listener(local_port, cli.listen_all, "OpenAI-compatible API")
+        bind_runtime_tcp_listener(local_port, options.listen_all, "OpenAI-compatible API")
             .await
             .with_context(|| format!("Failed to bind to port {local_port}"))?
     };
     let api_ready_url = listener_http_url(&listener, local_port, "OpenAI-compatible API");
-    let cport = cli.console;
-    let console_listener = bind_runtime_tcp_listener(cport, cli.listen_all, "Web console").await?;
+    let cport = options.console;
+    let console_listener =
+        bind_runtime_tcp_listener(cport, options.listen_all, "Web console").await?;
     let console_ready_url = listener_http_url(&console_listener, cport, "Web console");
-    emit_passive_ready_events(cli, &node, is_client, api_ready_url, console_ready_url).await;
+    emit_passive_ready_events(options, &node, is_client, api_ready_url, console_ready_url).await;
 
     let PassiveConsoleRuntime {
         control_rx,
         console_server_handle,
     } = setup_passive_console_runtime(
         PassiveConsoleSetupContext {
-            cli,
+            options,
             node: &node,
             is_client,
             plugin_manager: &plugin_manager,
@@ -8604,7 +8640,7 @@ async fn run_passive(
 }
 
 async fn emit_passive_ready_events(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     is_client: bool,
     api_ready_url: String,
@@ -8629,7 +8665,7 @@ async fn emit_passive_ready_events(
     };
     let _ = emit_event(passive_mode_event);
     let _ = emit_event(OutputEvent::ApiReady { url: api_ready_url });
-    if cli.headless {
+    if options.headless {
         let _ = emit_event(OutputEvent::Info {
             message: format!("Management API: {console_ready_url}"),
             context: None,
@@ -8683,20 +8719,20 @@ fn maybe_spawn_passive_promotion_task(
 }
 
 async fn setup_passive_publication(
-    cli: &Cli,
+    options: &RuntimeOptions,
     node: &mesh::Node,
     is_client: bool,
 ) -> PassivePublicationSetup {
     let mut setup = PassivePublicationSetup::default();
-    if cli.publish && !is_client {
+    if options.publish && !is_client {
         let pub_node = node.clone();
-        match cli.mesh_discovery_mode {
+        match options.mesh_discovery_mode {
             mesh_discovery::MeshDiscoveryMode::Nostr => match nostr::load_or_create_keys() {
                 Ok(nostr_keys) => {
-                    let relays = nostr_relays(&cli.nostr_relay);
-                    let pub_name = cli.mesh_name.clone();
-                    let pub_region = cli.region.clone();
-                    let pub_max_clients = cli.max_clients;
+                    let relays = nostr_relays(&options.nostr_relay);
+                    let pub_name = options.mesh_name.clone();
+                    let pub_region = options.region.clone();
+                    let pub_max_clients = options.max_clients;
                     let (status_tx, status_rx) = tokio::sync::watch::channel(None);
                     setup.status_rx = Some(status_rx);
                     tokio::spawn(Box::pin(nostr::publish_loop(
@@ -8717,7 +8753,7 @@ async fn setup_passive_publication(
                         message: format!(
                             "Publishing to Nostr failed: {e}. Standby node is running privately — add --publish after fixing the issue to make discoverable."
                         ),
-                        context: cli
+                        context: options
                             .mesh_name
                             .as_ref()
                             .map(|mesh_name| format!("mesh={mesh_name}")),
@@ -8727,11 +8763,11 @@ async fn setup_passive_publication(
                 }
             },
             mesh_discovery::MeshDiscoveryMode::Mdns => {
-                let pub_name = cli.mesh_name.clone();
-                let pub_region = cli.region.clone();
-                let pub_max_clients = cli.max_clients;
-                let pub_api_port = cli.console;
-                let pub_details_reachable = cli.listen_all;
+                let pub_name = options.mesh_name.clone();
+                let pub_region = options.region.clone();
+                let pub_max_clients = options.max_clients;
+                let pub_api_port = options.console;
+                let pub_details_reachable = options.listen_all;
                 let (status_tx, status_rx) = tokio::sync::watch::channel(None);
                 setup.status_rx = Some(status_rx);
                 tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
@@ -8751,14 +8787,14 @@ async fn setup_passive_publication(
         return setup;
     }
 
-    if cli.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
-        && (cli.auto || cli.discover.is_some())
+    if options.mesh_discovery_mode == mesh_discovery::MeshDiscoveryMode::Nostr
+        && (options.auto || options.discover.is_some())
         && !is_client
     {
-        let relays = nostr_relays(&cli.nostr_relay);
+        let relays = nostr_relays(&options.nostr_relay);
         let wd_node = node.clone();
-        let wd_name = cli.mesh_name.clone();
-        let wd_region = cli.region.clone();
+        let wd_name = options.mesh_name.clone();
+        let wd_region = options.region.clone();
         let (status_tx, status_rx) = tokio::sync::watch::channel(None);
         setup.status_rx = Some(status_rx);
         tokio::spawn(async move {
@@ -9039,15 +9075,17 @@ mod tests {
 
     #[test]
     fn explicit_disable_iroh_relays_overrides_nostr_relay_policy() {
-        let mut cli = Cli::parse_from(["mesh-llm"]);
-        cli.mesh_discovery_mode = mesh_discovery::MeshDiscoveryMode::Nostr;
-        cli.disable_iroh_relays = true;
+        let options = RuntimeOptions {
+            mesh_discovery_mode: mesh_discovery::MeshDiscoveryMode::Nostr,
+            disable_iroh_relays: true,
+            ..RuntimeOptions::default()
+        };
 
         assert_eq!(
-            relay_policy_for_runtime(&cli),
+            relay_policy_for_runtime_options(&options),
             mesh::RelayPolicy::ExplicitlyDisabled
         );
-        assert!(!relay_policy_for_runtime(&cli).uses_relay());
+        assert!(!relay_policy_for_runtime_options(&options).uses_relay());
     }
 
     #[test]
@@ -9999,7 +10037,7 @@ mod tests {
 
     #[test]
     fn test_build_startup_model_specs_prefers_cli_models_over_config() {
-        let cli = Cli::parse_from([
+        let options = runtime_options_for_test(&[
             "mesh-llm",
             "--model",
             "Qwen3-8B-Q4_K_M",
@@ -10023,7 +10061,7 @@ mod tests {
             ..plugin::MeshConfig::default()
         };
 
-        let specs = build_startup_model_specs(&cli, &config).unwrap();
+        let specs = build_startup_model_specs(&options, &config).unwrap();
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].model_ref, PathBuf::from("Qwen3-8B-Q4_K_M"));
         assert_eq!(specs[0].mmproj_ref, None);
@@ -10034,7 +10072,7 @@ mod tests {
 
     #[test]
     fn test_build_startup_model_specs_uses_config_models_when_cli_is_empty() {
-        let cli = Cli::parse_from(["mesh-llm", "--ctx-size", "4096"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--ctx-size", "4096"]);
         let config = plugin::MeshConfig {
             models: vec![
                 plugin::ModelConfigEntry {
@@ -10067,7 +10105,7 @@ mod tests {
             ..plugin::MeshConfig::default()
         };
 
-        let specs = build_startup_model_specs(&cli, &config).unwrap();
+        let specs = build_startup_model_specs(&options, &config).unwrap();
         assert_eq!(specs.len(), 2);
         assert_eq!(specs[0].model_ref, PathBuf::from("Qwen3-8B-Q4_K_M"));
         assert_eq!(specs[0].ctx_size, Some(4096));
@@ -10084,7 +10122,7 @@ mod tests {
 
     #[test]
     fn test_build_startup_model_specs_ignores_config_models_for_client() {
-        let cli = Cli::parse_from(["mesh-llm", "--client"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--client"]);
         let config = plugin::MeshConfig {
             models: vec![plugin::ModelConfigEntry {
                 model: "Qwen3-8B-Q4_K_M".into(),
@@ -10102,7 +10140,7 @@ mod tests {
             ..plugin::MeshConfig::default()
         };
 
-        let specs = build_startup_model_specs(&cli, &config).unwrap();
+        let specs = build_startup_model_specs(&options, &config).unwrap();
         assert!(specs.is_empty());
     }
 
@@ -10121,14 +10159,9 @@ mod tests {
         assert_interactive_handler_spawns_once_across_startup_callbacks();
     }
 
-    #[tokio::test]
-    async fn non_serving_subcommands_retain_plain_output() {
-        assert_non_serving_dispatch_short_circuit_behavior().await;
-    }
-
     #[test]
     fn pinned_gpu_startup_preflight_uses_config_gpu_id() {
-        let cli = Cli::parse_from(["mesh-llm"]);
+        let options = runtime_options_for_test(&["mesh-llm"]);
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
@@ -10149,7 +10182,7 @@ mod tests {
             }],
             ..plugin::MeshConfig::default()
         };
-        let specs = build_startup_model_specs(&cli, &config).unwrap();
+        let specs = build_startup_model_specs(&options, &config).unwrap();
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -10332,7 +10365,7 @@ mod tests {
 
     #[test]
     fn pinned_gpu_startup_preflight_cli_models_bypass_config_gpu_id() {
-        let cli = Cli::parse_from(["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--model", "Qwen3-8B-Q4_K_M"]);
         let config = plugin::MeshConfig {
             gpu: plugin::GpuConfig {
                 assignment: plugin::GpuAssignment::Pinned,
@@ -10353,7 +10386,7 @@ mod tests {
             }],
             ..plugin::MeshConfig::default()
         };
-        let specs = build_startup_model_specs(&cli, &config).unwrap();
+        let specs = build_startup_model_specs(&options, &config).unwrap();
         let mut plans = vec![StartupModelPlan {
             declared_ref: "Qwen3-8B-Q4_K_M".into(),
             resolved_path: PathBuf::from("/tmp/Qwen3-8B-Q4_K_M.gguf"),
@@ -10573,19 +10606,19 @@ mod tests {
 
     #[test]
     fn test_should_show_serve_config_help_for_bare_serve_without_models() {
-        let cli = Cli::parse_from(["mesh-llm"]);
+        let options = runtime_options_for_test(&["mesh-llm"]);
         let startup_specs = Vec::new();
 
         assert!(should_show_serve_config_help(
             Some(RuntimeSurface::Serve),
-            &cli,
+            &options,
             &startup_specs
         ));
     }
 
     #[test]
     fn test_should_not_show_serve_config_help_when_models_are_present() {
-        let cli = Cli::parse_from(["mesh-llm"]);
+        let options = runtime_options_for_test(&["mesh-llm"]);
         let startup_specs = vec![StartupModelSpec {
             model_ref: PathBuf::from("Qwen3-8B-Q4_K_M"),
             mmproj_ref: None,
@@ -10602,43 +10635,43 @@ mod tests {
 
         assert!(!should_show_serve_config_help(
             Some(RuntimeSurface::Serve),
-            &cli,
+            &options,
             &startup_specs
         ));
     }
 
     #[test]
     fn test_should_not_show_serve_config_help_for_client_surface() {
-        let cli = Cli::parse_from(["mesh-llm", "--client"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--client"]);
         let startup_specs = Vec::new();
 
         assert!(!should_show_serve_config_help(
             Some(RuntimeSurface::Client),
-            &cli,
+            &options,
             &startup_specs
         ));
     }
 
     #[test]
     fn test_should_not_show_serve_config_help_for_auto_serve_without_models() {
-        let cli = Cli::parse_from(["mesh-llm", "--auto"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--auto"]);
         let startup_specs = Vec::new();
 
         assert!(!should_show_serve_config_help(
             Some(RuntimeSurface::Serve),
-            &cli,
+            &options,
             &startup_specs
         ));
     }
 
     #[test]
     fn test_should_not_show_serve_config_help_for_join_serve_without_models() {
-        let cli = Cli::parse_from(["mesh-llm", "--join", "token"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--join", "token"]);
         let startup_specs = Vec::new();
 
         assert!(!should_show_serve_config_help(
             Some(RuntimeSurface::Serve),
-            &cli,
+            &options,
             &startup_specs
         ));
     }
@@ -11054,19 +11087,18 @@ mod tests {
     // Publication-state matrix (Issue #240)
     // ---------------------------------------------------------------------------
 
-    /// Helper to build a minimal `Cli` for publication-state tests.
-    fn make_cli(args: &[&str]) -> crate::cli::Cli {
-        crate::cli::Cli::try_parse_from(args).unwrap()
+    /// Helper to build a minimal `RuntimeOptions` for publication-state tests.
+    fn make_cli(args: &[&str]) -> RuntimeOptions {
+        runtime_options_for_test(args)
     }
 
-    fn make_runtime_cli(args: &[&str]) -> crate::cli::Cli {
-        let normalized = crate::cli::normalize_runtime_surface_args(args.iter().copied());
-        crate::cli::Cli::try_parse_from(normalized.normalized).unwrap()
+    fn make_runtime_cli(args: &[&str]) -> RuntimeOptions {
+        runtime_options_for_test(args)
     }
 
     #[test]
     fn swarm_capture_client_registers_runtime_owner() {
-        let cli = make_runtime_cli(&[
+        let options = make_runtime_cli(&[
             "mesh-llm",
             "client",
             "--auto",
@@ -11074,16 +11106,16 @@ mod tests {
             "/tmp/mesh-capture",
         ]);
 
-        assert!(cli.client);
-        assert!(swarm_capture_observer_requested(&cli));
+        assert!(options.client);
+        assert!(swarm_capture_observer_requested(&options));
     }
 
     #[test]
     fn plain_client_still_skips_runtime_owner_registration() {
-        let cli = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
+        let options = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
 
-        assert!(cli.client);
-        assert!(!swarm_capture_observer_requested(&cli));
+        assert!(options.client);
+        assert!(!swarm_capture_observer_requested(&options));
     }
 
     #[test]
@@ -11093,37 +11125,37 @@ mod tests {
         let old = std::env::var_os(key);
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { std::env::set_var(key, "/tmp/mesh-capture") };
-        let cli = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
+        let options = make_runtime_cli(&["mesh-llm", "client", "--auto"]);
 
-        assert!(swarm_capture_observer_requested(&cli));
+        assert!(swarm_capture_observer_requested(&options));
         restore_env(key, old);
     }
 
     #[test]
     fn mesh_name_does_not_force_publish() {
-        let cli = make_cli(&[
+        let options = make_cli(&[
             "mesh-llm",
             "--model",
             "dummy-model",
             "--mesh-name",
             "my-mesh",
         ]);
-        assert!(!cli.publish, "mesh_name alone must not set publish");
-        assert_eq!(cli.mesh_name.as_deref(), Some("my-mesh"));
+        assert!(!options.publish, "mesh_name alone must not set publish");
+        assert_eq!(options.mesh_name.as_deref(), Some("my-mesh"));
     }
 
     #[test]
     fn explicit_publish_remains_enabled() {
-        let cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
+        let options = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
         assert!(
-            cli.publish,
+            options.publish,
             "explicit --publish must set publish=true even without mesh_name"
         );
     }
 
     #[test]
     fn publish_with_mesh_name_is_public_and_named() {
-        let cli = make_cli(&[
+        let options = make_cli(&[
             "mesh-llm",
             "--model",
             "dummy-model",
@@ -11131,9 +11163,12 @@ mod tests {
             "--mesh-name",
             "named-public",
         ]);
-        assert!(cli.publish, "publish + mesh_name must keep publish=true");
+        assert!(
+            options.publish,
+            "publish + mesh_name must keep publish=true"
+        );
         assert_eq!(
-            cli.mesh_name.as_deref(),
+            options.mesh_name.as_deref(),
             Some("named-public"),
             "mesh_name must be preserved alongside publish"
         );
@@ -11141,27 +11176,27 @@ mod tests {
 
     #[test]
     fn auto_without_publish_stays_private() {
-        let cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--auto"]);
-        assert!(!cli.publish, "--auto alone must not imply publish");
-        assert!(cli.auto, "--auto flag should still be true");
+        let options = make_cli(&["mesh-llm", "--model", "dummy-model", "--auto"]);
+        assert!(!options.publish, "--auto alone must not imply publish");
+        assert!(options.auto, "--auto flag should still be true");
     }
 
     /// Task 2: Named private mesh keeps private identity (no implicit publish).
     #[test]
     fn named_private_mesh_keeps_private_identity() {
         // A named mesh without --publish must have publish=false.
-        // The is_public gate in runtime startup uses `cli.auto || cli.publish`,
+        // The is_public gate in runtime startup uses `options.auto || options.publish`,
         // so a named-only mesh should NOT trigger public identity handling.
-        let cli = make_cli(&[
+        let options = make_cli(&[
             "mesh-llm",
             "--model",
             "dummy-model",
             "--mesh-name",
             "private-named",
         ]);
-        assert!(!cli.publish);
-        assert!(!cli.auto);
-        let is_public = cli.auto || cli.publish;
+        assert!(!options.publish);
+        assert!(!options.auto);
+        let is_public = options.auto || options.publish;
         assert!(
             !is_public,
             "named-only mesh must be treated as private for identity purposes"
@@ -11172,11 +11207,11 @@ mod tests {
     #[test]
     fn start_new_mesh_does_not_auto_enable_publish() {
         use crate::runtime::discovery::start_new_mesh;
-        let mut cli = make_cli(&["mesh-llm", "--model", "dummy-model"]);
-        assert!(!cli.publish, "precondition: publish starts false");
-        start_new_mesh(&mut cli, &["dummy-model".to_string()], 16.0, false);
+        let mut options = make_cli(&["mesh-llm", "--model", "dummy-model"]);
+        assert!(!options.publish, "precondition: publish starts false");
+        start_new_mesh(&mut options, &["dummy-model".to_string()], 16.0, false);
         assert!(
-            !cli.publish,
+            !options.publish,
             "start_new_mesh must NOT set publish=true when it was not requested"
         );
     }
@@ -11185,11 +11220,11 @@ mod tests {
     #[test]
     fn start_new_mesh_preserves_explicit_publish() {
         use crate::runtime::discovery::start_new_mesh;
-        let mut cli = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
-        assert!(cli.publish, "precondition: publish is true");
-        start_new_mesh(&mut cli, &["dummy-model".to_string()], 16.0, false);
+        let mut options = make_cli(&["mesh-llm", "--model", "dummy-model", "--publish"]);
+        assert!(options.publish, "precondition: publish is true");
+        start_new_mesh(&mut options, &["dummy-model".to_string()], 16.0, false);
         assert!(
-            cli.publish,
+            options.publish,
             "explicit --publish must survive start_new_mesh call"
         );
     }
@@ -11235,8 +11270,6 @@ mod tests {
 
     #[test]
     fn test_console_session_mode_serve_uses_interactive_mode() {
-        use crate::cli::RuntimeSurface;
-
         // When explicit_surface is Some(RuntimeSurface::Serve), should preserve current mode
         let result = initial_console_session_mode_for_surface(
             Some(RuntimeSurface::Serve),
@@ -11247,8 +11280,6 @@ mod tests {
 
     #[test]
     fn test_console_session_mode_client_uses_interactive_mode() {
-        use crate::cli::RuntimeSurface;
-
         // Explicit client mode is a runtime surface, so it should inherit the
         // detected terminal mode and start the passive/client dashboard.
         let result = initial_console_session_mode_for_surface(
@@ -11272,8 +11303,8 @@ mod tests {
     //
     // Regression history: commit 1bd62389 ("feat(hardware): add hardware
     // information enrichment") changed the serve --auto path so its join
-    // candidates land in `auto_join_candidates` instead of `cli.join`. The
-    // bootstrap proxy gate keyed off `cli.join` and silently stopped firing
+    // candidates land in `auto_join_candidates` instead of `options.join`. The
+    // bootstrap proxy gate keyed off `options.join` and silently stopped firing
     // for `serve --auto`, leaving :9337 unbound while the local model
     // loaded. These tests pin the gate so both client and serve get the
     // bootstrap proxy whenever there is a candidate to tunnel to.
@@ -11281,25 +11312,25 @@ mod tests {
     #[test]
     fn bootstrap_proxy_gate_fires_when_cli_join_is_set() {
         // Classic invite-token path (`--join <token>`).
-        let cli = Cli::parse_from(["mesh-llm", "--join", "tok-abc"]);
-        assert!(should_start_bootstrap_proxy(&cli, &[]));
+        let options = runtime_options_for_test(&["mesh-llm", "--join", "tok-abc"]);
+        assert!(should_start_bootstrap_proxy(&options, &[]));
     }
 
     #[test]
     fn bootstrap_proxy_gate_fires_for_serve_auto_via_auto_join_candidates() {
-        // serve --auto leaves cli.join empty and stages discovery results in
+        // serve --auto leaves options.join empty and stages discovery results in
         // auto_join_candidates instead. The proxy must still spawn so :9337
         // proxies through the mesh while the local GPU loads.
-        let cli = Cli::parse_from(["mesh-llm", "--auto"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--auto"]);
         assert!(
-            cli.join.is_empty(),
-            "precondition: serve --auto has empty cli.join"
+            options.join.is_empty(),
+            "precondition: serve --auto has empty options.join"
         );
         let candidates = vec![(
             "tok-from-discovery".to_string(),
             Some("mesh-llm".to_string()),
         )];
-        assert!(should_start_bootstrap_proxy(&cli, &candidates));
+        assert!(should_start_bootstrap_proxy(&options, &candidates));
     }
 
     #[test]
@@ -11307,19 +11338,20 @@ mod tests {
         // --client --auto with zero discovery results: nothing to tunnel to.
         // This matches the pre-1bd62389 behavior — the gate stays closed
         // until discovery turns up a peer, at which point handle_auto_decision
-        // populates cli.join and the gate fires on the next pass through
+        // populates options.join and the gate fires on the next pass through
         // run_auto. We don't pre-bind the proxy speculatively for --client.
-        let cli = Cli::parse_from(["mesh-llm", "--client", "--auto"]);
-        assert!(!should_start_bootstrap_proxy(&cli, &[]));
+        let options = runtime_options_for_test(&["mesh-llm", "--client", "--auto"]);
+        assert!(!should_start_bootstrap_proxy(&options, &[]));
     }
 
     #[test]
     fn bootstrap_proxy_gate_fires_for_client_auto_with_join_populated() {
         // --client --auto with a successful discovery hit: handle_auto_decision
-        // pushed the token into cli.join, so the gate fires (unchanged from
+        // pushed the token into options.join, so the gate fires (unchanged from
         // pre-regression behavior).
-        let cli = Cli::parse_from(["mesh-llm", "--client", "--auto", "--join", "tok-x"]);
-        assert!(should_start_bootstrap_proxy(&cli, &[]));
+        let options =
+            runtime_options_for_test(&["mesh-llm", "--client", "--auto", "--join", "tok-x"]);
+        assert!(should_start_bootstrap_proxy(&options, &[]));
     }
 
     #[test]
@@ -11327,8 +11359,8 @@ mod tests {
         // Plain `mesh-llm` with no join, no auto candidates, no --client:
         // this node intends to start a new mesh standalone. Nothing to tunnel
         // through, so the bootstrap proxy should stay quiet.
-        let cli = Cli::parse_from(["mesh-llm"]);
-        assert!(!should_start_bootstrap_proxy(&cli, &[]));
+        let options = runtime_options_for_test(&["mesh-llm"]);
+        assert!(!should_start_bootstrap_proxy(&options, &[]));
     }
 
     #[tokio::test]
@@ -11341,7 +11373,7 @@ mod tests {
         let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
             .await
             .expect("test node");
-        let cli = Cli::parse_from(["mesh-llm", "--auto"]);
+        let options = runtime_options_for_test(&["mesh-llm", "--auto"]);
         let candidates = vec![("tok".to_string(), None)];
         let router = affinity::AffinityRouter::default();
 
@@ -11350,7 +11382,7 @@ mod tests {
         let port = scratch.local_addr().unwrap().port();
         drop(scratch);
 
-        let stop_tx = start_run_auto_bootstrap_proxy(&cli, &node, port, &router, &candidates);
+        let stop_tx = start_run_auto_bootstrap_proxy(&options, &node, port, &router, &candidates);
         assert!(
             stop_tx.is_some(),
             "serve --auto with auto_join_candidates must spawn bootstrap proxy"
@@ -11387,9 +11419,9 @@ mod tests {
         let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
             .await
             .expect("test node");
-        let cli = Cli::parse_from(["mesh-llm"]);
+        let options = runtime_options_for_test(&["mesh-llm"]);
         let router = affinity::AffinityRouter::default();
-        let stop_tx = start_run_auto_bootstrap_proxy(&cli, &node, 0, &router, &[]);
+        let stop_tx = start_run_auto_bootstrap_proxy(&options, &node, 0, &router, &[]);
         assert!(
             stop_tx.is_none(),
             "standalone serve must not spawn bootstrap proxy"

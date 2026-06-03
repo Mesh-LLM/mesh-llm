@@ -714,6 +714,9 @@ fn clear_native_log_file() {
 }
 
 fn set_native_log_callback(callback: skippy_ffi::LlamaLogCallback) {
+    if !skippy_ffi::native_runtime_loaded() {
+        return;
+    }
     unsafe {
         skippy_ffi::llama_log_set(callback, ptr::null_mut());
         skippy_ffi::ggml_log_set(callback, ptr::null_mut());

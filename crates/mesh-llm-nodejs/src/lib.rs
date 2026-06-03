@@ -1,15 +1,18 @@
 #![forbid(unsafe_code)]
 
-use mesh_llm_api_server::events::{Event, EventListener};
-use mesh_llm_api_server::{
-    ChatMessage, ChatRequest, DevicePolicy, DownloadOptions, InviteToken, LoadModelOptions,
-    MeshApiError, MeshNode, OwnerKeypair, ResponsesRequest, UnloadModelOptions, UnloadTarget,
-};
 #[cfg(feature = "embedded-runtime")]
-use mesh_llm_host_runtime::sdk::{EmbeddedChatMessage, EmbeddedServingController};
+use mesh_llm_sdk::embedded_runtime::{EmbeddedChatMessage, EmbeddedServingController};
+use mesh_llm_sdk::events::{Event, EventListener};
+use mesh_llm_sdk::node as sdk_node;
+use mesh_llm_sdk::node::{
+    ChatMessage, ChatRequest, DevicePolicy, DownloadOptions, InviteToken, LoadModelOptions,
+    MeshNode, OwnerKeypair, ResponsesRequest, UnloadModelOptions, UnloadTarget,
+};
 use napi::bindgen_prelude::*;
+use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi_derive::napi;
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -17,6 +20,74 @@ use tokio::sync::Notify;
 #[napi]
 pub fn generate_owner_keypair_hex() -> String {
     OwnerKeypair::generate().to_hex()
+}
+
+#[napi(js_name = "currentMeshVersion")]
+pub fn current_mesh_version() -> String {
+    mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()
+}
+
+#[napi(js_name = "currentSkippyAbiVersion")]
+pub fn current_skippy_abi_version() -> String {
+    mesh_llm_sdk::native_runtime::current_skippy_abi_version()
+}
+
+#[napi(js_name = "installNativeRuntimeJson")]
+pub async fn install_native_runtime_json(
+    options_json: String,
+    progress: Option<ThreadsafeFunction<String>>,
+) -> Result<String> {
+    let mut options = parse_native_runtime_install_options(&options_json)?;
+    if let Some(progress) = progress {
+        options.progress = Some(native_runtime_progress_callback(progress));
+    }
+    let outcome = mesh_llm_sdk::native_runtime::install_native_runtime(options)
+        .await
+        .map_err(to_napi_error)?;
+    Ok(native_runtime_install_outcome_json(outcome).to_string())
+}
+
+#[napi(js_name = "installedNativeRuntimesJson")]
+pub fn installed_native_runtimes_json(cache_dir: Option<String>) -> Result<String> {
+    let runtimes = native_runtime_cache(cache_dir)?
+        .installed()
+        .map_err(to_napi_error)?;
+    Ok(Value::Array(
+        runtimes
+            .into_iter()
+            .map(installed_native_runtime_json)
+            .collect(),
+    )
+    .to_string())
+}
+
+#[napi(js_name = "removeNativeRuntime")]
+pub fn remove_native_runtime(
+    cache_dir: Option<String>,
+    mesh_version: String,
+    native_runtime_id: String,
+) -> Result<bool> {
+    native_runtime_cache(cache_dir)?
+        .remove(&mesh_version, &native_runtime_id)
+        .map_err(to_napi_error)
+}
+
+#[napi(js_name = "pruneNativeRuntimesJson")]
+pub fn prune_native_runtimes_json(
+    cache_dir: Option<String>,
+    active_mesh_version: Option<String>,
+    mode: Option<String>,
+) -> Result<String> {
+    let active_mesh_version = active_mesh_version
+        .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string());
+    let mode = parse_native_runtime_prune_mode(mode.as_deref())?;
+    let plan = native_runtime_cache(cache_dir)?
+        .prune(&active_mesh_version, mode)
+        .map_err(to_napi_error)?;
+    Ok(json!({
+        "removedDirs": plan.remove_dirs.into_iter().map(path_to_string).collect::<Vec<_>>()
+    })
+    .to_string())
 }
 
 #[napi]
@@ -28,7 +99,7 @@ pub struct Node {
 
 #[napi]
 pub struct ConsoleHandle {
-    inner: Arc<Mutex<Option<mesh_llm_console_server::ConsoleServerHandle>>>,
+    inner: Arc<Mutex<Option<mesh_llm_sdk::console::ConsoleServerHandle>>>,
     url: String,
 }
 
@@ -264,7 +335,7 @@ impl Node {
     pub async fn cancel(&self, request_id: String) -> Result<()> {
         self.node
             .inference()
-            .cancel(mesh_llm_api_server::RequestId(request_id))
+            .cancel(sdk_node::RequestId(request_id))
             .await
             .map_err(to_napi_error)
     }
@@ -285,7 +356,7 @@ impl Node {
         let models = self
             .node
             .models()
-            .search(mesh_llm_api_server::ModelSearchQuery {
+            .search(sdk_node::ModelSearchQuery {
                 query,
                 limit: limit.map(|value| value as usize),
             })
@@ -412,8 +483,8 @@ impl Node {
             .transpose()
             .map_err(|_| Error::from_reason("console port must be between 0 and 65535"))?
             .unwrap_or(0);
-        let handle = mesh_llm_console_server::start_file_console(
-            mesh_llm_console_server::ConsoleServerOptions {
+        let handle = mesh_llm_sdk::console::start_file_console(
+            mesh_llm_sdk::console::ConsoleServerOptions {
                 asset_dir: asset_dir.into(),
                 port,
                 listen_all: listen_all.unwrap_or(false),
@@ -633,7 +704,96 @@ fn parse_device_policy(value: &Value) -> Result<DevicePolicy> {
     }
 }
 
-fn model_summary_json(model: mesh_llm_api_server::ModelSummary) -> Value {
+fn parse_native_runtime_install_options(
+    source: &str,
+) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions> {
+    let value = parse_json(source)?;
+    Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
+        mesh_version: optional_string(&value, "meshVersion")
+            .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),
+        skippy_abi_version: optional_string(&value, "skippyAbiVersion")
+            .unwrap_or_else(mesh_llm_sdk::native_runtime::current_skippy_abi_version),
+        selection: mesh_llm_sdk::native_runtime::RuntimeSelection::parse(
+            optional_string(&value, "selection").as_deref(),
+        )
+        .map_err(to_napi_error)?,
+        manifest_path: optional_string(&value, "manifestPath").map(PathBuf::from),
+        manifest_url: optional_string(&value, "manifestUrl"),
+        bundle_dirs: string_array(&value, "bundleDirs")
+            .into_iter()
+            .map(PathBuf::from)
+            .collect(),
+        cache_dir: optional_string(&value, "cacheDir").map(PathBuf::from),
+        verification_policy: parse_native_runtime_verification_policy(
+            optional_string(&value, "verificationPolicy").as_deref(),
+        )?,
+        progress: None,
+        allow_download: value
+            .get("allowDownload")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+    })
+}
+
+fn optional_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn string_array(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn parse_native_runtime_verification_policy(
+    value: Option<&str>,
+) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimeVerificationPolicy> {
+    match value.unwrap_or("require_checksum") {
+        "require_checksum" | "RequireChecksum" => {
+            Ok(mesh_llm_sdk::native_runtime::NativeRuntimeVerificationPolicy::RequireChecksum)
+        }
+        "require_checksum_and_signature" | "RequireChecksumAndSignature" => Ok(
+            mesh_llm_sdk::native_runtime::NativeRuntimeVerificationPolicy::RequireChecksumAndSignature,
+        ),
+        other => Err(Error::from_reason(format!(
+            "unsupported native runtime verification policy: {other}"
+        ))),
+    }
+}
+
+fn parse_native_runtime_prune_mode(
+    value: Option<&str>,
+) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimePruneMode> {
+    match value.unwrap_or("keep_active_and_previous") {
+        "keep_active_and_previous" | "KeepActiveAndPrevious" => {
+            Ok(mesh_llm_sdk::native_runtime::NativeRuntimePruneMode::KeepActiveAndPrevious)
+        }
+        "active_only" | "ActiveOnly" => {
+            Ok(mesh_llm_sdk::native_runtime::NativeRuntimePruneMode::ActiveOnly)
+        }
+        other => Err(Error::from_reason(format!(
+            "unsupported native runtime prune mode: {other}"
+        ))),
+    }
+}
+
+fn native_runtime_cache(
+    cache_dir: Option<String>,
+) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimeCache> {
+    let cache_dir = cache_dir.map(PathBuf::from);
+    mesh_llm_sdk::native_runtime::native_runtime_cache(cache_dir.as_deref()).map_err(to_napi_error)
+}
+
+fn model_summary_json(model: sdk_node::ModelSummary) -> Value {
     json!({
         "id": model.id,
         "name": model.name,
@@ -643,7 +803,7 @@ fn model_summary_json(model: mesh_llm_api_server::ModelSummary) -> Value {
     })
 }
 
-fn served_model_json(model: mesh_llm_api_server::ServedModel) -> Value {
+fn served_model_json(model: sdk_node::ServedModel) -> Value {
     json!({
         "modelRef": model.model_ref,
         "modelId": model.model_id,
@@ -656,7 +816,69 @@ fn served_model_json(model: mesh_llm_api_server::ServedModel) -> Value {
     })
 }
 
-fn capabilities_json(value: mesh_llm_api_server::ModelCapabilities) -> Value {
+fn native_runtime_install_outcome_json(
+    outcome: mesh_llm_sdk::native_runtime::NativeRuntimeInstallOutcome,
+) -> Value {
+    json!({
+        "status": match outcome.status {
+            mesh_llm_sdk::native_runtime::NativeRuntimeInstallStatus::AlreadyInstalled => "already_installed",
+            mesh_llm_sdk::native_runtime::NativeRuntimeInstallStatus::Installed => "installed",
+        },
+        "runtime": installed_native_runtime_json(outcome.runtime),
+        "selectedNativeRuntimeId": outcome.resolution.selected.id,
+        "selectedSource": native_runtime_source_name(&outcome.resolution.source),
+    })
+}
+
+fn native_runtime_progress_json(
+    event: mesh_llm_sdk::native_runtime::NativeRuntimeDownloadProgress,
+) -> Value {
+    json!({
+        "nativeRuntimeId": event.native_runtime_id,
+        "url": event.url,
+        "downloadedBytes": event.downloaded_bytes,
+        "totalBytes": event.total_bytes,
+        "finished": event.finished,
+    })
+}
+
+fn native_runtime_progress_callback(
+    progress: ThreadsafeFunction<String>,
+) -> mesh_llm_sdk::native_runtime::NativeRuntimeDownloadProgressCallback {
+    Arc::new(move |event| {
+        let _ = progress.call(
+            Ok(native_runtime_progress_json(event).to_string()),
+            ThreadsafeFunctionCallMode::NonBlocking,
+        );
+    })
+}
+
+fn installed_native_runtime_json(
+    runtime: mesh_llm_sdk::native_runtime::InstalledNativeRuntime,
+) -> Value {
+    json!({
+        "meshVersion": runtime.mesh_version,
+        "nativeRuntimeId": runtime.native_runtime_id,
+        "flavor": runtime.flavor,
+        "path": path_to_string(runtime.path),
+        "skippyAbiVersion": runtime.manifest.runtime.skippy_abi,
+    })
+}
+
+fn native_runtime_source_name(source: &mesh_llm_sdk::native_runtime::NativeRuntimeSource) -> &str {
+    match source {
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Installed { .. } => "installed",
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Bundle { .. } => "bundle",
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Download { .. } => "download",
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Missing => "missing",
+    }
+}
+
+fn path_to_string(path: PathBuf) -> String {
+    path.display().to_string()
+}
+
+fn capabilities_json(value: sdk_node::ModelCapabilities) -> Value {
     json!({
         "multimodal": value.multimodal,
         "vision": capability_level_json(value.vision),
@@ -667,28 +889,28 @@ fn capabilities_json(value: mesh_llm_api_server::ModelCapabilities) -> Value {
     })
 }
 
-fn serving_model_state_json(value: mesh_llm_api_server::ServingModelState) -> Value {
+fn serving_model_state_json(value: sdk_node::ServingModelState) -> Value {
     match value {
-        mesh_llm_api_server::ServingModelState::Loading => json!({ "type": "Loading" }),
-        mesh_llm_api_server::ServingModelState::Ready => json!({ "type": "Ready" }),
-        mesh_llm_api_server::ServingModelState::Failed => json!({ "type": "Failed" }),
-        mesh_llm_api_server::ServingModelState::Unloading => json!({ "type": "Unloading" }),
-        mesh_llm_api_server::ServingModelState::Stopped => json!({ "type": "Stopped" }),
-        mesh_llm_api_server::ServingModelState::Unknown(value) => {
+        sdk_node::ServingModelState::Loading => json!({ "type": "Loading" }),
+        sdk_node::ServingModelState::Ready => json!({ "type": "Ready" }),
+        sdk_node::ServingModelState::Failed => json!({ "type": "Failed" }),
+        sdk_node::ServingModelState::Unloading => json!({ "type": "Unloading" }),
+        sdk_node::ServingModelState::Stopped => json!({ "type": "Stopped" }),
+        sdk_node::ServingModelState::Unknown(value) => {
             json!({ "type": "Unknown", "value": value })
         }
     }
 }
 
-fn capability_level_json(value: mesh_llm_api_server::CapabilityLevel) -> Value {
+fn capability_level_json(value: sdk_node::CapabilityLevel) -> Value {
     match value {
-        mesh_llm_api_server::CapabilityLevel::None => json!({ "type": "None" }),
-        mesh_llm_api_server::CapabilityLevel::Likely => json!({ "type": "Likely" }),
-        mesh_llm_api_server::CapabilityLevel::Supported => json!({ "type": "Supported" }),
+        sdk_node::CapabilityLevel::None => json!({ "type": "None" }),
+        sdk_node::CapabilityLevel::Likely => json!({ "type": "Likely" }),
+        sdk_node::CapabilityLevel::Supported => json!({ "type": "Supported" }),
     }
 }
 
-fn to_napi_error(error: MeshApiError) -> Error {
+fn to_napi_error(error: impl ToString) -> Error {
     Error::from_reason(error.to_string())
 }
 

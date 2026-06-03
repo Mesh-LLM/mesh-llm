@@ -10,6 +10,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
+| Language-specific SDK examples | [Rust](sdk/rust.md), [Node.js](sdk/node.md), [Swift](sdk/swift.md), [Kotlin/Android](sdk/kotlin.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) |
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) |
 | Goose, Claude Code, OpenCode, Pi, curl, blackboard | [AGENTS.md](AGENTS.md) |

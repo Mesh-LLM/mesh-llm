@@ -135,8 +135,8 @@ sanitize_component() {
 
 backend_flavor() {
     case "$BACKEND" in
-        cuda) printf 'cuda\n' ;;
-        cuda-blackwell) printf 'cuda-blackwell\n' ;;
+        cuda) printf 'cuda%s\n' "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-12}" ;;
+        cuda-blackwell) printf 'cuda%s-sm120\n' "${MESH_LLM_CUDA_TOOLKIT_MAJOR:-13}" ;;
         rocm|hip) printf 'rocm\n' ;;
         *) printf '%s\n' "$BACKEND" ;;
     esac
@@ -318,36 +318,75 @@ import sys
 manifest_path = sys.argv[1]
 primary_library = sys.argv[2]
 library_paths = sys.argv[3:]
+backend = "$BACKEND"
+kind = {"hip": "rocm", "cuda-blackwell": "cuda"}.get(backend, backend)
+cuda_arches = [
+    value.strip()
+    for value in (
+        os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES")
+        or os.environ.get("SKIPPY_CUDA_ARCHITECTURES")
+        or ("sm_120" if backend == "cuda-blackwell" else "")
+    ).split(",")
+    if value.strip()
+]
+rocm_arches = [
+    value.strip()
+    for value in (
+        os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS")
+        or os.environ.get("SKIPPY_AMDGPU_TARGETS")
+        or ""
+    ).split(",")
+    if value.strip()
+]
+backend_manifest = {"kind": kind}
+if kind == "cuda":
+    backend_manifest["cuda"] = {
+        "toolkit_major": int(os.environ.get("MESH_LLM_CUDA_TOOLKIT_MAJOR") or (13 if backend == "cuda-blackwell" else 12)),
+        "gpu_arches": cuda_arches,
+    }
+    min_driver = os.environ.get("MESH_LLM_CUDA_MIN_DRIVER")
+    if min_driver:
+        backend_manifest["cuda"]["min_driver"] = min_driver
+elif kind == "rocm":
+    backend_manifest["rocm"] = {
+        "gpu_arches": rocm_arches,
+    }
+    version = os.environ.get("MESH_LLM_ROCM_VERSION")
+    if version:
+        backend_manifest["rocm"]["version"] = version
+elif kind == "vulkan":
+    backend_manifest["vulkan"] = {}
+    min_api = os.environ.get("MESH_LLM_VULKAN_MIN_API_VERSION")
+    if min_api:
+        backend_manifest["vulkan"]["min_api_version"] = min_api
+
 manifest = {
-    "schema_version": 1,
-    "artifact_id": "$artifact_id",
-    "native_runtime_id": "$artifact_id",
-    "mesh_version": "$mesh_version",
-    "target_triple": "$TARGET_TRIPLE",
-    "platform": "$platform",
-    "os": "$runtime_os",
-    "arch": "$runtime_arch",
-    "backend": "$BACKEND",
-    "flavor": "$flavor",
-    "library": primary_library,
-    "library_paths": library_paths,
-    "library_sha256": "$primary_sha",
-    "url": None,
-    "sha256": None,
-    "signature": None,
-    "requirements": [],
-    "skippy_abi_version": "$abi_version",
-    "llama_upstream_sha": "$upstream_sha" or None,
-    "llama_patched_sha": "$patched_sha" or None,
-    "llama_patch_digest": "$patch_digest" or None,
-    "llama_build_dir": os.path.abspath("$LLAMA_STAGE_BUILD_DIR"),
-    "cuda_architectures": os.environ.get("LLAMA_STAGE_CUDA_ARCHITECTURES") or os.environ.get("SKIPPY_CUDA_ARCHITECTURES"),
-    "amdgpu_targets": os.environ.get("LLAMA_STAGE_AMDGPU_TARGETS") or os.environ.get("SKIPPY_AMDGPU_TARGETS"),
-    "features": [
-        "skippy-runtime",
-        "llama.cpp",
-        "native-runtime-loader",
-    ],
+    "runtime": {
+        "id": "$artifact_id",
+        "mesh_version": "$mesh_version",
+        "skippy_abi": "$abi_version",
+        "platform": {
+            "os": "$runtime_os",
+            "arch": "$runtime_arch",
+            "target": "$TARGET_TRIPLE",
+        },
+        "backend": backend_manifest,
+        "rank": int(os.environ.get("MESH_LLM_NATIVE_RUNTIME_RANK") or 0),
+        "libraries": library_paths,
+        "url": None,
+        "sha256": None,
+        "signature": None,
+    },
+    "build": {
+        "platform": "$platform",
+        "backend": "$BACKEND",
+        "primary_library": primary_library,
+        "library_sha256": "$primary_sha",
+        "llama_upstream_sha": "$upstream_sha" or None,
+        "llama_patched_sha": "$patched_sha" or None,
+        "llama_patch_digest": "$patch_digest" or None,
+        "llama_build_dir": os.path.abspath("$LLAMA_STAGE_BUILD_DIR"),
+    },
 }
 with open(manifest_path, "w", encoding="utf-8") as fh:
     json.dump(manifest, fh, indent=2, sort_keys=True)

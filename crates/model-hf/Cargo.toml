@@ -10,12 +10,17 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 [dependencies]
 anyhow.workspace = true
 async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6.0.0"
 hf_hub = { package = "hf-hub", version = "1.0.0-rc.1", default-features = false, features = ["blocking"] }
 model-artifact = { path = "../model-artifact", version = "0.68.0" }
 model-ref = { path = "../model-ref", version = "0.68.0" }
 serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
 tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]
+serial_test = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }

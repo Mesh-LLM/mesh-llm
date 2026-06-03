@@ -1,0 +1,1034 @@
+mod formatters;
+mod formatters_console;
+mod formatters_json;
+
+use anyhow::{Result, anyhow, bail};
+use mesh_llm_cli::models::ModelSearchSort;
+use mesh_llm_cli::models::ModelsCommand;
+use mesh_llm_host_runtime::command_support::models::skippy::{
+    CertificationGateStatus, SkippyCertificationRequest, certify_layer_package,
+    identity_from_layer_package, is_layer_package_ref, resolve_hf_package_to_local,
+};
+use mesh_llm_host_runtime::command_support::models::{
+    ModelCleanupPlan, ModelCleanupResult, SearchArtifactFilter, SearchProgress, SearchSort,
+    ShowVariantsProgress, delete, download_model_ref_with_progress_details,
+    find_remote_catalog_model_exact, installed_model_capabilities,
+    load_model_usage_record_for_path, model_usage_cache_dir, plan_model_cleanup, remote_catalog,
+    remote_catalog_model_ref, scan_installed_models, search_catalog_models, search_huggingface,
+    show_exact_model, show_model_variants_with_progress,
+};
+use mesh_llm_tui::terminal_progress::{DeterminateProgressLine, clear_stderr_line, start_spinner};
+use serde_json::json;
+use std::io::IsTerminal;
+use std::time::Duration;
+use std::time::Instant;
+
+use formatters::{
+    InstalledRow, catalog_model_is_mlx, format_installed_size, format_relative_timestamp,
+    model_kind_code, models_formatter, search_formatter,
+};
+
+pub async fn run_model_search(
+    query: &[String],
+    _prefer_gguf: bool,
+    prefer_mlx: bool,
+    catalog_only: bool,
+    limit: usize,
+    sort: ModelSearchSort,
+    json_output: bool,
+) -> Result<()> {
+    let formatter = search_formatter(json_output);
+    let query = query.join(" ");
+    let filter = if prefer_mlx {
+        SearchArtifactFilter::Mlx
+    } else {
+        SearchArtifactFilter::Gguf
+    };
+    let search_sort = map_search_sort(sort);
+
+    if catalog_only {
+        let results: Vec<_> = search_catalog_models(&query)?
+            .into_iter()
+            .filter(|model| match filter {
+                SearchArtifactFilter::Gguf => !catalog_model_is_mlx(model),
+                SearchArtifactFilter::Mlx => catalog_model_is_mlx(model),
+            })
+            .collect();
+        if results.is_empty() {
+            return formatter.render_catalog_empty(&query, filter, search_sort);
+        }
+        return formatter.render_catalog_results(&query, filter, &results, limit, search_sort);
+    }
+
+    let mut announced_repo_scan = false;
+    let mut last_reported_completed = 0usize;
+    let mut search_spinner = if formatter.is_json() {
+        None
+    } else {
+        Some(start_spinner(&format!(
+            "Searching Hugging Face {} repos for '{}'",
+            formatters::filter_label(filter),
+            query
+        )))
+    };
+    let mut repo_spinner = None;
+    let repo_progress = DeterminateProgressLine::new("🔎");
+    let results = search_huggingface(
+        &query,
+        limit,
+        filter,
+        search_sort,
+        |progress| match progress {
+            SearchProgress::SearchingHub => {}
+            SearchProgress::InspectingRepos { completed, total } => {
+                if formatter.is_json() {
+                    return;
+                }
+                if let Some(mut spinner) = search_spinner.take() {
+                    spinner.finish();
+                }
+                if total == 0 {
+                    return;
+                }
+                if !announced_repo_scan {
+                    announced_repo_scan = true;
+                    repo_spinner = Some(start_spinner(&format!(
+                        "Inspecting {total} candidate repos..."
+                    )));
+                }
+                if completed == 0 {
+                    return;
+                }
+                if let Some(mut spinner) = repo_spinner.take() {
+                    spinner.finish();
+                }
+                if completed < total && completed < last_reported_completed.saturating_add(5) {
+                    return;
+                }
+                last_reported_completed = completed;
+                let _ = repo_progress.draw_counts(
+                    "Inspecting repos",
+                    completed,
+                    total,
+                    Some(" candidate repos"),
+                );
+                if completed == total {
+                    let _ = clear_stderr_line();
+                    eprintln!("   Inspected {completed}/{total} candidate repos...");
+                }
+            }
+        },
+    )
+    .await?;
+    if let Some(mut spinner) = search_spinner.take() {
+        spinner.finish();
+    }
+    if let Some(mut spinner) = repo_spinner.take() {
+        spinner.finish();
+    }
+    if results.is_empty() {
+        return formatter.render_hf_empty(&query, filter, search_sort);
+    }
+    formatter.render_hf_results(&query, filter, search_sort, &results)
+}
+
+pub fn run_model_recommended(json_output: bool) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    remote_catalog::ensure_catalog()?;
+    let models = remote_catalog::loaded_models()?;
+    formatter.render_recommended(&models)
+}
+
+fn build_installed_rows() -> Vec<InstalledRow> {
+    scan_installed_models()
+        .into_iter()
+        .map(|name| {
+            let path = mesh_llm_host_runtime::command_support::models::find_model_path(&name);
+            let display_name = mesh_llm_host_runtime::command_support::models::installed_model_display_name(&name);
+            let catalog_model = find_remote_catalog_model_exact(&name);
+            let layer_count = mesh_llm_host_runtime::command_support::models::layered_package_layer_count_for_path(&path);
+            let model_ref = if layer_count.is_some() {
+                name.clone()
+            } else if let Some(model) = catalog_model.as_ref() {
+                remote_catalog_model_ref(model)
+            } else if let Some(identity) = mesh_llm_host_runtime::command_support::models::huggingface_identity_for_path(&path) {
+                mesh_llm_host_runtime::command_support::models::installed_model_huggingface_ref(&identity)
+            } else {
+                name.clone()
+            };
+            let show_command = layer_count
+                .is_none()
+                .then(|| format!("mesh-llm models show {model_ref}"));
+            let download_command = layer_count
+                .is_none()
+                .then(|| format!("mesh-llm models download {model_ref}"));
+            let delete_command = format!("mesh-llm models delete {model_ref}");
+            let size =
+                if let Some(bytes) = mesh_llm_host_runtime::command_support::models::layered_package_total_bytes_for_path(&path) {
+                    Some(bytes)
+                } else if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("gguf"))
+                {
+                    Some(mesh_llm_host_runtime::command_support::models::election::total_model_bytes(&path))
+                } else {
+                    std::fs::metadata(&path).map(|meta| meta.len()).ok()
+                };
+            let capabilities = installed_model_capabilities(&name);
+            let usage = load_model_usage_record_for_path(&path);
+            InstalledRow {
+                name: display_name,
+                model_ref,
+                show_command,
+                download_command,
+                delete_command,
+                path,
+                size,
+                layer_count,
+                catalog_model,
+                capabilities,
+                managed_by_mesh: usage.as_ref().is_some_and(|record| record.mesh_managed),
+                last_used_at: usage.map(|record| record.last_used_at),
+            }
+        })
+        .collect()
+}
+
+pub fn run_model_installed(json_output: bool) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    let rows = build_installed_rows();
+    formatter.render_installed(&rows)
+}
+
+pub async fn run_model_certify(
+    model: &str,
+    report_out: Option<&std::path::Path>,
+    json_output: bool,
+    package_only: bool,
+    api_base: Option<&str>,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<()> {
+    let api_base = api_base.map(str::trim).filter(|value| !value.is_empty());
+    validate_model_certify_options(package_only, api_base, prompt, max_tokens)?;
+
+    let report = certify_layer_package(SkippyCertificationRequest {
+        model_ref: model.to_string(),
+        package_only,
+        api_base: api_base.map(ToString::to_string),
+        prompt: prompt.to_string(),
+        max_tokens,
+    })
+    .await?;
+    let report_json = serde_json::to_string_pretty(&report)?;
+    if let Some(path) = report_out {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, format!("{report_json}\n"))?;
+    }
+    if json_output {
+        println!("{report_json}");
+    } else {
+        println!(
+            "Skippy package certification: {}",
+            status_label(report.status)
+        );
+        println!("Model: {}", report.model_id);
+        println!("Package: {}", report.resolved_package_ref);
+        println!("Manifest: {}", report.manifest_sha256);
+        println!("Layers: {}", report.layer_count);
+        if let Some(path) = report_out {
+            println!("Report: {}", path.display());
+        }
+    }
+    if report.status != CertificationGateStatus::Passed {
+        bail!(
+            "skippy package certification {}",
+            status_label(report.status)
+        );
+    }
+    Ok(())
+}
+
+fn validate_model_certify_options(
+    package_only: bool,
+    api_base: Option<&str>,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<()> {
+    let api_base = api_base.map(str::trim).filter(|value| !value.is_empty());
+    if package_only {
+        if api_base.is_some() {
+            bail!(
+                "Do not combine --package-only with --api-base; remove --package-only to run runtime smoke gates."
+            );
+        }
+        return Ok(());
+    }
+
+    let Some(api_base) = api_base else {
+        bail!(
+            "models certify requires either --package-only or --api-base for runtime smoke gates"
+        );
+    };
+    let parsed = reqwest::Url::parse(api_base)
+        .map_err(|error| anyhow!("invalid --api-base {api_base:?}: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        bail!("--api-base must be an http(s) URL with a host");
+    }
+    if prompt.trim().is_empty() {
+        bail!("--prompt must not be empty when runtime smoke gates are enabled");
+    }
+    if max_tokens == 0 {
+        bail!("--max-tokens must be greater than 0 when runtime smoke gates are enabled");
+    }
+    Ok(())
+}
+
+fn status_label(status: CertificationGateStatus) -> &'static str {
+    match status {
+        CertificationGateStatus::Passed => "passed",
+        CertificationGateStatus::Failed => "failed",
+        CertificationGateStatus::Incomplete => "incomplete",
+        CertificationGateStatus::NotRequired => "not required",
+    }
+}
+
+pub fn run_model_cleanup(unused_since: Option<&str>, yes: bool, json_output: bool) -> Result<()> {
+    let unused_duration = unused_since.map(parse_cleanup_age).transpose()?;
+    let plan = plan_model_cleanup(unused_duration)?;
+    if yes {
+        let result =
+            mesh_llm_host_runtime::command_support::models::execute_model_cleanup(unused_duration)?;
+        if json_output {
+            render_cleanup_json(unused_since, &plan, Some(&result))?;
+        } else {
+            render_cleanup_console(unused_since, &plan, Some(&result))?;
+        }
+    } else if json_output {
+        render_cleanup_json(unused_since, &plan, None)?;
+    } else {
+        render_cleanup_console(unused_since, &plan, None)?;
+    }
+    Ok(())
+}
+
+// Delete command integration will be implemented in Task 2.
+
+pub async fn run_model_show(model_ref: &str, json_output: bool) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    let interactive = !json_output && std::io::stdout().is_terminal();
+    let detail_started = Instant::now();
+    if interactive {
+        eprintln!("🔎 Resolving model details from Hugging Face...");
+    }
+    let details = show_exact_model(model_ref).await?;
+    if interactive {
+        eprintln!(
+            "✅ Resolved model details ({:.1}s)",
+            detail_started.elapsed().as_secs_f32()
+        );
+    }
+    let is_gguf = model_kind_code(details.kind) == "gguf";
+    let variants = if is_gguf {
+        let variants_started = Instant::now();
+        if interactive {
+            eprintln!("🔎 Fetching GGUF variants from Hugging Face...");
+        }
+        let variants_progress = DeterminateProgressLine::new("🔎");
+        let variants = show_model_variants_with_progress(&details.exact_ref, |progress| {
+            if !interactive {
+                return;
+            }
+            match progress {
+                ShowVariantsProgress::Inspecting { completed, total } => {
+                    if total == 0 {
+                        return;
+                    }
+                    let _ = variants_progress.draw_counts(
+                        "Inspecting variant sizes",
+                        completed,
+                        total,
+                        None,
+                    );
+                    if completed == total {
+                        let _ = clear_stderr_line();
+                    }
+                }
+            }
+        })
+        .await?;
+        if let Some(variants) = &variants {
+            if interactive {
+                eprintln!(
+                    "✅ Fetched {} GGUF variants ({:.1}s)",
+                    variants.len(),
+                    variants_started.elapsed().as_secs_f32()
+                );
+            }
+        } else if interactive {
+            eprintln!(
+                "✅ No GGUF variants for this ref ({:.1}s)",
+                variants_started.elapsed().as_secs_f32()
+            );
+        }
+        variants
+    } else {
+        None
+    };
+    formatter.render_show(&details, variants.as_deref())
+}
+
+pub async fn run_model_download(
+    model_ref: &str,
+    include_draft: bool,
+    json_output: bool,
+) -> Result<()> {
+    let formatter = models_formatter(json_output);
+    if let Some((package_ref, package_dir)) =
+        download_layer_package_for_model_ref(model_ref).await?
+    {
+        if include_draft && !json_output {
+            eprintln!("⚠ Draft download is not available for layer packages");
+        }
+        return formatter.render_layer_package_download(model_ref, &package_ref, &package_dir);
+    }
+
+    let (path, details) = download_model_ref_with_progress_details(model_ref, !json_output).await?;
+    if !include_draft {
+        return formatter.render_download(model_ref, &path, details.as_ref(), false, None);
+    }
+
+    let mut draft_out: Option<(String, std::path::PathBuf)> = None;
+    if let Some(details_ref) = details.as_ref() {
+        if let Some(draft_name) = details_ref.draft.as_deref() {
+            let draft_ref = find_remote_catalog_model_exact(draft_name)
+                .map(|model| remote_catalog_model_ref(&model))
+                .unwrap_or_else(|| draft_name.to_string());
+            let (draft_path, _) =
+                download_model_ref_with_progress_details(&draft_ref, !json_output).await?;
+            draft_out = Some((draft_name.to_string(), draft_path));
+        } else if !json_output {
+            eprintln!(
+                "⚠ No draft model available for {}",
+                details_ref.display_name
+            );
+        }
+    }
+    formatter.render_download(
+        model_ref,
+        &path,
+        details.as_ref(),
+        true,
+        draft_out.as_ref().map(|(n, p)| (n.as_str(), p.as_path())),
+    )
+}
+
+async fn download_layer_package_for_model_ref(
+    model_ref: &str,
+) -> Result<Option<(String, std::path::PathBuf)>> {
+    let Some(package_ref) = resolve_download_layer_package_ref(model_ref) else {
+        return Ok(None);
+    };
+    let package_dir = tokio::task::spawn_blocking({
+        let package_ref = package_ref.clone();
+        move || {
+            let identity = identity_from_layer_package(&package_ref)?;
+            resolve_hf_package_to_local(&package_ref, 0, identity.layer_count, true, true)
+                .map(std::path::PathBuf::from)
+        }
+    })
+    .await??;
+    Ok(Some((package_ref, package_dir)))
+}
+
+fn resolve_download_layer_package_ref(model_ref: &str) -> Option<String> {
+    if is_layer_package_ref(model_ref) {
+        return Some(model_ref.to_string());
+    }
+    let _ = remote_catalog::ensure_catalog();
+    remote_catalog::find_layer_package(model_ref)
+        .or_else(|| remote_catalog::find_huggingface_layer_package(model_ref))
+}
+
+pub async fn dispatch_models_command(command: &ModelsCommand) -> Result<()> {
+    match command {
+        ModelsCommand::Package {
+            source_repo,
+            quant,
+            target,
+            model_id,
+            flavor,
+            timeout,
+            mesh_llm_ref,
+            dry_run,
+            confirm,
+            follow,
+            status,
+            logs,
+            cancel,
+            list,
+            update_script,
+            json,
+        } => {
+            mesh_llm_commands::model_package::dispatch_model_package(
+                mesh_llm_commands::model_package::ModelPrepareArgs {
+                    source_repo: source_repo.as_deref(),
+                    quant: quant.as_deref(),
+                    target: target.as_deref(),
+                    model_id: model_id.as_deref(),
+                    flavor,
+                    timeout,
+                    mesh_llm_ref,
+                    dry_run: *dry_run,
+                    confirm: *confirm,
+                    follow: *follow,
+                    json: *json,
+                    status: status.as_deref(),
+                    logs: logs.as_deref(),
+                    cancel: cancel.as_deref(),
+                    list: *list,
+                    update_script: *update_script,
+                },
+            )
+            .await?;
+        }
+        ModelsCommand::Recommended { json } | ModelsCommand::List { json } => {
+            run_model_recommended(*json)?
+        }
+        ModelsCommand::Installed { json } => run_model_installed(*json)?,
+        ModelsCommand::Cleanup {
+            unused_since,
+            yes,
+            json,
+        } => run_model_cleanup(unused_since.as_deref(), *yes, *json)?,
+        ModelsCommand::Prune { yes, json } => run_model_prune(*yes, *json)?,
+        ModelsCommand::Certify {
+            model,
+            report_out,
+            json,
+            package_only,
+            api_base,
+            prompt,
+            max_tokens,
+        } => {
+            run_model_certify(
+                model,
+                report_out.as_deref(),
+                *json,
+                *package_only,
+                api_base.as_deref(),
+                prompt,
+                *max_tokens,
+            )
+            .await?
+        }
+        ModelsCommand::Search {
+            query,
+            gguf,
+            mlx,
+            catalog,
+            limit,
+            sort,
+            json,
+        } => run_model_search(query, *gguf, *mlx, *catalog, *limit, *sort, *json).await?,
+        ModelsCommand::Show { model, json } => run_model_show(model, *json).await?,
+        ModelsCommand::Download { model, draft, json } => {
+            run_model_download(model, *draft, *json).await?
+        }
+        ModelsCommand::Updates {
+            repo,
+            all,
+            check,
+            json,
+        } => {
+            let repo_for_update = repo.clone();
+            let repo_for_render = repo.clone();
+            let all = *all;
+            let check = *check;
+            tokio::task::spawn_blocking(move || {
+                mesh_llm_host_runtime::command_support::models::run_update(
+                    repo_for_update.as_deref(),
+                    all,
+                    check,
+                )
+            })
+            .await
+            .map_err(anyhow::Error::from)??;
+            if *json {
+                let formatter = models_formatter(*json);
+                formatter.render_updates_status(repo_for_render.as_deref(), all, check)?;
+            }
+        }
+        ModelsCommand::Delete { model, yes, json } => {
+            run_model_delete(model.as_str(), *yes, *json).await?
+        }
+    }
+    Ok(())
+}
+
+fn run_model_prune(yes: bool, json_output: bool) -> Result<()> {
+    let cache_dir =
+        mesh_llm_host_runtime::command_support::models::skippy::materialized_stage_cache_dir();
+    if !yes {
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "dry_run": true,
+                    "cache_dir": cache_dir,
+                    "apply": "mesh-llm models prune --yes",
+                }))?
+            );
+        } else {
+            println!("🧹 Derived stage cache prune preview");
+            println!("📁 Cache: {}", cache_dir.display());
+            println!("Apply with:");
+            println!("  mesh-llm models prune --yes");
+        }
+        return Ok(());
+    }
+    let removed =
+        mesh_llm_host_runtime::command_support::models::skippy::prune_unpinned_materialized_stages(
+        )?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "dry_run": false,
+                "cache_dir": cache_dir,
+                "removed_files": removed,
+            }))?
+        );
+    } else {
+        println!("✅ Derived stage cache pruned");
+        println!("Removed files: {}", removed);
+    }
+    Ok(())
+}
+
+fn parse_cleanup_age(value: &str) -> Result<Duration> {
+    let value = value.trim();
+    if value.is_empty() {
+        bail!("Cleanup age must not be empty");
+    }
+    let split_index = value
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(value.len());
+    if split_index == 0 || split_index == value.len() {
+        bail!("Use a cleanup age like 12h, 7d, or 30m");
+    }
+    let amount: u64 = value[..split_index]
+        .parse()
+        .map_err(|_| anyhow!("Invalid cleanup age: {value}"))?;
+    let unit = value[split_index..].to_ascii_lowercase();
+    let seconds = match unit.as_str() {
+        "m" | "min" | "mins" | "minute" | "minutes" => amount.saturating_mul(60),
+        "h" | "hr" | "hrs" | "hour" | "hours" => amount.saturating_mul(60 * 60),
+        "d" | "day" | "days" => amount.saturating_mul(60 * 60 * 24),
+        "w" | "week" | "weeks" => amount.saturating_mul(60 * 60 * 24 * 7),
+        _ => bail!("Unsupported cleanup age unit '{unit}'. Use m, h, d, or w."),
+    };
+    Ok(Duration::from_secs(seconds))
+}
+
+fn render_cleanup_console(
+    unused_since: Option<&str>,
+    plan: &ModelCleanupPlan,
+    result: Option<&ModelCleanupResult>,
+) -> Result<()> {
+    let executed = result.is_some();
+    if executed {
+        println!("✅ Model cleanup complete");
+    } else {
+        println!("🧹 Model cleanup preview");
+    }
+    println!(
+        "📁 HF cache: {}",
+        mesh_llm_host_runtime::command_support::models::huggingface_hub_cache_dir().display()
+    );
+    println!("📁 Mesh cache: {}", model_usage_cache_dir().display());
+    println!("🛡️ Scope: mesh-managed records only");
+    if let Some(unused_since) = unused_since {
+        println!("⏱️ Filter: unused for at least {}", unused_since);
+    }
+    println!();
+
+    if plan.candidates.is_empty() {
+        println!("No mesh-managed models matched the cleanup filters.");
+    } else {
+        for candidate in &plan.candidates {
+            println!("📦 {}", candidate.display_name);
+            if candidate.stale_record_only {
+                println!("   would remove: stale usage record only");
+            } else {
+                println!(
+                    "   would remove: {} across {} file{}",
+                    format_installed_size(candidate.total_bytes),
+                    candidate.file_count,
+                    if candidate.file_count == 1 { "" } else { "s" }
+                );
+            }
+            if let Some(model_ref) = candidate.model_ref.as_deref() {
+                println!("   ref: {}", model_ref);
+            }
+            println!("   source: {}", candidate.source);
+            if let Some(label) = format_relative_timestamp(&candidate.last_used_at) {
+                println!("   last used: {}", label);
+            }
+            println!("   path: {}", candidate.primary_path.display());
+            if candidate.stale_record_only {
+                println!(
+                    "   note: no managed files remain on disk; cleanup only removes the usage record"
+                );
+            }
+            println!();
+        }
+    }
+
+    if let Some(result) = result {
+        println!("Removed model records: {}", result.removed_candidates);
+        println!("Removed files: {}", result.removed_files);
+        println!(
+            "Removed metadata cache files: {}",
+            result.removed_metadata_files
+        );
+        println!("Removed usage records: {}", result.removed_records);
+        println!(
+            "Reclaimed: {}",
+            format_installed_size(result.reclaimed_bytes)
+        );
+    } else {
+        println!(
+            "Would remove: {} across {} file{}",
+            format_installed_size(plan.total_bytes),
+            plan.total_files,
+            if plan.total_files == 1 { "" } else { "s" }
+        );
+        if plan.stale_record_only > 0 {
+            println!(
+                "Would also clear {} stale usage record{}",
+                plan.stale_record_only,
+                if plan.stale_record_only == 1 { "" } else { "s" }
+            );
+        }
+        if plan.skipped_recent > 0 {
+            println!(
+                "Skipped recent mesh-managed record{}: {}",
+                if plan.skipped_recent == 1 { "" } else { "s" },
+                plan.skipped_recent
+            );
+        }
+        println!();
+        println!("Apply with:");
+        print!("  mesh-llm models cleanup");
+        if let Some(unused_since) = unused_since {
+            print!(" --unused-since {}", unused_since);
+        }
+        println!(" --yes");
+    }
+    Ok(())
+}
+
+fn render_cleanup_json(
+    unused_since: Option<&str>,
+    plan: &ModelCleanupPlan,
+    result: Option<&ModelCleanupResult>,
+) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "hf_cache_dir": mesh_llm_host_runtime::command_support::models::huggingface_hub_cache_dir(),
+            "mesh_cache_dir": model_usage_cache_dir(),
+            "mesh_managed_only": true,
+            "unused_since": unused_since,
+            "dry_run": result.is_none(),
+            "plan": plan,
+            "result": result,
+        }))?
+    );
+    Ok(())
+}
+
+pub async fn run_model_delete(model: &str, yes: bool, json_output: bool) -> Result<()> {
+    let paths = match delete::resolve_model_identifier(model).await {
+        Ok(p) => p,
+        Err(e) => bail!("{e}"),
+    };
+
+    if paths.is_empty() {
+        bail!("Model not found: {}", model);
+    }
+
+    if !yes {
+        let derived_stage_paths =
+            mesh_llm_host_runtime::command_support::models::skippy::materialized_stages_for_sources(&paths)?;
+        let resolved = build_delete_preview_model(model, &paths, derived_stage_paths);
+        let formatter = models_formatter(json_output);
+        return formatter.render_delete_preview(&resolved);
+    }
+
+    let removed_derived_cache_files =
+        mesh_llm_host_runtime::command_support::models::skippy::remove_materialized_stages_for_sources(&paths)?;
+    let mut result = delete::delete_model_by_identifier(model).await?;
+    result.removed_derived_cache_files = removed_derived_cache_files;
+    let formatter = models_formatter(json_output);
+    formatter.render_delete_result(&result)
+}
+
+fn build_delete_preview_model(
+    model: &str,
+    paths: &[std::path::PathBuf],
+    derived_stage_paths: Vec<std::path::PathBuf>,
+) -> mesh_llm_host_runtime::command_support::models::ResolvedModel {
+    let primary_path = paths[0].clone();
+    let display_name = if paths.len() > 1 {
+        format!("{model} ({} files)", paths.len())
+    } else {
+        primary_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string()
+    };
+
+    mesh_llm_host_runtime::command_support::models::ResolvedModel {
+        path: primary_path,
+        paths: paths.to_vec(),
+        derived_stage_paths,
+        display_name,
+        is_exact_path: false,
+        matched_records: vec![],
+    }
+}
+
+fn map_search_sort(sort: ModelSearchSort) -> SearchSort {
+    match sort {
+        ModelSearchSort::Trending => SearchSort::Trending,
+        ModelSearchSort::Downloads => SearchSort::Downloads,
+        ModelSearchSort::Likes => SearchSort::Likes,
+        ModelSearchSort::Created => SearchSort::Created,
+        ModelSearchSort::Updated => SearchSort::Updated,
+        ModelSearchSort::ParametersDesc => SearchSort::ParametersDesc,
+        ModelSearchSort::ParametersAsc => SearchSort::ParametersAsc,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        build_delete_preview_model, build_installed_rows, parse_cleanup_age,
+        resolve_download_layer_package_ref, validate_model_certify_options,
+    };
+    use serial_test::serial;
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("mesh-llm-{prefix}-{stamp}"))
+    }
+
+    fn restore_env(key: &str, previous: Option<OsString>) {
+        if let Some(value) = previous {
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::set_var(key, value) };
+        } else {
+            // TODO: Audit that the environment access only happens in single-threaded code.
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+
+    fn create_cache_repo_file(
+        root: &Path,
+        repo_id: &str,
+        revision: &str,
+        relative_file: &str,
+        size_bytes: usize,
+    ) -> PathBuf {
+        let repo_dir = root.join(format!("models--{}", repo_id.replace('/', "--")));
+        let refs_dir = repo_dir.join("refs");
+        let snapshot_dir = repo_dir.join("snapshots").join(revision);
+        std::fs::create_dir_all(&refs_dir).unwrap();
+        std::fs::create_dir_all(
+            snapshot_dir.join(Path::new(relative_file).parent().unwrap_or(Path::new(""))),
+        )
+        .unwrap();
+        std::fs::write(refs_dir.join("main"), revision).unwrap();
+
+        let path = snapshot_dir.join(relative_file);
+        std::fs::write(&path, vec![0u8; size_bytes]).unwrap();
+        path
+    }
+
+    #[test]
+    fn cleanup_age_parser_accepts_common_units() {
+        assert_eq!(
+            parse_cleanup_age("30m").expect("minutes should parse"),
+            std::time::Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            parse_cleanup_age("12h").expect("hours should parse"),
+            std::time::Duration::from_secs(12 * 60 * 60)
+        );
+        assert_eq!(
+            parse_cleanup_age("7d").expect("days should parse"),
+            std::time::Duration::from_secs(7 * 24 * 60 * 60)
+        );
+    }
+
+    #[test]
+    fn cleanup_age_parser_rejects_missing_or_unknown_units() {
+        assert!(parse_cleanup_age("30").is_err());
+        assert!(parse_cleanup_age("2months").is_err());
+        assert!(parse_cleanup_age("").is_err());
+    }
+
+    #[test]
+    fn model_certify_requires_explicit_certification_mode() {
+        let error = validate_model_certify_options(false, None, "Say ok.", 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("--package-only"), "{error}");
+        assert!(error.contains("--api-base"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_ambiguous_package_and_runtime_modes() {
+        let error =
+            validate_model_certify_options(true, Some("http://127.0.0.1:9337"), "Say ok.", 2)
+                .unwrap_err()
+                .to_string();
+
+        assert!(error.contains("Do not combine"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_empty_runtime_prompt() {
+        let error = validate_model_certify_options(false, Some("http://127.0.0.1:9337"), "   ", 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("--prompt"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_zero_runtime_tokens() {
+        let error =
+            validate_model_certify_options(false, Some("http://127.0.0.1:9337"), "Say ok.", 0)
+                .unwrap_err()
+                .to_string();
+
+        assert!(error.contains("--max-tokens"), "{error}");
+    }
+
+    #[test]
+    fn model_certify_rejects_non_http_runtime_base() {
+        let error = validate_model_certify_options(false, Some("file:///tmp/api"), "Say ok.", 2)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("--api-base"), "{error}");
+        assert!(error.contains("http"), "{error}");
+    }
+
+    #[test]
+    fn model_download_accepts_explicit_hf_layer_package_ref() {
+        assert_eq!(
+            resolve_download_layer_package_ref("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123"),
+            Some("hf://meshllm/Qwen3-8B-Q4_K_M-layers@abc123".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn model_download_without_package_mapping_falls_back_to_model_download() {
+        let _catalog = mesh_llm_host_runtime::command_support::models::remote_catalog::set_catalog_entries_for_test(Vec::new());
+        assert_eq!(
+            resolve_download_layer_package_ref("plain-local-model"),
+            None
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn installed_rows_keep_layered_package_ref_and_safe_commands() {
+        let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
+        let prev_hf_home = std::env::var_os("HF_HOME");
+        let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
+
+        let temp = unique_temp_dir("installed-layered-row");
+        create_cache_repo_file(
+            &temp,
+            "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers",
+            "abcdef1234567890",
+            "shared/embeddings.gguf",
+            6,
+        );
+        create_cache_repo_file(
+            &temp,
+            "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers",
+            "abcdef1234567890",
+            "layers/layer-000.gguf",
+            9,
+        );
+        create_cache_repo_file(
+            &temp,
+            "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers",
+            "abcdef1234567890",
+            "layers/layer-001.gguf",
+            9,
+        );
+
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::set_var("HF_HUB_CACHE", &temp) };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("HF_HOME") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { std::env::remove_var("XDG_CACHE_HOME") };
+
+        let rows = build_installed_rows();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.model_ref, "meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers");
+        assert_eq!(row.layer_count, Some(2));
+        assert_eq!(row.show_command, None);
+        assert_eq!(row.download_command, None);
+        assert_eq!(
+            row.delete_command,
+            "mesh-llm models delete meshllm/DeepSeek-V3.2-UD-Q4_K_XL-layers"
+        );
+
+        let _ = std::fs::remove_dir_all(&temp);
+        restore_env("HF_HUB_CACHE", prev_hub_cache);
+        restore_env("HF_HOME", prev_hf_home);
+        restore_env("XDG_CACHE_HOME", prev_xdg);
+    }
+
+    #[test]
+    fn delete_preview_model_retains_all_resolved_package_paths() {
+        let paths = vec![
+            PathBuf::from("/tmp/demo-layers/layers/layer-000.gguf"),
+            PathBuf::from("/tmp/demo-layers/layers/layer-001.gguf"),
+            PathBuf::from("/tmp/demo-layers/shared/embeddings.gguf"),
+        ];
+
+        let derived_stage_paths =
+            vec![PathBuf::from("/tmp/mesh-llm/skippy-stages/demo-stage.gguf")];
+        let resolved =
+            build_delete_preview_model("meshllm/Demo-layers", &paths, derived_stage_paths.clone());
+
+        assert_eq!(resolved.path, paths[0]);
+        assert_eq!(resolved.paths, paths);
+        assert_eq!(resolved.derived_stage_paths, derived_stage_paths);
+        assert_eq!(resolved.display_name, "meshllm/Demo-layers (3 files)");
+    }
+}

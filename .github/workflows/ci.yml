@@ -72,7 +72,14 @@ jobs:
               - 'crates/mesh-llm-api-client/**'
               - 'crates/mesh-llm-api-server/**'
               - 'crates/mesh-llm-config/**'
+              - 'crates/mesh-llm-commands/**'
+              - 'crates/mesh-llm-events/**'
+              - 'crates/mesh-llm-hardware-profile/**'
+              - 'crates/mesh-llm-runtime-install/**'
               - 'crates/mesh-llm-sdk/**'
+              - 'crates/mesh-llm-cli/**'
+              - 'crates/mesh-llm-embedded-runtime/**'
+              - 'crates/mesh-llm-tui/**'
               - 'crates/mesh-llm-console-server/**'
               - 'crates/mesh-llm-ffi/**'
               - 'crates/mesh-llm-nodejs/**'
@@ -84,7 +91,11 @@ jobs:
               - 'crates/mesh-llm-types/**'
               - 'sdk/**'
               - 'Package.swift'
-              - 'scripts/ci-native-sdk-smoke.sh'
+              - 'scripts/ci-rust-sdk-smoke.sh'
+              - 'scripts/ci-prepare-native-runtime.sh'
+              - 'scripts/ci-install-native-runtime.sh'
+              - 'scripts/package-sdk-console-assets.sh'
+              - 'scripts/verify-sdk-console-assets.sh'
               - 'scripts/ci-kotlin-sdk-smoke.sh'
               - 'scripts/ci-swift-sdk-smoke.sh'
               - 'scripts/ci-sdk-fixture.sh'
@@ -249,7 +260,7 @@ jobs:
         run: scripts/build-llama.sh
 
       - name: SDK and API crate tests
-        if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-config') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-sdk') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-console-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs') }}
+        if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-config') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-commands') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-events') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-hardware-profile') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-runtime-install') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-sdk') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-cli') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-tui') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-embedded-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-console-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs') }}
         env:
           AFFECTED: ${{ needs.changes.outputs.affected_crates }}
           ALL_RUST: ${{ needs.changes.outputs.all_rust }}
@@ -259,7 +270,7 @@ jobs:
             [ "$ALL_RUST" = "true" ] || jq -e --arg crate "$crate" 'index($crate) != null' <<<"$AFFECTED" >/dev/null
           }
 
-          for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-sdk mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do
+          for c in mesh-llm-client mesh-llm-api-client mesh-llm-api-server mesh-llm-config mesh-llm-commands mesh-llm-events mesh-llm-hardware-profile mesh-llm-runtime-install mesh-llm-cli mesh-llm-tui mesh-llm-embedded-runtime mesh-llm-sdk mesh-llm-console-server mesh-llm-ffi mesh-llm-nodejs; do
             if should_test "$c"; then
               cargo test -p "$c"
             else
@@ -429,12 +440,12 @@ jobs:
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
       timeout_minutes: 20
 
-  native_sdk_smoke:
+  rust_sdk_smoke:
     needs: [changes, linux, inference_smoke_tests]
     if: ${{ needs.inference_smoke_tests.result == 'success' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.sdk == 'true') && needs.changes.outputs.docs_only != 'true' }}
     uses: ./.github/workflows/sdk-smoke.yml
     with:
-      sdk_kind: native
+      sdk_kind: rust
       artifact_name: ci-linux-inference-binaries
       artifact_path: ci-artifacts/linux
       staged_binary_path: target/debug/mesh-llm

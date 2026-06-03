@@ -3,11 +3,15 @@ name = "model-resolver"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Model reference resolution helpers for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
 
 [dependencies]
 anyhow.workspace = true
-model-ref = { path = "../model-ref" }
-model-artifact = { path = "../model-artifact" }
+model-ref = { path = "../model-ref", version = "0.68.0"  }
+model-artifact = { path = "../model-artifact", version = "0.68.0"  }
 serde.workspace = true
 serde_json.workspace = true
 
