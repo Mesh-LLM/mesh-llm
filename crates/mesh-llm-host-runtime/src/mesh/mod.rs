@@ -404,7 +404,7 @@ pub enum RelayPolicy {
 }
 
 impl RelayPolicy {
-    fn uses_relay(self) -> bool {
+    pub(crate) fn uses_relay(self) -> bool {
         matches!(self, Self::DefaultPublic)
     }
 
