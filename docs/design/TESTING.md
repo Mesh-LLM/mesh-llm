@@ -620,6 +620,8 @@ curl localhost:3131/api/discover # Nostr meshes (current mesh marked by mesh_id)
 - `/api/model-targets` returns ranked targets with explicit-interest counts, request counts, serving-node counts, `wanted` for targets not currently served, and derived `capacity_advice` without changing ranking or routing behavior
 - If `[runtime] reconcile_model_targets = true` is enabled, unserved local explicit interests that are already present on disk and fit the current node may be runtime-loaded automatically. If `reconcile_model_target_demand_upgrades = true` is also enabled, an already-serving host may replace a lower-demand local model with a locally present, higher-demand unserved target whose active demand is still within `model_target_demand_upgrade_max_age_secs`. Leave these unset for read-only advisory checks.
 - Discover results can be matched to current mesh by `mesh_id`
+- In `--mesh-discovery-mode mdns`, `/api/discover` must show LAN advertisements without raw invite tokens; token fingerprints are expected, while proof challenges and `/api/discovery/lan-details` should appear only when the publishing node's management API is LAN-reachable, such as with `--listen-all`.
+- POST `/api/discovery/lan-details` must reject missing or wrong-token proof and must return local detail without echoing the raw invite token.
 
 ### 24. HTTP proxy single-request connection contract
 

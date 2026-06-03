@@ -4,6 +4,9 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 description = "Reusable guardrail and compaction primitives for mesh-llm OpenAI-compatible paths"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
 
 [lints]
 workspace = true

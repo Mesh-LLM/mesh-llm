@@ -292,7 +292,7 @@ fn split_topology_failure_reason(
     let estimated_total_bytes = bytes_per_layer.saturating_mul(u64::from(package.layer_count));
 
     format!(
-        "unable to plan split topology for {model_ref}: native_context={}, minimum_context={}, evaluated_context={}, evaluated_lanes={}, layer_count={}, estimated_bytes_per_layer={}, estimated_total_bytes={}, total_usable_vram={}, max_placeable_layers_at_evaluated_shape={}/{}; participants [{}]; excluded [{}]",
+        "split_capacity_shortfall: unable to plan split topology for {model_ref}: native_context={}, minimum_context={}, evaluated_context={}, evaluated_lanes={}, layer_count={}, estimated_bytes_per_layer={}, estimated_total_bytes={}, total_usable_vram={}, max_placeable_layers_at_evaluated_shape={}/{}; participants [{}]; excluded [{}]",
         resources.native_context_length,
         minimum_context,
         evaluated_context,
@@ -494,7 +494,7 @@ impl SplitCapacityReadinessReport {
 
     fn error_message(&self, model_ref: &str) -> String {
         let mut message = format!(
-            "aggregate split capacity for {model_ref} requires {}, mesh has {} across {} participant(s), short by {}",
+            "split_capacity_shortfall: aggregate split capacity for {model_ref} requires {}, mesh has {} across {} participant(s), short by {}",
             format_gb(self.required_bytes),
             format_gb(self.available_bytes),
             self.participants.len(),
@@ -631,6 +631,7 @@ mod tests {
             &excluded,
         );
 
+        assert!(message.contains("split_capacity_shortfall"));
         assert!(message.contains("model-a"));
         assert!(message.contains("short by 60.0GB"));
         assert!(message.contains("participants ["));

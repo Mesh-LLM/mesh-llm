@@ -590,7 +590,7 @@ impl PluginManager {
         summaries
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         for plugin in self.inner.plugins.values() {
             plugin.shutdown().await;
@@ -1150,7 +1150,7 @@ impl PluginManager {
     }
 
     #[cfg(test)]
-    pub async fn set_test_stream_handler<F>(&self, plugin_name: &str, handler: F)
+    pub(crate) async fn set_test_stream_handler<F>(&self, plugin_name: &str, handler: F)
     where
         F: Fn(proto::OpenStreamRequest) -> TestStreamFuture + Send + Sync + 'static,
     {

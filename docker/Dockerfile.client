@@ -39,6 +39,7 @@ WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates/mesh-llm-ui/ crates/mesh-llm-ui/
 COPY crates/mesh-llm-identity/ crates/mesh-llm-identity/
+COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
 COPY crates/mesh-llm-protocol/ crates/mesh-llm-protocol/
 COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
 COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/
@@ -110,6 +111,7 @@ COPY --from=ui-builder /app/dist crates/mesh-llm-ui/dist
 COPY Cargo.toml Cargo.lock ./
 COPY crates/mesh-llm-ui/ crates/mesh-llm-ui/
 COPY crates/mesh-llm-identity/ crates/mesh-llm-identity/
+COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
 COPY crates/mesh-llm-protocol/ crates/mesh-llm-protocol/
 COPY crates/mesh-llm-routing/ crates/mesh-llm-routing/
 COPY crates/mesh-llm-guardrails/ crates/mesh-llm-guardrails/

@@ -27,8 +27,14 @@ let prompt = ProcessInfo.processInfo.environment["MESH_SDK_PROMPT"]
 
 if localModelRef != nil {
     do {
-        let runtime = try NativeRuntime.prepare()
-        print("[runtime] artifact=\(runtime.artifactId) library=\(runtime.library.path)")
+        let runtime = try await NativeRuntime.resolve(
+            NativeRuntimeResolveOptions(
+                artifactDirectory: ProcessInfo.processInfo.environment["MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR"]
+                    .map(URL.init(fileURLWithPath:)),
+                allowDownload: ProcessInfo.processInfo.environment["MESH_SDK_RUNTIME_ALLOW_DOWNLOAD"] == "1"
+            )
+        )
+        print("[runtime] artifact=\(runtime.nativeRuntimeId) path=\(runtime.path)")
     } catch {
         FileHandle.standardError.write(Data("[error] \(error)\n".utf8))
         exit(1)

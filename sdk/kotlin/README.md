@@ -50,24 +50,29 @@ include per-ABI llama.cpp static runtime archives.
 
 ## Usage
 
-JVM apps must configure the native runtime before any generated UniFFI symbol is
-used. Point `MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR` at a verified
-`meshllm-native-*` artifact, or pass the artifact directory explicitly:
+Apps that need local serving resolve or install a native runtime before loading
+a model. The resolver can use packaged artifact directories or download the
+recommended runtime through the SDK native runtime manager:
 
 ```kotlin
 import ai.meshllm.NativeRuntime
+import ai.meshllm.NativeRuntimeResolveOptions
+import java.io.File
 
-val runtime = NativeRuntime.configure()
-println("loaded ${runtime.artifactId} from ${runtime.artifactDir}")
+val runtime = NativeRuntime.resolve(
+    NativeRuntimeResolveOptions(
+        artifactDir = System.getenv("MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR")?.let(::File),
+        allowDownload = System.getenv("MESH_SDK_RUNTIME_ALLOW_DOWNLOAD") == "1",
+    ),
+)
+println("loaded ${runtime.nativeRuntimeId} from ${runtime.path}")
 ```
 
 ```kotlin
 import ai.meshllm.InviteToken
-import ai.meshllm.NativeRuntime
 import ai.meshllm.Node
 import uniffi.mesh_ffi.generateOwnerKeypairHex
 
-NativeRuntime.configure()
 val ownerKeypair = generateOwnerKeypairHex()
 val node = Node(InviteToken("your-invite-token"), ownerKeypair)
 
@@ -120,12 +125,31 @@ Build or download a native runtime artifact, then run the JVM example with that
 artifact directory:
 
 ```bash
-scripts/package-native-sdk.sh \
+scripts/package-native-runtime.sh \
   --backend metal \
   --target aarch64-apple-darwin \
-  --out dist/native-sdk
+  --out dist/native-runtimes
 
-MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-sdk/meshllm-native-darwin-aarch64-metal \
+MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR=dist/native-runtimes/meshllm-native-runtime-darwin-aarch64-metal \
 MESH_SDK_MODEL_REF=Qwen2.5-3B-Instruct-Q4_K_M \
 ./gradlew --no-daemon run -p sdk/kotlin/example/example-jvm
+```
+
+## Optional Console Assets
+
+Published Kotlin/JVM and Android packages include the built console resources
+under `mesh-llm/console`. Because those resources may live inside a JAR or APK,
+use `ConsoleAssets.packagedOptions()` to extract them to a filesystem directory
+before starting the static console server:
+
+```kotlin
+val console = node.startConsole(ConsoleAssets.packagedOptions(port = 3131u.toUShort()))
+println(console.url())
+```
+
+Release packages prepare those resources with:
+
+```bash
+scripts/package-sdk-console-assets.sh --sdk kotlin
+scripts/verify-sdk-console-assets.sh --sdk kotlin
 ```

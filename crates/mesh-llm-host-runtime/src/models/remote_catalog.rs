@@ -8,15 +8,15 @@ use std::{
     collections::HashSet,
     fs,
     path::{Component, Path, PathBuf},
-    sync::{Mutex, RwLock},
+    sync::{
+        Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime},
 };
 
 #[cfg(test)]
-use std::sync::{
-    Arc, LazyLock,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result, bail};
 use model_resolver::{
@@ -55,7 +55,6 @@ static CATALOG_REFRESH_BACKOFF_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
 /// cached catalog is already available.
 const CATALOG_REFRESH_BACKOFF: Duration = Duration::from_secs(5 * 60);
 
-#[cfg(test)]
 static CATALOG_ENTRIES_OVERRIDE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
@@ -65,8 +64,8 @@ type HfModelFileProbe = Arc<dyn Fn(&str, &str, &str) -> bool + Send + Sync>;
 static HF_MODEL_FILE_PROBE_OVERRIDE: LazyLock<Mutex<Option<HfModelFileProbe>>> =
     LazyLock::new(|| Mutex::new(None));
 
-#[cfg(test)]
-pub(crate) struct CatalogEntriesOverrideGuard {
+#[doc(hidden)]
+pub struct CatalogEntriesOverrideGuard {
     previous_entries: Option<Vec<CatalogEntry>>,
     previous_override_active: bool,
 }
@@ -76,10 +75,8 @@ pub(crate) struct HfModelFileProbeOverrideGuard {
     previous_probe: Option<HfModelFileProbe>,
 }
 
-#[cfg(test)]
-pub(crate) fn set_catalog_entries_for_test(
-    entries: Vec<CatalogEntry>,
-) -> CatalogEntriesOverrideGuard {
+#[doc(hidden)]
+pub fn set_catalog_entries_for_test(entries: Vec<CatalogEntry>) -> CatalogEntriesOverrideGuard {
     let previous_override_active = CATALOG_ENTRIES_OVERRIDE_ACTIVE.swap(true, Ordering::SeqCst);
     let mut lock = CATALOG_ENTRIES.write().unwrap();
     let previous = lock.replace(entries);
@@ -89,7 +86,6 @@ pub(crate) fn set_catalog_entries_for_test(
     }
 }
 
-#[cfg(test)]
 impl Drop for CatalogEntriesOverrideGuard {
     fn drop(&mut self) {
         *CATALOG_ENTRIES.write().unwrap() = self.previous_entries.take();
@@ -245,15 +241,12 @@ pub fn load_catalog_from_disk() -> Result<()> {
 
 /// Ensures the catalog is loaded — refreshes if stale, otherwise loads from disk.
 pub fn ensure_catalog() -> Result<()> {
-    #[cfg(test)]
-    {
-        if CATALOG_ENTRIES_OVERRIDE_ACTIVE.load(Ordering::SeqCst) {
-            let lock = CATALOG_ENTRIES
-                .read()
-                .map_err(|_| anyhow::anyhow!("catalog lock poisoned"))?;
-            if lock.is_some() {
-                return Ok(());
-            }
+    if CATALOG_ENTRIES_OVERRIDE_ACTIVE.load(Ordering::SeqCst) {
+        let lock = CATALOG_ENTRIES
+            .read()
+            .map_err(|_| anyhow::anyhow!("catalog lock poisoned"))?;
+        if lock.is_some() {
+            return Ok(());
         }
     }
 

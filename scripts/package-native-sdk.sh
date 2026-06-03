@@ -71,7 +71,7 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 case "$BACKEND" in
-    cpu|metal|cuda|rocm|hip|vulkan) ;;
+    cpu|metal|cuda|cuda-blackwell|rocm|hip|vulkan) ;;
     *)
         echo "unsupported native SDK backend: $BACKEND" >&2
         exit 1
@@ -144,31 +144,51 @@ library_basename() {
     esac
 }
 
+uniffi_library_basename() {
+    case "$1" in
+        dll) printf 'uniffi_mesh_ffi.dll\n' ;;
+        *) printf 'libuniffi_mesh_ffi.%s\n' "$1" ;;
+    esac
+}
+
 sanitize_component() {
     printf '%s' "$1" | tr ';, /:' '_____' | tr -cd 'A-Za-z0-9_.-'
 }
 
 backend_flavor() {
     case "$BACKEND" in
-        cuda)
-            local cuda_arch="${LLAMA_STAGE_CUDA_ARCHITECTURES:-${SKIPPY_CUDA_ARCHITECTURES:-}}"
-            if [[ -n "$cuda_arch" ]]; then
-                printf 'cuda-sm%s\n' "$(sanitize_component "$cuda_arch")"
-            else
-                printf 'cuda\n'
-            fi
-            ;;
-        rocm|hip)
-            local amdgpu_targets="${LLAMA_STAGE_AMDGPU_TARGETS:-${SKIPPY_AMDGPU_TARGETS:-}}"
-            if [[ -n "$amdgpu_targets" ]]; then
-                printf 'rocm-%s\n' "$(sanitize_component "$amdgpu_targets")"
-            else
-                printf 'rocm\n'
-            fi
-            ;;
+        cuda) printf 'cuda\n' ;;
+        cuda-blackwell) printf 'cuda-blackwell\n' ;;
+        rocm|hip) printf 'rocm\n' ;;
         *)
             printf '%s\n' "$BACKEND"
             ;;
+    esac
+}
+
+build_backend() {
+    case "$BACKEND" in
+        cuda-blackwell) printf 'cuda\n' ;;
+        hip) printf 'rocm\n' ;;
+        *) printf '%s\n' "$BACKEND" ;;
+    esac
+}
+
+target_runtime_os() {
+    case "$1" in
+        *apple-darwin) printf 'macos\n' ;;
+        *linux*|*android*) printf 'linux\n' ;;
+        *windows*) printf 'windows\n' ;;
+        *) echo "cannot infer runtime os for target: $1" >&2; exit 1 ;;
+    esac
+}
+
+target_runtime_arch() {
+    case "$1" in
+        aarch64-*) printf 'aarch64\n' ;;
+        x86_64-*) printf 'x86_64\n' ;;
+        armv7-*) printf 'arm\n' ;;
+        *) echo "cannot infer runtime arch for target: $1" >&2; exit 1 ;;
     esac
 }
 
@@ -214,12 +234,12 @@ if [[ -z "$TARGET_TRIPLE" ]]; then
 fi
 
 if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
-    LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_BACKEND="$BACKEND" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
+    LLAMA_STAGE_BUILD_DIR="$(LLAMA_STAGE_BACKEND="$(build_backend)" "$SCRIPT_DIR/build-llama.sh" --print-build-dir)"
 fi
 
 if [[ "$BUILD" == "1" ]]; then
     "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
-    LLAMA_STAGE_BACKEND="$BACKEND" \
+    LLAMA_STAGE_BACKEND="$(build_backend)" \
         LLAMA_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
         LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
         "$SCRIPT_DIR/build-llama.sh"
@@ -231,14 +251,17 @@ if [[ "$BUILD" == "1" ]]; then
     if [[ "$TARGET_TRIPLE" != "$(default_target_triple)" ]]; then
         cargo_args+=(--target "$TARGET_TRIPLE")
     fi
-    LLAMA_STAGE_BACKEND="$BACKEND" \
+    LLAMA_STAGE_BACKEND="$(build_backend)" \
         LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" \
         cargo "${cargo_args[@]}"
 fi
 
 lib_ext="$(library_extension "$TARGET_TRIPLE")"
 lib_name="$(library_basename "$lib_ext")"
+uniffi_lib_name="$(uniffi_library_basename "$lib_ext")"
 platform="$(target_platform "$TARGET_TRIPLE")"
+runtime_os="$(target_runtime_os "$TARGET_TRIPLE")"
+runtime_arch="$(target_runtime_arch "$TARGET_TRIPLE")"
 flavor="$(backend_flavor)"
 artifact_id="meshllm-native-${platform}-${flavor}"
 
@@ -270,6 +293,7 @@ rm -rf "$stage_dir"
 mkdir -p "$stage_dir/lib"
 
 cp "$lib_path" "$stage_dir/lib/$lib_name"
+cp "$lib_path" "$stage_dir/lib/$uniffi_lib_name"
 
 patched_sha=""
 upstream_sha=""
@@ -295,14 +319,24 @@ import sys
 manifest = {
     "schema_version": 1,
     "artifact_id": "$artifact_id",
+    "native_runtime_id": "$artifact_id",
     "sdk_version": "$sdk_version",
+    "mesh_version": "$sdk_version",
     "target_triple": "$TARGET_TRIPLE",
     "platform": "$platform",
+    "os": "$runtime_os",
+    "arch": "$runtime_arch",
     "backend": "$BACKEND",
     "flavor": "$flavor",
     "cargo_profile": "$PROFILE",
     "library": "lib/$lib_name",
+    "library_paths": ["lib/$lib_name"],
+    "uniffi_library": "lib/$uniffi_lib_name",
     "library_sha256": "$lib_sha",
+    "url": None,
+    "sha256": None,
+    "signature": None,
+    "requirements": [],
     "llama_upstream_sha": "$upstream_sha" or None,
     "llama_patched_sha": "$patched_sha" or None,
     "llama_patch_digest": "$patch_digest" or None,
@@ -333,6 +367,9 @@ This artifact contains the MeshLLM native SDK runtime for:
 
 SDK loaders should read \`manifest.json\`, verify \`library_sha256\`, then load
 \`$lib_name\`.
+
+Kotlin/JVM UniFFI consumers can load \`$uniffi_lib_name\`, which is an alias of
+the same library kept for UniFFI's generated JNA lookup name.
 EOF
 
 mkdir -p "$OUT_DIR"

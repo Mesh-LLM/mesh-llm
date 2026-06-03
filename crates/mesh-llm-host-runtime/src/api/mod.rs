@@ -23,7 +23,8 @@
 //!   DELETE /api/runtime/models/{model} — unload a local model
 //!   DELETE /api/runtime/instances/{instance_id} — unload one local runtime instance
 //!   GET  /api/events    — SSE stream of status updates
-//!   GET  /api/discover  — browse Nostr-published meshes
+//!   GET  /api/discover  — browse Nostr meshes or LAN mDNS advertisements
+//!   POST /api/discovery/lan-details — invite-token proof-gated LAN detail
 //!   POST /api/chat      — proxy to chat completions API
 //!   POST /api/responses — proxy to responses API
 //!   POST /api/objects   — upload a request-scoped media object
@@ -239,6 +240,8 @@ impl MeshApi {
                 api_port,
                 model_size_bytes,
                 mesh_name: None,
+                mesh_region: None,
+                mesh_max_clients: None,
                 latest_version: None,
                 nostr_relays: nostr::DEFAULT_RELAYS
                     .iter()
@@ -375,8 +378,16 @@ impl MeshApi {
             });
     }
 
-    pub async fn set_mesh_name(&self, name: String) {
-        self.inner.lock().await.mesh_name = Some(name);
+    pub async fn set_mesh_publication_metadata(
+        &self,
+        name: Option<String>,
+        region: Option<String>,
+        max_clients: Option<usize>,
+    ) {
+        let mut inner = self.inner.lock().await;
+        inner.mesh_name = name;
+        inner.mesh_region = region;
+        inner.mesh_max_clients = max_clients;
     }
 
     pub async fn set_nostr_relays(&self, relays: Vec<String>) {

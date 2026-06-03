@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn valid_owner_keypair_hex() -> String {
-    mesh_llm_api_server::OwnerKeypair::generate().to_hex()
+    mesh_llm_sdk::OwnerKeypair::generate().to_hex()
 }
 
 fn valid_node() -> Arc<meshllm_ffi::MeshNodeHandle> {
@@ -141,7 +141,7 @@ fn create_node_with_invalid_owner_keypair_fails() {
 #[test]
 fn create_node_uses_supplied_owner_keypair() {
     let owner_keypair_hex = {
-        let keypair = mesh_llm_api_server::OwnerKeypair::generate();
+        let keypair = mesh_llm_sdk::OwnerKeypair::generate();
         keypair.to_hex()
     };
 

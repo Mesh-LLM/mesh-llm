@@ -946,7 +946,7 @@ fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStat
         Some(format!(
             "mesh-llm pi --host 127.0.0.1:{} --model {}",
             input.api_port,
-            crate::cli::shell::single_quote(&display_model_name)
+            single_quote_shell_arg(&display_model_name)
         ))
     } else {
         None
@@ -969,6 +969,10 @@ fn derive_runtime_status(input: RuntimeStatusDerivationInput<'_>) -> RuntimeStat
         launch_pi,
         launch_goose,
     }
+}
+
+fn single_quote_shell_arg(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn derive_local_node_state(
@@ -1050,6 +1054,7 @@ fn build_peer_payload(peer: &mesh::PeerInfo) -> PeerPayload {
         serving_models: peer.serving_models.clone(),
         hosted_models: peer.hosted_models.clone(),
         hosted_models_known: peer.hosted_models_known,
+        advertised_model_throughput: peer.advertised_model_throughput.clone(),
         version: peer.version.clone(),
         rtt_ms: peer.rtt_ms,
         latency_ms: display_latency.latency_ms,

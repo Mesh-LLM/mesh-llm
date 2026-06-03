@@ -32,7 +32,7 @@ on:
       runs_on:
         description: "JSON runner label string/array for the reusable workflow."
         required: false
-        default: '"self-hosted"'
+        default: '"ubuntu-24.04"'
       output_dir:
         description: "Evidence output directory. Defaults to nightly-artifacts/stability/<run_id>."
         required: false
@@ -56,5 +56,5 @@ jobs:
       agent_smokes: ${{ github.event.inputs.agent_smokes || vars.MESH_NIGHTLY_STABILITY_AGENT_SMOKES || '' }}
       skip_streaming: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_streaming || false }}
       timeout: ${{ github.event.inputs.timeout || vars.MESH_NIGHTLY_STABILITY_TIMEOUT || '180' }}
-      runs_on: ${{ github.event.inputs.runs_on || vars.MESH_NIGHTLY_STABILITY_RUNS_ON || '"self-hosted"' }}
+      runs_on: ${{ github.event.inputs.runs_on || vars.MESH_NIGHTLY_STABILITY_RUNS_ON || '"ubuntu-24.04"' }}
       output_dir: ${{ github.event.inputs.output_dir || format('nightly-artifacts/stability/{0}', github.run_id) }}

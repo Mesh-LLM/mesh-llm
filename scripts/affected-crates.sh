@@ -9,16 +9,25 @@ set -euo pipefail
 # Hardcoded workspace members (fallback for fail-open)
 WORKSPACE_MEMBERS=(
   "mesh-llm"
+  "mesh-llm-cli"
+  "mesh-llm-commands"
   "mesh-llm-config"
+  "mesh-llm-events"
   "mesh-llm-gpu-bench"
   "mesh-llm-host-runtime"
+  "mesh-llm-hardware-profile"
   "mesh-llm-identity"
+  "mesh-llm-native-runtime"
   "mesh-llm-protocol"
   "mesh-llm-routing"
+  "mesh-llm-runtime-install"
+  "mesh-llm-sdk"
   "mesh-llm-guardrails"
   "mesh-llm-system"
   "mesh-llm-types"
   "mesh-llm-console-server"
+  "mesh-llm-embedded-runtime"
+  "mesh-llm-tui"
   "mesh-llm-ui"
   "mesh-llm-plugin"
   "mesh-llm-skills"
@@ -125,7 +134,7 @@ main() {
     if [[ "$file" =~ ^Cargo\.lock$ ]] || \
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
        [[ "$file" =~ ^third_party/llama\.cpp/ ]] || \
-       [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-mac|build-windows|skippy-ci-smoke)\. ]] || \
+       [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
        [[ "$file" =~ ^Justfile$ ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \
        [[ "$file" =~ ^scripts/plan-clippy-batches\.sh$ ]] || \

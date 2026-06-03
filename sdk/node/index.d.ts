@@ -95,17 +95,55 @@ export type ServingStatus = {
   models: ServedModel[]
 }
 
-export type NativeRuntimeArtifact = {
-  artifactId: string
-  artifactDir: string
-  manifest: string
-  library: string
-  metadata: Record<string, unknown>
+export type InstalledNativeRuntime = {
+  meshVersion: string
+  nativeRuntimeId: string
+  flavor: string
+  path: string
+  skippyAbiVersion?: string | null
 }
 
-export type NativeRuntimeConfig = {
+export type NativeRuntimeDownloadProgress = {
+  nativeRuntimeId: string
+  url: string
+  downloadedBytes: number
+  totalBytes?: number | null
+  finished: boolean
+}
+
+export type NativeRuntimeInstallOptions = {
+  meshVersion?: string
+  skippyAbiVersion?: string
+  selection?: string
+  manifestPath?: string
+  manifestUrl?: string
+  bundleDirs?: string[]
+  cacheDir?: string
+  verificationPolicy?: 'require_checksum' | 'require_checksum_and_signature'
+  allowDownload?: boolean
+  onProgress?: (event: NativeRuntimeDownloadProgress) => void
+}
+
+export type NativeRuntimeResolveOptions = NativeRuntimeInstallOptions & {
   artifactDir?: string
   searchDirs?: string[]
+}
+
+export type NativeRuntimeInstallOutcome = {
+  status: 'already_installed' | 'installed'
+  runtime: InstalledNativeRuntime
+  selectedNativeRuntimeId: string
+  selectedSource: 'installed' | 'bundle' | 'download' | 'missing'
+}
+
+export type NativeRuntimePruneOptions = {
+  cacheDir?: string
+  activeMeshVersion?: string
+  mode?: 'keep_active_and_previous' | 'active_only'
+}
+
+export type NativeRuntimePruneResult = {
+  removedDirs: string[]
 }
 
 export type NodeOptions = {
@@ -176,5 +214,16 @@ export declare class Node {
 }
 
 export declare function generateOwnerKeypairHex(): string
-export declare function resolveNativeRuntime(config?: NativeRuntimeConfig): NativeRuntimeArtifact
-export declare function validateNativeRuntime(artifactDir: string): NativeRuntimeArtifact
+export declare function currentMeshVersion(): string
+export declare function currentSkippyAbiVersion(): string
+export declare function defaultConsoleAssetDir(): string
+export declare function installNativeRuntime(options?: NativeRuntimeInstallOptions): Promise<NativeRuntimeInstallOutcome>
+export declare function installedNativeRuntimes(options?: { cacheDir?: string }): Promise<InstalledNativeRuntime[]>
+export declare function removeNativeRuntime(options: {
+  cacheDir?: string
+  meshVersion: string
+  nativeRuntimeId: string
+}): boolean
+export declare function pruneNativeRuntimes(options?: NativeRuntimePruneOptions): NativeRuntimePruneResult
+export declare function resolveNativeRuntime(config?: NativeRuntimeResolveOptions): Promise<InstalledNativeRuntime>
+export declare function validateNativeRuntime(artifactDir: string, options?: NativeRuntimeInstallOptions): Promise<InstalledNativeRuntime>

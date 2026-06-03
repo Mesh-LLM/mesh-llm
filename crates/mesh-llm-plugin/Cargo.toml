@@ -2,6 +2,10 @@
 name = "mesh-llm-plugin"
 version.workspace = true
 edition = "2024"
+license.workspace = true
+description = "Plugin protocol and runtime primitives for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [lints]
 workspace = true

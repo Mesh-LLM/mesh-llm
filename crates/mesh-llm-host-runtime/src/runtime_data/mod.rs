@@ -619,6 +619,130 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn status_payload_exposes_peer_advertised_model_throughput() {
+        let collector = RuntimeDataCollector::new();
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x44; 32]).public());
+        let peer = PeerInfo {
+            id: peer_id,
+            addr: EndpointAddr {
+                id: peer_id,
+                addrs: Default::default(),
+            },
+            mesh_id: None,
+            mesh_policy_hash: None,
+            genesis_policy: None,
+            role: NodeRole::Worker,
+            first_joined_mesh_ts: Some(456),
+            models: vec!["Qwen/Qwen3-Coder".into()],
+            vram_bytes: 32_000_000_000,
+            rtt_ms: Some(7),
+            model_source: None,
+            admitted: true,
+            serving_models: vec!["Qwen/Qwen3-Coder".into()],
+            hosted_models: vec!["Qwen/Qwen3-Coder".into()],
+            hosted_models_known: true,
+            available_models: vec!["Qwen/Qwen3-Coder".into()],
+            requested_models: vec![],
+            explicit_model_interests: vec![],
+            last_seen: std::time::Instant::now(),
+            last_mentioned: std::time::Instant::now(),
+            version: Some("0.70.0".into()),
+            gpu_name: None,
+            hostname: Some("peer.local".into()),
+            is_soc: Some(false),
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: HashMap::new(),
+            served_model_descriptors: vec![],
+            served_model_runtime: vec![],
+            owner_attestation: None,
+            release_attestation_summary: ReleaseAttestationSummary::default(),
+            artifact_transfer_supported: false,
+            stage_protocol_generation_supported: false,
+            stage_status_list_supported: false,
+            advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
+                model_name: "Qwen/Qwen3-Coder".into(),
+                avg_tokens_per_second_milli: 13_400,
+                throughput_samples: 27,
+            }],
+            display_rtt: None,
+            selected_path: None,
+            propagated_latency: None,
+            owner_summary: crate::crypto::OwnershipSummary::default(),
+        };
+        let hardware = collector.build_hardware_view(HardwareViewInput {
+            gpu_name: None,
+            gpu_vram: None,
+            gpu_reserved_bytes: None,
+            gpu_mem_bandwidth_gbps: None,
+            gpu_compute_tflops_fp32: None,
+            gpu_compute_tflops_fp16: None,
+            my_hostname: Some("node.local".into()),
+            my_is_soc: Some(false),
+            my_vram_gb: 24.0,
+            model_size_gb: 8.0,
+            first_joined_mesh_ts: Some(123),
+        });
+        let snapshot = collector.build_status_view(StatusViewInput {
+            version: "0.70.0".into(),
+            latest_version: Some("0.70.0".into()),
+            node_id: "node-1".into(),
+            owner: crate::crypto::OwnershipSummary::default(),
+            release_attestation: ReleaseAttestationSummary::default(),
+            token: "invite-token".into(),
+            is_host: true,
+            is_client: false,
+            llama_ready: true,
+            model_name: "Self-Model".into(),
+            models: vec!["Self-Model".into()],
+            available_models: vec!["Self-Model".into()],
+            requested_models: vec![],
+            serving_models: vec!["Self-Model".into()],
+            hosted_models: vec!["Self-Model".into()],
+            draft_name: None,
+            api_port: 3131,
+            inflight_requests: 1,
+            mesh_id: Some("mesh-1".into()),
+            mesh_name: Some("test-mesh".into()),
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            local_processes: vec![],
+            peers: vec![peer],
+            wakeable_nodes: vec![],
+            routing_affinity: crate::network::affinity::AffinityStatsSnapshot::default(),
+            hardware,
+        });
+
+        assert_eq!(
+            snapshot.peers[0].advertised_model_throughput[0].model_name,
+            "Qwen/Qwen3-Coder"
+        );
+
+        let payload = status_payload(snapshot);
+        assert_eq!(payload.peers[0].advertised_model_throughput.len(), 1);
+
+        let json = serde_json::to_value(&payload).expect("serialize status payload");
+        assert_eq!(
+            json["peers"][0]["advertised_model_throughput"],
+            json!([
+                {
+                    "model_name": "Qwen/Qwen3-Coder",
+                    "avg_tokens_per_second_milli": 13400,
+                    "throughput_samples": 27,
+                }
+            ])
+        );
+    }
+
+    #[test]
     fn runtime_data_model_snapshot_matches_api_payloads() {
         let collector = RuntimeDataCollector::new();
         let local_inventory = LocalModelInventorySnapshot {

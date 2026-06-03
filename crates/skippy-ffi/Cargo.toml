@@ -4,5 +4,13 @@ edition.workspace = true
 license.workspace = true
 version.workspace = true
 build = "build.rs"
+description = "Rust FFI bindings for the Skippy native runtime ABI"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[features]
+default = ["dynamic-runtime"]
+dynamic-runtime = ["dep:libloading"]
 
 [dependencies]
+libloading = { version = "0.8", optional = true }

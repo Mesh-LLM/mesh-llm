@@ -20,6 +20,8 @@ import uniffi.mesh_ffi.createAutoNode as ffiCreateAutoNode
 import uniffi.mesh_ffi.createClient as ffiCreateClient
 import uniffi.mesh_ffi.createNode as ffiCreateNode
 import uniffi.mesh_ffi.discoverPublicMeshes as ffiDiscoverPublicMeshes
+import java.io.File
+import java.nio.file.Files
 
 typealias CapabilityLevel = uniffi.mesh_ffi.CapabilityLevel
 typealias ConsoleHandle = uniffi.mesh_ffi.ConsoleHandleInterface
@@ -70,6 +72,66 @@ data class ConsoleOptions(
     val port: UShort? = null,
     val listenAll: Boolean = false,
 )
+
+object ConsoleAssets {
+    private const val RESOURCE_ROOT = "mesh-llm/console"
+    private const val MANIFEST = "$RESOURCE_ROOT/manifest.txt"
+
+    fun packagedOptions(
+        destination: File? = null,
+        port: UShort? = null,
+        listenAll: Boolean = false,
+    ): ConsoleOptions =
+        ConsoleOptions(
+            assetDir = extractPackaged(destination).absolutePath,
+            port = port,
+            listenAll = listenAll,
+        )
+
+    fun extractPackaged(destination: File? = null): File {
+        val target = destination ?: Files.createTempDirectory("mesh-llm-console-").toFile()
+        val loader = Thread.currentThread().contextClassLoader ?: ConsoleAssets::class.java.classLoader
+        val entries = loader.getResourceAsStream(MANIFEST)?.bufferedReader()?.use { reader ->
+            reader.readLines()
+                .map(String::trim)
+                .filter(String::isNotEmpty)
+        } ?: error(
+            "Packaged MeshLLM console assets are missing. Run scripts/package-sdk-console-assets.sh --sdk kotlin before publishing the Kotlin package."
+        )
+
+        if (target.exists()) {
+            target.deleteRecursively()
+        }
+        target.mkdirs()
+
+        entries.forEach { relativePath ->
+            requireSafeConsoleAssetPath(relativePath)
+            val resource = "$RESOURCE_ROOT/$relativePath"
+            val output = target.resolve(relativePath)
+            output.parentFile?.mkdirs()
+            loader.getResourceAsStream(resource)?.use { input ->
+                output.outputStream().use { destinationStream ->
+                    input.copyTo(destinationStream)
+                }
+            } ?: error("Packaged MeshLLM console asset is missing: $resource")
+        }
+
+        check(target.resolve("index.html").isFile) {
+            "Packaged MeshLLM console assets did not include index.html"
+        }
+        return target
+    }
+
+    private fun requireSafeConsoleAssetPath(relativePath: String) {
+        require(relativePath.isNotBlank()) { "Console asset path must not be blank" }
+        require(!relativePath.startsWith("/") && !relativePath.contains("\\")) {
+            "Console asset path must be relative: $relativePath"
+        }
+        require(relativePath.split('/').none { it == ".." || it.isBlank() }) {
+            "Console asset path must stay inside the console directory: $relativePath"
+        }
+    }
+}
 
 sealed class Event {
     object Connecting : Event()

@@ -5,11 +5,19 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_LINK_MODE");
+    println!("cargo:rerun-if-env-changed=LLAMA_STAGE_BACKEND");
+    println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_BACKEND");
+    println!("cargo:rerun-if-env-changed=SKIPPY_LLAMA_AUTO_BUILD");
+    println!("cargo:rerun-if-env-changed=MESH_LLM_AUTO_BUILD_LLAMA");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=HIP_PATH");
     println!("cargo:rerun-if-env-changed=ROCM_PATH");
     println!("cargo:rerun-if-env-changed=LLVMInstallDir");
     println!("cargo:rerun-if-env-changed=VULKAN_SDK");
+
+    if std::env::var_os("CARGO_FEATURE_DYNAMIC_RUNTIME").is_some() {
+        return;
+    }
 
     let link_mode =
         std::env::var("LLAMA_STAGE_LINK_MODE").or_else(|_| std::env::var("SKIPPY_LLAMA_LINK_MODE"));
@@ -41,6 +49,10 @@ fn main() {
             }
         })
         .unwrap_or_else(|_| default_build_dir(&workspace_root, &target));
+    let backend = std::env::var("LLAMA_STAGE_BACKEND")
+        .or_else(|_| std::env::var("SKIPPY_LLAMA_BACKEND"))
+        .unwrap_or_else(|_| default_backend(&target).to_string());
+    ensure_static_native_ready(&workspace_root, &build_dir, &target, &backend);
 
     let search_dirs = [
         build_dir.join("tools/mtmd"),
@@ -77,6 +89,7 @@ fn main() {
             "ggml/src/ggml-cpu/libggml-cpu.a",
             "ggml/src/ggml-cpu/ggml-cpu.lib",
         ),
+        ("ggml/src/libggml-cpu.a", "ggml/src/ggml-cpu.lib"),
         (
             "ggml/src/ggml-blas/libggml-blas.a",
             "ggml/src/ggml-blas/ggml-blas.lib",
@@ -204,12 +217,146 @@ fn main() {
 }
 
 fn default_build_dir(workspace_root: &std::path::Path, target: &str) -> std::path::PathBuf {
-    let suffix = if target.contains("apple") {
+    let suffix = default_backend(target);
+    workspace_root.join(format!(".deps/llama-build/build-stage-abi-{suffix}"))
+}
+
+fn default_backend(target: &str) -> &'static str {
+    if target.contains("apple") {
         "metal"
     } else {
         "cpu"
-    };
-    workspace_root.join(format!(".deps/llama-build/build-stage-abi-{suffix}"))
+    }
+}
+
+fn ensure_static_native_ready(
+    workspace_root: &std::path::Path,
+    build_dir: &std::path::Path,
+    target: &str,
+    backend: &str,
+) {
+    if required_static_archives_exist(build_dir) {
+        return;
+    }
+
+    if !native_auto_build_enabled() {
+        panic!(
+            "patched llama.cpp ABI archives are missing from {}; run `just llama-build`, set LLAMA_STAGE_BUILD_DIR, or enable SKIPPY_LLAMA_AUTO_BUILD=1",
+            build_dir.display()
+        );
+    }
+
+    let prepare = workspace_root.join("scripts/prepare-llama.sh");
+    let build = workspace_root.join("scripts/build-llama.sh");
+    println!("cargo:rerun-if-changed={}", prepare.display());
+    println!("cargo:rerun-if-changed={}", build.display());
+    if !prepare.exists() || !build.exists() {
+        panic!(
+            "patched llama.cpp ABI archives are missing from {}, and mesh-llm build scripts were not found under {}; set LLAMA_STAGE_BUILD_DIR to a prepared native build",
+            build_dir.display(),
+            workspace_root.display()
+        );
+    }
+    if target.contains("windows") {
+        panic!(
+            "patched llama.cpp ABI archives are missing from {}; automatic native preparation is not supported for Windows from build.rs yet",
+            build_dir.display()
+        );
+    }
+
+    println!(
+        "cargo:warning=building patched llama.cpp ABI for mesh-llm SDK ({backend}) at {}",
+        build_dir.display()
+    );
+    run_native_script(
+        workspace_root,
+        &prepare,
+        ["pinned"].as_slice(),
+        backend,
+        &[
+            ("LLAMA_WORKDIR", workspace_root.join(".deps/llama.cpp")),
+            ("LLAMA_BUILD_DIR", build_dir.to_path_buf()),
+            ("LLAMA_STAGE_BUILD_DIR", build_dir.to_path_buf()),
+        ],
+    );
+    run_native_script(
+        workspace_root,
+        &build,
+        [].as_slice(),
+        backend,
+        &[
+            ("LLAMA_WORKDIR", workspace_root.join(".deps/llama.cpp")),
+            ("LLAMA_BUILD_DIR", build_dir.to_path_buf()),
+            ("LLAMA_STAGE_BUILD_DIR", build_dir.to_path_buf()),
+        ],
+    );
+
+    if !required_static_archives_exist(build_dir) {
+        panic!(
+            "patched llama.cpp ABI build finished but required archives are still missing from {}",
+            build_dir.display()
+        );
+    }
+}
+
+fn native_auto_build_enabled() -> bool {
+    for key in ["SKIPPY_LLAMA_AUTO_BUILD", "MESH_LLM_AUTO_BUILD_LLAMA"] {
+        if let Ok(value) = std::env::var(key) {
+            return !matches!(
+                value.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            );
+        }
+    }
+    true
+}
+
+fn run_native_script(
+    workspace_root: &std::path::Path,
+    script: &std::path::Path,
+    args: &[&str],
+    backend: &str,
+    paths: &[(&str, std::path::PathBuf)],
+) {
+    let mut command = std::process::Command::new("bash");
+    command.current_dir(workspace_root).arg(script).args(args);
+    for (key, value) in paths {
+        command.env(key, value);
+    }
+    command.env("LLAMA_STAGE_BACKEND", backend);
+    let status = command.status().unwrap_or_else(|error| {
+        panic!("failed to run {}: {error}", script.display());
+    });
+    if !status.success() {
+        panic!("{} failed with status {status}", script.display());
+    }
+}
+
+fn required_static_archives_exist(build_dir: &std::path::Path) -> bool {
+    [
+        &["src/libllama.a", "src/llama.lib"][..],
+        &["common/libllama-common.a", "common/llama-common.lib"],
+        &[
+            "common/libllama-common-base.a",
+            "common/llama-common-base.lib",
+        ],
+        &["ggml/src/libggml.a", "ggml/src/ggml.lib"],
+        &["ggml/src/libggml-base.a", "ggml/src/ggml-base.lib"],
+        &[
+            "ggml/src/libggml-cpu.a",
+            "ggml/src/ggml-cpu.lib",
+            "ggml/src/ggml-cpu/libggml-cpu.a",
+            "ggml/src/ggml-cpu/ggml-cpu.lib",
+        ],
+    ]
+    .iter()
+    .all(|candidates| static_archive_exists_any(build_dir, candidates))
+}
+
+fn static_archive_exists_any(build_dir: &std::path::Path, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| build_dir.join(candidate).exists())
 }
 
 fn static_archive_exists(

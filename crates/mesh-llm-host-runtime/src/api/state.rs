@@ -43,6 +43,10 @@ impl Serialize for PublicationState {
 }
 
 pub enum RuntimeControlRequest {
+    Join {
+        invite_token: String,
+        resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
     Load {
         spec: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeLoadResponse>>,
@@ -56,7 +60,9 @@ pub enum RuntimeControlRequest {
         mode: GuardrailMode,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<OpenAiGuardrailModeUpdateResponse>>,
     },
-    Shutdown,
+    Shutdown {
+        source: &'static str,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -199,6 +205,8 @@ pub(super) struct ApiInner {
     pub(super) api_port: u16,
     pub(super) model_size_bytes: u64,
     pub(super) mesh_name: Option<String>,
+    pub(super) mesh_region: Option<String>,
+    pub(super) mesh_max_clients: Option<usize>,
     pub(super) latest_version: Option<String>,
     pub(super) nostr_relays: Vec<String>,
     pub(super) mesh_discovery_mode: MeshDiscoveryMode,

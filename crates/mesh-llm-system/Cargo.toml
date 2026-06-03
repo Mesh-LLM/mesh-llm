@@ -2,6 +2,10 @@
 name = "mesh-llm-system"
 version.workspace = true
 edition = "2024"
+license.workspace = true
+description = "Host system inspection and update helpers for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [dependencies]
 anyhow = "1"
@@ -10,13 +14,13 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6.0.0"
 hex = "0.4.3"
 libc = "0.2.183"
-mesh-llm-gpu-bench = { path = "../mesh-llm-gpu-bench" }
+mesh-llm-gpu-bench = { path = "../mesh-llm-gpu-bench", version = "0.68.0"  }
 reqwest = { version = "0.12", features = ["stream", "json"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-skippy-runtime = { path = "../skippy-runtime", optional = true }
+skippy-runtime = { path = "../skippy-runtime", version = "0.68.0", optional = true  }
 tracing = "0.1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
@@ -25,6 +29,7 @@ gpu-bench-cuda = ["mesh-llm-gpu-bench/cuda"]
 gpu-bench-hip = ["mesh-llm-gpu-bench/hip"]
 gpu-bench-intel = ["mesh-llm-gpu-bench/intel"]
 skippy-devices = ["dep:skippy-runtime"]
+dynamic-native-runtime = ["skippy-devices", "skippy-runtime/dynamic-native-runtime"]
 
 [dev-dependencies]
 serial_test = "3"

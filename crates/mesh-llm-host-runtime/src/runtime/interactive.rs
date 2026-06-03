@@ -1,16 +1,15 @@
 use crate::api::{MeshApi, RuntimeControlRequest};
-use crate::cli::output::{
-    ConsoleSessionMode, OutputManager, TuiControlFlow, TuiEvent, TuiKeyEvent,
-};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
+use mesh_llm_events::{ConsoleSessionMode, OutputSink, TuiControlFlow, TuiEvent, TuiKeyEvent};
 use std::fmt;
+use std::io::BufRead;
 #[cfg(test)]
 use std::io::Write;
-use std::io::{BufRead, IsTerminal};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) const HELP_TEXT: &str = "help: h=help, q=quit, i=info snapshot";
@@ -46,14 +45,7 @@ fn parse_command(line: &str) -> Option<InteractiveCommand> {
     }
 }
 
-pub(crate) fn console_session_mode(stdin_is_tty: bool, stderr_is_tty: bool) -> ConsoleSessionMode {
-    console_session_mode_for_term(
-        stdin_is_tty,
-        stderr_is_tty,
-        std::env::var("TERM").ok().as_deref(),
-    )
-}
-
+#[cfg(test)]
 fn console_session_mode_for_term(
     stdin_is_tty: bool,
     stderr_is_tty: bool,
@@ -66,18 +58,12 @@ fn console_session_mode_for_term(
     }
 }
 
+#[cfg(test)]
 fn terminal_supports_dashboard(term: Option<&str>) -> bool {
     match term.map(str::trim).filter(|term| !term.is_empty()) {
         Some(term) => term != "dumb",
         None => false,
     }
-}
-
-pub(crate) fn current_console_session_mode() -> ConsoleSessionMode {
-    console_session_mode(
-        std::io::stdin().is_terminal(),
-        std::io::stderr().is_terminal(),
-    )
 }
 
 #[cfg(test)]
@@ -100,13 +86,13 @@ fn maybe_write_initial_prompt<W: Write>(
 pub(crate) fn spawn_handler(
     control_tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
     console_state: MeshApi,
-    output_manager: &'static OutputManager,
+    output_sink: Arc<dyn OutputSink>,
     initial_prompt_mode: InitialPromptMode,
 ) {
     spawn_handler_with_first_paint_ack(
         control_tx,
         console_state,
-        output_manager,
+        output_sink,
         initial_prompt_mode,
         None,
     );
@@ -115,15 +101,15 @@ pub(crate) fn spawn_handler(
 pub(crate) fn spawn_handler_with_first_paint_ack(
     control_tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
     console_state: MeshApi,
-    output_manager: &'static OutputManager,
+    output_sink: Arc<dyn OutputSink>,
     initial_prompt_mode: InitialPromptMode,
     first_paint_ack: Option<tokio::sync::oneshot::Sender<std::io::Result<()>>>,
 ) {
-    match interactive_entry_kind(output_manager.console_session_mode()) {
+    match interactive_entry_kind(output_sink.console_session_mode()) {
         InteractiveEntryKind::Tui => spawn_tui_handler(
             control_tx,
             console_state,
-            output_manager,
+            output_sink,
             initial_prompt_mode,
             first_paint_ack,
         ),
@@ -131,12 +117,7 @@ pub(crate) fn spawn_handler_with_first_paint_ack(
             if let Some(ack) = first_paint_ack {
                 let _ = ack.send(Ok(()));
             }
-            spawn_line_handler(
-                control_tx,
-                console_state,
-                output_manager,
-                initial_prompt_mode,
-            );
+            spawn_line_handler(control_tx, console_state, output_sink, initial_prompt_mode);
         }
     }
 }
@@ -164,7 +145,7 @@ pub(crate) fn assert_deferred_initial_prompt_waits_for_runtime_ready() {
 fn spawn_line_handler(
     control_tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
     console_state: MeshApi,
-    output_manager: &'static OutputManager,
+    output_sink: Arc<dyn OutputSink>,
     initial_prompt_mode: InitialPromptMode,
 ) {
     let runtime_handle = tokio::runtime::Handle::current();
@@ -172,7 +153,7 @@ fn spawn_line_handler(
         &runtime_handle,
         control_tx,
         console_state,
-        output_manager,
+        output_sink,
         initial_prompt_mode,
     );
 }
@@ -181,11 +162,11 @@ fn spawn_line_handler_with_runtime(
     runtime_handle: &tokio::runtime::Handle,
     control_tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
     console_state: MeshApi,
-    output_manager: &'static OutputManager,
+    output_sink: Arc<dyn OutputSink>,
     initial_prompt_mode: InitialPromptMode,
 ) {
     if matches!(initial_prompt_mode, InitialPromptMode::Immediate) {
-        let _ = output_manager.write_ready_prompt();
+        let _ = output_sink.write_ready_prompt();
     }
 
     let (line_tx, mut line_rx) =
@@ -224,7 +205,12 @@ fn spawn_line_handler_with_runtime(
                         eprintln!("{HELP_TEXT}");
                     }
                     Some(InteractiveCommand::Quit) => {
-                        if control_tx.send(RuntimeControlRequest::Shutdown).is_err() {
+                        if control_tx
+                            .send(RuntimeControlRequest::Shutdown {
+                                source: "interactive",
+                            })
+                            .is_err()
+                        {
                             tracing::warn!("interactive shutdown request dropped because runtime control is unavailable");
                         }
                         break;
@@ -241,8 +227,8 @@ fn spawn_line_handler_with_runtime(
                 }
             }
 
-            if output_manager.ready_prompt_active() {
-                let _ = output_manager.write_ready_prompt();
+            if output_sink.ready_prompt_active() {
+                let _ = output_sink.write_ready_prompt();
             }
         }
     });
@@ -251,7 +237,7 @@ fn spawn_line_handler_with_runtime(
 fn spawn_tui_handler(
     control_tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
     console_state: MeshApi,
-    output_manager: &'static OutputManager,
+    output_sink: Arc<dyn OutputSink>,
     initial_prompt_mode: InitialPromptMode,
     first_paint_ack: Option<tokio::sync::oneshot::Sender<std::io::Result<()>>>,
 ) {
@@ -260,9 +246,12 @@ fn spawn_tui_handler(
         .name("mesh-llm-interactive-tui".to_string())
         .spawn(move || {
             let fallback_control_tx = control_tx.clone();
-            if let Err(err) =
-                run_tui_loop(&runtime_handle, control_tx, output_manager, first_paint_ack)
-            {
+            if let Err(err) = run_tui_loop(
+                &runtime_handle,
+                control_tx,
+                output_sink.clone(),
+                first_paint_ack,
+            ) {
                 let should_fallback = err.should_fallback_to_line_handler();
                 tracing::warn!("interactive pretty loop failed: {err}");
                 if should_fallback {
@@ -273,7 +262,7 @@ fn spawn_tui_handler(
                         &runtime_handle,
                         fallback_control_tx,
                         console_state,
-                        output_manager,
+                        output_sink,
                         initial_prompt_mode,
                     );
                 }
@@ -287,7 +276,7 @@ fn spawn_tui_handler(
 fn run_tui_loop(
     runtime_handle: &tokio::runtime::Handle,
     control_tx: tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>,
-    output_manager: &'static OutputManager,
+    output_sink: Arc<dyn OutputSink>,
     mut first_paint_ack: Option<tokio::sync::oneshot::Sender<std::io::Result<()>>>,
 ) -> Result<(), TuiLoopError> {
     enable_raw_mode()
@@ -298,17 +287,17 @@ fn run_tui_loop(
     let mut shutdown_sent = false;
 
     let result = (|| -> Result<(), TuiLoopError> {
-        if let Err(err) = runtime_handle.block_on(output_manager.enter_tui()) {
+        if let Err(err) = runtime_handle.block_on(output_sink.enter_tui()) {
             send_first_paint_ack(&mut first_paint_ack, Err(clone_io_error(&err)));
             return Err(TuiLoopError::startup(err));
         }
 
         if let Ok((columns, rows)) = size() {
             let _ = runtime_handle
-                .block_on(output_manager.dispatch_tui_event(TuiEvent::Resize { columns, rows }));
+                .block_on(output_sink.dispatch_tui_event(TuiEvent::Resize { columns, rows }));
         }
 
-        match runtime_handle.block_on(output_manager.render_tui_if_dirty()) {
+        match runtime_handle.block_on(output_sink.render_tui_if_dirty()) {
             Ok(_) => send_first_paint_ack(&mut first_paint_ack, Ok(())),
             Err(err) => {
                 send_first_paint_ack(&mut first_paint_ack, Err(clone_io_error(&err)));
@@ -332,21 +321,25 @@ fn run_tui_loop(
                 continue;
             };
             match runtime_handle
-                .block_on(output_manager.dispatch_tui_event(event))
+                .block_on(output_sink.dispatch_tui_event(event))
                 .map_err(TuiLoopError::runtime)?
             {
                 TuiControlFlow::Continue => {}
                 TuiControlFlow::Quit => {
                     shutdown_requested = true;
-                    if control_tx.send(RuntimeControlRequest::Shutdown).is_err() {
+                    if control_tx
+                        .send(RuntimeControlRequest::Shutdown {
+                            source: "interactive",
+                        })
+                        .is_err()
+                    {
                         tracing::warn!(
                             "interactive shutdown request dropped because runtime control is unavailable"
                         );
                     }
                     shutdown_sent = true;
                     std::thread::sleep(TUI_QUIT_FRAME_DELAY);
-                    if let Err(err) = runtime_handle.block_on(output_manager.render_tui_if_dirty())
-                    {
+                    if let Err(err) = runtime_handle.block_on(output_sink.render_tui_if_dirty()) {
                         tracing::warn!("interactive shutdown frame render failed: {err}");
                     }
                     break;
@@ -358,15 +351,19 @@ fn run_tui_loop(
     })();
 
     let (exit_result, raw_result) = restore_tui_terminal_after_loop(
-        runtime_handle.block_on(output_manager.exit_tui()),
-        crate::cli::output::force_restore_tui_terminal,
+        runtime_handle.block_on(output_sink.exit_tui()),
+        || output_sink.force_restore_tui_terminal(),
         || disable_raw_mode().map_err(std::io::Error::other),
     );
     cleanup_guard.disarm();
 
     if shutdown_requested
         && !shutdown_sent
-        && control_tx.send(RuntimeControlRequest::Shutdown).is_err()
+        && control_tx
+            .send(RuntimeControlRequest::Shutdown {
+                source: "interactive",
+            })
+            .is_err()
     {
         tracing::warn!(
             "interactive shutdown request dropped because runtime control is unavailable"
@@ -447,7 +444,9 @@ impl Drop for TuiTerminalCleanupGuard {
     fn drop(&mut self) {
         if self.armed {
             tracing::warn!("interactive pretty loop unwound before normal terminal cleanup");
-            let _ = crate::cli::output::force_restore_tui_terminal();
+            if let Some(sink) = mesh_llm_events::output_sink() {
+                let _ = sink.force_restore_tui_terminal();
+            }
             let _ = disable_raw_mode();
         }
     }
@@ -531,8 +530,8 @@ mod tests {
         maybe_write_initial_prompt, parse_command, read_tui_event, restore_tui_terminal_after_loop,
         write_ready_prompt,
     };
-    use crate::cli::output::{ConsoleSessionMode, TuiEvent, TuiKeyEvent};
     use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use mesh_llm_events::{ConsoleSessionMode, TuiEvent, TuiKeyEvent};
 
     #[test]
     fn parse_command_accepts_supported_shortcuts() {

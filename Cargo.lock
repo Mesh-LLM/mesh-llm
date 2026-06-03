@@ -3759,15 +3759,27 @@ dependencies = [
 name = "mesh-llm"
 version = "0.68.0"
 dependencies = [
+ "anyhow",
  "axum",
+ "chrono",
+ "clap",
  "hex",
+ "mesh-llm-cli",
  "mesh-llm-client",
+ "mesh-llm-commands",
  "mesh-llm-host-runtime",
+ "mesh-llm-plugin",
+ "mesh-llm-plugin-manager",
+ "mesh-llm-system",
+ "mesh-llm-tui",
  "reqwest 0.12.28",
+ "serde",
  "serde_json",
  "serial_test",
+ "tabwriter",
  "tempfile",
  "tokio",
+ "urlencoding",
 ]
 
 [[package]]
@@ -3788,6 +3800,16 @@ dependencies = [
  "mesh-llm-api-client",
  "mesh-llm-node",
  "tokio",
+]
+
+[[package]]
+name = "mesh-llm-cli"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "mesh-llm-events",
+ "serde",
 ]
 
 [[package]]
@@ -3822,6 +3844,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-commands"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs",
+ "hex",
+ "hf-hub",
+ "iroh",
+ "json5",
+ "mesh-llm-cli",
+ "mesh-llm-identity",
+ "mesh-llm-native-runtime",
+ "mesh-llm-plugin-manager",
+ "mesh-llm-runtime-install",
+ "mesh-llm-system",
+ "mesh-llm-tui",
+ "model-package",
+ "model-ref",
+ "rand 0.10.1",
+ "reqwest 0.12.28",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serial_test",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "mesh-llm-config"
 version = "0.68.0"
 dependencies = [
@@ -3846,13 +3902,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-embedded-runtime"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-host-runtime",
+ "serde_json",
+]
+
+[[package]]
+name = "mesh-llm-events"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "mesh-llm-ffi"
 version = "0.68.0"
 dependencies = [
- "mesh-llm-api-server",
- "mesh-llm-console-server",
- "mesh-llm-host-runtime",
  "mesh-llm-node",
+ "mesh-llm-sdk",
  "thiserror 2.0.18",
  "tokio",
  "uniffi",
@@ -3879,12 +3951,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-hardware-profile"
+version = "0.68.0"
+dependencies = [
+ "mesh-llm-native-runtime",
+]
+
+[[package]]
 name = "mesh-llm-host-runtime"
 version = "0.68.0"
 dependencies = [
- "ansi-to-tui",
  "anyhow",
- "arboard",
  "argon2",
  "async-trait",
  "axum",
@@ -3897,6 +3974,7 @@ dependencies = [
  "crypto_box",
  "dirs",
  "ed25519-dalek",
+ "flate2",
  "futures-util",
  "hex",
  "hf-hub",
@@ -3912,18 +3990,22 @@ dependencies = [
  "mesh-llm-api-server",
  "mesh-llm-client",
  "mesh-llm-config",
+ "mesh-llm-events",
  "mesh-llm-guardrails",
  "mesh-llm-identity",
+ "mesh-llm-native-runtime",
  "mesh-llm-node",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
  "mesh-llm-routing",
+ "mesh-llm-runtime-install",
  "mesh-llm-system",
  "mesh-llm-types",
  "mesh-llm-ui",
  "mesh-mixture-of-agents",
  "model-artifact",
+ "model-hf",
  "model-package",
  "model-ref",
  "model-resolver",
@@ -3934,7 +4016,6 @@ dependencies = [
  "opentelemetry_sdk",
  "prost",
  "rand 0.10.1",
- "ratatui",
  "regex-lite",
  "reqwest 0.12.28",
  "rmcp",
@@ -3953,6 +4034,7 @@ dependencies = [
  "skippy-server",
  "skippy-topology",
  "tabwriter",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -3970,14 +4052,33 @@ dependencies = [
 name = "mesh-llm-identity"
 version = "0.68.0"
 dependencies = [
+ "argon2",
+ "base64",
+ "chacha20poly1305",
+ "chrono",
  "crypto_box",
+ "dirs",
  "ed25519-dalek",
  "hex",
+ "keyring",
  "rand 0.10.1",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2 0.10.9",
  "thiserror 2.0.18",
+ "zeroize",
+]
+
+[[package]]
+name = "mesh-llm-native-runtime"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
@@ -3998,9 +4099,7 @@ dependencies = [
 name = "mesh-llm-nodejs"
 version = "0.68.0"
 dependencies = [
- "mesh-llm-api-server",
- "mesh-llm-console-server",
- "mesh-llm-host-runtime",
+ "mesh-llm-sdk",
  "napi",
  "napi-build",
  "napi-derive",
@@ -4061,6 +4160,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-runtime-install"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "dirs",
+ "flate2",
+ "futures-util",
+ "hex",
+ "mesh-llm-hardware-profile",
+ "mesh-llm-native-runtime",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "skippy-ffi",
+ "tar",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "mesh-llm-sdk"
+version = "0.68.0"
+dependencies = [
+ "anyhow",
+ "mesh-llm-api-client",
+ "mesh-llm-api-server",
+ "mesh-llm-console-server",
+ "mesh-llm-embedded-runtime",
+ "mesh-llm-runtime-install",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mesh-llm-skills"
 version = "0.68.0"
 dependencies = [
@@ -4100,6 +4235,22 @@ dependencies = [
  "reqwest 0.12.28",
  "serde_json",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mesh-llm-tui"
+version = "0.68.0"
+dependencies = [
+ "ansi-to-tui",
+ "anyhow",
+ "arboard",
+ "chrono",
+ "crossterm 0.28.1",
+ "mesh-llm-events",
+ "ratatui",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -4210,10 +4361,15 @@ version = "0.68.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
+ "dirs",
  "hf-hub",
  "model-artifact",
  "model-ref",
  "serde",
+ "serde_json",
+ "serial_test",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
 ]
@@ -7252,6 +7408,9 @@ dependencies = [
 [[package]]
 name = "skippy-ffi"
 version = "0.68.0"
+dependencies = [
+ "libloading",
+]
 
 [[package]]
 name = "skippy-metrics"

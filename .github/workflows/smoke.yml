@@ -12,10 +12,17 @@ on:
       cache_key_prefix:
         required: true
         type: string
+      release_tag:
+        required: false
+        default: ''
+        type: string
       runs_on:
         required: false
-        default: '"blacksmith-4vcpu-ubuntu-2404"'
+        default: '"ubuntu-24.04"'
         type: string
+    secrets:
+      HF_TOKEN:
+        required: false
 
 env:
   CACHE_NAMESPACE: mesh-llm
@@ -26,8 +33,14 @@ jobs:
   smoke_tests:
     name: Skippy Inference Smoke Tests
     runs-on: ${{ fromJson(inputs.runs_on) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v5
+
+      - name: Prepare dispatched release version
+        if: inputs.release_tag != ''
+        run: scripts/release-version.sh "${{ inputs.release_tag }}"
 
       - uses: actions/setup-python@v6
         with:

@@ -1,16 +1,25 @@
 [workspace]
 members = [
     "crates/mesh-llm",
+    "crates/mesh-llm-cli",
+    "crates/mesh-llm-commands",
     "crates/mesh-llm-config",
+    "crates/mesh-llm-events",
     "crates/mesh-llm-gpu-bench",
     "crates/mesh-llm-host-runtime",
+    "crates/mesh-llm-hardware-profile",
     "crates/mesh-llm-identity",
+    "crates/mesh-llm-native-runtime",
     "crates/mesh-llm-protocol",
     "crates/mesh-llm-routing",
+    "crates/mesh-llm-runtime-install",
+    "crates/mesh-llm-sdk",
     "crates/mesh-llm-guardrails",
     "crates/mesh-llm-system",
+    "crates/mesh-llm-tui",
     "crates/mesh-llm-types",
     "crates/mesh-llm-console-server",
+    "crates/mesh-llm-embedded-runtime",
     "crates/mesh-llm-ui",
     "crates/mesh-llm-plugin",
     "crates/mesh-llm-skills",
@@ -60,7 +69,7 @@ version = "0.68.0"
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
-mesh-llm-skills = { path = "crates/mesh-llm-skills" }
+mesh-llm-skills = { path = "crates/mesh-llm-skills", version = "0.68.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

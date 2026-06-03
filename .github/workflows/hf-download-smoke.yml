@@ -5,12 +5,15 @@ on:
     inputs:
       runs_on:
         required: false
-        default: '"blacksmith-4vcpu-ubuntu-2404"'
+        default: '"ubuntu-24.04"'
         type: string
       timeout_minutes:
         required: false
         default: 20
         type: number
+    secrets:
+      HF_TOKEN:
+        required: false
 
 env:
   CACHE_NAMESPACE: mesh-llm
@@ -20,6 +23,8 @@ jobs:
     name: HuggingFace download smoke
     runs-on: ${{ fromJson(inputs.runs_on) }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

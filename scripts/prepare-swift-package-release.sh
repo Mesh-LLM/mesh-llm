@@ -22,6 +22,8 @@ ARTIFACT_PATH="$ARTIFACT_DIR/$ARTIFACT_NAME"
 
 mkdir -p "$ARTIFACT_DIR"
 
+"$REPO_ROOT/scripts/package-sdk-console-assets.sh" --sdk all
+"$REPO_ROOT/scripts/verify-sdk-console-assets.sh" --sdk all
 "$REPO_ROOT/sdk/swift/scripts/build-xcframework.sh"
 
 rm -f "$ARTIFACT_PATH"

@@ -13,6 +13,12 @@ Install the latest release bundle:
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
 ```
 
+On Windows, use PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+```
+
 To opt into the latest published prerelease bundle instead:
 
 ```bash
@@ -25,6 +31,13 @@ For a non-interactive install, set the flavor explicitly:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | MESH_LLM_INSTALL_FLAVOR=vulkan bash
+```
+
+On Windows:
+
+```powershell
+$env:MESH_LLM_INSTALL_FLAVOR = "vulkan"
+irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
 ```
 
 Release bundles install the `mesh-llm` host binary plus the flavor-specific

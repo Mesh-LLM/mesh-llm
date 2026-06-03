@@ -97,18 +97,30 @@ pub fn parse_rocm_gpu_memory_and_used(output: &str) -> Vec<(u64, Option<u64>)> {
 
 #[cfg(all(
     any(target_os = "linux", test),
-    any(not(feature = "skippy-devices"), test)
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
 ))]
 const ROCM_UNIFIED_VRAM_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(all(
     any(target_os = "linux", test),
-    any(not(feature = "skippy-devices"), test)
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
 ))]
 const ROCM_UNIFIED_MIN_GTT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 #[cfg(all(
     any(target_os = "linux", test),
-    any(not(feature = "skippy-devices"), test)
+    any(
+        not(feature = "skippy-devices"),
+        feature = "dynamic-native-runtime",
+        test
+    )
 ))]
 pub(super) fn rocm_unified_memory_usable_bytes(
     vram_totals: &[u64],

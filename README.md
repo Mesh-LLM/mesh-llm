@@ -17,6 +17,12 @@ Install the latest release:
 curl -fsSL https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh | bash
 ```
 
+On Windows, use PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+```
+
 Join the public mesh and start serving:
 
 ```bash

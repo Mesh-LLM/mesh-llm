@@ -2,13 +2,14 @@
 
 mod api;
 mod capture;
-mod cli;
+pub mod command_support;
 pub mod crypto;
-mod inference;
+pub mod discovery;
+pub mod inference;
 mod mesh;
-mod models;
+pub mod models;
 mod network;
-mod plugin;
+pub mod plugin;
 mod plugins;
 mod protocol;
 mod runtime;
@@ -37,23 +38,45 @@ pub use mesh::requirements::{
 };
 
 use anyhow::Result;
-use std::time::Duration;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub use runtime::{
+    MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,
+};
+
 pub async fn run() -> Result<()> {
+    initialize_host_runtime()?;
     runtime::run().await
 }
 
-pub async fn run_main() -> i32 {
-    match run().await {
-        Ok(()) => 0,
-        Err(err) => {
-            let _ = cli::output::emit_fatal_error(&err);
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            1
-        }
+pub async fn run_runtime(
+    options: RuntimeOptions,
+    explicit_surface: Option<RuntimeSurface>,
+    legacy_warning: Option<String>,
+) -> Result<()> {
+    initialize_host_runtime()?;
+    run_runtime_initialized(options, explicit_surface, legacy_warning).await
+}
+
+pub async fn run_runtime_initialized(
+    options: RuntimeOptions,
+    explicit_surface: Option<RuntimeSurface>,
+    legacy_warning: Option<String>,
+) -> Result<()> {
+    runtime::run_cli(options, explicit_surface, legacy_warning).await
+}
+
+pub fn initialize_host_runtime() -> Result<()> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    if let Some(runtime) = system::native_runtime::try_load_installed_native_runtime()? {
+        tracing::info!(
+            native_runtime_id = %runtime.native_runtime_id,
+            libraries = ?runtime.libraries,
+            "Loaded MeshLLM native runtime"
+        );
     }
+    Ok(())
 }
 
 #[cfg(test)]

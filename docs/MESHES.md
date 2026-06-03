@@ -188,6 +188,14 @@ mesh-llm discover --auto
 ```
 
 `discover --auto` prints the best invite token, which is useful for scripts.
+When using `--mesh-discovery-mode mdns`, discovery is LAN-scoped: mDNS TXT
+records advertise bounded capacity/model summaries and a token fingerprint.
+When the management API is reachable from LAN peers, for example with
+`--listen-all`, they also advertise a short-lived proof challenge and
+`/api/discovery/lan-details`. They never carry the raw invite token. A node can
+request local detail from that endpoint only by posting proof derived from the
+matching invite token, and mDNS re-discovery uses the same supplied-token gate
+if peers are lost.
 
 ## Console and management API
 
@@ -207,7 +215,9 @@ curl -s http://localhost:3131/api/discover | jq .
 ```
 
 `/api/status` reports whether the local mesh publication is `private`,
-`public`, or `publish_failed`.
+`public`, or `publish_failed`. `/api/discover` follows the active discovery
+mode: Nostr mode returns public relay results, while mDNS mode returns LAN
+advertisements with token fingerprints and challenge metadata only.
 
 The same status payload also includes `routing_affinity.target_reputation`.
 Those counters are local behavioral health signals used by the current proxy to
@@ -247,7 +257,9 @@ mesh-llm auth trust remove <owner-id>
 - `--mesh-discovery-mode mdns` is LAN-only discovery and transport startup:
   it does not contact Nostr relays, does not register with public iroh relays,
   and does not run raw public STUN probing. mDNS TXT records contain only a
-  token fingerprint; joins still require a matching supplied invite token.
+  token fingerprint plus, when the management API is LAN-reachable, challenge
+  metadata; joins and LAN detail requests still require proof from a matching
+  supplied invite token.
 - Mesh connectivity uses managed iroh relay infrastructure by default when
   direct paths are unavailable in Nostr mode.
 - Hidden relay override flags exist for lab/debug deployments, but normal users

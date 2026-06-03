@@ -296,7 +296,10 @@ mod tests {
         include_str!("../../tests/fixtures/skippy_full_surface_invalid.toml");
 
     fn documented_matrix_key_paths() -> BTreeSet<String> {
-        let matrix = include_str!("../../../../docs/skippy/CONFIGURATION.md");
+        let matrix = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/skippy/CONFIGURATION.md"
+        ));
         matrix
             .lines()
             .filter(|line| line.starts_with('|'))
@@ -1416,7 +1419,10 @@ mmproj = "multimodal.gguf"
             "omitted per-model request defaults should stay absent"
         );
 
-        let matrix = include_str!("../../../../docs/skippy/CONFIGURATION.md");
+        let matrix = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/skippy/CONFIGURATION.md"
+        ));
         let matrix_keys = documented_matrix_key_paths();
         assert!(
             matrix_keys.len() >= 100,
@@ -1437,9 +1443,10 @@ mmproj = "multimodal.gguf"
             assert!(matrix.contains(key), "missing matrix doc entry {key}");
         }
 
-        let docs_readme = include_str!("../../../../docs/README.md");
-        let usage = include_str!("../../../../docs/USAGE.md");
-        let cli = include_str!("../../../../docs/CLI.md");
+        let docs_readme =
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/README.md"));
+        let usage = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/USAGE.md"));
+        let cli = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/CLI.md"));
         assert!(docs_readme.contains("[skippy/CONFIGURATION.md](skippy/CONFIGURATION.md)"));
         assert!(usage.contains("request payload values still win"));
         assert!(cli.contains("Request defaults only fill absent or null request fields"));

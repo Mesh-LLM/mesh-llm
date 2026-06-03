@@ -10,6 +10,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
+| Language-specific SDK examples | [Rust](sdk/rust.md), [Node.js](sdk/node.md), [Swift](sdk/swift.md), [Kotlin/Android](sdk/kotlin.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) |
 | Contribute or publish layer package repositories | [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) |
 | Goose, Claude Code, OpenCode, Pi, curl, blackboard | [AGENTS.md](AGENTS.md) |
@@ -39,6 +40,7 @@ Use [SKIPPY_SPLITS.md](SKIPPY_SPLITS.md) for Skippy split-serving workflows.
 | [BENCHMARKS.md](BENCHMARKS.md) | Current benchmark numbers and performance context |
 | [SWARM_CAPTURE.md](SWARM_CAPTURE.md) | Opt-in local debug capture for mesh membership and connection diagnostics |
 | [design/](design/) | Architecture notes, protocol design, testing playbooks, carried llama.cpp patch documentation |
+| [design/NATIVE_RUNTIMES.md](design/NATIVE_RUNTIMES.md) | Native runtime artifact packaging, exact version matching, resolver behavior, and SDK/autoupdater ownership |
 | [design/NODE_OWNER_IDENTITY.md](design/NODE_OWNER_IDENTITY.md) | Owner identity, trust policy, and how owner trust stays separate from release attestation |
 | [plugins/](plugins/) | Plugin architecture and implementation planning |
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |

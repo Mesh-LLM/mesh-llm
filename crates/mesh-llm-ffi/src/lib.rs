@@ -1,16 +1,21 @@
-use mesh_llm_api_server::OwnerKeypair;
-use mesh_llm_api_server::events::{Event, EventListener as CoreEventListener};
-use mesh_llm_api_server::{
-    ChatMessage, ChatRequest, ClientBuilder, DevicePolicy as ApiDevicePolicy, InviteToken,
-    MeshApiError, MeshClient, MeshNode, ModelKind as ApiModelKind, ModelSource as ApiModelSource,
-    PublicMeshQuery as ApiPublicMeshQuery, RequestId, ResponsesRequest,
-    ServingModelState as ApiServingModelState, UnloadModelOptions as ApiUnloadModelOptions,
-    UnloadTarget as ApiUnloadTarget, create_auto_client as sdk_create_auto_client,
-    create_auto_node as sdk_create_auto_node, discover_public_meshes as sdk_discover_public_meshes,
-};
 #[cfg(feature = "embedded-runtime")]
-use mesh_llm_host_runtime::sdk::{EmbeddedChatMessage, EmbeddedServingController};
+use mesh_llm_sdk::embedded_runtime::{EmbeddedChatMessage, EmbeddedServingController};
+use mesh_llm_sdk::events::{Event, EventListener as CoreEventListener};
+use mesh_llm_sdk::node as sdk_node;
+use mesh_llm_sdk::node::{
+    DevicePolicy as ApiDevicePolicy, MeshNode, ModelKind as ApiModelKind,
+    ModelSource as ApiModelSource, ServingModelState as ApiServingModelState,
+    UnloadModelOptions as ApiUnloadModelOptions, UnloadTarget as ApiUnloadTarget,
+    create_auto_node as sdk_create_auto_node,
+};
+use mesh_llm_sdk::{
+    ChatMessage, ChatRequest, ClientBuilder, InviteToken, MeshApiError, MeshClient, OwnerKeypair,
+    PublicMeshQuery as ApiPublicMeshQuery, RequestId, ResponsesRequest,
+    create_auto_client as sdk_create_auto_client,
+    discover_public_meshes as sdk_discover_public_meshes,
+};
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -63,6 +68,8 @@ pub enum FfiError {
     ServingUnsupported(String),
     #[error("console failed: {0}")]
     ConsoleFailed(String),
+    #[error("native runtime failed: {0}")]
+    NativeRuntimeFailed(String),
 }
 
 #[derive(uniffi::Record)]
@@ -311,9 +318,70 @@ pub enum ClientEvent {
     Disconnected { reason: String },
 }
 
+#[derive(uniffi::Enum)]
+pub enum NativeRuntimeVerificationPolicyNative {
+    RequireChecksum,
+    RequireChecksumAndSignature,
+}
+
+#[derive(uniffi::Enum)]
+pub enum NativeRuntimePruneModeNative {
+    KeepActiveAndPrevious,
+    ActiveOnly,
+}
+
+#[derive(uniffi::Record)]
+pub struct NativeRuntimeInstallOptionsNative {
+    pub mesh_version: Option<String>,
+    pub skippy_abi_version: Option<String>,
+    pub selection: String,
+    pub manifest_path: Option<String>,
+    pub manifest_url: Option<String>,
+    pub bundle_dirs: Vec<String>,
+    pub cache_dir: Option<String>,
+    pub verification_policy: NativeRuntimeVerificationPolicyNative,
+    pub allow_download: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct NativeRuntimeDownloadProgressNative {
+    pub native_runtime_id: String,
+    pub url: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    pub finished: bool,
+}
+
+#[derive(uniffi::Record)]
+pub struct InstalledNativeRuntimeNative {
+    pub mesh_version: String,
+    pub native_runtime_id: String,
+    pub flavor: String,
+    pub path: String,
+    pub skippy_abi_version: Option<String>,
+}
+
+#[derive(uniffi::Record)]
+pub struct NativeRuntimeInstallOutcomeNative {
+    pub status: String,
+    pub runtime: InstalledNativeRuntimeNative,
+    pub selected_native_runtime_id: String,
+    pub selected_source: String,
+}
+
+#[derive(uniffi::Record)]
+pub struct NativeRuntimePruneResultNative {
+    pub removed_dirs: Vec<String>,
+}
+
 #[uniffi::export(callback_interface)]
 pub trait EventListener: Send + Sync {
     fn on_event(&self, event: ClientEvent);
+}
+
+#[uniffi::export(callback_interface)]
+pub trait NativeRuntimeProgressListener: Send + Sync {
+    fn on_progress(&self, event: NativeRuntimeDownloadProgressNative);
 }
 
 struct EventListenerBridge {
@@ -359,7 +427,7 @@ pub struct MeshNodeHandle {
 
 #[derive(uniffi::Object)]
 pub struct ConsoleHandle {
-    inner: Mutex<Option<mesh_llm_console_server::ConsoleServerHandle>>,
+    inner: Mutex<Option<mesh_llm_sdk::console::ConsoleServerHandle>>,
     url: String,
 }
 
@@ -372,6 +440,69 @@ pub struct ConsoleHandle {
 #[uniffi::export]
 pub fn generate_owner_keypair_hex() -> String {
     OwnerKeypair::generate().to_hex()
+}
+
+#[uniffi::export]
+pub fn current_mesh_version() -> String {
+    mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()
+}
+
+#[uniffi::export]
+pub fn current_skippy_abi_version() -> String {
+    mesh_llm_sdk::native_runtime::current_skippy_abi_version()
+}
+
+#[uniffi::export]
+pub fn install_native_runtime(
+    options: NativeRuntimeInstallOptionsNative,
+    progress: Option<Box<dyn NativeRuntimeProgressListener>>,
+) -> Result<NativeRuntimeInstallOutcomeNative, FfiError> {
+    let options = runtime_install_options(options, progress)?;
+    block_on(mesh_llm_sdk::native_runtime::install_native_runtime(
+        options,
+    ))
+    .map(NativeRuntimeInstallOutcomeNative::from)
+    .map_err(map_native_runtime_error)
+}
+
+#[uniffi::export]
+pub fn installed_native_runtimes(
+    cache_dir: Option<String>,
+) -> Result<Vec<InstalledNativeRuntimeNative>, FfiError> {
+    native_runtime_cache(cache_dir)?
+        .installed()
+        .map(|runtimes| {
+            runtimes
+                .into_iter()
+                .map(InstalledNativeRuntimeNative::from)
+                .collect()
+        })
+        .map_err(map_native_runtime_error)
+}
+
+#[uniffi::export]
+pub fn remove_native_runtime(
+    cache_dir: Option<String>,
+    mesh_version: String,
+    native_runtime_id: String,
+) -> Result<bool, FfiError> {
+    native_runtime_cache(cache_dir)?
+        .remove(&mesh_version, &native_runtime_id)
+        .map_err(map_native_runtime_error)
+}
+
+#[uniffi::export]
+pub fn prune_native_runtimes(
+    cache_dir: Option<String>,
+    active_mesh_version: Option<String>,
+    mode: NativeRuntimePruneModeNative,
+) -> Result<NativeRuntimePruneResultNative, FfiError> {
+    let active_mesh_version = active_mesh_version
+        .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string());
+    native_runtime_cache(cache_dir)?
+        .prune(&active_mesh_version, mode.into())
+        .map(NativeRuntimePruneResultNative::from)
+        .map_err(map_native_runtime_error)
 }
 
 #[uniffi::export]
@@ -587,7 +718,7 @@ impl MeshNodeHandle {
     }
 
     pub fn status(&self) -> ClientStatus {
-        let status = block_on(self.node.status().node()).unwrap_or(mesh_llm_api_server::Status {
+        let status = block_on(self.node.status().node()).unwrap_or(sdk_node::Status {
             connected: false,
             peer_count: 0,
         });
@@ -697,14 +828,10 @@ impl MeshNodeHandle {
     }
 
     pub fn search_models(&self, query: ModelSearchQuery) -> Result<Vec<ModelSummary>, FfiError> {
-        block_on(
-            self.node
-                .models()
-                .search(mesh_llm_api_server::ModelSearchQuery {
-                    query: query.query,
-                    limit: query.limit.map(|limit| limit as usize),
-                }),
-        )
+        block_on(self.node.models().search(sdk_node::ModelSearchQuery {
+            query: query.query,
+            limit: query.limit.map(|limit| limit as usize),
+        }))
         .map(|models| models.into_iter().map(ModelSummary::from).collect())
         .map_err(map_model_error)
     }
@@ -731,7 +858,7 @@ impl MeshNodeHandle {
         block_on(
             self.node
                 .models()
-                .download(model_ref, mesh_llm_api_server::DownloadOptions),
+                .download(model_ref, sdk_node::DownloadOptions),
         )
         .map(DownloadedModel::from)
         .map_err(map_model_error)
@@ -744,7 +871,7 @@ impl MeshNodeHandle {
     ) -> Result<DeleteModelResult, FfiError> {
         block_on(self.node.models().delete(
             model_ref,
-            mesh_llm_api_server::DeleteModelOptions {
+            sdk_node::DeleteModelOptions {
                 force: options.force,
             },
         ))
@@ -753,13 +880,9 @@ impl MeshNodeHandle {
     }
 
     pub fn cleanup_models(&self, policy: CleanupPolicy) -> Result<CleanupResult, FfiError> {
-        block_on(
-            self.node
-                .models()
-                .cleanup(mesh_llm_api_server::CleanupPolicy {
-                    remove_all: policy.remove_all,
-                }),
-        )
+        block_on(self.node.models().cleanup(sdk_node::CleanupPolicy {
+            remove_all: policy.remove_all,
+        }))
         .map(CleanupResult::from)
         .map_err(map_model_error)
     }
@@ -768,7 +891,7 @@ impl MeshNodeHandle {
         block_on(
             self.node
                 .models()
-                .prune_derived_cache(mesh_llm_api_server::PrunePolicy {
+                .prune_derived_cache(sdk_node::PrunePolicy {
                     remove_all: policy.remove_all,
                 }),
         )
@@ -783,7 +906,7 @@ impl MeshNodeHandle {
     ) -> Result<ServedModel, FfiError> {
         block_on(self.node.serving().load(
             model_ref,
-            mesh_llm_api_server::LoadModelOptions {
+            sdk_node::LoadModelOptions {
                 device_policy: options.device_policy.into(),
             },
         ))
@@ -842,8 +965,8 @@ impl MeshNodeHandle {
         &self,
         options: ConsoleOptionsNative,
     ) -> Result<Arc<ConsoleHandle>, FfiError> {
-        let handle = block_on(mesh_llm_console_server::start_file_console(
-            mesh_llm_console_server::ConsoleServerOptions {
+        let handle = block_on(mesh_llm_sdk::console::start_file_console(
+            mesh_llm_sdk::console::ConsoleServerOptions {
                 asset_dir: options.asset_dir.into(),
                 port: options.port.unwrap_or(0),
                 listen_all: options.listen_all,
@@ -882,6 +1005,47 @@ fn non_empty_path(value: Option<String>) -> Option<String> {
         let trimmed = path.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+fn runtime_install_options(
+    options: NativeRuntimeInstallOptionsNative,
+    progress: Option<Box<dyn NativeRuntimeProgressListener>>,
+) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions, FfiError> {
+    let progress = progress.map(runtime_progress_callback);
+    Ok(mesh_llm_sdk::native_runtime::NativeRuntimeInstallOptions {
+        mesh_version: options
+            .mesh_version
+            .unwrap_or_else(|| mesh_llm_sdk::native_runtime::CURRENT_MESH_VERSION.to_string()),
+        skippy_abi_version: options
+            .skippy_abi_version
+            .unwrap_or_else(mesh_llm_sdk::native_runtime::current_skippy_abi_version),
+        selection: mesh_llm_sdk::native_runtime::RuntimeSelection::parse(Some(
+            options.selection.as_str(),
+        ))
+        .map_err(map_native_runtime_error)?,
+        manifest_path: options.manifest_path.map(PathBuf::from),
+        manifest_url: options.manifest_url,
+        bundle_dirs: options.bundle_dirs.into_iter().map(PathBuf::from).collect(),
+        cache_dir: options.cache_dir.map(PathBuf::from),
+        verification_policy: options.verification_policy.into(),
+        progress,
+        allow_download: options.allow_download,
+    })
+}
+
+fn runtime_progress_callback(
+    listener: Box<dyn NativeRuntimeProgressListener>,
+) -> mesh_llm_sdk::native_runtime::NativeRuntimeDownloadProgressCallback {
+    let listener: Arc<dyn NativeRuntimeProgressListener> = Arc::from(listener);
+    Arc::new(move |event| listener.on_progress(event.into()))
+}
+
+fn native_runtime_cache(
+    cache_dir: Option<String>,
+) -> Result<mesh_llm_sdk::native_runtime::NativeRuntimeCache, FfiError> {
+    let cache_dir = cache_dir.map(PathBuf::from);
+    mesh_llm_sdk::native_runtime::native_runtime_cache(cache_dir.as_deref())
+        .map_err(map_native_runtime_error)
 }
 
 fn parse_owner_keypair(owner_keypair_bytes_hex: &str) -> Result<OwnerKeypair, FfiError> {
@@ -940,6 +1104,10 @@ fn map_stream_error(error: MeshApiError) -> FfiError {
     }
 }
 
+fn map_native_runtime_error(error: impl ToString) -> FfiError {
+    FfiError::NativeRuntimeFailed(error.to_string())
+}
+
 impl From<ChatRequestNative> for ChatRequest {
     fn from(value: ChatRequestNative) -> Self {
         Self {
@@ -979,8 +1147,8 @@ impl From<PublicMeshQuery> for ApiPublicMeshQuery {
     }
 }
 
-impl From<mesh_llm_api_server::PublicMesh> for PublicMesh {
-    fn from(value: mesh_llm_api_server::PublicMesh) -> Self {
+impl From<sdk_node::PublicMesh> for PublicMesh {
+    fn from(value: sdk_node::PublicMesh) -> Self {
         Self {
             invite_token: value.invite_token,
             serving: value.serving,
@@ -1000,18 +1168,18 @@ impl From<mesh_llm_api_server::PublicMesh> for PublicMesh {
     }
 }
 
-impl From<mesh_llm_api_server::CapabilityLevel> for CapabilityLevel {
-    fn from(value: mesh_llm_api_server::CapabilityLevel) -> Self {
+impl From<sdk_node::CapabilityLevel> for CapabilityLevel {
+    fn from(value: sdk_node::CapabilityLevel) -> Self {
         match value {
-            mesh_llm_api_server::CapabilityLevel::None => Self::None,
-            mesh_llm_api_server::CapabilityLevel::Likely => Self::Likely,
-            mesh_llm_api_server::CapabilityLevel::Supported => Self::Supported,
+            sdk_node::CapabilityLevel::None => Self::None,
+            sdk_node::CapabilityLevel::Likely => Self::Likely,
+            sdk_node::CapabilityLevel::Supported => Self::Supported,
         }
     }
 }
 
-impl From<mesh_llm_api_server::ModelCapabilities> for ModelCapabilities {
-    fn from(value: mesh_llm_api_server::ModelCapabilities) -> Self {
+impl From<sdk_node::ModelCapabilities> for ModelCapabilities {
+    fn from(value: sdk_node::ModelCapabilities) -> Self {
         Self {
             multimodal: value.multimodal,
             vision: value.vision.into(),
@@ -1023,8 +1191,8 @@ impl From<mesh_llm_api_server::ModelCapabilities> for ModelCapabilities {
     }
 }
 
-impl From<mesh_llm_api_server::ModelSummary> for ModelSummary {
-    fn from(value: mesh_llm_api_server::ModelSummary) -> Self {
+impl From<sdk_node::ModelSummary> for ModelSummary {
+    fn from(value: sdk_node::ModelSummary) -> Self {
         Self {
             id: value.id,
             name: value.name,
@@ -1056,8 +1224,8 @@ impl From<ApiModelKind> for ModelKind {
     }
 }
 
-impl From<mesh_llm_api_server::ModelDetails> for ModelDetails {
-    fn from(value: mesh_llm_api_server::ModelDetails) -> Self {
+impl From<sdk_node::ModelDetails> for ModelDetails {
+    fn from(value: sdk_node::ModelDetails) -> Self {
         Self {
             id: value.id,
             name: value.name,
@@ -1076,8 +1244,8 @@ impl From<mesh_llm_api_server::ModelDetails> for ModelDetails {
     }
 }
 
-impl From<mesh_llm_api_server::InstalledModel> for InstalledModel {
-    fn from(value: mesh_llm_api_server::InstalledModel) -> Self {
+impl From<sdk_node::InstalledModel> for InstalledModel {
+    fn from(value: sdk_node::InstalledModel) -> Self {
         Self {
             model_ref: value.model_ref,
             path: path_to_string(value.path),
@@ -1087,16 +1255,16 @@ impl From<mesh_llm_api_server::InstalledModel> for InstalledModel {
     }
 }
 
-impl From<mesh_llm_api_server::ModelCacheStatus> for ModelCacheStatus {
-    fn from(value: mesh_llm_api_server::ModelCacheStatus) -> Self {
+impl From<sdk_node::ModelCacheStatus> for ModelCacheStatus {
+    fn from(value: sdk_node::ModelCacheStatus) -> Self {
         Self {
             cache_dir: value.cache_dir.map(path_to_string),
         }
     }
 }
 
-impl From<mesh_llm_api_server::DownloadedModel> for DownloadedModel {
-    fn from(value: mesh_llm_api_server::DownloadedModel) -> Self {
+impl From<sdk_node::DownloadedModel> for DownloadedModel {
+    fn from(value: sdk_node::DownloadedModel) -> Self {
         Self {
             model_ref: value.model_ref,
             paths: value.paths.into_iter().map(path_to_string).collect(),
@@ -1106,8 +1274,8 @@ impl From<mesh_llm_api_server::DownloadedModel> for DownloadedModel {
     }
 }
 
-impl From<mesh_llm_api_server::DeleteModelResult> for DeleteModelResult {
-    fn from(value: mesh_llm_api_server::DeleteModelResult) -> Self {
+impl From<sdk_node::DeleteModelResult> for DeleteModelResult {
+    fn from(value: sdk_node::DeleteModelResult) -> Self {
         Self {
             deleted_paths: value
                 .deleted_paths
@@ -1119,8 +1287,8 @@ impl From<mesh_llm_api_server::DeleteModelResult> for DeleteModelResult {
     }
 }
 
-impl From<mesh_llm_api_server::CleanupResult> for CleanupResult {
-    fn from(value: mesh_llm_api_server::CleanupResult) -> Self {
+impl From<sdk_node::CleanupResult> for CleanupResult {
+    fn from(value: sdk_node::CleanupResult) -> Self {
         Self {
             deleted_paths: value
                 .deleted_paths
@@ -1137,8 +1305,8 @@ impl From<mesh_llm_api_server::CleanupResult> for CleanupResult {
     }
 }
 
-impl From<mesh_llm_api_server::PruneResult> for PruneResult {
-    fn from(value: mesh_llm_api_server::PruneResult) -> Self {
+impl From<sdk_node::PruneResult> for PruneResult {
+    fn from(value: sdk_node::PruneResult) -> Self {
         Self {
             deleted_paths: value
                 .deleted_paths
@@ -1173,8 +1341,8 @@ impl From<ApiServingModelState> for ServingModelState {
     }
 }
 
-impl From<mesh_llm_api_server::ServedModel> for ServedModel {
-    fn from(value: mesh_llm_api_server::ServedModel) -> Self {
+impl From<sdk_node::ServedModel> for ServedModel {
+    fn from(value: sdk_node::ServedModel) -> Self {
         Self {
             model_ref: value.model_ref,
             model_id: value.model_id,
@@ -1188,13 +1356,101 @@ impl From<mesh_llm_api_server::ServedModel> for ServedModel {
     }
 }
 
-impl From<mesh_llm_api_server::ServingStatus> for ServingStatus {
-    fn from(value: mesh_llm_api_server::ServingStatus) -> Self {
+impl From<sdk_node::ServingStatus> for ServingStatus {
+    fn from(value: sdk_node::ServingStatus) -> Self {
         Self {
             enabled: value.enabled,
             models: value.models.into_iter().map(ServedModel::from).collect(),
         }
     }
+}
+
+impl From<NativeRuntimeVerificationPolicyNative>
+    for mesh_llm_sdk::native_runtime::NativeRuntimeVerificationPolicy
+{
+    fn from(value: NativeRuntimeVerificationPolicyNative) -> Self {
+        match value {
+            NativeRuntimeVerificationPolicyNative::RequireChecksum => Self::RequireChecksum,
+            NativeRuntimeVerificationPolicyNative::RequireChecksumAndSignature => {
+                Self::RequireChecksumAndSignature
+            }
+        }
+    }
+}
+
+impl From<NativeRuntimePruneModeNative> for mesh_llm_sdk::native_runtime::NativeRuntimePruneMode {
+    fn from(value: NativeRuntimePruneModeNative) -> Self {
+        match value {
+            NativeRuntimePruneModeNative::KeepActiveAndPrevious => Self::KeepActiveAndPrevious,
+            NativeRuntimePruneModeNative::ActiveOnly => Self::ActiveOnly,
+        }
+    }
+}
+
+impl From<mesh_llm_sdk::native_runtime::NativeRuntimeDownloadProgress>
+    for NativeRuntimeDownloadProgressNative
+{
+    fn from(value: mesh_llm_sdk::native_runtime::NativeRuntimeDownloadProgress) -> Self {
+        Self {
+            native_runtime_id: value.native_runtime_id,
+            url: value.url,
+            downloaded_bytes: value.downloaded_bytes,
+            total_bytes: value.total_bytes,
+            finished: value.finished,
+        }
+    }
+}
+
+impl From<mesh_llm_sdk::native_runtime::InstalledNativeRuntime> for InstalledNativeRuntimeNative {
+    fn from(value: mesh_llm_sdk::native_runtime::InstalledNativeRuntime) -> Self {
+        Self {
+            mesh_version: value.mesh_version,
+            native_runtime_id: value.native_runtime_id,
+            flavor: value.flavor,
+            path: path_to_string(value.path),
+            skippy_abi_version: Some(value.manifest.runtime.skippy_abi),
+        }
+    }
+}
+
+impl From<mesh_llm_sdk::native_runtime::NativeRuntimeInstallOutcome>
+    for NativeRuntimeInstallOutcomeNative
+{
+    fn from(value: mesh_llm_sdk::native_runtime::NativeRuntimeInstallOutcome) -> Self {
+        Self {
+            status: match value.status {
+                mesh_llm_sdk::native_runtime::NativeRuntimeInstallStatus::AlreadyInstalled => {
+                    "already_installed".to_string()
+                }
+                mesh_llm_sdk::native_runtime::NativeRuntimeInstallStatus::Installed => {
+                    "installed".to_string()
+                }
+            },
+            runtime: value.runtime.into(),
+            selected_native_runtime_id: value.resolution.selected.id,
+            selected_source: native_runtime_source_name(&value.resolution.source),
+        }
+    }
+}
+
+impl From<mesh_llm_sdk::native_runtime::CachePrunePlan> for NativeRuntimePruneResultNative {
+    fn from(value: mesh_llm_sdk::native_runtime::CachePrunePlan) -> Self {
+        Self {
+            removed_dirs: value.remove_dirs.into_iter().map(path_to_string).collect(),
+        }
+    }
+}
+
+fn native_runtime_source_name(
+    source: &mesh_llm_sdk::native_runtime::NativeRuntimeSource,
+) -> String {
+    match source {
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Installed { .. } => "installed",
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Bundle { .. } => "bundle",
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Download { .. } => "download",
+        mesh_llm_sdk::native_runtime::NativeRuntimeSource::Missing => "missing",
+    }
+    .to_string()
 }
 
 impl From<UnloadTarget> for ApiUnloadTarget {

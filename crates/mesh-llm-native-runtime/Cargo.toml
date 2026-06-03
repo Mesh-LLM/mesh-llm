@@ -1,0 +1,20 @@
+[package]
+name = "mesh-llm-native-runtime"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Native runtime manifest, selection, and cache policy for Mesh LLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

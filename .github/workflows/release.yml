@@ -35,7 +35,7 @@ env:
 jobs:
   metadata:
     name: Resolve release metadata
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
@@ -82,13 +82,13 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15
             artifact_name: release-macos
             build_recipe: release-build
             bundle_recipe: release-bundle
             backend: metal
           - name: Linux x86_64 CPU
-            os: blacksmith-4vcpu-ubuntu-2404
+            os: ubuntu-24.04
             artifact_name: release-linux
             build_recipe: release-build
             bundle_recipe: release-bundle
@@ -175,6 +175,9 @@ jobs:
       artifact_name: release-linux-inference-binary
       mesh_binary_target: target/release/mesh-llm
       cache_key_prefix: release-
+      release_tag: ${{ needs.metadata.outputs.tag }}
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   build_native_sdk_runtime:
     name: Build native SDK runtime ${{ matrix.name }}
@@ -185,12 +188,12 @@ jobs:
       matrix:
         include:
           - name: macOS aarch64 Metal
-            os: blacksmith-6vcpu-macos-15
+            os: macos-15
             backend: metal
             target: aarch64-apple-darwin
             artifact_suffix: darwin-aarch64-metal
           - name: Linux x86_64 CPU
-            os: blacksmith-4vcpu-ubuntu-2404
+            os: ubuntu-24.04
             backend: cpu
             target: x86_64-unknown-linux-gnu
             artifact_suffix: linux-x86_64-cpu
@@ -242,14 +245,88 @@ jobs:
             dist/native-sdk-crates/*/target/package/*.crate
           if-no-files-found: error
 
+  build_native_runtime:
+    name: Build native runtime ${{ matrix.name }}
+    needs: metadata
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS aarch64 Metal
+            os: macos-15
+            backend: metal
+            target: aarch64-apple-darwin
+            artifact_suffix: darwin-aarch64-metal
+          - name: Linux x86_64 CPU
+            os: ubuntu-24.04
+            backend: cpu
+            target: x86_64-unknown-linux-gnu
+            artifact_suffix: linux-x86_64-cpu
+    env:
+      LLAMA_STAGE_BACKEND: ${{ matrix.backend }}
+      MESH_NATIVE_RUNTIME_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config libssl-dev libdbus-1-dev curl lld
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja lld
+
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Package native runtime
+        run: |
+          scripts/package-native-runtime.sh \
+            --build \
+            --backend "${{ matrix.backend }}" \
+            --target "${{ matrix.target }}" \
+            --out dist/native-runtimes
+
+      - name: Verify native runtime artifact
+        run: scripts/verify-native-runtime-package.sh dist/native-runtimes/*.tar.gz
+
+      - name: Upload native runtime
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-native-runtime-${{ matrix.artifact_suffix }}
+          path: |
+            dist/native-runtimes/*.tar.gz
+            dist/native-runtimes/*.sha256
+          if-no-files-found: error
+
   build_swift_sdk_artifact:
     name: Build Swift SDK XCFramework
     needs: metadata
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: macos-15
     env:
       LLAMA_STAGE_BACKEND: metal
     steps:
       - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            .github/cache-version.txt
+            crates/mesh-llm-ui/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -263,6 +340,15 @@ jobs:
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
         run: scripts/release-version.sh "$RELEASE_TAG"
+
+      - name: Prepare Swift console resources
+        run: |
+          scripts/package-sdk-console-assets.sh --sdk swift
+          scripts/verify-sdk-console-assets.sh --sdk swift
+
+      - name: Verify tagged Swift console resources
+        if: github.event_name != 'workflow_dispatch'
+        run: git ls-files --error-unmatch sdk/swift/Sources/MeshLLM/Resources/Console/index.html
 
       - name: Build SwiftPM binary artifact
         run: |
@@ -305,7 +391,7 @@ jobs:
   build_linux_arm64:
     name: Build Linux ARM64 CPU
     needs: metadata
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04-arm
     env:
       LLAMA_STAGE_BACKEND: cpu
       MESH_RELEASE_ARCH: aarch64
@@ -352,7 +438,7 @@ jobs:
     name: Build Linux aarch64 CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
       matrix:
@@ -377,6 +463,8 @@ jobs:
           done
           rm -rf /var/lib/apt/lists/*
       - uses: actions/checkout@v5
+      - name: Trust checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -389,6 +477,11 @@ jobs:
             crates/mesh-llm-ui/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@just
+      - name: Prepare dispatched release version
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: scripts/release-version.sh "$RELEASE_TAG"
       - name: Build aarch64 CUDA release bundle
         env:
           RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
@@ -405,7 +498,7 @@ jobs:
     name: Build Linux CUDA (${{ matrix.cuda_version }})
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -472,7 +565,7 @@ jobs:
     name: Build Linux ROCm
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     container:
       image: rocm/dev-ubuntu-24.04:7.0-complete
     env:
@@ -532,7 +625,7 @@ jobs:
     name: Build Linux Vulkan
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       LLAMA_STAGE_BACKEND: vulkan
     steps:
@@ -577,7 +670,7 @@ jobs:
   build_windows_cpu:
     name: Build Windows CPU
     needs: metadata
-    runs-on: blacksmith-8vcpu-windows-2025
+    runs-on: windows-2025
     env:
       LLAMA_STAGE_BACKEND: cpu
     steps:
@@ -625,7 +718,7 @@ jobs:
     name: Build Windows ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
-    runs-on: blacksmith-8vcpu-windows-2025
+    runs-on: windows-2025
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
       # Pin Windows CUDA to a version sccache 0.15.0 supports.
@@ -734,6 +827,7 @@ jobs:
       - build
       - inference_smoke_tests
       - build_native_sdk_runtime
+      - build_native_runtime
       - build_swift_sdk_artifact
       - build_linux_arm64
       - build_linux_aarch64_cuda
@@ -742,13 +836,26 @@ jobs:
       - build_linux_vulkan
       - build_windows_cpu
       - build_windows_gpu
-    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    if: ${{ always() && needs.metadata.result == 'success' && needs.metadata.outputs.canary != 'true' && needs.build.result == 'success' && needs.inference_smoke_tests.result == 'success' && needs.build_native_sdk_runtime.result == 'success' && needs.build_native_runtime.result == 'success' && needs.build_swift_sdk_artifact.result == 'success' && needs.build_linux_arm64.result == 'success' && (needs.build_linux_aarch64_cuda.result == 'success' || needs.build_linux_aarch64_cuda.result == 'skipped') && (needs.build_linux_cuda.result == 'success' || needs.build_linux_cuda.result == 'skipped') && (needs.build_linux_rocm.result == 'success' || needs.build_linux_rocm.result == 'skipped') && (needs.build_linux_vulkan.result == 'success' || needs.build_linux_vulkan.result == 'skipped') && needs.build_windows_cpu.result == 'success' && (needs.build_windows_gpu.result == 'success' || needs.build_windows_gpu.result == 'skipped') }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-        if: github.event_name == 'workflow_dispatch'
         with:
           fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v5
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            .github/cache-version.txt
+            crates/mesh-llm-ui/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
         if: github.event_name == 'workflow_dispatch'
@@ -762,6 +869,16 @@ jobs:
 
       - name: Remove smoke-only binary
         run: rm -f release-artifacts/mesh-llm
+
+      - name: Generate native runtime release manifest
+        env:
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+        run: |
+          scripts/generate-native-runtime-release-manifest.sh \
+            --tag "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --out release-artifacts/native-runtimes.json \
+            release-artifacts/meshllm-native-runtime-*.tar.gz
 
       - name: Download generated SwiftPM manifest
         if: github.event_name == 'workflow_dispatch'
@@ -782,9 +899,12 @@ jobs:
           fi
           scripts/release-version.sh "$RELEASE_TAG"
           cp generated-swift-manifest/Package.swift Package.swift
+          scripts/package-sdk-console-assets.sh --sdk all
+          scripts/verify-sdk-console-assets.sh --sdk all
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock crates/*/Cargo.toml tools/*/Cargo.toml sdk/kotlin/build.gradle.kts Package.swift
+          git add -f sdk/node/console sdk/swift/Sources/MeshLLM/Resources/Console sdk/kotlin/src/main/resources/mesh-llm/console
           if git diff --cached --quiet; then
             echo "Release source files already match $RELEASE_TAG"
           else
@@ -805,7 +925,7 @@ jobs:
     name: Preflight crates.io packages
     needs: [metadata, publish]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -823,7 +943,7 @@ jobs:
     name: Publish crates.io packages
     needs: [metadata, publish, publish_crates_preflight]
     if: ${{ needs.metadata.outputs.prerelease != 'true' && needs.metadata.outputs.canary != 'true' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

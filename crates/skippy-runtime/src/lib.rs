@@ -59,6 +59,47 @@ pub use skippy_ffi::{
     ActivationDType as RuntimeActivationDType, ActivationLayout as RuntimeActivationLayout,
 };
 
+#[cfg(feature = "dynamic-native-runtime")]
+pub use skippy_ffi::{
+    NativeRuntimeLoadError, load_native_runtime_libraries, load_native_runtime_library,
+    native_runtime_loaded,
+};
+
+#[cfg(not(feature = "dynamic-native-runtime"))]
+pub fn native_runtime_loaded() -> bool {
+    true
+}
+
+#[cfg(not(feature = "dynamic-native-runtime"))]
+/// No-op for statically linked Skippy runtime builds.
+///
+/// # Safety
+///
+/// Static builds resolve the native ABI at process link/load time, so this
+/// function does not dereference the supplied path or mutate loader state.
+pub unsafe fn load_native_runtime_library(
+    _path: impl AsRef<std::path::Path>,
+) -> Result<(), skippy_ffi::NativeRuntimeLoadError> {
+    Ok(())
+}
+
+#[cfg(not(feature = "dynamic-native-runtime"))]
+/// No-op for statically linked Skippy runtime builds.
+///
+/// # Safety
+///
+/// Static builds resolve the native ABI at process link/load time, so this
+/// function does not dereference the supplied paths or mutate loader state.
+pub unsafe fn load_native_runtime_libraries<I, P>(
+    _paths: I,
+) -> Result<(), skippy_ffi::NativeRuntimeLoadError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<std::path::Path>,
+{
+    Ok(())
+}
+
 static NATIVE_LOG_FILE: OnceLock<Mutex<Option<LineWriter<File>>>> = OnceLock::new();
 
 /// Channel sender for filtered native log messages.
@@ -673,6 +714,9 @@ fn clear_native_log_file() {
 }
 
 fn set_native_log_callback(callback: skippy_ffi::LlamaLogCallback) {
+    if !skippy_ffi::native_runtime_loaded() {
+        return;
+    }
     unsafe {
         skippy_ffi::llama_log_set(callback, ptr::null_mut());
         skippy_ffi::ggml_log_set(callback, ptr::null_mut());
@@ -3789,7 +3833,14 @@ mod tests {
         restore_native_logs();
         fs::remove_file(&path)?;
 
-        assert_eq!(contents, "mesh-llm: native call begin with context\n");
+        assert!(
+            contents.ends_with("mesh-llm: native call begin with context\n"),
+            "unexpected native log contents: {contents:?}"
+        );
+        assert!(
+            !contents.contains("native call begin\nwith context"),
+            "native log note was not sanitized: {contents:?}"
+        );
         Ok(())
     }
 

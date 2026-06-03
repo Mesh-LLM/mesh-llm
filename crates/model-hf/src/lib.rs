@@ -1,3 +1,5 @@
+pub mod store;
+
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},

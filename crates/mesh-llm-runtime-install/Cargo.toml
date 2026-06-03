@@ -1,0 +1,29 @@
+[package]
+name = "mesh-llm-runtime-install"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Native runtime manifest discovery, download, installation, and cache management for Mesh LLM"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dirs = "6.0.0"
+flate2 = "1"
+futures-util = "0.3"
+hex = "0.4"
+mesh-llm-hardware-profile = { path = "../mesh-llm-hardware-profile", version = "0.68.0" }
+mesh-llm-native-runtime = { path = "../mesh-llm-native-runtime", version = "0.68.0" }
+reqwest = { version = "0.12", features = ["stream", "json"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+skippy-ffi = { path = "../skippy-ffi", version = "0.68.0", default-features = false }
+tar = "0.4"
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "io-util"] }

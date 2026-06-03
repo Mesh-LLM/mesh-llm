@@ -7,7 +7,7 @@ version.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-skippy-ffi = { path = "../skippy-ffi" }
+skippy-ffi = { path = "../skippy-ffi", default-features = false }
 skippy-runtime = { path = "../skippy-runtime" }
 model-artifact = { path = "../model-artifact" }
 model-hf = { path = "../model-hf" }

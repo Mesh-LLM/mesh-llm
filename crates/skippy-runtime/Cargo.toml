@@ -3,10 +3,17 @@ name = "skippy-runtime"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Rust runtime layer for Skippy staged model execution"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+
+[features]
+default = []
+dynamic-native-runtime = ["skippy-ffi/dynamic-runtime"]
 
 [dependencies]
 anyhow.workspace = true
-skippy-ffi = { path = "../skippy-ffi" }
+skippy-ffi = { path = "../skippy-ffi", version = "0.68.0", default-features = false  }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

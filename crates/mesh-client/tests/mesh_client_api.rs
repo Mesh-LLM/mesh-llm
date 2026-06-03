@@ -67,13 +67,13 @@ async fn mesh_client_cancel_idempotent() {
 }
 
 #[tokio::test]
-async fn mesh_client_list_models_requires_api_base_url() {
+async fn mesh_client_list_models_defaults_to_direct_mesh_transport() {
     let kp = OwnerKeypair::generate();
     let token = InviteToken::from_str("test-token").unwrap();
     let client = ClientBuilder::new(kp, token).build().unwrap();
 
     let err = client.list_models().await.unwrap_err();
-    assert!(err.to_string().contains("MESH_CLIENT_API_BASE"));
+    assert!(err.to_string().contains("invalid invite token"));
 }
 
 #[tokio::test]

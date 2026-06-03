@@ -3,6 +3,11 @@ name = "mesh-llm-gpu-bench"
 version.workspace = true
 edition = "2024"
 build = "build.rs"
+license.workspace = true
+description = "Local GPU bandwidth benchmark helpers for mesh-llm"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1"

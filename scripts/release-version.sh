@@ -133,6 +133,7 @@ versioned_files=()
 workspace_manifest="$REPO_ROOT/Cargo.toml"
 require_file "$workspace_manifest"
 update_workspace_version "$workspace_manifest" "$version"
+update_versioned_path_dependency_versions "$workspace_manifest" "$version"
 versioned_files+=("$workspace_manifest")
 
 for relative_manifest in "${manifests[@]}"; do

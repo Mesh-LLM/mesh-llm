@@ -3,10 +3,17 @@ name = "skippy-server"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "Embedded Skippy staged runtime server"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
 
 [lib]
 name = "skippy_server"
 path = "src/lib.rs"
+
+[features]
+default = []
+dynamic-native-runtime = ["skippy-runtime/dynamic-native-runtime"]
 
 [dependencies]
 anyhow.workspace = true
@@ -16,11 +23,11 @@ base64 = "0.22"
 blake3.workspace = true
 clap.workspace = true
 futures-util = "0.3"
-skippy-runtime = { path = "../skippy-runtime" }
-skippy-protocol = { path = "../skippy-protocol" }
-skippy-cache = { path = "../skippy-cache" }
-skippy-metrics = { path = "../skippy-metrics" }
-openai-frontend = { path = "../openai-frontend" }
+skippy-runtime = { path = "../skippy-runtime", version = "0.68.0"  }
+skippy-protocol = { path = "../skippy-protocol", version = "0.68.0"  }
+skippy-cache = { path = "../skippy-cache", version = "0.68.0"  }
+skippy-metrics = { path = "../skippy-metrics", version = "0.68.0"  }
+openai-frontend = { path = "../openai-frontend", version = "0.68.0"  }
 opentelemetry-proto = "0.31.0"
 serde.workspace = true
 serde_json.workspace = true

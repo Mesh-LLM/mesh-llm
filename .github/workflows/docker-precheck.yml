@@ -32,7 +32,7 @@ permissions:
 jobs:
   precheck:
     name: ${{ inputs.job_name }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -63,13 +63,21 @@ jobs:
           grep -qE '^\s*COPY\s+Cargo\.toml\s+Cargo\.lock\s+\./?$' "$file"
           for path in \
             crates/mesh-llm/ \
+            crates/mesh-llm-cli/ \
+            crates/mesh-llm-commands/ \
+            crates/mesh-llm-events/ \
+            crates/mesh-llm-hardware-profile/ \
             crates/mesh-llm-identity/ \
+            crates/mesh-llm-native-runtime/ \
             crates/mesh-llm-protocol/ \
             crates/mesh-llm-routing/ \
+            crates/mesh-llm-runtime-install/ \
             crates/mesh-llm-guardrails/ \
             crates/mesh-llm-types/ \
             crates/mesh-llm-config/ \
             crates/mesh-llm-console-server/ \
+            crates/mesh-llm-embedded-runtime/ \
+            crates/mesh-llm-tui/ \
             crates/mesh-llm-plugin/ \
             crates/mesh-llm-skills/ \
             crates/mesh-llm-plugin-manager/ \
