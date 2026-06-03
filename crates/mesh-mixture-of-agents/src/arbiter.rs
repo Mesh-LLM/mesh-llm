@@ -60,10 +60,7 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
         .iter()
         .filter(|o| o.kind == OutputKind::ToolProposal)
         .collect();
-    let answers: Vec<&WorkerOutput> = outputs
-        .iter()
-        .filter(|o| o.kind == OutputKind::Answer)
-        .collect();
+    let answers: Vec<&WorkerOutput> = outputs.iter().filter(|o| is_usable_answer(o)).collect();
     let critiques: Vec<&WorkerOutput> = outputs
         .iter()
         .filter(|o| o.kind == OutputKind::Critique)
@@ -229,10 +226,7 @@ pub fn try_early_decision(
 
     // ── 2+ outputs: check for consensus ─────────────────────────────
 
-    let answers: Vec<&WorkerOutput> = outputs
-        .iter()
-        .filter(|o| o.kind == OutputKind::Answer)
-        .collect();
+    let answers: Vec<&WorkerOutput> = outputs.iter().filter(|o| is_usable_answer(o)).collect();
     let tool_proposals: Vec<&WorkerOutput> = outputs
         .iter()
         .filter(|o| o.kind == OutputKind::ToolProposal)
@@ -451,6 +445,12 @@ fn largest_agreeing_cluster<'a>(answers: &[&'a WorkerOutput]) -> Option<(usize, 
 }
 
 fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
+    if output.kind == OutputKind::Answer && !is_usable_answer(output) {
+        return Decision::NeedsReducer {
+            reason: "single worker returned silent reply sentinel".into(),
+        };
+    }
+
     match output.kind {
         OutputKind::ToolProposal if has_tools => {
             if let Some(ref name) = output.tool_name {
@@ -470,6 +470,11 @@ fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
         },
         _ => Decision::Answer(output.payload.clone()),
     }
+}
+
+fn is_usable_answer(output: &WorkerOutput) -> bool {
+    output.kind == OutputKind::Answer
+        && !crate::normalize::is_silent_reply_sentinel(&output.payload)
 }
 
 #[cfg(test)]
@@ -736,6 +741,29 @@ mod tests {
         ];
         // Both answers but low confidence — should wait for more
         assert!(try_early_decision(&outputs, 3, outputs.len(), false).is_none());
+    }
+
+    #[test]
+    fn no_reply_sentinel_does_not_win_answer_arbitration() {
+        let outputs = vec![
+            make_output(OutputKind::Answer, 0.99, "NO_REPLY"),
+            make_output(OutputKind::Answer, 0.6, "I can help with that."),
+        ];
+        match arbitrate(&outputs, false) {
+            Decision::Answer(text) => assert_eq!(text, "I can help with that."),
+            other => panic!("expected usable answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_reply_sentinel_for_single_output_needs_reducer() {
+        let outputs = vec![make_output(OutputKind::Answer, 0.99, "NO_REPLY")];
+        match arbitrate(&outputs, false) {
+            Decision::NeedsReducer { reason } => {
+                assert!(reason.contains("silent reply sentinel"));
+            }
+            other => panic!("expected reducer escalation, got {other:?}"),
+        }
     }
 
     #[test]

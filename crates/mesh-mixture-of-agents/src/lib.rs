@@ -205,6 +205,13 @@ async fn handle_query(
     start: Instant,
 ) -> TurnResult {
     let assignments = worker::assign_roles(&config.models);
+    let grace_mode = grace_mode_for_turn(session, has_tools);
+    let query_uses_tools = matches!(grace_mode, GraceMode::Tool);
+    let selected_tool_names = if query_uses_tools {
+        selected_tool_names_for_turn(session, allowed_tools)
+    } else {
+        Vec::new()
+    };
 
     tracing::info!(
         "moa: dispatching to {} workers: [{}]",
@@ -221,7 +228,12 @@ async fn handle_query(
 
     let enable_thinking = config.enable_thinking;
     for assignment in &assignments {
-        let packed = context::pack_for_worker(session, assignment.role, has_tools);
+        let packed = context::pack_for_worker_selected(
+            session,
+            assignment.role,
+            query_uses_tools,
+            &selected_tool_names,
+        );
         let model_name = assignment.model_name.clone();
         let role = assignment.role;
         let backend = config.backends[assignment.backend_index].clone();
@@ -252,10 +264,10 @@ async fn handle_query(
     let (outputs, summaries, early_decision) = gather_workers_incremental(
         &mut join_set,
         &dispatched,
-        has_tools,
+        query_uses_tools,
         allowed_tools,
         config.first_answer_grace,
-        grace_mode_for_turn(session, has_tools),
+        grace_mode,
     )
     .await;
 
@@ -273,13 +285,14 @@ async fn handle_query(
     // Capture whether we took the early-exit path BEFORE we resolve the
     // decision: the arbiter never runs when early_decision is Some.
     let took_early_exit = early_decision.is_some();
-    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, has_tools));
+    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, query_uses_tools));
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         session,
         decision,
         &outputs,
-        has_tools,
+        query_uses_tools,
+        &selected_tool_names,
         allowed_tools,
     )
     .await;
@@ -350,6 +363,67 @@ fn looks_like_tool_intent(text: &str) -> bool {
         .any(|phrase| text.contains(phrase))
 }
 
+fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> Vec<String> {
+    let available = if allowed_tools.is_empty() {
+        session.tool_names()
+    } else {
+        allowed_tools.to_vec()
+    };
+    if available.is_empty() {
+        return Vec::new();
+    }
+
+    let text = session.last_user_text().to_ascii_lowercase();
+    let mut selected = Vec::new();
+    for tool in &available {
+        let tool_lc = tool.to_ascii_lowercase();
+        if tool_is_relevant_to_text(&tool_lc, &text) {
+            selected.push(tool.clone());
+        }
+    }
+
+    if selected.is_empty() && available.len() == 1 {
+        available
+    } else {
+        selected
+    }
+}
+
+fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
+    if text.contains(tool_name) {
+        return true;
+    }
+
+    match tool_name {
+        "read" | "read_file" | "file_fetch" => contains_any(
+            text,
+            &["read ", "open ", "inspect ", "fetch file", "show file"],
+        ),
+        "edit" | "edit_file" | "file_write" | "write" => {
+            contains_any(text, &["edit ", "change ", "modify ", "write ", "create "])
+        }
+        "exec" | "run_command" | "process" => contains_any(
+            text,
+            &[
+                "run ", "execute ", "shell", "terminal", "command", "process",
+            ],
+        ),
+        "web_search" => contains_any(text, &["search ", "look up", "web search", "google"]),
+        "web_fetch" => contains_any(text, &["fetch ", "browse", "url", "http://", "https://"]),
+        "dir_list" | "dir_fetch" | "list_files" => {
+            contains_any(text, &["list ", "directory", "folder", "dir "])
+        }
+        "image" | "image_generate" => contains_any(text, &["image", "picture", "generate"]),
+        "pdf" => text.contains("pdf"),
+        "memory_search" | "memory_get" => text.contains("memory"),
+        _ => false,
+    }
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
 // ─── Tool result handling ────────────────────────────────────────────
 
 async fn handle_tool_result(
@@ -361,7 +435,9 @@ async fn handle_tool_result(
 ) -> TurnResult {
     let candidates = reducer_candidates(config);
     let candidate_count = candidates.len();
-    let (messages, tools) = context::pack_for_tool_result_turn(session, has_tools);
+    let selected_tool_names = selected_tool_names_for_turn(session, allowed_tools);
+    let (messages, tools) =
+        context::pack_for_tool_result_turn_selected(session, has_tools, &selected_tool_names);
 
     // Hedged ladder: start candidate 0, hedge to candidate 1 after hedge_delay
     // (or immediately on candidate 0 error), race for the first OK. Rescues
@@ -419,6 +495,10 @@ async fn handle_tool_result(
                         chat_response(&reduced.payload)
                     }
                 }
+                normalize::OutputKind::Uncertainty => error_response(
+                    "MoA reducer returned no usable answer",
+                    MOA_ERR_NO_USABLE_ANSWER,
+                ),
                 _ => chat_response(&reduced.payload),
             };
             (name, true, body)
@@ -463,6 +543,7 @@ async fn resolve_decision(
     decision: arbiter::Decision,
     outputs: &[WorkerOutput],
     has_tools: bool,
+    selected_tool_names: &[String],
     allowed_tools: &[String],
 ) -> (Value, bool, u32) {
     match decision {
@@ -473,7 +554,13 @@ async fn resolve_decision(
         arbiter::Decision::NeedsReducer { reason } => {
             tracing::info!("moa: reducer — {reason}");
             let candidates = reducer_candidates(config);
-            let (messages, tools) = context::pack_for_reducer(session, outputs, &reason, has_tools);
+            let (messages, tools) = context::pack_for_reducer_selected(
+                session,
+                outputs,
+                &reason,
+                has_tools,
+                selected_tool_names,
+            );
 
             // Hedged ladder over the ordered candidates (see hedged_reducer_call).
             let hedge_result = hedged_reducer_call(
@@ -522,6 +609,9 @@ async fn resolve_decision(
                             (chat_response(&reduced.payload), true, attempts)
                         }
                     }
+                    normalize::OutputKind::Uncertainty => {
+                        (fallback_worker_response(outputs), true, attempts)
+                    }
                     _ => (chat_response(&reduced.payload), true, attempts),
                 },
                 None => {
@@ -530,7 +620,7 @@ async fn resolve_decision(
                     // produce the output we're returning — we fell back to
                     // a worker. attempts still reflects what was spawned so
                     // observability can see "we tried N times and all failed".
-                    (chat_response(&best_answer(outputs)), false, attempts)
+                    (fallback_worker_response(outputs), false, attempts)
                 }
             }
         }
@@ -542,16 +632,30 @@ async fn resolve_decision(
 fn best_answer(outputs: &[WorkerOutput]) -> String {
     outputs
         .iter()
-        .filter(|o| matches!(o.kind, normalize::OutputKind::Answer))
+        .filter(|o| {
+            matches!(o.kind, normalize::OutputKind::Answer)
+                && !normalize::is_silent_reply_sentinel(&o.payload)
+        })
         // `total_cmp` is total over all f32 (including NaN/Inf); `partial_cmp`
         // can return `None` on NaN, which would panic on `unwrap`.
         // `normalize_worker_output` now sanitizes non-finite confidences
         // before they reach here, but using `total_cmp` keeps this site
         // panic-free even if a future caller skips the normalizer.
         .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-        .or(outputs.first())
         .map(|o| o.payload.clone())
         .unwrap_or_default()
+}
+
+fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
+    let answer = best_answer(outputs);
+    if answer.is_empty() {
+        error_response(
+            "MoA could not produce a usable answer",
+            MOA_ERR_NO_USABLE_ANSWER,
+        )
+    } else {
+        chat_response(&answer)
+    }
 }
 
 /// Build a response body that signals MoA-level failure to the client.
@@ -617,6 +721,8 @@ pub const MOA_ERR_ALL_WORKERS_FAILED: &str = "all_workers_failed";
 /// Every reducer candidate failed (in both the tool-result and the
 /// arbiter-escalated paths).
 pub const MOA_ERR_ALL_REDUCERS_FAILED: &str = "all_reducers_failed";
+/// MoA only received silence directives or uncertainty after reduction.
+pub const MOA_ERR_NO_USABLE_ANSWER: &str = "no_usable_answer";
 
 fn chat_response(content: &str) -> Value {
     json!({
@@ -712,6 +818,30 @@ mod response_builder_tests {
         // here is *not* about which specific answer wins, only that we do
         // not panic and we return *some* answer.
         assert!(!picked.is_empty());
+    }
+
+    #[test]
+    fn best_answer_ignores_silent_reply_sentinel() {
+        let outputs = vec![
+            answer("a", 0.99, "NO_REPLY"),
+            answer("b", 0.6, "Here is a real response."),
+        ];
+        assert_eq!(best_answer(&outputs), "Here is a real response.");
+    }
+
+    #[test]
+    fn fallback_worker_response_errors_when_only_silent_sentinel_remains() {
+        let outputs = vec![answer("a", 0.99, "NO_REPLY")];
+        let resp = fallback_worker_response(&outputs);
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_str),
+            Some(MOA_ERR_NO_USABLE_ANSWER)
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str),
+            Some("error")
+        );
     }
 
     #[test]
@@ -844,5 +974,38 @@ mod response_builder_tests {
             &None,
         );
         assert_eq!(grace_mode_for_turn(&session, false), GraceMode::Answer);
+    }
+
+    #[test]
+    fn read_prompt_selects_only_read_tool() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Read /tmp/file.txt"})],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["read".to_string()]
+        );
+    }
+
+    #[test]
+    fn ordinary_prompt_selects_no_tools() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Help"})],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            Vec::<String>::new()
+        );
     }
 }
