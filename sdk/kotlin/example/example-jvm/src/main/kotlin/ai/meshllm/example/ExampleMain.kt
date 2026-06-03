@@ -27,6 +27,7 @@ fun main(args: Array<String>) = runBlocking {
     val runtime = NativeRuntime.resolve(
         ai.meshllm.NativeRuntimeResolveOptions(
             artifactDir = System.getenv("MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR")?.let(::File),
+            cacheDir = System.getenv("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")?.let(::File),
             allowDownload = System.getenv("MESH_SDK_RUNTIME_ALLOW_DOWNLOAD") == "1",
         )
     )

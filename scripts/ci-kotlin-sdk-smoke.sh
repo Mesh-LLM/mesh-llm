@@ -82,6 +82,8 @@ scripts/ci-sdk-fixture.sh "$1" "$2" "$3" -- \
             export ORG_GRADLE_JAVA_HOME="${ORG_GRADLE_JAVA_HOME:-$JAVA_HOME}"
             export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.java.installations.auto-detect=false -Dorg.gradle.java.installations.paths=$ORG_GRADLE_JAVA_HOME"
         fi
+        export MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR="${MESHLLM_NATIVE_RUNTIME_ARTIFACT_DIR:?}"
+        export MESH_LLM_NATIVE_RUNTIME_CACHE_DIR="${MESH_LLM_NATIVE_RUNTIME_CACHE_DIR:?}"
         export JNA_LIBRARY_PATH="${MESHLLM_KOTLIN_JNA_LIBRARY_PATH}${JNA_LIBRARY_PATH:+:$JNA_LIBRARY_PATH}"
         export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} -Djna.library.path=$MESHLLM_KOTLIN_JNA_LIBRARY_PATH"
         cd '"$REPO_ROOT"'/sdk/kotlin/example/example-jvm
