@@ -633,9 +633,68 @@ install_bundle() {
     done
 }
 
-install_recommended_native_runtime() {
+download_native_runtime_manifest() {
     local tmp_dir="$1"
     local manifest_url
+    local manifest_path="$tmp_dir/native-runtimes.json"
+
+    if [[ -f "$manifest_path" ]]; then
+        return 0
+    fi
+    if ! manifest_url="$(release_url "native-runtimes.json")"; then
+        return 1
+    fi
+    if ! curl -fsSL "$manifest_url" -o "$manifest_path" 2>/dev/null; then
+        return 1
+    fi
+}
+
+download_release_asset() {
+    local asset="$1"
+    local archive="$2"
+    local url
+
+    if ! url="$(release_url "$asset")"; then
+        return 1
+    fi
+
+    echo "Downloading $url"
+    curl -fsSL "$url" -o "$archive" 2>/dev/null
+}
+
+download_release_archive() {
+    local tmp_dir="$1"
+    local requested_asset="$2"
+    local requested_archive="$tmp_dir/$requested_asset"
+    local fallback_asset="mesh-bundle.tar.gz"
+    local fallback_archive="$tmp_dir/$fallback_asset"
+
+    DOWNLOADED_ASSET="$requested_asset"
+    DOWNLOADED_ARCHIVE="$requested_archive"
+
+    if download_release_asset "$requested_asset" "$requested_archive"; then
+        return 0
+    fi
+
+    if ! download_native_runtime_manifest "$tmp_dir"; then
+        echo "error: could not download release archive: $requested_asset" >&2
+        return 1
+    fi
+
+    if [[ "$requested_asset" != "$fallback_asset" ]] &&
+        download_release_asset "$fallback_asset" "$fallback_archive"; then
+        echo "Using runtime-enabled mesh bundle because $requested_asset was not available."
+        DOWNLOADED_ASSET="$fallback_asset"
+        DOWNLOADED_ARCHIVE="$fallback_archive"
+        return 0
+    fi
+
+    echo "error: could not download release archive: $requested_asset or $fallback_asset" >&2
+    return 1
+}
+
+install_recommended_native_runtime() {
+    local tmp_dir="$1"
     local manifest_path="$tmp_dir/native-runtimes.json"
     local binary="$INSTALL_DIR/mesh-llm"
 
@@ -645,10 +704,7 @@ install_recommended_native_runtime() {
     if ! "$binary" runtime install --help >/dev/null 2>&1; then
         return 0
     fi
-    if ! manifest_url="$(release_url "native-runtimes.json")"; then
-        return 0
-    fi
-    if ! curl -fsSL "$manifest_url" -o "$manifest_path" 2>/dev/null; then
+    if ! download_native_runtime_manifest "$tmp_dir"; then
         return 0
     fi
 
@@ -900,10 +956,6 @@ main() {
     flavor="$(choose_flavor)"
     local asset
     asset="$(asset_name "$flavor")"
-    local url
-    if ! url="$(release_url "$asset")"; then
-        exit 1
-    fi
 
     local tmp_dir
     tmp_dir="$(mktemp -d)"
@@ -911,17 +963,15 @@ main() {
     printf -v tmp_dir_escaped '%q' "$tmp_dir"
     trap "rm -rf -- $tmp_dir_escaped" EXIT
 
-    local archive="$tmp_dir/$asset"
     echo "Installing flavor: $flavor"
     if bool_is_true "$INSTALL_PRERELEASE"; then
         echo "Release channel: prerelease"
     else
         echo "Release channel: stable"
     fi
-    echo "Downloading $url"
-    curl -fsSL "$url" -o "$archive"
+    download_release_archive "$tmp_dir" "$asset"
 
-    tar -xzf "$archive" -C "$tmp_dir"
+    tar -xzf "$DOWNLOADED_ARCHIVE" -C "$tmp_dir"
 
     if [[ ! -d "$tmp_dir/mesh-bundle" ]]; then
         echo "error: release archive did not contain mesh-bundle/" >&2
@@ -931,7 +981,7 @@ main() {
     install_bundle "$tmp_dir/mesh-bundle"
     install_recommended_native_runtime "$tmp_dir"
 
-    echo "Installed $asset to $INSTALL_DIR"
+    echo "Installed $DOWNLOADED_ASSET to $INSTALL_DIR"
 
     if bool_is_true "$INSTALL_SERVICE"; then
         echo
