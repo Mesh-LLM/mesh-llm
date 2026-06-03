@@ -67,7 +67,10 @@ runs:
       run: |
         set -euo pipefail
         mkdir -p ~/.models
-        curl -fSL "${{ inputs.model_url }}" -o "$HOME/.models/${{ inputs.model_file }}"
+        curl --fail --location --show-error \
+          --retry 6 --retry-delay 10 --retry-all-errors \
+          "${{ inputs.model_url }}" \
+          -o "$HOME/.models/${{ inputs.model_file }}"
         ls -lh "$HOME/.models/${{ inputs.model_file }}"
 
     - name: Save integration model cache
