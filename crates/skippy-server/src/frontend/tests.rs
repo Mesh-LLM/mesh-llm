@@ -1105,6 +1105,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         generation_limit: Arc::new(Semaphore::new(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         kv: None,
     })
@@ -1288,6 +1289,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         generation_limit: Arc::new(Semaphore::new(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         kv: None,
     };

@@ -68,6 +68,7 @@ use crate::{
     telemetry::{Telemetry, lifecycle_attrs, now_unix_nanos},
 };
 
+mod admission;
 mod backend;
 mod embedded_execution;
 mod embedded_generation;
@@ -81,7 +82,14 @@ mod speculative;
 mod util;
 mod wire_messages;
 
-use self::{prefill::*, request::*, speculative::*, util::*, wire_messages::*};
+use self::{
+    admission::{GenerationTokenBudget, GenerationTokenBudgetRequest},
+    prefill::*,
+    request::*,
+    speculative::*,
+    util::*,
+    wire_messages::*,
+};
 
 static OPENAI_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -181,6 +189,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         kv,
     });
@@ -525,6 +534,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: args.hook_policy,
         kv,
     });
@@ -563,6 +573,7 @@ struct StageOpenAiBackend {
     generation_limit: Arc<Semaphore>,
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
+    generation_token_budget: Arc<GenerationTokenBudget>,
     hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     kv: Option<Arc<KvStageIntegration>>,
 }
@@ -1308,6 +1319,10 @@ impl OpenAiBackendMode {
             Self::LocalRuntime => "local-runtime",
             Self::EmbeddedStageZero { .. } => "embedded-stage0",
         }
+    }
+
+    fn reserves_local_kv_tokens(&self) -> bool {
+        !matches!(self, Self::BinaryChain { .. })
     }
 }
 
