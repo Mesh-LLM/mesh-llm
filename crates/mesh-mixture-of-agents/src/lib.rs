@@ -59,6 +59,8 @@ use tool_guard::enforce_tool_call_contract;
 use worker::WorkerRole;
 pub use worker::{strip_thinking, truncate_chars};
 
+const SAME_TOOL_FORCE_ANSWER_THRESHOLD: usize = 3;
+
 /// The virtual model name that triggers MoA routing.
 pub const VIRTUAL_MODEL_NAME: &str = "mesh";
 
@@ -331,6 +333,24 @@ fn grace_mode_for_turn(session: &Session, has_tools: bool) -> GraceMode {
 
 fn looks_like_tool_intent(text: &str) -> bool {
     let text = text.to_ascii_lowercase();
+    if contains_any(
+        &text,
+        &[
+            "no tool",
+            "without tool",
+            "do not use tool",
+            "don't use tool",
+            "no web",
+            "without web",
+            "do not browse",
+            "don't browse",
+            "no lookup",
+            "without lookup",
+        ],
+    ) {
+        return false;
+    }
+
     let tool_intent_phrases = [
         "use a tool",
         "using a tool",
@@ -451,8 +471,37 @@ fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
                 "run ", "execute ", "shell", "terminal", "command", "process",
             ],
         ),
-        "web_search" => contains_any(text, &["search ", "look up", "web search", "google"]),
-        "web_fetch" => contains_any(text, &["fetch ", "browse", "url", "http://", "https://"]),
+        "web_search" => contains_any(
+            text,
+            &[
+                "search ",
+                "look up",
+                "lookup",
+                "web",
+                "google",
+                "github",
+                "issue",
+                "pull request",
+                "pr ",
+                "weather",
+                "forecast",
+                "current",
+                "latest",
+                "today",
+                "tomorrow",
+            ],
+        ),
+        "web_fetch" => contains_any(
+            text,
+            &[
+                "fetch ",
+                "browse",
+                "url",
+                "http://",
+                "https://",
+                "github.com/",
+            ],
+        ),
         "dir_list" | "dir_fetch" | "list_files" => {
             contains_any(text, &["list ", "directory", "folder", "dir "])
         }
@@ -478,9 +527,22 @@ async fn handle_tool_result(
 ) -> TurnResult {
     let candidates = reducer_candidates(config);
     let candidate_count = candidates.len();
-    let selected_tool_names = selected_tool_names_for_turn(session, allowed_tools);
-    let (messages, tools) =
-        context::pack_for_tool_result_turn_selected(session, has_tools, &selected_tool_names);
+    let repeated_tool = repeated_same_tool_results(session);
+    let force_answer = repeated_tool.is_some();
+    let selected_tool_names = if force_answer {
+        Vec::new()
+    } else {
+        selected_tool_names_for_turn(session, allowed_tools)
+    };
+    let (mut messages, tools) = context::pack_for_tool_result_turn_selected(
+        session,
+        has_tools && !force_answer,
+        &selected_tool_names,
+    );
+    if let Some((tool, count)) = repeated_tool {
+        tracing::info!("moa: forcing answer after {count} consecutive completed {tool} tool calls");
+        append_tool_loop_answer_instruction(&mut messages, &tool, count);
+    }
 
     // Hedged ladder: start candidate 0, hedge to candidate 1 after hedge_delay
     // (or immediately on candidate 0 error), race for the first OK. Rescues
@@ -574,6 +636,39 @@ async fn handle_tool_result(
         reducer_attempts: attempts,
         turn_kind: TurnKind::ToolResult,
         elapsed_ms: start.elapsed().as_millis() as u64,
+    }
+}
+
+fn repeated_same_tool_results(session: &Session) -> Option<(String, usize)> {
+    let calls = session.pending_tool_calls();
+    let last = calls.last()?;
+    last.result.as_ref()?;
+
+    let tool_name = last.function_name.as_str();
+    let count = calls
+        .iter()
+        .rev()
+        .take_while(|call| call.function_name == tool_name && call.result.is_some())
+        .count();
+
+    (count >= SAME_TOOL_FORCE_ANSWER_THRESHOLD).then(|| (tool_name.to_string(), count))
+}
+
+fn append_tool_loop_answer_instruction(messages: &mut [Value], tool: &str, count: usize) {
+    let instruction = format!(
+        "\n\nTool loop guard: the last {count} completed tool calls all used `{tool}`. \
+         Answer now from the gathered tool results. Do not call another tool. \
+         If the evidence is incomplete, say what can be determined and what is missing."
+    );
+
+    if let Some(system) = messages
+        .iter_mut()
+        .find(|msg| msg.get("role").and_then(Value::as_str) == Some("system"))
+        && let Some(content) = system.get("content").and_then(Value::as_str)
+    {
+        let mut updated = content.to_string();
+        updated.push_str(&instruction);
+        system["content"] = Value::String(updated);
     }
 }
 
@@ -1015,6 +1110,19 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn negated_web_prompt_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Plain check with no web lookup: reply OK",
+            })],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "web_search"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
     fn no_tools_uses_answer_grace() {
         let mut session = Session::new();
         session.ingest(
@@ -1038,6 +1146,26 @@ mod response_builder_tests {
         assert_eq!(
             selected_tool_names_for_turn(&session, &[]),
             vec!["read".to_string()]
+        );
+    }
+
+    #[test]
+    fn weather_prompt_selects_web_search_tool() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Check the current Melbourne weather forecast for today",
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["web_search".to_string()]
         );
     }
 
@@ -1073,6 +1201,69 @@ mod response_builder_tests {
             selected_tool_names_for_turn(&session, &[]),
             vec!["exec".to_string()]
         );
+    }
+
+    #[test]
+    fn two_same_tool_results_do_not_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "web_search"),
+                tool_result_msg("call_1", "result 1"),
+                tool_call_msg("call_2", "web_search"),
+                tool_result_msg("call_2", "result 2"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(repeated_same_tool_results(&session), None);
+    }
+
+    #[test]
+    fn three_same_tool_results_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "web_search"),
+                tool_result_msg("call_1", "result 1"),
+                tool_call_msg("call_2", "web_search"),
+                tool_result_msg("call_2", "result 2"),
+                tool_call_msg("call_3", "web_search"),
+                tool_result_msg("call_3", "result 3"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(
+            repeated_same_tool_results(&session),
+            Some(("web_search".to_string(), 3))
+        );
+    }
+
+    fn tool_call_msg(id: &str, name: &str) -> Value {
+        serde_json::json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": id,
+                "type": "function",
+                "function": {"name": name, "arguments": "{\"query\":\"x\"}"}
+            }]
+        })
+    }
+
+    fn tool_result_msg(id: &str, text: &str) -> Value {
+        serde_json::json!({
+            "role": "tool",
+            "tool_call_id": id,
+            "content": text
+        })
     }
 
     #[test]

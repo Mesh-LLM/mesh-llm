@@ -17,7 +17,7 @@ use serde_json::Value;
 
 /// Min confidence for the time-based grace path; matches the consensus rule.
 const GRACE_MIN_CONFIDENCE: f32 = 0.5;
-const TOOL_GRACE_MIN_CONFIDENCE: f32 = 0.7;
+const TOOL_GRACE_MIN_CONFIDENCE: f32 = 0.6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GraceMode {
