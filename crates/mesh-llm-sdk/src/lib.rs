@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
+#[cfg(feature = "serving")]
 use std::time::Duration;
 
 #[cfg(feature = "serving")]
@@ -722,6 +723,7 @@ fn host_config(parts: EmbeddedNodeParts) -> mesh_llm_embedded_runtime::EmbeddedM
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "serving")]
     use super::*;
 
     #[test]
