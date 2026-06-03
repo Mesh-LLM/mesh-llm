@@ -5869,7 +5869,7 @@ async fn build_run_auto_node_setup(
 async fn attempt_run_auto_join(
     node: &mesh::Node,
     join_attempts: &[(String, Option<String>)],
-    is_client: bool,
+    prefer_fast_probe: bool,
 ) -> RunAutoJoinOutcome {
     let mut outcome = RunAutoJoinOutcome {
         joined: false,
@@ -5877,8 +5877,8 @@ async fn attempt_run_auto_join(
         successful_join: None,
     };
 
-    if is_client {
-        match attempt_fast_client_auto_join(node, join_attempts).await {
+    if prefer_fast_probe {
+        match attempt_fast_auto_join(node, join_attempts).await {
             Some(Ok(successful_join)) => {
                 return build_successful_run_auto_join(node, successful_join).await;
             }
@@ -5911,7 +5911,7 @@ async fn attempt_run_auto_join(
     outcome
 }
 
-async fn attempt_fast_client_auto_join(
+async fn attempt_fast_auto_join(
     node: &mesh::Node,
     join_attempts: &[(String, Option<String>)],
 ) -> Option<Result<(String, Option<String>)>> {
@@ -5976,7 +5976,8 @@ async fn run_auto_join_existing_mesh(
     } else {
         auto_join_candidates.to_vec()
     };
-    let outcome = attempt_run_auto_join(node, &join_attempts, cli.client).await;
+    let prefer_fast_probe = should_prefer_fast_auto_join(cli, auto_join_candidates);
+    let outcome = attempt_run_auto_join(node, &join_attempts, prefer_fast_probe).await;
     update_cli_with_successful_run_auto_join(cli, outcome.successful_join);
 
     if !outcome.joined {
@@ -5988,6 +5989,13 @@ async fn run_auto_join_existing_mesh(
     }
 
     spawn_run_auto_post_join_tasks(cli, node).await;
+}
+
+fn should_prefer_fast_auto_join(
+    cli: &Cli,
+    auto_join_candidates: &[(String, Option<String>)],
+) -> bool {
+    cli.client || !auto_join_candidates.is_empty()
 }
 
 async fn spawn_run_auto_post_join_tasks(cli: &Cli, node: &mesh::Node) {
@@ -11081,6 +11089,34 @@ mod tests {
         // through, so the bootstrap proxy should stay quiet.
         let cli = Cli::parse_from(["mesh-llm"]);
         assert!(!should_start_bootstrap_proxy(&cli, &[]));
+    }
+
+    #[test]
+    fn serve_auto_prefers_fast_join_probe_for_discovered_candidates() {
+        let cli = Cli::parse_from(["mesh-llm", "--auto"]);
+        let candidates = vec![("tok-from-discovery".to_string(), None)];
+        assert!(
+            should_prefer_fast_auto_join(&cli, &candidates),
+            "serve --auto should avoid serial retry when discovery found candidates"
+        );
+    }
+
+    #[test]
+    fn explicit_serve_join_keeps_serial_join_path() {
+        let cli = Cli::parse_from(["mesh-llm", "serve", "--join", "tok-explicit"]);
+        assert!(
+            !should_prefer_fast_auto_join(&cli, &[]),
+            "explicit serve --join keeps the established serial join path"
+        );
+    }
+
+    #[test]
+    fn client_auto_keeps_fast_join_probe() {
+        let cli = Cli::parse_from(["mesh-llm", "--client", "--auto"]);
+        assert!(
+            should_prefer_fast_auto_join(&cli, &[]),
+            "client auto-join keeps the existing fast probe behavior"
+        );
     }
 
     #[tokio::test]
