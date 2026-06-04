@@ -615,6 +615,8 @@ jobs:
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
       timeout_minutes: 15
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   inference_smoke_tests:
     needs: [changes, linux_cpu_artifact]
@@ -624,6 +626,8 @@ jobs:
       artifact_name: ci-linux-inference-binaries
       mesh_binary_target: target/debug/mesh-llm
       cache_key_prefix: ''
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   agent_live_smokes:
     needs: [changes, linux_cpu_artifact]
@@ -682,6 +686,8 @@ jobs:
       model_cache_scope: two-node-smoke-model
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
       timeout_minutes: 20
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   two_node_split_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -694,6 +700,8 @@ jobs:
       model_cache_scope: two-node-split-smoke-model
       smoke_script: scripts/ci-two-node-split-smoke.sh
       timeout_minutes: 25
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   rust_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -706,6 +714,8 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
       runs_on: '"ubuntu-24.04"'
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   kotlin_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -718,6 +728,8 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
       runs_on: '"ubuntu-24.04"'
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   macos_cpu_artifact:
     needs: changes
@@ -833,6 +845,8 @@ jobs:
       model_cache_scope: sdk-smoke-model
       runs_on: '"macos-15"'
       timeout_minutes: 40
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   macos_targets:
     needs: changes
