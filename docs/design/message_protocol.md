@@ -38,7 +38,7 @@ All protobuf control-plane streams use the same framing:
 
 Maximum frame size: 8 MiB (`MAX_CONTROL_FRAME_BYTES`). Frames exceeding this limit are rejected.
 
-Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/1` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
+Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
 
 ## Protocol Generation
 
@@ -253,11 +253,11 @@ message MeshSubprotocol {
 message MeshSubprotocolOpen {
   uint32 gen = 1;
   string name = 2;              // "skippy-stage"
-  uint32 major = 3;             // 1
+  uint32 major = 3;             // 2
 }
 ```
 
-New outbound transfer uses mesh stream `0x0d` (`STREAM_SUBPROTOCOL`), followed by a length-prefixed `MeshSubprotocolOpen { name: "skippy-stage", major: 1 }`, the Skippy-owned stream kind `0x03`, a length-prefixed `StageArtifactTransferRequest`, a length-prefixed `StageArtifactTransferResponse`, and raw artifact bytes when accepted. Nodes continue to accept the legacy inbound `skippy-stage/1` artifact-transfer stream during rolling updates.
+Outbound transfer uses mesh stream `0x0d` (`STREAM_SUBPROTOCOL`), followed by a length-prefixed `MeshSubprotocolOpen { name: "skippy-stage", major: 2 }`, the Skippy-owned stream kind `0x03`, a length-prefixed `StageArtifactTransferRequest`, a length-prefixed `StageArtifactTransferResponse`, and raw artifact bytes when accepted. Skippy stage major 2 is a compatibility break for generation-3 direct prediction return.
 
 **Request:**
 ```proto
@@ -314,4 +314,4 @@ The following are explicitly NOT protobuf and are not described here:
 
 - Nodes advertise `mesh-llm/1` on accept.
 - Scoped `mesh-llm/1` control-plane streams (0x01, 0x03, 0x05, 0x06, 0x07, 0x0b, 0x0c, 0x0d) use protobuf framing for their mesh-owned open/control frames.
-- Skippy artifact transfer uses `STREAM_SUBPROTOCOL` (0x0d) to open `skippy-stage/1`, then Skippy-owned stream type `0x03`; only its request/response metadata is protobuf-framed, followed by raw artifact bytes when accepted.
+- Skippy artifact transfer uses `STREAM_SUBPROTOCOL` (0x0d) to open `skippy-stage/2`, then Skippy-owned stream type `0x03`; only its request/response metadata is protobuf-framed, followed by raw artifact bytes when accepted.

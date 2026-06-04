@@ -3,7 +3,7 @@
 //! Mesh control traffic uses QUIC ALPN `mesh-llm/1` and multiplexes bi-streams
 //! by first byte. Mesh-owned subsystem streams use `STREAM_SUBPROTOCOL` on the
 //! admitted mesh connection; Skippy activation transport remains on the
-//! latency-sensitive `skippy-stage/1` ALPN.
+//! latency-sensitive `skippy-stage/2` ALPN.
 
 pub use mesh_llm_types::mesh::{
     DEMAND_TTL_SECS, MAX_SPLIT_RTT_MS, ModelDemand, ModelRuntimeDescriptor, ModelSourceKind,
@@ -2056,7 +2056,7 @@ async fn bind_mesh_endpoint(
         .secret_key(secret_key)
         .alpns(vec![
             ALPN_V1.to_vec(),
-            skippy_protocol::STAGE_ALPN_V1.to_vec(),
+            skippy_protocol::STAGE_ALPN_V2.to_vec(),
         ])
         .transport_config(startup_transport_config())
         .relay_mode(relay_mode_for_startup(relay));
@@ -3786,7 +3786,7 @@ impl Node {
                 .build();
             let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
                 .secret_key(secret_key.clone())
-                .alpns(vec![ALPN.to_vec(), skippy_protocol::STAGE_ALPN_V1.to_vec()])
+                .alpns(vec![ALPN.to_vec(), skippy_protocol::STAGE_ALPN_V2.to_vec()])
                 .relay_mode(iroh::endpoint::RelayMode::Disabled)
                 .transport_config(transport_config)
                 .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
@@ -6042,7 +6042,7 @@ impl Node {
         };
         let conn = tokio::time::timeout(std::time::Duration::from_secs(10), async {
             self.endpoint
-                .connect(addr, skippy_protocol::STAGE_ALPN_V1)
+                .connect(addr, skippy_protocol::STAGE_ALPN_V2)
                 .await
         })
         .await
@@ -6200,7 +6200,7 @@ impl Node {
     }
 
     async fn handle_stage_alpn(&self, alpn: &[u8], conn: Connection, remote: EndpointId) -> bool {
-        if alpn != skippy_protocol::STAGE_ALPN_V1 {
+        if alpn != skippy_protocol::STAGE_ALPN_V2 {
             return false;
         }
         tracing::info!(
@@ -7327,7 +7327,7 @@ impl Node {
                     .await
             }
             skippy_protocol::STAGE_STREAM_TRANSPORT => {
-                anyhow::bail!("skippy activation transport stays on skippy-stage/1")
+                anyhow::bail!("skippy activation transport stays on skippy-stage/2")
             }
             other => anyhow::bail!("unknown skippy stage subprotocol stream kind {other:#04x}"),
         }

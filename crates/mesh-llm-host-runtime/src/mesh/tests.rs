@@ -301,7 +301,7 @@ async fn make_test_node_with_requirements(
         .secret_key(endpoint_secret_key.clone())
         .alpns(vec![
             ALPN_V1.to_vec(),
-            skippy_protocol::STAGE_ALPN_V1.to_vec(),
+            skippy_protocol::STAGE_ALPN_V2.to_vec(),
         ])
         .transport_config(transport_config)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?

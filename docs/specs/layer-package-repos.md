@@ -108,14 +108,14 @@ package discovery protocol.
 
 Privacy and compatibility boundaries:
 
-- Nodes advertise only `skippy-stage/1` subprotocol feature support, including
+- Nodes advertise only `skippy-stage/2` subprotocol feature support, including
   `artifact-transfer`. They do not gossip local package inventory, artifact
   paths, cache roots, or tokens.
 - Mesh owns only the subprotocol open envelope; Skippy owns the artifact
   request/response schema, authorization semantics, and byte framing.
-- Legacy inbound `skippy-stage/1` artifact-transfer streams remain accepted for
-  rolling-update compatibility; new outbound peer cache transfer uses the mesh
-  `STREAM_SUBPROTOCOL` envelope.
+- Peer cache transfer uses the mesh `STREAM_SUBPROTOCOL` envelope. Generation-3
+  Skippy stage peers are a compatibility break, so older chained-reply
+  subprotocol peers are not mixed into new split topologies.
 - Only `hf://namespace/repo@revision` package refs are eligible for peer
   transfer.
 - The serving node checks the active split topology and only serves artifacts

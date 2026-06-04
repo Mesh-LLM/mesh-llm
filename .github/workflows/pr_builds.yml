@@ -1095,7 +1095,7 @@ jobs:
       - name: Check mesh-llm binary on Windows
         if: ${{ matrix.backend == 'cpu' && env.RUN_WINDOWS_CPU_FULL != 'true' }}
         shell: pwsh
-        run: cargo check --locked -p mesh-llm --bin mesh-llm
+        run: cargo check --locked -p mesh-llm --bin mesh-llm --features dynamic-native-runtime
       - name: Check Node SDK addon on Windows
         if: ${{ matrix.backend == 'cpu' }}
         shell: pwsh
