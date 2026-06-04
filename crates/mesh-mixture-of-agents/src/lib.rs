@@ -46,6 +46,7 @@ mod tool_guard;
 pub mod worker;
 
 pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
+pub(crate) use tool_guard::enforce_tool_call_contract;
 
 use backend::call_backend;
 use fanout::{GraceMode, gather_workers_incremental};
@@ -55,7 +56,6 @@ use reducer::{hedged_reducer_call, reducer_candidates};
 use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
-use tool_guard::enforce_tool_call_contract;
 use worker::WorkerRole;
 pub use worker::{strip_thinking, truncate_chars};
 
@@ -534,9 +534,10 @@ async fn handle_tool_result(
     } else {
         selected_tool_names_for_turn(session, allowed_tools)
     };
+    let tools_enabled_for_reducer = has_tools && !force_answer;
     let (mut messages, tools) = context::pack_for_tool_result_turn_selected(
         session,
-        has_tools && !force_answer,
+        tools_enabled_for_reducer,
         &selected_tool_names,
     );
     if let Some((tool, count)) = repeated_tool {
@@ -593,12 +594,7 @@ async fn handle_tool_result(
             // missing / non-object arguments to `"{}"`.
             let body = match reduced.kind {
                 normalize::OutputKind::ToolProposal => {
-                    if let Some(tname) = reduced.tool_name.as_ref() {
-                        let args = reduced.tool_arguments.as_ref().unwrap_or(&Value::Null);
-                        tool_call_response(tname, args)
-                    } else {
-                        chat_response(&reduced.payload)
-                    }
+                    tool_proposal_response(&reduced, tools_enabled_for_reducer)
                 }
                 normalize::OutputKind::Uncertainty => error_response(
                     "MoA reducer returned no usable answer",
@@ -687,7 +683,18 @@ async fn resolve_decision(
     match decision {
         arbiter::Decision::Answer(text) => (chat_response(&text), false, 0),
         arbiter::Decision::ToolCall { name, arguments } => {
-            (tool_call_response(&name, &arguments), false, 0)
+            if has_tools {
+                (tool_call_response(&name, &arguments), false, 0)
+            } else {
+                (
+                    error_response(
+                        "MoA selected a tool call, but tools are disabled for this turn",
+                        MOA_ERR_NO_USABLE_ANSWER,
+                    ),
+                    false,
+                    0,
+                )
+            }
         }
         arbiter::Decision::NeedsReducer { reason } => {
             tracing::info!("moa: reducer — {reason}");
@@ -745,12 +752,7 @@ async fn resolve_decision(
                         // previous "both name AND args required" gate would
                         // silently fall back to a chat_response and break
                         // the calling agent's tool loop.
-                        if let Some(name) = reduced.tool_name.as_ref() {
-                            let args = reduced.tool_arguments.as_ref().unwrap_or(&Value::Null);
-                            (tool_call_response(name, args), true, attempts)
-                        } else {
-                            (chat_response(&reduced.payload), true, attempts)
-                        }
+                        (tool_proposal_response(&reduced, has_tools), true, attempts)
                     }
                     normalize::OutputKind::Uncertainty => {
                         (fallback_worker_response(outputs), true, attempts)
@@ -799,6 +801,22 @@ fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
     } else {
         chat_response(&answer)
     }
+}
+
+fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
+    if has_tools && let Some(name) = output.tool_name.as_ref() {
+        let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
+        return tool_call_response(name, args);
+    }
+
+    if output.payload.trim().is_empty() || normalize::is_silent_reply_sentinel(&output.payload) {
+        return error_response(
+            "MoA reducer returned no usable answer",
+            MOA_ERR_NO_USABLE_ANSWER,
+        );
+    }
+
+    chat_response(&output.payload)
 }
 
 /// Build a response body that signals MoA-level failure to the client.
@@ -984,6 +1002,43 @@ mod response_builder_tests {
             resp.pointer("/choices/0/finish_reason")
                 .and_then(Value::as_str),
             Some("error")
+        );
+    }
+
+    fn tool_proposal(payload: &str) -> WorkerOutput {
+        WorkerOutput {
+            kind: normalize::OutputKind::ToolProposal,
+            confidence: 0.8,
+            tool_name: Some("read_file".to_string()),
+            tool_arguments: Some(json!({"path": "README.md"})),
+            payload: payload.to_string(),
+            model: "reducer".to_string(),
+            role: WorkerRole::Reducer,
+            elapsed_ms: 1,
+        }
+    }
+
+    #[test]
+    fn tool_proposal_response_emits_tool_call_when_tools_enabled() {
+        let resp = tool_proposal_response(&tool_proposal("Need to read."), true);
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(Value::as_str),
+            Some("read_file")
+        );
+    }
+
+    #[test]
+    fn tool_proposal_response_does_not_emit_tool_call_when_tools_disabled() {
+        let resp = tool_proposal_response(&tool_proposal("I need to read README.md."), false);
+        assert!(
+            resp.pointer("/choices/0/message/tool_calls").is_none(),
+            "disabled tools must not leak tool_calls: {resp}"
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/content")
+                .and_then(Value::as_str),
+            Some("I need to read README.md.")
         );
     }
 
