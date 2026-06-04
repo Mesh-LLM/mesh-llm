@@ -591,25 +591,25 @@ async fn add_worker_backend(
     });
     if let Some(port) = local_port {
         let context_length = resolution.node.local_model_context_length(name).await;
-        if !context_selection::context_can_satisfy(resolution.required_tokens, context_length) {
+        if context_selection::context_can_satisfy(resolution.required_tokens, context_length) {
+            let backend_idx = backends.len();
+            backends.push(std::sync::Arc::new(LocalModelBackend {
+                port,
+                http: resolution.http.clone(),
+            }));
+            models.push(moa::ModelEntry {
+                name: name.to_string(),
+                backend_index: backend_idx,
+            });
+            *local_count += 1;
+            return true;
+        } else {
             tracing::info!(
                 "MoA: skipping local worker {name}; context {:?} cannot fit {:?} required tokens",
                 context_length,
                 resolution.required_tokens
             );
-            return false;
         }
-        let backend_idx = backends.len();
-        backends.push(std::sync::Arc::new(LocalModelBackend {
-            port,
-            http: resolution.http.clone(),
-        }));
-        models.push(moa::ModelEntry {
-            name: name.to_string(),
-            backend_index: backend_idx,
-        });
-        *local_count += 1;
-        return true;
     }
 
     // Otherwise find a remote host. hosts_for_model returns peers in

@@ -6195,7 +6195,7 @@ fn should_prefer_fast_auto_join(
     options: &RuntimeOptions,
     auto_join_candidates: &[(String, Option<String>)],
 ) -> bool {
-    options.client || !auto_join_candidates.is_empty()
+    options.client || (options.join.is_empty() && !auto_join_candidates.is_empty())
 }
 
 async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, node: &mesh::Node) {
@@ -11387,6 +11387,16 @@ mod tests {
         assert!(
             !should_prefer_fast_auto_join(&options, &[]),
             "explicit serve --join keeps the established serial join path"
+        );
+    }
+
+    #[test]
+    fn explicit_serve_join_ignores_discovered_fast_join_candidates() {
+        let options = runtime_options_for_test(&["mesh-llm", "serve", "--join", "tok-explicit"]);
+        let candidates = vec![("tok-from-discovery".to_string(), None)];
+        assert!(
+            !should_prefer_fast_auto_join(&options, &candidates),
+            "explicit serve --join should not be switched to discovery fast-probe"
         );
     }
 

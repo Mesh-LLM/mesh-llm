@@ -61,12 +61,6 @@ const MOA_PREAMBLE: &str = "\
 [Multiple models are analyzing this request in parallel. \
 Respond with your best answer or tool call. Be direct.]";
 
-/// Augment the agent's system prompt with the MoA preamble.
-/// If there's no system prompt, create one with just the preamble.
-fn augmented_system_prompt(session: &Session) -> String {
-    augmented_system_prompt_for_mode(session, true)
-}
-
 fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bool) -> String {
     match session.system_prompt() {
         Some(sp) => {
@@ -405,7 +399,7 @@ pub fn pack_for_tool_result_turn_selected(
     has_tools: bool,
     selected_tool_names: &[String],
 ) -> (Vec<Value>, Option<Value>) {
-    let system = augmented_system_prompt(session);
+    let system = augmented_system_prompt_for_mode(session, has_tools);
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
@@ -797,6 +791,32 @@ mod tests {
             tools[0].pointer("/function/name").and_then(Value::as_str),
             Some("read_file")
         );
+    }
+
+    #[test]
+    fn tool_result_reducer_strips_tool_guidance_when_tools_disabled() {
+        let s = session_with(
+            &[
+                system_msg(
+                    "You are helpful.\n## Tooling\ntool list goes here\n## Tool Call Style\ncall policy",
+                ),
+                user_msg("Answer without tools"),
+                assistant_tool_msg("call_read", "read_file", json!({"path": "/tmp/a"})),
+                tool_result_msg("call_read", "done"),
+            ],
+            Some(tools_two()),
+        );
+
+        let (messages, tools) = pack_for_tool_result_turn(&s, false);
+        let system = messages[0]
+            .get("content")
+            .and_then(Value::as_str)
+            .expect("system content");
+
+        assert!(tools.is_none());
+        assert!(system.contains("You are helpful."));
+        assert!(!system.contains("tool list goes here"));
+        assert!(!system.contains("call policy"));
     }
 
     #[test]

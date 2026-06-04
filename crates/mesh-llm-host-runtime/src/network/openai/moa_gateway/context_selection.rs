@@ -42,20 +42,22 @@ pub(in crate::network::openai) fn virtual_mesh_context_length(
     models: &[String],
     runtimes: &[mesh::ModelRuntimeDescriptor],
 ) -> Option<u32> {
-    let mut contexts = Vec::new();
+    let mut contexts_by_model = Vec::new();
     for model in models {
         if model == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME {
             continue;
         }
-        contexts.extend(
-            runtimes
-                .iter()
-                .filter(|runtime| runtime.model_name == *model)
-                .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length),
-        );
+        let context = runtimes
+            .iter()
+            .filter(|runtime| runtime.model_name == *model)
+            .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length)
+            .max();
+        if let Some(context) = context {
+            contexts_by_model.push(context);
+        }
     }
-    contexts.sort_unstable_by(|left, right| right.cmp(left));
-    contexts.get(1).copied()
+    contexts_by_model.sort_unstable_by(|left, right| right.cmp(left));
+    contexts_by_model.get(1).copied()
 }
 
 pub(in crate::network::openai) fn should_advertise_virtual_mesh(models: &[String]) -> bool {
@@ -100,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn virtual_mesh_context_uses_second_highest_known_contributor_context() {
+    fn virtual_mesh_context_uses_second_highest_known_model_context() {
         let models = vec![
             "small".to_string(),
             "large-a".to_string(),
@@ -114,6 +116,20 @@ mod tests {
         assert_eq!(
             virtual_mesh_context_length(&models, &runtimes),
             Some(131_072)
+        );
+    }
+
+    #[test]
+    fn virtual_mesh_context_counts_each_model_once() {
+        let models = vec!["small".to_string(), "large".to_string()];
+        let runtimes = vec![
+            runtime("large", Some(131_072)),
+            runtime("large", Some(131_072)),
+            runtime("small", Some(16_384)),
+        ];
+        assert_eq!(
+            virtual_mesh_context_length(&models, &runtimes),
+            Some(16_384)
         );
     }
 
