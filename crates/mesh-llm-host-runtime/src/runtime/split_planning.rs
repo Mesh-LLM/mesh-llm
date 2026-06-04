@@ -11,6 +11,7 @@ use super::local::{SplitParticipant, SplitParticipantExclusion};
 // recommendedMaxWorkingSetSize on macOS).  No additional headroom deduction.
 const RUNTIME_NODE_HEADROOM_NUMERATOR: u64 = 0;
 const RUNTIME_NODE_HEADROOM_DENOMINATOR: u64 = 10;
+const DEFAULT_TARGET_DECODE_TPOT_MS: u32 = 33;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyPlanInput {
@@ -20,6 +21,7 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) kv_bytes_per_token: u64,
     pub(super) context_length_override: Option<u32>,
     pub(super) parallel_lanes_override: Option<usize>,
+    pub(super) target_decode_tpot_ms: Option<u32>,
     pub(super) minimum_nodes: usize,
     pub(super) nodes: Vec<SplitTopologyPlanNode>,
 }
@@ -30,12 +32,15 @@ pub(super) struct SplitTopologyPlanNode {
     pub(super) detected_vram_bytes: u64,
     pub(super) max_vram_bytes: Option<u64>,
     pub(super) runtime_headroom_bytes: u64,
+    pub(super) stage_transfer_latency_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyPlan {
     pub(super) context_length: u32,
     pub(super) parallel_lanes: usize,
+    pub(super) estimated_decode_network_ms_per_token: Option<u32>,
+    pub(super) decode_tpot_target_met: Option<bool>,
     pub(super) stages: Vec<TopologyStagePlan>,
 }
 
@@ -79,16 +84,20 @@ pub(super) fn plan_split_topology(input: SplitTopologyPlanInput) -> Result<Split
                 detected_vram_bytes: node.detected_vram_bytes,
                 max_vram_bytes: node.max_vram_bytes,
                 runtime_headroom_bytes: node.runtime_headroom_bytes,
+                stage_transfer_latency_ms: node.stage_transfer_latency_ms,
             })
             .collect(),
         context_length_override: input.context_length_override,
         parallel_lanes_override: input.parallel_lanes_override,
+        target_decode_tpot_ms: input.target_decode_tpot_ms,
     })
     .context("plan skippy split topology")?;
 
     Ok(SplitTopologyPlan {
         context_length: plan.context_length,
         parallel_lanes: plan.parallel_lanes,
+        estimated_decode_network_ms_per_token: plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met: plan.decode_tpot_target_met,
         stages: plan.stages,
     })
 }
@@ -151,6 +160,8 @@ pub(super) fn plan_runtime_slice_topology_with_resources(
         model_ref,
         context_length = plan.context_length,
         slots = plan.parallel_lanes,
+        estimated_decode_network_ms_per_token = plan.estimated_decode_network_ms_per_token,
+        decode_tpot_target_met = plan.decode_tpot_target_met,
         stages = ?split_stage_plan_labels(&stages),
         "planned resource-aware split runtime topology"
     );
@@ -214,6 +225,7 @@ fn runtime_slice_plan_input(
         kv_bytes_per_token: resources.kv_bytes_per_token,
         context_length_override: resources.ctx_size_override,
         parallel_lanes_override: resources.parallel_override,
+        target_decode_tpot_ms: Some(DEFAULT_TARGET_DECODE_TPOT_MS),
         minimum_nodes: super::local::SPLIT_DEFAULT_MIN_PARTICIPANTS,
         nodes: participants
             .iter()
@@ -222,6 +234,7 @@ fn runtime_slice_plan_input(
                 detected_vram_bytes: participant.vram_bytes,
                 max_vram_bytes: Some(participant.vram_bytes),
                 runtime_headroom_bytes: default_runtime_headroom_bytes(participant.vram_bytes),
+                stage_transfer_latency_ms: participant.rtt_ms,
             })
             .collect(),
     }
@@ -545,6 +558,12 @@ mod tests {
         SplitParticipant::new(make_id(seed), vram_bytes, None)
     }
 
+    fn participant_with_rtt(seed: u8, vram_bytes: u64, rtt_ms: u32) -> SplitParticipant {
+        let mut participant = participant(seed, vram_bytes);
+        participant.rtt_ms = Some(rtt_ms);
+        participant
+    }
+
     #[test]
     fn default_runtime_headroom_is_zero() {
         assert_eq!(default_runtime_headroom_bytes(100), 0);
@@ -613,6 +632,36 @@ mod tests {
         assert!(plan.slots > 0);
         assert_eq!(plan.stages.first().unwrap().layer_start, 0);
         assert_eq!(plan.stages.last().unwrap().layer_end, 30);
+    }
+
+    #[test]
+    fn resource_planner_prefers_lower_tpot_stage_count_from_participant_rtt() {
+        let participants = vec![
+            participant_with_rtt(1, 23_000_000_000, 10),
+            participant_with_rtt(2, 23_000_000_000, 10),
+            participant_with_rtt(3, 23_000_000_000, 10),
+            participant_with_rtt(4, 23_000_000_000, 10),
+        ];
+
+        let plan = plan_runtime_slice_topology_with_resources(
+            "topology-test",
+            "model-a",
+            &package(40, 40_000_000_000),
+            &participants,
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 262_144,
+                kv_bytes_per_token: 64 * 1024,
+                ctx_size_override: None,
+                parallel_override: None,
+            },
+        )
+        .expect("latency-aware runtime topology");
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.stages.first().unwrap().layer_start, 0);
+        assert_eq!(plan.stages.last().unwrap().layer_end, 40);
     }
 
     #[test]

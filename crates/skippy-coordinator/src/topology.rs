@@ -17,6 +17,7 @@ pub struct TopologyPlanningInput {
     pub nodes: Vec<TopologyNode>,
     pub context_length_override: Option<u32>,
     pub parallel_lanes_override: Option<usize>,
+    pub target_decode_tpot_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -25,6 +26,7 @@ pub struct TopologyNode {
     pub detected_vram_bytes: u64,
     pub max_vram_bytes: Option<u64>,
     pub runtime_headroom_bytes: u64,
+    pub stage_transfer_latency_ms: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,6 +34,8 @@ pub struct TopologyPlan {
     pub context_length: u32,
     pub parallel_lanes: usize,
     pub stages: Vec<TopologyStagePlan>,
+    pub estimated_decode_network_ms_per_token: Option<u32>,
+    pub decode_tpot_target_met: Option<bool>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -77,27 +81,44 @@ pub fn plan_topology(input: &TopologyPlanningInput) -> Result<TopologyPlan, Topo
     )?;
     let lane_candidates = parallel_lane_candidates(input.parallel_lanes_override)?;
     let nodes = usable_nodes(&input.nodes);
+    let latency_aware = latency_aware_planning(input, &nodes);
 
     let minimum_nodes = input.minimum_nodes.max(1);
+    let mut best_latency_candidate: Option<CandidatePlan> = None;
     for context_length in context_candidates {
         for node_count in minimum_nodes..=nodes.len().min(input.layer_count as usize) {
             for parallel_lanes in lane_candidates.iter().copied() {
                 let mut best_for_count: Option<CandidatePlan> = None;
                 for_each_node_subset(&nodes, node_count, |subset| {
-                    if let Some(candidate) =
+                    let Some(candidate) =
                         fit_candidate(input, subset, context_length, parallel_lanes)
-                        && best_for_count
-                            .as_ref()
-                            .is_none_or(|current| candidate.cmp(current) == Ordering::Greater)
+                    else {
+                        return;
+                    };
+                    if best_for_count
+                        .as_ref()
+                        .is_none_or(|current| candidate_better_for_same_shape(&candidate, current))
                     {
                         best_for_count = Some(candidate);
                     }
                 });
                 if let Some(candidate) = best_for_count {
+                    if latency_aware {
+                        if best_latency_candidate.as_ref().is_none_or(|current| {
+                            latency_candidate_better(&candidate, current, input)
+                        }) {
+                            best_latency_candidate = Some(candidate);
+                        }
+                        continue;
+                    }
                     return Ok(candidate.plan);
                 }
             }
         }
+    }
+
+    if let Some(candidate) = best_latency_candidate {
+        return Ok(candidate.plan);
     }
 
     Err(TopologyPlanError::NoValidTopology { minimum_context })
@@ -175,6 +196,7 @@ pub fn minimum_valid_context(native_context: u32) -> u32 {
 struct UsableNode {
     node_id: String,
     usable_vram_bytes: u64,
+    stage_transfer_latency_ms: Option<u32>,
 }
 
 fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
@@ -188,6 +210,7 @@ fn usable_nodes(nodes: &[TopologyNode]) -> Vec<UsableNode> {
             UsableNode {
                 node_id: node.node_id.clone(),
                 usable_vram_bytes: capped.saturating_sub(node.runtime_headroom_bytes),
+                stage_transfer_latency_ms: node.stage_transfer_latency_ms,
             }
         })
         .collect::<Vec<_>>();
@@ -356,15 +379,96 @@ fn fit_candidate(
         next_layer = layer_end;
     }
 
-    (next_layer == input.layer_count).then_some(CandidatePlan {
+    if next_layer != input.layer_count {
+        return None;
+    }
+
+    let estimated_decode_network_ms_per_token = estimate_decode_network_ms_per_token(nodes);
+    Some(CandidatePlan {
         plan: TopologyPlan {
             context_length,
             parallel_lanes,
             stages,
+            estimated_decode_network_ms_per_token,
+            decode_tpot_target_met: decode_tpot_target_met(
+                estimated_decode_network_ms_per_token,
+                input.target_decode_tpot_ms,
+            ),
         },
         minimum_remaining_vram,
         total_remaining_vram,
     })
+}
+
+fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
+    nodes
+        .iter()
+        .any(|node| node.stage_transfer_latency_ms.is_some())
+}
+
+fn candidate_better_for_same_shape(candidate: &CandidatePlan, current: &CandidatePlan) -> bool {
+    let candidate_estimate = candidate
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    let current_estimate = current
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    candidate_estimate < current_estimate
+        || (candidate_estimate == current_estimate && candidate.cmp(current) == Ordering::Greater)
+}
+
+fn latency_candidate_better(
+    candidate: &CandidatePlan,
+    current: &CandidatePlan,
+    input: &TopologyPlanningInput,
+) -> bool {
+    latency_candidate_ordering(candidate, current, input) == Ordering::Greater
+}
+
+fn latency_candidate_ordering(
+    left: &CandidatePlan,
+    right: &CandidatePlan,
+    input: &TopologyPlanningInput,
+) -> Ordering {
+    let left_estimate = left
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    let right_estimate = right
+        .plan
+        .estimated_decode_network_ms_per_token
+        .unwrap_or_default();
+    let left_target_met = decode_tpot_target_met(
+        left.plan.estimated_decode_network_ms_per_token,
+        input.target_decode_tpot_ms,
+    )
+    .unwrap_or(true);
+    let right_target_met = decode_tpot_target_met(
+        right.plan.estimated_decode_network_ms_per_token,
+        input.target_decode_tpot_ms,
+    )
+    .unwrap_or(true);
+
+    left_target_met
+        .cmp(&right_target_met)
+        .then_with(|| right_estimate.cmp(&left_estimate))
+        .then_with(|| left.plan.context_length.cmp(&right.plan.context_length))
+        .then_with(|| left.plan.parallel_lanes.cmp(&right.plan.parallel_lanes))
+        .then_with(|| left.cmp(right))
+}
+
+fn estimate_decode_network_ms_per_token(nodes: &[UsableNode]) -> Option<u32> {
+    let hop_latency = nodes
+        .iter()
+        .filter_map(|node| node.stage_transfer_latency_ms)
+        .max()?;
+    Some(hop_latency.saturating_mul(nodes.len() as u32))
+}
+
+fn decode_tpot_target_met(estimate: Option<u32>, target: Option<u32>) -> Option<bool> {
+    Some(estimate? <= target?)
 }
 
 fn candidate_bytes_per_layer(
@@ -400,6 +504,14 @@ mod tests {
             detected_vram_bytes: gib * GIB,
             max_vram_bytes: None,
             runtime_headroom_bytes: 0,
+            stage_transfer_latency_ms: None,
+        }
+    }
+
+    fn latency_node(id: &str, gib: u64, stage_transfer_latency_ms: u32) -> TopologyNode {
+        TopologyNode {
+            stage_transfer_latency_ms: Some(stage_transfer_latency_ms),
+            ..node(id, gib)
         }
     }
 
@@ -413,6 +525,7 @@ mod tests {
             nodes,
             context_length_override: None,
             parallel_lanes_override: None,
+            target_decode_tpot_ms: None,
         }
     }
 
@@ -426,6 +539,7 @@ mod tests {
             nodes,
             context_length_override: None,
             parallel_lanes_override: None,
+            target_decode_tpot_ms: None,
         }
     }
 
@@ -445,6 +559,7 @@ mod tests {
             // Metal recommendedMaxWorkingSetSize is already the usable budget
             // reported by the local runtime.
             runtime_headroom_bytes: 0,
+            stage_transfer_latency_ms: None,
         }
     }
 
@@ -509,6 +624,43 @@ mod tests {
             .find(|stage| stage.node_id == "capped")
             .unwrap();
         assert!(capped_stage.layer_end - capped_stage.layer_start < 20);
+    }
+
+    #[test]
+    fn latency_aware_planner_prefers_lower_tpot_over_native_context() {
+        let mut request = input(vec![
+            latency_node("a", 23, 10),
+            latency_node("b", 23, 10),
+            latency_node("c", 23, 10),
+            latency_node("d", 23, 10),
+        ]);
+        request.native_context_length = 262_144;
+        request.minimum_nodes = 2;
+        request.target_decode_tpot_ms = Some(33);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 2);
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(20));
+        assert_eq!(plan.decode_tpot_target_met, Some(true));
+    }
+
+    #[test]
+    fn latency_aware_planner_reports_target_miss_when_memory_requires_more_stages() {
+        let mut request = qwen_coder_480b_input(qwen_nodes(4, 80));
+        request
+            .nodes
+            .iter_mut()
+            .for_each(|node| node.stage_transfer_latency_ms = Some(10));
+        request.target_decode_tpot_ms = Some(33);
+
+        let plan = plan_topology(&request).unwrap();
+
+        assert_eq!(plan.context_length, 65_536);
+        assert_eq!(plan.stages.len(), 4);
+        assert_eq!(plan.estimated_decode_network_ms_per_token, Some(40));
+        assert_eq!(plan.decode_tpot_target_met, Some(false));
     }
 
     #[test]
