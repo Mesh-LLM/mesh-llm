@@ -481,6 +481,21 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
+      - name: Disable missing sccache wrapper
+        run: |
+          if command -v sccache >/dev/null 2>&1; then
+            sccache --version
+            exit 0
+          fi
+
+          echo "::warning::sccache is not available in this Linux test container; running without Rust compiler cache"
+          {
+            echo "MESH_LLM_REQUIRE_SCCACHE=0"
+            echo "RUSTC_WRAPPER="
+            echo "LLAMA_STAGE_USE_SCCACHE=0"
+            echo "SKIPPY_USE_SCCACHE=0"
+          } >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
@@ -586,6 +601,11 @@ jobs:
       - name: Show sccache stats
         if: ${{ always() }}
         run: |
+          if ! command -v sccache >/dev/null 2>&1; then
+            echo "sccache not available; stats skipped"
+            exit 0
+          fi
+
           sccache --show-stats || true
           requests="$(sccache --show-stats 2>/dev/null | awk '/Compile requests/ { print $3; exit }')"
           if [ "${requests:-0}" = "0" ]; then
