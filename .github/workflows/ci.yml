@@ -336,6 +336,7 @@ jobs:
       - name: Skippy smoke tests
         timeout-minutes: 45
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
         run: scripts/skippy-ci-smoke.sh
 
