@@ -700,7 +700,7 @@ implementation gate.
 
 ## Control-Plane Protocol (Protobuf v1)
 
-The control plane uses QUIC ALPN `mesh-llm/1` with the `meshllm.node.v1` protobuf schema. Scoped control-plane streams use 4-byte LE framing followed by protobuf bytes. Skippy control/artifact streams are advertised through gossip subprotocol features and run through mesh `STREAM_SUBPROTOCOL` (0x0d); activation transport stays on `skippy-stage/1`.
+The control plane uses QUIC ALPN `mesh-llm/1` with the `meshllm.node.v1` protobuf schema. Scoped control-plane streams use 4-byte LE framing followed by protobuf bytes. Skippy control/artifact streams are advertised through gossip subprotocol features and run through mesh `STREAM_SUBPROTOCOL` (0x0d); activation transport stays on `skippy-stage/2`.
 
 | Stream | Type | Format |
 |--------|------|--------|
@@ -733,15 +733,12 @@ For a layer-package split where the coordinator already has the HF package
 cached and a worker does not:
 
 - Current/current mesh: the worker may use mesh `STREAM_SUBPROTOCOL` (0x0d)
-  to open `skippy-stage/1`, then Skippy artifact-transfer stream 0x03, to
+  to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
-- Rolling-update compatibility: nodes should still accept the legacy
-  `skippy-stage/1` artifact-transfer stream from an already-running pre-update
-  peer, but new outbound artifact transfer should use `STREAM_SUBPROTOCOL`.
-- Current/released mixed mesh: a released coordinator without
-  advertised `skippy-stage/1` `artifact-transfer` support must not be dialed
-  for artifact transfer; the worker must fall back to local/HF package
-  resolution.
+- Current/released mixed mesh: a released coordinator without advertised
+  `skippy-stage/2` `artifact-transfer`, `stage-generation-3`, and
+  `direct-prediction-return` support must not be selected for a generation-3
+  split topology; the worker must fall back to local/HF package resolution.
 - Default public-mesh safety: with `MESH_LLM_ARTIFACT_TRANSFER` unset, the node
   must advertise no `artifact-transfer` feature, reject inbound artifact
   transfer requests, and continue through local/HF fallback resolution.

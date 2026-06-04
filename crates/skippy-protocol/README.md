@@ -12,7 +12,7 @@ bindings.
 transfer, and activation transport. Mesh owns admission, subprotocol discovery,
 connectivity, and stream muxing; Skippy owns the protobuf schema and semantics.
 Control and artifact frames are carried through the mesh `STREAM_SUBPROTOCOL`
-envelope, while activation transport remains on `skippy-stage/1` between
+envelope, while activation transport remains on `skippy-stage/2` between
 neighboring stage servers.
 
 ```mermaid

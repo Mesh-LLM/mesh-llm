@@ -192,7 +192,7 @@ Skippy owns:
   wire encoding;
 - Skippy control/artifact payload semantics carried through the mesh-owned
   `STREAM_SUBPROTOCOL` envelope;
-- the `skippy-stage/1` QUIC ALPN for latency-sensitive activation transport;
+- the `skippy-stage/2` QUIC ALPN for latency-sensitive activation transport;
 - layer package loading/materialization;
 - topology planning primitives and family capability policy;
 - backend telemetry emitted by runtime/stage execution.
@@ -814,9 +814,9 @@ activation semantics.
 
 Skippy control and package-artifact streams ride over the admitted `mesh-llm/1`
 connection with mesh stream `STREAM_SUBPROTOCOL`, a length-prefixed
-`MeshSubprotocolOpen { name: "skippy-stage", major: 1 }`, then a Skippy-owned
+`MeshSubprotocolOpen { name: "skippy-stage", major: 2 }`, then a Skippy-owned
 stream kind and length-prefixed `skippy-protocol` protobuf frame. Activation
-transport stays on the `skippy-stage/1` QUIC ALPN and switches to raw
+transport stays on the `skippy-stage/2` QUIC ALPN and switches to raw
 activation bytes after the `StageTransportOpen` frame.
 
 ### 9. Replace Split Serving
