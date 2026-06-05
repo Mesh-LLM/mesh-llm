@@ -14,29 +14,111 @@ pub(super) fn embedded_decode_message(
     wire_dtype: WireActivationDType,
     args: DecodeMessageArgs,
 ) -> OpenAiResult<StageWireMessage> {
-    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
-    state.seq_id = 0;
-    state.prompt_token_count = i32::try_from(args.prompt_token_count)
-        .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
-    state.decode_step = i32::try_from(args.decode_step)
-        .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
-    state.current_token = args.current;
-    state.source_stage_index = -1;
-    Ok(StageWireMessage {
-        kind: WireMessageKind::DecodeEmbd,
-        pos_start: i32::try_from(args.pos_start)
-            .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?,
-        token_count: 1,
-        state,
-        request_id: args.request_id,
-        session_id: args.session_id,
-        sampling: args.sampling,
-        chat_sampling_metadata: None,
-        tokens: vec![args.current],
-        positions: Vec::new(),
-        activation: Vec::new(),
-        raw_bytes: Vec::new(),
-    })
+    let mut message = ReusableDecodeMessage::new(
+        wire_dtype,
+        ReusableDecodeMessageArgs {
+            request_id: args.request_id,
+            session_id: args.session_id,
+            prompt_token_count: args.prompt_token_count,
+            base_pos_start: args.pos_start,
+            sampling: args.sampling,
+            sideband_capacity: 1,
+        },
+    )?;
+    message.update_at_pos(
+        args.decode_step,
+        args.pos_start,
+        args.current,
+        &[args.current],
+    )?;
+    Ok(message.into_message())
+}
+
+pub(super) struct ReusableDecodeMessageArgs {
+    pub(super) request_id: u64,
+    pub(super) session_id: u64,
+    pub(super) prompt_token_count: usize,
+    pub(super) base_pos_start: usize,
+    pub(super) sampling: Option<WireSamplingConfig>,
+    pub(super) sideband_capacity: usize,
+}
+
+pub(super) struct ReusableDecodeMessage {
+    message: StageWireMessage,
+    base_pos_start: usize,
+}
+
+impl ReusableDecodeMessage {
+    pub(super) fn new(
+        wire_dtype: WireActivationDType,
+        args: ReusableDecodeMessageArgs,
+    ) -> OpenAiResult<Self> {
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
+        state.seq_id = 0;
+        state.prompt_token_count = i32::try_from(args.prompt_token_count)
+            .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
+        state.source_stage_index = -1;
+        Ok(Self {
+            message: StageWireMessage {
+                kind: WireMessageKind::DecodeEmbd,
+                pos_start: i32::try_from(args.base_pos_start)
+                    .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?,
+                token_count: 1,
+                state,
+                request_id: args.request_id,
+                session_id: args.session_id,
+                sampling: args.sampling,
+                chat_sampling_metadata: None,
+                tokens: Vec::with_capacity(args.sideband_capacity.max(1)),
+                positions: Vec::new(),
+                activation: Vec::new(),
+                raw_bytes: Vec::new(),
+            },
+            base_pos_start: args.base_pos_start,
+        })
+    }
+
+    pub(super) fn update(
+        &mut self,
+        decode_step: usize,
+        current: i32,
+    ) -> OpenAiResult<&StageWireMessage> {
+        self.update_with_tokens(decode_step, current, &[current])
+    }
+
+    pub(super) fn update_with_tokens(
+        &mut self,
+        decode_step: usize,
+        current: i32,
+        tokens: &[i32],
+    ) -> OpenAiResult<&StageWireMessage> {
+        let pos_start = self
+            .base_pos_start
+            .checked_add(decode_step)
+            .ok_or_else(|| OpenAiError::backend("decode position overflow"))?;
+        self.update_at_pos(decode_step, pos_start, current, tokens)
+    }
+
+    fn update_at_pos(
+        &mut self,
+        decode_step: usize,
+        pos_start: usize,
+        current: i32,
+        tokens: &[i32],
+    ) -> OpenAiResult<&StageWireMessage> {
+        self.message.pos_start = i32::try_from(pos_start)
+            .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?;
+        self.message.state.decode_step = i32::try_from(decode_step)
+            .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
+        self.message.state.current_token = current;
+        self.message.tokens.clear();
+        self.message.tokens.extend_from_slice(tokens);
+        Ok(&self.message)
+    }
+
+    fn into_message(self) -> StageWireMessage {
+        self.message
+    }
 }
 
 pub(super) struct VerifySpanMessageArgs<'a> {
