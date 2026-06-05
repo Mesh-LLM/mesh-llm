@@ -18,6 +18,7 @@ use skippy_protocol::binary::{
     StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind, recv_ready, recv_reply,
     write_stage_message,
 };
+use skippy_protocol::{LoadMode, StageTopology, StageTopologyEntry};
 use skippy_runtime::{
     RuntimeConfig, RuntimeLoadMode, StageModel,
     package::{PackageStageRequest, materialize_layer_package_details},
@@ -33,6 +34,8 @@ use crate::{
     model_identity::model_identity_for_path,
     support::{ChildGuard, parse_wire_dtype, retry},
 };
+
+use crate::direct_return::BenchDirectReturnServer;
 
 struct DistributedRunOutcome {
     run_id: String,
@@ -184,6 +187,8 @@ struct DeploymentPlan {
     work_dir: PathBuf,
     metrics_http: String,
     metrics_otlp_grpc: String,
+    driver_return_bind_addr: String,
+    driver_return_endpoint: String,
     stages: Vec<StageAssignment>,
     execute_remote: bool,
     keep_remote: bool,
@@ -331,6 +336,7 @@ fn run_distributed_collect(args: RunArgs) -> Result<DistributedRunOutcome> {
     let run_id = args.run_id.clone().unwrap_or_else(generate_bench_run_id);
     let run_dir = args.work_dir.join(&run_id);
     let config_dir = run_dir.join("configs");
+    let topology_path = config_dir.join("topology.json");
     fs::create_dir_all(&config_dir)
         .with_context(|| format!("create benchmark work dir {}", config_dir.display()))?;
 
@@ -352,6 +358,7 @@ fn run_distributed_collect(args: RunArgs) -> Result<DistributedRunOutcome> {
         fallback_model_identity,
     )?;
     write_stage_configs(&args, &plan, &model_ref)?;
+    write_stage_topology(&args, &plan, &topology_path)?;
     write_json_file(&run_dir.join("deployment-plan.json"), &plan)?;
 
     let client = Client::builder()
@@ -1068,6 +1075,8 @@ fn build_deployment_plan(
         work_dir: args.work_dir.clone(),
         metrics_http,
         metrics_otlp_grpc: metrics_otlp,
+        driver_return_bind_addr: driver_return_bind_addr(args),
+        driver_return_endpoint: driver_return_endpoint(args, &stages)?,
         stages,
         execute_remote: args.execute_remote,
         keep_remote: args.keep_remote,
@@ -1116,12 +1125,7 @@ fn write_stage_configs(args: &RunArgs, plan: &DeploymentPlan, model_ref: &str) -
         } else {
             model_ref.to_string()
         };
-        let config_load_mode =
-            if stage.remote_model_path.is_some() && args.stage_load_mode == "layer-package" {
-                "artifact-slice"
-            } else {
-                args.stage_load_mode.as_str()
-            };
+        let config_load_mode = stage_config_load_mode(args, stage);
         let upstream = if stage.stage_index == 0 {
             json!(null)
         } else {
@@ -1167,6 +1171,86 @@ fn write_stage_configs(args: &RunArgs, plan: &DeploymentPlan, model_ref: &str) -
     Ok(())
 }
 
+fn write_stage_topology(args: &RunArgs, plan: &DeploymentPlan, topology_path: &Path) -> Result<()> {
+    let topology = StageTopology {
+        topology_id: plan.topology_id.clone(),
+        model_id: plan.model_id.clone(),
+        stages: plan
+            .stages
+            .iter()
+            .map(|stage| {
+                Ok(StageTopologyEntry {
+                    stage_id: stage.stage_id.clone(),
+                    stage_index: stage.stage_index,
+                    host: Some(stage.host.clone()),
+                    endpoint: if stage.stage_index == 0 {
+                        format!("tcp://{}", plan.driver_return_endpoint)
+                    } else {
+                        stage.endpoint.clone()
+                    },
+                    layer_start: stage.layer_start,
+                    layer_end: stage.layer_end,
+                    load_mode: parse_load_mode(stage_config_load_mode(args, stage))?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    write_json_file(topology_path, &topology)
+}
+
+fn stage_config_load_mode<'a>(args: &'a RunArgs, stage: &StageAssignment) -> &'a str {
+    if stage.remote_model_path.is_some() && args.stage_load_mode == "layer-package" {
+        "artifact-slice"
+    } else {
+        args.stage_load_mode.as_str()
+    }
+}
+
+fn parse_load_mode(load_mode: &str) -> Result<LoadMode> {
+    match load_mode {
+        "artifact-slice" => Ok(LoadMode::ArtifactSlice),
+        "layer-package" => Ok(LoadMode::LayerPackage),
+        "runtime-slice" => Ok(LoadMode::RuntimeSlice),
+        _ => bail!("unsupported stage load mode for topology: {load_mode}"),
+    }
+}
+
+fn driver_return_bind_addr(args: &RunArgs) -> String {
+    format!("0.0.0.0:{}", driver_return_port(args))
+}
+
+fn driver_return_endpoint(args: &RunArgs, stages: &[StageAssignment]) -> Result<String> {
+    let first = stages.first().context("deployment plan has no stages")?;
+    let endpoint = first
+        .endpoint
+        .strip_prefix("tcp://")
+        .unwrap_or(&first.endpoint);
+    let host = endpoint_host(endpoint)?;
+    let host = if host == "localhost" {
+        "127.0.0.1"
+    } else {
+        host
+    };
+    Ok(format!("{host}:{}", driver_return_port(args)))
+}
+
+fn endpoint_host(endpoint: &str) -> Result<&str> {
+    if let Some(rest) = endpoint.strip_prefix('[') {
+        let (host, _) = rest
+            .split_once(']')
+            .with_context(|| format!("invalid bracketed endpoint host: {endpoint}"))?;
+        return Ok(host);
+    }
+    endpoint
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .with_context(|| format!("endpoint is missing port: {endpoint}"))
+}
+
+fn driver_return_port(args: &RunArgs) -> u16 {
+    args.first_stage_port.saturating_add(1000).max(1)
+}
+
 fn execute_remote_plan(args: &RunArgs, plan: &DeploymentPlan) -> Result<Vec<ChildGuard>> {
     let mut sessions = Vec::with_capacity(plan.stages.len());
     let mut started_stages = Vec::with_capacity(plan.stages.len());
@@ -1208,6 +1292,17 @@ fn execute_remote_plan(args: &RunArgs, plan: &DeploymentPlan) -> Result<Vec<Chil
                     .arg(format!("{}:{}", stage.host, stage.remote_config_path)),
             )
             .with_context(|| format!("rsync config to {}", stage.host))?;
+            run_command(
+                Command::new("rsync")
+                    .arg("-az")
+                    .arg(stage_topology_source_path(stage)?)
+                    .arg(format!(
+                        "{}:{}",
+                        stage.host,
+                        stage_remote_topology_path(stage)?
+                    )),
+            )
+            .with_context(|| format!("rsync topology to {}", stage.host))?;
 
             if args.rsync_model_artifacts {
                 rsync_model_artifacts(args, stage)?;
@@ -1270,6 +1365,19 @@ fn prepare_local_stage(args: &RunArgs, stage: &StageAssignment) -> Result<()> {
             stage.remote_config_path
         )
     })?;
+    fs::copy(
+        stage_topology_source_path(stage)?,
+        stage_remote_topology_path(stage)?,
+    )
+    .with_context(|| {
+        format!(
+            "copy local stage topology {} to {}",
+            stage_topology_source_path(stage)
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|_| "<unknown>".to_string()),
+            stage_remote_topology_path(stage).unwrap_or_else(|_| "<unknown>".to_string())
+        )
+    })?;
     if args.rsync_model_artifacts
         && let (Some(stage_model), Some(local_model)) = (
             args.stage_model.as_ref(),
@@ -1279,6 +1387,21 @@ fn prepare_local_stage(args: &RunArgs, stage: &StageAssignment) -> Result<()> {
         materialize_stage_model_on_coordinator(stage_model, stage, local_model)?;
     }
     Ok(())
+}
+
+fn stage_topology_source_path(stage: &StageAssignment) -> Result<PathBuf> {
+    let parent = stage
+        .config_path
+        .parent()
+        .context("stage config path has no parent")?;
+    Ok(parent.join("topology.json"))
+}
+
+fn stage_remote_topology_path(stage: &StageAssignment) -> Result<String> {
+    Ok(format!(
+        "{}/topology.json",
+        remote_parent(&stage.remote_config_path)?
+    ))
 }
 
 fn local_start_command(args: &RunArgs, plan: &DeploymentPlan, stage: &StageAssignment) -> String {
@@ -1307,7 +1430,7 @@ fn stage_start_wrapper(
     bin: &str,
     config_path: &str,
 ) -> String {
-    let stage_command = stage_server_command(args, plan, bin, config_path);
+    let stage_command = stage_server_command(args, plan, stage, bin, config_path);
     let exit_path = shell_quote(&stage.remote_exit_code_path);
     let log_path = shell_quote(&stage.remote_log_path);
     let pid_path = shell_quote(&stage.remote_pid_path);
@@ -1326,6 +1449,7 @@ fn stage_start_wrapper(
 fn stage_server_command(
     args: &RunArgs,
     plan: &DeploymentPlan,
+    stage: &StageAssignment,
     bin: &str,
     config_path: &str,
 ) -> String {
@@ -1343,9 +1467,12 @@ fn stage_server_command(
         .map(|mbps| format!(" --downstream-wire-mbps {mbps}"))
         .unwrap_or_default();
     format!(
-        "{} serve-binary --config {} --activation-width {} --activation-wire-dtype {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
+        "{} serve-binary --config {} --topology {} --activation-width {} --activation-wire-dtype {} --metrics-otlp-grpc {} --telemetry-queue-capacity {} --telemetry-level {} --max-inflight {}{}{} --downstream-wire-delay-ms {}{}",
         shell_quote(bin),
         shell_quote(config_path),
+        shell_quote(
+            &stage_remote_topology_path(stage).unwrap_or_else(|_| "topology.json".to_string())
+        ),
         args.activation_width,
         shell_quote(&args.activation_wire_dtype),
         shell_quote(&plan.metrics_otlp_grpc),
@@ -1457,6 +1584,7 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
     } else {
         Some(DriverTokenizer::open(args, plan)?)
     };
+    let direct_returns = BenchDirectReturnServer::start(&plan.driver_return_bind_addr)?;
 
     let mut results = Vec::with_capacity(prompt_cases.len());
     for (index, prompt_case) in prompt_cases.iter().enumerate() {
@@ -1469,8 +1597,15 @@ fn run_remote_prompt_driver(args: &RunArgs, plan: &DeploymentPlan) -> Result<Pro
                 .expect("tokenizer is present without explicit prompt tokens")
                 .tokenize(&prompt_case.prompt)?
         };
-        let mut result =
-            run_remote_prompt_case(args, first, wire_dtype, prompt_case, token_ids, index)?;
+        let mut result = run_remote_prompt_case(
+            args,
+            first,
+            wire_dtype,
+            prompt_case,
+            token_ids,
+            index,
+            &direct_returns,
+        )?;
         result.elapsed_ms = started.elapsed().as_millis();
         results.push(result);
     }
@@ -1569,6 +1704,7 @@ fn run_remote_prompt_case(
     prompt_case: &PromptCase,
     token_ids: Vec<i32>,
     prompt_index: usize,
+    direct_returns: &BenchDirectReturnServer,
 ) -> Result<PromptDriverResult> {
     if token_ids.is_empty() {
         bail!("prompt produced no tokens");
@@ -1585,6 +1721,15 @@ fn run_remote_prompt_case(
     let wire_started = Instant::now();
     let request_id = 10_000_u64 + prompt_index as u64;
     let session_id = 20_000_u64 + prompt_index as u64;
+    let direct_return = direct_returns.register(request_id, session_id)?;
+    send_generation_config(
+        &mut stream,
+        wire_dtype,
+        request_id,
+        session_id,
+        token_ids.len(),
+    )
+    .with_context(|| format!("send generation config for prompt {prompt_index}"))?;
     let prefill_token_count = token_ids.len().saturating_sub(1);
     let mut prefill_chunk_count = 0usize;
     let mut effective_chunk_size = None;
@@ -1646,12 +1791,11 @@ fn run_remote_prompt_case(
         write_stage_message(&mut stream, &message, wire_dtype).with_context(|| {
             format!("send remote decode step {decode_step} for prompt {prompt_index}")
         })?;
-        let reply = recv_reply(&mut stream).with_context(|| {
-            format!("receive remote decode step {decode_step} reply for prompt {prompt_index}")
-        })?;
-        if reply.kind != WireReplyKind::PredictedToken {
-            bail!("expected predicted-token reply, got {:?}", reply.kind);
-        }
+        let reply = direct_return
+            .recv_expected(WireReplyKind::PredictedToken)
+            .with_context(|| {
+                format!("receive direct decode step {decode_step} reply for prompt {prompt_index}")
+            })?;
         if decode_step == 0 {
             ttft_ms = wire_started.elapsed().as_millis();
         }
@@ -1722,6 +1866,29 @@ fn adaptive_prefill_chunk_size(args: &RunArgs, prefill_token_count: usize) -> Op
         }
     }
     selected.map(|(_, chunk_size)| chunk_size)
+}
+
+fn send_generation_config(
+    stream: &mut TcpStream,
+    wire_dtype: skippy_protocol::binary::WireActivationDType,
+    request_id: u64,
+    session_id: u64,
+    prompt_token_count: usize,
+) -> Result<()> {
+    let message = StageWireMessage::configure_generation(
+        wire_dtype,
+        request_id,
+        session_id,
+        i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
+        None,
+        None,
+    );
+    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
+    if reply.kind != WireReplyKind::Ack {
+        bail!("expected configure-generation ACK, got {:?}", reply.kind);
+    }
+    Ok(())
 }
 
 struct PrefillChunk<'a> {
@@ -3182,6 +3349,8 @@ mod tests {
             work_dir: PathBuf::from("/tmp/work"),
             metrics_http: "http://127.0.0.1:18080".to_string(),
             metrics_otlp_grpc: "http://coordinator.local:14317".to_string(),
+            driver_return_bind_addr: "0.0.0.0:20031".to_string(),
+            driver_return_endpoint: "host.local:20031".to_string(),
             stages: Vec::new(),
             execute_remote: true,
             keep_remote: false,

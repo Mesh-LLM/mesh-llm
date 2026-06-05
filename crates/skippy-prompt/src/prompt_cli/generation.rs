@@ -11,6 +11,7 @@ struct PromptRun<'a> {
     prompt_index: usize,
     prompt: &'a str,
     live_session: Option<&'a mut PromptLiveSession>,
+    direct_returns: &'a PromptDirectReturnServer,
 }
 
 fn run_prompt(run: PromptRun<'_>) -> Result<()> {
@@ -27,6 +28,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         prompt_index,
         prompt,
         mut live_session,
+        direct_returns,
     } = run;
 
     if args.prefill_chunk_size == 0 {
@@ -67,6 +69,9 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
     );
     let prompt_index_bytes = prompt_index.to_le_bytes();
     let request_id = stable_wire_id(&[session_id.as_bytes(), &prompt_index_bytes]);
+    let direct_return_timeout = Duration::from_secs(args.decode_timeout_secs.max(1));
+    let direct_return =
+        direct_returns.register(request_id, wire_session_id, direct_return_timeout)?;
 
     let mut session_reuse = PromptSessionReuseStats::default();
     let mut one_shot_stream = None;
@@ -177,6 +182,15 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
     stream.set_read_timeout(Some(io_timeout)).ok();
     stream.set_write_timeout(Some(io_timeout)).ok();
     let mut reply_stats = StageReplyStats::default();
+    let generation_config = send_generation_config(
+        stream,
+        wire_dtype,
+        request_id,
+        wire_session_id,
+        token_ids.len(),
+    )
+    .with_context(|| stage_chain_error_context(args))?;
+    reply_stats.merge(generation_config.stats);
     if should_try_exact_prefix_restore(live_enabled, prefill_start, prefill_token_count) {
         let restore_tokens = &token_ids[..prefill_token_count];
         eprintln!(
@@ -323,6 +337,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
                 prefill_token_count,
                 decode_index,
                 current,
+                &direct_return,
             )
             .with_context(|| stage_chain_error_context(args))?;
             decode_ms += reply.elapsed_ms;
@@ -370,6 +385,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             decode_index,
             &verify_inputs,
             true,
+            &direct_return,
         )
         .with_context(|| stage_chain_error_context(args))?;
         decode_ms += reply.elapsed_ms;
@@ -423,6 +439,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
                     prefill_token_count,
                     decode_index,
                     current,
+                    &direct_return,
                 )
                 .with_context(|| stage_chain_error_context(args))?;
                 commit_tokens = vec![repair.predicted];
@@ -444,6 +461,7 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
                     decode_index,
                     repair_inputs,
                     false,
+                    &direct_return,
                 )
                 .with_context(|| stage_chain_error_context(args))?;
                 commit_tokens = repaired_commit_tokens(
@@ -494,9 +512,10 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         }
         speculative_stats.adaptive_window_final = adaptive_window;
         if (decision.rejected() || reached_eog)
-            && let Some(draft) = draft.as_deref_mut() {
-                draft.reset_to_context(&context_tokens)?;
-            }
+            && let Some(draft) = draft.as_deref_mut()
+        {
+            draft.reset_to_context(&context_tokens)?;
+        }
         if reached_eog {
             break;
         }
@@ -525,13 +544,14 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
             &generated,
             &assistant_raw_text,
             generation_reached_eog,
-        ) {
-            live_rematerialize_failed = true;
-            eprintln!(
-                "warning: live transcript rematerialization failed after generation; \
+        )
+    {
+        live_rematerialize_failed = true;
+        eprintln!(
+            "warning: live transcript rematerialization failed after generation; \
                  the next prompt will reset the live session: {error:#}"
-            );
-        }
+        );
+    }
 
     if !live_enabled {
         stop_prompt_stream(stream, wire_dtype, request_id, wire_session_id, args)?;
@@ -556,10 +576,11 @@ fn run_prompt(run: PromptRun<'_>) -> Result<()> {
         }
         live.messages = live_messages;
         if let Some(last) = live.messages.last_mut()
-            && last.role == "user" {
-                live.messages
-                    .push(ChatTemplateMessage::new("assistant", &assistant_raw_text));
-            }
+            && last.role == "user"
+        {
+            live.messages
+                .push(ChatTemplateMessage::new("assistant", &assistant_raw_text));
+        }
         live.resident_tokens =
             live_transcript_tokens(tokenizer, chat_template_model, args, &live.messages)?;
         live.dirty = !generation_reached_eog || live_rematerialize_failed;

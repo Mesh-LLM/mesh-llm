@@ -75,11 +75,31 @@ impl StageOpenAiBackend {
                         .prompt_token_ids
                         .last()
                         .expect("checked non-empty prompt");
-                    if let Some(cached) = self.try_restore_embedded_split_full_prompt_first_token(
+                    if let Some(cached) = self.try_restore_embedded_split_exact_replay(
                         &request,
                         &session_key,
                         downstream,
                     )? {
+                        prefill_chain_cache_restored = true;
+                        prefill_chain_restored_tokens = request
+                            .prompt_token_ids
+                            .len()
+                            .saturating_add(cached.predicted_tokens.len().saturating_sub(1));
+                        prefill_chain_cache_stats = cached.reply_stats;
+                        cache_stats.cached_prompt_tokens =
+                            saturating_u32(request.prompt_token_ids.len());
+                        cache_stats.matched_prefix_tokens =
+                            saturating_u32(request.prompt_token_ids.len());
+                        cache_stats.suffix_prefill_tokens = 0;
+                        cache_stats.hit_kind = Some("chain_exact_replay");
+                        fused_first_decode = Some(cached);
+                    } else if let Some(cached) = self
+                        .try_restore_embedded_split_full_prompt_first_token(
+                            &request,
+                            &session_key,
+                            downstream,
+                        )?
+                    {
                         prefill_chain_cache_restored = true;
                         prefill_chain_restored_tokens = request.prompt_token_ids.len();
                         prefill_chain_cache_stats = cached.reply_stats;
@@ -534,28 +554,27 @@ impl StageOpenAiBackend {
             );
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
-            if let Some(message) = generation_config_message(
+            let message = generation_config_message(
                 request.wire_dtype,
                 request_id,
                 session_id,
                 request.prompt_token_ids.len(),
                 wire_sampling.clone(),
                 request.chat_sampling_metadata,
-            )? {
-                write_stage_message_conditioned(
-                    &mut *downstream,
-                    &message,
-                    request.wire_dtype,
-                    request.downstream_wire_condition,
-                )
-                .map_err(openai_io_error)?;
-                let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
-                if reply.kind != WireReplyKind::Ack {
-                    return Err(OpenAiError::backend(format!(
-                        "expected generation config ACK from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
+            )?;
+            write_stage_message_conditioned(
+                &mut *downstream,
+                &message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+            let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+            if reply.kind != WireReplyKind::Ack {
+                return Err(OpenAiError::backend(format!(
+                    "expected generation config ACK from downstream, got {:?}",
+                    reply.kind
+                )));
             }
 
             let decode_timer = PhaseTimer::start();
@@ -578,11 +597,11 @@ impl StageOpenAiBackend {
                 .last()
                 .expect("checked non-empty prompt");
             let mut context_tokens = request.prompt_token_ids.to_vec();
+            let mut exact_replay_tokens = Vec::new();
             let mut fused_reached_stop = false;
             if let Some(fused) = fused_first_decode.take() {
                 current = fused.predicted;
-                decoded_tokens = 1;
-                context_tokens.push(current);
+                decoded_tokens = fused.predicted_tokens.len();
                 decode_stage0_compute_ms += fused.execution.stage0_compute_ms;
                 decode_runtime_lock_wait_ms += fused.execution.runtime_lock_wait_ms;
                 decode_runtime_lock_wait_max_ms =
@@ -598,56 +617,104 @@ impl StageOpenAiBackend {
                     .saturating_add(fused.execution.forward_activation_bytes);
                 decode_forward_write_ms += fused.execution.forward_write_ms;
                 decode_downstream_wait_ms += fused.execution.downstream_wait_ms;
-                let mut token_attrs = self.openai_attrs(request.ids);
-                token_attrs.insert("llama_stage.decode_step".to_string(), json!(0));
-                token_attrs.insert(
-                    "llama_stage.decode_token_phase".to_string(),
-                    json!(fused.token_phase),
-                );
-                token_attrs.insert(
-                    "llama_stage.message_kind".to_string(),
-                    json!(fused.message_kind),
-                );
-                token_attrs.insert(
-                    "llama_stage.elapsed_ms".to_string(),
-                    json!(fused.elapsed_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.stage0_compute_ms".to_string(),
-                    json!(fused.execution.stage0_compute_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.runtime_lock_wait_ms".to_string(),
-                    json!(fused.execution.runtime_lock_wait_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.runtime_lock_hold_ms".to_string(),
-                    json!(fused.execution.runtime_lock_hold_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.output_activation_bytes".to_string(),
-                    json!(fused.execution.output_activation_bytes),
-                );
-                token_attrs.insert(
-                    "llama_stage.forward_activation_bytes".to_string(),
-                    json!(fused.execution.forward_activation_bytes),
-                );
-                token_attrs.insert(
-                    "llama_stage.activation_encode_ms".to_string(),
-                    json!(fused.execution.activation_encode_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.forward_write_ms".to_string(),
-                    json!(fused.execution.forward_write_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.downstream_wait_ms".to_string(),
-                    json!(fused.execution.downstream_wait_ms),
-                );
-                token_attrs.insert("llama_stage.predicted_token".to_string(), json!(current));
-                self.telemetry
-                    .emit_debug("stage.openai_decode_token", token_attrs);
-                fused_reached_stop = on_token(current)? == TokenControl::Stop;
+                for (index, token) in fused.predicted_tokens.iter().copied().enumerate() {
+                    current = token;
+                    exact_replay_tokens.push(current);
+                    context_tokens.push(current);
+                    let mut token_attrs = self.openai_attrs(request.ids);
+                    token_attrs.insert("llama_stage.decode_step".to_string(), json!(index));
+                    token_attrs.insert(
+                        "llama_stage.decode_token_phase".to_string(),
+                        json!(fused.token_phase),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.message_kind".to_string(),
+                        json!(fused.message_kind),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.elapsed_ms".to_string(),
+                        json!(if index == 0 { fused.elapsed_ms } else { 0.0 }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.cached_replay_token_index".to_string(),
+                        json!(index),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.cached_replay_token_count".to_string(),
+                        json!(fused.predicted_tokens.len()),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.stage0_compute_ms".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.stage0_compute_ms
+                        } else {
+                            0.0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.runtime_lock_wait_ms".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.runtime_lock_wait_ms
+                        } else {
+                            0.0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.runtime_lock_hold_ms".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.runtime_lock_hold_ms
+                        } else {
+                            0.0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.output_activation_bytes".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.output_activation_bytes
+                        } else {
+                            0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.forward_activation_bytes".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.forward_activation_bytes
+                        } else {
+                            0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.activation_encode_ms".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.activation_encode_ms
+                        } else {
+                            0.0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.forward_write_ms".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.forward_write_ms
+                        } else {
+                            0.0
+                        }),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.downstream_wait_ms".to_string(),
+                        json!(if index == 0 {
+                            fused.execution.downstream_wait_ms
+                        } else {
+                            0.0
+                        }),
+                    );
+                    token_attrs.insert("llama_stage.predicted_token".to_string(), json!(current));
+                    self.telemetry
+                        .emit_debug("stage.openai_decode_token", token_attrs);
+                    if on_token(current)? == TokenControl::Stop {
+                        fused_reached_stop = true;
+                        break;
+                    }
+                }
             }
             let max_speculative_window = request.speculative_window.max(1);
             let mut adaptive_window = if request.adaptive_speculative_window {
@@ -1026,10 +1093,11 @@ impl StageOpenAiBackend {
                     .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
                 state.current_token = current;
                 state.source_stage_index = -1;
-                let message_tokens =
-                    decode_sideband_tokens(decode_step, request.prompt_token_ids, current);
-                let records_full_prompt_sideband =
-                    message_tokens.len() == request.prompt_token_ids.len();
+                let message_tokens = decode_sideband_tokens(&context_tokens, current);
+                let records_replay_checkpoint =
+                    message_tokens.len() == context_tokens.len() && message_tokens.len() > 1;
+                let records_full_prompt_checkpoint =
+                    decode_step == 0 && message_tokens.len() == request.prompt_token_ids.len();
                 let message = StageWireMessage {
                     kind: WireMessageKind::DecodeEmbd,
                     pos_start: i32::try_from(prefill_token_count + decode_step as usize)
@@ -1105,16 +1173,32 @@ impl StageOpenAiBackend {
                 let forward_write_ms = write_timer.elapsed_ms();
                 decode_forward_write_ms += forward_write_ms;
                 let wait_timer = PhaseTimer::start();
-                let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+                let reply = request
+                    .prediction_return
+                    .as_ref()
+                    .ok_or_else(|| {
+                        OpenAiError::backend("missing direct prediction return receiver")
+                    })?
+                    .recv_expected(WireReplyKind::PredictedToken)
+                    .map_err(openai_backend_error)?;
                 let downstream_wait_ms = wait_timer.elapsed_ms();
                 decode_downstream_wait_ms += downstream_wait_ms;
-                if reply.kind != WireReplyKind::PredictedToken {
-                    return Err(OpenAiError::backend(format!(
-                        "expected predicted-token reply from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
-                if decode_step == 0 && records_full_prompt_sideband {
+                if records_replay_checkpoint
+                    && super::prefix_cache::request_allows_exact_replay(&request)
+                {
+                    self.record_embedded_stage0_replay_checkpoint(
+                        super::prefix_cache::EmbeddedReplayCheckpointRecord {
+                            session_id: &session_key,
+                            ids: request.ids,
+                            prompt_token_ids: request.prompt_token_ids,
+                            checkpoint_token_ids: &context_tokens,
+                            predicted_tokens: &exact_replay_tokens,
+                            predicted: reply.predicted,
+                            sampling: request.sampling,
+                            chat_sampling_metadata: request.chat_sampling_metadata,
+                        },
+                    )?;
+                } else if records_full_prompt_checkpoint {
                     self.record_embedded_stage0_full_prompt_first_token(
                         &session_key,
                         request.ids,
@@ -1124,6 +1208,7 @@ impl StageOpenAiBackend {
                 }
                 current = reply.predicted;
                 decoded_tokens += 1;
+                exact_replay_tokens.push(current);
                 context_tokens.push(current);
                 let mut token_attrs = self.openai_attrs(request.ids);
                 token_attrs.insert("llama_stage.decode_step".to_string(), json!(decode_step));
@@ -1301,12 +1386,11 @@ impl StageOpenAiBackend {
     }
 }
 
-fn decode_sideband_tokens(decode_step: u32, prompt_token_ids: &[i32], current: i32) -> Vec<i32> {
-    if decode_step == 0
-        && prompt_token_ids.len() <= skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES
-        && prompt_token_ids.last().copied() == Some(current)
+fn decode_sideband_tokens(context_token_ids: &[i32], current: i32) -> Vec<i32> {
+    if context_token_ids.len() <= skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES
+        && context_token_ids.last().copied() == Some(current)
     {
-        return prompt_token_ids.to_vec();
+        return context_token_ids.to_vec();
     }
     vec![current]
 }

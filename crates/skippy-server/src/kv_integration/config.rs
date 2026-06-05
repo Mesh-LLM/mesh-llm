@@ -56,6 +56,7 @@ impl KvStageIntegration {
                 cache_config.max_bytes,
             ))),
             first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
+            replay_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         }))
     }
 }

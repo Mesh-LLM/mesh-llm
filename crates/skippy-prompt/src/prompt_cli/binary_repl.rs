@@ -108,6 +108,11 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
         format_prompt_max_new_tokens(args.max_new_tokens),
         args.prefill_chunk_size
     );
+    let direct_returns = PromptDirectReturnServer::start(args.direct_return_bind_addr)?;
+    eprintln!(
+        "direct prediction return listener: {}",
+        direct_returns.endpoint()
+    );
     if let Some(draft) = draft.as_ref() {
         eprintln!(
             "draft model enabled: {} speculative_window={}",
@@ -170,7 +175,9 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             "Type a prompt, use Up/Down for history, Ctrl-C to interrupt generation, :history, :logs [name] [lines], :rerun N, :noappend, :append, or :quit."
         );
     } else {
-        eprintln!("Type a prompt, use Up/Down for history, Ctrl-C to interrupt generation, :history, :rerun N, :noappend, :append, or :quit.");
+        eprintln!(
+            "Type a prompt, use Up/Down for history, Ctrl-C to interrupt generation, :history, :rerun N, :noappend, :append, or :quit."
+        );
     }
 
     let mut prompt_index = 0usize;
@@ -204,6 +211,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 prompt_index,
                 prompt: &prompt,
                 live_session: None,
+                direct_returns: &direct_returns,
             })
             .or_else(|error| handle_prompt_error(error, &interrupt, prompt_index))?;
             prompt_index += 1;
@@ -269,6 +277,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
                 prompt_index,
                 prompt: &prompt,
                 live_session: None,
+                direct_returns: &direct_returns,
             })
             .or_else(|error| handle_prompt_error(error, &interrupt, prompt_index))?;
             prompt_index += 1;
@@ -289,6 +298,7 @@ pub fn binary_repl(args: BinaryReplArgs) -> Result<()> {
             prompt_index,
             prompt: input,
             live_session: append_transcript.then_some(&mut live_session),
+            direct_returns: &direct_returns,
         });
         if prompt_result.is_err() {
             live_session.mark_dirty();

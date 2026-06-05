@@ -1377,8 +1377,6 @@ alias = "model-alias"
         );
         assert!(skippy.features.iter().any(|feature| feature
             == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3));
-        assert!(skippy.features.iter().any(|feature| feature
-            == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN));
         assert_eq!(
             proto_pa
                 .owner_attestation
@@ -1546,30 +1544,6 @@ alias = "model-alias"
                 name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
                 major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
                 features: vec![
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3
-                        .to_string(),
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN.to_string(),
-                ],
-            }],
-            ..Default::default()
-        };
-
-        let (_, ann) = proto_ann_to_local(&proto_pa).expect("proto announcement should decode");
-
-        assert!(!ann.stage_protocol_generation_supported);
-    }
-
-    #[test]
-    fn proto_announcement_without_direct_prediction_return_is_not_stage_compatible() {
-        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xCF; 32]).public());
-        let proto_pa = crate::proto::node::PeerAnnouncement {
-            endpoint_id: peer_id.as_bytes().to_vec(),
-            role: crate::proto::node::NodeRole::Worker as i32,
-            subprotocols: vec![crate::proto::node::MeshSubprotocol {
-                name: skippy_protocol::STAGE_SUBPROTOCOL_NAME.to_string(),
-                major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
-                features: vec![
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
                     skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3
                         .to_string(),
                 ],

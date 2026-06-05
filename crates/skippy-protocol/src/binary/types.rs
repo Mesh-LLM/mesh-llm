@@ -63,6 +63,7 @@ pub enum WireMessageKind {
     TryRestorePrefill = 17,
     TryRestorePrefillDecode = 18,
     TrimSession = 19,
+    PredictionReturnOpen = 20,
 }
 
 impl WireMessageKind {
@@ -143,6 +144,7 @@ impl TryFrom<i32> for WireMessageKind {
             17 => Ok(Self::TryRestorePrefill),
             18 => Ok(Self::TryRestorePrefillDecode),
             19 => Ok(Self::TrimSession),
+            20 => Ok(Self::PredictionReturnOpen),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -421,6 +423,29 @@ impl StageWireMessage {
                     ));
                 }
                 Ok(self.activation.clone())
+            }
+            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
+            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
+                &self.activation,
+                self.token_count,
+                n_embd,
+                self.state.flags,
+            ),
+        }
+    }
+
+    pub fn take_activation_f32_payload(&mut self, n_embd: i32) -> io::Result<Vec<u8>> {
+        if self.activation.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.state.dtype()? {
+            WireActivationDType::F32 => {
+                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+                    return Err(invalid_data(
+                        "decoded activation payload byte count exceeds maximum",
+                    ));
+                }
+                Ok(std::mem::take(&mut self.activation))
             }
             WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
             WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(

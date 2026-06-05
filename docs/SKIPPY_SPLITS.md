@@ -205,4 +205,4 @@ transfer. Received artifacts are size/SHA-256 verified and installed atomically.
 - [LAYER_PACKAGE_REPOS.md](LAYER_PACKAGE_REPOS.md) explains how to contribute packages.
 - [specs/layer-package-repos.md](specs/layer-package-repos.md) is the manifest spec.
 - [skippy/FAMILY_STATUS.md](skippy/FAMILY_STATUS.md) lists certified families.
-- [skippy/TOPOLOGY_PLANNER.md](skippy/TOPOLOGY_PLANNER.md) documents topology planning.
+- [skippy/TOPOLOGY_PLANNER.md](skippy/TOPOLOGY_PLANNER.md) documents topology planning, including latency-aware physical stage counts.

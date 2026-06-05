@@ -1,5 +1,5 @@
 use super::{
-    binary_full_prefill_record_identities, decode_full_prompt_sideband,
+    binary_full_prefill_record_identities, decode_record_tokens_sideband,
     prepare_binary_stage_connection, restore_prefill_decode_as_decode_message,
     token_sideband_or_fill,
 };
@@ -173,22 +173,36 @@ fn first_decode_message_with_full_prompt_sideband() -> StageWireMessage {
 }
 
 #[test]
-fn decode_full_prompt_sideband_records_metadata_without_changing_exec_token() {
+fn decode_record_tokens_sideband_records_metadata_without_changing_exec_token() {
     let message = first_decode_message_with_full_prompt_sideband();
 
     let exec_tokens = token_sideband_or_fill(&message).unwrap();
-    let prompt_tokens = decode_full_prompt_sideband(&message).unwrap();
+    let prompt_tokens = decode_record_tokens_sideband(&message).unwrap();
 
     assert_eq!(exec_tokens, vec![104]);
     assert_eq!(prompt_tokens, &[101, 102, 103, 104]);
 }
 
 #[test]
-fn decode_full_prompt_sideband_requires_first_decode() {
+fn decode_record_tokens_sideband_accepts_decode_checkpoint() {
+    let mut message = first_decode_message_with_full_prompt_sideband();
+    message.state.decode_step = 1;
+    message.state.current_token = 201;
+    message.tokens.push(201);
+
+    assert_eq!(
+        decode_record_tokens_sideband(&message).unwrap(),
+        &[101, 102, 103, 104, 201]
+    );
+    assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![201]);
+}
+
+#[test]
+fn decode_record_tokens_sideband_rejects_wrong_checkpoint_len() {
     let mut message = first_decode_message_with_full_prompt_sideband();
     message.state.decode_step = 1;
 
-    assert!(decode_full_prompt_sideband(&message).is_none());
+    assert!(decode_record_tokens_sideband(&message).is_none());
     assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![104]);
 }
 

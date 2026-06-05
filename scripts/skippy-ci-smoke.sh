@@ -203,7 +203,8 @@ write_stage_config() {
   local payload="$7"
   local n_batch="${8:-$SMOKE_N_BATCH}"
   local n_ubatch="${9:-$SMOKE_N_UBATCH}"
-  python3 - "$config_path" "$model_id" "$model_path" "$layer_end" "$ctx_size" "$bind_addr" "$payload" "$SMOKE_FLASH_ATTN" "$n_batch" "$n_ubatch" <<'PY'
+  local upstream_endpoint="${10:-}"
+  python3 - "$config_path" "$model_id" "$model_path" "$layer_end" "$ctx_size" "$bind_addr" "$payload" "$SMOKE_FLASH_ATTN" "$n_batch" "$n_ubatch" "$upstream_endpoint" <<'PY'
 import json
 import sys
 
@@ -218,6 +219,7 @@ import sys
     flash_attn,
     n_batch,
     n_ubatch,
+    upstream_endpoint,
 ) = sys.argv[1:]
 config = {
     "run_id": "skippy-ci-smoke",
@@ -239,7 +241,11 @@ config = {
     "filter_tensors_on_load": False,
     "load_mode": "runtime-slice",
     "bind_addr": bind_addr,
-    "upstream": None,
+    "upstream": None if not upstream_endpoint else {
+        "stage_id": "stage-0",
+        "stage_index": 0,
+        "endpoint": upstream_endpoint,
+    },
     "downstream": None,
     "kv_cache": {
         "mode": "lookup-record",
@@ -394,12 +400,14 @@ assert_json "$REPORT_DIR/recurrent-kv-recurrent.json" \
   '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == true and .state_payload_kind == "kv-recurrent" and .cache_hit_repeats == 2 and .state_bytes > 0 and .payload_digest.recurrent_bytes > 0 and .payload_digest.kv_bytes > 0'
 
 PROMPT_PORT="$(pick_port)"
+PROMPT_RETURN_PORT="$(pick_port)"
 PROMPT_CONFIG="$WORK_DIR/prompt-stage.json"
 PROMPT_LOG="$WORK_DIR/prompt-stage.log"
 PROMPT_IN="$WORK_DIR/prompt-input.txt"
 PROMPT_OUT="$WORK_DIR/prompt-output.log"
 PROMPT_BIND="127.0.0.1:${PROMPT_PORT}"
-write_stage_config "$PROMPT_CONFIG" "$DENSE_MODEL_ID" "$DENSE_MODEL_PATH" "$DENSE_LAYER_END" "$PROMPT_CTX_SIZE" "$PROMPT_BIND" "resident-kv" "$PROMPT_N_BATCH" "$PROMPT_N_UBATCH"
+PROMPT_RETURN_BIND="127.0.0.1:${PROMPT_RETURN_PORT}"
+write_stage_config "$PROMPT_CONFIG" "$DENSE_MODEL_ID" "$DENSE_MODEL_PATH" "$DENSE_LAYER_END" "$PROMPT_CTX_SIZE" "$PROMPT_BIND" "resident-kv" "$PROMPT_N_BATCH" "$PROMPT_N_UBATCH" "tcp://${PROMPT_RETURN_BIND}"
 make_long_prompt_file "$PROMPT_IN"
 
 OPENAI_PORT="$(pick_port)"
@@ -599,6 +607,7 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --tokenizer-layer-start 0 \
     --tokenizer-layer-end "$DENSE_LAYER_END" \
     --first-stage-addr "$PROMPT_BIND" \
+    --direct-return-bind-addr "$PROMPT_RETURN_BIND" \
     --ctx-size "$PROMPT_CTX_SIZE" \
     --activation-width 2048 \
     --activation-wire-dtype f16 \

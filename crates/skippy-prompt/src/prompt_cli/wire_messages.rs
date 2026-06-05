@@ -28,6 +28,7 @@ fn send_decode_step(
     prefill_token_count: usize,
     decode_index: usize,
     current: i32,
+    direct_return: &PromptDirectReturnReceiver,
 ) -> Result<DecodeStepReply> {
     let decode_started = Instant::now();
     let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
@@ -54,11 +55,9 @@ fn send_decode_step(
     };
     write_stage_message(&mut *stream, &message, wire_dtype)
         .with_context(|| format!("send decode step {decode_index}"))?;
-    let reply = recv_reply(&mut *stream)
+    let reply = direct_return
+        .recv_expected(WireReplyKind::PredictedToken)
         .with_context(|| format!("receive decode step {decode_index} reply"))?;
-    if reply.kind != WireReplyKind::PredictedToken {
-        bail!("expected predicted-token reply, got {:?}", reply.kind);
-    }
     Ok(DecodeStepReply {
         predicted: reply.predicted,
         stats: reply.stats,
@@ -78,6 +77,7 @@ fn send_verify_span(
     decode_index: usize,
     tokens: &[i32],
     checkpoint: bool,
+    direct_return: &PromptDirectReturnReceiver,
 ) -> Result<VerifySpanReply> {
     if tokens.is_empty() {
         bail!("verify span requires at least one token");
@@ -112,18 +112,43 @@ fn send_verify_span(
         .with_context(|| format!("send verify span at decode step {decode_index}"))?;
     let write_ms = elapsed_ms(write_started);
     let wait_started = Instant::now();
-    let reply = recv_reply(&mut *stream)
+    let reply = direct_return
+        .recv_expected(WireReplyKind::PredictedTokens)
         .with_context(|| format!("receive verify span {decode_index} reply"))?;
     let wait_ms = elapsed_ms(wait_started);
-    if reply.kind != WireReplyKind::PredictedTokens {
-        bail!("expected predicted-tokens reply, got {:?}", reply.kind);
-    }
     Ok(VerifySpanReply {
         predicted_tokens: reply.predicted_tokens,
         stats: reply.stats,
         write_ms,
         wait_ms,
         elapsed_ms: elapsed_ms(verify_started),
+    })
+}
+
+fn send_generation_config(
+    stream: &mut TcpStream,
+    wire_dtype: WireActivationDType,
+    request_id: u64,
+    session_id: u64,
+    prompt_token_count: usize,
+) -> Result<SessionControlReply> {
+    let started = Instant::now();
+    let message = StageWireMessage::configure_generation(
+        wire_dtype,
+        request_id,
+        session_id,
+        i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
+        None,
+        None,
+    );
+    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
+    if reply.kind != WireReplyKind::Ack {
+        bail!("expected configure-generation ACK, got {:?}", reply.kind);
+    }
+    Ok(SessionControlReply {
+        stats: reply.stats,
+        elapsed_ms: elapsed_ms(started),
     })
 }
 
@@ -601,9 +626,5 @@ fn stable_wire_id(parts: &[&[u8]]) -> u64 {
             .try_into()
             .expect("8-byte digest prefix"),
     );
-    if id == 0 {
-        1
-    } else {
-        id
-    }
+    if id == 0 { 1 } else { id }
 }

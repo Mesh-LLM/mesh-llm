@@ -48,6 +48,7 @@ pub struct KvStageIntegration {
     pub(crate) activations: Arc<Mutex<ResidentActivationCache<ActivationFrame>>>,
     pub(crate) exact_states: Arc<Mutex<ExactStateCache<ExactStateExtra>>>,
     pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
+    pub(crate) replay_tokens: Arc<Mutex<BTreeMap<String, Vec<i32>>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,6 +276,48 @@ impl KvStageIntegration {
             .expect("first-token cache lock poisoned")
             .get(&identity.page_id)
             .copied()
+    }
+
+    pub fn record_cached_replay_tokens(
+        &self,
+        cache_key: &str,
+        identity: &PrefillKvIdentity,
+        previous: &[i32],
+        predicted: i32,
+        max_replay_tokens: usize,
+    ) -> Option<usize> {
+        if !self.should_record()
+            || max_replay_tokens == 0
+            || previous.len() >= max_replay_tokens
+            || identity.identity.token_count < self.candidate_policy.min_tokens
+        {
+            return None;
+        }
+        let mut replay_tokens = self
+            .replay_tokens
+            .lock()
+            .expect("replay-token cache lock poisoned");
+        let entry = replay_tokens.entry(cache_key.to_string()).or_default();
+        if entry.len() > previous.len() {
+            return Some(entry.len().min(max_replay_tokens));
+        }
+        if entry.as_slice() != previous {
+            return None;
+        }
+        entry.push(predicted);
+        Some(entry.len())
+    }
+
+    pub fn lookup_cached_replay_tokens(&self, cache_key: &str, max_tokens: usize) -> Vec<i32> {
+        if !self.should_lookup() || max_tokens == 0 {
+            return Vec::new();
+        }
+        self.replay_tokens
+            .lock()
+            .expect("replay-token cache lock poisoned")
+            .get(cache_key)
+            .map(|tokens| tokens.iter().copied().take(max_tokens).collect())
+            .unwrap_or_default()
     }
 }
 

@@ -17,10 +17,6 @@ pub const STAGE_PROTOCOL_GENERATION: u32 = 3;
 /// while still rejecting current-generation frames, so split planning gates on
 /// this exact token before sending current-generation control requests.
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3: &str = "stage-generation-3";
-/// Breaking generation-3 stage contract: prediction-bearing stage messages
-/// return directly from the final stage to the origin stage instead of relaying
-/// sampled-token replies back through intermediate stages.
-pub const STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN: &str = "direct-prediction-return";
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
     STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
@@ -656,11 +652,10 @@ mod tests {
         stage_control_response,
     };
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN,
-        STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3, StageFrameError,
-        validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
-        validate_stage_control_request, validate_stage_control_response,
-        validate_stage_transport_open,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3,
+        StageFrameError, validate_stage_artifact_transfer_request,
+        validate_stage_artifact_transfer_response, validate_stage_control_request,
+        validate_stage_control_response, validate_stage_transport_open,
     };
 
     #[test]
@@ -668,10 +663,6 @@ mod tests {
         assert_eq!(
             STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
-        );
-        assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN,
-            "direct-prediction-return"
         );
     }
 

@@ -1,4 +1,5 @@
 mod cli;
+mod direct_return;
 mod report;
 mod runner;
 mod support;
