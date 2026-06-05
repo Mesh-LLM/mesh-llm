@@ -2271,6 +2271,7 @@ pub struct Node {
         >,
     >,
     stage_transport_bridges: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    stage_transport_aliases: Arc<Mutex<HashMap<String, String>>>,
     stage_topologies: Arc<Mutex<StageTopologyState>>,
     plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     display_name: Arc<Mutex<Option<String>>>,
@@ -3465,6 +3466,40 @@ impl Node {
         Ok(bind_addr)
     }
 
+    pub(crate) async fn register_stage_transport_alias(
+        &self,
+        topology_id: &str,
+        run_id: &str,
+        stage_id: &str,
+        bind_addr: impl Into<String>,
+    ) {
+        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
+        self.stage_transport_aliases
+            .lock()
+            .await
+            .insert(key, bind_addr.into());
+    }
+
+    pub(crate) async fn stage_transport_alias(
+        &self,
+        topology_id: &str,
+        run_id: &str,
+        stage_id: &str,
+    ) -> Option<String> {
+        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
+        self.stage_transport_aliases.lock().await.get(&key).cloned()
+    }
+
+    pub(crate) async fn unregister_stage_transport_alias(
+        &self,
+        topology_id: &str,
+        run_id: &str,
+        stage_id: &str,
+    ) {
+        let key = stage_runtime_status_key(topology_id, run_id, stage_id);
+        self.stage_transport_aliases.lock().await.remove(&key);
+    }
+
     pub(crate) async fn stop_stage_transport_bridge(
         &self,
         topology_id: &str,
@@ -3716,6 +3751,7 @@ impl Node {
             stage_transport_tx,
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
+            stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
@@ -3875,6 +3911,7 @@ impl Node {
             stage_transport_tx,
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
+            stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             display_name: Arc::new(Mutex::new(None)),
@@ -7530,24 +7567,16 @@ impl Node {
                         }
                     }
                 }
-                let Some(downstream) = load.downstream.as_mut() else {
-                    return Ok(());
-                };
-                let Some(downstream_node) = downstream.node_id else {
-                    return Ok(());
-                };
-                if downstream_node == self.endpoint.id() {
-                    return Ok(());
+                let topology_id = load.topology_id.clone();
+                let run_id = load.run_id.clone();
+                if let Some(upstream) = load.upstream.as_mut() {
+                    self.prepare_stage_peer_endpoint(&topology_id, &run_id, upstream)
+                        .await?;
                 }
-                let bridge_addr = self
-                    .ensure_stage_transport_bridge(
-                        downstream_node,
-                        load.topology_id.clone(),
-                        load.run_id.clone(),
-                        downstream.stage_id.clone(),
-                    )
-                    .await?;
-                downstream.endpoint = bridge_addr;
+                if let Some(downstream) = load.downstream.as_mut() {
+                    self.prepare_stage_peer_endpoint(&topology_id, &run_id, downstream)
+                        .await?;
+                }
             }
             crate::inference::skippy::StageControlRequest::Prepare(_) => {}
             crate::inference::skippy::StageControlRequest::Stop(stop) => {
@@ -7559,6 +7588,25 @@ impl Node {
             | crate::inference::skippy::StageControlRequest::CancelPrepare(_)
             | crate::inference::skippy::StageControlRequest::StatusUpdate(_) => {}
         }
+        Ok(())
+    }
+
+    async fn prepare_stage_peer_endpoint(
+        &self,
+        topology_id: &str,
+        run_id: &str,
+        peer: &mut crate::inference::skippy::StagePeerDescriptor,
+    ) -> anyhow::Result<()> {
+        let Some(peer_node) = peer.node_id else {
+            return Ok(());
+        };
+        if peer_node == self.endpoint.id() {
+            return Ok(());
+        }
+        let bridge_addr = self
+            .ensure_stage_transport_bridge(peer_node, topology_id, run_id, peer.stage_id.clone())
+            .await?;
+        peer.endpoint = bridge_addr;
         Ok(())
     }
 

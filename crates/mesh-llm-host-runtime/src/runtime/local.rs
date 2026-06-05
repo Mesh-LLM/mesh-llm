@@ -1231,12 +1231,23 @@ async fn load_split_runtime_generation_inner(
             .await;
     }
 
+    let stage0_return_port = alloc_local_port().await?;
+    let stage0_return_endpoint = format!("127.0.0.1:{stage0_return_port}");
+    spec.node
+        .register_stage_transport_alias(
+            &spec.generation.topology_id,
+            &spec.generation.run_id,
+            &settings.stage0.stage_id,
+            stage0_return_endpoint.clone(),
+        )
+        .await;
     let downstream = Box::pin(load_downstream_split_runtime_stages(
         spec,
         &settings,
         cleanup_on_error,
         &mut ready_by_stage,
         &mut downstream,
+        &stage0_return_endpoint,
     ))
     .await?;
     let downstream_endpoint = if downstream.node_id == Some(spec.node.id()) {
@@ -1284,7 +1295,7 @@ async fn load_split_runtime_generation_inner(
         runtime_options.config.selected_device = Some(pinned_stage_device(gpu));
     }
     runtime_options.config.load_mode = settings.load_mode.clone();
-    runtime_options.config.bind_addr = "127.0.0.1:0".to_string();
+    runtime_options.config.bind_addr = stage0_return_endpoint;
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = Some(PeerConfig {
         stage_id: downstream.stage_id,
@@ -1367,10 +1378,17 @@ async fn load_downstream_split_runtime_stages(
     cleanup_on_error: &mut bool,
     ready_by_stage: &mut HashMap<String, skippy::StageStatusSnapshot>,
     downstream: &mut Option<skippy::StagePeerDescriptor>,
+    stage0_return_endpoint: &str,
 ) -> Result<skippy::StagePeerDescriptor> {
     for stage in spec.generation.stages.iter().skip(1).rev() {
         *cleanup_on_error = true;
-        let load = split_runtime_stage_load_request(spec, settings, stage, downstream.clone());
+        let load = split_runtime_stage_load_request(
+            spec,
+            settings,
+            stage,
+            downstream.clone(),
+            stage0_return_endpoint,
+        );
         prepare_split_stage(spec.node, stage.node_id, load.clone()).await?;
         wait_for_split_stage_source(
             spec.node,
@@ -1433,8 +1451,14 @@ fn split_runtime_stage_load_request(
     settings: &SplitGenerationLoadSettings<'_>,
     stage: &RuntimeSliceStagePlan,
     downstream: Option<skippy::StagePeerDescriptor>,
+    stage0_return_endpoint: &str,
 ) -> skippy::StageLoadRequest {
     let resolved_config = &settings.runtime_options.config;
+    let upstream = if downstream.is_none() {
+        split_runtime_stage_upstream(spec, stage0_return_endpoint)
+    } else {
+        None
+    };
     skippy::StageLoadRequest {
         topology_id: spec.generation.topology_id.clone(),
         run_id: spec.generation.run_id.clone(),
@@ -1470,9 +1494,22 @@ fn split_runtime_stage_load_request(
         coordinator_id: Some(spec.node.id()),
         lease_until_unix_ms: spec.generation.lease_until_unix_ms,
         load_mode: settings.load_mode.clone(),
-        upstream: None,
+        upstream,
         downstream,
     }
+}
+
+fn split_runtime_stage_upstream(
+    spec: &SplitGenerationLoadSpec<'_>,
+    stage0_return_endpoint: &str,
+) -> Option<skippy::StagePeerDescriptor> {
+    let stage0 = spec.generation.stages.first()?;
+    Some(skippy::StagePeerDescriptor {
+        stage_id: stage0.stage_id.clone(),
+        stage_index: stage0.stage_index,
+        endpoint: stage0_return_endpoint.to_string(),
+        node_id: Some(stage0.node_id),
+    })
 }
 
 fn split_generation_load_settings<'a>(
@@ -2593,6 +2630,16 @@ async fn stop_split_generation(
     generation: &SplitTopologyGeneration,
     shutdown_generation: u64,
 ) {
+    if let Some(stage0) = generation.stages.first()
+        && stage0.node_id == node.id()
+    {
+        node.unregister_stage_transport_alias(
+            &generation.topology_id,
+            &generation.run_id,
+            &stage0.stage_id,
+        )
+        .await;
+    }
     for stage in generation.stages.iter().skip(1) {
         let stop = skippy::StageStopRequest {
             topology_id: generation.topology_id.clone(),

@@ -1,33 +1,26 @@
-use std::{
-    collections::HashMap,
-    io,
-    net::{TcpListener, TcpStream},
-    sync::{Arc, Mutex, mpsc},
-    thread,
-    time::Duration,
-};
-
-use anyhow::{Context, Result, anyhow, bail};
-use skippy_protocol::binary::{StageReply, WireMessageKind, WireReplyKind, recv_reply, send_ready};
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct DirectReturnKey {
+struct PromptDirectReturnKey {
     request_id: u64,
     session_id: u64,
 }
 
-type DirectReturnResult = Result<StageReply, String>;
-type DirectReturnSender = mpsc::Sender<DirectReturnResult>;
-type DirectReturnWaiters = Arc<Mutex<HashMap<DirectReturnKey, DirectReturnSender>>>;
+type PromptDirectReturnResult = Result<StageReply, String>;
+type PromptDirectReturnSender = mpsc::Sender<PromptDirectReturnResult>;
+type PromptDirectReturnWaiters =
+    Arc<Mutex<HashMap<PromptDirectReturnKey, PromptDirectReturnSender>>>;
 
-pub(super) struct BenchDirectReturnServer {
-    waiters: DirectReturnWaiters,
+struct PromptDirectReturnServer {
+    local_addr: SocketAddr,
+    waiters: PromptDirectReturnWaiters,
 }
 
-impl BenchDirectReturnServer {
-    pub(super) fn start(bind_addr: &str) -> Result<Self> {
+impl PromptDirectReturnServer {
+    fn start(bind_addr: SocketAddr) -> Result<Self> {
         let listener = TcpListener::bind(bind_addr)
-            .with_context(|| format!("bind benchmark direct-return listener {bind_addr}"))?;
+            .with_context(|| format!("bind prompt direct-return listener {bind_addr}"))?;
+        let local_addr = listener
+            .local_addr()
+            .context("read prompt direct-return listener address")?;
         let waiters = Arc::new(Mutex::new(HashMap::new()));
         let thread_waiters = waiters.clone();
         thread::spawn(move || {
@@ -37,57 +30,67 @@ impl BenchDirectReturnServer {
                         let waiters = thread_waiters.clone();
                         thread::spawn(move || {
                             if let Err(error) =
-                                handle_bench_direct_return_connection(waiters, stream)
+                                handle_prompt_direct_return_connection(waiters, stream)
                             {
-                                eprintln!("benchmark direct-return connection failed: {error:#}");
+                                eprintln!("prompt direct-return connection failed: {error:#}");
                             }
                         });
                     }
                     Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                     Err(error) => {
-                        eprintln!("benchmark direct-return listener failed: {error}");
+                        eprintln!("prompt direct-return listener failed: {error}");
                         break;
                     }
                 }
             }
         });
-        Ok(Self { waiters })
+        Ok(Self {
+            local_addr,
+            waiters,
+        })
     }
 
-    pub(super) fn register(
+    fn endpoint(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    fn register(
         &self,
         request_id: u64,
         session_id: u64,
-    ) -> Result<BenchDirectReturnReceiver> {
-        let key = DirectReturnKey {
+        timeout: Duration,
+    ) -> Result<PromptDirectReturnReceiver> {
+        let key = PromptDirectReturnKey {
             request_id,
             session_id,
         };
         let (sender, receiver) = mpsc::channel();
         self.waiters
             .lock()
-            .map_err(|_| anyhow!("benchmark direct-return hub lock poisoned"))?
+            .map_err(|_| anyhow!("prompt direct-return hub lock poisoned"))?
             .insert(key, sender);
-        Ok(BenchDirectReturnReceiver {
+        Ok(PromptDirectReturnReceiver {
             key,
             waiters: self.waiters.clone(),
             receiver,
+            timeout,
         })
     }
 }
 
-pub(super) struct BenchDirectReturnReceiver {
-    key: DirectReturnKey,
-    waiters: DirectReturnWaiters,
-    receiver: mpsc::Receiver<DirectReturnResult>,
+struct PromptDirectReturnReceiver {
+    key: PromptDirectReturnKey,
+    waiters: PromptDirectReturnWaiters,
+    receiver: mpsc::Receiver<PromptDirectReturnResult>,
+    timeout: Duration,
 }
 
-impl BenchDirectReturnReceiver {
-    pub(super) fn recv_expected(&self, expected: WireReplyKind) -> Result<StageReply> {
+impl PromptDirectReturnReceiver {
+    fn recv_expected(&self, expected: WireReplyKind) -> Result<StageReply> {
         let reply = self
             .receiver
-            .recv_timeout(Duration::from_secs(300))
-            .context("timed out waiting for benchmark direct prediction return")?
+            .recv_timeout(self.timeout)
+            .context("timed out waiting for prompt direct prediction return")?
             .map_err(|error| anyhow!(error))?;
         if reply.kind != expected {
             bail!(
@@ -99,7 +102,7 @@ impl BenchDirectReturnReceiver {
     }
 }
 
-impl Drop for BenchDirectReturnReceiver {
+impl Drop for PromptDirectReturnReceiver {
     fn drop(&mut self) {
         if let Ok(mut waiters) = self.waiters.lock() {
             waiters.remove(&self.key);
@@ -107,28 +110,27 @@ impl Drop for BenchDirectReturnReceiver {
     }
 }
 
-fn handle_bench_direct_return_connection(
-    waiters: DirectReturnWaiters,
+fn handle_prompt_direct_return_connection(
+    waiters: PromptDirectReturnWaiters,
     mut stream: TcpStream,
 ) -> Result<()> {
-    send_ready(&mut stream).context("send benchmark direct-return ready")?;
-    let open = skippy_protocol::binary::read_stage_message(&mut stream, 0)
-        .context("read benchmark direct-return open")?;
+    send_ready(&mut stream).context("send prompt direct-return ready")?;
+    let open = read_stage_message(&mut stream, 0).context("read prompt direct-return open")?;
     if open.kind != WireMessageKind::PredictionReturnOpen {
         bail!("expected prediction-return-open message");
     }
-    let key = DirectReturnKey {
+    let key = PromptDirectReturnKey {
         request_id: open.request_id,
         session_id: open.session_id,
     };
     let sender = waiters
         .lock()
-        .map_err(|_| anyhow!("benchmark direct-return hub lock poisoned"))?
+        .map_err(|_| anyhow!("prompt direct-return hub lock poisoned"))?
         .get(&key)
         .cloned()
         .ok_or_else(|| {
             anyhow!(
-                "no benchmark direct-return waiter for request {}",
+                "no prompt direct-return waiter for request {}",
                 key.request_id
             )
         })?;
@@ -142,7 +144,7 @@ fn handle_bench_direct_return_connection(
             Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(error) => {
                 let _ = sender.send(Err(error.to_string()));
-                return Err(error).context("read benchmark direct prediction return");
+                return Err(error).context("read prompt direct prediction return");
             }
         }
     }

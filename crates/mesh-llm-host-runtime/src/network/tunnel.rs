@@ -3,7 +3,7 @@
 
 use crate::mesh::Node;
 use crate::protocol::read_len_prefixed;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use iroh::EndpointId;
 use prost::Message;
 use std::sync::Arc;
@@ -128,46 +128,75 @@ async fn handle_inbound_stage_transport(
         anyhow::bail!("stage transport requester_id does not match QUIC peer identity");
     }
 
-    let statuses = node
+    let bind_addr = resolve_stage_transport_bind_addr(&node, &open).await?;
+    let tcp_stream = TcpStream::connect(&bind_addr).await?;
+    tcp_stream.set_nodelay(true)?;
+    tracing::info!(
+        "Inbound stage transport stream {} → {}",
+        remote.fmt_short(),
+        bind_addr
+    );
+    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
+    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+}
+
+async fn resolve_stage_transport_bind_addr(
+    node: &Node,
+    open: &skippy_protocol::proto::stage::StageTransportOpen,
+) -> Result<String> {
+    let status_result = node
         .query_local_stage_status(crate::inference::skippy::StageStatusFilter {
             topology_id: Some(open.topology_id.clone()),
             run_id: Some(open.run_id.clone()),
             stage_id: Some(open.stage_id.clone()),
         })
-        .await?;
-    let status = statuses
-        .into_iter()
-        .find(|status| {
-            status.topology_id == open.topology_id
-                && status.run_id == open.run_id
-                && status.stage_id == open.stage_id
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "stage {} / {} / {} is not loaded locally",
-                open.topology_id,
-                open.run_id,
-                open.stage_id
-            )
-        })?;
-    if status.state != crate::inference::skippy::StageRuntimeState::Ready {
-        anyhow::bail!(
-            "stage {} / {} / {} is not ready: {:?}",
-            status.topology_id,
-            status.run_id,
-            status.stage_id,
-            status.state
-        );
+        .await;
+    match status_result {
+        Ok(statuses) => {
+            if let Some(status) = statuses.into_iter().find(|status| {
+                status.topology_id == open.topology_id
+                    && status.run_id == open.run_id
+                    && status.stage_id == open.stage_id
+            }) {
+                if status.state != crate::inference::skippy::StageRuntimeState::Ready {
+                    anyhow::bail!(
+                        "stage {} / {} / {} is not ready: {:?}",
+                        status.topology_id,
+                        status.run_id,
+                        status.stage_id,
+                        status.state
+                    );
+                }
+                return Ok(status.bind_addr);
+            }
+        }
+        Err(error) => {
+            if let Some(bind_addr) = node
+                .stage_transport_alias(&open.topology_id, &open.run_id, &open.stage_id)
+                .await
+            {
+                return Ok(bind_addr);
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "query local stage status for {} / {} / {}",
+                    open.topology_id, open.run_id, open.stage_id
+                )
+            });
+        }
     }
-    let tcp_stream = TcpStream::connect(&status.bind_addr).await?;
-    tcp_stream.set_nodelay(true)?;
-    tracing::info!(
-        "Inbound stage transport stream {} → {}",
-        remote.fmt_short(),
-        status.bind_addr
-    );
-    let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    if let Some(bind_addr) = node
+        .stage_transport_alias(&open.topology_id, &open.run_id, &open.stage_id)
+        .await
+    {
+        return Ok(bind_addr);
+    }
+    anyhow::bail!(
+        "stage {} / {} / {} is not loaded locally",
+        open.topology_id,
+        open.run_id,
+        open.stage_id
+    )
 }
 
 /// Bidirectional relay between a TCP stream and a QUIC bi-stream.

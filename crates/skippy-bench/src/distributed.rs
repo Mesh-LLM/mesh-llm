@@ -35,9 +35,7 @@ use crate::{
     support::{ChildGuard, parse_wire_dtype, retry},
 };
 
-mod direct_return;
-
-use direct_return::BenchDirectReturnServer;
+use crate::direct_return::BenchDirectReturnServer;
 
 struct DistributedRunOutcome {
     run_id: String,

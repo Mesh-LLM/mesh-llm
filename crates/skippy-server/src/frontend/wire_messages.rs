@@ -116,20 +116,17 @@ pub(super) fn generation_config_message(
     prompt_token_count: usize,
     sampling: Option<WireSamplingConfig>,
     chat_sampling_metadata: Option<&str>,
-) -> OpenAiResult<Option<StageWireMessage>> {
-    let Some(metadata) = chat_sampling_metadata else {
-        return Ok(None);
-    };
+) -> OpenAiResult<StageWireMessage> {
     let prompt_token_count = i32::try_from(prompt_token_count)
         .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
-    Ok(Some(StageWireMessage::configure_generation(
+    Ok(StageWireMessage::configure_generation(
         wire_dtype,
         request_id,
         session_id,
         prompt_token_count,
         sampling,
-        Some(metadata.to_string()),
-    )))
+        chat_sampling_metadata.map(str::to_string),
+    ))
 }
 
 pub(super) struct OpenAiPrefillChunk<'a> {

@@ -184,6 +184,8 @@ pub struct BinaryReplArgs {
     pub tokenizer_n_gpu_layers: i32,
     #[arg(long, default_value = "127.0.0.1:19031")]
     pub first_stage_addr: String,
+    #[arg(long, default_value = "127.0.0.1:19030")]
+    pub direct_return_bind_addr: SocketAddr,
     #[arg(long, default_value_t = 0)]
     pub tokenizer_layer_start: u32,
     #[arg(long, default_value_t = 10)]

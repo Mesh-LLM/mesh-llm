@@ -1,7 +1,13 @@
 use std::{
     collections::HashMap,
-    net::TcpStream,
-    sync::{Arc, Mutex, mpsc},
+    io,
+    net::{SocketAddr, TcpListener, TcpStream},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread::{self, JoinHandle},
     time::Duration,
 };
 
@@ -10,9 +16,9 @@ use skippy_protocol::{
     StageConfig, StageTopology,
     binary::{
         StageReply, StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind,
-        WireReplyKind, recv_ready, recv_reply, send_reply_ack_with_stats,
-        send_reply_predicted_tokens_with_stats, send_reply_predicted_with_stats,
-        write_stage_message,
+        WireReplyKind, read_stage_message, recv_ready, recv_reply, send_ready,
+        send_reply_ack_with_stats, send_reply_predicted_tokens_with_stats,
+        send_reply_predicted_with_stats, write_stage_message,
     },
 };
 
@@ -43,6 +49,81 @@ impl Default for PredictionReturnHub {
             waiters: Mutex::new(HashMap::new()),
         }
     }
+}
+
+pub struct PredictionReturnListener {
+    shutdown: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+    hub: Arc<PredictionReturnHub>,
+}
+
+impl PredictionReturnListener {
+    pub fn start(bind_addr: SocketAddr) -> Result<Self> {
+        let listener = TcpListener::bind(bind_addr)
+            .with_context(|| format!("bind direct prediction return listener {bind_addr}"))?;
+        listener
+            .set_nonblocking(true)
+            .context("set direct prediction return listener nonblocking")?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let thread_shutdown = shutdown.clone();
+        let hub = Arc::new(PredictionReturnHub::default());
+        let thread_hub = hub.clone();
+        let thread = thread::spawn(move || {
+            while !thread_shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        if let Err(error) = stream.set_nonblocking(false) {
+                            eprintln!(
+                                "direct prediction return connection failed: set blocking: {error}"
+                            );
+                            continue;
+                        }
+                        let hub = thread_hub.clone();
+                        thread::spawn(move || {
+                            if let Err(error) = handle_prediction_return_connection(hub, stream) {
+                                eprintln!("direct prediction return connection failed: {error:#}");
+                            }
+                        });
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        eprintln!("direct prediction return listener failed: {error}");
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            shutdown,
+            thread: Some(thread),
+            hub,
+        })
+    }
+
+    pub fn hub(&self) -> Arc<PredictionReturnHub> {
+        self.hub.clone()
+    }
+}
+
+impl Drop for PredictionReturnListener {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn handle_prediction_return_connection(
+    hub: Arc<PredictionReturnHub>,
+    mut stream: TcpStream,
+) -> Result<()> {
+    send_ready(&mut stream).context("send direct prediction return ready")?;
+    let open = read_stage_message(&mut stream, 0).context("read direct prediction return open")?;
+    hub.handle_return_connection(open, stream)
 }
 
 impl PredictionReturnHub {
@@ -147,7 +228,7 @@ pub(crate) fn open_prediction_return_stream(
     wire_dtype: WireActivationDType,
     timeout_secs: u64,
 ) -> Result<TcpStream> {
-    let endpoint = driver_stage_endpoint(topology)?;
+    let endpoint = driver_stage_endpoint(config, topology)?;
     let return_addr = resolve_downstream_endpoint(endpoint)?;
     let source_ip = downstream_source_ip(config)?;
     let attempts = timeout_secs.saturating_mul(2).max(1);
@@ -197,19 +278,34 @@ pub(crate) fn send_direct_prediction_return(
     }
 }
 
-fn driver_stage_endpoint(topology: Option<&StageTopology>) -> Result<&str> {
-    let topology = topology.ok_or_else(|| anyhow!("direct prediction return requires topology"))?;
+fn driver_stage_endpoint<'a>(
+    config: &'a StageConfig,
+    topology: Option<&'a StageTopology>,
+) -> Result<&'a str> {
+    if let Some(topology) = topology {
+        return driver_stage_endpoint_from_topology(topology);
+    }
+    if let Some(upstream) = config
+        .upstream
+        .as_ref()
+        .filter(|upstream| upstream.stage_index == 0)
+    {
+        return Ok(strip_tcp_prefix(&upstream.endpoint));
+    }
+    Err(anyhow!("direct prediction return requires topology"))
+}
+
+fn driver_stage_endpoint_from_topology(topology: &StageTopology) -> Result<&str> {
     topology
         .stages
         .iter()
         .find(|stage| stage.stage_index == 0)
-        .map(|stage| {
-            stage
-                .endpoint
-                .strip_prefix("tcp://")
-                .unwrap_or(&stage.endpoint)
-        })
+        .map(|stage| strip_tcp_prefix(&stage.endpoint))
         .ok_or_else(|| anyhow!("topology does not contain driver-facing stage 0"))
+}
+
+fn strip_tcp_prefix(endpoint: &str) -> &str {
+    endpoint.strip_prefix("tcp://").unwrap_or(endpoint)
 }
 
 fn prediction_return_open_message(request_id: u64, session_id: u64) -> StageWireMessage {
