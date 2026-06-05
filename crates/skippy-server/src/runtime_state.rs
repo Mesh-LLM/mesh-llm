@@ -241,7 +241,7 @@ impl RuntimeState {
         token_id: i32,
         input: Option<&ActivationFrame>,
     ) -> Result<(i32, ActivationFrame)> {
-        self.decode_frame_sampled(session_id, token_id, None, input)
+        self.decode_frame_sampled(session_id, token_id, None, input, 0)
     }
 
     pub fn decode_frame_sampled(
@@ -250,9 +250,11 @@ impl RuntimeState {
         token_id: i32,
         sampling: Option<&SamplingConfig>,
         input: Option<&ActivationFrame>,
+        output_capacity: usize,
     ) -> Result<(i32, ActivationFrame)> {
         let session = self.session(session_id)?;
-        let output = session.decode_step_frame_sampled(token_id, sampling, input, 0)?;
+        let output =
+            session.decode_step_frame_sampled(token_id, sampling, input, output_capacity)?;
         self.add_session_tokens(session_id, 1);
         Ok(output)
     }
@@ -262,9 +264,10 @@ impl RuntimeState {
         session_id: &str,
         token_ids: &[i32],
         input: Option<&ActivationFrame>,
+        output_capacity: usize,
     ) -> Result<(Vec<i32>, ActivationFrame)> {
         let session = self.session(session_id)?;
-        let output = session.verify_tokens_frame(token_ids, input, 0)?;
+        let output = session.verify_tokens_frame(token_ids, input, output_capacity)?;
         self.add_session_tokens(session_id, token_ids.len() as u64);
         Ok(output)
     }

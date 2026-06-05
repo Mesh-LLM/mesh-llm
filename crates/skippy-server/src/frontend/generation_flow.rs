@@ -811,6 +811,12 @@ impl StageOpenAiBackend {
                         &[current],
                         None,
                         false,
+                        stage_output_activation_capacity(
+                            &request.config,
+                            message.token_count,
+                            request.activation_width,
+                        )
+                        .map_err(openai_backend_error)?,
                     )
                     .map_err(openai_backend_error)?
                     .2;
@@ -853,26 +859,28 @@ impl StageOpenAiBackend {
                 let downstream_wait_ms = wait_timer.elapsed_ms();
                 decode_downstream_wait_ms += downstream_wait_ms;
                 current = reply.predicted;
-                let mut token_attrs = self.openai_attrs(&request.ids);
-                token_attrs.insert(
-                    "llama_stage.decode_step".to_string(),
-                    json!(decode_input_index),
-                );
-                token_attrs.insert(
-                    "llama_stage.stage0_compute_ms".to_string(),
-                    json!(stage0_compute_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.forward_write_ms".to_string(),
-                    json!(forward_write_ms),
-                );
-                token_attrs.insert(
-                    "llama_stage.downstream_wait_ms".to_string(),
-                    json!(downstream_wait_ms),
-                );
-                token_attrs.insert("llama_stage.predicted_token".to_string(), json!(current));
-                token_attrs.insert("llama_stage.message_kind".to_string(), json!("DecodeEmbd"));
-                self.emit_openai_phase("stage.openai_decode_token", token_timer, token_attrs);
+                if self.telemetry.is_debug_enabled() {
+                    let mut token_attrs = self.openai_attrs(&request.ids);
+                    token_attrs.insert(
+                        "llama_stage.decode_step".to_string(),
+                        json!(decode_input_index),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.stage0_compute_ms".to_string(),
+                        json!(stage0_compute_ms),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.forward_write_ms".to_string(),
+                        json!(forward_write_ms),
+                    );
+                    token_attrs.insert(
+                        "llama_stage.downstream_wait_ms".to_string(),
+                        json!(downstream_wait_ms),
+                    );
+                    token_attrs.insert("llama_stage.predicted_token".to_string(), json!(current));
+                    token_attrs.insert("llama_stage.message_kind".to_string(), json!("DecodeEmbd"));
+                    self.emit_openai_phase("stage.openai_decode_token", token_timer, token_attrs);
+                }
             }
 
             let mut decode_attrs = self.openai_attrs(&request.ids);
