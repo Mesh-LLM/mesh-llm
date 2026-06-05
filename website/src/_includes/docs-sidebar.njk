@@ -1,0 +1,24 @@
+{% from "components/ui.njk" import docsNavGroup %}
+
+<aside class="docs-sidebar hidden min-w-0 lg:block" aria-label="Documentation navigation" data-pagefind-ignore="all">
+<div class="docs-sidebar-inner">
+    <div class="docs-search docs-sidebar-search docs-pagefind-trigger mb-4" data-pagefind-ignore="all">
+      <pagefind-modal-trigger placeholder="Search docs"></pagefind-modal-trigger>
+    </div>
+    {% for group in docs %}
+      {{ docsNavGroup(group, page.url, "docs-nav-group mb-6 grid grid-cols-1 gap-1", "mb-2 text-sm font-semibold text-fg", "min-h-[30px] border-l pl-4 text-sm text-muted hover:text-blue-3") }}
+    {% endfor %}
+  </div>
+</aside>
+
+<details class="docs-mobile-nav rounded-mesh border border-line-soft bg-surface/70 p-3 lg:hidden" data-pagefind-ignore="all">
+  <summary class="min-h-11 cursor-pointer list-none text-sm font-semibold text-fg">Navigation</summary>
+  <div class="docs-mobile-nav-panel mt-3 grid grid-cols-1 gap-5 border-t border-line-soft pt-4">
+    <div class="docs-search docs-mobile-search docs-pagefind-trigger">
+      <pagefind-modal-trigger placeholder="Search docs"></pagefind-modal-trigger>
+    </div>
+    {% for group in docs %}
+      {{ docsNavGroup(group, page.url) }}
+    {% endfor %}
+  </div>
+</details>

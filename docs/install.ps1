@@ -282,6 +282,38 @@ function Get-ReleaseUrl {
     return "https://github.com/$Repo/releases/latest/download/$Asset"
 }
 
+function Get-ChecksumUrl {
+    param([string]$Url)
+    return "$Url.sha256"
+}
+
+function Read-ExpectedSha256 {
+    param([string]$Path)
+    $content = Get-Content -Path $Path -Raw
+    $match = [regex]::Match($content, "[A-Fa-f0-9]{64}")
+    if (-not $match.Success) {
+        throw "checksum sidecar did not contain a SHA-256 digest: $Path"
+    }
+    return $match.Value.ToLowerInvariant()
+}
+
+function Assert-DownloadedFileChecksum {
+    param(
+        [string]$Path,
+        [string]$Url
+    )
+
+    $checksumPath = "$Path.sha256"
+    $checksumUrl = Get-ChecksumUrl $Url
+    Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumPath
+    $expected = Read-ExpectedSha256 $checksumPath
+    $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "checksum mismatch for $(Split-Path -Leaf $Path): expected $expected, got $actual"
+    }
+    Write-Host "Verified checksum: $(Split-Path -Leaf $Path)"
+}
+
 function Get-StaleBinaryNames {
     $names = @(
         "mesh-llm",
@@ -323,6 +355,31 @@ function Install-Bundle {
     Get-ChildItem -Path $BundleDir -Force | ForEach-Object {
         Copy-Item -Path $_.FullName -Destination (Join-Path $InstallDir $_.Name) -Recurse -Force
     }
+}
+
+function Install-RecommendedNativeRuntime {
+    param([string]$TempDir)
+    $meshBinary = Join-Path $InstallDir "mesh-llm.exe"
+    if (-not (Test-Path $meshBinary)) {
+        return
+    }
+
+    $manifestPath = Join-Path $TempDir "native-runtimes.json"
+    $manifestUrl = Get-ReleaseUrl "native-runtimes.json"
+    try {
+        Invoke-WebRequest -Uri $manifestUrl -OutFile $manifestPath
+        Assert-DownloadedFileChecksum -Path $manifestPath -Url $manifestUrl
+    } catch {
+        Write-Warning "Native runtime manifest was not available or could not be verified; skipping runtime install. $_"
+        return
+    }
+
+    & $meshBinary runtime install --manifest $manifestPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Native runtime install did not complete successfully."
+        return
+    }
+    & $meshBinary runtime prune --active-only
 }
 
 function Add-InstallDirToPath {
@@ -371,6 +428,7 @@ try {
     }
     Write-Host "Downloading $url"
     Invoke-WebRequest -Uri $url -OutFile $archive
+    Assert-DownloadedFileChecksum -Path $archive -Url $url
 
     Expand-Archive -Path $archive -DestinationPath $tmpRoot -Force
 
@@ -380,6 +438,7 @@ try {
     }
 
     Install-Bundle $bundleDir
+    Install-RecommendedNativeRuntime $tmpRoot
     Add-InstallDirToPath
 
     Write-Host "Installed $asset to $InstallDir"

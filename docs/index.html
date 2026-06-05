@@ -1,437 +1,1817 @@
 <!doctype html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>mesh-llm — Decentralised LLM Inference</title>
-    <meta name="description" content="Turn spare capacity into an auto-configured p2p inference cloud. Serve many models, access your private models from anywhere, or share compute with others, let your agents collaborate p2p.">
-    <style>
-        :root { --bg:#0a0a0a; --bg2:#0d0d0d; --border:#1a1a1a; --text:#d0d0d0; --text2:#888; --text3:#555; --green:#4c4; --green-dim:#2a5a2a; --green-bg:#0a1a0a; --blue:#6cf; --blue-dim:#1a3a5c; --orange:#c84; --orange-dim:#5a4a2a; }
-        * { box-sizing:border-box; margin:0; padding:0; }
-        html { scroll-behavior:smooth; }
-        body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:var(--bg); color:var(--text); line-height:1.7; -webkit-font-smoothing:antialiased; }
-        a { color:var(--blue); text-decoration:none; } a:hover { text-decoration:underline; }
-        code,.mono { font-family:"SF Mono","Fira Code",monospace; }
-        nav { position:fixed; top:0; left:0; right:0; z-index:100; background:rgba(10,10,10,0.85); backdrop-filter:blur(12px); border-bottom:1px solid var(--border); padding:0.7rem 2rem; display:flex; align-items:center; gap:1rem; }
-        nav .logo { display:flex; align-items:center; }
-        nav .logo img { height:30px; width:auto; display:block; }
-        nav .links { margin-left:auto; display:flex; gap:1.5rem; font-size:0.8rem; } nav .links a { color:var(--text2); } nav .links a:hover { color:#fff; text-decoration:none; }
-        section { max-width:860px; margin:0 auto; padding:4rem 2rem; }
-        .hero { min-height:85vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding-top:5rem; }
-        .hero-badge { display:inline-flex; align-items:center; gap:0.4rem; font-size:0.7rem; color:var(--green); background:var(--green-bg); border:1px solid var(--green-dim); border-radius:20px; padding:0.25rem 0.8rem; margin-bottom:1.5rem; }
-        .hero-badge .dot { width:5px; height:5px; border-radius:50%; background:var(--green); }
-        .hero h1 { font-size:clamp(2.2rem,5vw,3.2rem); font-weight:700; letter-spacing:-0.03em; line-height:1.15; color:#fff; max-width:660px; margin-bottom:1rem; }
-        .hero p { font-size:1.05rem; color:var(--text2); max-width:540px; margin-bottom:2rem; }
-        .hero-ctas { display:flex; gap:0.8rem; flex-wrap:wrap; justify-content:center; }
-        .btn { display:inline-flex; align-items:center; gap:0.4rem; padding:0.6rem 1.4rem; border-radius:8px; font-size:0.85rem; font-weight:500; cursor:pointer; border:none; transition:all 0.15s; }
-        .btn-primary { background:#fff; color:#000; } .btn-primary:hover { background:#e0e0e0; text-decoration:none; }
-        .btn-secondary { background:transparent; color:var(--text); border:1px solid #333; } .btn-secondary:hover { border-color:#666; text-decoration:none; }
-        .mesh-demo { margin:2.5rem auto 0; max-width:580px; width:100%; }
-        .mesh-demo svg { width:100%; height:auto; display:block; }
-        .tags { display:flex; gap:0.5rem; flex-wrap:wrap; justify-content:center; margin-top:2rem; font-size:0.7rem; }
-        .tag { padding:0.2rem 0.6rem; border-radius:4px; color:var(--text3); border:1px solid var(--border); }
-        .section-tag { font-size:0.65rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--green); margin-bottom:0.5rem; }
-        h2 { font-size:1.7rem; font-weight:700; color:#fff; letter-spacing:-0.02em; margin-bottom:0.5rem; }
-        .section-lead { color:var(--text2); font-size:0.95rem; margin-bottom:2rem; max-width:540px; }
-        .steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1.5rem; }
-        .step { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:1.3rem; }
-        .step-num { font-size:0.65rem; font-weight:700; color:var(--green); background:var(--green-bg); border:1px solid var(--green-dim); width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-bottom:0.7rem; }
-        .step h3 { font-size:0.9rem; color:#fff; margin-bottom:0.3rem; }
-        .step p { font-size:0.78rem; color:var(--text2); line-height:1.6; }
-        .code-block { background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:1rem 1.3rem; overflow-x:auto; font-size:0.8rem; line-height:1.8; margin:1.5rem 0; }
-        .code-block .comment { color:var(--text3); } .code-block .cmd { color:var(--green); } .code-block .flag { color:var(--blue); } .code-block .val { color:var(--orange); }
-        .features { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:1rem; }
-        .feature { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:1.2rem; }
-        .feature h3 { font-size:0.85rem; color:#fff; margin-bottom:0.25rem; }
-        .feature p { font-size:0.76rem; color:var(--text2); line-height:1.55; }
-        .feature-icon { font-size:1.1rem; margin-bottom:0.5rem; }
-        .cta-section { text-align:center; border-top:1px solid var(--border); padding-top:3rem; }
-        .cta-section p { color:var(--text2); margin-bottom:1.5rem; }
-        .cta-buttons { display:flex; gap:0.8rem; justify-content:center; flex-wrap:wrap; }
-        footer { text-align:center; padding:2rem; font-size:0.7rem; color:var(--text3); border-top:1px solid var(--border); }
-        @media (max-width:600px) { section { padding:3rem 1.2rem; } nav { padding:0.6rem 1rem; } .steps,.features { grid-template-columns:1fr; } }
-    </style>
+  <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+
+
+<title>Mesh LLM</title>
+<meta name="description" content="Mesh serves large local models across multiple machines through one OpenAI-compatible endpoint.">
+<link rel="canonical" href="https://docs.anarchai.org/">
+<meta name="theme-color" content="#09090b">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Mesh LLM">
+<meta property="og:description" content="Mesh serves large local models across multiple machines through one OpenAI-compatible endpoint.">
+<meta property="og:url" content="https://docs.anarchai.org/">
+<meta property="og:site_name" content="Mesh LLM">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Mesh LLM">
+<meta name="twitter:description" content="Mesh serves large local models across multiple machines through one OpenAI-compatible endpoint.">
+<link rel="icon" href="/mesh-llm-logo.svg" type="image/svg+xml">
+
+<link rel="stylesheet" href="/assets/site.generated.css">
+
+
+  <script>
+    document.documentElement.classList.add('js');
+
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    if (!location.hash && !location.search) window.scrollTo(0, 0);
+
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Rajdhani:wght@700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="/assets/lucide.min.js" defer></script>
+  <script src="/assets/github-stars.js" defer></script>
+
+  <script src="/assets/anime.min.js" defer></script>
+  <script src="/assets/title-reveal.js" defer></script>
+  <script src="/assets/hero-viz.js" defer></script>
+  <script src="/assets/topology-switcher.js" defer></script>
+  <script src="/assets/model-slicing.js" defer></script>
+  <script src="/assets/plugin-architecture.js" defer></script>
+  <script src="/assets/copy-code.js" defer></script>
+
+  <script>window.addEventListener('DOMContentLoaded', () => { if (typeof lucide !== 'undefined') lucide.createIcons(); });</script>
 </head>
-<body>
-    <nav>
-        <a class="logo" href="#"><img src="mesh-llm-logo.svg" alt="mesh-llm"></a>
-        <div class="links">
-            <a href="#install">Quick start</a>
-            <a href="#models">Models</a>
-            <a href="#splits">Splits</a>
-            <a href="#agents">Agents</a>
-            <a href="#blackboard">Blackboard</a>
-            <a href="#features">Features</a>
-            <a href="https://github.com/Mesh-LLM/mesh-llm">GitHub</a>
-        </div>
-    </nav>
+<body class="home-intro">
+  <nav class="top sticky top-0 z-50 border-b border-line-soft bg-void/90 backdrop-blur-xl supports-[backdrop-filter]:bg-void/75" data-pagefind-ignore="all">
+  <div class="shell nav-inner flex min-h-16 items-center gap-3 sm:gap-5">
+    <a class="brand min-w-0 shrink-0" href="/" aria-label="Mesh LLM home"><img
+  class="brand-mark-img"
+  src="/assets/images/jelly-logo-color.png"
+  width="180"
+  height="180"
+  alt=""
+  decoding="async">
+<span class="brand-name">mesh<span>llm</span></span>
 
-    <section class="hero">
-        <div class="hero-badge" style="background:rgba(200,160,60,0.12); border-color:rgba(200,160,60,0.3);"><span class="dot" style="background:#c8a03c;"></span> Work in progress — use with caution</div>
-        <h1>Pool compute to run powerful open models</h1>
-        <p>Turn spare capacity into an auto-configured p2p inference cloud. Serve many models, access your private models from anywhere, or share compute with others, let your agents collaborate p2p.</p>
-        <div class="hero-ctas">
-            <a href="https://meshllm.cloud" class="btn btn-primary">Try it now</a>
-            <a href="https://github.com/Mesh-LLM/mesh-llm" class="btn btn-secondary">View on GitHub</a>
+</a>
+    <div class="nav-links ml-auto flex min-w-0 items-center gap-2 text-sm text-muted sm:gap-4">
+      <a class="hidden whitespace-nowrap transition-colors hover:text-fg md:inline-flex" href="https://public.meshllm.cloud">Public Mesh</a>
+      <a class="hidden whitespace-nowrap transition-colors hover:text-fg sm:inline-flex" href="/catalog/">Catalog</a>
+      <a class="hidden whitespace-nowrap transition-colors hover:text-fg sm:inline-flex" href="/docs/">Docs</a>
+      <div class="nav-cta flex min-w-0 items-center gap-2">
+        <a class="nav-github btn ghost btn-sm inline-flex min-h-11 items-center gap-2 whitespace-nowrap rounded-mesh border border-line px-3 text-sm" href="https://github.com/Mesh-LLM/mesh-llm" data-github-stars-link data-github-repo="Mesh-LLM/mesh-llm" aria-label="View Mesh-LLM/mesh-llm on GitHub, 1.1k stars, v0.71.0 release">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.7.5.5 5.6.5 12c0 5 3.3 9.3 7.8 10.8.6.1.8-.2.8-.6V20c-3.2.7-3.8-1.4-3.8-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2.9-.3 1.9-.4 2.9-.4s2 .1 2.9.4c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.3-5.3 5.6.4.4.8 1.1.8 2.2v3.2c0 .3.2.7.8.6 4.5-1.5 7.8-5.8 7.8-10.8C23.5 5.6 18.3.5 12 .5Z"/></svg>
+          <span data-github-stars>1.1k</span>
+          <span class="github-separator" aria-hidden="true">·</span>
+          <span data-github-release>v0.71.0</span>
+        </a>
+        <a class="btn primary btn-sm inline-flex h-11 min-h-0 items-center justify-center whitespace-nowrap rounded-mesh px-3 text-sm font-semibold sm:px-4" href="/docs/pages/installing-mesh/">Install</a>
+      </div>
+    </div>
+  </div>
+</nav>
+
+  <main>
+  <section class="hero stage2-scroll" data-stage2-scroll aria-label="Distributed inference animation">
+  <div class="hero-stage-sticky">
+    <div class="hero-viz" aria-hidden="true">
+  <svg viewBox="0 0 1440 740" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <radialGradient id="bgblue" cx="50%" cy="50%" r="55%">
+        <stop offset="0%"   stop-color="#60a5fa" stop-opacity="0.95"/>
+        <stop offset="42%"  stop-color="#3b82f6" stop-opacity="0.40"/>
+        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+      </radialGradient>
+      <radialGradient id="bggreen" cx="50%" cy="50%" r="55%">
+        <stop offset="0%"   stop-color="#86efac" stop-opacity="0.9"/>
+        <stop offset="42%"  stop-color="#22c55e" stop-opacity="0.32"/>
+        <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+      </radialGradient>
+      <radialGradient id="mesh-blue-field" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.22"/>
+        <stop offset="62%" stop-color="#3b82f6" stop-opacity="0.06"/>
+        <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+      </radialGradient>
+      <radialGradient id="mesh-green-field" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#22c55e" stop-opacity="0.14"/>
+        <stop offset="68%" stop-color="#22c55e" stop-opacity="0.04"/>
+        <stop offset="100%" stop-color="#22c55e" stop-opacity="0"/>
+      </radialGradient>
+      <pattern id="mesh-grid" width="36" height="36" patternUnits="userSpaceOnUse">
+        <path d="M 36 0 L 0 0 0 36" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+      </pattern>
+    </defs>
+  </svg>
+  <div class="hero-inference">
+    <div class="inference-head">
+      <span class="inference-dot"></span>
+      <span>BigModel V3 XL</span>
+    </div>
+    <div class="inference-stream">
+      <span class="stream-token">routing</span>
+      <span class="stream-token">request</span>
+      <span class="stream-token">to</span>
+      <span class="stream-token">server</span>
+      <span class="stream-token">node</span>
+      <span class="stream-token">streaming</span>
+      <span class="stream-token">tokens</span>
+      <span class="stream-token">back</span>
+    </div>
+  </div>
+</div>
+
+
+    <div class="hero-title-loop shell">
+      <h1 class="hero-title-heading">Distributed<br>Model Inference</h1>
+      <p class="hero-title-subtitle">
+        <span class="hero-subtitle-copy"><span class="hero-subtitle-prefix"></span><span class="hero-subtitle-animated"><span class="hero-subtitle-dynamic"></span><span class="hero-subtitle-dot">.</span></span></span>
+      </p>
+    </div>
+    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet.</p>
+
+    <div class="hero-footer shell mx-auto flex w-[min(100%-1.5rem,75rem)] md:w-[min(100%-4rem,75rem)]" aria-label="Hero actions">
+      <div class="hero-footer-actions min-w-0">
+        <div class="hero-install flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-mesh border border-line-soft bg-void/80 px-3 shadow-terminal" aria-label="Install Mesh">
+          <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
+            <span class="cmd">curl</span>
+            <span class="flag">-fsSL</span>
+            <span class="value">https://mesh-llm.cloud/install.sh</span>
+            <span class="pipe">|</span>
+            <span class="cmd">sh</span>
+          </code>
+          <button class="hero-copy inline-flex shrink-0 items-center justify-center p-0 text-muted hover:text-fg" type="button" data-copy-text="curl -fsSL https://mesh-llm.cloud/install.sh | sh" aria-label="Copy install command" title="Copy install command">
+            <i data-lucide="copy" aria-hidden="true"></i>
+          </button>
+        </div>
+        <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh border border-line-soft px-4 text-sm font-semibold text-muted hover:text-fg" href="#topology">
+          <span>Learn more</span>
+          <i data-lucide="arrow-down" aria-hidden="true"></i>
+        </a>
+      </div>
+
+      <div class="hero-sponsor shrink-0 items-center gap-3 text-sm text-subtle" aria-label="Sponsor slot">
+        <span>Sponsored by</span>
+        <a class="sponsor-slot" href="https://github.com/Mesh-LLM/mesh-llm" aria-label="Sponsor Mesh">
+          <svg aria-hidden="true" viewBox="0 0 50 50" fill="none">
+            <rect x="0.75" y="0.75" width="48.5" height="48.5" rx="7.25" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M25 4.5V45.5M4.5 25H45.5M9 9H41V41H9V9Z" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+            <path d="M25 4.5L45.5 25L25 45.5L4.5 25L25 4.5Z" stroke="var(--sponsor-line)" stroke-width="1"/>
+            <circle cx="25" cy="25" r="18.5" stroke="var(--sponsor-line)" stroke-width="1"/>
+            <circle cx="25" cy="25" r="12" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+
+    <div class="stage2-aperture-portal">
+      <div class="stage2-workspace">
+        <div class="stage2-bench">
+          <div class="stage2-phase-stage" data-stage2-phase-stage data-stage2-layout-root>
+            <div class="stage2-model-block" data-stage2-model style="--stage2-model-piece-count: 10;">
+              <div class="stage2-model-shell">
+                <div class="stage2-model-header">
+                  <div>
+                    <span class="stage2-model-kicker">LLM container</span>
+                    <strong>BigModel V3 XL</strong>
+                  </div>
+                  <span class="stage2-model-status">ready to shard</span>
+                </div>
+                <dl class="stage2-model-metrics">
+                  <div><dt>params</dt><dd>120B</dd></div>
+                  <div><dt>weights</dt><dd>242GB</dd></div>
+                  <div><dt>layers</dt><dd>10</dd></div>
+                </dl>
+                <div class="stage2-tensor-stack" data-stage2-tensor-stack>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="0" data-stage2-model-layer="0" data-layout-id="stage2-layer-0" style="--stage2-model-piece-index: 0;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L0</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">9B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="1" data-stage2-model-layer="1" data-layout-id="stage2-layer-1" style="--stage2-model-piece-index: 1;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L1</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">10B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="2" data-stage2-model-layer="2" data-layout-id="stage2-layer-2" style="--stage2-model-piece-index: 2;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L2</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">11B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="3" data-stage2-model-layer="3" data-layout-id="stage2-layer-3" style="--stage2-model-piece-index: 3;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L3</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">12B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="4" data-stage2-model-layer="4" data-layout-id="stage2-layer-4" style="--stage2-model-piece-index: 4;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L4</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">13B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="5" data-stage2-model-layer="5" data-layout-id="stage2-layer-5" style="--stage2-model-piece-index: 5;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L5</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">14B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="6" data-stage2-model-layer="6" data-layout-id="stage2-layer-6" style="--stage2-model-piece-index: 6;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L6</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">15B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="7" data-stage2-model-layer="7" data-layout-id="stage2-layer-7" style="--stage2-model-piece-index: 7;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L7</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">16B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="8" data-stage2-model-layer="8" data-layout-id="stage2-layer-8" style="--stage2-model-piece-index: 8;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L8</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">17B</span>
+                    </div>
+
+                    <div class="stage2-model-layer" data-stage2-model-piece="9" data-stage2-model-layer="9" data-layout-id="stage2-layer-9" style="--stage2-model-piece-index: 9;">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L9</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+                      </span>
+                      <span class="stage2-layer-param">18B</span>
+                    </div>
+
+                  <span class="stage2-slice-cutter" data-stage2-slice-cutter aria-hidden="true"></span>
+                </div>
+                <div class="stage2-model-lock" data-stage2-lock-status role="group" aria-labelledby="stage2-lock-title" aria-describedby="stage2-lock-summary">
+                  <span class="stage2-lock-mark" aria-hidden="true"></span>
+                  <div class="stage2-lock-copy">
+                    <strong id="stage2-lock-title">Split plan committed</strong>
+                    <span class="stage2-lock-summary" id="stage2-lock-summary">10 layers mapped across 6 nodes</span>
+                    <span class="stage2-lock-chips" aria-hidden="true">
+                      <span>L0-L9</span>
+                      <span>6 nodes</span>
+                      <span class="stage2-lock-chip--live">live</span>
+                    </span>
+                  </div>
+                  <div class="stage2-lock-route" aria-hidden="true">
+                    <span class="stage2-lock-route-label">commit route</span>
+                    <span class="stage2-lock-route-rail">
+                      <span class="stage2-lock-route-line"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 0;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 1;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 2;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 3;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 4;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 5;"></span>
+                      <span class="stage2-lock-packet"></span>
+                    </span>
+                    <span class="stage2-lock-route-ack">6 ACK</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stage2-mesh-field" data-stage2-mesh-field>
+              <div class="stage2-mesh-node stage2-mesh-node--server" data-stage2-node="server" data-stage2-capacity="768GB" data-stage2-target-layers="0,1,2,3" style="--stage2-node-color: #22c55e; --stage2-node-scale: 1.16;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Server" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>server</strong><span>768GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="server"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--cloud" data-stage2-node="cloud" data-stage2-capacity="192GB" data-stage2-target-layers="4,5" style="--stage2-node-color: #a5b4fc; --stage2-node-scale: 0.95;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Cloud" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>cloud node</strong><span>192GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="cloud"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--workstation" data-stage2-node="workstation" data-stage2-capacity="96GB" data-stage2-target-layers="6" style="--stage2-node-color: #60a5fa; --stage2-node-scale: 0.9;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Monitor" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>workstation</strong><span>96GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="workstation"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--gpu" data-stage2-node="gpu" data-stage2-capacity="32GB" data-stage2-target-layers="7" style="--stage2-node-color: #86efac; --stage2-node-scale: 0.86;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Gpu" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>gpu rig</strong><span>32GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="gpu"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--laptop" data-stage2-node="laptop" data-stage2-capacity="24GB" data-stage2-target-layers="8" style="--stage2-node-color: #93c5fd; --stage2-node-scale: 0.78;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Laptop" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>laptop</strong><span>24GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="laptop"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--mini" data-stage2-node="mini" data-stage2-capacity="8GB" data-stage2-target-layers="9" style="--stage2-node-color: #38bdf8; --stage2-node-scale: 0.7;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Router" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>mini pc</strong><span>8GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="mini"></div></div>
+              </div>
+
+            </div>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-1"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-2"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-3"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-4"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-5"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-6"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-7"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-8"></section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage2-aperture-ring" aria-hidden="true"></div>
+
+    <div class="stage2-scrubber" aria-label="Stage 2 sequence scrubber">
+      <div class="stage2-scrubber-meta" aria-live="polite">
+        <span class="stage2-phase-name">phase 1</span>
+        <span class="stage2-phase-index">01 / 08</span>
+      </div>
+      <div class="stage2-scrubber-track" aria-hidden="true">
+        <span class="stage2-scrubber-ticks"></span>
+        <span class="stage2-scrubber-majors"></span>
+        <span class="stage2-scrubber-thumb"></span>
+      </div>
+      <input class="stage2-scrubber-input" type="range" min="0" max="1000" value="0" aria-label="Stage 2 sequence position">
+    </div>
+  </div>
+</section>
+
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const arrow = document.querySelector('.hero-learn svg, .hero-learn [data-lucide="arrow-down"]');
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (arrow && !prefersReducedMotion && typeof anime !== 'undefined') {
+      anime.animate(arrow, {
+        translateY: [0, 5, 0],
+        opacity: [0.72, 1, 0.72],
+        duration: 1200,
+        loop: true,
+        easing: 'inOut(2)'
+      });
+    }
+  });
+</script>
+
+  <div class="trust-strip">
+  <div class="shell">
+    <div class="trust-inner">
+      <div class="label">Drop-in for the tools you already use</div>
+      <div class="row">
+        <span>goose</span>
+        <span>vscode</span>
+        <span>opencode</span>
+        <span>pi.dev</span>
+        <span>any OpenAI client</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+
+<section class="sec py-14 sm:py-20" id="topology">
+  <div class="shell">
+
+<div class="sec-head grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)] xl:items-end xl:gap-8">
+  <div>
+    <h2 class="title max-w-4xl text-balance font-display text-[clamp(2rem,7vw,4rem)] leading-[0.98] tracking-normal text-fg xl:text-[clamp(2.75rem,5vw,4.25rem)] xl:leading-[0.96]"><span class="title-line">One local API.</span><br/><span class="title-line">Two mesh modes.</span></h2>
+  </div>
+  <p class="sec-copy max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">Point tools at localhost while Mesh routes by model or splits one large model across nearby GPUs.</p>
+</div>
+
+
+    <div class="topology" data-topology-switcher>
+      <div class="topology-command">
+        <div class="min-w-0">
+          <span class="topology-command__label">OpenAI ingress</span>
+          <code class="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap">OPENAI_BASE_URL=http://localhost:9337/v1</code>
+        </div>
+        <div class="topology-mode-tabs" role="tablist" aria-label="Topology mode">
+          <button class="topology-mode-tab is-active" type="button" role="tab" id="topology-tab-route" aria-label="Run many models" aria-selected="true" aria-controls="topology-panel-route" data-topology-mode="route">
+            <span class="topology-mode-tab__full">Run many models</span>
+            <span class="topology-mode-tab__short" aria-hidden="true">Many</span>
+            <small>route by model</small>
+          </button>
+          <button class="topology-mode-tab" type="button" role="tab" id="topology-tab-split" aria-label="Split one large model" aria-selected="false" aria-controls="topology-panel-split" data-topology-mode="split">
+            <span class="topology-mode-tab__full">Split one large model</span>
+            <span class="topology-mode-tab__short" aria-hidden="true">Split</span>
+            <small>place layer stages</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="topology-stage">
+        <div class="topology-mode-panel is-active" role="tabpanel" id="topology-panel-route" aria-labelledby="topology-tab-route" data-topology-panel="route">
+          <p class="topology-kicker">Router mode</p>
+          <h3>The model field selects a host.</h3>
+          <div class="topology-terminal" aria-label="Route many models example">
+<span class="muted">GET /v1/models</span>
+<code class="topology-json"><span class="json-punctuation">{</span>
+  <span class="json-key">"data"</span><span class="json-punctuation">:</span> <span class="json-punctuation">[</span>
+    <span class="json-punctuation">{</span> <span class="json-key">"id"</span><span class="json-punctuation">:</span> <span class="json-string">"llama-3.2-1b"</span> <span class="json-punctuation">}</span><span class="json-punctuation">,</span>
+    <span class="json-punctuation">{</span> <span class="json-key">"id"</span><span class="json-punctuation">:</span> <span class="json-string">"qwen3-4b"</span> <span class="json-punctuation">}</span>
+  <span class="json-punctuation">]</span>
+<span class="json-punctuation">}</span></code>
+<span class="muted">POST /v1/chat/completions</span>
+<code class="topology-json"><span class="json-punctuation">{</span>
+  <span class="json-key">"model"</span><span class="json-punctuation">:</span> <span class="json-string">"qwen3-4b"</span><span class="json-punctuation">,</span>
+  <span class="json-key">"messages"</span><span class="json-punctuation">:</span> <span class="json-punctuation">[</span><span class="json-string">"..."</span><span class="json-punctuation">]</span>
+<span class="json-punctuation">}</span></code>
+          </div>
         </div>
 
-        <div class="mesh-demo">
-            <svg viewBox="0 0 580 260" xmlns="http://www.w3.org/2000/svg">
-                <line x1="290" y1="76" x2="130" y2="170" stroke="#2a5a2a" stroke-width="1.5"/>
-                <line x1="290" y1="76" x2="450" y2="170" stroke="#2a5a2a" stroke-width="1.5"/>
-                <line x1="130" y1="170" x2="450" y2="170" stroke="#1a3a5c" stroke-width="1" stroke-dasharray="4,3"/>
-                <circle r="2.5" fill="#4c4" opacity="0.7"><animateMotion dur="2s" repeatCount="indefinite" path="M290,76 L130,170"/></circle>
-                <circle r="2.5" fill="#6cf" opacity="0.5"><animateMotion dur="2s" repeatCount="indefinite" path="M130,170 L290,76"/></circle>
-                <circle r="2.5" fill="#4c4" opacity="0.7"><animateMotion dur="2.2s" repeatCount="indefinite" path="M290,76 L450,170"/></circle>
-                <text x="195" y="118" text-anchor="middle" fill="#333" font-size="9" font-family="monospace">QUIC · RPC</text>
-                <text x="385" y="118" text-anchor="middle" fill="#333" font-size="9" font-family="monospace">QUIC · RPC</text>
-                <text x="290" y="185" text-anchor="middle" fill="#333" font-size="9" font-family="monospace">gossip</text>
-                <!-- Host -->
-                <rect x="220" y="8" width="140" height="68" rx="6" fill="#0a1a12" stroke="#4c4" stroke-width="2"/>
-                <text x="290" y="26" text-anchor="middle" fill="#4c4" font-size="9" font-family="monospace" font-weight="600">GLM-4.7-Flash</text>
-                <text x="290" y="40" text-anchor="middle" fill="#6cf" font-size="10" font-family="monospace">host (103 GB)</text>
-                <text x="290" y="52" text-anchor="middle" fill="#4c4" font-size="7.5" font-family="monospace">llama-server · :9337</text>
-                <rect x="234" y="58" width="112" height="4" rx="1.5" fill="#151515"/><rect x="234" y="58" width="73" height="4" rx="1.5" fill="#2a5a2a"/>
-                <text x="234" y="72" fill="#444" font-size="7" font-family="monospace">18GB / 103GB</text>
-                <!-- Worker -->
-                <rect x="60" y="170" width="140" height="68" rx="6" fill="#0d1a26" stroke="#1a3a5c" stroke-width="1.5"/>
-                <text x="130" y="188" text-anchor="middle" fill="#6cf" font-size="9" font-family="monospace" font-weight="600">GLM-4.7-Flash</text>
-                <text x="130" y="202" text-anchor="middle" fill="#6cf" font-size="10" font-family="monospace">worker (52 GB)</text>
-                <text x="130" y="214" text-anchor="middle" fill="#3a3a3a" font-size="7.5" font-family="monospace">rpc-server</text>
-                <rect x="74" y="220" width="112" height="4" rx="1.5" fill="#151515"/><rect x="74" y="220" width="35" height="4" rx="1.5" fill="#1a3a5c"/>
-                <text x="74" y="234" fill="#444" font-size="7" font-family="monospace">18GB / 52GB</text>
-                <!-- Second model -->
-                <rect x="380" y="170" width="140" height="68" rx="6" fill="#0d1a26" stroke="#1a3a5c" stroke-width="1.5"/>
-                <text x="450" y="188" text-anchor="middle" fill="#c84" font-size="9" font-family="monospace" font-weight="600">Qwen2.5-3B</text>
-                <text x="450" y="202" text-anchor="middle" fill="#6cf" font-size="10" font-family="monospace">solo (13 GB)</text>
-                <text x="450" y="214" text-anchor="middle" fill="#4c4" font-size="7.5" font-family="monospace">llama-server · :9337</text>
-                <rect x="394" y="220" width="112" height="4" rx="1.5" fill="#151515"/><rect x="394" y="220" width="14" height="4" rx="1.5" fill="#5a4a2a"/>
-                <text x="394" y="234" fill="#444" font-size="7" font-family="monospace">2GB / 13GB</text>
+        <div class="topology-mode-panel" role="tabpanel" id="topology-panel-split" aria-labelledby="topology-tab-split" data-topology-panel="split" hidden>
+          <p class="topology-kicker">Split mode</p>
+          <h3>Layer ranges become a pipeline.</h3>
+          <div class="topology-terminal" aria-label="Split one large model example">
+<span class="muted">POST /v1/chat/completions</span>
+<code class="topology-json"><span class="json-punctuation">{</span>
+  <span class="json-key">"model"</span><span class="json-punctuation">:</span> <span class="json-string">"glm-4.5-air"</span><span class="json-punctuation">,</span>
+  <span class="json-key">"messages"</span><span class="json-punctuation">:</span> <span class="json-punctuation">[</span><span class="json-string">"..."</span><span class="json-punctuation">]</span>
+<span class="json-punctuation">}</span></code>
+<span class="muted">mesh planner</span>
+<span>L0-26 → L27-52 → L53-78</span>
+          </div>
+        </div>
+
+        <div class="topology-visual">
+          <div class="topology-map topology-map--route is-active" data-topology-map="route" aria-label="Run many models topology">
+            <svg class="topology-links topology-links--desktop-route" viewBox="0 0 960 460" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active" d="M 178 230 H 438" />
+              <path class="topology-edge topology-edge--warm" d="M 522 230 H 610 Q 620 230 620 220 V 122 Q 620 112 630 112 H 758" />
+              <path class="topology-edge topology-edge--active" d="M 522 230 H 758" />
+              <path class="topology-edge topology-edge--warm" d="M 522 230 H 610 Q 620 230 620 240 V 338 Q 620 348 630 348 H 758" />
             </svg>
+            <svg class="topology-links topology-links--mobile-route" viewBox="0 0 270 308" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 135 56 V 78" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 135 152 V 158 Q 135 164 129 164 H 74 Q 68 164 68 170 V 176" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 135 152 V 158 Q 135 164 141 164 H 196 Q 202 164 202 170 V 176" />
+              <path class="topology-edge topology-edge--warm topology-edge--mobile-flow" d="M 135 152 V 244" />
+            </svg>
+
+            <div class="mesh-node mesh-node--client route-client">
+              <span class="mesh-node__role">client</span>
+              <strong>your-computer</strong>
+              <small>localhost:9337</small>
+              <code>model=qwen3-4b</code>
+            </div>
+
+            <div class="mesh-core route-core" aria-label="Mesh router">
+              <span></span>
+              <i data-lucide="network" aria-hidden="true"></i>
+              <small>inventory + route</small>
+            </div>
+
+            <div class="mesh-node mesh-node--model route-model route-model--llama is-serving">
+              <span class="mesh-node__role">warm</span>
+              <strong>node-01</strong>
+              <small>llama-3.2-1b</small>
+            </div>
+            <div class="mesh-node mesh-node--model route-model route-model--qwen is-active-route">
+              <span class="mesh-node__role">selected</span>
+              <strong>node-02</strong>
+              <small>qwen3-4b</small>
+            </div>
+            <div class="mesh-node mesh-node--model route-model route-model--glm is-serving">
+              <span class="mesh-node__role">warm</span>
+              <strong>node-03</strong>
+              <small>glm-4.5-air</small>
+            </div>
+          </div>
+
+          <div class="topology-map topology-map--split" data-topology-map="split" aria-label="Split one large model topology" hidden>
+            <svg class="topology-links topology-links--desktop-split" viewBox="0 0 960 460" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active" d="M 190 230 H 272" />
+              <path class="topology-edge topology-edge--active" d="M 343 230 H 414" />
+              <path class="topology-edge topology-edge--active" d="M 546 230 H 587" />
+              <path class="topology-edge topology-edge--active" d="M 719 230 H 770" />
+              <path class="topology-edge topology-edge--idle topology-edge--return" d="M 835 270 V 332 Q 835 342 825 342 H 135 Q 125 342 125 332 V 270" />
+            </svg>
+            <svg class="topology-links topology-links--tablet-split" viewBox="0 0 960 460" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active" d="M 179 230 H 243" />
+              <path class="topology-edge topology-edge--active" d="M 333 230 H 394" />
+              <path class="topology-edge topology-edge--active" d="M 531 230 H 590" />
+              <path class="topology-edge topology-edge--active" d="M 726 230 H 781" />
+              <path class="topology-edge topology-edge--idle topology-edge--return" d="M 822 270 V 332 Q 822 342 812 342 H 148 Q 138 342 138 332 V 270" />
+            </svg>
+            <svg class="topology-links topology-links--mobile-split" viewBox="0 0 320 420" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 55 V 84" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 156 V 182" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 236 V 250" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 305 V 318" />
+              <path class="topology-edge topology-edge--return topology-edge--mobile-return" d="M 224 346 H 250 Q 256 346 256 340 V 34 Q 256 28 250 28 H 218" />
+            </svg>
+
+            <div class="mesh-node mesh-node--client split-client">
+              <span class="mesh-node__role">client</span>
+              <strong>your-computer</strong>
+              <small>same /v1 call</small>
+            </div>
+
+            <div class="mesh-core split-core" aria-label="Split coordinator">
+              <span></span>
+              <i data-lucide="network" aria-hidden="true"></i>
+            </div>
+
+            <div class="split-stage split-stage--host split-stage--one">
+              <span>L0-26</span>
+              <strong>M3 Ultra</strong>
+              <small>prompt ingest · 4 ms</small>
+            </div>
+            <div class="split-stage split-stage--two">
+              <span>L27-52</span>
+              <strong>RX 7800 XT</strong>
+              <small>activations · 11 ms</small>
+            </div>
+            <div class="split-stage split-stage--three">
+              <span>L53-78</span>
+              <strong>RTX 3090</strong>
+              <small>tokens return</small>
+            </div>
+
+            <div class="split-callout split-callout--weights">weights stay local</div>
+            <div class="split-callout split-callout--activations">activations over QUIC</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="topology-legend" aria-label="Topology legend">
+        <span><i class="topology-legend__active"></i>active request path</span>
+        <span><i class="topology-legend__warm"></i>warm model</span>
+        <span class="topology-legend__status">3 nodes · 168 GB mesh</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+
+<section class="sec" id="plugins" style="padding-top: 56px;">
+  <div class="shell">
+
+<div class="sec-head grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)] xl:items-end xl:gap-8">
+  <div>
+    <h2 class="title max-w-4xl text-balance font-display text-[clamp(2rem,7vw,4rem)] leading-[0.98] tracking-normal text-fg xl:text-[clamp(2.75rem,5vw,4.25rem)] xl:leading-[0.96]"><span class="title-line">Pluggable architecture</span><br/><span class="title-line">for distributed agents.</span></h2>
+  </div>
+  <p class="sec-copy max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">Plugins declare what they provide in a manifest. The runtime starts them, routes calls, and exposes capabilities over MCP, HTTP, inference, and mesh events.</p>
+</div>
+
+
+
+
+
+<figure class="arch-diag arch-diag--socket" data-plugin-architecture role="img" aria-label="Mesh plugin architecture socket diagram: plugin modules plug into the Mesh runtime, and the runtime exposes configuration, inference backends, HTTP routes, and mesh events.">
+  <svg class="arch-svg arch-svg--full" viewBox="0 0 1000 520" aria-hidden="true">
+    <path class="arch-svg-bus-fill" d="M824 206H840Q847 206 847 199V190Q847 184 853 184H966Q976 184 976 194V326Q976 336 966 336H853Q847 336 847 330V321Q847 314 840 314H808Q801 314 801 321V330Q801 336 795 336H637Q631 336 631 330V321Q631 314 624 314H592Q585 314 585 321V330Q585 336 579 336H421Q415 336 415 330V321Q415 314 408 314H376Q369 314 369 321V330Q369 336 363 336H205Q199 336 199 330V321Q199 314 192 314H160Q153 314 153 321V330Q153 336 147 336H34Q24 336 24 326V194Q24 184 34 184H147Q153 184 153 190V199Q153 206 160 206H192Q199 206 199 199V190Q199 184 205 184H363Q369 184 369 190V199Q369 206 376 206H408Q415 206 415 199V190Q415 184 421 184H579Q585 184 585 190V199Q585 206 592 206H624Q631 206 631 199V190Q631 184 637 184H795Q801 184 801 190V199Q801 206 808 206H824Z"></path>
+    <path class="arch-svg-runtime-glow" d="M976 260V194Q976 184 966 184H34Q24 184 24 194V326Q24 336 34 336H966Q976 336 976 326V260" data-arch-runtime-glow></path>
+
+    <path class="arch-svg-socket-glow" d="M147 184Q153 184 153 190V199Q153 206 160 206H192Q199 206 199 199V190Q199 184 205 184" data-arch-socket-glow="full-top-0"></path>
+    <path class="arch-svg-socket-glow" d="M363 184Q369 184 369 190V199Q369 206 376 206H408Q415 206 415 199V190Q415 184 421 184" data-arch-socket-glow="full-top-1"></path>
+    <path class="arch-svg-socket-glow" d="M579 184Q585 184 585 190V199Q585 206 592 206H624Q631 206 631 199V190Q631 184 637 184" data-arch-socket-glow="full-top-2"></path>
+    <path class="arch-svg-socket-glow" d="M795 184Q801 184 801 190V199Q801 206 808 206H840Q847 206 847 199V190Q847 184 853 184" data-arch-socket-glow="full-top-3"></path>
+    <path class="arch-svg-socket-glow" d="M147 336Q153 336 153 330V321Q153 314 160 314H192Q199 314 199 321V330Q199 336 205 336" data-arch-socket-glow="full-bottom-0"></path>
+    <path class="arch-svg-socket-glow" d="M363 336Q369 336 369 330V321Q369 314 376 314H408Q415 314 415 321V330Q415 336 421 336" data-arch-socket-glow="full-bottom-1"></path>
+    <path class="arch-svg-socket-glow" d="M579 336Q585 336 585 330V321Q585 314 592 314H624Q631 314 631 321V330Q631 336 637 336" data-arch-socket-glow="full-bottom-2"></path>
+    <path class="arch-svg-socket-glow" d="M795 336Q801 336 801 330V321Q801 314 808 314H840Q847 314 847 321V330Q847 336 853 336" data-arch-socket-glow="full-bottom-3"></path>
+
+    <g class="arch-svg-runtime-copy arch-svg-runtime-copy--full" transform="translate(500 260)">
+      <text class="arch-svg-runtime-title arch-svg-runtime-title--center" x="0" y="-5.5">Mesh Runtime</text>
+      <text class="arch-svg-runtime-body arch-svg-runtime-body--center" x="0" y="25.5">loads manifests, starts plugin processes, routes declared capabilities</text>
+    </g>
+
+    <path class="arch-svg-draw-path arch-svg-draw-path--ingress" d="M976 260V194Q976 184 966 184H853Q847 184 847 190V199Q847 206 840 206H808Q801 206 801 199V190Q801 184 795 184H637Q631 184 631 190V199Q631 206 624 206H592Q585 206 585 199V190Q585 184 579 184H421Q415 184 415 190V199Q415 206 408 206H376Q369 206 369 199V190Q369 184 363 184H205Q199 184 199 190V199Q199 206 192 206H160Q153 206 153 199V190Q153 184 147 184H34Q24 184 24 194V260"></path>
+    <path class="arch-svg-draw-path arch-svg-draw-path--egress" d="M976 260V326Q976 336 966 336H853Q847 336 847 330V321Q847 314 840 314H808Q801 314 801 321V330Q801 336 795 336H637Q631 336 631 330V321Q631 314 624 314H592Q585 314 585 321V330Q585 336 579 336H421Q415 336 415 330V321Q415 314 408 314H376Q369 314 369 321V330Q369 336 363 336H205Q199 336 199 330V321Q199 314 192 314H160Q153 314 153 321V330Q153 336 147 336H34Q24 336 24 326V260"></path>
+
+    <g class="arch-svg-plug-position" transform="translate(82 50)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-0">
+        <path class="arch-svg-plug-shape" d="M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Blobstore</text>
+        <text class="arch-svg-plug-body" x="95" y="61">state persistence</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(298 50)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-1">
+        <path class="arch-svg-plug-shape" d="M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Blackboard</text>
+        <text class="arch-svg-plug-body" x="95" y="61">agent coordination</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(514 50)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="2" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-2">
+        <path class="arch-svg-plug-shape" d="M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">OpenAI Endpoint</text>
+        <text class="arch-svg-plug-body" x="95" y="61">OpenAI-compatible API</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(730 50)">
+      <g class="arch-svg-plug arch-svg-plug--muted" data-arch-plug data-arch-pair="3" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="full-top-3">
+        <path class="arch-svg-plug-shape" d="M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">More plugins</text>
+        <text class="arch-svg-plug-body" x="95" y="61">metrics, data, tools</text>
+      </g>
+    </g>
+
+
+    <g class="arch-svg-plug-position" transform="translate(82 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-0">
+        <path class="arch-svg-plug-shape" d="M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Configuration</text>
+        <text class="arch-svg-plug-body" x="95" y="61">settings, tweaks</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(298 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-1">
+        <path class="arch-svg-plug-shape" d="M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Inference backends</text>
+        <text class="arch-svg-plug-body" x="95" y="61">model serving</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(514 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="2" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-2">
+        <path class="arch-svg-plug-shape" d="M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">HTTP routes</text>
+        <text class="arch-svg-plug-body" x="95" y="61">REST endpoints</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(730 382)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="3" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="full-bottom-3">
+        <path class="arch-svg-plug-shape" d="M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="38">Mesh events</text>
+        <text class="arch-svg-plug-body" x="95" y="61">channels, gossip</text>
+      </g>
+    </g>
+  </svg>
+
+  <svg class="arch-svg arch-svg--small" viewBox="0 0 420 390" aria-hidden="true">
+    <path class="arch-svg-bus-fill" d="M408 211V156Q408 144 396 144H343Q337 144 337 150V159Q337 166 330 166H298Q291 166 291 159V150Q291 144 285 144H133Q127 144 127 150V159Q127 166 120 166H88Q81 166 81 159V150Q81 144 75 144H24Q12 144 12 156V266Q12 278 24 278H75Q81 278 81 272V263Q81 256 88 256H120Q127 256 127 263V272Q127 278 133 278H285Q291 278 291 272V263Q291 256 298 256H330Q337 256 337 263V272Q337 278 343 278H396Q408 278 408 266V211Z"></path>
+    <path class="arch-svg-runtime-glow" d="M408 211V156Q408 144 396 144H24Q12 144 12 156V266Q12 278 24 278H396Q408 278 408 266V211" data-arch-runtime-glow></path>
+
+    <path class="arch-svg-socket-glow" d="M75 144Q81 144 81 150V159Q81 166 88 166H120Q127 166 127 159V150Q127 144 133 144" data-arch-socket-glow="small-top-0"></path>
+    <path class="arch-svg-socket-glow" d="M285 144Q291 144 291 150V159Q291 166 298 166H330Q337 166 337 159V150Q337 144 343 144" data-arch-socket-glow="small-top-1"></path>
+    <path class="arch-svg-socket-glow" d="M75 278Q81 278 81 272V263Q81 256 88 256H120Q127 256 127 263V272Q127 278 133 278" data-arch-socket-glow="small-bottom-0"></path>
+    <path class="arch-svg-socket-glow" d="M285 278Q291 278 291 272V263Q291 256 298 256H330Q337 256 337 263V272Q337 278 343 278" data-arch-socket-glow="small-bottom-1"></path>
+
+    <g class="arch-svg-runtime-copy arch-svg-runtime-copy--small" transform="translate(210 211)">
+      <text class="arch-svg-runtime-title arch-svg-runtime-title--small" x="0" y="-3">Mesh Runtime</text>
+      <text class="arch-svg-runtime-body arch-svg-runtime-body--small" x="0" y="24">manifests, processes, capabilities</text>
+    </g>
+
+    <path class="arch-svg-draw-path arch-svg-draw-path--ingress" d="M408 211V156Q408 144 396 144H343Q337 144 337 150V159Q337 166 330 166H298Q291 166 291 159V150Q291 144 285 144H133Q127 144 127 150V159Q127 166 120 166H88Q81 166 81 159V150Q81 144 75 144H24Q12 144 12 156V211"></path>
+    <path class="arch-svg-draw-path arch-svg-draw-path--egress" d="M408 211V266Q408 278 396 278H343Q337 278 337 272V263Q337 256 330 256H298Q291 256 291 263V272Q291 278 285 278H133Q127 278 127 272V263Q127 256 120 256H88Q81 256 81 263V272Q81 278 75 278H24Q12 278 12 266V211"></path>
+
+    <g class="arch-svg-plug-position" transform="translate(10 10)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="small-top-0">
+        <path class="arch-svg-plug-shape" d="M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">Blackboard</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">coordination</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(220 10)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="42" data-arch-overshoot="8" data-arch-socket="small-top-1">
+        <path class="arch-svg-plug-shape" d="M10 0H180Q190 0 190 10V78Q190 88 180 88H119Q113 88 113 94V104Q113 110 107 110H81Q75 110 75 104V94Q75 88 69 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">OpenAI Endpoint</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">compatible API</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(10 324)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="0" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="small-bottom-0">
+        <path class="arch-svg-plug-shape" d="M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">Inference backends</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">model serving</text>
+      </g>
+    </g>
+    <g class="arch-svg-plug-position" transform="translate(220 324)">
+      <g class="arch-svg-plug" data-arch-plug data-arch-pair="1" data-arch-seat="-42" data-arch-overshoot="8" data-arch-socket="small-bottom-1">
+        <path class="arch-svg-plug-shape" d="M10 0H69Q75 0 75 -6V-16Q75 -22 81 -22H107Q113 -22 113 -16V-6Q113 0 119 0H180Q190 0 190 10V78Q190 88 180 88H10Q0 88 0 78V10Q0 0 10 0Z"></path>
+        <text class="arch-svg-plug-title" x="95" y="34.75">HTTP routes</text>
+        <text class="arch-svg-plug-body" x="95" y="56.75">REST endpoints</text>
+      </g>
+    </g>
+  </svg>
+</figure>
+
+  </div>
+</section>
+
+
+
+<section class="sec pt-14 sm:pt-20" id="catalog">
+  <div class="shell">
+
+<div class="sec-head grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,34rem)] xl:items-end xl:gap-8">
+  <div>
+    <h2 class="title max-w-4xl text-balance font-display text-[clamp(2rem,7vw,4rem)] leading-[0.98] tracking-normal text-fg xl:text-[clamp(2.75rem,5vw,4.25rem)] xl:leading-[0.96]">Mesh-ready model refs, ready to copy.</h2>
+  </div>
+  <p class="sec-copy max-w-[42rem] text-pretty text-base leading-7 text-muted sm:text-lg">Browse live Hugging Face catalog data, copy <span class="mono" style="color: var(--blue-3);">org/repo:quant</span> refs, and see which models ship layer packages for multi-machine serving.</p>
+</div>
+
+
+    <div class="toolbar catalog-home-toolbar" id="catalog-toolbar">
+      <label class="ctrl search catalog-home-search flex min-h-11 min-w-0 items-center gap-2 rounded-mesh border border-line bg-surface px-3">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <span class="sr-only">Search models</span>
+        <input type="text" id="catalog-search" class="ctrl-input" placeholder="Search models, refs, or families…" aria-label="Search models">
+      </label>
+      <div class="catalog-home-filter-group" aria-label="Filter controls">
+      <label class="ctrl select catalog-home-select flex min-h-11 min-w-0 items-center rounded-mesh border border-line bg-surface px-3" for="filter-capability">
+        <span class="ctrl-label">Capability</span>
+        <select id="filter-capability" aria-label="Filter by capability">
+          <option value="">Any</option>
+          <option value="Code">Code</option>
+          <option value="Vision">Vision</option>
+          <option value="Long context">Long context</option>
+        </select>
+      </label>
+      <label class="ctrl select catalog-home-select flex min-h-11 min-w-0 items-center rounded-mesh border border-line bg-surface px-3" for="filter-runtime">
+        <span class="ctrl-label">Runtime</span>
+        <select id="filter-runtime" aria-label="Filter by runtime">
+          <option value="">Any</option>
+          <option value="Multi-machine">Multi-machine</option>
+          <option value="Single machine">Single machine</option>
+        </select>
+      </label>
+      <label class="ctrl select catalog-home-select flex min-h-11 min-w-0 items-center rounded-mesh border border-line bg-surface px-3" for="filter-hardware">
+        <span class="ctrl-label">Hardware</span>
+        <select id="filter-hardware" aria-label="Filter by hardware">
+          <option value="">Any</option>
+          <option value="&le; 8 GB">&le; 8 GB</option>
+          <option value="11–20 GB">11–20 GB</option>
+          <option value="40 GB +">40 GB+</option>
+        </select>
+      </label>
+      <label class="ctrl select catalog-home-select flex min-h-11 min-w-0 items-center rounded-mesh border border-line bg-surface px-3" for="filter-source">
+        <span class="ctrl-label">Source</span>
+        <select id="filter-source" aria-label="Filter by source">
+          <option value="">Any</option>
+          <option value="Qwen">Qwen</option>
+          <option value="GLM">GLM</option>
+          <option value="Gemma">Gemma</option>
+          <option value="DeepSeek">DeepSeek</option>
+          <option value="Kimi">Kimi</option>
+          <option value="Llama">Llama</option>
+          <option value="Mistral">Mistral</option>
+          <option value="MiniMax">MiniMax</option>
+        </select>
+      </label>
+      </div>
+    </div>
+
+    <div class="catalog-card" id="catalog-card">
+      <div class="catalog-head">
+        <span>Model</span>
+        <span>Size / quant</span>
+        <span>Run mode</span>
+        <span>Layer packages</span>
+        <span>Model ref</span>
+        <span>Links</span>
+      </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Kimi">
+          <div>
+            <div class="m">Kimi K2 Thinking</div>
+            <div class="ms">Layer package for unsloth/Kimi-K2-Thinking-GGUF:UD-Q4_K_XL</div>
+          </div>
+          <div>
+            <div class="sz">646.2 GB</div>
+            <div class="q"><span class="badge">UD-Q4_K_XL</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">61 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/Kimi-K2-Thinking-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" title="Copy ref" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Kimi-K2-Thinking-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/kimi-k2-thinking-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
         </div>
 
-        <div class="tags">
-            <span class="tag">OpenAI-compatible API</span>
-            <span class="tag">Pipeline + expert parallelism</span>
-            <span class="tag">Multi-model routing</span>
-            <span class="tag">Inter-model collaboration</span>
-            <span class="tag">Demand-aware rebalancing</span>
-            <span class="tag">Nostr discovery</span>
-            <span class="tag">Agent gossip</span>
-            <span class="tag">macOS + Linux</span>
-        </div>
-    </section>
-
-    <blockquote style="max-width:640px; margin:2.5rem auto; padding:1.5rem 2rem; border-left:3px solid #646cff; background:#1a1a2e; border-radius:8px; font-style:italic; color:#ccc; line-height:1.7;">
-        As part of the <a href="https://github.com/block/goose" style="color:#646cff;">goose</a> project, we wanted to let people try more open models, but many didn't have capacity on their own. Open models continue to improve apace so it makes sense to make it easy to host and share as they get more capable and larger. That is what this experiment is about.
-        <div style="margin-top:0.75rem; font-style:normal; font-size:0.9em; color:#999;">— Mic N</div>
-    </blockquote>
-
-    <section id="features">
-        <div class="section-tag">Features</div>
-        <h2>Distributed and decentralized inference</h2>
-
-        <div class="features">
-            <div class="feature">
-                <div class="feature-icon">⚡</div>
-                <h3>Automatic distribution</h3>
-                <p>Model fits on one machine? Solo mode, full speed. Too big? Dense models pipeline-split by layers across nodes. Splits are latency-aware — low-RTT peers preferred for tighter coordination.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🧩</div>
-                <h3>Stage lifecycle</h3>
-                <p>The planner chooses peers and layer ranges, loads stages downstream-to-upstream, waits for readiness, then publishes the stage-0 route.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🔀</div>
-                <h3>Multi-model routing</h3>
-                <p>Different nodes serve different models. API proxy routes by <code>model</code> field. Nodes auto-assigned based on what's needed and what's on disk.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📊</div>
-                <h3>Demand-aware rebalancing</h3>
-                <p>Unified demand map propagates across the mesh via gossip. Standby nodes promote to serve unserved or hot models. Dead hosts replaced within 60 seconds.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📡</div>
-                <h3>Nostr discovery</h3>
-                <p>Publish your mesh to Nostr relays. Others find it with <code>--auto</code> or join by name with <code>--discover "my-mesh"</code>. Smart scoring: region match, VRAM, health probe before joining.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🚀</div>
-                <h3>Zero-transfer loading</h3>
-                <p>Weights read from local GGUF files, not sent over the network. Model load: 111s → 5s. Per-token RPC round-trips: 558 → 8.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📈</div>
-                <h3>Scales passively</h3>
-                <p>GPU nodes gossip. Clients use lightweight routing tables — zero per-client server state. Event-driven: cost proportional to topology changes, not node count.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🎯</div>
-                <h3>Speculative decoding</h3>
-                <p>Draft model runs locally, proposes tokens verified in one batched pass. +38% throughput on code. Auto-detected from catalog.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">💻</div>
-                <h3>Web console</h3>
-                <p>Live topology, VRAM bars, model picker, built-in chat. API-driven — everything the console shows comes from JSON endpoints.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🧠</div>
-                <h3>Inter-model collaboration</h3>
-                <p>Models help each other during inference. Text-only model gets an image? A vision peer captions it silently. Small model uncertain? Peers race a second opinion. Repetition loop? Another model nudges it out. The caller sees one seamless response. Inspired by <a href="https://arxiv.org/pdf/2601.16863">Mixture of Models</a> — the mesh is the ensemble.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🤖</div>
-                <h3>Works with agents</h3>
-                <p>OpenAI-compatible API on <code>localhost:9337</code>. Use with goose, pi, opencode, or any tool that supports custom OpenAI endpoints.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🔗</div>
-                <h3>External backends</h3>
-                <p>Already running vLLM, TGI, or Ollama? Install the <code>openai-endpoint</code> plugin and add a <code>url</code> to your config. mesh-llm discovers the models and routes requests — the backend does all the inference work.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📝</div>
-                <h3>Agent gossip</h3>
-                <p>Have your agents gossip over the mesh — share status, findings, and questions via CLI or MCP. Works standalone with any LLM setup, no GPU needed. <a href="#blackboard">Learn more →</a></p>
-            </div>
-        </div>
-    </section>
-
-    <section id="install">
-        <div class="section-tag">Quick start</div>
-        <h2>Install &amp; run</h2>
-        <p class="section-lead">macOS or Linux. One command to install, one to run.</p>
-
-        <div class="code-block">
-            <span class="comment"># Install the latest platform bundle</span><br>
-            <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="val">https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.sh</span> | <span class="cmd">bash</span><br><br>
-            <span class="comment"># Install on Linux (build from source — needs just, cmake, nvcc, Rust, Node.js)</span><br>
-            <span class="cmd">git clone</span> <span class="val">https://github.com/Mesh-LLM/mesh-llm</span> &amp;&amp; <span class="cmd">cd</span> mesh-llm &amp;&amp; <span class="cmd">just</span> build<br><br>
-            <span class="comment"># Join the public mesh — instant chat, zero config</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--auto</span><br><br>
-            <span class="comment"># Or start your own mesh with a model</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">GLM-4.7-Flash</span><br><br>
-            <span class="comment"># Launch goose with the mesh (picks strongest model automatically)</span><br>
-            <span class="cmd">mesh-llm</span> goose<br><br>
-            <span class="comment"># Launch Claude Code with the mesh</span><br>
-            <span class="cmd">mesh-llm</span> claude
-        </div>
-    </section>
-
-    <section id="agents">
-        <div class="section-tag">Integrations</div>
-        <h2>Use with coding agents</h2>
-        <p class="section-lead">Standard OpenAI API on <code>localhost:9337</code>. Works with anything.</p>
-
-        <details style="margin-bottom:1rem;" open>
-            <summary style="cursor:pointer; font-size:0.9rem; font-weight:600; color:#fff; padding:0.8rem 0;">▸ goose (built-in launcher)</summary>
-            <p style="font-size:0.8rem; color:var(--text2); margin:0.5rem 0;">Uses a local mesh if present; otherwise auto-starts a client node. Picks the strongest model automatically. Cleans up on exit.</p>
-            <div class="code-block" style="margin-top:0.5rem;">
-                <span class="cmd">mesh-llm</span> goose<br><br>
-                <span class="comment"># Specify model explicitly (example: MiniMax)</span><br>
-                <span class="cmd">mesh-llm</span> goose <span class="flag">--model</span> <span class="val">MiniMax-M2.5-Q4_K_M</span>
-            </div>
-        </details>
-
-        <details style="margin-bottom:1rem;">
-            <summary style="cursor:pointer; font-size:0.9rem; font-weight:600; color:#fff; padding:0.8rem 0;">▸ pi (built-in launcher)</summary>
-            <div class="code-block" style="margin-top:0.5rem;">
-                <span class="cmd">mesh-llm</span> pi<br><br>
-                <span class="comment"># Or pick a specific model</span><br>
-                <span class="cmd">mesh-llm</span> pi <span class="flag">--model</span> <span class="val">MiniMax-M2.5-Q4_K_M</span><br><br>
-                <span class="comment"># Only write ~/.pi/agent/models.json</span><br>
-                <span class="cmd">mesh-llm</span> pi <span class="flag">--write</span><br><br>
-                <span class="comment"># Target a remote mesh host or URL</span><br>
-                <span class="cmd">mesh-llm</span> pi <span class="flag">--write</span> <span class="flag">--host</span> <span class="val">carrack.patio51.com:9337</span>
-            </div>
-            <p style="font-size:0.8rem; color:var(--text2); margin:0.5rem 0;">Writes every mesh model into <code>~/.pi/agent/models.json</code>, including Pi <code>contextWindow</code>/<code>maxTokens</code> when mesh metadata is available, and launches pi unless <code>--write</code> is set. Use <code>--host</code> for a remote mesh host or full URL.</p>
-        </details>
-
-        <details style="margin-bottom:1rem;">
-            <summary style="cursor:pointer; font-size:0.9rem; font-weight:600; color:#fff; padding:0.8rem 0;">▸ opencode</summary>
-            <div class="code-block" style="margin-top:0.5rem;">
-                <span class="cmd">OPENAI_API_KEY</span>=dummy <span class="cmd">OPENAI_BASE_URL</span>=<span class="val">http://localhost:9337/v1</span> \<br>
-                &nbsp;&nbsp;opencode <span class="flag">-m</span> <span class="val">openai/GLM-4.7-Flash-Q4_K_M</span>
-            </div>
-        </details>
-
-        <details style="margin-bottom:1rem;" open>
-            <summary style="cursor:pointer; font-size:0.9rem; font-weight:600; color:#fff; padding:0.8rem 0;">▸ claude code (built-in launcher)</summary>
-            <p style="font-size:0.8rem; color:var(--text2); margin:0.5rem 0;">Uses a local mesh if present; otherwise auto-starts a client node. Picks the strongest model automatically. Cleans up on exit.</p>
-            <div class="code-block" style="margin-top:0.5rem;">
-                <span class="cmd">mesh-llm</span> claude<br><br>
-                <span class="comment"># Specify model explicitly (example: MiniMax)</span><br>
-                <span class="cmd">mesh-llm</span> claude <span class="flag">--model</span> <span class="val">MiniMax-M2.5-Q4_K_M</span>
-            </div>
-        </details>
-
-        <details style="margin-bottom:1rem;">
-            <summary style="cursor:pointer; font-size:0.9rem; font-weight:600; color:#fff; padding:0.8rem 0;">▸ curl / any OpenAI client</summary>
-            <div class="code-block" style="margin-top:0.5rem;">
-                <span class="cmd">curl</span> <span class="val">http://localhost:9337/v1/chat/completions</span> \<br>
-                &nbsp;&nbsp;<span class="flag">-H</span> <span class="val">"Content-Type: application/json"</span> \<br>
-                &nbsp;&nbsp;<span class="flag">-d</span> <span class="val">'{"model":"GLM-4.7-Flash-Q4_K_M","messages":[{"role":"user","content":"hello"}]}'</span>
-            </div>
-        </details>
-    </section>
-
-    <section id="models">
-        <div class="section-tag">Models</div>
-        <h2>Specifying models</h2>
-        <p class="section-lead"><code>--model</code> accepts catalog names, URLs, or local paths. Hugging Face-backed models are auto-downloaded into the standard Hugging Face cache on first use with resume support.</p>
-
-        <div class="code-block">
-            <span class="comment"># Short name (fuzzy match — finds Qwen3-8B-Q4_K_M)</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">Qwen3-8B</span><br><br>
-            <span class="comment"># Full catalog name</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">Qwen3-8B-Q4_K_M</span><br><br>
-            <span class="comment"># Any GGUF from HuggingFace (auto-downloaded)</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf</span><br><br>
-            <span class="comment"># HuggingFace shorthand (org/repo/file.gguf)</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">bartowski/Llama-3.2-3B-Instruct-GGUF/Llama-3.2-3B-Instruct-Q4_K_M.gguf</span><br><br>
-            <span class="comment"># Local GGUF file</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">~/my-models/custom-model.gguf</span><br><br>
-            <span class="comment"># Browse the catalog</span><br>
-            <span class="cmd">mesh-llm</span> download
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-0.5B-Instruct</div>
+            <div class="ms">Draft for Qwen2.5 and DeepSeek-R1-Distill models</div>
+          </div>
+          <div>
+            <div class="sz">491 MB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>Qwen/Qwen2.5-0.5B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
         </div>
 
-        <h3 style="font-size:0.95rem; color:#fff; margin:2rem 0 1rem;">Built-in catalog</h3>
-        <p style="font-size:0.82rem; color:var(--text2); margin-bottom:1rem;">The catalog is a convenience — it changes as new models come out. Catalog models auto-download with their draft model for speculative decoding. Any GGUF model works, whether it's in the catalog or not.</p>
-        <div style="overflow-x:auto;">
-        <table style="width:100%; font-size:0.75rem; border-collapse:collapse; color:var(--text);">
-            <thead>
-                <tr style="border-bottom:1px solid var(--border); text-align:left;">
-                    <th style="padding:0.4rem 0.8rem; color:var(--text2);">VRAM</th>
-                    <th style="padding:0.4rem 0.8rem; color:var(--text2);">Model</th>
-                    <th style="padding:0.4rem 0.8rem; color:var(--text2);">Size</th>
-                    <th style="padding:0.4rem 0.8rem; color:var(--text2);">Notes</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem; color:var(--text3);">≤3GB</td><td style="padding:0.3rem 0.8rem;"><code>Qwen3-4B</code></td><td style="padding:0.3rem 0.8rem;">2.5GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Thinking modes</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Qwen2.5-3B</code></td><td style="padding:0.3rem 0.8rem;">2.1GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Small &amp; fast</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Llama-3.2-3B</code></td><td style="padding:0.3rem 0.8rem;">2.0GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Good tool calling</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem; color:var(--text3);">6-8GB</td><td style="padding:0.3rem 0.8rem;"><code>Qwen3-8B</code></td><td style="padding:0.3rem 0.8rem;">5.0GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Strong for its size</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Gemma-3-12B</code></td><td style="padding:0.3rem 0.8rem;">7.3GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Punches above weight</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem; color:var(--text3);">11-17GB</td><td style="padding:0.3rem 0.8rem;"><code>Qwen3-14B</code></td><td style="padding:0.3rem 0.8rem;">9.0GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Thinking modes</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Devstral-Small-2505</code></td><td style="padding:0.3rem 0.8rem;">14.3GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Agentic coding</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Qwen3-32B</code></td><td style="padding:0.3rem 0.8rem;">19.8GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Best dense Qwen3</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Qwen2.5-Coder-32B</code></td><td style="padding:0.3rem 0.8rem;">20GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Matches GPT-4o on code</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Qwen3.5-27B</code></td><td style="padding:0.3rem 0.8rem;">17GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Latest Qwen dense</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem; color:var(--text3);">40GB+</td><td style="padding:0.3rem 0.8rem;"><code>Qwen3-Coder-Next</code></td><td style="padding:0.3rem 0.8rem;">48GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">~85B dense, frontier coding</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Llama-3.3-70B</code></td><td style="padding:0.3rem 0.8rem;">43GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Strong all-around</td></tr>
-                <tr style="border-bottom:1px solid var(--border);"><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Qwen2.5-72B</code></td><td style="padding:0.3rem 0.8rem;">47GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Flagship Qwen2.5</td></tr>
-                <tr><td style="padding:0.3rem 0.8rem;"></td><td style="padding:0.3rem 0.8rem;"><code>Llama-3.1-405B</code></td><td style="padding:0.3rem 0.8rem;">149GB</td><td style="padding:0.3rem 0.8rem; color:var(--text2);">Largest dense (Q2_K)</td></tr>
-            </tbody>
-        </table>
-        </div>
-        <p style="font-size:0.75rem; color:var(--text3); margin-top:0.8rem;">Full catalog: <code>mesh-llm download</code> · Not in the catalog? Use a HuggingFace URL — any GGUF works.</p>
-    </section>
-
-    <section id="splits">
-        <div class="section-tag">Split serving</div>
-        <h2>Run one model across two nodes</h2>
-        <p class="section-lead">Use a published layer package and start every serving node with the same model id. The coordinator picks layer ranges; each node downloads the shared artifacts and layer files it needs for its assigned stage.</p>
-
-        <div class="code-block">
-            <span class="comment"># Node A: coordinator. Copy the printed token.</span><br>
-            <span class="cmd">mesh-llm</span> serve \<br>
-            &nbsp;&nbsp;<span class="flag">--model</span> <span class="val">meshllm/Qwen3-8B-Q4_K_M-layers</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--split</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span><br><br>
-            <span class="comment"># Node B: worker. Use the token from node A.</span><br>
-            <span class="cmd">mesh-llm</span> serve \<br>
-            &nbsp;&nbsp;<span class="flag">--model</span> <span class="val">meshllm/Qwen3-8B-Q4_K_M-layers</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--split</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--max-vram</span> <span class="val">5</span> \<br>
-            &nbsp;&nbsp;<span class="flag">--join</span> <span class="val">&lt;token&gt;</span><br><br>
-            <span class="comment"># Verify from node A</span><br>
-            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:9337/v1/models</span><br>
-            <span class="cmd">curl</span> <span class="val">http://127.0.0.1:3131/api/status</span>
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-3B-Instruct</div>
+            <div class="ms">Small &amp; fast general chat</div>
+          </div>
+          <div>
+            <div class="sz">2.1 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>Qwen/Qwen2.5-3B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
         </div>
 
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:1rem;">Defaults are API <code>:9337</code> and console <code>:3131</code>. On multi-interface hosts, add <code>--bind-ip &lt;lan-ip&gt;</code> so peers advertise a reachable address. If planning says the model needs more memory, increase <code>--max-vram</code> or use a smaller context/model.</p>
-    </section>
-
-    <section id="blackboard">
-        <div class="section-tag">Collaboration</div>
-        <h2>Blackboard</h2>
-        <p class="section-lead">Have your agents gossip over the mesh to collaborate amongst themselves. Status updates, findings, and questions propagate across the mesh — no central server, no cloud.</p>
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:0.8rem;">Blackboard ships as an external plugin. Works standalone — using your own API keys or cloud models? Run <code>mesh-llm client</code> with the plugin configured to give your agents a gossip layer. No GPU needed, no model needed.</p>
-
-        <div class="features" style="margin-bottom:2rem;">
-            <div class="feature">
-                <div class="feature-icon">🔍</div>
-                <h3>Search before you start</h3>
-                <p>Has someone already worked on this? Multi-term OR search finds relevant posts across the team. No embeddings, no external services — just fast local text matching.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">📢</div>
-                <h3>Share as you go</h3>
-                <p>Post what you're working on, what you found, what broke. Convention prefixes — <code>STATUS:</code>, <code>FINDING:</code>, <code>QUESTION:</code>, <code>TIP:</code>, <code>DONE:</code> — make search easy.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🤝</div>
-                <h3>Avoid doubling up</h3>
-                <p>Multiple agents working across repos? The blackboard keeps them coordinated. No one duplicates work, no one misses a fix someone else already found.</p>
-            </div>
-            <div class="feature">
-                <div class="feature-icon">🔒</div>
-                <h3>Stays in the mesh</h3>
-                <p>Blackboard propagates only to nodes in your mesh — no cloud, no external relays. PII is auto-scrubbed (paths, keys, secrets). Ephemeral: messages fade after 48 hours. Use a private mesh to keep it between your team.</p>
-            </div>
+        <div class="catalog-row" data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-Coder-32B-Instruct</div>
+            <div class="ms">Top-tier code gen, matches GPT-4o on code</div>
+          </div>
+          <div>
+            <div class="sz">20 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>Qwen/Qwen2.5-Coder-32B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
         </div>
 
-        <div class="code-block">
-            <span class="comment"># Install blackboard, then start a node</span><br>
-            <span class="cmd">mesh-llm</span> plugins install <span class="val">blackboard</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">client --join</span> <span class="val">&lt;token&gt;</span><br><br>
-            <span class="comment"># Post, search, read (talks to the running node)</span><br>
-            <span class="cmd">mesh-llm</span> blackboard <span class="val">"STATUS: working on auth refactor"</span><br>
-            <span class="cmd">mesh-llm</span> blackboard <span class="flag">--search</span> <span class="val">"CUDA OOM"</span><br>
-            <span class="cmd">mesh-llm</span> blackboard
+        <div class="catalog-row" data-capability="Code" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-Coder-7B-Instruct</div>
+            <div class="ms">Code generation &amp; completion</div>
+          </div>
+          <div>
+            <div class="sz">4.4 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>Qwen/Qwen2.5-Coder-7B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
         </div>
 
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:1.5rem;">
-            The CLI commands and MCP tools talk to the running node via its local API once the external plugin is installed and configured.
-        </p>
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:0.8rem;">
-            With the skill installed, agents proactively search before starting work, post their status, share findings, and answer each other's questions — all through the mesh.
-        </p>
-        <p style="font-size:0.82rem; color:var(--text2); margin-top:0.8rem;">
-            Also available through the management HTTP MCP endpoint at <code>http://127.0.0.1:3131/mcp</code>. Installed plugin tools are exposed under their plugin namespace.
-        </p>
-        <p style="font-size:0.82rem; color:#e5a700; margin-top:0.8rem;">
-            ⚠️ On a public mesh (<code>--auto</code>), your posts are visible to all peers. For private use, create your own mesh or join with <code>--join &lt;token&gt;</code>.
-        </p>
-    </section>
-
-    <section class="cta-section">
-        <h2>Try it</h2>
-        <p>One binary. macOS Apple Silicon plus Linux/Windows for CUDA, HIP, Vulkan, or CPU. MIT licensed.</p>
-        <div class="cta-buttons">
-            <a href="https://meshllm.cloud" class="btn btn-primary">Try it now</a>
-            <a href="#install" class="btn btn-secondary">Install</a>
-            <a href="https://github.com/Mesh-LLM/mesh-llm" class="btn btn-secondary">GitHub →</a>
-            <a href="https://github.com/Mesh-LLM/mesh-llm/blob/main/ROADMAP.md" class="btn btn-secondary">Roadmap</a>
+        <div class="catalog-row" data-capability="Code" data-runtime="Single machine" data-hardware="40 GB +" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-Coder-Next</div>
+            <div class="ms">~85B dense, frontier coding model</div>
+          </div>
+          <div>
+            <div class="sz">48 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>Qwen/Qwen3-Coder-Next-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/Qwen/Qwen3-Coder-Next-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
         </div>
-    </section>
 
-    <section style="max-width:640px; margin:0 auto; padding:2rem 1.5rem 3rem; font-size:0.82rem; color:var(--text3); line-height:1.7;">
-        <h3 style="font-size:0.85rem; color:var(--text2); margin-bottom:1rem;">Research &amp; roadmap</h3>
-        <p>We're exploring how to scale mesh inference with mixtures of models — routing and combining responses from heterogeneous LLMs. Inter-model collaboration is live: models consult each other during inference for image captioning, uncertainty resolution, and loop recovery. Papers informing this work:</p>
-        <ul style="margin:0.8rem 0; padding-left:1.2rem;">
-            <li><a href="https://arxiv.org/html/2507.00507v1" style="color:#646cff;">LLM-Mesh</a> — resource-efficient serverless LLM inference across heterogeneous hardware</li>
-            <li><a href="https://arxiv.org/pdf/2601.16863" style="color:#646cff;">Mixture of Models / NSED</a> — self-evaluating deliberation across models (Peeramid Labs)</li>
-            <li><a href="https://nvidianews.nvidia.com/news/nvidia-launches-nemotron-coalition-of-leading-global-ai-labs-to-advance-open-frontier-models" style="color:#646cff;">NVIDIA Nemotron Coalition</a> — advancing open frontier models across leading AI labs</li>
-        </ul>
-        <p>For current plans and work items, see the <a href="https://github.com/Mesh-LLM/mesh-llm/blob/main/ROADMAP.md" style="color:#646cff;">Roadmap</a> and <a href="https://github.com/Mesh-LLM/mesh-llm/blob/main/crates/mesh-llm/TODO.md" style="color:#646cff;">TODO</a> on GitHub.</p>
-        <p style="margin-top:0.8rem;">Come say hi on <a href="https://github.com/block/goose?tab=readme-ov-file#goose-around-with-us" style="color:#646cff;">Discord</a> — we're in the goose community.</p>
-    </section>
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Mistral">
+          <div>
+            <div class="m">Hermes-2-Pro-Mistral-7B</div>
+            <div class="ms">Goose default, strong tool calling for agents</div>
+          </div>
+          <div>
+            <div class="sz">4.4 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/Hermes-2-Pro-Mistral-7B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/Hermes-2-Pro-Mistral-7B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
 
-    <footer><p>mesh-llm — open source under MIT. Built with Rust, iroh, llama.cpp.</p></footer>
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Llama">
+          <div>
+            <div class="m">Llama-3.2-1B-Instruct</div>
+            <div class="ms">Draft for Llama 3.x and Llama 4 models</div>
+          </div>
+          <div>
+            <div class="sz">760 MB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/Llama-3.2-1B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Llama">
+          <div>
+            <div class="m">Llama-3.2-3B-Instruct</div>
+            <div class="ms">Meta Llama 3.2, goose default, good tool calling</div>
+          </div>
+          <div>
+            <div class="sz">2.0 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/Llama-3.2-3B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-14B-Instruct</div>
+            <div class="ms">Solid general chat</div>
+          </div>
+          <div>
+            <div class="sz">9.0 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/Qwen2.5-14B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-32B-Instruct</div>
+            <div class="ms">Proven general chat</div>
+          </div>
+          <div>
+            <div class="sz">20 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/Qwen2.5-32B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen2.5-Coder-14B-Instruct</div>
+            <div class="ms">Strong code gen, fills gap between 7B and 32B</div>
+          </div>
+          <div>
+            <div class="sz">9.0 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/Qwen2.5-Coder-14B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Gemma">
+          <div>
+            <div class="m">Gemma-3-1B-it</div>
+            <div class="ms">Draft for Gemma 3 models</div>
+          </div>
+          <div>
+            <div class="sz">780 MB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/google_gemma-3-1b-it-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Gemma">
+          <div>
+            <div class="m">Gemma-3-27B-it</div>
+            <div class="ms">Google Gemma 3 27B, strong reasoning</div>
+          </div>
+          <div>
+            <div class="sz">17 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>bartowski/google_gemma-3-27b-it-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Llama">
+          <div>
+            <div class="m">Llama-4-Scout</div>
+            <div class="ms">MoE 109B/17B active, 16 experts top-1, Meta latest, tool calling</div>
+          </div>
+          <div>
+            <div class="sz">22.5 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>glogwa68/Llama-4-scout-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/glogwa68/Llama-4-scout-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="DeepSeek">
+          <div>
+            <div class="m">DeepSeek-R1-Distill-Qwen-14B</div>
+            <div class="ms">DeepSeek R1 reasoning distilled into Qwen 14B</div>
+          </div>
+          <div>
+            <div class="sz">9.0 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="DeepSeek">
+          <div>
+            <div class="m">DeepSeek-R1-Distill-Qwen-32B</div>
+            <div class="ms">DeepSeek R1 reasoning distilled into Qwen 32B</div>
+          </div>
+          <div>
+            <div class="sz">19.9 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/DeepSeek-R1-Distill-Qwen-32B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="DeepSeek">
+          <div>
+            <div class="m">DeepSeek-V3.2</div>
+            <div class="ms">MoE 671B, frontier general model, requires multi-node</div>
+          </div>
+          <div>
+            <div class="sz">382 GB</div>
+            <div class="q"><span class="badge">UD-Q4_K_XL</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">61 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/DeepSeek-V3.2-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/DeepSeek-V3.2-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/deepseek-v3-2-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Mistral">
+          <div>
+            <div class="m">Devstral-Small-2505</div>
+            <div class="ms">Mistral agentic coding, tool use</div>
+          </div>
+          <div>
+            <div class="sz">14.3 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Devstral-Small-2505-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Devstral-Small-2505-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="GLM">
+          <div>
+            <div class="m">GLM-4-32B</div>
+            <div class="ms">Strong 32B, good tool calling</div>
+          </div>
+          <div>
+            <div class="sz">19.7 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/GLM-4-32B-0414-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/GLM-4-32B-0414-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="GLM">
+          <div>
+            <div class="m">GLM-4.7-Flash</div>
+            <div class="ms">MoE 30B/3B active, 64 experts top-4, fast inference, tool calling</div>
+          </div>
+          <div>
+            <div class="sz">18 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/GLM-4.7-Flash-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/GLM-4.7-Flash-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="40 GB +" data-source="MiniMax">
+          <div>
+            <div class="m">MiniMax-M2.5</div>
+            <div class="ms">MoE 456B/46B active, 256 experts top-8, Q4_K_M</div>
+          </div>
+          <div>
+            <div class="sz">138 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/MiniMax-M2.5-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/MiniMax-M2.5-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Mistral">
+          <div>
+            <div class="m">Mistral-Small-3.1-24B-Instruct</div>
+            <div class="ms">Mistral general chat, good tool calling</div>
+          </div>
+          <div>
+            <div class="sz">14.3 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Mistral-Small-3.1-24B-Instruct-2503-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-0.6B</div>
+            <div class="ms">Draft for Qwen3 models</div>
+          </div>
+          <div>
+            <div class="sz">397 MB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-0.6B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-14B</div>
+            <div class="ms">Qwen3 strong chat, thinking modes</div>
+          </div>
+          <div>
+            <div class="sz">9.0 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-14B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-14B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-235B-A22B</div>
+            <div class="ms">MoE 235B/22B, proven at 16 tok/s across 2 nodes</div>
+          </div>
+          <div>
+            <div class="sz">134 GB</div>
+            <div class="q"><span class="badge">UD-Q4_K_XL</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">94 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-235B-A22B-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-235B-A22B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/qwen3-235b-a22b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-30B-A3B</div>
+            <div class="ms">MoE general chat, 128 experts top-8, thinking/non-thinking</div>
+          </div>
+          <div>
+            <div class="sz">17.3 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-30B-A3B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-30B-A3B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-32B</div>
+            <div class="ms">Best Qwen3 dense, thinking/non-thinking modes</div>
+          </div>
+          <div>
+            <div class="sz">19.8 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-32B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-32B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-32B (UD)</div>
+            <div class="ms">Qwen3 32B dense, layer package available</div>
+          </div>
+          <div>
+            <div class="sz">20.0 GB</div>
+            <div class="q"><span class="badge">UD-Q4_K_XL</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">64 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-32B-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-32B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/qwen3-32b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-4B</div>
+            <div class="ms">Qwen3 starter, thinking/non-thinking modes</div>
+          </div>
+          <div>
+            <div class="sz">2.5 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-4B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-4B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Multi-machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-8B</div>
+            <div class="ms">Qwen3 mid-tier, strong for its size</div>
+          </div>
+          <div>
+            <div class="sz">5.0 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">36 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-8B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-8B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/qwen3-8b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-Coder-30B-A3B-Instruct</div>
+            <div class="ms">MoE agentic coding, tool use, 128 experts top-8</div>
+          </div>
+          <div>
+            <div class="sz">18.6 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="Code" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3-Coder-480B-A35B-Instruct</div>
+            <div class="ms">MoE 480B/35B, largest coding model, requires multi-node</div>
+          </div>
+          <div>
+            <div class="sz">294 GB</div>
+            <div class="q"><span class="badge">UD-Q4_K_XL</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">62 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF<span class="col">:UD-Q4_K_XL</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/qwen3-coder-480b-a35b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3.5-0.8B-Vision</div>
+            <div class="ms">Tiny vision model, OCR, screenshots, runs anywhere</div>
+          </div>
+          <div>
+            <div class="sz">508 MB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3.5-0.8B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3.5-4B-Vision</div>
+            <div class="ms">Small vision model, good quality/size balance</div>
+          </div>
+          <div>
+            <div class="sz">2.7 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3.5-4B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3.5-4B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <div>
+            <div class="m">Qwen3.5-9B-Vision</div>
+            <div class="ms">Vision + text, replaces Qwen3-8B with image understanding</div>
+          </div>
+          <div>
+            <div class="sz">5.8 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/Qwen3.5-9B-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/Qwen3.5-9B-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Gemma">
+          <div>
+            <div class="m">Gemma-3-12B-it</div>
+            <div class="ms">Google Gemma 3 12B, punches above weight</div>
+          </div>
+          <div>
+            <div class="sz">7.3 GB</div>
+            <div class="q"><span class="badge">Q4_K_M</span></div>
+          </div>
+          <div><span class="run sm">Single machine</span></div>
+          <div><span class="badge">—</span></div>
+          <div class="ref ref-copy"><code>unsloth/gemma-3-12b-it-GGUF<span class="col">:Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/gemma-3-12b-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-row" data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Gemma">
+          <div>
+            <div class="m">Gemma-4-26B-A4B-it</div>
+            <div class="ms">Layer package for unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M</div>
+          </div>
+          <div>
+            <div class="sz">16.9 GB</div>
+            <div class="q"><span class="badge">UD-Q4_K_M</span></div>
+          </div>
+          <div><span class="run mm">Multi-machine</span></div>
+          <div><span class="badge green">30 layers</span></div>
+          <div class="ref ref-copy"><code>unsloth/gemma-4-26B-A4B-it-GGUF<span class="col">:UD-Q4_K_M</span></code><button class="copy" type="button" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div>
+          <div class="links">
+            <a href="https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF" target="_blank" rel="noopener"><i data-lucide="external-link"></i></a>
+            <a href="https://huggingface.co/meshllm/gemma-4-26b-a4b-layer-package" target="_blank" rel="noopener"><i data-lucide="package"></i></a>
+          </div>
+        </div>
+
+        <div class="catalog-foot">
+          <span class="live" id="catalog-count"></span>
+          <div class="pg"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec py-14 sm:py-20 lg:pb-24" id="install">
+  <div class="shell">
+    <div class="cta-terminal" aria-label="Mesh install and serve commands">
+  <div class="cta-terminal-bar">
+    <div class="cta-window-dots" aria-hidden="true">
+      <span class="red"></span>
+      <span class="yellow"></span>
+      <span class="green"></span>
+    </div>
+    <div class="cta-terminal-tabs" role="tablist" aria-label="Install methods">
+      <button class="active" type="button" role="tab" aria-selected="true" data-install-method="curl" data-install-copy="curl -fsSL https://mesh-llm.cloud/install.sh | sh">curl</button>
+      <button type="button" role="tab" aria-selected="false" data-install-method="brew" data-install-copy="brew install mesh-llm/tap/mesh-llm">brew</button>
+      <button type="button" role="tab" aria-selected="false" data-install-method="cargo" data-install-copy="cargo install mesh-llm">cargo</button>
+    </div>
+    <div class="cta-terminal-meta">~ &middot; zsh &middot; mesh-llm</div>
+    <button class="cta-copy" type="button" data-copy-text="curl -fsSL https://mesh-llm.cloud/install.sh | sh" aria-label="Copy install command">COPY</button>
+  </div>
+
+  <div class="cta-terminal-body">
+    <div class="cta-terminal-block">
+      <p class="comment"># Install Mesh (macOS, Linux, Windows &middot; ~18 MB)</p>
+      <p class="cta-install-command" data-install-command-display aria-live="polite"><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="value">https://mesh-llm.cloud/install.sh</span> <span class="pipe">|</span> <span class="cmd">sh</span></p>
+      <template data-install-template="curl"><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="value">https://mesh-llm.cloud/install.sh</span> <span class="pipe">|</span> <span class="cmd">sh</span></template>
+      <template data-install-template="brew"><span class="prompt">$</span> <span class="cmd">brew</span> <span class="cmd">install</span> <span class="value">mesh-llm/tap/mesh-llm</span></template>
+      <template data-install-template="cargo"><span class="prompt">$</span> <span class="cmd">cargo</span> <span class="cmd">install</span> <span class="value">mesh-llm</span></template>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Join the public mesh and serve if this machine can</p>
+      <p><span class="prompt">$</span> <span class="cmd">mesh-llm</span> <span class="cmd">serve</span> <span class="flag">--auto</span></p>
+      <p class="status"><span class="caret">&rsaquo;</span> discovering peers via nostr... <span class="ok">[ok]</span></p>
+      <p class="status"><span class="caret">&rsaquo;</span> joined "public" (217 peers) <span class="ok">[ok]</span></p>
+      <p class="status"><span class="caret">&rsaquo;</span> proxy listening on <span class="value">localhost:3131</span> <span class="ok">[ok]</span></p>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Or serve an 8GB VRAM-friendly catalog model</p>
+      <p><span class="prompt">$</span> <span class="cmd">mesh-llm</span> <span class="cmd">serve</span> <span class="flag">--model</span> <span class="value">gemma-4-26B-A4B-it-UD-Q4_K_M</span></p>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Point any OpenAI client at Mesh</p>
+      <p><span class="prompt">$</span> <span class="cmd">export</span> <span class="value">OPENAI_BASE_URL=http://localhost:3131/v1</span></p>
+    </div>
+  </div>
+
+  <div class="cta-terminal-footer">
+    <span class="live-dot" aria-hidden="true"></span>
+    <span>stream</span>
+    <strong><span class="caret">&rsaquo;</span> GLM-4.5-Air-Q4_K_M</strong>
+    <span>42 t/s &middot; ttft 187 ms</span>
+    <span>pipeline-split &middot; 3 peers</span>
+  </div>
+</div>
+
+  </div>
+</section>
+
+  <script>
+(function () {
+  const searchInput = document.getElementById('catalog-search');
+  const filterCapability = document.getElementById('filter-capability');
+  const filterRuntime = document.getElementById('filter-runtime');
+  const filterHardware = document.getElementById('filter-hardware');
+  const filterSource = document.getElementById('filter-source');
+  const catalogCard = document.getElementById('catalog-card');
+
+  if (!searchInput || !catalogCard) return;
+
+  var PAGE_SIZE = 10;
+  var currentPage = 1;
+  var filteredRows = [];
+
+  function applyFilters() {
+    const query = searchInput.value.toLowerCase().trim();
+    const capability = filterCapability ? filterCapability.value : '';
+    const runtime = filterRuntime ? filterRuntime.value : '';
+    const hardware = filterHardware ? filterHardware.value : '';
+    const source = filterSource ? filterSource.value : '';
+
+    const rows = catalogCard.querySelectorAll('.catalog-row');
+    filteredRows = [];
+
+    rows.forEach(function (row) {
+      const name = (row.querySelector('.m')?.textContent || '').toLowerCase();
+      const ref = (row.querySelector('.ref code')?.textContent || '').toLowerCase();
+      const desc = (row.querySelector('.ms')?.textContent || '').toLowerCase();
+      const caps = row.getAttribute('data-capability') || '';
+      const rt = row.getAttribute('data-runtime') || '';
+      const hw = row.getAttribute('data-hardware') || '';
+      const src = row.getAttribute('data-source') || '';
+
+      const matchesSearch = !query || name.includes(query) || ref.includes(query) || desc.includes(query);
+      const matchesCapability = !capability || caps.split(' ').some(function (c) { return c.toLowerCase() === capability.toLowerCase(); });
+      const matchesRuntime = !runtime || rt.toLowerCase() === runtime.toLowerCase();
+      const matchesHardware = !hardware || hw.toLowerCase() === hardware.toLowerCase();
+      const matchesSource = !source || src.toLowerCase() === source.toLowerCase();
+
+      const visible = matchesSearch && matchesCapability && matchesRuntime && matchesHardware && matchesSource;
+      row.style.display = 'none';
+      if (visible) filteredRows.push(row);
+    });
+
+    currentPage = 1;
+    renderPage();
+  }
+
+  function renderPage() {
+    var totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    var start = (currentPage - 1) * PAGE_SIZE;
+    var end = start + PAGE_SIZE;
+
+    filteredRows.forEach(function (row, i) {
+      row.style.display = (i >= start && i < end) ? '' : 'none';
+    });
+
+    updatePagination(filteredRows.length, totalPages);
+  }
+
+  function updatePagination(total, totalPages) {
+    var pgEl = catalogCard.querySelector('.catalog-foot .pg');
+    if (!pgEl) return;
+
+    if (totalPages <= 1) {
+      pgEl.style.display = 'none';
+      return;
+    }
+    pgEl.style.display = '';
+
+    var totalPagesNum = totalPages;
+    var html = '';
+
+    // Prev button
+    html += '<a href="#" class="pg-prev"' + (currentPage === 1 ? ' style="opacity:0.3;pointer-events:none"' : '') + '>←</a>';
+
+    // Page numbers with ellipsis
+    if (totalPagesNum <= 7) {
+      for (var i = 1; i <= totalPagesNum; i++) {
+        html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
+      }
+    } else {
+      html += '<a href="#" class="pg-num' + (1 === currentPage ? ' now' : '') + '" data-page="1">1</a>';
+      if (currentPage > 3) html += '<span style="padding:4px 6px;color:var(--muted)">…</span>';
+      var rangeStart = Math.max(2, currentPage - 1);
+      var rangeEnd = Math.min(totalPagesNum - 1, currentPage + 1);
+      if (currentPage <= 3) rangeEnd = Math.min(4, totalPagesNum - 1);
+      if (currentPage >= totalPagesNum - 2) rangeStart = Math.max(3, totalPagesNum - 2);
+      for (var i = rangeStart; i <= rangeEnd; i++) {
+        html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
+      }
+      if (currentPage < totalPagesNum - 2) html += '<span style="padding:4px 6px;color:var(--muted)">…</span>';
+      html += '<a href="#" class="pg-num' + (totalPagesNum === currentPage ? ' now' : '') + '" data-page="' + totalPagesNum + '">' + totalPagesNum + '</a>';
+    }
+
+    // Next button
+    html += '<a href="#" class="pg-next"' + (currentPage === totalPagesNum ? ' style="opacity:0.3;pointer-events:none"' : '') + '>→</a>';
+
+    pgEl.innerHTML = html;
+
+    // Update live count
+    var liveEl = catalogCard.querySelector('.catalog-foot .live');
+    if (liveEl) {
+      liveEl.innerHTML = 'Showing ' + ((currentPage - 1) * PAGE_SIZE + 1) + '–' + Math.min(currentPage * PAGE_SIZE, total) + ' of ' + total;
+    }
+  }
+
+  // Pagination click handler
+  catalogCard.addEventListener('click', function (e) {
+    var pgBtn = e.target.closest('.pg-prev, .pg-next, .pg-num');
+    if (!pgBtn) return;
+    e.preventDefault();
+
+    if (pgBtn.classList.contains('pg-prev')) currentPage--;
+    else if (pgBtn.classList.contains('pg-next')) currentPage++;
+    else if (pgBtn.hasAttribute('data-page')) currentPage = parseInt(pgBtn.getAttribute('data-page'));
+
+    renderPage();
+  });
+
+  searchInput.addEventListener('input', applyFilters);
+  if (filterCapability) filterCapability.addEventListener('change', applyFilters);
+  if (filterRuntime) filterRuntime.addEventListener('change', applyFilters);
+  if (filterHardware) filterHardware.addEventListener('change', applyFilters);
+  if (filterSource) filterSource.addEventListener('change', applyFilters);
+
+  // Copy button functionality
+  catalogCard.addEventListener('click', function (e) {
+    const btn = e.target.closest('.copy');
+    if (!btn) return;
+    const row = btn.closest('.catalog-row');
+    const ref = row.querySelector('.ref code')?.textContent || '';
+    navigator.clipboard.writeText(ref).then(function () {
+      const original = btn.innerHTML;
+      btn.classList.add('copied');
+      btn.textContent = '✓';
+      setTimeout(function () {
+        btn.innerHTML = original;
+        btn.classList.remove('copied');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      }, 1200);
+    });
+  });
+
+  // Keyboard shortcut for search
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const tag = document.activeElement.tagName;
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+        e.preventDefault();
+        searchInput.focus();
+      }
+    }
+  });
+
+  // Initial render
+  applyFilters();
+})();
+</script>
+
+</main>
+
+
+
+<footer class="site-footer" id="footer" data-pagefind-ignore="all">
+  <div class="shell">
+    <div class="footer-rule" aria-hidden="true"></div>
+
+    <div class="footer-grid">
+      <section class="footer-sponsors" aria-labelledby="footer-sponsors-title">
+        <h2 id="footer-sponsors-title">Sponsors</h2>
+        <div class="footer-list">
+
+<a class="footer-row sponsor-row" href="https://github.com/Mesh-LLM/mesh-llm">
+
+    <span class="footer-sponsor-logo" aria-hidden="true">
+      <svg viewBox="0 0 50 50" fill="none">
+        <rect x="0.75" y="0.75" width="48.5" height="48.5" rx="7.25" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M25 4.5V45.5M4.5 25H45.5M9 9H41V41H9V9Z" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+        <path d="M25 4.5L45.5 25L25 45.5L4.5 25L25 4.5Z" stroke="var(--sponsor-line)" stroke-width="1"/>
+        <circle cx="25" cy="25" r="18.5" stroke="var(--sponsor-line)" stroke-width="1"/>
+        <circle cx="25" cy="25" r="12" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+      </svg>
+    </span>
+
+  <span>Become a sponsor</span>
+  <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+</a>
+
+        </div>
+
+        <div class="footer-brand-block">
+          <a class="brand" href="/" aria-label="Mesh LLM home"><img
+  class="brand-mark-img"
+  src="/assets/images/jelly-logo-color.png"
+  width="180"
+  height="180"
+  alt=""
+  decoding="async">
+<span class="brand-name">mesh<span>llm</span></span>
+
+<span class="brand-version" data-github-release data-current-version-label aria-label="Current version v0.71.0">v0.71.0</span>
+
+</a>
+          <span>© 2026 mesh-llm</span>
+        </div>
+      </section>
+
+      <div class="footer-links-block">
+        <section class="footer-column" aria-labelledby="footer-site-title">
+          <h2 id="footer-site-title">Site</h2>
+          <nav class="footer-list" aria-label="Footer site links">
+
+<a class="footer-row" href="/">
+
+  <span>Home</span>
+  <i data-lucide="arrow-right" aria-hidden="true"></i>
+</a>
+
+
+<a class="footer-row" href="/docs/">
+
+  <span>Documentation</span>
+  <i data-lucide="arrow-right" aria-hidden="true"></i>
+</a>
+
+
+<a class="footer-row" href="/catalog/">
+
+  <span>Model catalog</span>
+  <i data-lucide="arrow-right" aria-hidden="true"></i>
+</a>
+
+
+<a class="footer-row" href="/docs/pages/installing-mesh/">
+
+  <span>Install Mesh</span>
+  <i data-lucide="arrow-right" aria-hidden="true"></i>
+</a>
+
+          </nav>
+        </section>
+
+        <section class="footer-column" aria-labelledby="footer-socials-title">
+          <h2 id="footer-socials-title">Socials</h2>
+          <nav class="footer-list" aria-label="Footer social links">
+
+<a class="footer-row" href="https://github.com/Mesh-LLM/mesh-llm">
+
+  <span>GitHub</span>
+  <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+</a>
+
+
+<a class="footer-row" href="https://public.meshllm.cloud">
+
+  <span>Public Mesh</span>
+  <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+</a>
+
+
+<a class="footer-row" href="https://github.com/Mesh-LLM/mesh-llm/blob/main/ROADMAP.md">
+
+  <span>Roadmap</span>
+  <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+</a>
+
+
+<a class="footer-row" href="https://github.com/Mesh-LLM/mesh-llm/blob/main/LICENSE">
+
+  <span>License</span>
+  <i data-lucide="arrow-up-right" aria-hidden="true"></i>
+</a>
+
+          </nav>
+        </section>
+
+        <form class="footer-subscribe" action="#" method="post">
+          <label for="footer-email">Stay in the loop</label>
+          <div class="footer-subscribe-row">
+            <input id="footer-email" name="email" type="email" autocomplete="email" placeholder="Enter your email">
+            <button type="submit">Subscribe</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</footer>
+
 </body>
 </html>

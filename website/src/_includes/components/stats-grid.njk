@@ -1,0 +1,8 @@
+<div class="stats grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  {% for stat in homeStats %}
+    <div class="stat min-w-0 rounded-mesh border border-line-soft bg-surface/55 p-5">
+      <div class="v text-[clamp(2rem,9vw,3.25rem)] font-semibold leading-none text-fg">{{ stat.value | safe }}<span class="u text-base text-muted">{{ stat.unit | safe }}</span></div>
+      <div class="lbl mt-2 text-sm text-muted">{{ stat.label | safe }}</div>
+    </div>
+  {% endfor %}
+</div>

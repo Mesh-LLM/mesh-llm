@@ -1,0 +1,109 @@
+{% from "components/ui.njk" import sectionHead, badge, meter %}
+
+<section class="sec pt-14 sm:pt-20" id="features">
+  <div class="shell">
+    {{ sectionHead(
+      "Built for the way you actually run models.",
+      "Mesh handles discovery, placement, routing, and model serving so tools just see a single OpenAI endpoint."
+    ) }}
+
+    <div class="features grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-6 xl:auto-rows-[minmax(16rem,auto)]">
+      <!-- big tile: layer packages -->
+      <div class="tile span-4 row-2 min-w-0 overflow-hidden rounded-mesh border border-line-soft bg-surface/70 p-5 md:col-span-2 xl:col-span-4 xl:row-span-2 xl:p-7">
+        <div class="glow b"></div>
+        <div class="head">
+          <h3>Layer packages, split across peers</h3>
+          <p>Run larger models by placing work across the machines you already have, instead of needing one oversized GPU. The planner picks low-RTT peers and pipeline-splits by layer range. Weights stay on local disk; only activations cross the wire.</p>
+          <div class="mt-3 flex flex-wrap gap-1.5">
+            {{ badge("Layer packages", "green") }}
+            {{ badge("Pipeline-split", "blue") }}
+            {{ badge("Zero-transfer load") }}
+          </div>
+        </div>
+        <div class="viz">
+          <div class="mini-topo">
+            <div class="node">L 0–20<br/><b>node-01</b><span class="layers">host</span></div>
+            <div class="node">L 21–40<br/><b>node-02</b><span class="layers">7800 XT</span></div>
+            <div class="node you">L 41–60<br/><b>your-mac &larr;</b><span class="layers">M3 Ultra</span></div>
+            <div class="node">L 61–80<br/><b>galleon-04</b><span class="layers">3090</span></div>
+          </div>
+          <div class="meters mt-4 grid gap-3">
+            {{ meter("model load", "111 s &rarr; 5 s", "5%") }}
+            {{ meter("rpc per token", "558 &rarr; 8", "2%", "b") }}
+          </div>
+        </div>
+      </div>
+
+      <!-- OpenAI compat -->
+      <div class="tile span-2 row-2 min-w-0 overflow-hidden rounded-mesh border border-line-soft bg-surface/70 p-5 xl:col-span-2 xl:row-span-2 xl:p-7">
+        <div class="head">
+          <h3>Same SDK. New backend.</h3>
+          <p>Standard <span class="mono" style="color: var(--blue-3);">/v1</span> chat, completions, streaming, tool-calls and structured outputs. Anything that accepts <span class="mono">OPENAI_BASE_URL</span> just works.</p>
+        </div>
+        <div class="api-diag">
+          <div class="col">
+            <div class="row"><b>goose</b></div>
+            <div class="row"><b>claude</b></div>
+            <div class="row"><b>continue</b></div>
+            <div class="row"><b>opencode</b></div>
+          </div>
+          <div class="mesh">Mesh</div>
+          <div class="col">
+            <div class="row">gemma-4</div>
+            <div class="row">glm-4.5</div>
+            <div class="row">qwen-coder</div>
+            <div class="row">llama-3.1</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Public or private -->
+      <div class="tile span-3 min-w-0 overflow-hidden rounded-mesh border border-line-soft bg-surface/70 p-5 xl:col-span-3 xl:p-7">
+        <div class="glow g"></div>
+        <div class="head">
+          <h3>Your boundary, your rules.</h3>
+          <p>Join the public mesh, keep a private mesh for your own machines, or publish a mesh you operate. Discovery via Nostr — no central directory, no cloud handshake.</p>
+          <div class="mt-3 flex flex-wrap gap-1.5">
+            {{ badge("public.meshllm.cloud") }}
+            {{ badge("private", "blue") }}
+            {{ badge("--publish") }}
+          </div>
+        </div>
+      </div>
+
+      <!-- Speculative -->
+      <div class="tile span-3 min-w-0 overflow-hidden rounded-mesh border border-line-soft bg-surface/70 p-5 xl:col-span-3 xl:p-7">
+        <div class="head">
+          <h3>Speculative decoding, paired by default.</h3>
+          <p>Catalog entries ship with a draft model already configured. A local draft proposes tokens; the target verifies in one batched pass. <b style="color: var(--green-3);">+38 %</b> on code-heavy workloads, no tuning.</p>
+        </div>
+      </div>
+
+      <!-- Hugging Face -->
+      <div class="tile span-3 min-w-0 overflow-hidden rounded-mesh border border-line-soft bg-surface/70 p-5 xl:col-span-3 xl:p-7">
+        <div class="head">
+          <h3>Live Hugging Face index.</h3>
+          <p>A curated index of well-tested GGUFs with paired drafts and known good quants. Refreshes hourly from <span class="mono" style="color: var(--blue-3);">meshllm/catalog</span> on Hugging Face.</p>
+        </div>
+        <div class="code-thumb">
+<span class="c"># pull from the catalog ref</span>
+<span class="p">$</span> mesh-llm <span class="f">serve</span> <span class="v">\</span>
+    <span class="f">--model</span> <span class="v">unsloth/Qwen3-32B-GGUF:Q4_K_M</span>
+  <span class="k">▸</span> match: <span class="v">qwen3-32B</span>  <span class="c">/ paired draft: qwen2.5-3B</span></div>
+      </div>
+
+      <!-- Rebalance -->
+      <div class="tile span-3 min-w-0 overflow-hidden rounded-mesh border border-line-soft bg-surface/70 p-5 xl:col-span-3 xl:p-7">
+        <div class="head">
+          <h3>Demand-aware rebalance.</h3>
+          <p>A unified demand map gossips across the mesh; standby nodes promote to hot models when traffic spikes, and dead hosts are replaced in <b style="color: var(--green-3);">under 60 s</b>.</p>
+        </div>
+        <div class="meters grid gap-3">
+          {{ meter("cold → hot promotion", "5.4 s", "22%") }}
+          {{ meter("dead-node replace", "&lt; 60 s", "70%") }}
+          {{ meter("speculative &middot; code", "+38 %", "62%", "b") }}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

@@ -282,6 +282,38 @@ function Get-ReleaseUrl {
     return "https://github.com/$Repo/releases/latest/download/$Asset"
 }
 
+function Get-ChecksumUrl {
+    param([string]$Url)
+    return "$Url.sha256"
+}
+
+function Read-ExpectedSha256 {
+    param([string]$Path)
+    $content = Get-Content -Path $Path -Raw
+    $match = [regex]::Match($content, "[A-Fa-f0-9]{64}")
+    if (-not $match.Success) {
+        throw "checksum sidecar did not contain a SHA-256 digest: $Path"
+    }
+    return $match.Value.ToLowerInvariant()
+}
+
+function Assert-DownloadedFileChecksum {
+    param(
+        [string]$Path,
+        [string]$Url
+    )
+
+    $checksumPath = "$Path.sha256"
+    $checksumUrl = Get-ChecksumUrl $Url
+    Invoke-WebRequest -Uri $checksumUrl -OutFile $checksumPath
+    $expected = Read-ExpectedSha256 $checksumPath
+    $actual = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "checksum mismatch for $(Split-Path -Leaf $Path): expected $expected, got $actual"
+    }
+    Write-Host "Verified checksum: $(Split-Path -Leaf $Path)"
+}
+
 function Get-StaleBinaryNames {
     $names = @(
         "mesh-llm",
@@ -336,8 +368,9 @@ function Install-RecommendedNativeRuntime {
     $manifestUrl = Get-ReleaseUrl "native-runtimes.json"
     try {
         Invoke-WebRequest -Uri $manifestUrl -OutFile $manifestPath
+        Assert-DownloadedFileChecksum -Path $manifestPath -Url $manifestUrl
     } catch {
-        Write-Host "Native runtime manifest was not available for this release; skipping runtime install."
+        Write-Warning "Native runtime manifest was not available or could not be verified; skipping runtime install. $_"
         return
     }
 
@@ -395,6 +428,7 @@ try {
     }
     Write-Host "Downloading $url"
     Invoke-WebRequest -Uri $url -OutFile $archive
+    Assert-DownloadedFileChecksum -Path $archive -Url $url
 
     Expand-Archive -Path $archive -DestinationPath $tmpRoot -Force
 
