@@ -31,6 +31,7 @@ use crate::{
         ChainArgs, DtypeMatrixArgs, FlashAttentionArg, RuntimeArgs, ServerArgs, SingleStepArgs,
         SplitScanArgs, StageLoadMode, StateHandoffArgs, StatePayloadKind,
     },
+    direct_return::CorrectnessDirectReturnServer,
     report::{
         BaselineReport, BoundaryReport, ChainReport, ChainStageReport, DtypeMatrixReport,
         PackagePartReport, PackageStageReport, SingleStepReport, SplitReport, SplitScanReport,
@@ -720,9 +721,11 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
     }
     let activation_width = activation_width(&boundary)?;
 
+    let direct_returns = CorrectnessDirectReturnServer::start("127.0.0.1:0")?;
     let run_id = generate_run_id();
     let model_id = args.model_identity.model_id.clone();
     let config_path = temp_config_path_for(&run_id, "stage-1");
+    let topology_path = temp_config_path_for(&run_id, "topology");
     let config = json!({
         "run_id": run_id,
         "topology_id": "correctness-single-step",
@@ -748,12 +751,36 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         "upstream": {
             "stage_id": "stage-0",
             "stage_index": 0,
-            "endpoint": "driver"
+            "endpoint": format!("tcp://{}", direct_returns.endpoint())
         },
         "downstream": null
     });
+    let topology = correctness_topology(
+        "correctness-single-step",
+        &model_id,
+        &[
+            CorrectnessTopologyStage {
+                stage_id: "stage-0",
+                stage_index: 0,
+                endpoint: format!("tcp://{}", direct_returns.endpoint()),
+                layer_start: 0,
+                layer_end: args.split_layer,
+                load_mode: protocol_load_mode(args.stage_load_mode),
+            },
+            CorrectnessTopologyStage {
+                stage_id: "stage-1",
+                stage_index: 1,
+                endpoint: format!("tcp://{}", args.stage1_bind_addr),
+                layer_start: args.split_layer,
+                layer_end: args.layer_end,
+                load_mode: protocol_load_mode(args.stage_load_mode),
+            },
+        ],
+    );
     fs::write(&config_path, serde_json::to_vec_pretty(&config)?)
         .with_context(|| format!("failed to write {}", config_path.display()))?;
+    fs::write(&topology_path, serde_json::to_vec_pretty(&topology)?)
+        .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
     let mut stage_command = Command::new(&args.stage_server_bin);
     stage_command.args([
@@ -762,6 +789,10 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         config_path
             .to_str()
             .context("stage config path is not valid UTF-8")?,
+        "--topology",
+        topology_path
+            .to_str()
+            .context("topology path is not valid UTF-8")?,
         "--activation-width",
         &activation_width.to_string(),
         "--activation-wire-dtype",
@@ -772,6 +803,11 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
 
     let mut stream = connect_ready(args.stage1_bind_addr, args.startup_timeout_secs)
         .context("stage 1 binary server did not become ready")?;
+    let request_id = 1;
+    let session_id = 1;
+    let direct_return = direct_returns.register(request_id, session_id)?;
+    send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)
+        .context("send binary generation config")?;
     let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
     state.prompt_token_count = 0;
     state.decode_step = 0;
@@ -791,20 +827,19 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         pos_start: 0,
         token_count: 1,
         state,
-        request_id: 1,
-        session_id: 1,
+        request_id,
+        session_id,
         sampling: None,
         chat_sampling_metadata: None,
         tokens: vec![token_id],
-        positions: Vec::new(),
+        positions: vec![0],
         activation,
         raw_bytes: Vec::new(),
     };
     write_stage_message(&mut stream, &message, wire_dtype).context("send binary decode")?;
-    let reply = recv_reply(&mut stream).context("receive binary reply")?;
-    if reply.kind != WireReplyKind::PredictedToken {
-        bail!("expected predicted-token reply, got {:?}", reply.kind);
-    }
+    let reply = direct_return
+        .recv_expected(WireReplyKind::PredictedToken)
+        .context("receive direct binary reply")?;
     write_stage_message(&mut stream, &StageWireMessage::stop(wire_dtype), wire_dtype)
         .context("send binary stop")?;
 
@@ -917,10 +952,12 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
     }
     let activation_width = activation_width(&boundary)?;
 
+    let direct_returns = CorrectnessDirectReturnServer::start("127.0.0.1:0")?;
     let run_id = generate_run_id();
     let model_id = args.model_identity.model_id.clone();
     let stage1_config_path = temp_config_path_for(&run_id, "stage-1");
     let stage2_config_path = temp_config_path_for(&run_id, "stage-2");
+    let topology_path = temp_config_path_for(&run_id, "topology");
     let stage2_config = json!({
         "run_id": run_id,
         "topology_id": "correctness-chain",
@@ -975,7 +1012,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         "upstream": {
             "stage_id": "stage-0",
             "stage_index": 0,
-            "endpoint": "driver"
+            "endpoint": format!("tcp://{}", direct_returns.endpoint())
         },
         "downstream": {
             "stage_id": "stage-2",
@@ -983,6 +1020,36 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             "endpoint": format!("tcp://{}", args.stage2_bind_addr)
         }
     });
+    let topology = correctness_topology(
+        "correctness-chain",
+        &model_id,
+        &[
+            CorrectnessTopologyStage {
+                stage_id: "stage-0",
+                stage_index: 0,
+                endpoint: format!("tcp://{}", direct_returns.endpoint()),
+                layer_start: 0,
+                layer_end: args.split_layer_1,
+                load_mode: protocol_load_mode(args.stage_load_mode),
+            },
+            CorrectnessTopologyStage {
+                stage_id: "stage-1",
+                stage_index: 1,
+                endpoint: format!("tcp://{}", args.stage1_bind_addr),
+                layer_start: args.split_layer_1,
+                layer_end: args.split_layer_2,
+                load_mode: protocol_load_mode(args.stage_load_mode),
+            },
+            CorrectnessTopologyStage {
+                stage_id: "stage-2",
+                stage_index: 2,
+                endpoint: format!("tcp://{}", args.stage2_bind_addr),
+                layer_start: args.split_layer_2,
+                layer_end: args.layer_end,
+                load_mode: protocol_load_mode(args.stage_load_mode),
+            },
+        ],
+    );
     fs::write(
         &stage2_config_path,
         serde_json::to_vec_pretty(&stage2_config)?,
@@ -993,6 +1060,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         serde_json::to_vec_pretty(&stage1_config)?,
     )
     .with_context(|| format!("failed to write {}", stage1_config_path.display()))?;
+    fs::write(&topology_path, serde_json::to_vec_pretty(&topology)?)
+        .with_context(|| format!("failed to write {}", topology_path.display()))?;
 
     let mut stage2_command = Command::new(&args.stage_server_bin);
     stage2_command.args([
@@ -1001,6 +1070,10 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         stage2_config_path
             .to_str()
             .context("stage 2 config path is not valid UTF-8")?,
+        "--topology",
+        topology_path
+            .to_str()
+            .context("topology path is not valid UTF-8")?,
         "--activation-width",
         &activation_width.to_string(),
         "--activation-wire-dtype",
@@ -1020,6 +1093,10 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         stage1_config_path
             .to_str()
             .context("stage 1 config path is not valid UTF-8")?,
+        "--topology",
+        topology_path
+            .to_str()
+            .context("topology path is not valid UTF-8")?,
         "--activation-width",
         &activation_width.to_string(),
         "--activation-wire-dtype",
@@ -1030,6 +1107,11 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
 
     let mut stream = connect_ready(args.stage1_bind_addr, args.startup_timeout_secs)
         .context("stage 1 binary server did not become ready")?;
+    let request_id = 2;
+    let session_id = 2;
+    let direct_return = direct_returns.register(request_id, session_id)?;
+    send_generation_config(&mut stream, wire_dtype, request_id, session_id, 1)
+        .context("send binary chain generation config")?;
     let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, wire_dtype);
     state.prompt_token_count = 0;
     state.decode_step = 0;
@@ -1049,20 +1131,19 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         pos_start: 0,
         token_count: 1,
         state,
-        request_id: 2,
-        session_id: 2,
+        request_id,
+        session_id,
         sampling: None,
         chat_sampling_metadata: None,
         tokens: vec![token_id],
-        positions: Vec::new(),
+        positions: vec![0],
         activation,
         raw_bytes: Vec::new(),
     };
     write_stage_message(&mut stream, &message, wire_dtype).context("send binary chain decode")?;
-    let reply = recv_reply(&mut stream).context("receive binary chain reply")?;
-    if reply.kind != WireReplyKind::PredictedToken {
-        bail!("expected predicted-token reply, got {:?}", reply.kind);
-    }
+    let reply = direct_return
+        .recv_expected(WireReplyKind::PredictedToken)
+        .context("receive direct binary chain reply")?;
     write_stage_message(&mut stream, &StageWireMessage::stop(wire_dtype), wire_dtype)
         .context("send binary chain stop")?;
 
@@ -1082,6 +1163,60 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
             stage2_resolution.report,
         ],
     })
+}
+
+struct CorrectnessTopologyStage<'a> {
+    stage_id: &'a str,
+    stage_index: u32,
+    endpoint: String,
+    layer_start: u32,
+    layer_end: u32,
+    load_mode: &'static str,
+}
+
+fn correctness_topology(
+    topology_id: &str,
+    model_id: &str,
+    stages: &[CorrectnessTopologyStage<'_>],
+) -> serde_json::Value {
+    json!({
+        "topology_id": topology_id,
+        "model_id": model_id,
+        "stages": stages.iter().map(|stage| {
+            json!({
+                "stage_id": stage.stage_id,
+                "stage_index": stage.stage_index,
+                "host": "localhost",
+                "endpoint": stage.endpoint,
+                "layer_start": stage.layer_start,
+                "layer_end": stage.layer_end,
+                "load_mode": stage.load_mode,
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+fn send_generation_config(
+    stream: &mut std::net::TcpStream,
+    wire_dtype: skippy_protocol::binary::WireActivationDType,
+    request_id: u64,
+    session_id: u64,
+    prompt_token_count: usize,
+) -> Result<()> {
+    let message = StageWireMessage::configure_generation(
+        wire_dtype,
+        request_id,
+        session_id,
+        i32::try_from(prompt_token_count).context("prompt token count exceeds i32")?,
+        None,
+        None,
+    );
+    write_stage_message(&mut *stream, &message, wire_dtype).context("send configure-generation")?;
+    let reply = recv_reply(&mut *stream).context("receive configure-generation ACK")?;
+    if reply.kind != WireReplyKind::Ack {
+        bail!("expected configure-generation ACK, got {:?}", reply.kind);
+    }
+    Ok(())
 }
 
 fn run_binary_state_handoff(args: BinaryStateHandoffConfig) -> Result<BinaryStateHandoffResult> {
