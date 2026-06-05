@@ -599,6 +599,17 @@ impl StageOpenAiBackend {
                 .expect("checked non-empty prompt");
             let mut context_tokens = request.prompt_token_ids.to_vec();
             let mut exact_replay_tokens = Vec::new();
+            let mut decode_message = ReusableDecodeMessage::new(
+                request.wire_dtype,
+                ReusableDecodeMessageArgs {
+                    request_id,
+                    session_id,
+                    prompt_token_count: request.prompt_token_ids.len(),
+                    base_pos_start: prefill_token_count,
+                    sampling: wire_sampling.clone(),
+                    sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
+                },
+            )?;
             let mut fused_reached_stop = false;
             if let Some(fused) = fused_first_decode.take() {
                 current = fused.predicted;
@@ -1088,34 +1099,25 @@ impl StageOpenAiBackend {
                         continue;
                     }
                 }
-                let mut state =
-                    StageStateHeader::new(WireMessageKind::DecodeEmbd, request.wire_dtype);
-                state.seq_id = 0;
-                state.prompt_token_count = i32::try_from(request.prompt_token_ids.len())
-                    .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
-                state.decode_step = i32::try_from(decode_step)
-                    .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
-                state.current_token = current;
-                state.source_stage_index = -1;
-                let message_tokens = decode_sideband_tokens(&context_tokens, current);
-                let records_replay_checkpoint =
-                    message_tokens.len() == context_tokens.len() && message_tokens.len() > 1;
-                let records_full_prompt_checkpoint =
-                    decode_step == 0 && message_tokens.len() == request.prompt_token_ids.len();
-                let message = StageWireMessage {
-                    kind: WireMessageKind::DecodeEmbd,
-                    pos_start: i32::try_from(prefill_token_count + decode_step as usize)
-                        .map_err(|_| OpenAiError::backend("decode position exceeds i32"))?,
-                    token_count: 1,
-                    state,
-                    request_id,
-                    session_id,
-                    sampling: wire_sampling.clone(),
-                    chat_sampling_metadata: None,
-                    tokens: message_tokens,
-                    positions: Vec::new(),
-                    activation: Vec::new(),
-                    raw_bytes: Vec::new(),
+                let uses_context_sideband = decode_uses_context_sideband(
+                    &context_tokens,
+                    current,
+                    skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
+                );
+                let records_replay_checkpoint = uses_context_sideband && context_tokens.len() > 1;
+                let records_full_prompt_checkpoint = decode_step == 0
+                    && uses_context_sideband
+                    && context_tokens.len() == request.prompt_token_ids.len();
+                let decode_step_index = usize::try_from(decode_step)
+                    .map_err(|_| OpenAiError::backend("decode step exceeds usize"))?;
+                let message = if uses_context_sideband {
+                    decode_message.update_with_tokens(
+                        decode_step_index,
+                        current,
+                        &context_tokens,
+                    )?
+                } else {
+                    decode_message.update(decode_step_index, current)?
                 };
                 let stage0_timer = PhaseTimer::start();
                 let token_runtime_lock_wait_ms;
@@ -1137,7 +1139,7 @@ impl StageOpenAiBackend {
                     let output = run_binary_stage_message(
                         &mut runtime,
                         &session_key,
-                        &message,
+                        message,
                         &[current],
                         None,
                         false,
@@ -1161,7 +1163,7 @@ impl StageOpenAiBackend {
                 decode_stage0_compute_ms += stage0_compute_ms;
                 let forwarded = forwarded_stage_message_timed(
                     request.config,
-                    &message,
+                    message,
                     &output,
                     request.wire_dtype,
                     request.activation_width,
@@ -1398,11 +1400,11 @@ impl StageOpenAiBackend {
     }
 }
 
-fn decode_sideband_tokens(context_token_ids: &[i32], current: i32) -> Vec<i32> {
-    if context_token_ids.len() <= skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES
+fn decode_uses_context_sideband(
+    context_token_ids: &[i32],
+    current: i32,
+    sideband_capacity: usize,
+) -> bool {
+    context_token_ids.len() <= sideband_capacity
         && context_token_ids.last().copied() == Some(current)
-    {
-        return context_token_ids.to_vec();
-    }
-    vec![current]
 }
