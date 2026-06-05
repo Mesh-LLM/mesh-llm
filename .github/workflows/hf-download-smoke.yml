@@ -48,5 +48,21 @@ jobs:
           cache-bin: "false"
           prefix-key: ${{ env.CACHE_NAMESPACE }}-rust-${{ hashFiles('.github/cache-version.txt') }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Restore Hugging Face download test model cache
+        id: hf_download_model_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/mesh-llm-hf-download-cache
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-hf-download-smoke-models-${{ hashFiles('.github/cache-version.txt') }}
+          restore-keys: |
+            ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-hf-download-smoke-models-
       - name: HuggingFace download integration tests
+        env:
+          MESH_HF_DOWNLOAD_TEST_CACHE_DIR: ${{ runner.temp }}/mesh-llm-hf-download-cache
         run: scripts/ci-hf-download-smoke.sh
+      - name: Save Hugging Face download test model cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.hf_download_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/mesh-llm-hf-download-cache
+          key: ${{ steps.hf_download_model_cache.outputs.cache-primary-key }}

@@ -133,6 +133,13 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 
 - Smoke jobs restore binaries through `.github/actions/restore-smoke-inputs` and
   reusable workflows instead of rebuilding `mesh-llm` or patched llama.cpp.
+- `restore-smoke-inputs` also owns the single-GGUF smoke model cache used by
+  inference, scripted two-node, and SDK smokes. The Skippy CI smoke lanes
+  restore a separate two-model cache for dense and recurrent GGUF fixtures, and
+  `hf-download-smoke.yml` points the Rust HF integration tests at a cached model
+  directory via `MESH_HF_DOWNLOAD_TEST_CACHE_DIR`.
+- Shared model caches are restored in PRs and saved only from trusted `main`
+  runs.
 - Linux CPU artifacts feed inference, two-node, native SDK, and Kotlin SDK
   smokes. macOS CPU artifacts feed Swift SDK smokes.
 - Artifact-consuming smokes are additionally gated on the matching CPU producer

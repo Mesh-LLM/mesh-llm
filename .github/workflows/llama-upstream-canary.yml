@@ -60,12 +60,30 @@ jobs:
         if: steps.sha.outputs.changed == 'true'
         run: cargo check -p skippy-ffi -p skippy-runtime -p skippy-server -p skippy-model-package -p skippy-correctness -p llama-spec-bench
 
+      - name: Restore Skippy smoke model cache
+        if: steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
+        id: skippy_smoke_model_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: mesh-llm-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
+          restore-keys: |
+            mesh-llm-${{ runner.os }}-skippy-ci-smoke-models-
+
       - name: Skippy smoke tests
         if: steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false'
         timeout-minutes: 45
         env:
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
+          MODEL_DIR: ${{ runner.temp }}/skippy-ci-smoke-models
         run: scripts/skippy-ci-smoke.sh
+
+      - name: Save Skippy smoke model cache
+        if: steps.sha.outputs.changed == 'true' && env.LLAMA_UPSTREAM_CANARY_SMOKE != '0' && env.LLAMA_UPSTREAM_CANARY_SMOKE != 'false' && github.ref == 'refs/heads/main' && steps.skippy_smoke_model_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ steps.skippy_smoke_model_cache.outputs.cache-primary-key }}
 
       - name: Update llama.cpp upstream pin
         if: steps.sha.outputs.changed == 'true'

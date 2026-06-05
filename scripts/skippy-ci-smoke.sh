@@ -16,7 +16,7 @@ resolve_llama_build_dir() {
 LLAMA_BUILD_DIR="$(resolve_llama_build_dir)"
 WORK_DIR="${WORK_DIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/skippy-ci-smoke}"
 REPORT_DIR="${WORK_DIR}/reports"
-MODEL_DIR="${WORK_DIR}/models"
+MODEL_DIR="${MODEL_DIR:-${WORK_DIR}/models}"
 
 DENSE_MODEL_REPO="${DENSE_MODEL_REPO:-jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF}"
 DENSE_MODEL_FILE="${DENSE_MODEL_FILE:-SmolLM2-135M-Instruct.Q4_K_M.gguf}"
@@ -122,6 +122,12 @@ download_model() {
   local file="$2"
   local out_dir="$3"
   mkdir -p "$out_dir"
+  local cached_path="${out_dir}/${file}"
+  if [[ -s "$cached_path" ]]; then
+    echo "using cached ${repo}/${file} at ${cached_path}" >&2
+    printf '%s\n' "$cached_path"
+    return 0
+  fi
   echo "downloading ${repo}/${file}" >&2
   local output path
   output="$(run_with_timeout "download ${repo}/${file}" hf download "$repo" "$file" --local-dir "$out_dir")"

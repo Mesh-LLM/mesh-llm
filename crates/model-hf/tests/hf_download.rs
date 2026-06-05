@@ -14,14 +14,27 @@
 
 use model_artifact::{ModelArtifactFile, ModelFormat, ModelRepository, resolve_model_artifact_ref};
 use model_hf::HfModelRepository;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// Build a repository pointed at a fresh temp cache directory.
+/// Build a repository pointed at a fresh temp cache directory by default.
+///
+/// CI can set MESH_HF_DOWNLOAD_TEST_CACHE_DIR to reuse the GitHub Actions
+/// model cache while still exercising the real Rust HF download path on misses.
 fn make_repo(tmp: &Path) -> HfModelRepository {
     HfModelRepository::builder()
-        .cache_dir(tmp.join("hf-cache"))
+        .cache_dir(test_cache_dir(tmp))
         .build()
         .expect("build HfModelRepository")
+}
+
+fn test_cache_dir(tmp: &Path) -> PathBuf {
+    if let Some(cache_dir) = std::env::var_os("MESH_HF_DOWNLOAD_TEST_CACHE_DIR") {
+        let cache_dir = PathBuf::from(cache_dir);
+        std::fs::create_dir_all(&cache_dir).expect("create MESH_HF_DOWNLOAD_TEST_CACHE_DIR");
+        cache_dir
+    } else {
+        tmp.join("hf-cache")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +211,8 @@ async fn resolve_artifact_ref_split_gguf() {
 /// Download the actual GGUF file via the Rust HF client and verify the result.
 ///
 /// Uses `jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF` (~100 MB). The same
-/// model is already cached in CI, and this test uses a dedicated temp cache
-/// directory so it always exercises the real download path.
+/// model is restored from the GitHub Actions cache in CI when available, and
+/// local runs keep using a dedicated temp cache by default.
 #[tokio::test]
 #[ignore]
 async fn download_single_gguf_file() {
