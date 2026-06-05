@@ -1,6 +1,7 @@
 use super::{
-    binary_full_prefill_record_identities, prepare_binary_stage_connection,
-    restore_prefill_decode_as_decode_message,
+    binary_full_prefill_record_identities, decode_full_prompt_sideband,
+    prepare_binary_stage_connection, restore_prefill_decode_as_decode_message,
+    token_sideband_or_fill,
 };
 use std::{
     io,
@@ -148,6 +149,47 @@ fn prefill_message() -> StageWireMessage {
         activation: Vec::new(),
         raw_bytes: Vec::new(),
     }
+}
+
+fn first_decode_message_with_full_prompt_sideband() -> StageWireMessage {
+    let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F16);
+    state.prompt_token_count = 4;
+    state.decode_step = 0;
+    state.current_token = 104;
+    StageWireMessage {
+        kind: WireMessageKind::DecodeEmbd,
+        pos_start: 3,
+        token_count: 1,
+        state,
+        request_id: 11,
+        session_id: 13,
+        sampling: None,
+        chat_sampling_metadata: None,
+        tokens: vec![101, 102, 103, 104],
+        positions: Vec::new(),
+        activation: Vec::new(),
+        raw_bytes: Vec::new(),
+    }
+}
+
+#[test]
+fn decode_full_prompt_sideband_records_metadata_without_changing_exec_token() {
+    let message = first_decode_message_with_full_prompt_sideband();
+
+    let exec_tokens = token_sideband_or_fill(&message).unwrap();
+    let prompt_tokens = decode_full_prompt_sideband(&message).unwrap();
+
+    assert_eq!(exec_tokens, vec![104]);
+    assert_eq!(prompt_tokens, &[101, 102, 103, 104]);
+}
+
+#[test]
+fn decode_full_prompt_sideband_requires_first_decode() {
+    let mut message = first_decode_message_with_full_prompt_sideband();
+    message.state.decode_step = 1;
+
+    assert!(decode_full_prompt_sideband(&message).is_none());
+    assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![104]);
 }
 
 #[test]

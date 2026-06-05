@@ -35,6 +35,7 @@ jobs:
     runs-on: ${{ fromJson(inputs.runs_on) }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v5
 

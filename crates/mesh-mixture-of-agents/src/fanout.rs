@@ -9,13 +9,22 @@
 
 use std::time::{Duration, Instant};
 
-use crate::enforce_allowed_tools;
+use crate::enforce_tool_call_contract;
 use crate::worker::WorkerRole;
 use crate::{WorkerSummary, arbiter, normalize};
 use normalize::WorkerOutput;
+use serde_json::Value;
 
 /// Min confidence for the time-based grace path; matches the consensus rule.
 const GRACE_MIN_CONFIDENCE: f32 = 0.5;
+const TOOL_GRACE_MIN_CONFIDENCE: f32 = 0.6;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GraceMode {
+    Disabled,
+    Answer,
+    Tool,
+}
 
 /// Identifier for a worker we dispatched. Used to reconcile the
 /// per-worker accounting at the end of fan-out so the — possibly
@@ -31,7 +40,9 @@ pub(crate) async fn gather_workers_incremental(
     dispatched: &[DispatchedWorker],
     has_tools: bool,
     allowed_tools: &[String],
+    tools: Option<&Value>,
     first_answer_grace: Duration,
+    grace_mode: GraceMode,
 ) -> (
     Vec<WorkerOutput>,
     Vec<WorkerSummary>,
@@ -42,24 +53,28 @@ pub(crate) async fn gather_workers_incremental(
     let mut summaries = Vec::new();
     let mut total_finished: usize = 0;
     let dispatched_at = Instant::now();
-    let grace_enabled = !has_tools && !first_answer_grace.is_zero();
+    let grace_enabled = grace_mode != GraceMode::Disabled && !first_answer_grace.is_zero();
 
-    // Grace eligibility: we have one or more Answer-kind outputs that
-    // meet the confidence floor. Previously we only armed grace on
-    // exactly 1 answer; on the public mesh we saw a real failure where
-    // multiple fast workers all answered short text in <1s but didn't
-    // textually agree, so the arbiter's consensus rule didn't fire and
-    // MoA waited for the slow tail worker (~40s on Qwen3-8B). With the
-    // relaxed eligibility, grace catches that case too — once the
-    // grace window has elapsed and ≥1 qualifying answer is in hand,
-    // we pick the highest-confidence one and ship it.
+    // Grace eligibility: once the grace window has elapsed and a qualifying
+    // partial decision exists, ship it instead of waiting for the slow tail.
+    // Answer grace handles ordinary chat, including tool-enabled clients that
+    // attach schemas to every request. Tool grace handles obvious tool-intent
+    // prompts, but only when a worker has actually proposed a valid tool.
     let grace_eligible = |outs: &[WorkerOutput]| -> bool {
         if !grace_enabled {
             return false;
         }
-        outs.iter().any(|o| {
-            o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
-        })
+        match grace_mode {
+            GraceMode::Disabled => false,
+            GraceMode::Answer => outs.iter().any(|o| {
+                o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
+            }),
+            GraceMode::Tool => outs.iter().any(|o| {
+                o.kind == normalize::OutputKind::ToolProposal
+                    && o.tool_name.is_some()
+                    && o.confidence >= TOOL_GRACE_MIN_CONFIDENCE
+            }),
+        }
     };
 
     loop {
@@ -74,36 +89,20 @@ pub(crate) async fn gather_workers_incremental(
             biased;
             join = join_set.join_next() => join,
             _ = tokio::time::sleep(grace_remaining), if armed => {
-                // Pick the highest-confidence Answer. If there's only
-                // one (the old grace condition), this trivially returns
-                // that one. With multiple answers we prefer the most
-                // confident worker rather than waiting longer to see
-                // whether they textually converge.
-                let answer = outputs
-                    .iter()
-                    .filter(|o| o.kind == normalize::OutputKind::Answer)
-                    .max_by(|a, b| {
-                        a.confidence
-                            .partial_cmp(&b.confidence)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .expect("grace_eligible guaranteed at least one Answer")
-                    .payload
-                    .clone();
-                let answer_count = outputs
-                    .iter()
-                    .filter(|o| o.kind == normalize::OutputKind::Answer)
-                    .count();
                 tracing::info!(
-                    "moa: grace early-exit — {} answer(s) after {}ms (grace={}ms), {} pending",
-                    answer_count,
+                    "moa: grace early-exit after {}ms (grace={}ms), {} pending",
                     dispatched_at.elapsed().as_millis(),
                     first_answer_grace.as_millis(),
                     total_workers.saturating_sub(total_finished),
                 );
+                let decision = match grace_mode {
+                    GraceMode::Answer => grace_answer_decision(&outputs),
+                    GraceMode::Tool => grace_tool_decision(&outputs),
+                    GraceMode::Disabled => unreachable!("disabled grace cannot be armed"),
+                };
                 drain_after_early_exit(join_set, &mut summaries).await;
                 reconcile_dispatched(dispatched, &mut summaries);
-                return (outputs, summaries, Some(arbiter::Decision::Answer(answer)));
+                return (outputs, summaries, Some(decision));
             }
         };
 
@@ -116,7 +115,7 @@ pub(crate) async fn gather_workers_incremental(
                 total_finished += 1;
                 let mut normalized =
                     normalize::normalize_worker_output(&text, &model, role, elapsed);
-                enforce_allowed_tools(&mut normalized, allowed_tools, &model);
+                enforce_tool_call_contract(&mut normalized, allowed_tools, tools, &model);
                 tracing::info!(
                     "moa: worker {} ({}) → {:?} conf={:.2} ({}ms, {} chars)",
                     model,
@@ -185,6 +184,60 @@ pub(crate) async fn gather_workers_incremental(
     (outputs, summaries, None)
 }
 
+fn grace_answer_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
+    let answer = outputs
+        .iter()
+        .filter(|o| o.kind == normalize::OutputKind::Answer)
+        .max_by(|a, b| {
+            a.confidence
+                .partial_cmp(&b.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("answer grace requires at least one Answer");
+    let answer_count = outputs
+        .iter()
+        .filter(|o| o.kind == normalize::OutputKind::Answer)
+        .count();
+    tracing::info!(
+        "moa: answer grace picked {} answer(s), conf={:.2}",
+        answer_count,
+        answer.confidence,
+    );
+    arbiter::Decision::Answer(answer.payload.clone())
+}
+
+fn grace_tool_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
+    let proposal = outputs
+        .iter()
+        .filter(|o| {
+            o.kind == normalize::OutputKind::ToolProposal
+                && o.tool_name.is_some()
+                && o.confidence >= TOOL_GRACE_MIN_CONFIDENCE
+        })
+        .max_by(|a, b| {
+            a.confidence
+                .partial_cmp(&b.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("tool grace requires at least one valid ToolProposal");
+    let name = proposal
+        .tool_name
+        .clone()
+        .expect("tool grace filters proposals without names");
+    tracing::info!(
+        "moa: tool grace picked {} conf={:.2}",
+        name,
+        proposal.confidence,
+    );
+    arbiter::Decision::ToolCall {
+        name,
+        arguments: proposal
+            .tool_arguments
+            .clone()
+            .unwrap_or(serde_json::Value::Object(Default::default())),
+    }
+}
+
 /// After `abort_all`, drain any tasks that did finish before the abort
 /// reached them, recording each as a summary. Aborted tasks produce a
 /// `JoinError::cancelled` which carries no `(model, role)` payload —
@@ -250,6 +303,17 @@ mod tests {
         .to_string()
     }
 
+    fn tool_text(name: &str, confidence: f32) -> String {
+        serde_json::json!({
+            "kind": "tool_proposal",
+            "tool": name,
+            "arguments": {"path": "/tmp/openclaw-tool-baseline.txt"},
+            "confidence": confidence,
+            "payload": "Use the requested tool.",
+        })
+        .to_string()
+    }
+
     fn spawn_worker(
         join_set: &mut tokio::task::JoinSet<(String, WorkerRole, Result<String, String>, u64)>,
         model: &str,
@@ -305,7 +369,9 @@ mod tests {
             &dispatched,
             false, // has_tools
             &[],
+            None,
             Duration::from_millis(50),
+            GraceMode::Answer,
         )
         .await;
         let elapsed = started.elapsed();
@@ -321,10 +387,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grace_does_not_fire_when_tools_present() {
-        // Same shape as above but with has_tools=true. Agentic turns
-        // must wait for consensus regardless of grace; gather should
-        // NOT return on the lone answer.
+    async fn answer_grace_can_fire_when_tools_are_present() {
+        // OpenClaw-style clients attach tool schemas to ordinary chat turns.
+        // When the caller has classified the prompt as non-tool intent, answer
+        // grace should still avoid waiting for the slow tail.
         let mut js = tokio::task::JoinSet::new();
         let dispatched = vec![
             spawn_worker(
@@ -356,23 +422,112 @@ mod tests {
             &dispatched,
             true, // has_tools
             &[],
+            None,
             Duration::from_millis(50),
+            GraceMode::Answer,
         )
         .await;
         let elapsed = started.elapsed();
 
-        // Should have waited for at least the second worker (~200ms),
-        // since grace is bypassed in tool-calling mode.
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "answer grace should still fire with schemas attached; got {elapsed:?}"
+        );
+        assert_eq!(outputs.len(), 1, "grace should leave the slow tail pending");
+        assert!(matches!(decision, Some(arbiter::Decision::Answer(_))));
+    }
+
+    #[tokio::test]
+    async fn disabled_grace_waits_even_when_answer_qualifies() {
+        let mut js = tokio::task::JoinSet::new();
+        let dispatched = vec![
+            spawn_worker(
+                &mut js,
+                "fast",
+                WorkerRole::Fast,
+                10,
+                Ok(answer_text("hi", 0.7)),
+            ),
+            spawn_worker(
+                &mut js,
+                "slow1",
+                WorkerRole::Specialist,
+                200,
+                Ok(answer_text("agreed", 0.6)),
+            ),
+            spawn_worker(
+                &mut js,
+                "slow2",
+                WorkerRole::Strong,
+                200,
+                Ok(answer_text("agreed", 0.6)),
+            ),
+        ];
+
+        let started = std::time::Instant::now();
+        let (outputs, _summaries, _decision) = gather_workers_incremental(
+            &mut js,
+            &dispatched,
+            true,
+            &[],
+            None,
+            Duration::from_millis(50),
+            GraceMode::Disabled,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
         assert!(
             elapsed >= Duration::from_millis(150),
-            "tools=true must bypass grace; got {elapsed:?}"
+            "disabled grace must not short-circuit; got {elapsed:?}"
         );
-        // Consensus rule may or may not have early-exited (depends on
-        // arbiter cluster decision); either way at least 2 outputs were
-        // observed before deciding.
-        assert!(outputs.len() >= 2, "tool turn must collect ≥2 answers");
-        // decision may be None (no consensus) or Some — both valid here.
-        let _ = decision;
+        assert!(outputs.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn tool_grace_fires_on_high_confidence_tool_proposal() {
+        let mut js = tokio::task::JoinSet::new();
+        let dispatched = vec![
+            spawn_worker(
+                &mut js,
+                "tool_worker",
+                WorkerRole::Specialist,
+                10,
+                Ok(tool_text("read", 0.85)),
+            ),
+            spawn_worker(
+                &mut js,
+                "slow1",
+                WorkerRole::Strong,
+                5_000,
+                Ok(tool_text("read", 0.9)),
+            ),
+        ];
+
+        let started = std::time::Instant::now();
+        let (_outputs, _summaries, decision) = gather_workers_incremental(
+            &mut js,
+            &dispatched,
+            true,
+            &["read".to_string()],
+            None,
+            Duration::from_millis(50),
+            GraceMode::Tool,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "tool grace should not wait for the slow tail; got {elapsed:?}"
+        );
+        match decision.expect("tool grace should decide") {
+            arbiter::Decision::ToolCall { name, arguments } => {
+                assert_eq!(name, "read");
+                assert_eq!(arguments["path"], "/tmp/openclaw-tool-baseline.txt");
+            }
+            other => panic!("expected tool call, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -410,7 +565,9 @@ mod tests {
             &dispatched,
             false, // has_tools
             &[],
+            None,
             Duration::ZERO,
+            GraceMode::Answer,
         )
         .await;
         let elapsed = started.elapsed();
@@ -451,9 +608,16 @@ mod tests {
         ];
 
         let started = std::time::Instant::now();
-        let (outputs, _summaries, _decision) =
-            gather_workers_incremental(&mut js, &dispatched, false, &[], Duration::from_millis(50))
-                .await;
+        let (outputs, _summaries, _decision) = gather_workers_incremental(
+            &mut js,
+            &dispatched,
+            false,
+            &[],
+            None,
+            Duration::from_millis(50),
+            GraceMode::Answer,
+        )
+        .await;
         let elapsed = started.elapsed();
 
         assert!(
@@ -497,9 +661,16 @@ mod tests {
         ];
 
         let started = std::time::Instant::now();
-        let (outputs, _summaries, decision) =
-            gather_workers_incremental(&mut js, &dispatched, false, &[], Duration::from_millis(50))
-                .await;
+        let (outputs, _summaries, decision) = gather_workers_incremental(
+            &mut js,
+            &dispatched,
+            false,
+            &[],
+            None,
+            Duration::from_millis(50),
+            GraceMode::Answer,
+        )
+        .await;
         let elapsed = started.elapsed();
 
         assert!(
@@ -556,7 +727,9 @@ mod tests {
             &dispatched,
             false,
             &[],
+            None,
             Duration::from_millis(100),
+            GraceMode::Answer,
         )
         .await;
         let decision = decision.expect("grace must yield a Decision");

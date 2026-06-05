@@ -6,10 +6,10 @@
 //! synthetic "you are a worker" envelope.  It augments with a short preamble
 //! and varies the depth per role:
 //!
-//! - Fast:       system prompt + last user msg + tool names only
-//! - Specialist: system prompt + last 4 msgs + tool summaries
-//! - Strong:     system prompt + last 10 msgs + full tool schemas
-//! - Reducer:    system prompt + worker outputs + full tool schemas
+//! - Fast:       system prompt + last user msg + optional tool names
+//! - Specialist: system prompt + last 4 msgs + optional tool summaries/schemas
+//! - Strong:     system prompt + last 10 msgs + optional full tool schemas
+//! - Reducer:    system prompt + worker outputs + optional full tool schemas
 
 use crate::normalize::WorkerOutput;
 use crate::session::Session;
@@ -31,11 +31,24 @@ pub struct PackedContext {
 /// Each worker gets a slice of the real conversation — the agent's actual
 /// system prompt and messages — not a synthetic replacement.  The depth of
 /// the slice and tool detail varies by role.
-pub fn pack_for_worker(session: &Session, role: WorkerRole, _has_tools: bool) -> PackedContext {
+pub fn pack_for_worker(session: &Session, role: WorkerRole, has_tools: bool) -> PackedContext {
+    pack_for_worker_selected(session, role, has_tools, &[])
+}
+
+/// Build a worker context with native tool schemas narrowed to
+/// `selected_tool_names` when non-empty.
+pub fn pack_for_worker_selected(
+    session: &Session,
+    role: WorkerRole,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> PackedContext {
     match role {
-        WorkerRole::Fast => pack_fast(session),
-        WorkerRole::Specialist => pack_specialist(session),
-        WorkerRole::Strong | WorkerRole::Generalist | WorkerRole::Reducer => pack_strong(session),
+        WorkerRole::Fast => pack_fast(session, has_tools, selected_tool_names),
+        WorkerRole::Specialist => pack_specialist(session, has_tools, selected_tool_names),
+        WorkerRole::Strong | WorkerRole::Generalist | WorkerRole::Reducer => {
+            pack_strong(session, has_tools, selected_tool_names)
+        }
     }
 }
 
@@ -48,28 +61,62 @@ const MOA_PREAMBLE: &str = "\
 [Multiple models are analyzing this request in parallel. \
 Respond with your best answer or tool call. Be direct.]";
 
-/// Augment the agent's system prompt with the MoA preamble.
-/// If there's no system prompt, create one with just the preamble.
-fn augmented_system_prompt(session: &Session) -> String {
+fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bool) -> String {
     match session.system_prompt() {
-        Some(sp) => format!("{MOA_PREAMBLE}\n\n{sp}"),
+        Some(sp) => {
+            let prompt = if include_tool_guidance {
+                sp
+            } else {
+                strip_tool_guidance_sections(&sp)
+            };
+            format!("{MOA_PREAMBLE}\n\n{prompt}")
+        }
         None => MOA_PREAMBLE.to_string(),
     }
 }
 
+fn strip_tool_guidance_sections(prompt: &str) -> String {
+    const STRIPPED_HEADINGS: &[&str] = &["## Tooling", "## Tool Call Style"];
+
+    let mut out = Vec::new();
+    let mut skipping = false;
+    for line in prompt.lines() {
+        if line.starts_with("## ") {
+            skipping = STRIPPED_HEADINGS
+                .iter()
+                .any(|heading| line.trim() == *heading);
+        }
+        if !skipping {
+            out.push(line);
+        }
+    }
+
+    out.join("\n").trim().to_string()
+}
+
 /// Augmented system prompt with a compact tool catalogue appended.
-fn system_with_tool_names(session: &Session) -> String {
-    let mut prompt = augmented_system_prompt(session);
-    let names = session.tool_names();
+fn system_with_tool_names(
+    session: &Session,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> String {
+    let mut prompt = augmented_system_prompt_for_mode(session, has_tools);
+    let tools = selected_tools(session, has_tools, selected_tool_names);
+    let names = tool_names_from(tools.as_ref());
     if !names.is_empty() {
         prompt.push_str(&format!("\n\nAvailable tools: {}", names.join(", ")));
     }
     prompt
 }
 
-fn system_with_tool_summaries(session: &Session) -> String {
-    let mut prompt = augmented_system_prompt(session);
-    let summaries = session.tool_summaries();
+fn system_with_tool_summaries(
+    session: &Session,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> String {
+    let mut prompt = augmented_system_prompt_for_mode(session, has_tools);
+    let tools = selected_tools(session, has_tools, selected_tool_names);
+    let summaries = tool_summaries_from(tools.as_ref());
     if !summaries.is_empty() {
         prompt.push_str("\n\nAvailable tools:");
         for s in &summaries {
@@ -83,8 +130,8 @@ fn system_with_tool_summaries(session: &Session) -> String {
 // System prompt + last user message + tool names only.
 // Smallest context, quickest to respond.
 
-fn pack_fast(session: &Session) -> PackedContext {
-    let system = system_with_tool_names(session);
+fn pack_fast(session: &Session, has_tools: bool, selected_tool_names: &[String]) -> PackedContext {
+    let system = system_with_tool_names(session, has_tools, selected_tool_names);
     let user_text = session.last_user_text();
 
     // Per-request sessions: the caller owns the multi-turn loop and
@@ -104,8 +151,12 @@ fn pack_fast(session: &Session) -> PackedContext {
 // ── Specialist worker ────────────────────────────────────────────────
 // System prompt + last 4 messages + tool name+description summaries.
 
-fn pack_specialist(session: &Session) -> PackedContext {
-    let system = system_with_tool_summaries(session);
+fn pack_specialist(
+    session: &Session,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> PackedContext {
+    let system = system_with_tool_summaries(session, has_tools, selected_tool_names);
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
@@ -132,7 +183,7 @@ fn pack_specialist(session: &Session) -> PackedContext {
     PackedContext {
         messages,
         max_tokens: 512,
-        tools: session.tools().cloned(), // Specialist gets full schemas for native tool_calls
+        tools: selected_tools(session, has_tools, selected_tool_names),
     }
 }
 
@@ -141,8 +192,12 @@ fn pack_specialist(session: &Session) -> PackedContext {
 // This worker gets the deepest context and the actual tool definitions so
 // it can produce native tool_calls if the backend supports it.
 
-fn pack_strong(session: &Session) -> PackedContext {
-    let system = augmented_system_prompt(session);
+fn pack_strong(
+    session: &Session,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> PackedContext {
+    let system = augmented_system_prompt_for_mode(session, has_tools);
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
@@ -167,7 +222,7 @@ fn pack_strong(session: &Session) -> PackedContext {
 
     // Forward the real tool schemas — the strong worker can produce native
     // tool_calls through the OpenAI API
-    let tools = session.tools().cloned();
+    let tools = selected_tools(session, has_tools, selected_tool_names);
 
     PackedContext {
         messages,
@@ -186,12 +241,24 @@ pub fn pack_for_reducer(
     session: &Session,
     outputs: &[WorkerOutput],
     reason: &str,
-    _has_tools: bool,
+    has_tools: bool,
+) -> (Vec<Value>, Option<Value>) {
+    pack_for_reducer_selected(session, outputs, reason, has_tools, &[])
+}
+
+/// Build reducer context with native tools narrowed to `selected_tool_names`
+/// when non-empty.
+pub fn pack_for_reducer_selected(
+    session: &Session,
+    outputs: &[WorkerOutput],
+    reason: &str,
+    has_tools: bool,
+    selected_tool_names: &[String],
 ) -> (Vec<Value>, Option<Value>) {
     let user_text = session.last_user_text();
 
     let mut system_parts = vec![
-        augmented_system_prompt(session),
+        augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
         format!("Multiple models analyzed this request and disagreed. Reason: {reason}"),
         "Review their outputs below and produce ONE final response — either a direct answer \
@@ -218,7 +285,7 @@ pub fn pack_for_reducer(
         }
     }
 
-    let tools = session.tools().cloned();
+    let tools = selected_tools(session, has_tools, selected_tool_names);
 
     (
         vec![
@@ -227,6 +294,85 @@ pub fn pack_for_reducer(
         ],
         tools,
     )
+}
+
+fn selected_tools(
+    session: &Session,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> Option<Value> {
+    if !has_tools {
+        return None;
+    }
+
+    let tools = session.tools()?;
+    if selected_tool_names.is_empty() {
+        return Some(tools.clone());
+    }
+
+    let selected: std::collections::HashSet<String> = selected_tool_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    let filtered: Vec<Value> = tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|tool| {
+            tool.pointer("/function/name")
+                .and_then(Value::as_str)
+                .map(|name| selected.contains(&name.to_ascii_lowercase()))
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+
+    if filtered.is_empty() {
+        Some(tools.clone())
+    } else {
+        Some(Value::Array(filtered))
+    }
+}
+
+fn tool_names_from(tools: Option<&Value>) -> Vec<String> {
+    tools
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    tool.pointer("/function/name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tool_summaries_from(tools: Option<&Value>) -> Vec<String> {
+    tools
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    let name = tool.pointer("/function/name")?.as_str()?;
+                    let desc = tool
+                        .pointer("/function/description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let first_line = desc.lines().next().unwrap_or(desc);
+                    let truncated = if first_line.len() > 80 {
+                        format!("{}...", crate::worker::truncate_chars(first_line, 77))
+                    } else {
+                        first_line.to_string()
+                    };
+                    Some(format!("{name}: {truncated}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Build context for a tool-result turn (reducer only, not full fan-out).
@@ -241,9 +387,19 @@ pub fn pack_for_reducer(
 /// what to do next.
 pub fn pack_for_tool_result_turn(
     session: &Session,
-    _has_tools: bool,
+    has_tools: bool,
 ) -> (Vec<Value>, Option<Value>) {
-    let system = augmented_system_prompt(session);
+    pack_for_tool_result_turn_selected(session, has_tools, &[])
+}
+
+/// Build context for a tool-result turn with native tools narrowed to
+/// `selected_tool_names` when non-empty.
+pub fn pack_for_tool_result_turn_selected(
+    session: &Session,
+    has_tools: bool,
+    selected_tool_names: &[String],
+) -> (Vec<Value>, Option<Value>) {
+    let system = augmented_system_prompt_for_mode(session, has_tools);
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
@@ -298,7 +454,7 @@ pub fn pack_for_tool_result_turn(
         }
     }
 
-    let tools = session.tools().cloned();
+    let tools = selected_tools(session, has_tools, selected_tool_names);
 
     (messages, tools)
 }
@@ -502,6 +658,39 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_chat_omits_tool_summaries_and_native_tools() {
+        let s = session_with(
+            &[system_msg("Agent SP."), user_msg("What can you help with?")],
+            Some(tools_two()),
+        );
+        let specialist = pack_for_worker(&s, WorkerRole::Specialist, false);
+        let strong = pack_for_worker(&s, WorkerRole::Strong, false);
+
+        assert!(specialist.tools.is_none());
+        assert!(strong.tools.is_none());
+        assert!(!system_text(&specialist.messages).contains("read_file"));
+        assert!(!system_text(&strong.messages).contains("read_file"));
+    }
+
+    #[test]
+    fn tool_selection_filters_native_tool_schemas() {
+        let s = session_with(&[user_msg("Read the file")], Some(tools_two()));
+        let selected = vec!["read_file".to_string()];
+        let packed = pack_for_worker_selected(&s, WorkerRole::Strong, true, &selected);
+        let tools = packed
+            .tools
+            .as_ref()
+            .and_then(Value::as_array)
+            .expect("selected tools array");
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(
+            tools[0].pointer("/function/name").and_then(Value::as_str),
+            Some("read_file")
+        );
+    }
+
+    #[test]
     fn strong_worker_has_deep_history_and_native_tools() {
         // Build a session with many turns so we can verify depth.
         let mut msgs = vec![system_msg("Agent ST.")];
@@ -578,6 +767,56 @@ mod tests {
             tools.is_some(),
             "tool-result reducer should still receive native tool schemas",
         );
+    }
+
+    #[test]
+    fn tool_result_reducer_filters_native_tool_schemas() {
+        let s = session_with(
+            &[
+                user_msg("Read /tmp/a"),
+                assistant_tool_msg("call_read", "read_file", json!({"path": "/tmp/a"})),
+                tool_result_msg("call_read", "done"),
+            ],
+            Some(tools_two()),
+        );
+        let selected = vec!["read_file".to_string()];
+        let (_messages, tools) = pack_for_tool_result_turn_selected(&s, true, &selected);
+        let tools = tools
+            .as_ref()
+            .and_then(Value::as_array)
+            .expect("selected tools array");
+
+        assert_eq!(tools.len(), 1);
+        assert_eq!(
+            tools[0].pointer("/function/name").and_then(Value::as_str),
+            Some("read_file")
+        );
+    }
+
+    #[test]
+    fn tool_result_reducer_strips_tool_guidance_when_tools_disabled() {
+        let s = session_with(
+            &[
+                system_msg(
+                    "You are helpful.\n## Tooling\ntool list goes here\n## Tool Call Style\ncall policy",
+                ),
+                user_msg("Answer without tools"),
+                assistant_tool_msg("call_read", "read_file", json!({"path": "/tmp/a"})),
+                tool_result_msg("call_read", "done"),
+            ],
+            Some(tools_two()),
+        );
+
+        let (messages, tools) = pack_for_tool_result_turn(&s, false);
+        let system = messages[0]
+            .get("content")
+            .and_then(Value::as_str)
+            .expect("system content");
+
+        assert!(tools.is_none());
+        assert!(system.contains("You are helpful."));
+        assert!(!system.contains("tool list goes here"));
+        assert!(!system.contains("call policy"));
     }
 
     #[test]
@@ -665,6 +904,24 @@ mod tests {
         assert!(sys.contains("Multiple models"));
     }
 
+    #[test]
+    fn ordinary_chat_strips_openclaw_tool_guidance_sections() {
+        let prompt = "\
+You are helpful.
+## Tooling
+tool list goes here
+## Tool Call Style
+tool-call policy goes here
+## Safety
+keep this";
+        let stripped = strip_tool_guidance_sections(prompt);
+        assert!(stripped.contains("You are helpful."));
+        assert!(stripped.contains("## Safety"));
+        assert!(stripped.contains("keep this"));
+        assert!(!stripped.contains("tool list goes here"));
+        assert!(!stripped.contains("tool-call policy goes here"));
+    }
+
     // ── pack_for_reducer: includes reason + worker outputs ───────────
 
     fn worker_out(model: &str, payload: &str) -> WorkerOutput {
@@ -715,6 +972,20 @@ mod tests {
         assert_eq!(
             last.get("content").and_then(|c| c.as_str()),
             Some("which is bigger, 7^3 or 350?"),
+        );
+    }
+
+    #[test]
+    fn ordinary_chat_reducer_omits_native_tools() {
+        let s = session_with(
+            &[system_msg("Agent R."), user_msg("What can you help with?")],
+            Some(tools_two()),
+        );
+        let outputs = vec![worker_out("alpha", "I can help with coding.")];
+        let (_messages, tools) = pack_for_reducer(&s, &outputs, "ordinary answer", false);
+        assert!(
+            tools.is_none(),
+            "ordinary chat reducer should not receive native tool schemas"
         );
     }
 

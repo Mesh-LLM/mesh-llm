@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
     path::PathBuf,
@@ -55,6 +55,7 @@ impl KvStageIntegration {
                 cache_config.max_entries.clamp(1, 512),
                 cache_config.max_bytes,
             ))),
+            first_tokens: Arc::new(Mutex::new(BTreeMap::new())),
         }))
     }
 }

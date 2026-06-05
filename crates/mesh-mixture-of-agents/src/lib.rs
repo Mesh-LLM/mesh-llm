@@ -46,18 +46,20 @@ mod tool_guard;
 pub mod worker;
 
 pub use backend::{HttpBackend, ModelBackend, ModelEntry, SamplingParams, apply_enable_thinking};
+pub(crate) use tool_guard::enforce_tool_call_contract;
 
 use backend::call_backend;
-use fanout::gather_workers_incremental;
+use fanout::{GraceMode, gather_workers_incremental};
 use mesh_llm_guardrails::tool_arguments_wire_string;
 use normalize::WorkerOutput;
 use reducer::{hedged_reducer_call, reducer_candidates};
 use serde_json::{Value, json};
 use session::Session;
 use std::time::{Duration, Instant};
-use tool_guard::enforce_allowed_tools;
 use worker::WorkerRole;
 pub use worker::{strip_thinking, truncate_chars};
+
+const SAME_TOOL_FORCE_ANSWER_THRESHOLD: usize = 3;
 
 /// The virtual model name that triggers MoA routing.
 pub const VIRTUAL_MODEL_NAME: &str = "mesh";
@@ -205,6 +207,13 @@ async fn handle_query(
     start: Instant,
 ) -> TurnResult {
     let assignments = worker::assign_roles(&config.models);
+    let grace_mode = grace_mode_for_turn(session, has_tools);
+    let query_uses_tools = matches!(grace_mode, GraceMode::Tool);
+    let selected_tool_names = if query_uses_tools {
+        selected_tool_names_for_turn(session, allowed_tools)
+    } else {
+        Vec::new()
+    };
 
     tracing::info!(
         "moa: dispatching to {} workers: [{}]",
@@ -221,7 +230,12 @@ async fn handle_query(
 
     let enable_thinking = config.enable_thinking;
     for assignment in &assignments {
-        let packed = context::pack_for_worker(session, assignment.role, has_tools);
+        let packed = context::pack_for_worker_selected(
+            session,
+            assignment.role,
+            query_uses_tools,
+            &selected_tool_names,
+        );
         let model_name = assignment.model_name.clone();
         let role = assignment.role;
         let backend = config.backends[assignment.backend_index].clone();
@@ -252,9 +266,11 @@ async fn handle_query(
     let (outputs, summaries, early_decision) = gather_workers_incremental(
         &mut join_set,
         &dispatched,
-        has_tools,
+        query_uses_tools,
         allowed_tools,
+        session.tools(),
         config.first_answer_grace,
+        grace_mode,
     )
     .await;
 
@@ -272,13 +288,14 @@ async fn handle_query(
     // Capture whether we took the early-exit path BEFORE we resolve the
     // decision: the arbiter never runs when early_decision is Some.
     let took_early_exit = early_decision.is_some();
-    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, has_tools));
+    let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, query_uses_tools));
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
         session,
         decision,
         &outputs,
-        has_tools,
+        query_uses_tools,
+        &selected_tool_names,
         allowed_tools,
     )
     .await;
@@ -303,6 +320,202 @@ async fn handle_query(
     }
 }
 
+fn grace_mode_for_turn(session: &Session, has_tools: bool) -> GraceMode {
+    if !has_tools {
+        return GraceMode::Answer;
+    }
+    if looks_like_tool_intent(&session.last_user_text()) {
+        GraceMode::Tool
+    } else {
+        GraceMode::Answer
+    }
+}
+
+fn looks_like_tool_intent(text: &str) -> bool {
+    let text = text.to_ascii_lowercase();
+    if contains_any(
+        &text,
+        &[
+            "no tool",
+            "without tool",
+            "do not use tool",
+            "don't use tool",
+            "no web",
+            "without web",
+            "do not browse",
+            "don't browse",
+            "no lookup",
+            "without lookup",
+        ],
+    ) {
+        return false;
+    }
+
+    let tool_intent_phrases = [
+        "use a tool",
+        "using a tool",
+        "read ",
+        "inspect ",
+        "open ",
+        "fetch ",
+        "search ",
+        "look up",
+        "browse",
+        "web",
+        "url",
+        "http://",
+        "https://",
+        "file",
+        "directory",
+        "folder",
+        "list ",
+        "run ",
+        "execute",
+        "terminal",
+        "shell",
+        "github",
+        "issue",
+        "pull request",
+        "pr ",
+        "weather",
+    ];
+    tool_intent_phrases
+        .iter()
+        .any(|phrase| text.contains(phrase))
+}
+
+fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> Vec<String> {
+    let available = if allowed_tools.is_empty() {
+        session.tool_names()
+    } else {
+        allowed_tools.to_vec()
+    };
+    if available.is_empty() {
+        return Vec::new();
+    }
+
+    let text = session.last_user_text().to_ascii_lowercase();
+    let mut selected = Vec::new();
+    for tool in &available {
+        let tool_lc = tool.to_ascii_lowercase();
+        if tool_is_relevant_to_text(&tool_lc, &text) {
+            selected.push(tool.clone());
+        }
+    }
+
+    for tool in recent_tool_chain_names(session) {
+        if available.iter().any(|available| available == &tool) && !selected.contains(&tool) {
+            selected.push(tool);
+        }
+    }
+
+    if selected.is_empty() && available.len() == 1 {
+        available
+    } else {
+        selected
+    }
+}
+
+fn recent_tool_chain_names(session: &Session) -> Vec<String> {
+    let all = session.all_messages();
+    let Some(latest_tool_idx) = all.iter().rposition(|msg| message_role(msg) == "tool") else {
+        return Vec::new();
+    };
+    let start_idx = all[..=latest_tool_idx]
+        .iter()
+        .rposition(|msg| message_role(msg) == "user")
+        .unwrap_or(0);
+
+    let mut names = Vec::new();
+    for msg in &all[start_idx..=latest_tool_idx] {
+        let Some(tool_calls) = msg.get("tool_calls").and_then(Value::as_array) else {
+            continue;
+        };
+        for tool_call in tool_calls {
+            let Some(name) = tool_call
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            if !names.iter().any(|existing| existing == name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+
+    names
+}
+
+fn message_role(msg: &Value) -> &str {
+    msg.get("role").and_then(Value::as_str).unwrap_or("")
+}
+
+fn tool_is_relevant_to_text(tool_name: &str, text: &str) -> bool {
+    if text.contains(tool_name) {
+        return true;
+    }
+
+    match tool_name {
+        "read" | "read_file" | "file_fetch" => contains_any(
+            text,
+            &["read ", "open ", "inspect ", "fetch file", "show file"],
+        ),
+        "edit" | "edit_file" | "file_write" | "write" => {
+            contains_any(text, &["edit ", "change ", "modify ", "write ", "create "])
+        }
+        "exec" | "run_command" | "process" => contains_any(
+            text,
+            &[
+                "run ", "execute ", "shell", "terminal", "command", "process",
+            ],
+        ),
+        "web_search" => contains_any(
+            text,
+            &[
+                "search ",
+                "look up",
+                "lookup",
+                "web",
+                "google",
+                "github",
+                "issue",
+                "pull request",
+                "pr ",
+                "weather",
+                "forecast",
+                "current",
+                "latest",
+                "today",
+                "tomorrow",
+            ],
+        ),
+        "web_fetch" => contains_any(
+            text,
+            &[
+                "fetch ",
+                "browse",
+                "url",
+                "http://",
+                "https://",
+                "github.com/",
+            ],
+        ),
+        "dir_list" | "dir_fetch" | "list_files" => {
+            contains_any(text, &["list ", "directory", "folder", "dir "])
+        }
+        "image" | "image_generate" => contains_any(text, &["image", "picture", "generate"]),
+        "pdf" => text.contains("pdf"),
+        "memory_search" | "memory_get" => text.contains("memory"),
+        _ => false,
+    }
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
 // ─── Tool result handling ────────────────────────────────────────────
 
 async fn handle_tool_result(
@@ -314,7 +527,23 @@ async fn handle_tool_result(
 ) -> TurnResult {
     let candidates = reducer_candidates(config);
     let candidate_count = candidates.len();
-    let (messages, tools) = context::pack_for_tool_result_turn(session, has_tools);
+    let repeated_tool = repeated_same_tool_results(session);
+    let force_answer = repeated_tool.is_some();
+    let selected_tool_names = if force_answer {
+        Vec::new()
+    } else {
+        selected_tool_names_for_turn(session, allowed_tools)
+    };
+    let tools_enabled_for_reducer = has_tools && !force_answer;
+    let (mut messages, tools) = context::pack_for_tool_result_turn_selected(
+        session,
+        tools_enabled_for_reducer,
+        &selected_tool_names,
+    );
+    if let Some((tool, count)) = repeated_tool {
+        tracing::info!("moa: forcing answer after {count} consecutive completed {tool} tool calls");
+        append_tool_loop_answer_instruction(&mut messages, &tool, count);
+    }
 
     // Hedged ladder: start candidate 0, hedge to candidate 1 after hedge_delay
     // (or immediately on candidate 0 error), race for the first OK. Rescues
@@ -341,7 +570,7 @@ async fn handle_tool_result(
         }) => {
             let mut reduced =
                 normalize::normalize_worker_output(&text, &winner, WorkerRole::Reducer, 0);
-            enforce_allowed_tools(&mut reduced, allowed_tools, &winner);
+            enforce_tool_call_contract(&mut reduced, allowed_tools, session.tools(), &winner);
             (spawned, Some((winner, reduced)))
         }
         Err(reducer::HedgedReducerErr {
@@ -365,13 +594,12 @@ async fn handle_tool_result(
             // missing / non-object arguments to `"{}"`.
             let body = match reduced.kind {
                 normalize::OutputKind::ToolProposal => {
-                    if let Some(tname) = reduced.tool_name.as_ref() {
-                        let args = reduced.tool_arguments.as_ref().unwrap_or(&Value::Null);
-                        tool_call_response(tname, args)
-                    } else {
-                        chat_response(&reduced.payload)
-                    }
+                    tool_proposal_response(&reduced, tools_enabled_for_reducer)
                 }
+                normalize::OutputKind::Uncertainty => error_response(
+                    "MoA reducer returned no usable answer",
+                    MOA_ERR_NO_USABLE_ANSWER,
+                ),
                 _ => chat_response(&reduced.payload),
             };
             (name, true, body)
@@ -407,6 +635,39 @@ async fn handle_tool_result(
     }
 }
 
+fn repeated_same_tool_results(session: &Session) -> Option<(String, usize)> {
+    let calls = session.pending_tool_calls();
+    let last = calls.last()?;
+    last.result.as_ref()?;
+
+    let tool_name = last.function_name.as_str();
+    let count = calls
+        .iter()
+        .rev()
+        .take_while(|call| call.function_name == tool_name && call.result.is_some())
+        .count();
+
+    (count >= SAME_TOOL_FORCE_ANSWER_THRESHOLD).then(|| (tool_name.to_string(), count))
+}
+
+fn append_tool_loop_answer_instruction(messages: &mut [Value], tool: &str, count: usize) {
+    let instruction = format!(
+        "\n\nTool loop guard: the last {count} completed tool calls all used `{tool}`. \
+         Answer now from the gathered tool results. Do not call another tool. \
+         If the evidence is incomplete, say what can be determined and what is missing."
+    );
+
+    if let Some(system) = messages
+        .iter_mut()
+        .find(|msg| msg.get("role").and_then(Value::as_str) == Some("system"))
+        && let Some(content) = system.get("content").and_then(Value::as_str)
+    {
+        let mut updated = content.to_string();
+        updated.push_str(&instruction);
+        system["content"] = Value::String(updated);
+    }
+}
+
 // ─── Decision resolution ─────────────────────────────────────────────
 
 /// Returns (response body, reducer_used, reducer_attempts).
@@ -416,17 +677,35 @@ async fn resolve_decision(
     decision: arbiter::Decision,
     outputs: &[WorkerOutput],
     has_tools: bool,
+    selected_tool_names: &[String],
     allowed_tools: &[String],
 ) -> (Value, bool, u32) {
     match decision {
         arbiter::Decision::Answer(text) => (chat_response(&text), false, 0),
         arbiter::Decision::ToolCall { name, arguments } => {
-            (tool_call_response(&name, &arguments), false, 0)
+            if has_tools {
+                (tool_call_response(&name, &arguments), false, 0)
+            } else {
+                (
+                    error_response(
+                        "MoA selected a tool call, but tools are disabled for this turn",
+                        MOA_ERR_NO_USABLE_ANSWER,
+                    ),
+                    false,
+                    0,
+                )
+            }
         }
         arbiter::Decision::NeedsReducer { reason } => {
             tracing::info!("moa: reducer — {reason}");
             let candidates = reducer_candidates(config);
-            let (messages, tools) = context::pack_for_reducer(session, outputs, &reason, has_tools);
+            let (messages, tools) = context::pack_for_reducer_selected(
+                session,
+                outputs,
+                &reason,
+                has_tools,
+                selected_tool_names,
+            );
 
             // Hedged ladder over the ordered candidates (see hedged_reducer_call).
             let hedge_result = hedged_reducer_call(
@@ -448,7 +727,12 @@ async fn resolve_decision(
                 }) => {
                     let mut reduced =
                         normalize::normalize_worker_output(&text, &winner, WorkerRole::Reducer, 0);
-                    enforce_allowed_tools(&mut reduced, allowed_tools, &winner);
+                    enforce_tool_call_contract(
+                        &mut reduced,
+                        allowed_tools,
+                        session.tools(),
+                        &winner,
+                    );
                     (spawned, Some(reduced))
                 }
                 Err(reducer::HedgedReducerErr {
@@ -468,12 +752,10 @@ async fn resolve_decision(
                         // previous "both name AND args required" gate would
                         // silently fall back to a chat_response and break
                         // the calling agent's tool loop.
-                        if let Some(name) = reduced.tool_name.as_ref() {
-                            let args = reduced.tool_arguments.as_ref().unwrap_or(&Value::Null);
-                            (tool_call_response(name, args), true, attempts)
-                        } else {
-                            (chat_response(&reduced.payload), true, attempts)
-                        }
+                        (tool_proposal_response(&reduced, has_tools), true, attempts)
+                    }
+                    normalize::OutputKind::Uncertainty => {
+                        (fallback_worker_response(outputs), true, attempts)
                     }
                     _ => (chat_response(&reduced.payload), true, attempts),
                 },
@@ -483,7 +765,7 @@ async fn resolve_decision(
                     // produce the output we're returning — we fell back to
                     // a worker. attempts still reflects what was spawned so
                     // observability can see "we tried N times and all failed".
-                    (chat_response(&best_answer(outputs)), false, attempts)
+                    (fallback_worker_response(outputs), false, attempts)
                 }
             }
         }
@@ -495,16 +777,46 @@ async fn resolve_decision(
 fn best_answer(outputs: &[WorkerOutput]) -> String {
     outputs
         .iter()
-        .filter(|o| matches!(o.kind, normalize::OutputKind::Answer))
+        .filter(|o| {
+            matches!(o.kind, normalize::OutputKind::Answer)
+                && !normalize::is_silent_reply_sentinel(&o.payload)
+        })
         // `total_cmp` is total over all f32 (including NaN/Inf); `partial_cmp`
         // can return `None` on NaN, which would panic on `unwrap`.
         // `normalize_worker_output` now sanitizes non-finite confidences
         // before they reach here, but using `total_cmp` keeps this site
         // panic-free even if a future caller skips the normalizer.
         .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-        .or(outputs.first())
         .map(|o| o.payload.clone())
         .unwrap_or_default()
+}
+
+fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
+    let answer = best_answer(outputs);
+    if answer.is_empty() {
+        error_response(
+            "MoA could not produce a usable answer",
+            MOA_ERR_NO_USABLE_ANSWER,
+        )
+    } else {
+        chat_response(&answer)
+    }
+}
+
+fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
+    if has_tools && let Some(name) = output.tool_name.as_ref() {
+        let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
+        return tool_call_response(name, args);
+    }
+
+    if output.payload.trim().is_empty() || normalize::is_silent_reply_sentinel(&output.payload) {
+        return error_response(
+            "MoA reducer returned no usable answer",
+            MOA_ERR_NO_USABLE_ANSWER,
+        );
+    }
+
+    chat_response(&output.payload)
 }
 
 /// Build a response body that signals MoA-level failure to the client.
@@ -570,6 +882,8 @@ pub const MOA_ERR_ALL_WORKERS_FAILED: &str = "all_workers_failed";
 /// Every reducer candidate failed (in both the tool-result and the
 /// arbiter-escalated paths).
 pub const MOA_ERR_ALL_REDUCERS_FAILED: &str = "all_reducers_failed";
+/// MoA only received silence directives or uncertainty after reduction.
+pub const MOA_ERR_NO_USABLE_ANSWER: &str = "no_usable_answer";
 
 fn chat_response(content: &str) -> Value {
     json!({
@@ -665,6 +979,67 @@ mod response_builder_tests {
         // here is *not* about which specific answer wins, only that we do
         // not panic and we return *some* answer.
         assert!(!picked.is_empty());
+    }
+
+    #[test]
+    fn best_answer_ignores_silent_reply_sentinel() {
+        let outputs = vec![
+            answer("a", 0.99, "NO_REPLY"),
+            answer("b", 0.6, "Here is a real response."),
+        ];
+        assert_eq!(best_answer(&outputs), "Here is a real response.");
+    }
+
+    #[test]
+    fn fallback_worker_response_errors_when_only_silent_sentinel_remains() {
+        let outputs = vec![answer("a", 0.99, "NO_REPLY")];
+        let resp = fallback_worker_response(&outputs);
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_str),
+            Some(MOA_ERR_NO_USABLE_ANSWER)
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str),
+            Some("error")
+        );
+    }
+
+    fn tool_proposal(payload: &str) -> WorkerOutput {
+        WorkerOutput {
+            kind: normalize::OutputKind::ToolProposal,
+            confidence: 0.8,
+            tool_name: Some("read_file".to_string()),
+            tool_arguments: Some(json!({"path": "README.md"})),
+            payload: payload.to_string(),
+            model: "reducer".to_string(),
+            role: WorkerRole::Reducer,
+            elapsed_ms: 1,
+        }
+    }
+
+    #[test]
+    fn tool_proposal_response_emits_tool_call_when_tools_enabled() {
+        let resp = tool_proposal_response(&tool_proposal("Need to read."), true);
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(Value::as_str),
+            Some("read_file")
+        );
+    }
+
+    #[test]
+    fn tool_proposal_response_does_not_emit_tool_call_when_tools_disabled() {
+        let resp = tool_proposal_response(&tool_proposal("I need to read README.md."), false);
+        assert!(
+            resp.pointer("/choices/0/message/tool_calls").is_none(),
+            "disabled tools must not leak tool_calls: {resp}"
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/content")
+                .and_then(Value::as_str),
+            Some("I need to read README.md.")
+        );
     }
 
     #[test]
@@ -764,5 +1139,201 @@ mod response_builder_tests {
             .and_then(serde_json::Value::as_u64)
             .expect("completion_tokens is u64");
         assert!(tokens > 0);
+    }
+
+    #[test]
+    fn tool_enabled_chat_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "How are you?"})],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "read"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
+    fn tool_intent_uses_tool_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use a tool to read /tmp/openclaw-tool-baseline.txt",
+            })],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "read"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Tool);
+    }
+
+    #[test]
+    fn negated_web_prompt_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Plain check with no web lookup: reply OK",
+            })],
+            &Some(serde_json::json!([{"type": "function", "function": {"name": "web_search"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
+    fn no_tools_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Reply OK"})],
+            &None,
+        );
+        assert_eq!(grace_mode_for_turn(&session, false), GraceMode::Answer);
+    }
+
+    #[test]
+    fn read_prompt_selects_only_read_tool() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Read /tmp/file.txt"})],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["read".to_string()]
+        );
+    }
+
+    #[test]
+    fn weather_prompt_selects_web_search_tool() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Check the current Melbourne weather forecast for today",
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["web_search".to_string()]
+        );
+    }
+
+    #[test]
+    fn tool_result_turn_keeps_active_tool_selected() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "check local auth"}),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_exec",
+                        "type": "function",
+                        "function": {"name": "exec", "arguments": "{\"command\":\"echo ok\"}"}
+                    }]
+                }),
+                serde_json::json!({
+                    "role": "tool",
+                    "tool_call_id": "call_exec",
+                    "content": "logged in"
+                }),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["exec".to_string()]
+        );
+    }
+
+    #[test]
+    fn two_same_tool_results_do_not_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "web_search"),
+                tool_result_msg("call_1", "result 1"),
+                tool_call_msg("call_2", "web_search"),
+                tool_result_msg("call_2", "result 2"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(repeated_same_tool_results(&session), None);
+    }
+
+    #[test]
+    fn three_same_tool_results_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "web_search"),
+                tool_result_msg("call_1", "result 1"),
+                tool_call_msg("call_2", "web_search"),
+                tool_result_msg("call_2", "result 2"),
+                tool_call_msg("call_3", "web_search"),
+                tool_result_msg("call_3", "result 3"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(
+            repeated_same_tool_results(&session),
+            Some(("web_search".to_string(), 3))
+        );
+    }
+
+    fn tool_call_msg(id: &str, name: &str) -> Value {
+        serde_json::json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": id,
+                "type": "function",
+                "function": {"name": name, "arguments": "{\"query\":\"x\"}"}
+            }]
+        })
+    }
+
+    fn tool_result_msg(id: &str, text: &str) -> Value {
+        serde_json::json!({
+            "role": "tool",
+            "tool_call_id": id,
+            "content": text
+        })
+    }
+
+    #[test]
+    fn ordinary_prompt_selects_no_tools() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({"role": "user", "content": "Help"})],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            Vec::<String>::new()
+        );
     }
 }

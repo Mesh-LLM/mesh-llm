@@ -1,12 +1,12 @@
 # Stage Data Flow
 
-This note describes the current four-stage benchmark data path and the relative
-size of each flow. The reference run is the mixed 192-prompt Qwen3.6 benchmark
-using `f32` activation wire format, `--prefill-chunk-size 256`,
-`--stage-max-inflight 2`, `--stage-reply-credit-limit 1`,
-`--n-gpu-layers -1`, summary telemetry, and balanced splits `10,20,30`.
+This note describes the four-stage benchmark data path and the relative size of
+each flow. The reference run is the mixed 192-prompt Qwen3.6 benchmark using
+`f32` activation wire format, `--prefill-chunk-size 256`,
+`--stage-max-inflight 2`, `--stage-reply-credit-limit 1`, `--n-gpu-layers -1`,
+summary telemetry, and balanced splits `10,20,30`.
 
-## Current Flow
+## Generation 2 Chained Flow
 
 ```mermaid
 flowchart LR
@@ -33,6 +33,52 @@ flowchart LR
     S2 -.->|"summary OTLP<br/>small"| M
     S3 -.->|"summary OTLP<br/>small"| M
 ```
+
+Generation 2 returned prediction-bearing replies along the same chain as
+activation forwarding. With four stages, each decode token crossed the three
+activation links and then crossed three reply links before stage 0 could emit
+the token. On a topology with a fixed 10 ms delay per inter-stage hop, the reply
+chain alone makes the hot path six hops, or about 60 ms before compute.
+
+## Generation 3 Direct Prediction Return
+
+Stage protocol generation 3 is a compatibility-breaking change. A peer is stage
+compatible only when it advertises the `skippy-stage` major version for
+generation 3 plus both `stage-generation-3` and
+`direct-prediction-return`. Prediction-bearing messages must return directly
+from the final/readout stage to the driver-facing stage. Intermediate stages
+continue to forward activations and may handle cold-path control acknowledgments,
+but they are not part of the decode-token prediction return path.
+
+```mermaid
+flowchart LR
+    Client["OpenAI client / benchmark driver"] --> Mesh["mesh-llm<br/>openai-frontend + stage-0 route"]
+    Mesh --> D["token IDs + control<br/>~183 KiB total corpus"]
+    D --> S0["stage-0<br/>layers 0..10<br/>embeddings + first block"]
+
+    S0 -->|"activation frames<br/>~364.7 MiB total<br/>max prefill frame ~2.0 MiB<br/>decode frame 8 KiB/token"| S1["stage-1<br/>layers 10..20"]
+    S1 -->|"activation frames<br/>~364.7 MiB total<br/>max prefill frame ~2.0 MiB<br/>decode frame 8 KiB/token"| S2["stage-2<br/>layers 20..30"]
+    S2 -->|"activation frames<br/>~364.7 MiB total<br/>max prefill frame ~2.0 MiB<br/>decode frame 8 KiB/token"| S3["stage-3<br/>layers 30..40<br/>output logits/token"]
+
+    S3 -->|"predicted token(s)<br/>direct return"| S0
+    S0 -->|"predicted tokens<br/>~6 KiB generated token IDs"| D
+    D --> Mesh
+    Mesh --> Client
+
+    S3 -.->|"control ACKs / stats<br/>cold path"| S2
+    S2 -.->|"control ACKs / stats<br/>cold path"| S1
+    S1 -.->|"control ACKs / stats<br/>cold path"| S0
+
+    Mesh -.->|"run/topology metadata<br/>small"| M
+    S0 -.->|"summary OTLP<br/>small"| M["metrics-server"]
+    S1 -.->|"summary OTLP<br/>small"| M
+    S2 -.->|"summary OTLP<br/>small"| M
+    S3 -.->|"summary OTLP<br/>small"| M
+```
+
+With the same four stages and 10 ms inter-stage delay, the no-spec decode hot
+path becomes `S0 -> S1 -> S2 -> S3 -> S0`: four hops, or about 40 ms before
+compute. That removes two serialized reply hops from every generated token.
 
 ## Relative Sizes
 

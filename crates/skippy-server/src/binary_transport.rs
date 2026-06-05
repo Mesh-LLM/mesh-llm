@@ -978,6 +978,21 @@ fn handle_binary_connection(
             }
         }
 
+        if let Some(full_prompt_tokens) = decode_full_prompt_sideband(&message) {
+            let mut runtime = runtime.lock().expect("runtime lock poisoned");
+            let record = maybe_record_binary_full_prefill(
+                config,
+                &mut runtime,
+                kv,
+                telemetry,
+                &session_key,
+                &message,
+                full_prompt_tokens,
+            );
+            drop(runtime);
+            add_binary_record_stats(&mut message_reply_stats, config, &record);
+        }
+
         let mut forward_write_ms = 0.0;
         let mut forward_activation_encode_ms = 0.0;
         let mut downstream_wait_ms = 0.0;
@@ -2098,6 +2113,19 @@ fn handle_binary_restore_prefill_decode_control(
                 .context("restore-decode downstream miss ACK")?;
             return Ok(());
         }
+        {
+            let mut runtime = runtime.lock().expect("runtime lock poisoned");
+            let record = maybe_record_binary_full_prefill(
+                config,
+                &mut runtime,
+                kv,
+                telemetry,
+                session_id,
+                message,
+                message.tokens.as_slice(),
+            );
+            add_binary_record_stats(&mut control_stats, config, &record);
+        }
         let mut attrs = binary_message_attrs(config, wire_session_id, message);
         attrs.insert("skippy.kv.control_hit".to_string(), json!(true));
         attrs.insert(
@@ -2127,6 +2155,19 @@ fn handle_binary_restore_prefill_decode_control(
         return Ok(());
     }
 
+    {
+        let mut runtime = runtime.lock().expect("runtime lock poisoned");
+        let record = maybe_record_binary_full_prefill(
+            config,
+            &mut runtime,
+            kv,
+            telemetry,
+            session_id,
+            message,
+            message.tokens.as_slice(),
+        );
+        add_binary_record_stats(&mut control_stats, config, &record);
+    }
     let mut attrs = binary_message_attrs(config, wire_session_id, message);
     attrs.insert("skippy.kv.control_hit".to_string(), json!(true));
     attrs.insert(
@@ -3303,6 +3344,9 @@ fn token_sideband_or_fill(message: &StageWireMessage) -> Result<Vec<i32>> {
         .token_count
         .try_into()
         .context("negative token_count")?;
+    if let Some(token) = decode_execution_token(message, token_count) {
+        return Ok(vec![token]);
+    }
     if message.tokens.len() == token_count {
         return Ok(message.tokens.clone());
     }
@@ -3315,6 +3359,55 @@ fn token_sideband_or_fill(message: &StageWireMessage) -> Result<Vec<i32>> {
         0
     };
     Ok(vec![fill; token_count])
+}
+
+fn decode_execution_token(message: &StageWireMessage, token_count: usize) -> Option<i32> {
+    if !matches!(
+        message.kind,
+        WireMessageKind::DecodeEmbd
+            | WireMessageKind::DecodeReadout
+            | WireMessageKind::DecodeLightCtx
+            | WireMessageKind::DecodeReplayEmbd
+            | WireMessageKind::DecodeReplayFinalEmbd
+    ) || token_count != 1
+        || message.state.current_token == skippy_protocol::binary::LLAMA_TOKEN_NULL
+    {
+        return None;
+    }
+    Some(message.state.current_token)
+}
+
+fn decode_full_prompt_sideband(message: &StageWireMessage) -> Option<&[i32]> {
+    if message.kind != WireMessageKind::DecodeEmbd
+        || message.token_count != 1
+        || message.state.decode_step != 0
+        || message.state.prompt_token_count <= 0
+    {
+        return None;
+    }
+    let prompt_token_count = usize::try_from(message.state.prompt_token_count).ok()?;
+    if message.tokens.len() != prompt_token_count
+        || message.tokens.last().copied() != Some(message.state.current_token)
+    {
+        return None;
+    }
+    Some(message.tokens.as_slice())
+}
+
+fn add_binary_record_stats(
+    reply_stats: &mut StageReplyStats,
+    config: &StageConfig,
+    record: &BinaryKvRecordResult,
+) {
+    if record.recorded_pages > 0 {
+        reply_stats.kv_recorded_pages += record.recorded_pages as i64;
+        reply_stats.kv_record_stage_mask |= stage_mask(config.stage_index);
+    }
+    if record.recorded_activations > 0 {
+        reply_stats.kv_recorded_bytes = reply_stats
+            .kv_recorded_bytes
+            .saturating_add(record.recorded_activation_bytes as i64);
+    }
 }
 
 #[cfg(test)]

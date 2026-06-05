@@ -72,7 +72,22 @@ impl StageOpenAiBackend {
                         .prompt_token_ids
                         .last()
                         .expect("checked non-empty prompt");
-                    if let Some(fused) = self.try_restore_embedded_split_prefill_and_decode(
+                    if let Some(cached) = self.try_restore_embedded_split_full_prompt_first_token(
+                        &request,
+                        &session_key,
+                        downstream,
+                    )? {
+                        prefill_chain_cache_restored = true;
+                        prefill_chain_restored_tokens = request.prompt_token_ids.len();
+                        prefill_chain_cache_stats = cached.reply_stats;
+                        cache_stats.cached_prompt_tokens =
+                            saturating_u32(request.prompt_token_ids.len());
+                        cache_stats.matched_prefix_tokens =
+                            saturating_u32(request.prompt_token_ids.len());
+                        cache_stats.suffix_prefill_tokens = 0;
+                        cache_stats.hit_kind = Some("chain_full_prompt_first_token");
+                        fused_first_decode = Some(cached);
+                    } else if let Some(fused) = self.try_restore_embedded_split_prefill_and_decode(
                         &request,
                         &session_key,
                         downstream,
@@ -479,6 +494,15 @@ impl StageOpenAiBackend {
                 "skippy.kv.chain_cache_hit_stage_mask".to_string(),
                 json!(prefill_chain_cache_stats.kv_hit_stage_mask),
             );
+            super::prefix_cache::insert_chain_prefix_cache_savings_attrs(
+                &mut prefill_attrs,
+                super::prefix_cache::chain_prefix_cache_savings(
+                    &prefill_chain_cache_stats,
+                    prefill_chain_restored_tokens,
+                    request.wire_dtype,
+                    request.activation_width,
+                ),
+            );
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
             if let Some(message) = generation_config_message(
@@ -549,11 +573,11 @@ impl StageOpenAiBackend {
                 token_attrs.insert("llama_stage.decode_step".to_string(), json!(0));
                 token_attrs.insert(
                     "llama_stage.decode_token_phase".to_string(),
-                    json!("fused-restore"),
+                    json!(fused.token_phase),
                 );
                 token_attrs.insert(
                     "llama_stage.message_kind".to_string(),
-                    json!("TryRestorePrefillDecode"),
+                    json!(fused.message_kind),
                 );
                 token_attrs.insert(
                     "llama_stage.elapsed_ms".to_string(),
@@ -973,6 +997,10 @@ impl StageOpenAiBackend {
                     .map_err(|_| OpenAiError::backend("decode step exceeds i32"))?;
                 state.current_token = current;
                 state.source_stage_index = -1;
+                let message_tokens =
+                    decode_sideband_tokens(decode_step, request.prompt_token_ids, current);
+                let records_full_prompt_sideband =
+                    message_tokens.len() == request.prompt_token_ids.len();
                 let message = StageWireMessage {
                     kind: WireMessageKind::DecodeEmbd,
                     pos_start: i32::try_from(prefill_token_count + decode_step as usize)
@@ -983,7 +1011,7 @@ impl StageOpenAiBackend {
                     session_id,
                     sampling: wire_sampling.clone(),
                     chat_sampling_metadata: None,
-                    tokens: vec![current],
+                    tokens: message_tokens,
                     positions: Vec::new(),
                     activation: Vec::new(),
                     raw_bytes: Vec::new(),
@@ -1056,6 +1084,14 @@ impl StageOpenAiBackend {
                         "expected predicted-token reply from downstream, got {:?}",
                         reply.kind
                     )));
+                }
+                if decode_step == 0 && records_full_prompt_sideband {
+                    self.record_embedded_stage0_full_prompt_first_token(
+                        &session_key,
+                        request.ids,
+                        request.prompt_token_ids,
+                        reply.predicted,
+                    )?;
                 }
                 current = reply.predicted;
                 decoded_tokens += 1;
@@ -1234,4 +1270,14 @@ impl StageOpenAiBackend {
         result?;
         Ok(cache_stats)
     }
+}
+
+fn decode_sideband_tokens(decode_step: u32, prompt_token_ids: &[i32], current: i32) -> Vec<i32> {
+    if decode_step == 0
+        && prompt_token_ids.len() <= skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES
+        && prompt_token_ids.last().copied() == Some(current)
+    {
+        return prompt_token_ids.to_vec();
+    }
+    vec![current]
 }

@@ -1,5 +1,67 @@
 use super::*;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct ChainPrefixCacheSavings {
+    pub(super) hit_stage_count: u32,
+    pub(super) stage0_activation_bytes_avoided: usize,
+    pub(super) interstage_activation_bytes_avoided_estimate: usize,
+}
+
+pub(super) fn chain_prefix_cache_savings(
+    stats: &StageReplyStats,
+    restored_tokens: usize,
+    wire_dtype: WireActivationDType,
+    activation_width: i32,
+) -> ChainPrefixCacheSavings {
+    let hit_stage_count = prefix_cache_hit_stage_count(stats.kv_hit_stage_mask);
+    let stage0_activation_bytes_avoided =
+        estimated_activation_bytes(wire_dtype, restored_tokens, activation_width);
+    let interstage_activation_bytes_avoided_estimate =
+        stage0_activation_bytes_avoided.saturating_mul(hit_stage_count.saturating_sub(1) as usize);
+    ChainPrefixCacheSavings {
+        hit_stage_count,
+        stage0_activation_bytes_avoided,
+        interstage_activation_bytes_avoided_estimate,
+    }
+}
+
+pub(super) fn insert_chain_prefix_cache_savings_attrs(
+    attrs: &mut BTreeMap<String, Value>,
+    savings: ChainPrefixCacheSavings,
+) {
+    attrs.insert(
+        "skippy.kv.chain_cache_hit_stage_count".to_string(),
+        json!(savings.hit_stage_count),
+    );
+    attrs.insert(
+        "skippy.kv.chain_cache_stage0_activation_bytes_avoided".to_string(),
+        json!(savings.stage0_activation_bytes_avoided),
+    );
+    attrs.insert(
+        "skippy.kv.chain_cache_interstage_activation_bytes_avoided_estimate".to_string(),
+        json!(savings.interstage_activation_bytes_avoided_estimate),
+    );
+}
+
+fn prefix_cache_hit_stage_count(hit_stage_mask: i64) -> u32 {
+    if hit_stage_mask <= 0 {
+        return 0;
+    }
+    (hit_stage_mask as u64).count_ones()
+}
+
+fn estimated_activation_bytes(
+    wire_dtype: WireActivationDType,
+    token_count: usize,
+    activation_width: i32,
+) -> usize {
+    let Ok(token_count) = i32::try_from(token_count) else {
+        return 0;
+    };
+    skippy_protocol::binary::activation_wire_bytes(wire_dtype, token_count, activation_width)
+        .unwrap_or(0)
+}
+
 pub(super) fn stage0_prefill_record_identities(
     kv: &KvStageIntegration,
     config: &StageConfig,
@@ -277,8 +339,22 @@ impl StageOpenAiBackend {
             identities
                 .iter()
                 .map(|identity| {
-                    kv.record_resident_prefix(&mut runtime, session_id, identity, token_ids)
-                        .map_err(openai_backend_error)
+                    let token_count = identity
+                        .identity
+                        .token_count
+                        .try_into()
+                        .unwrap_or(usize::MAX)
+                        .min(token_ids.len());
+                    if token_count == token_ids.len() {
+                        let _ = kv.record_exact_state(&mut runtime, session_id, identity);
+                    }
+                    kv.record_resident_prefix(
+                        &mut runtime,
+                        session_id,
+                        identity,
+                        &token_ids[..token_count],
+                    )
+                    .map_err(openai_backend_error)
                 })
                 .collect::<OpenAiResult<Vec<_>>>()?
         };
@@ -325,6 +401,118 @@ impl StageOpenAiBackend {
                 .emit("stage.openai_kv_record_decision", attrs);
         }
         Ok(recorded_any)
+    }
+
+    pub(super) fn record_embedded_stage0_full_prompt_first_token(
+        &self,
+        session_id: &str,
+        ids: &OpenAiGenerationIds,
+        token_ids: &[i32],
+        predicted: i32,
+    ) -> OpenAiResult<bool> {
+        let Some(kv) = self.kv.as_ref() else {
+            return Ok(false);
+        };
+        if token_ids.is_empty() || !kv.should_record() {
+            return Ok(false);
+        }
+        let base = self.local_kv_message_base(session_id, ids);
+        let identity = kv.prefill_identity(&self.config, &base, 0, token_ids);
+        let recorded_state =
+            self.record_embedded_stage0_full_prefill(session_id, ids, token_ids)?;
+        let recorded_token = kv.record_cached_first_token(&identity, predicted);
+        let mut attrs = self.openai_attrs(ids);
+        attrs.insert(
+            "skippy.kv.decision".to_string(),
+            json!("stage0_full_prompt_first_token_record"),
+        );
+        attrs.insert("skippy.kv.token_count".to_string(), json!(token_ids.len()));
+        attrs.insert("skippy.kv.predicted_token".to_string(), json!(predicted));
+        attrs.insert(
+            "skippy.kv.recorded_page_id".to_string(),
+            json!(identity.page_id),
+        );
+        attrs.insert(
+            "skippy.kv.recorded_state".to_string(),
+            json!(recorded_state),
+        );
+        attrs.insert(
+            "skippy.kv.recorded_first_token".to_string(),
+            json!(recorded_token),
+        );
+        self.telemetry
+            .emit("stage.openai_kv_record_decision", attrs);
+        Ok(recorded_state || recorded_token)
+    }
+
+    pub(super) fn try_restore_embedded_split_full_prompt_first_token(
+        &self,
+        request: &EmbeddedStageZeroGeneration<'_>,
+        session_key: &str,
+        downstream: &mut TcpStream,
+    ) -> OpenAiResult<Option<EmbeddedFusedFirstDecode>> {
+        let Some(kv) = self.kv.as_ref() else {
+            return Ok(None);
+        };
+        if request.prompt_token_ids.is_empty() || !kv.should_lookup() {
+            return Ok(None);
+        }
+        let timer = PhaseTimer::start();
+        let base = self.local_kv_message_base(session_key, request.ids);
+        let identity = kv.prefill_identity(request.config, &base, 0, request.prompt_token_ids);
+        let Some(predicted) = kv.lookup_cached_first_token(&identity) else {
+            return Ok(None);
+        };
+        let Some(restore) = self.try_restore_embedded_split_prefill(
+            request,
+            session_key,
+            downstream,
+            request.prompt_token_ids,
+        )?
+        else {
+            return Ok(None);
+        };
+        if restore.restored_tokens < request.prompt_token_ids.len() {
+            return Ok(None);
+        }
+        let mut attrs = self.openai_attrs(request.ids);
+        attrs.insert(
+            "skippy.kv.decision".to_string(),
+            json!("chain_full_prompt_first_token_hit"),
+        );
+        attrs.insert(
+            "skippy.kv.restored_tokens".to_string(),
+            json!(restore.restored_tokens),
+        );
+        attrs.insert("skippy.kv.predicted_token".to_string(), json!(predicted));
+        attrs.insert("skippy.kv.hit_page_id".to_string(), json!(identity.page_id));
+        attrs.insert(
+            "skippy.kv.lookup_hits".to_string(),
+            json!(restore.stats.kv_lookup_hits),
+        );
+        attrs.insert(
+            "skippy.kv.hit_stage_mask".to_string(),
+            json!(restore.stats.kv_hit_stage_mask),
+        );
+        insert_chain_prefix_cache_savings_attrs(
+            &mut attrs,
+            chain_prefix_cache_savings(
+                &restore.stats,
+                restore.restored_tokens,
+                request.wire_dtype,
+                request.activation_width,
+            ),
+        );
+        self.telemetry
+            .emit("stage.openai_kv_lookup_decision", attrs);
+        Ok(Some(EmbeddedFusedFirstDecode {
+            predicted,
+            reply_stats: restore.stats,
+            execution: EmbeddedExecutionStats::default(),
+            elapsed_ms: timer.elapsed_ms(),
+            token_phase: "full-prompt-cache",
+            message_kind: "TryRestorePrefill",
+        }))
     }
 
     pub(super) fn try_restore_embedded_split_prefill(
@@ -416,6 +604,15 @@ impl StageOpenAiBackend {
         attrs.insert(
             "skippy.kv.hit_stage_mask".to_string(),
             json!(restore_stats.kv_hit_stage_mask),
+        );
+        insert_chain_prefix_cache_savings_attrs(
+            &mut attrs,
+            chain_prefix_cache_savings(
+                &restore_stats,
+                restored_tokens,
+                request.wire_dtype,
+                request.activation_width,
+            ),
         );
         self.telemetry
             .emit("stage.openai_kv_lookup_decision", attrs);
@@ -576,8 +773,23 @@ impl StageOpenAiBackend {
             "skippy.kv.hit_stage_mask".to_string(),
             json!(reply_stats.kv_hit_stage_mask),
         );
+        insert_chain_prefix_cache_savings_attrs(
+            &mut attrs,
+            chain_prefix_cache_savings(
+                &reply_stats,
+                prefill_tokens.len(),
+                request.wire_dtype,
+                request.activation_width,
+            ),
+        );
         self.telemetry
             .emit("stage.openai_kv_lookup_decision", attrs);
+        self.record_embedded_stage0_full_prompt_first_token(
+            session_key,
+            request.ids,
+            request.prompt_token_ids,
+            downstream_reply.predicted,
+        )?;
         Ok(Some(EmbeddedFusedFirstDecode {
             predicted: downstream_reply.predicted,
             reply_stats,
@@ -592,6 +804,8 @@ impl StageOpenAiBackend {
                 downstream_wait_ms,
             },
             elapsed_ms: timer.elapsed_ms(),
+            token_phase: "fused-restore",
+            message_kind: "TryRestorePrefillDecode",
         }))
     }
 
@@ -619,5 +833,46 @@ impl StageOpenAiBackend {
         {
             let _ = recv_reply(&mut *downstream);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_prefix_cache_savings_counts_confirmed_stage_hits() {
+        let stats = StageReplyStats {
+            kv_hit_stage_mask: openai_stage_mask(0)
+                | openai_stage_mask(1)
+                | openai_stage_mask(2)
+                | openai_stage_mask(3),
+            ..Default::default()
+        };
+
+        let savings = chain_prefix_cache_savings(&stats, 256, WireActivationDType::F16, 5120);
+
+        assert_eq!(savings.hit_stage_count, 4);
+        assert_eq!(savings.stage0_activation_bytes_avoided, 2_621_440);
+        assert_eq!(
+            savings.interstage_activation_bytes_avoided_estimate,
+            7_864_320
+        );
+    }
+
+    #[test]
+    fn chain_prefix_cache_savings_uses_wire_dtype() {
+        let stats = StageReplyStats {
+            kv_hit_stage_mask: openai_stage_mask(0) | openai_stage_mask(1),
+            ..Default::default()
+        };
+
+        let q8 = chain_prefix_cache_savings(&stats, 256, WireActivationDType::Q8, 5120);
+        let f32 = chain_prefix_cache_savings(&stats, 256, WireActivationDType::F32, 5120);
+
+        assert_eq!(q8.stage0_activation_bytes_avoided, 1_311_744);
+        assert_eq!(q8.interstage_activation_bytes_avoided_estimate, 1_311_744);
+        assert_eq!(f32.stage0_activation_bytes_avoided, 5_242_880);
+        assert_eq!(f32.interstage_activation_bytes_avoided_estimate, 5_242_880);
     }
 }

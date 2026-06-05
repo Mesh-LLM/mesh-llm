@@ -60,7 +60,7 @@ flowchart TB
     R --> Parse["request parsing<br/>validation<br/>normalization<br/>OpenAI errors"]
     Parse --> B["OpenAiBackend implementation"]
     B --> Local["embedded single-stage<br/>skippy runtime"]
-    B --> Chain["mesh stage-0 route<br/>skippy-stage/1 chain"]
+    B --> Chain["mesh stage-0 route<br/>skippy-stage/2 chain"]
     Local --> Resp["OpenAI response JSON"]
     Chain --> Resp
     Resp --> R

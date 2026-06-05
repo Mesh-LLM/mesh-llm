@@ -23,8 +23,8 @@ pub use rescue::{
 };
 pub use structured::{StructuredOutputSpec, UnsupportedStructuredSchema};
 pub use tools::{
-    MESH_EMIT_STRUCTURED_TOOL_NAME, MESH_RESPOND_TOOL_NAME, extract_tool_name_and_arguments,
-    is_reserved_tool_name, mesh_emit_structured_tool_definition, mesh_respond_tool_definition,
-    model_param_size_b, normalize_tool_arguments, request_uses_reserved_tool_name,
-    tool_arguments_wire_string,
+    MESH_EMIT_STRUCTURED_TOOL_NAME, MESH_RESPOND_TOOL_NAME, ToolArgumentSchemaError,
+    extract_tool_name_and_arguments, is_reserved_tool_name, mesh_emit_structured_tool_definition,
+    mesh_respond_tool_definition, model_param_size_b, normalize_tool_arguments,
+    request_uses_reserved_tool_name, sanitize_tool_arguments_for_tool, tool_arguments_wire_string,
 };

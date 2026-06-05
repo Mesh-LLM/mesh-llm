@@ -14,8 +14,10 @@ fn skippy_stage_subprotocols(
     let mut features = vec![skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string()];
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V2.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3.to_string(),
         );
+        features
+            .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN.to_string());
     }
     if artifact_transfer_supported {
         features.push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER.to_string());
@@ -47,7 +49,10 @@ fn supports_skippy_status_list(subprotocols: &[crate::proto::node::MeshSubprotoc
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     supports_skippy_stage_feature(
         subprotocols,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V2,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V3,
+    ) && supports_skippy_stage_feature(
+        subprotocols,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DIRECT_PREDICTION_RETURN,
     ) && supports_skippy_stage_feature(
         subprotocols,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,

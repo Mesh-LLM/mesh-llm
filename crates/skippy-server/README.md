@@ -15,9 +15,12 @@ mesh/openai-frontend; diagnostic and benchmark clients may connect directly to
 the first stage.
 
 The full request/reply path is tip-to-tip: token IDs enter at the driver-facing
-tip, flow through the stage chain, and predicted tokens return from the final
-tip. Middle-out is the prefill optimization inside that path, where internal
-boundary activations are handed downstream while local compute advances.
+tip, and activations flow through the stage chain. Stage protocol generation 3
+is a compatibility-breaking contract: prediction-bearing replies return
+directly from the final/readout tip to the driver-facing stage instead of being
+relayed back through intermediate stages. Middle-out is the prefill optimization
+inside that path, where internal boundary activations are handed downstream
+while local compute advances.
 
 ```mermaid
 flowchart LR
@@ -27,12 +30,14 @@ flowchart LR
     S0 -->|activation frames| S1["stage-1<br/>layers 10..20"]
     S1 -->|activation frames| S2["..."]
     S2 -->|activation frames| SF["final tip<br/>output/readout"]
-    SF -->|PredictedToken / ACK| S2
-    S2 -->|PredictedToken / ACK| S1
-    S1 -->|PredictedToken / ACK| S0
+    SF -->|PredictedToken / PredictedTokens<br/>direct return| S0
     S0 -->|PredictedToken / ACK| D
     D --> Mesh
     Mesh --> C
+
+    SF -.->|control ACK / stats<br/>cold path| S2
+    S2 -.->|control ACK / stats<br/>cold path| S1
+    S1 -.->|control ACK / stats<br/>cold path| S0
 
     P["layer package<br/>model-package.json + GGUF parts"] --> S0
     P --> S1
@@ -75,6 +80,10 @@ unload or replan.
 ## Notes
 
 - `serve-binary` is the tuned binary stage-to-stage path.
+- `serve-binary` participates in the breaking generation-3 stage protocol.
+  Stage compatibility requires the `stage-generation-3` and
+  `direct-prediction-return` features; older chained-reply peers are rejected
+  during split planning instead of being mixed into a generation-3 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
   abandoned, or broken connections do not monopolize the listener and block the

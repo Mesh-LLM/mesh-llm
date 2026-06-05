@@ -1668,6 +1668,7 @@ struct EmbeddedLocalOutput {
     runtime_lock_hold_ms: f64,
 }
 
+#[derive(Default)]
 struct EmbeddedExecutionStats {
     stage0_compute_ms: f64,
     runtime_lock_wait_ms: f64,
@@ -1690,6 +1691,8 @@ struct EmbeddedFusedFirstDecode {
     reply_stats: StageReplyStats,
     execution: EmbeddedExecutionStats,
     elapsed_ms: f64,
+    token_phase: &'static str,
+    message_kind: &'static str,
 }
 
 struct EmbeddedSessionControl {

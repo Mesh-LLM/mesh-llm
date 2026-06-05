@@ -47,6 +47,7 @@ pub struct KvStageIntegration {
     pub(crate) resident: Arc<Mutex<ResidentPrefixCache>>,
     pub(crate) activations: Arc<Mutex<ResidentActivationCache<ActivationFrame>>>,
     pub(crate) exact_states: Arc<Mutex<ExactStateCache<ExactStateExtra>>>,
+    pub(crate) first_tokens: Arc<Mutex<BTreeMap<String, i32>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -251,6 +252,29 @@ impl KvStageIntegration {
 
     fn lookup_candidate_token_counts(&self, token_count: u64) -> Vec<u64> {
         self.candidate_policy.candidate_token_counts(token_count)
+    }
+
+    pub fn record_cached_first_token(&self, identity: &PrefillKvIdentity, predicted: i32) -> bool {
+        if !self.should_record() || identity.identity.token_count < self.candidate_policy.min_tokens
+        {
+            return false;
+        }
+        self.first_tokens
+            .lock()
+            .expect("first-token cache lock poisoned")
+            .insert(identity.page_id.clone(), predicted)
+            .is_none()
+    }
+
+    pub fn lookup_cached_first_token(&self, identity: &PrefillKvIdentity) -> Option<i32> {
+        if !self.should_lookup() {
+            return None;
+        }
+        self.first_tokens
+            .lock()
+            .expect("first-token cache lock poisoned")
+            .get(&identity.page_id)
+            .copied()
     }
 }
 

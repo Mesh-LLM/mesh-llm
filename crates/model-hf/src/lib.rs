@@ -3,6 +3,7 @@ pub mod store;
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -94,7 +95,10 @@ impl HfModelRepositoryBuilder {
 
     pub fn build(self) -> Result<HfModelRepository> {
         let cache_dir = self.cache_dir.unwrap_or_else(huggingface_hub_cache_dir);
-        let mut builder = HFClientBuilder::new().cache_dir(cache_dir.clone());
+        let mut builder = HFClientBuilder::new()
+            .cache_dir(cache_dir.clone())
+            .retry_max_attempts(6)
+            .retry_base_delay(Duration::from_millis(500));
 
         let endpoint = self
             .endpoint

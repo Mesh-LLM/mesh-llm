@@ -481,6 +481,21 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
+      - name: Disable missing sccache wrapper
+        run: |
+          if command -v sccache >/dev/null 2>&1; then
+            sccache --version
+            exit 0
+          fi
+
+          echo "::warning::sccache is not available in this Linux test container; running without Rust compiler cache"
+          {
+            echo "MESH_LLM_REQUIRE_SCCACHE=0"
+            echo "RUSTC_WRAPPER="
+            echo "LLAMA_STAGE_USE_SCCACHE=0"
+            echo "SKIPPY_USE_SCCACHE=0"
+          } >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
@@ -507,6 +522,16 @@ jobs:
       - name: Build patched llama.cpp ABI libraries
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
+
+      - name: Restore Skippy smoke model cache
+        if: ${{ matrix.group == 'skippy-smoke' }}
+        id: skippy_smoke_model_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
+          restore-keys: |
+            ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-
 
       - name: SDK and API crate tests
         if: ${{ matrix.group == 'sdk-api' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-config') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-commands') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-events') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-hardware-profile') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-runtime-install') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-sdk') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-cli') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-tui') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-embedded-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-console-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs')) }}
@@ -578,12 +603,27 @@ jobs:
         if: ${{ matrix.group == 'skippy-smoke' }}
         timeout-minutes: 45
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
+          MODEL_DIR: ${{ runner.temp }}/skippy-ci-smoke-models
         run: scripts/skippy-ci-smoke.sh
+
+      - name: Save Skippy smoke model cache
+        if: ${{ matrix.group == 'skippy-smoke' && github.ref == 'refs/heads/main' && steps.skippy_smoke_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ steps.skippy_smoke_model_cache.outputs.cache-primary-key }}
 
       - name: Show sccache stats
         if: ${{ always() }}
         run: |
+          if ! command -v sccache >/dev/null 2>&1; then
+            echo "sccache not available; stats skipped"
+            exit 0
+          fi
+
           sccache --show-stats || true
           requests="$(sccache --show-stats 2>/dev/null | awk '/Compile requests/ { print $3; exit }')"
           if [ "${requests:-0}" = "0" ]; then
@@ -615,6 +655,8 @@ jobs:
     uses: ./.github/workflows/hf-download-smoke.yml
     with:
       timeout_minutes: 15
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   inference_smoke_tests:
     needs: [changes, linux_cpu_artifact]
@@ -624,6 +666,8 @@ jobs:
       artifact_name: ci-linux-inference-binaries
       mesh_binary_target: target/debug/mesh-llm
       cache_key_prefix: ''
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   agent_live_smokes:
     needs: [changes, linux_cpu_artifact]
@@ -682,6 +726,8 @@ jobs:
       model_cache_scope: two-node-smoke-model
       smoke_script: scripts/ci-two-node-client-serving-smoke.sh
       timeout_minutes: 20
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   two_node_split_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -694,6 +740,8 @@ jobs:
       model_cache_scope: two-node-split-smoke-model
       smoke_script: scripts/ci-two-node-split-smoke.sh
       timeout_minutes: 25
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   rust_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -706,6 +754,8 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
       runs_on: '"ubuntu-24.04"'
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   kotlin_sdk_smoke:
     needs: [changes, linux_cpu_artifact]
@@ -718,6 +768,8 @@ jobs:
       staged_binary_path: target/debug/mesh-llm
       model_cache_scope: sdk-smoke-model
       runs_on: '"ubuntu-24.04"'
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   macos_cpu_artifact:
     needs: changes
@@ -833,6 +885,8 @@ jobs:
       model_cache_scope: sdk-smoke-model
       runs_on: '"macos-15"'
       timeout_minutes: 40
+    secrets:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
   macos_targets:
     needs: changes
@@ -1059,7 +1113,7 @@ jobs:
       - name: Check mesh-llm binary on Windows
         if: ${{ matrix.backend == 'cpu' && env.RUN_WINDOWS_CPU_FULL != 'true' }}
         shell: pwsh
-        run: cargo check --locked -p mesh-llm --bin mesh-llm
+        run: cargo check --locked -p mesh-llm --bin mesh-llm --features dynamic-native-runtime
       - name: Check Node SDK addon on Windows
         if: ${{ matrix.backend == 'cpu' }}
         shell: pwsh

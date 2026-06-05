@@ -38,6 +38,7 @@ pub async fn try_handle_moa(
     request: &mut proxy::BufferedHttpRequest,
     effective_model: Option<&str>,
     targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
 ) -> Option<TcpStream> {
     if effective_model != Some(moa::VIRTUAL_MODEL_NAME) {
         return Some(tcp_stream);
@@ -51,7 +52,7 @@ pub async fn try_handle_moa(
 
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
 
-    let Some(mut config) = build_moa_config(node, targets).await else {
+    let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
         let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
         return None;
     };
@@ -74,6 +75,9 @@ pub async fn try_handle_moa(
 fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
     extract_enable_thinking_override(body).or(Some(false))
 }
+
+pub(in crate::network::openai) mod context_selection;
+mod progress;
 
 /// Pull the caller's "disable / enable thinking" preference out of an
 /// inbound chat-completion or responses JSON body. Mirrors the same
@@ -137,8 +141,6 @@ fn extract_enable_thinking_override(body: &serde_json::Value) -> Option<bool> {
 
     result
 }
-
-mod progress;
 
 /// Run a turn through the gateway and write the response with x-moa-* headers.
 ///
@@ -361,6 +363,7 @@ fn build_moa_headers(result: &moa::TurnResult) -> Vec<(&'static str, String)> {
 pub async fn build_moa_config(
     node: &mesh::Node,
     targets: Option<&election::ModelTargets>,
+    required_tokens: Option<u32>,
 ) -> Option<moa::GatewayConfig> {
     let http = reqwest::Client::new();
     let mut backends: Vec<std::sync::Arc<dyn moa::ModelBackend>> = Vec::new();
@@ -390,6 +393,7 @@ pub async fn build_moa_config(
             targets,
             &http,
             &aliases,
+            required_tokens,
             &mut backends,
             &mut models,
             &mut local_count,
@@ -407,6 +411,7 @@ pub async fn build_moa_config(
     }
 
     tracing::info!(
+        required_tokens = ?required_tokens,
         "MoA config: {} workers ({} local, {} remote): {:?}",
         models.len(),
         local_count,
@@ -472,12 +477,19 @@ async fn resolve_one_worker_from_aliases(
     targets: Option<&election::ModelTargets>,
     http: &reqwest::Client,
     aliases: &[String],
+    required_tokens: Option<u32>,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
 ) {
+    let resolution = WorkerBackendResolution {
+        node,
+        targets,
+        http,
+        required_tokens,
+    };
     for name in aliases {
-        if add_worker_backend(node, targets, http, name, backends, models, local_count).await {
+        if add_worker_backend(&resolution, name, backends, models, local_count).await {
             return;
         }
     }
@@ -554,17 +566,22 @@ fn is_locally_served(name: &str, targets: Option<&election::ModelTargets>) -> bo
 /// Resolve `name` to a backend (local skippy port if available, else first
 /// remote host) and append it to `backends`/`models`. Returns true if a
 /// backend was added.
+struct WorkerBackendResolution<'a> {
+    node: &'a mesh::Node,
+    targets: Option<&'a election::ModelTargets>,
+    http: &'a reqwest::Client,
+    required_tokens: Option<u32>,
+}
+
 async fn add_worker_backend(
-    node: &mesh::Node,
-    targets: Option<&election::ModelTargets>,
-    http: &reqwest::Client,
+    resolution: &WorkerBackendResolution<'_>,
     name: &str,
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
 ) -> bool {
     // Prefer local skippy port when this node serves the model.
-    let local_port = targets.and_then(|t| {
+    let local_port = resolution.targets.and_then(|t| {
         t.targets.get(name).and_then(|tv| {
             tv.iter().find_map(|t| match t {
                 election::InferenceTarget::Local(p) => Some(*p),
@@ -573,26 +590,42 @@ async fn add_worker_backend(
         })
     });
     if let Some(port) = local_port {
-        let backend_idx = backends.len();
-        backends.push(std::sync::Arc::new(LocalModelBackend {
-            port,
-            http: http.clone(),
-        }));
-        models.push(moa::ModelEntry {
-            name: name.to_string(),
-            backend_index: backend_idx,
-        });
-        *local_count += 1;
-        return true;
+        let context_length = resolution.node.local_model_context_length(name).await;
+        if context_selection::context_can_satisfy(resolution.required_tokens, context_length) {
+            let backend_idx = backends.len();
+            backends.push(std::sync::Arc::new(LocalModelBackend {
+                port,
+                http: resolution.http.clone(),
+            }));
+            models.push(moa::ModelEntry {
+                name: name.to_string(),
+                backend_index: backend_idx,
+            });
+            *local_count += 1;
+            return true;
+        } else {
+            tracing::info!(
+                "MoA: skipping local worker {name}; context {:?} cannot fit {:?} required tokens",
+                context_length,
+                resolution.required_tokens
+            );
+        }
     }
 
     // Otherwise find a remote host. hosts_for_model returns peers in
-    // hash-preferred order; take the first.
-    let remote_hosts = node.hosts_for_model(name).await;
-    if let Some(peer_id) = remote_hosts.into_iter().next() {
+    // hash-preferred order; prefer hosts with enough advertised context.
+    let remote_hosts = resolution.node.hosts_for_model(name).await;
+    if let Some(peer_id) = context_selection::select_remote_host(
+        resolution.node,
+        name,
+        resolution.required_tokens,
+        remote_hosts,
+    )
+    .await
+    {
         let backend_idx = backends.len();
         backends.push(std::sync::Arc::new(RemoteModelBackend {
-            node: node.clone(),
+            node: resolution.node.clone(),
             peer_id,
         }));
         models.push(moa::ModelEntry {
