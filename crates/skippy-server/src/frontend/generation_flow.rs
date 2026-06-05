@@ -762,6 +762,17 @@ impl StageOpenAiBackend {
             let mut decode_downstream_wait_ms = 0.0;
             let mut decode_output_activation_bytes = 0usize;
             let mut decode_forward_activation_bytes = 0usize;
+            let mut decode_message = ReusableDecodeMessage::new(
+                request.wire_dtype,
+                ReusableDecodeMessageArgs {
+                    request_id,
+                    session_id,
+                    prompt_token_count: prefill.token_count,
+                    base_pos_start: prefill.token_count,
+                    sampling: wire_sampling.clone(),
+                    sideband_capacity: 1,
+                },
+            )?;
 
             while decoded_tokens < max_tokens as usize {
                 if request
@@ -780,18 +791,7 @@ impl StageOpenAiBackend {
                 }
 
                 let decode_input_index = decoded_tokens - 1;
-                let message = embedded_decode_message(
-                    request.wire_dtype,
-                    DecodeMessageArgs {
-                        request_id,
-                        session_id,
-                        prompt_token_count: prefill.token_count,
-                        pos_start: prefill.token_count + decode_input_index,
-                        decode_step: decode_input_index,
-                        current,
-                        sampling: wire_sampling.clone(),
-                    },
-                )?;
+                let message = decode_message.update(decode_input_index, current)?;
                 let token_timer = PhaseTimer::start();
                 let stage0_timer = PhaseTimer::start();
                 let output = {
@@ -807,7 +807,7 @@ impl StageOpenAiBackend {
                     let output = run_binary_stage_message(
                         &mut runtime,
                         &session_key,
-                        &message,
+                        message,
                         &[current],
                         None,
                         false,
@@ -827,7 +827,7 @@ impl StageOpenAiBackend {
                 decode_stage0_compute_ms += stage0_compute_ms;
                 let forwarded = forwarded_stage_message_timed(
                     &request.config,
-                    &message,
+                    message,
                     &output,
                     request.wire_dtype,
                     request.activation_width,
