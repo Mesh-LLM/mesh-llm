@@ -1011,7 +1011,15 @@ struct RankedTarget<T> {
     throughput: Option<TargetThroughputRank>,
 }
 
+#[derive(Clone)]
+struct TargetRouteDiagnostic {
+    target: election::InferenceTarget,
+    context_length: Option<u32>,
+    throughput: Option<TargetThroughputRank>,
+}
+
 const LOCAL_THROUGHPUT_PRECEDENCE_SAMPLES: u64 = 3;
+const GOSSIPED_THROUGHPUT_MIN_RANK_SAMPLES: u64 = 3;
 const TARGET_THROUGHPUT_MAX_SCORE_SAMPLES: u64 = 32;
 
 fn target_throughput_rank_key(throughput: Option<TargetThroughputRank>) -> (bool, bool, u64, u64) {
@@ -1019,6 +1027,11 @@ fn target_throughput_rank_key(throughput: Option<TargetThroughputRank>) -> (bool
         return (false, false, 0, 0);
     };
     if throughput.avg_tokens_per_second_milli == 0 || throughput.throughput_samples == 0 {
+        return (false, false, 0, 0);
+    }
+    if !throughput.local_observation
+        && throughput.throughput_samples < GOSSIPED_THROUGHPUT_MIN_RANK_SAMPLES
+    {
         return (false, false, 0, 0);
     }
     let sample_weight = throughput
@@ -1151,12 +1164,11 @@ async fn order_remote_hosts_by_context(
     reorder_candidates_by_context_and_throughput(&candidates, required_tokens)
 }
 
-async fn order_targets_by_context(
+async fn collect_target_route_diagnostics(
     node: &mesh::Node,
     model: &str,
-    required_tokens: Option<u32>,
     targets: &[election::InferenceTarget],
-) -> Vec<election::InferenceTarget> {
+) -> Vec<TargetRouteDiagnostic> {
     let mut candidates = Vec::with_capacity(targets.len());
     for target in targets {
         let context_length = match target {
@@ -1172,8 +1184,29 @@ async fn order_targets_by_context(
             }
             _ => local_target_throughput_rank(node, model, target),
         };
-        candidates.push((target.clone(), context_length, throughput));
+        candidates.push(TargetRouteDiagnostic {
+            target: target.clone(),
+            context_length,
+            throughput,
+        });
     }
+    candidates
+}
+
+fn order_target_route_diagnostics(
+    candidates: &[TargetRouteDiagnostic],
+    required_tokens: Option<u32>,
+) -> Vec<election::InferenceTarget> {
+    let candidates = candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.target.clone(),
+                candidate.context_length,
+                candidate.throughput,
+            )
+        })
+        .collect::<Vec<_>>();
     reorder_candidates_by_context_and_throughput(&candidates, required_tokens)
 }
 
@@ -3606,10 +3639,21 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
     } = args;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
-    let ordered_candidates =
-        order_targets_by_context(&node, model, required_tokens, &targets.candidates(model)).await;
-    let ordered_candidates = affinity.route_eligible_candidates(model, &ordered_candidates);
+    let route_diagnostics =
+        collect_target_route_diagnostics(&node, model, &targets.candidates(model)).await;
+    let context_ordered_candidates =
+        order_target_route_diagnostics(&route_diagnostics, required_tokens);
+    let ordered_candidates = affinity.route_eligible_candidates(model, &context_ordered_candidates);
     if ordered_candidates.is_empty() {
+        record_route_model_decision(
+            &node,
+            model,
+            required_tokens,
+            &route_diagnostics,
+            &ordered_candidates,
+            None,
+            None,
+        );
         record_route_model_unavailable(&node, model, 0);
         let reason = no_context_eligible_target_reason(model, required_tokens);
         let _ = send_503(tcp_stream, &reason).await;
@@ -3622,6 +3666,15 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
         model,
         request.body_json.as_ref(),
         affinity,
+    );
+    record_route_model_decision(
+        &node,
+        model,
+        required_tokens,
+        &route_diagnostics,
+        &ordered_candidates,
+        Some(&selection.target),
+        selection.cached_target.as_ref(),
     );
     if matches!(selection.target, election::InferenceTarget::None) {
         return send_route_model_none_target(&node, tcp_stream, model).await;
@@ -3722,6 +3775,99 @@ async fn send_route_model_none_target(
     )
     .await;
     true
+}
+
+fn record_route_model_decision(
+    node: &mesh::Node,
+    model: &str,
+    required_tokens: Option<u32>,
+    candidates: &[TargetRouteDiagnostic],
+    eligible_candidates: &[election::InferenceTarget],
+    selected_target: Option<&election::InferenceTarget>,
+    cached_target: Option<&election::InferenceTarget>,
+) {
+    use crate::network::route_diagnostics::{
+        RouteDecisionReason, RouteDecisionRecord, RouteDecisionTargetRecord,
+    };
+
+    let selected_attempt_target =
+        selected_target.and_then(crate::network::metrics::AttemptTarget::from_inference_target);
+    let has_selected_target = selected_attempt_target.is_some();
+    let targets = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let attempt_target =
+                crate::network::metrics::AttemptTarget::from_inference_target(&candidate.target)?;
+            let selected = selected_target == Some(&candidate.target);
+            let reason_codes = route_model_target_reason_codes(
+                required_tokens,
+                candidate,
+                eligible_candidates,
+                selected,
+                cached_target == Some(&candidate.target),
+            );
+            Some(RouteDecisionTargetRecord {
+                target: attempt_target,
+                context_length: candidate.context_length,
+                required_tokens,
+                avg_tokens_per_second_milli: candidate
+                    .throughput
+                    .map(|throughput| throughput.avg_tokens_per_second_milli),
+                throughput_samples: candidate
+                    .throughput
+                    .map(|throughput| throughput.throughput_samples)
+                    .unwrap_or(0),
+                reason_codes,
+            })
+        })
+        .collect();
+
+    node.routing_metrics()
+        .record_route_decision(RouteDecisionRecord {
+            model: model.to_string(),
+            required_tokens,
+            selected_target: selected_attempt_target,
+            reason_codes: if has_selected_target {
+                vec![RouteDecisionReason::Selected]
+            } else {
+                vec![RouteDecisionReason::NoEligibleTarget]
+            },
+            targets,
+        });
+}
+
+fn route_model_target_reason_codes(
+    required_tokens: Option<u32>,
+    candidate: &TargetRouteDiagnostic,
+    eligible_candidates: &[election::InferenceTarget],
+    selected: bool,
+    affinity_selected: bool,
+) -> Vec<crate::network::route_diagnostics::RouteDecisionReason> {
+    use crate::network::route_diagnostics::RouteDecisionReason;
+
+    let mut reasons = Vec::new();
+    if selected {
+        reasons.push(RouteDecisionReason::Selected);
+    }
+    if affinity_selected {
+        reasons.push(RouteDecisionReason::AffinitySelected);
+    }
+    if matches!(
+        (required_tokens, candidate.context_length),
+        (Some(required), Some(context)) if context < required
+    ) {
+        reasons.push(RouteDecisionReason::ContextTooSmall);
+    } else if required_tokens.is_some() && candidate.context_length.is_none() {
+        reasons.push(RouteDecisionReason::ContextUnknown);
+    } else if !eligible_candidates.contains(&candidate.target) {
+        reasons.push(RouteDecisionReason::HealthFiltered);
+    } else if !selected {
+        reasons.push(RouteDecisionReason::NotSelected);
+    }
+    if selected && candidate.throughput.is_some() {
+        reasons.push(RouteDecisionReason::ThroughputPreferred);
+    }
+    reasons
 }
 
 async fn finish_exhausted_route_model_request(
@@ -5758,6 +5904,49 @@ mod tests {
     }
 
     #[test]
+    fn test_route_model_target_reason_codes_prefer_context_rejection_reason() {
+        let target = election::InferenceTarget::Local(9337);
+        let candidate = TargetRouteDiagnostic {
+            target,
+            context_length: Some(4096),
+            throughput: None,
+        };
+
+        let reasons = route_model_target_reason_codes(Some(8192), &candidate, &[], false, false);
+
+        assert_eq!(
+            reasons,
+            vec![crate::network::route_diagnostics::RouteDecisionReason::ContextTooSmall]
+        );
+    }
+
+    #[test]
+    fn test_route_model_target_reason_codes_mark_selected_affinity_and_throughput() {
+        let target = election::InferenceTarget::Local(9337);
+        let candidate = TargetRouteDiagnostic {
+            target: target.clone(),
+            context_length: Some(8192),
+            throughput: Some(TargetThroughputRank {
+                avg_tokens_per_second_milli: 40_000,
+                throughput_samples: 4,
+                local_observation: true,
+            }),
+        };
+
+        let reasons =
+            route_model_target_reason_codes(Some(4096), &candidate, &[target], true, true);
+
+        assert_eq!(
+            reasons,
+            vec![
+                crate::network::route_diagnostics::RouteDecisionReason::Selected,
+                crate::network::route_diagnostics::RouteDecisionReason::AffinitySelected,
+                crate::network::route_diagnostics::RouteDecisionReason::ThroughputPreferred,
+            ]
+        );
+    }
+
+    #[test]
     fn test_mesh_blob_token_from_url_requires_client_id_segment() {
         assert_eq!(
             mesh_blob_token_from_url("mesh://blob/client-1/token-123"),
@@ -5865,7 +6054,7 @@ mod tests {
                     Some(8192),
                     Some(TargetThroughputRank {
                         avg_tokens_per_second_milli: 40_000,
-                        throughput_samples: 2,
+                        throughput_samples: 4,
                         local_observation: false,
                     }),
                 ),
@@ -5874,6 +6063,35 @@ mod tests {
         );
 
         assert_eq!(ordered, vec![2, 1]);
+    }
+
+    #[test]
+    fn test_reorder_candidates_ignores_low_sample_gossip_hint() {
+        let ordered = reorder_candidates_by_context_and_throughput(
+            &[
+                (
+                    1u8,
+                    Some(8192),
+                    Some(TargetThroughputRank {
+                        avg_tokens_per_second_milli: 20_000,
+                        throughput_samples: 32,
+                        local_observation: false,
+                    }),
+                ),
+                (
+                    2u8,
+                    Some(8192),
+                    Some(TargetThroughputRank {
+                        avg_tokens_per_second_milli: 40_000,
+                        throughput_samples: 2,
+                        local_observation: false,
+                    }),
+                ),
+            ],
+            Some(4096),
+        );
+
+        assert_eq!(ordered, vec![1, 2]);
     }
 
     #[test]

@@ -1109,6 +1109,114 @@ mod tests {
     }
 
     #[test]
+    fn status_payload_exposes_bounded_route_decision_diagnostics() {
+        let routing_metrics = metrics::RoutingMetricsStatusSnapshot {
+            recent_route_decisions: vec![
+                crate::network::route_diagnostics::RouteDecisionSnapshot {
+                    model: "qwen".into(),
+                    required_tokens: Some(8192),
+                    selected_target: Some("peer-a".into()),
+                    selected_kind: Some("remote".into()),
+                    reason_codes: vec!["selected".into()],
+                    age_secs: 0,
+                    targets: vec![
+                        crate::network::route_diagnostics::RouteDecisionTargetSnapshot {
+                            target: "peer-a".into(),
+                            kind: "remote".into(),
+                            selected: true,
+                            context_length: Some(32768),
+                            required_tokens: Some(8192),
+                            avg_tokens_per_second_milli: Some(41_000),
+                            throughput_samples: 7,
+                            reason_codes: vec!["selected".into()],
+                        },
+                        crate::network::route_diagnostics::RouteDecisionTargetSnapshot {
+                            target: "https://example.test/v1".into(),
+                            kind: "endpoint".into(),
+                            selected: false,
+                            context_length: Some(4096),
+                            required_tokens: Some(8192),
+                            avg_tokens_per_second_milli: None,
+                            throughput_samples: 0,
+                            reason_codes: vec!["context_too_small".into(), "not_selected".into()],
+                        },
+                    ],
+                },
+            ],
+            ..Default::default()
+        };
+
+        let status = StatusPayload {
+            version: "0.60.2".to_string(),
+            latest_version: None,
+            node_id: "node-1".to_string(),
+            owner: test_owner_payload(),
+            release_attestation: test_release_attestation_summary(),
+            token: "token-1".to_string(),
+            node_state: NodeState::Loading,
+            node_status: NodeState::Loading.node_status_alias().to_string(),
+            is_host: true,
+            is_client: false,
+            llama_ready: false,
+            runtime: RuntimeStatusPayload {
+                backend: None,
+                openai_guardrails: None,
+                models: vec![],
+                stages: vec![],
+            },
+            model_name: "Qwen".to_string(),
+            models: vec![],
+            available_models: vec![],
+            requested_models: vec![],
+            wanted_model_refs: vec![],
+            serving_models: vec![],
+            hosted_models: vec![],
+            draft_name: None,
+            api_port: 3131,
+            my_vram_gb: 0.0,
+            model_size_gb: 0.0,
+            peers: vec![],
+            wakeable_nodes: vec![],
+            local_instances: vec![],
+            launch_pi: None,
+            launch_goose: None,
+            inflight_requests: 0,
+            mesh_id: None,
+            mesh_name: None,
+            mesh_discovery_mode: "nostr".into(),
+            discovery_scope: "public".into(),
+            discovery_source: "nostr-relay".into(),
+            nostr_discovery: false,
+            publication_state: "private".into(),
+            my_hostname: None,
+            my_is_soc: None,
+            gpus: vec![],
+            routing_affinity: affinity::AffinityStatsSnapshot::default(),
+            routing_metrics,
+            first_joined_mesh_ts: None,
+            mesh_requirements: None,
+            recent_mesh_rejections: vec![],
+        };
+
+        let json = serde_json::to_value(&status).expect("serialization failed");
+
+        let decision = &json["routing_metrics"]["recent_route_decisions"][0];
+        assert_eq!(decision["selected_target"], serde_json::json!("peer-a"));
+        assert_eq!(
+            decision["targets"][0]["avg_tokens_per_second_milli"],
+            serde_json::json!(41_000)
+        );
+        assert_eq!(
+            decision["targets"][1]["reason_codes"][0],
+            serde_json::json!("context_too_small")
+        );
+        assert_eq!(
+            decision["targets"][1]["target"],
+            serde_json::json!("https://example.test/v1")
+        );
+    }
+
+    #[test]
     fn status_payload_keeps_node_status_for_compatibility() {
         let status = StatusPayload {
             version: "0.60.2".to_string(),

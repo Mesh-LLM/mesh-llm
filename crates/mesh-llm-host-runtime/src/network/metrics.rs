@@ -1,6 +1,7 @@
 //! Bounded in-memory routing outcome and local routing pressure metrics for
 //! operator/API surfaces.
 
+use crate::inference::election;
 use serde::Serialize;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -53,7 +54,7 @@ pub(crate) struct MetricGroupMetadata {
     pub(crate) description: &'static str,
 }
 
-pub(crate) const ROUTING_METRIC_GROUPS: [MetricGroupMetadata; 5] = [
+pub(crate) const ROUTING_METRIC_GROUPS: [MetricGroupMetadata; 6] = [
     MetricGroupMetadata {
         name: "routing_metrics",
         layer: MetricLayer::Information,
@@ -74,6 +75,13 @@ pub(crate) const ROUTING_METRIC_GROUPS: [MetricGroupMetadata; 5] = [
         scope: MetricScope::LocalOnly,
         api_surface: "/api/status",
         description: "Current-node service mix summary for locally fronted traffic.",
+    },
+    MetricGroupMetadata {
+        name: "routing_metrics.recent_route_decisions",
+        layer: MetricLayer::Information,
+        scope: MetricScope::LocalOnly,
+        api_surface: "/api/status",
+        description: "Bounded local target choice/rejection reasons for recent routing decisions.",
     },
     MetricGroupMetadata {
         name: "mesh_models[].routing_metrics",
@@ -127,6 +135,9 @@ pub struct RoutingMetricsStatusSnapshot {
     pub local_node: LocalNodePressureSnapshot,
     /// Current-node service mix for requests fronted by this node.
     pub pressure: RoutingPressureSnapshot,
+    /// Bounded local target choice/rejection reasons for recent routing decisions.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub recent_route_decisions: Vec<crate::network::route_diagnostics::RouteDecisionSnapshot>,
 }
 
 impl Default for RoutingMetricsStatusSnapshot {
@@ -148,6 +159,7 @@ impl Default for RoutingMetricsStatusSnapshot {
             throughput_samples: 0,
             local_node: LocalNodePressureSnapshot::default(),
             pressure: RoutingPressureSnapshot::default(),
+            recent_route_decisions: Vec::new(),
         }
     }
 }
@@ -287,6 +299,18 @@ pub(crate) enum AttemptTarget {
 }
 
 impl AttemptTarget {
+    pub(crate) fn from_inference_target(target: &election::InferenceTarget) -> Option<Self> {
+        match target {
+            election::InferenceTarget::Local(port) => {
+                Some(Self::Local(format!("127.0.0.1:{port}")))
+            }
+            election::InferenceTarget::Remote(peer_id) => {
+                Some(Self::Remote(peer_id.fmt_short().to_string()))
+            }
+            election::InferenceTarget::None => None,
+        }
+    }
+
     fn key(&self) -> TargetKey {
         match self {
             Self::Local(label) => TargetKey {
@@ -345,6 +369,7 @@ pub(crate) trait RoutingTelemetrySink: Send + Sync {
 pub struct RoutingMetrics {
     globals: Arc<GlobalMetrics>,
     shards: Arc<Vec<Mutex<ModelShard>>>,
+    route_diagnostics: crate::network::route_diagnostics::RouteDiagnostics,
     config: MetricsConfig,
 }
 
@@ -362,6 +387,7 @@ impl RoutingMetrics {
         Self {
             globals: Arc::new(GlobalMetrics::default()),
             shards: Arc::new(shards),
+            route_diagnostics: crate::network::route_diagnostics::RouteDiagnostics::new(),
             config,
         }
     }
@@ -442,7 +468,9 @@ impl RoutingMetrics {
     }
 
     pub fn status_snapshot(&self, current_inflight_requests: u64) -> RoutingMetricsStatusSnapshot {
-        self.globals.status_snapshot(current_inflight_requests)
+        let mut snapshot = self.globals.status_snapshot(current_inflight_requests);
+        snapshot.recent_route_decisions = self.route_diagnostics.snapshot();
+        snapshot
     }
 
     pub fn model_snapshots(&self) -> HashMap<String, ModelRoutingMetricsSnapshot> {
@@ -466,6 +494,13 @@ impl RoutingMetrics {
             status: self.status_snapshot(current_inflight_requests),
             models: self.model_snapshots(),
         }
+    }
+
+    pub(crate) fn record_route_decision(
+        &self,
+        record: crate::network::route_diagnostics::RouteDecisionRecord,
+    ) {
+        self.route_diagnostics.record(record);
     }
 
     /// Cheap per-model throughput lookup for routing decisions.
@@ -824,6 +859,7 @@ impl GlobalMetrics {
             throughput_samples,
             local_node,
             pressure,
+            recent_route_decisions: Vec::new(),
         }
     }
 }
@@ -1223,6 +1259,7 @@ mod tests {
                 "routing_metrics",
                 "routing_metrics.local_node",
                 "routing_metrics.pressure",
+                "routing_metrics.recent_route_decisions",
             ]
         );
         assert!(
