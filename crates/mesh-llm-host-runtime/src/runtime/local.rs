@@ -1231,8 +1231,8 @@ async fn load_split_runtime_generation_inner(
             .await;
     }
 
-    let stage0_return_addr = alloc_local_port().await?;
-    let stage0_return_endpoint = stage0_return_addr.to_string();
+    let stage0_return_port = alloc_local_port().await?;
+    let stage0_return_endpoint = format!("127.0.0.1:{stage0_return_port}");
     let downstream = Box::pin(load_downstream_split_runtime_stages(
         spec,
         &settings,
