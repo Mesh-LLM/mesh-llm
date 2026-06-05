@@ -35,8 +35,8 @@ use self::local::{
 use self::model_target_reconciliation::{
     ModelTargetReconciliationAction, ModelTargetReconciliationCandidate,
     ModelTargetReconciliationCapacityState, ModelTargetReconciliationInput,
-    ModelTargetReconciliationPolicy, ModelTargetReconciliationState,
-    plan_model_target_reconciliation,
+    ModelTargetReconciliationNoAction, ModelTargetReconciliationPolicy,
+    ModelTargetReconciliationState, plan_model_target_reconciliation_with_reasons,
 };
 pub use self::options::{MeshGuardrailMode, RuntimeOptions, RuntimeSurface};
 use self::proxy::{api_proxy, bootstrap_proxy};
@@ -3762,6 +3762,12 @@ async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsContext<'_>) {
         .await
         .into_iter()
         .collect::<BTreeSet<_>>();
+    let protected_model_refs = node
+        .requested_models()
+        .await
+        .into_iter()
+        .chain(local_interest_model_refs.iter().cloned())
+        .collect::<BTreeSet<_>>();
     let loaded_model_refs = runtime_loaded_model_refs(runtime_models, managed_models);
     if local_interest_model_refs.is_empty() && loaded_model_refs.is_empty() {
         state.prune_expired(runtime_unix_secs());
@@ -3802,25 +3808,31 @@ async fn reconcile_model_targets_once(ctx: ReconcileModelTargetsContext<'_>) {
                 capacity_state: ModelTargetReconciliationCapacityState::from(
                     target.capacity_advice.state,
                 ),
+                required_bytes: target.capacity_advice.required_bytes,
                 local_path,
             }
         })
         .collect::<Vec<_>>();
 
     let now_secs = runtime_unix_secs();
-    let actions = plan_model_target_reconciliation(
+    let plan = plan_model_target_reconciliation_with_reasons(
         policy,
         state,
         ModelTargetReconciliationInput {
             now_secs,
             local_role: node.role().await,
+            local_capacity_bytes: local_vram_bytes,
             local_interest_model_refs: &local_interest_model_refs,
             loaded_model_refs: &loaded_model_refs,
+            protected_model_refs: &protected_model_refs,
             targets: &targets,
         },
     );
+    if plan.actions.is_empty() {
+        emit_model_target_reconciliation_no_action(state, &plan.no_action_reasons, now_secs);
+    }
 
-    for action in actions {
+    for action in plan.actions {
         let load_spec = action.load_spec.to_string_lossy().to_string();
         state.mark_load_started(&action.model_ref);
         let event_tx = runtime_event_tx.clone();
@@ -3897,6 +3909,26 @@ fn emit_model_target_reconciliation_queued(action: &ModelTargetReconciliationAct
     let _ = emit_event(OutputEvent::Info {
         message: format!("Model target reconciliation {verb} '{}'", action.model_ref),
         context,
+    });
+}
+
+fn emit_model_target_reconciliation_no_action(
+    state: &mut ModelTargetReconciliationState,
+    reasons: &[ModelTargetReconciliationNoAction],
+    now_secs: u64,
+) {
+    let Some(reason) = reasons.first() else {
+        return;
+    };
+    if !state.should_emit_no_action_reason(reason, now_secs) {
+        return;
+    }
+    let _ = emit_event(OutputEvent::Info {
+        message: format!(
+            "Model target reconciliation no action for '{}'",
+            reason.model_ref
+        ),
+        context: Some(format!("reason={}", reason.reason.as_str())),
     });
 }
 
