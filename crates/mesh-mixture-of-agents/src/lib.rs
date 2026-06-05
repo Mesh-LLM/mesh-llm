@@ -159,6 +159,16 @@ struct ForcedToolChoice {
     fallback_arguments: Value,
 }
 
+struct DecisionResolution<'a> {
+    session: &'a Session,
+    decision: arbiter::Decision,
+    outputs: &'a [WorkerOutput],
+    has_tools: bool,
+    selected_tool_names: &'a [String],
+    forced_tool: Option<&'a ForcedToolChoice>,
+    allowed_tools: &'a [String],
+}
+
 // ─── Gateway entry point ─────────────────────────────────────────────
 
 /// Process one MoA turn.
@@ -309,13 +319,15 @@ async fn handle_query(
     let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, query_uses_tools));
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
-        session,
-        decision,
-        &outputs,
-        query_uses_tools,
-        &selected_tool_names,
-        forced_tool,
-        allowed_tools,
+        DecisionResolution {
+            session,
+            decision,
+            outputs: &outputs,
+            has_tools: query_uses_tools,
+            selected_tool_names: &selected_tool_names,
+            forced_tool,
+            allowed_tools,
+        },
     )
     .await;
 
@@ -934,14 +946,18 @@ fn append_tool_loop_answer_instruction(messages: &mut [Value], tool: &str, count
 /// Returns (response body, reducer_used, reducer_attempts).
 async fn resolve_decision(
     config: &GatewayConfig,
-    session: &Session,
-    decision: arbiter::Decision,
-    outputs: &[WorkerOutput],
-    has_tools: bool,
-    selected_tool_names: &[String],
-    forced_tool: Option<&ForcedToolChoice>,
-    allowed_tools: &[String],
+    request: DecisionResolution<'_>,
 ) -> (Value, bool, u32) {
+    let DecisionResolution {
+        session,
+        decision,
+        outputs,
+        has_tools,
+        selected_tool_names,
+        forced_tool,
+        allowed_tools,
+    } = request;
+
     match decision {
         arbiter::Decision::Answer(text) => {
             if let Some(tool) = forced_tool.filter(|_| has_tools) {
@@ -1521,15 +1537,19 @@ mod response_builder_tests {
             name: "lookup_probe_fact".to_string(),
             fallback_arguments: json!({"key": "primary"}),
         };
+        let selected_tool_names = ["lookup_probe_fact".to_string()];
+        let allowed_tools = ["lookup_probe_fact".to_string()];
         let (resp, reducer_used, attempts) = resolve_decision(
             &config,
-            &session,
-            arbiter::Decision::Answer("I would call the tool.".to_string()),
-            &[],
-            true,
-            &["lookup_probe_fact".to_string()],
-            Some(&forced_tool),
-            &["lookup_probe_fact".to_string()],
+            DecisionResolution {
+                session: &session,
+                decision: arbiter::Decision::Answer("I would call the tool.".to_string()),
+                outputs: &[],
+                has_tools: true,
+                selected_tool_names: &selected_tool_names,
+                forced_tool: Some(&forced_tool),
+                allowed_tools: &allowed_tools,
+            },
         )
         .await;
 
