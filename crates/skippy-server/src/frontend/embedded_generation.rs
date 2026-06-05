@@ -65,6 +65,9 @@ impl StageOpenAiBackend {
             let mut prefill_stage0_full_recorded = false;
             let mut fused_first_decode = None;
             let mut prefill_planner = request.prefill_chunk_policy.planner();
+            if let Some(seed) = lane_pool.prefill_transport_seed() {
+                prefill_planner.observe(seed);
+            }
             if prefill_token_count > 0 {
                 let prefill_tokens = &request.prompt_token_ids[..prefill_token_count];
                 if request.max_tokens > 0 && request.draft.is_none() {
@@ -142,7 +145,8 @@ impl StageOpenAiBackend {
                         )?;
                         return Ok(());
                     }
-                    let chunk_size = prefill_planner.chunk_size_for(chunk_index);
+                    let chunk_size =
+                        prefill_planner.chunk_size_for(chunk_index, prefill_token_count);
                     let end = pos_start
                         .saturating_add(chunk_size)
                         .min(prefill_tokens.len());
@@ -353,6 +357,11 @@ impl StageOpenAiBackend {
                 prefill_deferred_replies_drained =
                     prefill_deferred_replies_drained.saturating_add(drained.drained_replies);
                 prefill_downstream_wait_ms += drained.downstream_wait_ms;
+                lane_pool.observe_prefill_transport(
+                    &prefill_chain_cache_stats,
+                    prefill_stage0_compute_ms,
+                    prefill_chunks,
+                );
                 if !prefill_chain_cache_restored {
                     prefill_stage0_full_recorded = self.record_embedded_stage0_full_prefill(
                         &session_key,
@@ -429,6 +438,26 @@ impl StageOpenAiBackend {
             prefill_attrs.insert(
                 "llama_stage.downstream_wait_ms".to_string(),
                 json!(prefill_downstream_wait_ms),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_edge_write_us_max".to_string(),
+                json!(prefill_chain_cache_stats.prefill_edge_write_us_max),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_edge_wait_us_max".to_string(),
+                json!(prefill_chain_cache_stats.prefill_edge_wait_us_max),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_edge_total_us_max".to_string(),
+                json!(prefill_chain_cache_stats.prefill_edge_total_us_max),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_edge_stage_index".to_string(),
+                json!(prefill_chain_cache_stats.prefill_edge_stage_index),
+            );
+            prefill_attrs.insert(
+                "llama_stage.prefill_edge_observation_count".to_string(),
+                json!(prefill_chain_cache_stats.prefill_edge_observation_count),
             );
             prefill_attrs.insert(
                 "skippy.prefill_credit_limit".to_string(),

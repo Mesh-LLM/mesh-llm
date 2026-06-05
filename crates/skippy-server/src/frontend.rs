@@ -825,6 +825,7 @@ struct PersistentStageLanePool {
     timeout_secs: u64,
     telemetry: Telemetry,
     lanes: Mutex<Vec<PersistentStageLane>>,
+    prefill_transport: Mutex<PrefillTransportEstimate>,
     next_lane_id: AtomicU64,
     capacity: usize,
 }
@@ -834,7 +835,20 @@ struct PersistentStageLane {
     stream: TcpStream,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PrefillTransportEstimate {
+    write_ms: f64,
+    wait_ms: f64,
+    write_to_compute: f64,
+    wait_to_compute: f64,
+    stage_index: i64,
+    activation_bytes: i64,
+    observations: u64,
+}
+
 impl PersistentStageLanePool {
+    const PREFILL_TRANSPORT_EWMA_ALPHA: f64 = 0.25;
+
     fn new(
         config: &StageConfig,
         capacity: usize,
@@ -849,6 +863,7 @@ impl PersistentStageLanePool {
             timeout_secs,
             telemetry,
             lanes: Mutex::new(Vec::with_capacity(capacity)),
+            prefill_transport: Mutex::new(PrefillTransportEstimate::default()),
             next_lane_id: AtomicU64::new(0),
             capacity,
         });
@@ -921,6 +936,56 @@ impl PersistentStageLanePool {
             now_unix_nanos() as u64,
         );
         Ok(lane)
+    }
+
+    fn prefill_transport_seed(&self) -> Option<PrefillChunkObservation> {
+        let estimate = *self.prefill_transport.lock().ok()?;
+        if estimate.observations == 0 {
+            return None;
+        }
+        Some(PrefillChunkObservation {
+            compute_ms: 1.0,
+            forward_write_ms: estimate.write_to_compute,
+            downstream_wait_ms: estimate.wait_to_compute,
+        })
+    }
+
+    fn observe_prefill_transport(
+        &self,
+        stats: &StageReplyStats,
+        stage0_compute_ms: f64,
+        prefill_chunks: usize,
+    ) {
+        if stats.prefill_edge_observation_count == 0 || prefill_chunks == 0 {
+            return;
+        }
+        let compute_ms = (stage0_compute_ms / prefill_chunks as f64).max(0.001);
+        let write_ms = us_to_ms(stats.prefill_edge_write_us_max);
+        let wait_ms = us_to_ms(stats.prefill_edge_wait_us_max);
+        let sample = PrefillTransportEstimate {
+            write_ms,
+            wait_ms,
+            write_to_compute: write_ms / compute_ms,
+            wait_to_compute: wait_ms / compute_ms,
+            stage_index: stats.prefill_edge_stage_index,
+            activation_bytes: stats.prefill_edge_activation_bytes_max,
+            observations: u64::try_from(stats.prefill_edge_observation_count).unwrap_or(0),
+        };
+        let mut estimate = match self.prefill_transport.lock() {
+            Ok(estimate) => estimate,
+            Err(_) => return,
+        };
+        if estimate.observations == 0 {
+            *estimate = sample;
+        } else {
+            estimate.write_ms = ewma(estimate.write_ms, sample.write_ms);
+            estimate.wait_ms = ewma(estimate.wait_ms, sample.wait_ms);
+            estimate.write_to_compute = ewma(estimate.write_to_compute, sample.write_to_compute);
+            estimate.wait_to_compute = ewma(estimate.wait_to_compute, sample.wait_to_compute);
+            estimate.stage_index = sample.stage_index;
+            estimate.activation_bytes = sample.activation_bytes;
+            estimate.observations = estimate.observations.saturating_add(sample.observations);
+        }
     }
 
     fn return_lane(&self, lane: PersistentStageLane) {
@@ -1009,6 +1074,13 @@ impl PersistentStageLanePool {
             stream,
         })
     }
+}
+
+fn ewma(old: f64, sample: f64) -> f64 {
+    old.mul_add(
+        1.0 - PersistentStageLanePool::PREFILL_TRANSPORT_EWMA_ALPHA,
+        sample * PersistentStageLanePool::PREFILL_TRANSPORT_EWMA_ALPHA,
+    )
 }
 
 #[derive(Clone)]

@@ -995,6 +995,7 @@ fn handle_binary_connection(
 
         let mut forward_write_ms = 0.0;
         let mut forward_activation_encode_ms = 0.0;
+        let mut forward_activation_bytes = 0usize;
         let mut downstream_wait_ms = 0.0;
         let mut upstream_reply_ms = early_reply_ms;
         let mut forward_write_start_unix_nanos = None;
@@ -1018,10 +1019,11 @@ fn handle_binary_connection(
                 activation_width,
             )?;
             forward_activation_encode_ms += forwarded.activation_encode_ms;
+            forward_activation_bytes = forwarded.message.activation.len();
             let mut downstream_write_attrs = binary_message_attrs(config, session_id, &message);
             downstream_write_attrs.insert(
                 "llama_stage.forward_activation_bytes".to_string(),
-                json!(forwarded.message.activation.len()),
+                json!(forward_activation_bytes),
             );
             downstream_write_attrs.insert(
                 "llama_stage.activation_encode_ms".to_string(),
@@ -1238,6 +1240,14 @@ fn handle_binary_connection(
                 }
             }
         } else if requires_predicted {
+            record_prefill_edge_transport(
+                &mut message_reply_stats,
+                config,
+                &message,
+                forward_write_ms,
+                downstream_wait_ms,
+                forward_activation_bytes,
+            );
             message_reply_stats.merge(pending_reply_stats);
             pending_reply_stats = StageReplyStats::default();
             record_verify_span_timing(
@@ -1290,6 +1300,14 @@ fn handle_binary_connection(
                 },
             );
         } else if !early_prefill_ack {
+            record_prefill_edge_transport(
+                &mut message_reply_stats,
+                config,
+                &message,
+                forward_write_ms,
+                downstream_wait_ms,
+                forward_activation_bytes,
+            );
             let reply_start_unix_nanos = now_unix_nanos() as u64;
             upstream_reply_start_unix_nanos.get_or_insert(reply_start_unix_nanos);
             let reply_started = Instant::now();
@@ -1311,6 +1329,14 @@ fn handle_binary_connection(
                 },
             );
         } else {
+            record_prefill_edge_transport(
+                &mut message_reply_stats,
+                config,
+                &message,
+                forward_write_ms,
+                downstream_wait_ms,
+                forward_activation_bytes,
+            );
             pending_reply_stats.merge(message_reply_stats);
         }
 
@@ -1692,6 +1718,25 @@ fn record_session_control_timing(
         }
         _ => {}
     }
+}
+
+fn record_prefill_edge_transport(
+    stats: &mut StageReplyStats,
+    config: &StageConfig,
+    message: &StageWireMessage,
+    forward_write_ms: f64,
+    downstream_wait_ms: f64,
+    activation_bytes: usize,
+) {
+    if !message.kind.is_prefill() || config.downstream.is_none() {
+        return;
+    }
+    stats.observe_prefill_edge_transport(
+        config.stage_index,
+        ms_to_us(forward_write_ms),
+        ms_to_us(downstream_wait_ms),
+        activation_bytes,
+    );
 }
 
 fn record_verify_span_timing(

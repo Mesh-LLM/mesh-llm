@@ -450,7 +450,13 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
     write_i64(&mut writer, stats.verify_span_token_count)?;
     write_i64(&mut writer, stats.verify_span_max_tokens)?;
     write_i64(&mut writer, stats.verify_span_checkpointed_requests)?;
-    write_i64(&mut writer, stats.verify_span_skip_checkpoint_requests)
+    write_i64(&mut writer, stats.verify_span_skip_checkpoint_requests)?;
+    write_i64(&mut writer, stats.prefill_edge_write_us_max)?;
+    write_i64(&mut writer, stats.prefill_edge_wait_us_max)?;
+    write_i64(&mut writer, stats.prefill_edge_total_us_max)?;
+    write_i64(&mut writer, stats.prefill_edge_stage_index)?;
+    write_i64(&mut writer, stats.prefill_edge_activation_bytes_max)?;
+    write_i64(&mut writer, stats.prefill_edge_observation_count)
 }
 
 fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
@@ -488,6 +494,12 @@ fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
         verify_span_max_tokens: read_i64(&mut reader)?,
         verify_span_checkpointed_requests: read_i64(&mut reader)?,
         verify_span_skip_checkpoint_requests: read_i64(&mut reader)?,
+        prefill_edge_write_us_max: read_i64(&mut reader)?,
+        prefill_edge_wait_us_max: read_i64(&mut reader)?,
+        prefill_edge_total_us_max: read_i64(&mut reader)?,
+        prefill_edge_stage_index: read_i64(&mut reader)?,
+        prefill_edge_activation_bytes_max: read_i64(&mut reader)?,
+        prefill_edge_observation_count: read_i64(&mut reader)?,
     })
 }
 

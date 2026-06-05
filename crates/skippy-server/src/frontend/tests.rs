@@ -6,7 +6,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -2062,10 +2062,10 @@ fn prefill_chunk_policy_keeps_legacy_schedule_behavior() {
     })
     .unwrap();
     let mut planner = policy.planner();
-    assert_eq!(planner.chunk_size_for(0), 128);
-    assert_eq!(planner.chunk_size_for(1), 256);
-    assert_eq!(planner.chunk_size_for(2), 384);
-    assert_eq!(planner.chunk_size_for(3), 384);
+    assert_eq!(planner.chunk_size_for(0, 512), 128);
+    assert_eq!(planner.chunk_size_for(1, 512), 256);
+    assert_eq!(planner.chunk_size_for(2, 512), 384);
+    assert_eq!(planner.chunk_size_for(3, 512), 384);
 }
 
 #[test]
@@ -2082,19 +2082,19 @@ fn prefill_adaptive_ramp_grows_when_downstream_wait_is_hidden() {
     })
     .unwrap();
     let mut planner = policy.planner();
-    assert_eq!(planner.chunk_size_for(0), 128);
+    assert_eq!(planner.chunk_size_for(0, 512), 128);
     planner.observe(PrefillChunkObservation {
         compute_ms: 100.0,
         forward_write_ms: 5.0,
         downstream_wait_ms: 20.0,
     });
-    assert_eq!(planner.chunk_size_for(1), 256);
+    assert_eq!(planner.chunk_size_for(1, 512), 256);
     planner.observe(PrefillChunkObservation {
         compute_ms: 100.0,
         forward_write_ms: 5.0,
         downstream_wait_ms: 20.0,
     });
-    assert_eq!(planner.chunk_size_for(2), 384);
+    assert_eq!(planner.chunk_size_for(2, 512), 384);
 }
 
 #[test]
@@ -2111,13 +2111,13 @@ fn prefill_adaptive_ramp_can_advance_without_observations() {
     })
     .unwrap();
     let mut planner = policy.planner();
-    assert_eq!(planner.chunk_size_for(0), 128);
+    assert_eq!(planner.chunk_size_for(0, 512), 128);
     planner.advance_without_observation();
-    assert_eq!(planner.chunk_size_for(1), 256);
+    assert_eq!(planner.chunk_size_for(1, 512), 256);
     planner.advance_without_observation();
-    assert_eq!(planner.chunk_size_for(2), 384);
+    assert_eq!(planner.chunk_size_for(2, 512), 384);
     planner.advance_without_observation();
-    assert_eq!(planner.chunk_size_for(3), 384);
+    assert_eq!(planner.chunk_size_for(3, 512), 384);
 }
 
 #[test]
@@ -2139,13 +2139,89 @@ fn prefill_adaptive_ramp_backs_off_when_wait_is_exposed() {
         forward_write_ms: 5.0,
         downstream_wait_ms: 10.0,
     });
-    assert_eq!(planner.chunk_size_for(1), 256);
+    assert_eq!(planner.chunk_size_for(1, 512), 256);
     planner.observe(PrefillChunkObservation {
         compute_ms: 100.0,
         forward_write_ms: 5.0,
         downstream_wait_ms: 150.0,
     });
-    assert_eq!(planner.chunk_size_for(2), 128);
+    assert_eq!(planner.chunk_size_for(2, 512), 128);
+}
+
+#[test]
+fn prefill_adaptive_ramp_backs_off_when_write_is_exposed() {
+    let policy = PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
+        policy: "adaptive-ramp",
+        schedule: None,
+        fixed_chunk_size: 256,
+        adaptive_start: 128,
+        adaptive_step: 128,
+        adaptive_max: 384,
+        schedule_arg: "--prefill-chunk-schedule",
+        policy_arg: "--prefill-chunk-policy",
+    })
+    .unwrap();
+    let mut planner = policy.planner();
+    planner.advance_without_observation();
+    assert_eq!(planner.chunk_size_for(1, 512), 256);
+    planner.observe(PrefillChunkObservation {
+        compute_ms: 100.0,
+        forward_write_ms: 90.0,
+        downstream_wait_ms: 0.0,
+    });
+    assert_eq!(planner.chunk_size_for(2, 512), 128);
+}
+
+#[test]
+fn prefill_adaptive_ramp_keeps_short_prompts_fixed() {
+    let policy = PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
+        policy: "adaptive-ramp",
+        schedule: None,
+        fixed_chunk_size: 256,
+        adaptive_start: 128,
+        adaptive_step: 128,
+        adaptive_max: 384,
+        schedule_arg: "--prefill-chunk-schedule",
+        policy_arg: "--prefill-chunk-policy",
+    })
+    .unwrap();
+    let mut planner = policy.planner();
+
+    assert_eq!(planner.chunk_size_for(0, 256), 256);
+    assert_eq!(planner.chunk_size_for(0, 257), 128);
+}
+
+#[test]
+fn prefill_transport_ewma_seeds_adaptive_ramp() {
+    let config = prefix_cache_test_config();
+    let pool = PersistentStageLanePool {
+        config: config.clone(),
+        timeout_secs: 5,
+        telemetry: Telemetry::new(None, 1, config, crate::telemetry::TelemetryLevel::Off),
+        lanes: Mutex::new(Vec::new()),
+        prefill_transport: Mutex::new(PrefillTransportEstimate::default()),
+        next_lane_id: AtomicU64::new(0),
+        capacity: 1,
+    };
+    let mut stats = StageReplyStats::default();
+    stats.observe_prefill_edge_transport(1, 1_000, 0, 1_048_576);
+    pool.observe_prefill_transport(&stats, 10.0, 1);
+
+    let policy = PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
+        policy: "adaptive-ramp",
+        schedule: None,
+        fixed_chunk_size: 256,
+        adaptive_start: 128,
+        adaptive_step: 128,
+        adaptive_max: 384,
+        schedule_arg: "--prefill-chunk-schedule",
+        policy_arg: "--prefill-chunk-policy",
+    })
+    .unwrap();
+    let mut planner = policy.planner();
+    planner.observe(pool.prefill_transport_seed().unwrap());
+
+    assert_eq!(planner.chunk_size_for(0, 512), 256);
 }
 
 #[test]

@@ -102,7 +102,7 @@ pub struct ServeBinaryArgs {
     pub openai_prefill_chunk_size: usize,
     #[arg(
         long,
-        default_value = "fixed",
+        default_value = "adaptive-ramp",
         help = "OpenAI prefill chunk policy: fixed, schedule, or adaptive-ramp. Passing --openai-prefill-chunk-schedule keeps legacy schedule behavior."
     )]
     pub openai_prefill_chunk_policy: String,
@@ -163,7 +163,7 @@ pub struct ServeOpenAiArgs {
     pub prefill_chunk_size: usize,
     #[arg(
         long,
-        default_value = "fixed",
+        default_value = "adaptive-ramp",
         help = "Prefill chunk policy for binary-chain OpenAI serving: fixed, schedule, or adaptive-ramp. Passing --prefill-chunk-schedule keeps legacy schedule behavior."
     )]
     pub prefill_chunk_policy: String,
@@ -188,4 +188,41 @@ pub struct ServeOpenAiArgs {
     pub telemetry_queue_capacity: usize,
     #[arg(long, value_enum, default_value_t = TelemetryLevel::Summary)]
     pub telemetry_level: TelemetryLevel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_prefill_policy_defaults_to_adaptive_ramp() {
+        let cli = Cli::try_parse_from([
+            "skippy-server",
+            "serve-binary",
+            "--config",
+            "stage.json",
+            "--activation-width",
+            "2048",
+        ])
+        .unwrap();
+
+        let Command::ServeBinary(args) = cli.command else {
+            panic!("expected serve-binary command");
+        };
+        assert_eq!(args.openai_prefill_chunk_policy, "adaptive-ramp");
+        assert_eq!(args.openai_prefill_adaptive_start, 128);
+        assert_eq!(args.openai_prefill_adaptive_step, 128);
+        assert_eq!(args.openai_prefill_adaptive_max, 384);
+
+        let cli = Cli::try_parse_from(["skippy-server", "serve-openai", "--config", "stage.json"])
+            .unwrap();
+
+        let Command::ServeOpenAi(args) = cli.command else {
+            panic!("expected serve-openai command");
+        };
+        assert_eq!(args.prefill_chunk_policy, "adaptive-ramp");
+        assert_eq!(args.prefill_adaptive_start, 128);
+        assert_eq!(args.prefill_adaptive_step, 128);
+        assert_eq!(args.prefill_adaptive_max, 384);
+    }
 }

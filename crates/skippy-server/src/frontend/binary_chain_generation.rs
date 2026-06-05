@@ -41,7 +41,8 @@ impl StageOpenAiBackend {
                     {
                         return Ok(());
                     }
-                    let chunk_size = prefill_planner.chunk_size_for(chunk_index);
+                    let chunk_size =
+                        prefill_planner.chunk_size_for(chunk_index, prefill_token_count);
                     let end = pos_start
                         .saturating_add(chunk_size)
                         .min(prefill_tokens.len());
