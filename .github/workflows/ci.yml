@@ -314,6 +314,15 @@ jobs:
       - name: Build mesh-llm binary (debug)
         run: cargo build -p mesh-llm --bin mesh-llm
 
+      - name: Restore Skippy smoke model cache
+        id: skippy_smoke_model_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
+          restore-keys: |
+            ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-
+
       - name: Unit tests
         if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'model-artifact') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-host-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') }}
         env:
@@ -339,7 +348,15 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
+          MODEL_DIR: ${{ runner.temp }}/skippy-ci-smoke-models
         run: scripts/skippy-ci-smoke.sh
+
+      - name: Save Skippy smoke model cache
+        if: ${{ github.ref == 'refs/heads/main' && steps.skippy_smoke_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ steps.skippy_smoke_model_cache.outputs.cache-primary-key }}
 
       - name: Protocol compatibility matrix
         if: ${{ needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-protocol') }}
