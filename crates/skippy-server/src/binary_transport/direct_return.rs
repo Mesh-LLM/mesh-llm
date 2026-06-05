@@ -72,6 +72,12 @@ impl PredictionReturnListener {
             while !thread_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        if let Err(error) = stream.set_nonblocking(false) {
+                            eprintln!(
+                                "direct prediction return connection failed: set blocking: {error}"
+                            );
+                            continue;
+                        }
                         let hub = thread_hub.clone();
                         thread::spawn(move || {
                             if let Err(error) = handle_prediction_return_connection(hub, stream) {

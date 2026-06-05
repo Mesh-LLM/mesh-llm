@@ -1233,6 +1233,14 @@ async fn load_split_runtime_generation_inner(
 
     let stage0_return_port = alloc_local_port().await?;
     let stage0_return_endpoint = format!("127.0.0.1:{stage0_return_port}");
+    spec.node
+        .register_stage_transport_alias(
+            &spec.generation.topology_id,
+            &spec.generation.run_id,
+            &settings.stage0.stage_id,
+            stage0_return_endpoint.clone(),
+        )
+        .await;
     let downstream = Box::pin(load_downstream_split_runtime_stages(
         spec,
         &settings,
@@ -2622,6 +2630,16 @@ async fn stop_split_generation(
     generation: &SplitTopologyGeneration,
     shutdown_generation: u64,
 ) {
+    if let Some(stage0) = generation.stages.first()
+        && stage0.node_id == node.id()
+    {
+        node.unregister_stage_transport_alias(
+            &generation.topology_id,
+            &generation.run_id,
+            &stage0.stage_id,
+        )
+        .await;
+    }
     for stage in generation.stages.iter().skip(1) {
         let stop = skippy::StageStopRequest {
             topology_id: generation.topology_id.clone(),
