@@ -237,10 +237,12 @@ pub fn try_early_decision(
     // Two workers saying "Paris" and "Berlin" must not be treated as
     // consensus. Find the largest cluster of content-similar answers
     // and only early-exit if it's ≥2 workers AND a majority of answers.
-    if answers.len() >= 2
-        && tool_proposals.is_empty()
-        && let Some((cluster_size, best)) = largest_agreeing_cluster(&answers)
-    {
+    let agreeing_cluster = if answers.len() >= 2 && tool_proposals.is_empty() {
+        largest_agreeing_cluster(&answers)
+    } else {
+        None
+    };
+    if let Some((cluster_size, best)) = agreeing_cluster {
         let majority = cluster_size * 2 >= answers.len();
         if majority && best.confidence >= 0.5 {
             tracing::info!(

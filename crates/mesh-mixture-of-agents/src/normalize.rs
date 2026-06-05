@@ -189,9 +189,12 @@ fn try_json_parse(
     // — if the worker writes inline tool JSON and we miss it, MoA leaks
     // the JSON back as `content` and the agent does nothing. This is
     // the failure mode PR #566 review called out.
-    if obj.get("kind").is_none()
-        && let Some((tool_name, arguments)) = extract_tool_name_and_arguments(&obj)
-    {
+    let openai_tool_call = obj
+        .get("kind")
+        .is_none()
+        .then(|| extract_tool_name_and_arguments(&obj))
+        .flatten();
+    if let Some((tool_name, arguments)) = openai_tool_call {
         let args = normalize_tool_arguments(arguments).map(Value::Object);
         return Some(WorkerOutput {
             kind: OutputKind::ToolProposal,
@@ -531,9 +534,9 @@ fn extract_tool_proposal(raw: &str) -> (Option<String>, Option<Value>) {
     }
 
     // Strategy 1: Look for structured JSON in the text
-    if let Some(json_str) = extract_json_object(raw)
-        && let Ok(obj) = serde_json::from_str::<Value>(&json_str)
-    {
+    let parsed_json =
+        extract_json_object(raw).and_then(|json_str| serde_json::from_str::<Value>(&json_str).ok());
+    if let Some(obj) = parsed_json {
         if let Some((name, arguments)) = extract_tool_name_and_arguments(&obj) {
             let args = normalize_tool_arguments(arguments).map(Value::Object);
             return (Some(name.to_string()), args);

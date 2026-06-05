@@ -268,9 +268,11 @@ fn extract_text_from_response(resp: &Value) -> Result<String, String> {
         .ok_or_else(|| "malformed response: missing choices[0].message".to_string())?;
 
     // Native tool_calls → KV format for normalizer
-    if let Some(tool_calls) = message.get("tool_calls").and_then(|tc| tc.as_array())
-        && let Some(tc) = tool_calls.first()
-    {
+    let first_tool_call = message
+        .get("tool_calls")
+        .and_then(|tc| tc.as_array())
+        .and_then(|tool_calls| tool_calls.first());
+    if let Some(tc) = first_tool_call {
         let name = tc
             .pointer("/function/name")
             .and_then(|n| n.as_str())

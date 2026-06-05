@@ -17,6 +17,12 @@ use crate::worker::WorkerRole;
 use serde_json::{Value, json};
 
 const TOOL_RESULT_CONTEXT_WINDOW: usize = 10;
+const TOOL_EVIDENCE_MAX_RESULTS: usize = 8;
+const TOOL_EVIDENCE_MAX_RESULT_CHARS: usize = 800;
+const TOOL_RESULT_RAW_MAX_CHARS: usize = 2_400;
+const TOOL_RESULT_JSON_MAX_SCALARS: usize = 48;
+const TOOL_RESULT_JSON_MAX_ARRAY_ITEMS: usize = 12;
+const TOOL_RESULT_SCALAR_MAX_CHARS: usize = 180;
 
 /// Packed context ready to send to a worker.
 pub struct PackedContext {
@@ -402,6 +408,9 @@ pub fn pack_for_tool_result_turn_selected(
     let system = augmented_system_prompt_for_mode(session, has_tools);
 
     let mut messages = vec![json!({"role": "system", "content": system})];
+    if let Some(evidence) = tool_evidence_message(session) {
+        messages.push(evidence);
+    }
 
     // Forward the tail of the conversation that includes the current user turn,
     // assistant tool_call messages, and their tool results. Tool-call chains
@@ -450,7 +459,7 @@ pub fn pack_for_tool_result_turn_selected(
     for msg in &all[start_idx..] {
         let role = message_role(msg);
         if role != "system" && !role.is_empty() {
-            messages.push(msg.clone());
+            messages.push(compact_tool_message(msg));
         }
     }
 
@@ -458,6 +467,228 @@ pub fn pack_for_tool_result_turn_selected(
 
     (messages, tools)
 }
+
+fn tool_evidence_message(session: &Session) -> Option<Value> {
+    let results = session.recent_tool_results();
+    if results.is_empty() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "Completed tool results. Preserve exact short values from these results when the user asks to include, recall, or return tool facts."
+            .to_string(),
+    ];
+    for (idx, (name, result)) in results
+        .iter()
+        .rev()
+        .take(TOOL_EVIDENCE_MAX_RESULTS)
+        .enumerate()
+    {
+        let compacted = compact_tool_result_text(result);
+        let result = if compacted.len() > TOOL_EVIDENCE_MAX_RESULT_CHARS {
+            format!(
+                "{}...",
+                crate::worker::truncate_chars(&compacted, TOOL_EVIDENCE_MAX_RESULT_CHARS - 3)
+            )
+        } else {
+            compacted
+        };
+        lines.push(format!("{}. {name}: {result}", idx + 1));
+    }
+
+    Some(json!({"role": "system", "content": lines.join("\n")}))
+}
+
+fn compact_tool_message(msg: &Value) -> Value {
+    if message_role(msg) != "tool" {
+        return msg.clone();
+    }
+
+    let Some(content) = msg.get("content").and_then(Value::as_str) else {
+        return msg.clone();
+    };
+    let compacted = compact_tool_result_text(content);
+    if compacted == content {
+        return msg.clone();
+    }
+
+    let mut compact = msg.clone();
+    if let Some(obj) = compact.as_object_mut() {
+        obj.insert("content".to_string(), Value::String(compacted));
+    }
+    compact
+}
+
+fn compact_tool_result_text(result: &str) -> String {
+    if result.len() <= TOOL_RESULT_RAW_MAX_CHARS {
+        return result.to_string();
+    }
+
+    if let Ok(json) = serde_json::from_str::<Value>(result) {
+        return compact_json_tool_result(result.len(), &json);
+    }
+
+    format!(
+        "Tool result compacted from {} chars; original was plain text.\n\
+         Text preview:\n{}...",
+        result.len(),
+        crate::worker::truncate_chars(result, TOOL_RESULT_RAW_MAX_CHARS - 96)
+    )
+}
+
+fn compact_json_tool_result(original_len: usize, value: &Value) -> String {
+    let mut lines = vec![format!(
+        "Tool result compacted from {original_len} chars; original was JSON."
+    )];
+    append_json_shape(value, &mut lines);
+    let mut scalars = Vec::new();
+    collect_json_scalars(value, "$", &mut scalars, 0);
+
+    if scalars.is_empty() {
+        lines.push("No compact scalar fields found.".to_string());
+    } else {
+        lines.push("Key scalar fields:".to_string());
+        lines.extend(scalars.into_iter().map(|line| format!("- {line}")));
+    }
+
+    lines.join("\n")
+}
+
+fn append_json_shape(value: &Value, lines: &mut Vec<String>) {
+    match value {
+        Value::Array(items) => {
+            lines.push(format!("JSON array with {} item(s).", items.len()));
+        }
+        Value::Object(map) => {
+            lines.push(format!("JSON object with {} top-level key(s).", map.len()));
+        }
+        _ => {}
+    }
+}
+
+fn collect_json_scalars(value: &Value, path: &str, out: &mut Vec<String>, depth: usize) {
+    if out.len() >= TOOL_RESULT_JSON_MAX_SCALARS || depth > 6 {
+        return;
+    }
+
+    match value {
+        Value::Array(items) => collect_array_scalars(items, path, out, depth),
+        Value::Object(map) => collect_object_scalars(map, path, out, depth),
+        _ => push_scalar(path, value, out),
+    }
+}
+
+fn collect_array_scalars(items: &[Value], path: &str, out: &mut Vec<String>, depth: usize) {
+    for (idx, item) in items
+        .iter()
+        .take(TOOL_RESULT_JSON_MAX_ARRAY_ITEMS)
+        .enumerate()
+    {
+        if out.len() >= TOOL_RESULT_JSON_MAX_SCALARS {
+            break;
+        }
+
+        let item_path = format!("{path}[{idx}]");
+        if let Some(row) = compact_object_row(item, &item_path) {
+            out.push(row);
+        } else {
+            collect_json_scalars(item, &item_path, out, depth + 1);
+        }
+    }
+}
+
+fn collect_object_scalars(
+    map: &serde_json::Map<String, Value>,
+    path: &str,
+    out: &mut Vec<String>,
+    depth: usize,
+) {
+    for key in PREFERRED_JSON_KEYS {
+        if out.len() >= TOOL_RESULT_JSON_MAX_SCALARS {
+            return;
+        }
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        if is_scalar(value) {
+            push_scalar(&format!("{path}.{key}"), value, out);
+        }
+    }
+
+    for (key, value) in map {
+        if out.len() >= TOOL_RESULT_JSON_MAX_SCALARS {
+            return;
+        }
+        if PREFERRED_JSON_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let child_path = format!("{path}.{key}");
+        collect_json_scalars(value, &child_path, out, depth + 1);
+    }
+}
+
+fn compact_object_row(value: &Value, path: &str) -> Option<String> {
+    let map = value.as_object()?;
+    let mut fields = Vec::new();
+    for key in PREFERRED_JSON_KEYS {
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        if let Some(scalar) = scalar_to_string(value) {
+            fields.push(format!("{key}={scalar}"));
+        }
+        if fields.len() >= 6 {
+            break;
+        }
+    }
+
+    (!fields.is_empty()).then(|| format!("{path}: {}", fields.join(", ")))
+}
+
+fn push_scalar(path: &str, value: &Value, out: &mut Vec<String>) {
+    let Some(scalar) = scalar_to_string(value) else {
+        return;
+    };
+    out.push(format!("{path}: {scalar}"));
+}
+
+fn scalar_to_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(format!(
+            "\"{}\"",
+            crate::worker::truncate_chars(text, TOOL_RESULT_SCALAR_MAX_CHARS)
+        )),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn is_scalar(value: &Value) -> bool {
+    matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_))
+}
+
+const PREFERRED_JSON_KEYS: &[&str] = &[
+    "number",
+    "title",
+    "name",
+    "full_name",
+    "state",
+    "status",
+    "html_url",
+    "url",
+    "path",
+    "file",
+    "value",
+    "fact",
+    "result",
+    "answer",
+    "summary",
+    "message",
+    "stdout",
+    "stderr",
+    "description",
+];
 
 fn message_role(msg: &Value) -> &str {
     msg.get("role").and_then(|r| r.as_str()).unwrap_or("")
@@ -748,19 +979,27 @@ mod tests {
 
         assert_eq!(
             roles,
-            vec!["system", "user", "assistant", "tool", "assistant", "tool"],
+            vec![
+                "system",
+                "system",
+                "user",
+                "assistant",
+                "tool",
+                "assistant",
+                "tool"
+            ],
             "tool-result reducer context must not start with a bare tool message",
         );
         assert_eq!(
-            messages[1].get("content").and_then(|c| c.as_str()),
+            messages[2].get("content").and_then(|c| c.as_str()),
             Some("What is the weather today?"),
         );
         assert!(
-            messages[2].get("tool_calls").is_some(),
+            messages[3].get("tool_calls").is_some(),
             "first tool result must retain its preceding assistant tool_call",
         );
         assert!(
-            messages[4].get("tool_calls").is_some(),
+            messages[5].get("tool_calls").is_some(),
             "latest tool result must retain its preceding assistant tool_call",
         );
         assert!(
@@ -790,6 +1029,99 @@ mod tests {
         assert_eq!(
             tools[0].pointer("/function/name").and_then(Value::as_str),
             Some("read_file")
+        );
+    }
+
+    #[test]
+    fn small_tool_result_content_is_preserved_exactly() {
+        let s = session_with(
+            &[
+                user_msg("Read /tmp/a"),
+                assistant_tool_msg("call_read", "read_file", json!({"path": "/tmp/a"})),
+                tool_result_msg("call_read", "short exact result"),
+            ],
+            Some(tools_two()),
+        );
+
+        let (messages, _tools) = pack_for_tool_result_turn(&s, true);
+        let tool = messages
+            .iter()
+            .find(|msg| msg.get("role").and_then(Value::as_str) == Some("tool"))
+            .expect("tool message");
+
+        assert_eq!(
+            tool.get("content").and_then(Value::as_str),
+            Some("short exact result")
+        );
+    }
+
+    #[test]
+    fn large_json_tool_result_is_compacted_for_reducer() {
+        let noisy_body = "x".repeat(8_000);
+        let result = json!([
+            {
+                "number": 801,
+                "title": "Batch Skippy decode across concurrent requests",
+                "html_url": "https://github.com/Mesh-LLM/mesh-llm/pull/801",
+                "body": noisy_body,
+                "user": {"login": "i386"}
+            },
+            {
+                "number": 800,
+                "title": "Reuse Skippy forwarded decode frames",
+                "html_url": "https://github.com/Mesh-LLM/mesh-llm/issues/800",
+                "body": "y".repeat(8_000),
+                "user": {"login": "i386"}
+            },
+            {
+                "number": 799,
+                "title": "Reuse Skippy decode wire messages",
+                "html_url": "https://github.com/Mesh-LLM/mesh-llm/issues/799",
+                "body": "z".repeat(8_000),
+                "user": {"login": "i386"}
+            }
+        ])
+        .to_string();
+        assert!(result.len() > TOOL_RESULT_RAW_MAX_CHARS);
+
+        let s = session_with(
+            &[
+                user_msg("Summarize the issues"),
+                assistant_tool_msg(
+                    "call_exec",
+                    "exec",
+                    json!({"command": "curl https://api.github.com/repos/Mesh-LLM/mesh-llm/issues"}),
+                ),
+                tool_result_msg("call_exec", &result),
+            ],
+            Some(tools_two()),
+        );
+
+        let (messages, _tools) = pack_for_tool_result_turn(&s, true);
+        let tool = messages
+            .iter()
+            .find(|msg| msg.get("role").and_then(Value::as_str) == Some("tool"))
+            .expect("tool message");
+        let content = tool
+            .get("content")
+            .and_then(Value::as_str)
+            .expect("compacted content");
+
+        assert!(content.contains("Tool result compacted from"));
+        assert!(content.contains("$[0]: number=801"));
+        assert!(content.contains("Batch Skippy decode across concurrent requests"));
+        assert!(content.contains("$[1]: number=800"));
+        assert!(content.contains("Reuse Skippy forwarded decode frames"));
+        assert!(content.contains("$[2]: number=799"));
+        assert!(content.contains("Reuse Skippy decode wire messages"));
+        assert!(
+            content.len() < 2_000,
+            "compacted tool content should be small, got {} chars:\n{content}",
+            content.len()
+        );
+        assert!(
+            !content.contains(&"x".repeat(512)),
+            "large noisy fields should not be forwarded raw"
         );
     }
 
@@ -844,16 +1176,16 @@ mod tests {
             "packed context should keep the MoA system preamble",
         );
         assert_eq!(
-            roles[1], "user",
+            roles[2], "user",
             "long bounded context should still include the original user query",
         );
         assert!(
-            packed.len() <= TOOL_RESULT_CONTEXT_WINDOW + 2,
-            "expected system + user prefix + bounded recent tail, got {} messages",
+            packed.len() <= TOOL_RESULT_CONTEXT_WINDOW + 3,
+            "expected system + evidence + user prefix + bounded recent tail, got {} messages",
             packed.len(),
         );
         assert_ne!(
-            roles[2], "tool",
+            roles[3], "tool",
             "bounded recent tail must not start with a bare tool message",
         );
     }
