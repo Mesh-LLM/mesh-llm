@@ -7530,24 +7530,16 @@ impl Node {
                         }
                     }
                 }
-                let Some(downstream) = load.downstream.as_mut() else {
-                    return Ok(());
-                };
-                let Some(downstream_node) = downstream.node_id else {
-                    return Ok(());
-                };
-                if downstream_node == self.endpoint.id() {
-                    return Ok(());
+                let topology_id = load.topology_id.clone();
+                let run_id = load.run_id.clone();
+                if let Some(upstream) = load.upstream.as_mut() {
+                    self.prepare_stage_peer_endpoint(&topology_id, &run_id, upstream)
+                        .await?;
                 }
-                let bridge_addr = self
-                    .ensure_stage_transport_bridge(
-                        downstream_node,
-                        load.topology_id.clone(),
-                        load.run_id.clone(),
-                        downstream.stage_id.clone(),
-                    )
-                    .await?;
-                downstream.endpoint = bridge_addr;
+                if let Some(downstream) = load.downstream.as_mut() {
+                    self.prepare_stage_peer_endpoint(&topology_id, &run_id, downstream)
+                        .await?;
+                }
             }
             crate::inference::skippy::StageControlRequest::Prepare(_) => {}
             crate::inference::skippy::StageControlRequest::Stop(stop) => {
@@ -7559,6 +7551,25 @@ impl Node {
             | crate::inference::skippy::StageControlRequest::CancelPrepare(_)
             | crate::inference::skippy::StageControlRequest::StatusUpdate(_) => {}
         }
+        Ok(())
+    }
+
+    async fn prepare_stage_peer_endpoint(
+        &self,
+        topology_id: &str,
+        run_id: &str,
+        peer: &mut crate::inference::skippy::StagePeerDescriptor,
+    ) -> anyhow::Result<()> {
+        let Some(peer_node) = peer.node_id else {
+            return Ok(());
+        };
+        if peer_node == self.endpoint.id() {
+            return Ok(());
+        }
+        let bridge_addr = self
+            .ensure_stage_transport_bridge(peer_node, topology_id, run_id, peer.stage_id.clone())
+            .await?;
+        peer.endpoint = bridge_addr;
         Ok(())
     }
 

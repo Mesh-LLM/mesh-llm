@@ -1,5 +1,6 @@
 mod chat_corpus;
 mod cli;
+mod direct_return;
 mod distributed;
 mod local_single;
 mod local_split;

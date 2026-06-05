@@ -46,6 +46,7 @@ mod socket;
 mod wire;
 
 pub use self::direct_return::PredictionReturnHub;
+pub use self::direct_return::PredictionReturnListener;
 pub(crate) use self::direct_return::PredictionReturnReceiver;
 pub(crate) use self::forwarding::{forwarded_stage_message, forwarded_stage_message_timed};
 pub use self::options::{BinaryStageOptions, EmbeddedOpenAiStageOptions, parse_wire_dtype};

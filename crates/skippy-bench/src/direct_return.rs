@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io,
-    net::{TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
@@ -20,14 +20,18 @@ type DirectReturnResult = Result<StageReply, String>;
 type DirectReturnSender = mpsc::Sender<DirectReturnResult>;
 type DirectReturnWaiters = Arc<Mutex<HashMap<DirectReturnKey, DirectReturnSender>>>;
 
-pub(super) struct BenchDirectReturnServer {
+pub(crate) struct BenchDirectReturnServer {
+    local_addr: SocketAddr,
     waiters: DirectReturnWaiters,
 }
 
 impl BenchDirectReturnServer {
-    pub(super) fn start(bind_addr: &str) -> Result<Self> {
+    pub(crate) fn start(bind_addr: &str) -> Result<Self> {
         let listener = TcpListener::bind(bind_addr)
             .with_context(|| format!("bind benchmark direct-return listener {bind_addr}"))?;
+        let local_addr = listener
+            .local_addr()
+            .context("read benchmark direct-return listener address")?;
         let waiters = Arc::new(Mutex::new(HashMap::new()));
         let thread_waiters = waiters.clone();
         thread::spawn(move || {
@@ -51,10 +55,17 @@ impl BenchDirectReturnServer {
                 }
             }
         });
-        Ok(Self { waiters })
+        Ok(Self {
+            local_addr,
+            waiters,
+        })
     }
 
-    pub(super) fn register(
+    pub(crate) fn endpoint(&self) -> String {
+        self.local_addr.to_string()
+    }
+
+    pub(crate) fn register(
         &self,
         request_id: u64,
         session_id: u64,
@@ -76,14 +87,14 @@ impl BenchDirectReturnServer {
     }
 }
 
-pub(super) struct BenchDirectReturnReceiver {
+pub(crate) struct BenchDirectReturnReceiver {
     key: DirectReturnKey,
     waiters: DirectReturnWaiters,
     receiver: mpsc::Receiver<DirectReturnResult>,
 }
 
 impl BenchDirectReturnReceiver {
-    pub(super) fn recv_expected(&self, expected: WireReplyKind) -> Result<StageReply> {
+    pub(crate) fn recv_expected(&self, expected: WireReplyKind) -> Result<StageReply> {
         let reply = self
             .receiver
             .recv_timeout(Duration::from_secs(300))
