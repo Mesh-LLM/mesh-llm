@@ -9,6 +9,7 @@ MODEL_ID="${MODEL_ID:-${MODEL_REPO}:${MODEL_SELECTOR}}"
 MODEL_PATH="${MODEL_PATH:-}"
 TOKENIZER="${TOKENIZER:-HuggingFaceTB/SmolLM2-135M-Instruct}"
 WORK_DIR="${WORK_DIR:-/tmp/skippy-openai-smoke}"
+MODEL_CACHE_DIR="${MODEL_CACHE_DIR:-${WORK_DIR}/model}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-9337}"
 BASE_URL="http://${HOST}:${PORT}/v1"
@@ -49,14 +50,19 @@ if [[ ! -d "$LLAMA_BUILD_DIR" ]]; then
   exit 1
 fi
 
-mkdir -p "$WORK_DIR/model"
+mkdir -p "$MODEL_CACHE_DIR"
 
 if [[ -z "$MODEL_PATH" ]]; then
-  require_cmd hf
-  echo "downloading ${MODEL_REPO}/${MODEL_FILE} into ${WORK_DIR}/model"
-  MODEL_PATH="$(hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$WORK_DIR/model" | sed -n 's/^path=//p' | tail -n 1)"
-  if [[ -z "$MODEL_PATH" ]]; then
-    MODEL_PATH="${WORK_DIR}/model/${MODEL_FILE}"
+  MODEL_PATH="${MODEL_CACHE_DIR}/${MODEL_FILE}"
+  if [[ -s "$MODEL_PATH" ]]; then
+    echo "using cached ${MODEL_REPO}/${MODEL_FILE} at ${MODEL_PATH}"
+  else
+    require_cmd hf
+    echo "downloading ${MODEL_REPO}/${MODEL_FILE} into ${MODEL_CACHE_DIR}"
+    MODEL_PATH="$(hf download "$MODEL_REPO" "$MODEL_FILE" --local-dir "$MODEL_CACHE_DIR" | sed -n 's/^path=//p' | tail -n 1)"
+    if [[ -z "$MODEL_PATH" ]]; then
+      MODEL_PATH="${MODEL_CACHE_DIR}/${MODEL_FILE}"
+    fi
   fi
 fi
 

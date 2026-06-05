@@ -523,6 +523,16 @@ jobs:
         if: ${{ steps.llama_cache.outputs.cache-hit != 'true' }}
         run: scripts/build-llama.sh
 
+      - name: Restore Skippy smoke model cache
+        if: ${{ matrix.group == 'skippy-smoke' }}
+        id: skippy_smoke_model_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-SmolLM2-135M-Instruct.Q4_K_M.gguf-Falcon-H1-0.5B-Instruct-Q4_K_M.gguf-${{ hashFiles('.github/cache-version.txt') }}
+          restore-keys: |
+            ${{ env.CACHE_NAMESPACE }}-${{ runner.os }}-skippy-ci-smoke-models-
+
       - name: SDK and API crate tests
         if: ${{ matrix.group == 'sdk-api' && (needs.changes.outputs.all_rust == 'true' || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-client') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-api-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-config') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-commands') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-events') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-hardware-profile') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-runtime-install') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-sdk') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-cli') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-tui') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-embedded-runtime') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-console-server') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-ffi') || contains(fromJson(needs.changes.outputs.affected_crates || '[]'), 'mesh-llm-nodejs')) }}
         run: |
@@ -596,7 +606,15 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HUGGING_FACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
           WORK_DIR: ${{ runner.temp }}/skippy-ci-smoke
+          MODEL_DIR: ${{ runner.temp }}/skippy-ci-smoke-models
         run: scripts/skippy-ci-smoke.sh
+
+      - name: Save Skippy smoke model cache
+        if: ${{ matrix.group == 'skippy-smoke' && github.ref == 'refs/heads/main' && steps.skippy_smoke_model_cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/skippy-ci-smoke-models
+          key: ${{ steps.skippy_smoke_model_cache.outputs.cache-primary-key }}
 
       - name: Show sccache stats
         if: ${{ always() }}
