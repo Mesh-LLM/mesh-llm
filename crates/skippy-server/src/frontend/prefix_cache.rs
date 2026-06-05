@@ -932,6 +932,12 @@ impl StageOpenAiBackend {
                 &[current],
                 None,
                 false,
+                stage_output_activation_capacity(
+                    request.config,
+                    decode_message.token_count,
+                    request.activation_width,
+                )
+                .map_err(openai_backend_error)?,
             )
             .map_err(openai_backend_error)?
             .2;
