@@ -433,6 +433,29 @@ impl StageWireMessage {
             ),
         }
     }
+
+    pub fn take_activation_f32_payload(&mut self, n_embd: i32) -> io::Result<Vec<u8>> {
+        if self.activation.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.state.dtype()? {
+            WireActivationDType::F32 => {
+                if self.activation.len() > MAX_STAGE_DECODED_ACTIVATION_BYTES {
+                    return Err(invalid_data(
+                        "decoded activation payload byte count exceeds maximum",
+                    ));
+                }
+                Ok(std::mem::take(&mut self.activation))
+            }
+            WireActivationDType::F16 => decode_f16_to_f32_bytes(&self.activation),
+            WireActivationDType::Q8 => decode_q8_to_f32_bytes_with_state_flags(
+                &self.activation,
+                self.token_count,
+                n_embd,
+                self.state.flags,
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

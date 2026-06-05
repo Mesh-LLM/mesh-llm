@@ -397,7 +397,7 @@ fn handle_binary_connection(
     loop {
         let recv_start_unix_nanos = now_unix_nanos() as u64;
         let recv_started = Instant::now();
-        let message = if let Some(message) = next_message.take() {
+        let mut message = if let Some(message) = next_message.take() {
             message
         } else {
             match read_stage_message(&mut *upstream, activation_width) {
@@ -697,7 +697,7 @@ fn handle_binary_connection(
                     telemetry,
                     &session_key,
                     session_id,
-                    &message,
+                    message,
                     downstream.as_mut(),
                     wire_dtype,
                     downstream_wire_condition,
@@ -824,6 +824,7 @@ fn handle_binary_connection(
         let mut runtime_lock_acquires = 0usize;
         let mut runtime_sessions_before = None;
         let mut runtime_sessions_after = None;
+        let input_activation_bytes = message.activation.len();
         let (predicted_token, predicted_tokens, output, compute_ms) = if restored_prefill {
             let now = now_unix_nanos() as u64;
             compute_start_unix_nanos = now;
@@ -839,8 +840,8 @@ fn handle_binary_connection(
             )
         } else {
             let input_decode_started = Instant::now();
-            let input = input_activation_frame(config, topology, &message, activation_width)?;
-            input_activation_decode_ms = if message.activation.is_empty() {
+            let input = input_activation_frame(config, topology, &mut message, activation_width)?;
+            input_activation_decode_ms = if input_activation_bytes == 0 {
                 0.0
             } else {
                 elapsed_ms(input_decode_started)
@@ -1303,7 +1304,7 @@ fn handle_binary_connection(
             downstream_wait_ms,
             upstream_reply_ms,
             message_elapsed_ms,
-            input_activation_bytes: message.activation.len(),
+            input_activation_bytes,
             output_activation_bytes: output.payload.len(),
             input_activation_decode_ms,
             forward_activation_encode_ms,
@@ -1425,7 +1426,7 @@ fn handle_binary_connection(
         );
         timing_attrs.insert(
             "skippy.input_activation_bytes".to_string(),
-            json!(message.activation.len()),
+            json!(input_activation_bytes),
         );
         timing_attrs.insert(
             "skippy.output_activation_bytes".to_string(),
@@ -1982,7 +1983,7 @@ fn handle_binary_restore_prefill_decode_control(
     telemetry: &Telemetry,
     session_id: &str,
     wire_session_id: u64,
-    message: &StageWireMessage,
+    mut message: StageWireMessage,
     downstream: Option<&mut TcpStream>,
     wire_dtype: WireActivationDType,
     downstream_wire_condition: WireCondition,
@@ -1992,19 +1993,19 @@ fn handle_binary_restore_prefill_decode_control(
     prediction_return_streams: &mut BTreeMap<(u64, u64), TcpStream>,
     downstream_connect_timeout_secs: u64,
 ) -> Result<()> {
-    let (prefix_tokens, current_token) = restore_decode_sideband(message)?;
+    let (prefix_tokens, current_token) = restore_decode_sideband(&message)?;
     let local = maybe_prefix_cache_control(
         config,
         runtime,
         kv,
         telemetry,
         session_id,
-        message,
+        &message,
         prefix_tokens,
     );
     control_stats.merge(local.stats);
     if !local.hit {
-        let mut attrs = binary_message_attrs(config, wire_session_id, message);
+        let mut attrs = binary_message_attrs(config, wire_session_id, &message);
         attrs.insert("skippy.kv.control_hit".to_string(), json!(false));
         attrs.insert(
             "llama_stage.elapsed_ms".to_string(),
@@ -2014,7 +2015,7 @@ fn handle_binary_restore_prefill_decode_control(
         send_one_off_direct_return(
             config,
             topology,
-            message,
+            &message,
             wire_dtype,
             downstream_connect_timeout_secs,
             StageReply {
@@ -2027,8 +2028,8 @@ fn handle_binary_restore_prefill_decode_control(
         return Ok(());
     }
 
-    let input = input_activation_frame(config, topology, message, activation_width)?;
-    let decode_message = restore_prefill_decode_as_decode_message(message, current_token);
+    let input = input_activation_frame(config, topology, &mut message, activation_width)?;
+    let decode_message = restore_prefill_decode_as_decode_message(&message, current_token);
     let compute_started = Instant::now();
     let (predicted_token, output, runtime_lock_wait_ms, runtime_lock_hold_ms) = {
         let lock_started = Instant::now();
@@ -2066,7 +2067,7 @@ fn handle_binary_restore_prefill_decode_control(
 
     if let Some(downstream) = downstream {
         let forwarded =
-            forwarded_stage_message_timed(config, message, &output, wire_dtype, activation_width)
+            forwarded_stage_message_timed(config, &message, &output, wire_dtype, activation_width)
                 .context("forward restore-decode activation")?;
         write_stage_message_conditioned(
             &mut *downstream,
@@ -2075,7 +2076,7 @@ fn handle_binary_restore_prefill_decode_control(
             downstream_wire_condition,
         )
         .context("forward restore-decode downstream")?;
-        let mut attrs = binary_message_attrs(config, wire_session_id, message);
+        let mut attrs = binary_message_attrs(config, wire_session_id, &message);
         attrs.insert("skippy.kv.control_hit".to_string(), json!(true));
         attrs.insert(
             "llama_stage.elapsed_ms".to_string(),
@@ -2110,12 +2111,12 @@ fn handle_binary_restore_prefill_decode_control(
             kv,
             telemetry,
             session_id,
-            message,
+            &message,
             message.tokens.as_slice(),
         );
         add_binary_record_stats(&mut control_stats, config, &record);
     }
-    let mut attrs = binary_message_attrs(config, wire_session_id, message);
+    let mut attrs = binary_message_attrs(config, wire_session_id, &message);
     attrs.insert("skippy.kv.control_hit".to_string(), json!(true));
     attrs.insert(
         "llama_stage.elapsed_ms".to_string(),
@@ -3255,14 +3256,14 @@ fn runtime_sampling_config(sampling: Option<&StageSamplingConfig>) -> Option<Sam
 fn input_activation_frame(
     config: &StageConfig,
     topology: Option<&StageTopology>,
-    message: &StageWireMessage,
+    message: &mut StageWireMessage,
     activation_width: i32,
 ) -> Result<Option<ActivationFrame>> {
     if message.activation.is_empty() {
         return Ok(None);
     }
     let payload = message
-        .activation_f32_payload(activation_width)
+        .take_activation_f32_payload(activation_width)
         .context("decode wire activation payload")?;
     let (layer_start, layer_end) = upstream_layer_range(config, topology, message);
     Ok(Some(ActivationFrame {
