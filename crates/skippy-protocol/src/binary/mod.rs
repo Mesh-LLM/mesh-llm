@@ -6,6 +6,7 @@ pub use activation::{
     activation_payload_multiplier_from_state_flags, activation_wire_bytes,
     activation_wire_bytes_with_state_flags, encode_f32_activation_payload,
     encode_f32_activation_payload_with_state_flags,
+    encode_f32_activation_payload_with_state_flags_into,
 };
 pub use codec::{
     read_stage_message, recv_ready, recv_reply, send_ready, send_reply_ack,
@@ -610,6 +611,42 @@ mod tests {
         let second = f32::from_le_bytes(decoded[4..8].try_into().unwrap());
         assert!((first - 1.0).abs() < 0.01);
         assert!((second + 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn f32_payload_encodes_into_reused_buffer() {
+        let mut input = Vec::new();
+        for value in [1.0_f32, -1.0, 0.5, -0.5] {
+            input.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut encoded = Vec::with_capacity(64);
+        let initial_capacity = encoded.capacity();
+
+        encode_f32_activation_payload_with_state_flags_into(
+            WireActivationDType::Q8,
+            2,
+            2,
+            &input,
+            0,
+            &mut encoded,
+        )
+        .unwrap();
+        assert_eq!(encoded.len(), 12);
+        assert!(encoded.capacity() >= initial_capacity);
+        let decoded = activation::decode_q8_to_f32_bytes(&encoded, 2, 2).unwrap();
+        assert_eq!(decoded.len(), input.len());
+
+        encode_f32_activation_payload_with_state_flags_into(
+            WireActivationDType::F16,
+            2,
+            2,
+            &input,
+            0,
+            &mut encoded,
+        )
+        .unwrap();
+        assert_eq!(encoded.len(), 8);
+        assert!(encoded.capacity() >= initial_capacity);
     }
 
     #[test]

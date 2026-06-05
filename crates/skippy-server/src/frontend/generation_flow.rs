@@ -732,6 +732,7 @@ impl StageOpenAiBackend {
                     sideband_capacity: 1,
                 },
             )?;
+            let mut forwarded_decode_message = ReusableForwardedStageMessage::new();
 
             while decoded_tokens < max_tokens as usize {
                 if request
@@ -784,14 +785,15 @@ impl StageOpenAiBackend {
                 };
                 let stage0_compute_ms = stage0_timer.elapsed_ms();
                 decode_stage0_compute_ms += stage0_compute_ms;
-                let forwarded = forwarded_stage_message_timed(
-                    &request.config,
-                    message,
-                    &output,
-                    request.wire_dtype,
-                    request.activation_width,
-                )
-                .map_err(openai_backend_error)?;
+                let forwarded = forwarded_decode_message
+                    .update(
+                        &request.config,
+                        message,
+                        &output,
+                        request.wire_dtype,
+                        request.activation_width,
+                    )
+                    .map_err(openai_backend_error)?;
                 decode_output_activation_bytes =
                     decode_output_activation_bytes.saturating_add(output.payload.len());
                 decode_forward_activation_bytes = decode_forward_activation_bytes
@@ -799,7 +801,7 @@ impl StageOpenAiBackend {
                 let write_timer = PhaseTimer::start();
                 write_stage_message_conditioned(
                     &mut lane.stream,
-                    &forwarded.message,
+                    forwarded.message,
                     request.wire_dtype,
                     request.downstream_wire_condition,
                 )

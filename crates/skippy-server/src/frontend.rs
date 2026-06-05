@@ -57,9 +57,10 @@ use tokio::{
 
 use crate::{
     binary_transport::{
-        PredictionReturnHub, PredictionReturnReceiver, WireCondition, connect_binary_downstream,
-        forwarded_stage_message, forwarded_stage_message_timed, run_binary_stage_message,
-        stage_output_activation_capacity, write_stage_message_conditioned,
+        PredictionReturnHub, PredictionReturnReceiver, ReusableForwardedStageMessage,
+        WireCondition, connect_binary_downstream, forwarded_stage_message,
+        forwarded_stage_message_timed, run_binary_stage_message, stage_output_activation_capacity,
+        write_stage_message_conditioned,
     },
     cli::ServeOpenAiArgs,
     config::{load_json, validate_config},

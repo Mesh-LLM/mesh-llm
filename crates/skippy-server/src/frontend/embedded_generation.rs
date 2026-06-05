@@ -610,6 +610,7 @@ impl StageOpenAiBackend {
                     sideband_capacity: skippy_protocol::binary::MAX_STAGE_SIDEBAND_VALUES,
                 },
             )?;
+            let mut forwarded_decode_message = ReusableForwardedStageMessage::new();
             let mut fused_reached_stop = false;
             if let Some(fused) = fused_first_decode.take() {
                 current = fused.predicted;
@@ -1161,14 +1162,15 @@ impl StageOpenAiBackend {
                 };
                 let stage0_compute_ms = stage0_timer.elapsed_ms();
                 decode_stage0_compute_ms += stage0_compute_ms;
-                let forwarded = forwarded_stage_message_timed(
-                    request.config,
-                    message,
-                    &output,
-                    request.wire_dtype,
-                    request.activation_width,
-                )
-                .map_err(openai_backend_error)?;
+                let forwarded = forwarded_decode_message
+                    .update(
+                        request.config,
+                        message,
+                        &output,
+                        request.wire_dtype,
+                        request.activation_width,
+                    )
+                    .map_err(openai_backend_error)?;
                 decode_forward_activation_encode_ms += forwarded.activation_encode_ms;
                 decode_output_activation_bytes =
                     decode_output_activation_bytes.saturating_add(output.payload.len());
@@ -1177,7 +1179,7 @@ impl StageOpenAiBackend {
                 let write_timer = PhaseTimer::start();
                 write_stage_message_conditioned(
                     &mut *downstream,
-                    &forwarded.message,
+                    forwarded.message,
                     request.wire_dtype,
                     request.downstream_wire_condition,
                 )

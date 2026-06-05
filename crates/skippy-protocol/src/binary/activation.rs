@@ -73,6 +73,26 @@ pub fn encode_f32_activation_payload_with_state_flags(
     f32_payload: &[u8],
     state_flag_bits: i32,
 ) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    encode_f32_activation_payload_with_state_flags_into(
+        dtype,
+        token_count,
+        n_embd,
+        f32_payload,
+        state_flag_bits,
+        &mut out,
+    )?;
+    Ok(out)
+}
+
+pub fn encode_f32_activation_payload_with_state_flags_into(
+    dtype: WireActivationDType,
+    token_count: i32,
+    n_embd: i32,
+    f32_payload: &[u8],
+    state_flag_bits: i32,
+    out: &mut Vec<u8>,
+) -> io::Result<()> {
     let expected_f32_bytes = activation_wire_bytes_with_state_flags(
         WireActivationDType::F32,
         token_count,
@@ -87,14 +107,18 @@ pub fn encode_f32_activation_payload_with_state_flags(
     if f32_payload.len() != expected_f32_bytes {
         return Err(invalid_data("F32 activation payload size mismatch"));
     }
+    out.clear();
     match dtype {
-        WireActivationDType::F32 => Ok(f32_payload.to_vec()),
-        WireActivationDType::F16 => encode_f32_to_f16_bytes(f32_payload),
+        WireActivationDType::F32 => {
+            out.extend_from_slice(f32_payload);
+            Ok(())
+        }
+        WireActivationDType::F16 => encode_f32_to_f16_bytes_into(f32_payload, out),
         WireActivationDType::Q8 => {
             let token_count = token_count
                 .checked_mul(activation_payload_multiplier_from_state_flags(state_flag_bits) as i32)
                 .ok_or_else(|| invalid_data("Q8 activation token count overflow"))?;
-            encode_f32_to_q8_bytes(f32_payload, token_count, n_embd)
+            encode_f32_to_q8_bytes_into(f32_payload, token_count, n_embd, out)
         }
     }
 }
@@ -130,16 +154,17 @@ pub(crate) fn decode_f16_to_f32_bytes(input: &[u8]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-fn encode_f32_to_f16_bytes(input: &[u8]) -> io::Result<Vec<u8>> {
+fn encode_f32_to_f16_bytes_into(input: &[u8], out: &mut Vec<u8>) -> io::Result<()> {
     if input.len() & 3 != 0 {
         return Err(invalid_data("F32 activation payload size is not aligned"));
     }
-    let mut out = Vec::with_capacity(input.len() / 2);
+    out.clear();
+    out.reserve(input.len() / 2);
     for chunk in input.chunks_exact(4) {
         let value = f32::from_le_bytes(chunk.try_into().expect("chunks_exact size"));
         out.extend_from_slice(&f32_to_f16_bits(value).to_le_bytes());
     }
-    Ok(out)
+    Ok(())
 }
 
 pub(crate) fn decode_q8_to_f32_bytes_with_state_flags(
@@ -204,7 +229,12 @@ pub(crate) fn decode_q8_to_f32_bytes(
     decode_q8_to_f32_bytes_with_state_flags(input, token_count, n_embd, 0)
 }
 
-fn encode_f32_to_q8_bytes(input: &[u8], token_count: i32, n_embd: i32) -> io::Result<Vec<u8>> {
+fn encode_f32_to_q8_bytes_into(
+    input: &[u8],
+    token_count: i32,
+    n_embd: i32,
+    out: &mut Vec<u8>,
+) -> io::Result<()> {
     if token_count < 0 || n_embd < 0 {
         return Err(invalid_data("negative Q8 activation dimensions"));
     }
@@ -218,8 +248,17 @@ fn encode_f32_to_q8_bytes(input: &[u8], token_count: i32, n_embd: i32) -> io::Re
         return Err(invalid_data("Q8 source payload size mismatch"));
     }
 
-    let mut scales = Vec::with_capacity(token_count * 4);
-    let mut packed = Vec::with_capacity(token_count * n_embd);
+    let scale_bytes = token_count
+        .checked_mul(4)
+        .ok_or_else(|| invalid_data("Q8 scale byte count overflow"))?;
+    let packed_bytes = token_count
+        .checked_mul(n_embd)
+        .ok_or_else(|| invalid_data("Q8 value byte count overflow"))?;
+    let total_bytes = scale_bytes
+        .checked_add(packed_bytes)
+        .ok_or_else(|| invalid_data("Q8 activation payload byte count overflow"))?;
+    out.clear();
+    out.resize(total_bytes, 0);
     for token_index in 0..token_count {
         let row_offset = token_index * n_embd * 4;
         let row = &input[row_offset..row_offset + n_embd * 4];
@@ -229,15 +268,16 @@ fn encode_f32_to_q8_bytes(input: &[u8], token_count: i32, n_embd: i32) -> io::Re
             max_abs = max_abs.max(value.abs());
         }
         let scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
-        scales.extend_from_slice(&scale.to_le_bytes());
-        for chunk in row.chunks_exact(4) {
+        let scale_offset = token_index * 4;
+        out[scale_offset..scale_offset + 4].copy_from_slice(&scale.to_le_bytes());
+        let packed_row_offset = scale_bytes + token_index * n_embd;
+        for (value_index, chunk) in row.chunks_exact(4).enumerate() {
             let value = f32::from_le_bytes(chunk.try_into().expect("chunks_exact size"));
             let quantized = (value / scale).round().clamp(-127.0, 127.0) as i8;
-            packed.push(quantized as u8);
+            out[packed_row_offset + value_index] = quantized as u8;
         }
     }
-    scales.extend_from_slice(&packed);
-    Ok(scales)
+    Ok(())
 }
 
 fn f16_bits_to_f32(bits: u16) -> f32 {

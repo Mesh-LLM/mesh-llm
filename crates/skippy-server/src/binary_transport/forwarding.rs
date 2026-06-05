@@ -25,6 +25,11 @@ pub(crate) struct ForwardedStageMessage {
     pub activation_encode_ms: f64,
 }
 
+pub(crate) struct ForwardedStageMessageRef<'a> {
+    pub message: &'a StageWireMessage,
+    pub activation_encode_ms: f64,
+}
+
 pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
     incoming: &StageWireMessage,
@@ -32,46 +37,98 @@ pub(crate) fn forwarded_stage_message_timed(
     wire_dtype: WireActivationDType,
     activation_width: i32,
 ) -> Result<ForwardedStageMessage> {
-    let mut state = incoming.state;
-    state.source_stage_index = config.stage_index as i32;
-    state.reserved = wire_dtype as i32;
-    state.flags |= activation_state_flags_from_frame_flags(output.desc.flags);
-    let encode_started = Instant::now();
-    let activation = skippy_protocol::binary::encode_f32_activation_payload_with_state_flags(
-        wire_dtype,
-        incoming.token_count,
-        activation_width,
-        &output.payload,
-        state.flags,
-    )
-    .with_context(|| {
-        format!(
-            "encode output activation payload; wire_dtype={wire_dtype:?} incoming_tokens={} output_tokens={} activation_width={} payload_bytes={} frame_payload_bytes={} state_flags={}",
-            incoming.token_count,
-            output.desc.token_count,
-            activation_width,
-            output.payload.len(),
-            output.desc.payload_bytes,
-            state.flags,
-        )
-    })?;
+    let mut reusable = ReusableForwardedStageMessage::new();
+    let activation_encode_ms = reusable
+        .update(config, incoming, output, wire_dtype, activation_width)?
+        .activation_encode_ms;
     Ok(ForwardedStageMessage {
-        message: StageWireMessage {
-            kind: incoming.kind,
-            pos_start: incoming.pos_start,
-            token_count: incoming.token_count,
-            state,
-            request_id: incoming.request_id,
-            session_id: incoming.session_id,
-            sampling: incoming.sampling.clone(),
-            chat_sampling_metadata: None,
-            tokens: incoming.tokens.clone(),
-            positions: incoming.positions.clone(),
-            activation,
-            raw_bytes: Vec::new(),
-        },
-        activation_encode_ms: encode_started.elapsed().as_secs_f64() * 1000.0,
+        message: reusable.into_message(),
+        activation_encode_ms,
     })
+}
+
+pub(crate) struct ReusableForwardedStageMessage {
+    message: StageWireMessage,
+}
+
+impl ReusableForwardedStageMessage {
+    pub(crate) fn new() -> Self {
+        Self {
+            message: StageWireMessage {
+                kind: skippy_protocol::binary::WireMessageKind::PrefillEmbd,
+                pos_start: 0,
+                token_count: 0,
+                state: Default::default(),
+                request_id: 0,
+                session_id: 0,
+                sampling: None,
+                chat_sampling_metadata: None,
+                tokens: Vec::new(),
+                positions: Vec::new(),
+                activation: Vec::new(),
+                raw_bytes: Vec::new(),
+            },
+        }
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        config: &StageConfig,
+        incoming: &StageWireMessage,
+        output: &ActivationFrame,
+        wire_dtype: WireActivationDType,
+        activation_width: i32,
+    ) -> Result<ForwardedStageMessageRef<'_>> {
+        let mut state = incoming.state;
+        state.source_stage_index = config.stage_index as i32;
+        state.reserved = wire_dtype as i32;
+        state.flags |= activation_state_flags_from_frame_flags(output.desc.flags);
+        let encode_started = Instant::now();
+        skippy_protocol::binary::encode_f32_activation_payload_with_state_flags_into(
+            wire_dtype,
+            incoming.token_count,
+            activation_width,
+            &output.payload,
+            state.flags,
+            &mut self.message.activation,
+        )
+        .with_context(|| {
+            format!(
+                "encode output activation payload; wire_dtype={wire_dtype:?} incoming_tokens={} output_tokens={} activation_width={} payload_bytes={} frame_payload_bytes={} state_flags={}",
+                incoming.token_count,
+                output.desc.token_count,
+                activation_width,
+                output.payload.len(),
+                output.desc.payload_bytes,
+                state.flags,
+            )
+        })?;
+        self.message.kind = incoming.kind;
+        self.message.pos_start = incoming.pos_start;
+        self.message.token_count = incoming.token_count;
+        self.message.state = state;
+        self.message.request_id = incoming.request_id;
+        self.message.session_id = incoming.session_id;
+        if self.message.sampling != incoming.sampling {
+            self.message.sampling = incoming.sampling.clone();
+        }
+        self.message.chat_sampling_metadata = None;
+        self.message.tokens.clear();
+        self.message.tokens.extend_from_slice(&incoming.tokens);
+        self.message.positions.clear();
+        self.message
+            .positions
+            .extend_from_slice(&incoming.positions);
+        self.message.raw_bytes.clear();
+        Ok(ForwardedStageMessageRef {
+            message: &self.message,
+            activation_encode_ms: encode_started.elapsed().as_secs_f64() * 1000.0,
+        })
+    }
+
+    fn into_message(self) -> StageWireMessage {
+        self.message
+    }
 }
 
 #[cfg(test)]
@@ -142,6 +199,35 @@ mod tests {
         }
     }
 
+    fn incoming_message_with_tokens(tokens: Vec<i32>) -> StageWireMessage {
+        let mut message = incoming_message();
+        message.token_count = tokens.len() as i32;
+        message.tokens = tokens;
+        message
+    }
+
+    fn f32_activation_frame(token_count: u32, values: &[f32]) -> ActivationFrame {
+        let mut payload = Vec::new();
+        for value in values {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        ActivationFrame {
+            desc: ActivationDesc {
+                version: 1,
+                dtype: RuntimeActivationDType::F32,
+                layout: RuntimeActivationLayout::TokenMajor,
+                producer_stage_index: 1,
+                layer_start: 4,
+                layer_end: 8,
+                token_count,
+                sequence_count: 1,
+                payload_bytes: payload.len() as u64,
+                flags: 0,
+            },
+            payload,
+        }
+    }
+
     fn rwkv7_sideband_frame() -> ActivationFrame {
         let mut payload = Vec::new();
         for value in [1.0_f32, 2.0, 3.0, 4.0] {
@@ -202,5 +288,42 @@ mod tests {
             forwarded.message.state.flags & state_flags::RWKV7_V_FIRST_SIDEBAND,
             0
         );
+    }
+
+    #[test]
+    fn reusable_forwarded_stage_message_reuses_activation_buffer() {
+        let config = stage_config();
+        let first_incoming = incoming_message_with_tokens(vec![11, 12]);
+        let first_output = f32_activation_frame(2, &[1.0, 2.0, 3.0, 4.0]);
+        let second_incoming = incoming_message_with_tokens(vec![13]);
+        let second_output = f32_activation_frame(1, &[5.0, 6.0]);
+        let mut reusable = ReusableForwardedStageMessage::new();
+
+        let first = reusable
+            .update(
+                &config,
+                &first_incoming,
+                &first_output,
+                WireActivationDType::F32,
+                2,
+            )
+            .unwrap();
+        assert_eq!(first.message.tokens, vec![11, 12]);
+        assert_eq!(first.message.activation.len(), 16);
+        let first_capacity = first.message.activation.capacity();
+
+        let second = reusable
+            .update(
+                &config,
+                &second_incoming,
+                &second_output,
+                WireActivationDType::F32,
+                2,
+            )
+            .unwrap();
+        assert_eq!(second.message.tokens, vec![13]);
+        assert_eq!(second.message.activation.len(), 8);
+        assert!(second.message.activation.capacity() >= first_capacity);
+        assert_eq!(second.message.state.source_stage_index, 1);
     }
 }
