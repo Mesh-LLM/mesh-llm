@@ -579,28 +579,27 @@ impl StageOpenAiBackend {
                 .max_tokens
                 .resolve(prefill.position as usize, self.ctx_size)?;
 
-            if let Some(message) = generation_config_message(
+            let message = generation_config_message(
                 request.wire_dtype,
                 request_id,
                 session_id,
                 prefill.token_count,
                 wire_sampling.clone(),
                 request.prompt.chat_parse_metadata.as_deref(),
-            )? {
-                write_stage_message_conditioned(
-                    &mut lane.stream,
-                    &message,
-                    request.wire_dtype,
-                    request.downstream_wire_condition,
-                )
-                .map_err(openai_io_error)?;
-                let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
-                if reply.kind != WireReplyKind::Ack {
-                    return Err(OpenAiError::backend(format!(
-                        "expected multimodal generation config ACK from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
+            )?;
+            write_stage_message_conditioned(
+                &mut lane.stream,
+                &message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+            let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
+            if reply.kind != WireReplyKind::Ack {
+                return Err(OpenAiError::backend(format!(
+                    "expected multimodal generation config ACK from downstream, got {:?}",
+                    reply.kind
+                )));
             }
 
             let media_chunks = if prefill.chunks.is_empty() {

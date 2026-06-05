@@ -505,28 +505,27 @@ impl StageOpenAiBackend {
             );
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
-            if let Some(message) = generation_config_message(
+            let message = generation_config_message(
                 request.wire_dtype,
                 request_id,
                 session_id,
                 request.prompt_token_ids.len(),
                 wire_sampling.clone(),
                 request.chat_sampling_metadata,
-            )? {
-                write_stage_message_conditioned(
-                    &mut *downstream,
-                    &message,
-                    request.wire_dtype,
-                    request.downstream_wire_condition,
-                )
-                .map_err(openai_io_error)?;
-                let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
-                if reply.kind != WireReplyKind::Ack {
-                    return Err(OpenAiError::backend(format!(
-                        "expected generation config ACK from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
+            )?;
+            write_stage_message_conditioned(
+                &mut *downstream,
+                &message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+            let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+            if reply.kind != WireReplyKind::Ack {
+                return Err(OpenAiError::backend(format!(
+                    "expected generation config ACK from downstream, got {:?}",
+                    reply.kind
+                )));
             }
 
             let decode_timer = PhaseTimer::start();
