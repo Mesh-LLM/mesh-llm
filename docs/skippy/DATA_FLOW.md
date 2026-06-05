@@ -44,9 +44,8 @@ chain alone makes the hot path six hops, or about 60 ms before compute.
 
 Stage protocol generation 3 is a compatibility-breaking change. A peer is stage
 compatible only when it advertises the `skippy-stage` major version for
-generation 3 plus both `stage-generation-3` and
-`direct-prediction-return`. Prediction-bearing messages must return directly
-from the final/readout stage to the driver-facing stage. Intermediate stages
+generation 3 plus `stage-generation-3`. Prediction-bearing messages return
+directly from the final/readout stage to the driver-facing stage. Intermediate stages
 continue to forward activations and may handle cold-path control acknowledgments,
 but they are not part of the decode-token prediction return path.
 

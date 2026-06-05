@@ -1280,6 +1280,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             downstream_wire_condition: WireCondition::new(0.0, None)?,
             prefill_reply_credit_limit: 0,
             lane_pool: Some(lane_pool),
+            prediction_returns: None,
         },
         draft: None,
         speculative_window: 0,

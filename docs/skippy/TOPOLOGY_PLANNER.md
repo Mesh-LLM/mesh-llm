@@ -106,6 +106,81 @@ Qwen3 dense, Gemma3, GLM4, Gemma4 A4B, Gemma4 E4B, MiniMax M2.7, OLMo, and
 Qwen3Next failed q8 exactness smokes while Llama, DeepSeek2, GLM-4.7 Flash,
 Gemma2, and Falcon-H1 passed validated q8 smokes.
 
+## Latency-Aware Stage Count
+
+The planner should choose the number of physical stages from an end-to-end
+decode latency budget. It should not maximize the stage count just because more
+eligible peers are available.
+
+Small layer slices remain useful package and cache units, but physical stages
+are serialized execution hops during decode. Every additional remote stage adds
+one more activation transfer on the critical path. Current upstream replies add
+more serialized return hops; even with direct predicted-token return, the last
+stage still pays one return hop to stage 0. For no speculative decoding, the
+steady-state decode budget is:
+
+```text
+decode_ms_per_token =
+  serialized_network_hops_ms + max(stage_decode_compute_ms) + protocol_overhead_ms
+```
+
+For a 30 tok/s target, the full decode loop must stay under `33.3 ms/token`.
+With a working assumption of `10 ms` per inter-stage transfer, the optimistic
+direct-return network floor already constrains feasible physical stage counts:
+
+| Physical stages | Serialized hops per token | Network floor | Best possible before compute |
+| --- | ---: | ---: | ---: |
+| 2 | 2 | 20 ms/token | 50.0 tok/s |
+| 3 | 3 | 30 ms/token | 33.3 tok/s |
+| 4 | 4 | 40 ms/token | 25.0 tok/s |
+| 5 | 5 | 50 ms/token | 20.0 tok/s |
+
+Under that assumption, a four-stage topology cannot reach 30 tok/s even before
+local decode compute is counted. A three-stage topology is only feasible if
+compute and protocol overhead are almost zero. A two-stage topology leaves real
+latency headroom, if the two peers can satisfy residency.
+
+The old planning intuition was memory-first: use every feasible peer, split the
+layers evenly, and accept the extra hops as the cost of fitting the model.
+
+```mermaid
+flowchart LR
+    P["Planner"] --> C["Use all eligible peers<br/>balanced layer count"]
+    C --> S0["stage 0<br/>host A"]
+    S0 -->|"activation<br/>10 ms"| S1["stage 1<br/>host B"]
+    S1 -->|"activation<br/>10 ms"| S2["stage 2<br/>host C"]
+    S2 -->|"activation<br/>10 ms"| S3["stage 3<br/>host D"]
+    S3 -->|"predicted token<br/>10 ms"| S0
+    S0 --> O["OpenAI stream"]
+```
+
+The latency-aware planner should instead enumerate feasible physical stage
+counts, reject candidates that do not fit resident memory, and choose the
+lowest estimated time per output token among the survivors.
+
+```mermaid
+flowchart TB
+    P["Latency-aware planner"] --> C2["2 physical stages<br/>2 serialized hops"]
+    P --> C3["3 physical stages<br/>3 serialized hops"]
+    P --> C4["4 physical stages<br/>4 serialized hops"]
+
+    C2 --> M["Residency check"]
+    C3 --> M
+    C4 --> M
+
+    M --> S["Score TPOT<br/>hops * RTT + max stage compute + overhead"]
+    S --> Pick["Pick lowest TPOT<br/>that fits memory"]
+    Pick --> R["Report target miss<br/>when no candidate can hit budget"]
+```
+
+This is a planner decision independent of the wire format: direct return
+improves the constants, but it does not remove the monotonic cost of added
+physical decode hops. The resource planner keeps one logical stage per physical
+peer and uses measured or configured stage-transfer latency to score feasible
+context/node/lane candidates. Later work can let one peer own multiple adjacent
+logical stages, but the first planner decision is simpler: prefer fewer
+physical decode hops whenever residency allows it.
+
 ## Family Capability Records
 
 Family capability records let the planner reason from measured model-family

@@ -345,6 +345,10 @@ fn prompt_repl_launch(args: PromptArgs) -> Result<()> {
         tokenizer_load_mode,
         tokenizer_n_gpu_layers: 0,
         first_stage_addr: stages[0].endpoint_addr.clone(),
+        direct_return_bind_addr: SocketAddr::from((
+            [127, 0, 0, 1],
+            args.first_stage_port.saturating_sub(1),
+        )),
         tokenizer_layer_start: stages[0].layer_start as u32,
         tokenizer_layer_end: stages[0].layer_end,
         ctx_size: args.ctx_size,

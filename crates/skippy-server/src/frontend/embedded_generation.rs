@@ -525,28 +525,27 @@ impl StageOpenAiBackend {
             );
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
-            if let Some(message) = generation_config_message(
+            let message = generation_config_message(
                 request.wire_dtype,
                 request_id,
                 session_id,
                 request.prompt_token_ids.len(),
                 wire_sampling.clone(),
                 request.chat_sampling_metadata,
-            )? {
-                write_stage_message_conditioned(
-                    &mut *downstream,
-                    &message,
-                    request.wire_dtype,
-                    request.downstream_wire_condition,
-                )
-                .map_err(openai_io_error)?;
-                let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
-                if reply.kind != WireReplyKind::Ack {
-                    return Err(OpenAiError::backend(format!(
-                        "expected generation config ACK from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
+            )?;
+            write_stage_message_conditioned(
+                &mut *downstream,
+                &message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+            let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+            if reply.kind != WireReplyKind::Ack {
+                return Err(OpenAiError::backend(format!(
+                    "expected generation config ACK from downstream, got {:?}",
+                    reply.kind
+                )));
             }
 
             let decode_timer = PhaseTimer::start();
@@ -1145,15 +1144,16 @@ impl StageOpenAiBackend {
                 let forward_write_ms = write_timer.elapsed_ms();
                 decode_forward_write_ms += forward_write_ms;
                 let wait_timer = PhaseTimer::start();
-                let reply = recv_reply(&mut *downstream).map_err(openai_io_error)?;
+                let reply = request
+                    .prediction_return
+                    .as_ref()
+                    .ok_or_else(|| {
+                        OpenAiError::backend("missing direct prediction return receiver")
+                    })?
+                    .recv_expected(WireReplyKind::PredictedToken)
+                    .map_err(openai_backend_error)?;
                 let downstream_wait_ms = wait_timer.elapsed_ms();
                 decode_downstream_wait_ms += downstream_wait_ms;
-                if reply.kind != WireReplyKind::PredictedToken {
-                    return Err(OpenAiError::backend(format!(
-                        "expected predicted-token reply from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
                 if records_replay_checkpoint
                     && super::prefix_cache::request_allows_exact_replay(&request)
                 {

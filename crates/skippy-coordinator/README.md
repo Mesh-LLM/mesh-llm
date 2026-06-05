@@ -138,16 +138,20 @@ The planner inputs are:
 - KV bytes per token for the selected KV cache type
 - minimum node count
 - available nodes, each with detected VRAM, optional max VRAM, and runtime
-  headroom
+  headroom, plus optional stage-transfer latency
 - optional explicit context or parallel-lane overrides
+- optional decode TPOT target
 
 The planner output is:
 
 - selected context length
 - selected parallel lanes
 - ordered stage list, with one contiguous layer range per selected node
+- optional estimated decode-network milliseconds per output token
+- optional TPOT target-met flag
 
-Planning priority is deliberately ordered for decode speed:
+Without latency inputs, planning priority is deliberately ordered for decode
+speed:
 
 1. Choose the highest valid context length, never exceeding the model's native
    GGUF context length.
@@ -162,6 +166,21 @@ set can already run the chosen context. More nodes add split boundaries and
 network hops, which can reduce decode speed, so the planner treats fewer nodes
 as more important than additional parallel lanes.
 
+When stage-transfer latency or a target decode TPOT is provided, the planner
+enumerates every feasible context/node/lane candidate and chooses by estimated
+decode-network TPOT first. The network estimate is:
+
+```text
+estimated_decode_network_ms_per_token =
+    selected_stage_count * max(selected_stage_transfer_latency_ms)
+```
+
+Candidates that meet the TPOT target beat candidates that miss it. Within the
+same target-met bucket, lower estimated network TPOT wins before context length,
+parallel lanes, and remaining VRAM margin. This lets a lower-context two-stage
+topology beat a higher-context four-stage topology when the deeper topology
+cannot hit the decode budget.
+
 ```mermaid
 flowchart TD
     Input["Model metadata and node VRAM budgets"]
@@ -169,14 +188,19 @@ flowchart TD
     Nodes["Try node counts from minimum upward"]
     Lanes["Try parallel lanes from 4 down to 1"]
     Fit{"Can all layers fit?"}
-    Plan["Return first valid plan"]
+    Latency{"Latency inputs?"}
+    Score["Score by TPOT, then context, lanes, VRAM"]
+    Plan["Return selected plan"]
     Reject["Reject topology"]
 
     Input --> Context
     Context --> Nodes
     Nodes --> Lanes
     Lanes --> Fit
-    Fit -- "yes" --> Plan
+    Fit -- "yes" --> Latency
+    Latency -- "no" --> Plan
+    Latency -- "yes" --> Score
+    Score --> Plan
     Fit -- "no" --> Lanes
     Context -- "below 64k floor" --> Reject
 ```

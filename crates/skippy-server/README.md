@@ -55,7 +55,7 @@ skippy-server example-config
 skippy-server serve --config stage.json
 skippy-server serve-binary --config stage.json --activation-width 576
 skippy-server serve-openai --config stage.json --bind-addr 127.0.0.1:9337
-skippy-server serve-openai --config stage-0.json --bind-addr 127.0.0.1:9337 --first-stage-addr 127.0.0.1:19031 --generation-concurrency 1
+skippy-server serve-binary --config stage-0.json --topology topology.json --activation-width 576 --openai-bind-addr 127.0.0.1:9337 --generation-concurrency 1
 ```
 
 ## Embedding API
@@ -81,8 +81,8 @@ unload or replan.
 
 - `serve-binary` is the tuned binary stage-to-stage path.
 - `serve-binary` participates in the breaking generation-3 stage protocol.
-  Stage compatibility requires the `stage-generation-3` and
-  `direct-prediction-return` features; older chained-reply peers are rejected
+  Stage compatibility requires `stage-generation-3`; direct prediction return is
+  part of that generation's contract, so older chained-reply peers are rejected
   during split planning instead of being mixed into a generation-3 topology.
 - `serve-binary` accepts upstream protocol connections concurrently. Model
   execution remains serialized by the per-process runtime lock, but readiness,
@@ -96,15 +96,16 @@ unload or replan.
   the private LAN address, such as `192.168.0.x:19031`, so both inbound serving
   and outbound stage-to-stage traffic are pinned to that interface.
 - `serve-openai` exposes `/v1/models`, `/v1/chat/completions`, and
-  `/v1/completions` using the shared `openai-frontend` crate. Without
-  `--first-stage-addr`, it uses the local runtime and requires a
-  final/single-stage config with no downstream peer. With `--first-stage-addr`,
-  it tokenizes/detokenizes locally and drives an existing `serve-binary` stage
-  chain over the binary protocol. `--model-id` is the exact served model id to
-  advertise and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage
-  topology. `--generation-concurrency` controls how many chat generation
-  requests may run at once; keep it explicit in benchmark reports because it can
-  serialize or expose concurrent stage-chain behavior.
+  `/v1/completions` using the shared `openai-frontend` crate for a local
+  final/single-stage config with no downstream peer. Split serving uses
+  embedded stage-0 OpenAI serving from `serve-binary --openai-bind-addr` because
+  generation-3 prediction returns flow directly from the final stage to stage 0.
+  The older standalone `serve-openai --first-stage-addr` adapter is no longer
+  supported. `--model-id` is the exact served model id to advertise
+  and accept, for example `org/repo:Q4_K_M`; it is not parsed as stage topology.
+  `--generation-concurrency` controls how many chat generation requests may run
+  at once; keep it explicit in benchmark reports because it can serialize or
+  expose concurrent stage-chain behavior.
 - `serve-openai` and embedded stage-0 OpenAI serving emit OpenAI-surface
   telemetry when `--metrics-otlp-grpc` and `--telemetry-level debug` are set.
   The spans account for the full request path visible to the backend:
@@ -254,8 +255,8 @@ sequenceDiagram
     O->>S0: stage0 prefill/decode
     S0->>S1: PrefillEmbd / DecodeEmbd over checked-out lane
     S1->>S2: forward over persistent downstream lane
-    S2-->>S1: ACK / PredictedToken
-    S1-->>S0: ACK / PredictedToken
+    S2-->>S1: ACK for control/prefill
+    S2-->>S0: PredictedToken direct return
     O->>S1: Stop logical session, keep TCP lane
     S1->>S2: Stop logical session, keep TCP lane
     O->>P: return healthy lane

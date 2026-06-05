@@ -32,8 +32,9 @@ use skippy_runtime::ModelInfo;
 use skippy_server::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiArgs, EmbeddedRuntimeOptions, EmbeddedRuntimeStatus,
     EmbeddedServerHandle, EmbeddedState, OpenAiGuardrailsConfig, OpenAiGuardrailsStatus,
-    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::WireCondition,
-    embedded_openai_backend, telemetry::Telemetry, telemetry::TelemetryLevel,
+    OpenAiGuardrailsTarget, SkippyRuntimeHandle, binary_transport::PredictionReturnListener,
+    binary_transport::WireCondition, embedded_openai_backend, telemetry::Telemetry,
+    telemetry::TelemetryLevel,
 };
 
 pub use certification::{
@@ -346,6 +347,7 @@ pub(crate) struct SkippyModelHandle {
     started_at_unix_nanos: i64,
     status: Arc<Mutex<HandleState>>,
     _materialized_pin: Option<materialization::MaterializedStagePin>,
+    _prediction_return_listener: Option<PredictionReturnListener>,
 }
 
 pub(crate) struct SkippyHttpHandle {
@@ -445,6 +447,7 @@ impl SkippyModelHandle {
             reply_credit_limit: embedded_args.reply_credit_limit,
             downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
             downstream_wire_condition: WireCondition::new(0.0, None)?,
+            prediction_returns: None,
             telemetry,
             hook_policy,
             openai_guardrails: None,
@@ -468,6 +471,7 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _materialized_pin: None,
+            _prediction_return_listener: None,
         })
     }
 
@@ -579,6 +583,16 @@ impl SkippyModelHandle {
             runtime_config.clone(),
             telemetry.level,
         );
+        let prediction_return_listener = if runtime_config.downstream.is_some() {
+            Some(PredictionReturnListener::start(
+                runtime_config.bind_addr.parse()?,
+            )?)
+        } else {
+            None
+        };
+        let prediction_returns = prediction_return_listener
+            .as_ref()
+            .map(PredictionReturnListener::hub);
         let binding = embedded_openai_backend(EmbeddedOpenAiArgs {
             bind_addr: "127.0.0.1:0"
                 .parse()
@@ -604,6 +618,7 @@ impl SkippyModelHandle {
             reply_credit_limit: embedded_args.reply_credit_limit,
             downstream_connect_timeout_secs: embedded_args.downstream_connect_timeout_secs,
             downstream_wire_condition: WireCondition::new(0.0, None)?,
+            prediction_returns,
             telemetry,
             hook_policy,
             openai_guardrails: None,
@@ -627,6 +642,7 @@ impl SkippyModelHandle {
                 last_error: None,
             })),
             _materialized_pin: materialized_pin,
+            _prediction_return_listener: prediction_return_listener,
         })
     }
 

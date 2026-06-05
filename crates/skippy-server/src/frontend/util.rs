@@ -136,15 +136,7 @@ pub(super) fn proactive_eviction_attrs(
     attrs
 }
 
-pub(super) fn parse_wire_dtype(value: &str) -> Result<WireActivationDType> {
-    match value {
-        "fp32" | "f32" => Ok(WireActivationDType::F32),
-        "fp16" | "f16" => Ok(WireActivationDType::F16),
-        "q8" | "int8" | "i8" => Ok(WireActivationDType::Q8),
-        _ => bail!("unsupported activation wire dtype {value}"),
-    }
-}
-
+#[cfg(test)]
 pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Result<TcpStream> {
     let endpoint = endpoint.strip_prefix("tcp://").unwrap_or(endpoint);
     let attempts = timeout_secs.saturating_mul(2).max(1);
@@ -162,7 +154,7 @@ pub(super) fn connect_endpoint_ready(endpoint: &str, timeout_secs: u64) -> Resul
             }
             Err(error) => last_error = Some(anyhow!(error).context("connect failed")),
         }
-        thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(500));
     }
     Err(last_error.unwrap_or_else(|| anyhow!("timed out")))
 }

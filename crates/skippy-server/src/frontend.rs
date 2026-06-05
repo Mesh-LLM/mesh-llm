@@ -7,7 +7,6 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -58,8 +57,9 @@ use tokio::{
 
 use crate::{
     binary_transport::{
-        WireCondition, connect_binary_downstream, forwarded_stage_message,
-        forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
+        PredictionReturnHub, PredictionReturnReceiver, WireCondition, connect_binary_downstream,
+        forwarded_stage_message, forwarded_stage_message_timed, run_binary_stage_message,
+        write_stage_message_conditioned,
     },
     cli::ServeOpenAiArgs,
     config::{load_json, validate_config},
@@ -69,7 +69,6 @@ use crate::{
 };
 
 mod backend;
-mod binary_chain_generation;
 mod embedded_execution;
 mod embedded_generation;
 mod generation_flow;
@@ -136,24 +135,12 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
     let model_id = ModelId::new(args.model_id.unwrap_or_else(|| config.model_id.clone()))
         .map_err(|error| anyhow!("invalid OpenAI model id: {error}"))?
         .into_string();
-    let mode = match args.first_stage_addr {
-        Some(first_stage_addr) => OpenAiBackendMode::BinaryChain {
-            first_stage_addr,
-            wire_dtype: parse_wire_dtype(&args.activation_wire_dtype)?,
-            prefill_chunk_policy: PrefillChunkPolicy::parse(PrefillChunkPolicyArgs {
-                policy: &args.prefill_chunk_policy,
-                schedule: args.prefill_chunk_schedule.as_deref(),
-                fixed_chunk_size: args.prefill_chunk_size,
-                adaptive_start: args.prefill_adaptive_start,
-                adaptive_step: args.prefill_adaptive_step,
-                adaptive_max: args.prefill_adaptive_max,
-                schedule_arg: "--prefill-chunk-schedule",
-                policy_arg: "--prefill-chunk-policy",
-            })?,
-            startup_timeout_secs: args.startup_timeout_secs,
-        },
-        None => OpenAiBackendMode::LocalRuntime,
-    };
+    if args.first_stage_addr.is_some() {
+        bail!(
+            "--first-stage-addr is no longer supported; direct prediction return requires embedded stage-0 OpenAI serving via serve-binary --openai-bind-addr"
+        );
+    }
+    let mode = OpenAiBackendMode::LocalRuntime;
     let mode_label = mode.label();
     let telemetry = Telemetry::new(
         args.metrics_otlp_grpc,
@@ -233,6 +220,7 @@ pub struct EmbeddedOpenAiArgs {
     pub reply_credit_limit: Option<usize>,
     pub downstream_connect_timeout_secs: u64,
     pub downstream_wire_condition: WireCondition,
+    pub prediction_returns: Option<Arc<PredictionReturnHub>>,
     pub telemetry: Telemetry,
     pub hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     pub openai_guardrails: Option<OpenAiGuardrailsConfig>,
@@ -508,6 +496,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         downstream_wire_condition: args.downstream_wire_condition,
         prefill_reply_credit_limit,
         lane_pool,
+        prediction_returns: args.prediction_returns.clone(),
     };
     args.telemetry
         .emit("stage.openai_server_start", lifecycle_attrs(&args.config));
@@ -804,12 +793,6 @@ async fn openai_http_telemetry(
 #[allow(clippy::large_enum_variant)]
 enum OpenAiBackendMode {
     LocalRuntime,
-    BinaryChain {
-        first_stage_addr: String,
-        wire_dtype: WireActivationDType,
-        prefill_chunk_policy: PrefillChunkPolicy,
-        startup_timeout_secs: u64,
-    },
     EmbeddedStageZero {
         config: StageConfig,
         wire_dtype: WireActivationDType,
@@ -818,6 +801,7 @@ enum OpenAiBackendMode {
         downstream_wire_condition: WireCondition,
         prefill_reply_credit_limit: usize,
         lane_pool: Option<Arc<PersistentStageLanePool>>,
+        prediction_returns: Option<Arc<PredictionReturnHub>>,
     },
 }
 
@@ -1250,7 +1234,6 @@ impl OpenAiBackendMode {
     fn label(&self) -> &'static str {
         match self {
             Self::LocalRuntime => "local-runtime",
-            Self::BinaryChain { .. } => "binary-chain",
             Self::EmbeddedStageZero { .. } => "embedded-stage0",
         }
     }
@@ -1615,19 +1598,6 @@ struct LocalGeneration<'a> {
     ids: &'a OpenAiGenerationIds,
 }
 
-struct BinaryChainGeneration<'a> {
-    first_stage_addr: &'a str,
-    wire_dtype: WireActivationDType,
-    prefill_chunk_policy: &'a PrefillChunkPolicy,
-    startup_timeout_secs: u64,
-    prompt_token_ids: &'a [i32],
-    max_tokens: u32,
-    sampling: &'a SamplingConfig,
-    chat_sampling_metadata: Option<&'a str>,
-    cancellation: Option<&'a openai_frontend::CancellationToken>,
-    ids: &'a OpenAiGenerationIds,
-}
-
 struct EmbeddedStageZeroGeneration<'a> {
     config: &'a StageConfig,
     wire_dtype: WireActivationDType,
@@ -1636,6 +1606,7 @@ struct EmbeddedStageZeroGeneration<'a> {
     downstream_wire_condition: WireCondition,
     prefill_reply_credit_limit: usize,
     lane_pool: Option<Arc<PersistentStageLanePool>>,
+    prediction_return: Option<PredictionReturnReceiver>,
     draft: Option<Arc<Mutex<DraftRunner>>>,
     speculative_window: usize,
     adaptive_speculative_window: bool,
@@ -1661,6 +1632,7 @@ struct SplitMultimodalGeneration<'a> {
     activation_width: i32,
     downstream_wire_condition: WireCondition,
     lane_pool: Arc<PersistentStageLanePool>,
+    prediction_return: Option<PredictionReturnReceiver>,
 }
 
 struct EmbeddedLocalOutput {

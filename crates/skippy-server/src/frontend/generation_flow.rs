@@ -68,26 +68,6 @@ impl StageOpenAiBackend {
                 },
                 |token| collector.push_token(token),
             )?,
-            OpenAiBackendMode::BinaryChain {
-                first_stage_addr,
-                wire_dtype,
-                prefill_chunk_policy,
-                startup_timeout_secs,
-            } => self.generate_binary_chain_tokens(
-                BinaryChainGeneration {
-                    first_stage_addr: &first_stage_addr,
-                    wire_dtype,
-                    prefill_chunk_policy: &prefill_chunk_policy,
-                    startup_timeout_secs,
-                    prompt_token_ids: &prompt_token_ids,
-                    max_tokens,
-                    sampling: &sampling,
-                    chat_sampling_metadata,
-                    cancellation,
-                    ids: &ids,
-                },
-                |token| collector.push_token(token),
-            )?,
             OpenAiBackendMode::EmbeddedStageZero {
                 config,
                 wire_dtype,
@@ -96,6 +76,7 @@ impl StageOpenAiBackend {
                 downstream_wire_condition,
                 prefill_reply_credit_limit,
                 lane_pool,
+                prediction_returns,
             } => self.generate_embedded_stage_zero_tokens(
                 EmbeddedStageZeroGeneration {
                     config: &config,
@@ -105,6 +86,11 @@ impl StageOpenAiBackend {
                     downstream_wire_condition,
                     prefill_reply_credit_limit,
                     lane_pool,
+                    prediction_return: prediction_returns
+                        .as_ref()
+                        .map(|hub| hub.register(ids.request_id, ids.session_id))
+                        .transpose()
+                        .map_err(openai_backend_error)?,
                     draft: self.draft.clone(),
                     speculative_window: self.speculative_window,
                     adaptive_speculative_window: self.adaptive_speculative_window,
@@ -185,6 +171,7 @@ impl StageOpenAiBackend {
             activation_width,
             downstream_wire_condition,
             lane_pool,
+            prediction_returns,
             ..
         } = self.mode.clone()
             && config.downstream.is_some()
@@ -192,6 +179,11 @@ impl StageOpenAiBackend {
             let lane_pool = lane_pool.ok_or_else(|| {
                 OpenAiError::backend("embedded stage 0 has no downstream lane pool")
             })?;
+            let prediction_return = prediction_returns
+                .as_ref()
+                .map(|hub| hub.register(ids.request_id, ids.session_id))
+                .transpose()
+                .map_err(openai_backend_error)?;
             return self.generate_split_multimodal_text(
                 SplitMultimodalGeneration {
                     prompt,
@@ -205,6 +197,7 @@ impl StageOpenAiBackend {
                     activation_width,
                     downstream_wire_condition,
                     lane_pool,
+                    prediction_return,
                 },
                 on_text_chunk,
             );
@@ -213,7 +206,7 @@ impl StageOpenAiBackend {
         match &self.mode {
             OpenAiBackendMode::LocalRuntime => {}
             OpenAiBackendMode::EmbeddedStageZero { config, .. } if config.downstream.is_none() => {}
-            OpenAiBackendMode::EmbeddedStageZero { .. } | OpenAiBackendMode::BinaryChain { .. } => {
+            OpenAiBackendMode::EmbeddedStageZero { .. } => {
                 return Err(OpenAiError::unsupported(
                     "multimodal requests require an embedded stage-0 runtime",
                 ));
@@ -586,28 +579,27 @@ impl StageOpenAiBackend {
                 .max_tokens
                 .resolve(prefill.position as usize, self.ctx_size)?;
 
-            if let Some(message) = generation_config_message(
+            let message = generation_config_message(
                 request.wire_dtype,
                 request_id,
                 session_id,
                 prefill.token_count,
                 wire_sampling.clone(),
                 request.prompt.chat_parse_metadata.as_deref(),
-            )? {
-                write_stage_message_conditioned(
-                    &mut lane.stream,
-                    &message,
-                    request.wire_dtype,
-                    request.downstream_wire_condition,
-                )
-                .map_err(openai_io_error)?;
-                let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
-                if reply.kind != WireReplyKind::Ack {
-                    return Err(OpenAiError::backend(format!(
-                        "expected multimodal generation config ACK from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
+            )?;
+            write_stage_message_conditioned(
+                &mut lane.stream,
+                &message,
+                request.wire_dtype,
+                request.downstream_wire_condition,
+            )
+            .map_err(openai_io_error)?;
+            let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
+            if reply.kind != WireReplyKind::Ack {
+                return Err(OpenAiError::backend(format!(
+                    "expected multimodal generation config ACK from downstream, got {:?}",
+                    reply.kind
+                )));
             }
 
             let media_chunks = if prefill.chunks.is_empty() {
@@ -657,7 +649,18 @@ impl StageOpenAiBackend {
                 .map_err(openai_io_error)?;
                 forward_write_ms += write_timer.elapsed_ms();
                 let wait_timer = PhaseTimer::start();
-                let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
+                let reply = if is_final_chunk {
+                    request
+                        .prediction_return
+                        .as_ref()
+                        .ok_or_else(|| {
+                            OpenAiError::backend("missing direct prediction return receiver")
+                        })?
+                        .recv_expected(WireReplyKind::PredictedToken)
+                        .map_err(openai_backend_error)?
+                } else {
+                    recv_reply(&mut lane.stream).map_err(openai_io_error)?
+                };
                 downstream_wait_ms += wait_timer.elapsed_ms();
                 let expected = if is_final_chunk {
                     WireReplyKind::PredictedToken
@@ -798,15 +801,16 @@ impl StageOpenAiBackend {
                 let forward_write_ms = write_timer.elapsed_ms();
                 decode_forward_write_ms += forward_write_ms;
                 let wait_timer = PhaseTimer::start();
-                let reply = recv_reply(&mut lane.stream).map_err(openai_io_error)?;
+                let reply = request
+                    .prediction_return
+                    .as_ref()
+                    .ok_or_else(|| {
+                        OpenAiError::backend("missing direct prediction return receiver")
+                    })?
+                    .recv_expected(WireReplyKind::PredictedToken)
+                    .map_err(openai_backend_error)?;
                 let downstream_wait_ms = wait_timer.elapsed_ms();
                 decode_downstream_wait_ms += downstream_wait_ms;
-                if reply.kind != WireReplyKind::PredictedToken {
-                    return Err(OpenAiError::backend(format!(
-                        "expected multimodal decode predicted-token reply from downstream, got {:?}",
-                        reply.kind
-                    )));
-                }
                 current = reply.predicted;
                 let mut token_attrs = self.openai_attrs(&request.ids);
                 token_attrs.insert(

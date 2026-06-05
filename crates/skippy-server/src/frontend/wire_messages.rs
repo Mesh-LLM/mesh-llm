@@ -109,49 +109,6 @@ pub(super) fn embedded_session_control_message(
     }
 }
 
-pub(super) struct OpenAiPrefillChunk<'a> {
-    pub(super) seq_id: usize,
-    pub(super) pos_start: usize,
-    pub(super) prefill_token_count: usize,
-    pub(super) tokens: &'a [i32],
-    pub(super) request_id: u64,
-    pub(super) session_id: u64,
-}
-
-pub(super) fn send_prefill_chunk(
-    stream: &mut TcpStream,
-    wire_dtype: WireActivationDType,
-    chunk: OpenAiPrefillChunk<'_>,
-) -> Result<()> {
-    let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd, wire_dtype);
-    state.seq_id = i32::try_from(chunk.seq_id).context("prefill seq exceeds i32")?;
-    state.prompt_token_count =
-        i32::try_from(chunk.prefill_token_count).context("prefill token count exceeds i32")?;
-    state.current_token = *chunk.tokens.last().context("prefill chunk is empty")?;
-    state.source_stage_index = -1;
-    let message = StageWireMessage {
-        kind: WireMessageKind::PrefillEmbd,
-        pos_start: i32::try_from(chunk.pos_start).context("prefill chunk position exceeds i32")?,
-        token_count: i32::try_from(chunk.tokens.len())
-            .context("prefill token count exceeds i32")?,
-        state,
-        request_id: chunk.request_id,
-        session_id: chunk.session_id,
-        sampling: None,
-        chat_sampling_metadata: None,
-        tokens: chunk.tokens.to_vec(),
-        positions: Vec::new(),
-        activation: Vec::new(),
-        raw_bytes: Vec::new(),
-    };
-    write_stage_message(&mut *stream, &message, wire_dtype).context("send prefill chunk")?;
-    let reply = recv_reply(&mut *stream).context("receive prefill chunk ACK")?;
-    if reply.kind != WireReplyKind::Ack {
-        bail!("expected prefill ACK, got {:?}", reply.kind);
-    }
-    Ok(())
-}
-
 pub(super) fn generation_config_message(
     wire_dtype: WireActivationDType,
     request_id: u64,
@@ -159,20 +116,26 @@ pub(super) fn generation_config_message(
     prompt_token_count: usize,
     sampling: Option<WireSamplingConfig>,
     chat_sampling_metadata: Option<&str>,
-) -> OpenAiResult<Option<StageWireMessage>> {
-    let Some(metadata) = chat_sampling_metadata else {
-        return Ok(None);
-    };
+) -> OpenAiResult<StageWireMessage> {
     let prompt_token_count = i32::try_from(prompt_token_count)
         .map_err(|_| OpenAiError::backend("prompt token count exceeds i32"))?;
-    Ok(Some(StageWireMessage::configure_generation(
+    Ok(StageWireMessage::configure_generation(
         wire_dtype,
         request_id,
         session_id,
         prompt_token_count,
         sampling,
-        Some(metadata.to_string()),
-    )))
+        chat_sampling_metadata.map(str::to_string),
+    ))
+}
+
+pub(super) struct OpenAiPrefillChunk<'a> {
+    pub(super) seq_id: usize,
+    pub(super) pos_start: usize,
+    pub(super) prefill_token_count: usize,
+    pub(super) tokens: &'a [i32],
+    pub(super) request_id: u64,
+    pub(super) session_id: u64,
 }
 
 pub(super) fn embedded_prefill_message(

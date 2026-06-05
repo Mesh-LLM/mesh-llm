@@ -219,6 +219,7 @@ impl PrefillChunkPlanner {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn advance_without_observation(&mut self) {
         let PrefillChunkPolicy::AdaptiveRamp { step, max, .. } = &self.policy else {
             return;

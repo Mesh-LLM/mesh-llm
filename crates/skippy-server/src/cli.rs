@@ -156,7 +156,7 @@ pub struct ServeOpenAiArgs {
     pub generation_concurrency: usize,
     #[arg(
         long,
-        help = "Connect to an existing serve-binary first stage instead of using the local runtime directly."
+        help = "Deprecated and unsupported. Direct prediction return requires embedded stage-0 OpenAI serving via serve-binary --openai-bind-addr."
     )]
     pub first_stage_addr: Option<String>,
     #[arg(long, default_value_t = 256)]
@@ -164,12 +164,12 @@ pub struct ServeOpenAiArgs {
     #[arg(
         long,
         default_value = "fixed",
-        help = "Prefill chunk policy for binary-chain OpenAI serving: fixed, schedule, or adaptive-ramp. Passing --prefill-chunk-schedule keeps legacy schedule behavior."
+        help = "Prefill chunk policy for split OpenAI serving: fixed, schedule, or adaptive-ramp. Passing --prefill-chunk-schedule keeps legacy schedule behavior."
     )]
     pub prefill_chunk_policy: String,
     #[arg(
         long,
-        help = "Comma-separated prefill chunk schedule for binary-chain OpenAI serving. Example: 128,256,512 sends the first chunk at 128 tokens, second at 256, and repeats 512 after that."
+        help = "Comma-separated prefill chunk schedule for split OpenAI serving. Example: 128,256,512 sends the first chunk at 128 tokens, second at 256, and repeats 512 after that."
     )]
     pub prefill_chunk_schedule: Option<String>,
     #[arg(long, default_value_t = 128)]
