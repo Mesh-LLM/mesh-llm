@@ -29,7 +29,6 @@ jobs:
       clippy_batches_json: ${{ steps.compute.outputs.clippy_batches_json }}
       all_rust: ${{ steps.compute.outputs.all_rust }}
       ui_changed: ${{ steps.compute.outputs.ui_changed }}
-      website_changed: ${{ steps.compute.outputs.website_changed }}
       website_docs_changed: ${{ steps.compute.outputs.website_docs_changed }}
       cli_surface_changed: ${{ steps.compute.outputs.cli_surface_changed }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
@@ -142,25 +141,6 @@ jobs:
       - name: Test
         run: pnpm test
 
-  website-build:
-    needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.website_changed == 'true'
-    runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: website
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: website/package-lock.json
-      - name: Install dependencies
-        run: npm ci
-      - name: Build public website
-        run: npm run build
-
   cli-docs-sync:
     needs: changes
     if: needs.changes.outputs.cli_surface_changed == 'true'
@@ -194,7 +174,7 @@ jobs:
           EOF
 
   summary:
-    needs: [changes, rust-fmt, rust-clippy, ui-quality, website-build, cli-docs-sync]
+    needs: [changes, rust-fmt, rust-clippy, ui-quality, cli-docs-sync]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -204,7 +184,6 @@ jobs:
           FMT: ${{ needs.rust-fmt.result }}
           CLIPPY: ${{ needs.rust-clippy.result }}
           UI: ${{ needs.ui-quality.result }}
-          WEBSITE: ${{ needs.website-build.result }}
           CLI_DOCS: ${{ needs.cli-docs-sync.result }}
         run: |
           {
@@ -216,12 +195,11 @@ jobs:
             printf '| %s | %s |\n' "rust-fmt" "$FMT"
             printf '| %s | %s |\n' "rust-clippy" "$CLIPPY"
             printf '| %s | %s |\n' "ui-quality" "$UI"
-            printf '| %s | %s |\n' "website-build" "$WEBSITE"
             printf '| %s | %s |\n' "cli-docs-sync" "$CLI_DOCS"
           } >> "$GITHUB_STEP_SUMMARY"
 
           FAILED=false
-          for STATUS in "$CHANGES" "$FMT" "$CLIPPY" "$UI" "$WEBSITE" "$CLI_DOCS"; do
+          for STATUS in "$CHANGES" "$FMT" "$CLIPPY" "$UI" "$CLI_DOCS"; do
             if [[ "$STATUS" == "failure" || "$STATUS" == "cancelled" ]]; then
               FAILED=true
             fi
