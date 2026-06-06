@@ -49,6 +49,16 @@ jobs:
         run: npm ci
       - name: Build public website
         run: npm run build
+      - name: Check generated website output is committed
+        working-directory: .
+        run: |
+          check_paths=(docs website/src/assets/site.generated.css ':(exclude)docs/pagefind')
+          if [[ -n "$(git status --porcelain -- "${check_paths[@]}")" ]]; then
+            git status --short -- "${check_paths[@]}"
+            git diff -- "${check_paths[@]}"
+            echo "Generated website output is stale. Run: just website-build" >&2
+            exit 1
+          fi
 
   summary:
     needs: [changes, website-build]
