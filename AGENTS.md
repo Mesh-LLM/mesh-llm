@@ -559,6 +559,25 @@ Current release flow:
    This bumps the version, refreshes `Cargo.lock` without upgrading dependencies, commits as `v0.X.Y: release`, pushes `main`, and then pushes only the new release tag.
 3. Pushing a `v*` tag triggers `.github/workflows/release.yml`, which builds the release artifacts on Linux CPU, Linux CUDA, and macOS and creates the GitHub release automatically.
 
+### Installer checksum sidecars
+
+Release/package scripts should keep generating `.sha256` sidecars for new
+release archives. Do not rely on backfilling old release assets, because pinned
+versions and alternate repos may not have sidecars.
+
+`install.sh` and `install.ps1` must treat release-archive checksums as
+backward-compatible rollout metadata:
+
+- If `<archive>.sha256` exists, verify it and fail the install on malformed
+  checksum data or checksum mismatch.
+- If the sidecar is missing for a legacy/current release, warn and continue by
+  default.
+- If `MESH_LLM_REQUIRE_CHECKSUM=1` is set, a missing sidecar is fatal.
+
+Do not change installer behavior to hard-require sidecars by default unless the
+release policy also guarantees every supported/pinned release and alternate
+install repo has matching checksum assets.
+
 ## Credentials
 
 Test machine IPs, SSH details, and passwords are in `~/Documents/private-note.txt` (outside the repo). **Never commit credentials to any tracked file.**

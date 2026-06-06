@@ -10,6 +10,7 @@ INSTALL_PRERELEASE="${MESH_LLM_INSTALL_PRERELEASE:-0}"
 INSTALL_SERVICE="${MESH_LLM_INSTALL_SERVICE:-0}"
 INSTALL_SERVICE_ARGS="${MESH_LLM_INSTALL_SERVICE_ARGS:-}"
 INSTALL_SERVICE_START="${MESH_LLM_INSTALL_SERVICE_START:-1}"
+REQUIRE_CHECKSUM="${MESH_LLM_REQUIRE_CHECKSUM:-0}"
 
 SERVICE_NAME="mesh-llm"
 SERVICE_LABEL="com.mesh-llm.mesh-llm"
@@ -68,6 +69,7 @@ Environment overrides:
   MESH_LLM_INSTALL_REF=main
   MESH_LLM_INSTALL_SERVICE=1
   MESH_LLM_INSTALL_SERVICE_START=0
+  MESH_LLM_REQUIRE_CHECKSUM=1
 EOF
 }
 
@@ -624,16 +626,60 @@ checksum_from_sidecar() {
     printf '%s\n' "$expected"
 }
 
+download_checksum_sidecar() {
+    local url="$1"
+    local sidecar="$2"
+    local status
+
+    status="$(curl -sSL -w '%{http_code}' -o "$sidecar" "$url")" || {
+        rm -f -- "$sidecar"
+        echo "error: could not download checksum sidecar: $url" >&2
+        return 2
+    }
+
+    case "$status" in
+        2*)
+            return 0
+            ;;
+        404|410)
+            rm -f -- "$sidecar"
+            return 1
+            ;;
+        *)
+            rm -f -- "$sidecar"
+            echo "error: checksum sidecar download returned HTTP $status: $url" >&2
+            return 2
+            ;;
+    esac
+}
+
 verify_downloaded_file() {
     local file="$1"
     local url="$2"
+    local require_checksum="${3:-$REQUIRE_CHECKSUM}"
     local sidecar="$file.sha256"
+    local sidecar_url
+    local sidecar_status
     local expected
     local actual
 
-    if ! curl -fsSL "$(checksum_url "$url")" -o "$sidecar"; then
-        echo "error: could not download checksum sidecar: $(checksum_url "$url")" >&2
-        return 1
+    sidecar_url="$(checksum_url "$url")"
+    sidecar_status=0
+    download_checksum_sidecar "$sidecar_url" "$sidecar" || sidecar_status=$?
+    if [[ "$sidecar_status" -ne 0 ]]; then
+        case "$sidecar_status" in
+            1)
+                if bool_is_true "$require_checksum"; then
+                    echo "error: checksum sidecar is required but missing: $sidecar_url" >&2
+                    return 1
+                fi
+                echo "warning: checksum sidecar not found; continuing without archive verification: $sidecar_url" >&2
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
     fi
     if ! expected="$(checksum_from_sidecar "$sidecar")"; then
         return 1
@@ -704,7 +750,7 @@ install_recommended_native_runtime() {
         echo "Native runtime manifest was not available for this release; skipping runtime install."
         return 0
     fi
-    if ! verify_downloaded_file "$manifest_path" "$manifest_url"; then
+    if ! verify_downloaded_file "$manifest_path" "$manifest_url" 1; then
         echo "warning: native runtime manifest could not be verified; skipping runtime install." >&2
         return 0
     fi
