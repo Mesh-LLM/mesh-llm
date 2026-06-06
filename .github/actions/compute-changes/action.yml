@@ -36,6 +36,15 @@ outputs:
   ui_changed:
     description: 'Boolean: true if UI files changed'
     value: ${{ steps.derive.outputs.ui_changed }}
+  website_changed:
+    description: 'Boolean: true if public website inputs changed'
+    value: ${{ steps.derive.outputs.website_changed }}
+  website_docs_changed:
+    description: 'Boolean: true if public website docs or command examples changed'
+    value: ${{ steps.derive.outputs.website_docs_changed }}
+  cli_surface_changed:
+    description: 'Boolean: true if Rust CLI definition files changed'
+    value: ${{ steps.derive.outputs.cli_surface_changed }}
   docs_only:
     description: 'Boolean: true if only docs changed'
     value: ${{ steps.derive.outputs.docs_only }}
@@ -98,6 +107,7 @@ runs:
         BATCHES=$(echo "$CRATES_JSON" | jq -c '.batches // []')
         ALL_RUST=$(echo "$CRATES_JSON" | jq -r '.all_rust // false')
         UI_CHANGED=$(echo "$CRATES_JSON" | jq -r '.ui_changed // false')
+        WEBSITE_CHANGED=$(echo "$CRATES_JSON" | jq -r '.website_changed // false')
 
         if [[ "$ALL_RUST" == "true" ]]; then
           CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --all)
@@ -108,9 +118,10 @@ runs:
         # Read changed files for docs_only and rust_changed logic
         CHANGED_FILES=$(cat /tmp/changed_files.txt | grep -v "^__force_all__$" || true)
 
-        # Determine docs_only: true if all_rust=false AND ui_changed=false AND all files match docs patterns
+        # Determine docs_only: true if all_rust=false, UI/website are unchanged,
+        # and all files match authored docs patterns.
         DOCS_ONLY="false"
-        if [[ "$ALL_RUST" == "false" ]] && [[ "$UI_CHANGED" == "false" ]]; then
+        if [[ "$ALL_RUST" == "false" ]] && [[ "$UI_CHANGED" == "false" ]] && [[ "$WEBSITE_CHANGED" == "false" ]]; then
           # Check if all changed files match docs patterns (*.md or docs/**)
           if [[ -n "$CHANGED_FILES" ]]; then
             NON_DOCS=$(echo "$CHANGED_FILES" | grep -v -E '(\.md$|^docs/)' || true)
@@ -126,6 +137,25 @@ runs:
           RUST_CHANGED="true"
         elif [[ $(echo "$AFFECTED_CRATES" | jq 'length') -gt 0 ]]; then
           RUST_CHANGED="true"
+        fi
+
+        # CLI surface definitions are public documentation inputs. Keep this
+        # limited to Clap/parser sources, not the React console UI or command
+        # handler internals, so website docs sync is precise and explainable.
+        CLI_SURFACE_CHANGED="false"
+        if [[ -n "$CHANGED_FILES" ]]; then
+          CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^crates/mesh-llm-cli/src/(parser|models|runtime|benchmark)\.rs$' || true)
+          if [[ -n "$CLI_SURFACE_INPUTS" ]]; then
+            CLI_SURFACE_CHANGED="true"
+          fi
+        fi
+
+        WEBSITE_DOCS_CHANGED="false"
+        if [[ -n "$CHANGED_FILES" ]]; then
+          WEBSITE_DOC_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^website/src/(docs/pages/|_includes/)' || true)
+          if [[ -n "$WEBSITE_DOC_INPUTS" ]]; then
+            WEBSITE_DOCS_CHANGED="true"
+          fi
         fi
 
         # Backend/platform lanes rebuild only for all-rust escalations or files
@@ -165,6 +195,9 @@ runs:
           echo "clippy_batches_json=$CLIPPY_BATCHES"
           echo "all_rust=$ALL_RUST"
           echo "ui_changed=$UI_CHANGED"
+          echo "website_changed=$WEBSITE_CHANGED"
+          echo "website_docs_changed=$WEBSITE_DOCS_CHANGED"
+          echo "cli_surface_changed=$CLI_SURFACE_CHANGED"
           echo "docs_only=$DOCS_ONLY"
           echo "rust_changed=$RUST_CHANGED"
           echo "backend_changed=$BACKEND_CHANGED"

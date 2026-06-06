@@ -63,6 +63,19 @@ WORKSPACE_MEMBERS=(
   "xtask"
 )
 
+is_website_input() {
+  local file="$1"
+
+  [[ "$file" =~ ^website/ ]] || \
+    [[ "$file" =~ ^install\.sh$ ]] || \
+    [[ "$file" =~ ^install\.ps1$ ]] || \
+    [[ "$file" =~ ^docs/(index\.html|CNAME|install\.sh|install\.ps1|mesh-llm-logo\.svg)$ ]] || \
+    [[ "$file" =~ ^docs/(assets|catalog|docs|pagefind)(/|$) ]]
+}
+
+FAIL_OPEN_UI_CHANGED=false
+FAIL_OPEN_WEBSITE_CHANGED=false
+
 # Fail-open handler: emit all_rust=true with full workspace
 fail_open() {
   local exit_code=$?
@@ -85,7 +98,8 @@ fail_open() {
   "test_crates": [],
   "batches": [[], [], []],
   "all_rust": true,
-  "ui_changed": false
+  "ui_changed": $([[ "$FAIL_OPEN_UI_CHANGED" == true ]] && echo "true" || echo "false"),
+  "website_changed": $([[ "$FAIL_OPEN_WEBSITE_CHANGED" == true ]] && echo "true" || echo "false")
 }
 EOF
   exit 0
@@ -122,12 +136,28 @@ main() {
   # Check for escalation paths or __force_all__ sentinel
   local escalate=false
   local ui_changed=false
+  local website_changed=false
+  FAIL_OPEN_UI_CHANGED=false
+  FAIL_OPEN_WEBSITE_CHANGED=false
 
   for file in "${changed_files[@]}"; do
+    # Public website changed detection. These paths are build inputs for the
+    # Eleventy/Tailwind/Pagefind site or generated website outputs under docs/.
+    if is_website_input "$file"; then
+      website_changed=true
+      FAIL_OPEN_WEBSITE_CHANGED=true
+    fi
+
+    # UI changed detection
+    if [[ "$file" =~ ^crates/mesh-llm-ui/ ]]; then
+      ui_changed=true
+      FAIL_OPEN_UI_CHANGED=true
+    fi
+
     # __force_all__ sentinel
     if [[ "$file" == "__force_all__" ]]; then
       escalate=true
-      break
+      continue
     fi
 
     # Escalation patterns
@@ -135,17 +165,10 @@ main() {
        [[ "$file" =~ ^Cargo\.toml$ ]] || \
        [[ "$file" =~ ^third_party/llama\.cpp/ ]] || \
        [[ "$file" =~ ^scripts/(build-llama|prepare-llama|build-mac|build-windows|skippy-ci-smoke|ci-install-native-runtime|ci-prepare-native-runtime|ci-smoke-test|ci-compat-smoke|ci-client-auto-test|ci-two-node-client-serving-smoke|ci-two-node-split-smoke)\. ]] || \
-       [[ "$file" =~ ^Justfile$ ]] || \
        [[ "$file" =~ ^\.github/cache-version\.txt$ ]] || \
        [[ "$file" =~ ^scripts/plan-clippy-batches\.sh$ ]] || \
        [[ "$file" =~ ^rust-toolchain(\.toml)?$ ]]; then
       escalate=true
-      break
-    fi
-
-    # UI changed detection
-    if [[ "$file" =~ ^crates/mesh-llm-ui/ ]]; then
-      ui_changed=true
     fi
   done
 
@@ -166,7 +189,8 @@ main() {
   "test_crates": [],
   "batches": [[], [], []],
   "all_rust": true,
-  "ui_changed": $([[ "$ui_changed" == true ]] && echo "true" || echo "false")
+  "ui_changed": $([[ "$ui_changed" == true ]] && echo "true" || echo "false"),
+  "website_changed": $([[ "$website_changed" == true ]] && echo "true" || echo "false")
 }
 EOF
     return 0
@@ -176,10 +200,10 @@ EOF
 
   # Step 1: Get crate → manifest_path mapping (no deps)
   local metadata_no_deps
-  metadata_no_deps=$(cargo metadata --format-version=1 --no-deps 2>/dev/null)
+  metadata_no_deps=$(cargo metadata --format-version=1 --no-deps 2>/dev/null) || fail_open
 
   local workspace_root
-  workspace_root=$(echo "$metadata_no_deps" | jq -r '.workspace_root')
+  workspace_root=$(echo "$metadata_no_deps" | jq -r '.workspace_root') || fail_open
 
   local -A crate_to_dir=()
   while IFS='|' read -r crate_name manifest_path; do
@@ -191,7 +215,7 @@ EOF
   # Step 2: Build reverse-dep graph: for each crate, list which crates depend on it
   local -A reverse_deps=()
   local metadata_json
-  metadata_json=$(cargo metadata --format-version=1 2>/dev/null)
+  metadata_json=$(cargo metadata --format-version=1 2>/dev/null) || fail_open
 
   # Build name→id mapping
   local -A name_to_id=()
@@ -341,12 +365,14 @@ EOF
     --argjson batch1 "$(printf '%s\n' "${batch1[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
     --argjson batch2 "$(printf '%s\n' "${batch2[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')" \
     --arg ui_changed "$([[ "$ui_changed" == true ]] && echo "true" || echo "false")" \
+    --arg website_changed "$([[ "$website_changed" == true ]] && echo "true" || echo "false")" \
     '{
       affected: $affected,
       test_crates: $test_crates,
       batches: [$batch0, $batch1, $batch2],
       all_rust: false,
-      ui_changed: ($ui_changed == "true")
+      ui_changed: ($ui_changed == "true"),
+      website_changed: ($website_changed == "true")
     }'
 }
 

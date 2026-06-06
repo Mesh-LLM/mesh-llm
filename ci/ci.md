@@ -10,6 +10,9 @@ flowchart TD
         ClippyBins["clippy binpack\nplan-clippy-batches.sh"]
         Backend["backend_changed?"]
         SDK["sdk_smoke_required?"]
+        Website["website_changed?"]
+        WebsiteDocs["website_docs_changed?"]
+        CLIDocs["cli_surface_changed?"]
         Docs["docs_only?"]
     end
 
@@ -17,22 +20,32 @@ flowchart TD
     Affected --> ClippyBins
     Files --> Backend
     Affected --> SDK
+    Files --> Website
+    Files --> WebsiteDocs
+    Files --> CLIDocs
     Files --> Docs
 
     subgraph Quality["pr_quality.yml · PR Quality Checks"]
         direction TB
         Fmt["rust-fmt"]
         Clippy["rust-clippy matrix\nweighted affected-crate bins"]
-        UIQ["ui-quality"]
+        UIQ["ui-quality\nReact console"]
+        WebsiteBuild["website-build\nEleventy/Tailwind/Pagefind"]
+        CLIDocsSync["cli-docs-sync\nCLI surface requires public docs"]
         QSummary["summary"]
         Fmt --> QSummary
         Clippy --> QSummary
         UIQ --> QSummary
+        WebsiteBuild --> QSummary
+        CLIDocsSync --> QSummary
     end
 
     ClippyBins --> Clippy
     Affected --> Fmt
     Files --> UIQ
+    Website --> WebsiteBuild
+    WebsiteDocs --> CLIDocsSync
+    CLIDocs --> CLIDocsSync
 
 subgraph PRCI["pr_builds.yml · PR Builds"]
         direction TB
@@ -83,6 +96,7 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 
     subgraph MainRelease["non-PR workflows"]
         MainCI["ci.yml\npush main / dispatch"]
+        WebsiteDeploy["website-pages.yml\nActions Pages deploy\nPublic Website environment"]
         DockerPublish["docker.yml\ntag / dispatch publish"]
         Release["release.yml\nrelease artifacts + publish gates"]
     end
@@ -98,8 +112,21 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 ## Current PR Builds contract
 
 - `pr_quality.yml` is named **PR Quality Checks** and owns the earliest feedback:
-  formatting, UI quality when relevant, and deterministic clippy bins from
-  `scripts/plan-clippy-batches.sh`.
+  formatting, React console UI quality when relevant, the public website build
+  canary when website inputs change, the CLI-docs sync guard when Rust CLI
+  definitions change, and deterministic clippy bins from
+  `scripts/plan-clippy-batches.sh`. Its summary job writes a Markdown table to
+  `$GITHUB_STEP_SUMMARY` instead of printing a terminal-only table.
+- `ui_changed` and `website_changed` intentionally describe different products:
+  `ui_changed` is only the embedded React console under `crates/mesh-llm-ui/**`,
+  while `website_changed` is only the public Eleventy/Tailwind/Pagefind website
+  and its passthrough inputs. Website changes do not trigger React console UI
+  quality or UI artifact rebuilds.
+- CLI surface changes in `crates/mesh-llm-cli/src/{parser,models,runtime,benchmark}.rs`
+  set `cli_surface_changed`. When that flag is true, `cli-docs-sync` requires a
+  public website docs/example update under `website/src/docs/pages/` or
+  `website/src/_includes/`, with `website/src/docs/pages/CLI.md` as the primary
+  command reference.
 - `pr_builds.yml` is named **PR Builds** and owns PR target jobs plus integration
   and smoke validation. Linux and macOS CPU artifact jobs upload the binaries
   that downstream smoke jobs consume before long validation groups finish;
@@ -109,8 +136,8 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
 - Workflow/orchestration-only PR edits validate the PR routing graph without
   becoming Rust crate changes. They must not fan out into Linux/macOS artifact
   producers, native backend, Windows GPU, benchmark, or SDK-smoke lanes unless a
-  changed file also affects Rust crates, UI assets, SDK inputs, or backend
-  products. Backend lanes are reserved for files that can affect native
+  changed file also affects Rust crates, React console UI assets, public website
+  inputs, SDK inputs, or backend products. Backend lanes are reserved for files that can affect native
   ABI/backend products, such as `third_party/llama.cpp/**`,
   `crates/skippy-ffi/**`, backend build scripts, `Justfile`, and
   `.github/cache-version.txt`.
@@ -126,8 +153,27 @@ subgraph PRCI["pr_builds.yml · PR Builds"]
   artifact cleanup. Cleanup-only workflow edits do not fan out into
   Rust/build/smoke jobs.
 - Docker image validation and publishing are intentionally not part of pull
-  request CI; non-PR workflows (`ci.yml`, `docker.yml`, `release.yml`) own main,
-  dispatch, tag, and release-grade publishing behavior.
+  request CI; non-PR workflows (`ci.yml`, `website-pages.yml`, `docker.yml`,
+  `release.yml`) own main, dispatch, tag, website deployment, and release-grade
+  publishing behavior.
+
+## Public website deployment
+
+- `website-pages.yml` deploys the public static site through GitHub Pages' Actions
+  deployment path. It runs on pushes to `main` that change `website/**`, the root
+  install scripts that Eleventy copies into the site, or the deploy workflow
+  itself, and it can also be run manually with `workflow_dispatch`.
+- The deploy workflow cleans generated website output, builds from `website/`
+  with `npm ci && npm run build`, stages only the generated public-site paths
+  into `public-website-artifact`, and deploys that artifact with
+  `actions/deploy-pages` using the custom `Public Website` environment. The
+  checked-in `docs/` tree is no longer the Pages source of truth once repository
+  Pages settings use the Actions build type.
+- Manual `workflow_dispatch` runs are guarded to the `main` ref so the public
+  website cannot be deployed from an arbitrary branch by accident.
+- Public website deployment stays separate from PR website quality checks:
+  `pr_quality.yml` proves that website sources build, while `website-pages.yml`
+  owns publishing the generated artifact after merge to `main`.
 
 ## Artifact and smoke reuse
 

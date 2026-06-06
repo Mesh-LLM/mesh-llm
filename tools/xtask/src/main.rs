@@ -1364,6 +1364,12 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let pr_builds_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
     let pr_quality_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_quality.yml"))?;
+    let website_pages_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/website-pages.yml"))?;
+    let compute_changes_action =
+        fs::read_to_string(repo_root.join(".github/actions/compute-changes/action.yml"))?;
+    let affected_crates_script = fs::read_to_string(repo_root.join("scripts/affected-crates.sh"))?;
+    let ci_docs = fs::read_to_string(repo_root.join("ci/ci.md"))?;
     let pr_cleanup_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_cleanup.yml"))?;
     let windows_warm_caches_workflow =
@@ -1488,6 +1494,122 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &pr_quality_workflow,
         "cargo run -p xtask -- repo-consistency ci-crate-lists",
         "PR quality CI crate-list drift check",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "website_changed",
+        "compute-changes public website change output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "website_docs_changed",
+        "compute-changes public website docs output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "cli_surface_changed",
+        "compute-changes CLI surface output",
+    )?;
+    ensure_contains(
+        &affected_crates_script,
+        "is_website_input",
+        "affected-crates public website input classifier",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "website-build:",
+        "PR quality public website build gate",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "npm run build",
+        "PR quality public website build command",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "cli-docs-sync:",
+        "PR quality CLI docs sync gate",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "GITHUB_STEP_SUMMARY",
+        "PR quality Markdown summary output",
+    )?;
+    ensure_contains(
+        &pr_builds_workflow,
+        "website_changed",
+        "PR Builds public website change output",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "website_changed?",
+        "CI topology public website route",
+    )?;
+    ensure_contains(&ci_docs, "cli-docs-sync", "CI topology CLI docs sync gate")?;
+    ensure_contains(
+        &website_pages_workflow,
+        "name: Public Website Deploy",
+        "public website deploy workflow name",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "branches: [main]",
+        "public website deploy main trigger",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "workflow_dispatch:",
+        "public website manual deploy trigger",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'",
+        "public website manual deploy main-ref guard",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "npm run clean",
+        "public website clean generated output step",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "public-website-artifact",
+        "public website staged artifact directory",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "path: public-website-artifact",
+        "public website staged Pages artifact upload",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "actions/upload-pages-artifact@v3",
+        "public website Pages artifact upload",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "actions/deploy-pages@v4",
+        "public website Pages deploy action",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "pages: write",
+        "public website deploy Pages permission",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "id-token: write",
+        "public website deploy OIDC permission",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "name: Public Website",
+        "public website custom environment",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "website-pages.yml",
+        "CI topology public website deploy workflow",
     )?;
     ensure_contains(
         &pr_cleanup_workflow,
