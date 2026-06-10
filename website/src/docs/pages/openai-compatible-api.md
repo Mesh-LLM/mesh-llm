@@ -1,3 +1,7 @@
+---
+title: OpenAI-Compatible API
+---
+
 # OpenAI-Compatible API
 
 Mesh exposes one local OpenAI-compatible API. Clients call the local API; Mesh decides which local or peer model handles the request.

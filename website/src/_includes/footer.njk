@@ -13,7 +13,7 @@
 
         <div class="footer-brand-block">
           <a class="brand" href="/" aria-label="Mesh LLM home">{% set showBrandVersion = true %}{% include "brand.njk" %}{% set showBrandVersion = false %}</a>
-          <span>© 2026 mesh-llm</span>
+          <span>© <script>document.write(new Date().getFullYear())</script> mesh-llm</span>
         </div>
       </section>
 
@@ -38,13 +38,37 @@
           </nav>
         </section>
 
-        <form class="footer-subscribe" action="#" method="post">
+        <form class="footer-subscribe" id="footer-subscribe-form" novalidate>
           <label for="footer-email">Stay in the loop</label>
           <div class="footer-subscribe-row">
-            <input id="footer-email" name="email" type="email" autocomplete="email" placeholder="Enter your email">
-            <button type="submit">Subscribe</button>
+            <input id="footer-email" name="email" type="email" autocomplete="email" placeholder="Enter your email" required>
+            <button type="submit" id="footer-subscribe-btn">Subscribe</button>
           </div>
         </form>
+
+<script>
+(function () {
+  var form = document.getElementById('footer-subscribe-form');
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = document.getElementById('footer-email');
+    var btn = document.getElementById('footer-subscribe-btn');
+    if (!email || !btn) return;
+    if (!email.value || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value)) {
+      email.focus();
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Subscribed ✓';
+    email.value = '';
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.textContent = 'Subscribe';
+    }, 3000);
+  });
+})();
+</script>
       </div>
     </div>
   </div>

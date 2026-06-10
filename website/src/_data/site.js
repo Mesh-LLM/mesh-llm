@@ -11,13 +11,18 @@ const site = {
 
 const fetchLatestReleaseTag = async (repo) => {
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     const response = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers: {
         Accept: 'application/vnd.github+json',
         'User-Agent': 'mesh-llm-website',
       },
+      signal: controller.signal,
     });
 
+    clearTimeout(timeoutId);
     if (!response.ok) return null;
 
     const release = await response.json();

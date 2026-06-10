@@ -4,7 +4,7 @@
 {% set pageDescription = description or site.description %}
 {% set canonicalUrl = site.url + page.url %}
 <title>{{ pageTitle }}</title>
-<meta name="description" content="{{ description or site.description }}">
+<meta name="description" content="{{ pageDescription }}">
 <link rel="canonical" href="{{ canonicalUrl }}">
 <meta name="theme-color" content="#09090b">
 <meta property="og:type" content="website">

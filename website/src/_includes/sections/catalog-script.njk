@@ -1,11 +1,11 @@
 <script>
 (function () {
-  const searchInput = document.getElementById('catalog-search');
-  const filterCapability = document.getElementById('filter-capability');
-  const filterRuntime = document.getElementById('filter-runtime');
-  const filterHardware = document.getElementById('filter-hardware');
-  const filterSource = document.getElementById('filter-source');
-  const catalogCard = document.getElementById('catalog-card');
+  var searchInput = document.getElementById('catalog-search');
+  var filterCapability = document.getElementById('filter-capability');
+  var filterRuntime = document.getElementById('filter-runtime');
+  var filterHardware = document.getElementById('filter-hardware');
+  var filterSource = document.getElementById('filter-source');
+  var catalogCard = document.getElementById('catalog-card');
 
   if (!searchInput || !catalogCard) return;
 
@@ -14,33 +14,34 @@
   var filteredRows = [];
 
   function applyFilters() {
-    const query = searchInput.value.toLowerCase().trim();
-    const capability = filterCapability ? filterCapability.value : '';
-    const runtime = filterRuntime ? filterRuntime.value : '';
-    const hardware = filterHardware ? filterHardware.value : '';
-    const source = filterSource ? filterSource.value : '';
+    var query = searchInput.value.toLowerCase().trim();
+    var capability = filterCapability ? filterCapability.value : '';
+    var runtime = filterRuntime ? filterRuntime.value : '';
+    var hardware = filterHardware ? filterHardware.value : '';
+    var source = filterSource ? filterSource.value : '';
 
-    const rows = catalogCard.querySelectorAll('.catalog-row');
+    var rows = catalogCard.querySelectorAll('tbody tr');
     filteredRows = [];
 
     rows.forEach(function (row) {
-      const name = (row.querySelector('.m')?.textContent || '').toLowerCase();
-      const ref = (row.querySelector('.ref code')?.textContent || '').toLowerCase();
-      const desc = (row.querySelector('.ms')?.textContent || '').toLowerCase();
-      const caps = row.getAttribute('data-capability') || '';
-      const rt = row.getAttribute('data-runtime') || '';
-      const hw = row.getAttribute('data-hardware') || '';
-      const src = row.getAttribute('data-source') || '';
+      var name = (row.querySelector('strong')?.textContent || '').toLowerCase();
+      var ref = (row.querySelector('.ref-copy code')?.textContent || '').toLowerCase();
+      var desc = (row.querySelector('.model-cell span')?.textContent || '').toLowerCase();
+      var caps = row.getAttribute('data-capability') || '';
+      var rt = row.getAttribute('data-runtime') || '';
+      var hw = row.getAttribute('data-hardware') || '';
+      var src = row.getAttribute('data-source') || '';
 
-      const matchesSearch = !query || name.includes(query) || ref.includes(query) || desc.includes(query);
-      const matchesCapability = !capability || caps.split(' ').some(function (c) { return c.toLowerCase() === capability.toLowerCase(); });
-      const matchesRuntime = !runtime || rt.toLowerCase() === runtime.toLowerCase();
-      const matchesHardware = !hardware || hw.toLowerCase() === hardware.toLowerCase();
-      const matchesSource = !source || src.toLowerCase() === source.toLowerCase();
+      var matchesSearch = !query || name.indexOf(query) !== -1 || ref.indexOf(query) !== -1 || desc.indexOf(query) !== -1;
+      var matchesCapability = !capability || caps.split(' ').some(function (c) { return c.toLowerCase() === capability.toLowerCase(); });
+      var matchesRuntime = !runtime || rt.toLowerCase() === runtime.toLowerCase();
+      var matchesHardware = !hardware || hw.toLowerCase() === hardware.toLowerCase();
+      var matchesSource = !source || src.toLowerCase() === source.toLowerCase();
 
-      const visible = matchesSearch && matchesCapability && matchesRuntime && matchesHardware && matchesSource;
       row.style.display = 'none';
-      if (visible) filteredRows.push(row);
+      if (matchesSearch && matchesCapability && matchesRuntime && matchesHardware && matchesSource) {
+        filteredRows.push(row);
+      }
     });
 
     currentPage = 1;
@@ -74,10 +75,8 @@
     var totalPagesNum = totalPages;
     var html = '';
 
-    // Prev button
     html += '<a href="#" class="pg-prev"' + (currentPage === 1 ? ' style="opacity:0.3;pointer-events:none"' : '') + '>←</a>';
 
-    // Page numbers with ellipsis
     if (totalPagesNum <= 7) {
       for (var i = 1; i <= totalPagesNum; i++) {
         html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
@@ -96,19 +95,16 @@
       html += '<a href="#" class="pg-num' + (totalPagesNum === currentPage ? ' now' : '') + '" data-page="' + totalPagesNum + '">' + totalPagesNum + '</a>';
     }
 
-    // Next button
     html += '<a href="#" class="pg-next"' + (currentPage === totalPagesNum ? ' style="opacity:0.3;pointer-events:none"' : '') + '>→</a>';
 
     pgEl.innerHTML = html;
 
-    // Update live count
     var liveEl = catalogCard.querySelector('.catalog-foot .live');
     if (liveEl) {
       liveEl.innerHTML = 'Showing ' + ((currentPage - 1) * PAGE_SIZE + 1) + '–' + Math.min(currentPage * PAGE_SIZE, total) + ' of ' + total;
     }
   }
 
-  // Pagination click handler
   catalogCard.addEventListener('click', function (e) {
     var pgBtn = e.target.closest('.pg-prev, .pg-next, .pg-num');
     if (!pgBtn) return;
@@ -127,14 +123,13 @@
   if (filterHardware) filterHardware.addEventListener('change', applyFilters);
   if (filterSource) filterSource.addEventListener('change', applyFilters);
 
-  // Copy button functionality
   catalogCard.addEventListener('click', function (e) {
-    const btn = e.target.closest('.copy');
+    var btn = e.target.closest('.copy');
     if (!btn) return;
-    const row = btn.closest('.catalog-row');
-    const ref = row.querySelector('.ref code')?.textContent || '';
+    var row = btn.closest('tr');
+    var ref = row.querySelector('.ref-copy code')?.textContent || '';
     navigator.clipboard.writeText(ref).then(function () {
-      const original = btn.innerHTML;
+      var original = btn.innerHTML;
       btn.classList.add('copied');
       btn.textContent = '✓';
       setTimeout(function () {
@@ -145,10 +140,9 @@
     });
   });
 
-  // Keyboard shortcut for search
   document.addEventListener('keydown', function (e) {
     if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      const tag = document.activeElement.tagName;
+      var tag = document.activeElement.tagName;
       if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
         e.preventDefault();
         searchInput.focus();
@@ -156,7 +150,6 @@
     }
   });
 
-  // Initial render
   applyFilters();
 })();
 </script>

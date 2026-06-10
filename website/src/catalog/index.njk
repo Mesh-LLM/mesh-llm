@@ -203,9 +203,21 @@ permalink: /catalog/index.html
     return `<span class="run-mode ${tone}">${escapeHtml(mode)}</span>`;
   }
 
+  function parseSizeInGb(sizeStr) {
+    const raw = String(sizeStr || '').trim();
+    const match = raw.match(/^([\d.]+)\s*(TB|GB|MB|KB)?$/i);
+    if (!match) return NaN;
+    const value = parseFloat(match[1]);
+    const unit = (match[2] || 'GB').toUpperCase();
+    if (unit === 'TB') return value * 1024;
+    if (unit === 'MB') return value / 1024;
+    if (unit === 'KB') return value / (1024 * 1024);
+    return value;
+  }
+
   function guessHardware(sizeStr) {
     if (sizeLooksLikeLayerCount(sizeStr)) return '';
-    const num = parseFloat(String(sizeStr));
+    const num = parseSizeInGb(sizeStr);
     if (isNaN(num)) return '';
     if (num <= 8) return '&le; 8 GB';
     if (num <= 20) return '11–20 GB';
@@ -274,6 +286,7 @@ permalink: /catalog/index.html
 
   function renderPage() {
     var totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    if (currentPage < 1) currentPage = 1;
     if (currentPage > totalPages) currentPage = totalPages;
 
     var start = (currentPage - 1) * PAGE_SIZE;
@@ -336,9 +349,9 @@ permalink: /catalog/index.html
     if (!pgBtn) return;
     e.preventDefault();
 
-    if (pgBtn.classList.contains('pg-prev')) currentPage--;
-    else if (pgBtn.classList.contains('pg-next')) currentPage++;
-    else if (pgBtn.hasAttribute('data-page')) currentPage = parseInt(pgBtn.getAttribute('data-page'));
+    if (pgBtn.classList.contains('pg-prev')) currentPage = Math.max(1, currentPage - 1);
+    else if (pgBtn.classList.contains('pg-next')) currentPage = currentPage + 1;
+    else if (pgBtn.hasAttribute('data-page')) currentPage = parseInt(pgBtn.getAttribute('data-page'), 10);
 
     renderPage();
   });
