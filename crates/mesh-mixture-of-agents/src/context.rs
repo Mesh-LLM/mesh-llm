@@ -202,13 +202,11 @@ fn plain_dialog_message_for_compact_context(msg: &Value) -> bool {
 }
 
 fn append_current_user_if_missing(messages: &mut Vec<Value>, session: &Session) {
-    let user_text = session.last_user_text();
-    if messages
-        .last()
-        .and_then(|m| m.get("content").and_then(Value::as_str))
-        != Some(&user_text)
-    {
-        messages.push(json!({"role": "user", "content": user_text}));
+    let Some(last_user) = session.last_user_message() else {
+        return;
+    };
+    if messages.last() != Some(last_user) {
+        messages.push(last_user.clone());
     }
 }
 
@@ -236,14 +234,7 @@ fn pack_strong(
         }
     }
 
-    let user_text = session.last_user_text();
-    if messages
-        .last()
-        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
-        != Some(&user_text)
-    {
-        messages.push(json!({"role": "user", "content": user_text}));
-    }
+    append_current_user_if_missing(&mut messages, session);
 
     // Forward the real tool schemas — the strong worker can produce native
     // tool_calls through the OpenAI API
@@ -280,8 +271,6 @@ pub fn pack_for_reducer_selected(
     has_tools: bool,
     selected_tool_names: &[String],
 ) -> (Vec<Value>, Option<Value>) {
-    let user_text = session.last_user_text();
-
     let mut system_parts = vec![
         augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
@@ -314,7 +303,7 @@ pub fn pack_for_reducer_selected(
 
     let mut messages = vec![json!({"role": "system", "content": system_parts.join("\n")})];
     messages.extend(reducer_recent_transcript_messages(session));
-    messages.push(json!({"role": "user", "content": user_text}));
+    append_current_user_if_missing(&mut messages, session);
 
     (messages, tools)
 }
@@ -920,6 +909,70 @@ mod tests {
         let last = packed.messages.last().unwrap();
         assert_eq!(last.get("role").and_then(|r| r.as_str()), Some("user"));
         assert_eq!(last.get("content").and_then(|c| c.as_str()), Some("m3"));
+    }
+
+    #[test]
+    fn worker_context_preserves_raw_current_user_message() {
+        let current_user = json!({
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "use this structured prompt"},
+                {"type": "text", "text": "without rebuilding it"},
+            ],
+        });
+        let s = session_with(
+            &[
+                system_msg("Agent SP."),
+                assistant_msg("ready"),
+                current_user.clone(),
+            ],
+            None,
+        );
+
+        for role in [WorkerRole::Fast, WorkerRole::Specialist, WorkerRole::Strong] {
+            let packed = pack_for_worker(&s, role, false);
+            let user_messages = packed
+                .messages
+                .iter()
+                .filter(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                user_messages.len(),
+                1,
+                "{role:?} should not append a stringified duplicate current user message: {:?}",
+                packed.messages,
+            );
+            assert_eq!(user_messages[0], &current_user);
+        }
+    }
+
+    #[test]
+    fn reducer_context_preserves_raw_current_user_message() {
+        let current_user = json!({
+            "role": "user",
+            "content": [{"type": "input_text", "text": "structured final request"}],
+        });
+        let s = session_with(
+            &[
+                user_msg("earlier"),
+                assistant_msg("earlier reply"),
+                current_user.clone(),
+            ],
+            None,
+        );
+        let outputs = vec![WorkerOutput {
+            model: "worker-a".into(),
+            kind: OutputKind::Answer,
+            payload: "candidate answer".into(),
+            tool_name: None,
+            tool_arguments: None,
+            confidence: 0.4,
+            role: WorkerRole::Fast,
+            elapsed_ms: 10,
+        }];
+
+        let (messages, _tools) = pack_for_reducer(&s, &outputs, "conflict", false);
+        assert_eq!(messages.last(), Some(&current_user));
     }
 
     #[test]

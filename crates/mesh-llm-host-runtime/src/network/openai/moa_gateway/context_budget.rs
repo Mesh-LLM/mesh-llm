@@ -3,6 +3,7 @@ use serde_json::Value;
 const MOA_BASE_RESERVE_TOKENS: u32 = 512;
 const MOA_TOOL_SCHEMA_RESERVE_TOKENS: u32 = 512;
 const MOA_TOOL_RESULT_RESERVE_TOKENS: u32 = 1_024;
+const TOOL_RESULT_SCAN_MAX_DEPTH: usize = 32;
 
 pub(in crate::network::openai::moa_gateway) fn add_moa_context_reserve(
     body: &Value,
@@ -36,14 +37,25 @@ fn body_has_tool_result(body: &Value) -> bool {
 }
 
 fn value_contains_responses_tool_result(value: &Value) -> bool {
+    value_contains_responses_tool_result_at_depth(value, 0)
+}
+
+fn value_contains_responses_tool_result_at_depth(value: &Value, depth: usize) -> bool {
+    if depth > TOOL_RESULT_SCAN_MAX_DEPTH {
+        return false;
+    }
     match value {
-        Value::Array(values) => values.iter().any(value_contains_responses_tool_result),
+        Value::Array(values) => values
+            .iter()
+            .any(|nested| value_contains_responses_tool_result_at_depth(nested, depth + 1)),
         Value::Object(object) => {
             value_is_tool_result(value)
                 || object
                     .iter()
                     .filter(|(key, _)| matches!(key.as_str(), "output" | "items" | "content"))
-                    .any(|(_, nested)| value_contains_responses_tool_result(nested))
+                    .any(|(_, nested)| {
+                        value_contains_responses_tool_result_at_depth(nested, depth + 1)
+                    })
         }
         _ => false,
     }
@@ -99,6 +111,17 @@ mod tests {
         });
 
         assert_eq!(add_moa_context_reserve(&body, Some(1_000)), Some(2_536));
+    }
+
+    #[test]
+    fn responses_tool_output_scan_is_depth_limited() {
+        let mut nested = json!({"type": "function_call_output", "output": "late"});
+        for _ in 0..40 {
+            nested = json!({"output": [nested]});
+        }
+        let body = json!({"input": nested});
+
+        assert_eq!(add_moa_context_reserve(&body, Some(1_000)), Some(1_512));
     }
 
     #[test]

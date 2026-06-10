@@ -472,8 +472,8 @@ fn translate_responses_function_call_item(
 }
 
 fn translate_responses_tool_result_item(object: &Map<String, Value>) -> Result<Value, OpenAiError> {
-    let call_id = non_empty_response_string(object, &["call_id", "tool_call_id", "id"])
-        .ok_or_else(|| {
+    let call_id =
+        non_empty_response_string(object, &["call_id", "tool_call_id"]).ok_or_else(|| {
             OpenAiError::invalid_request("responses function_call_output is missing call_id")
         })?;
     let content =
@@ -1522,6 +1522,31 @@ mod tests {
         assert_eq!(messages[2]["role"], "tool");
         assert_eq!(messages[2]["tool_call_id"], "call_lookup");
         assert_eq!(messages[2]["content"], "{\"value\":\"signal-7429\"}");
+    }
+
+    #[test]
+    fn normalize_responses_tool_result_requires_call_id_not_item_id() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [
+                {"role": "user", "content": "look up the codeword"},
+                {
+                    "type": "function_call_output",
+                    "id": "item_output_123",
+                    "output": "{\"value\":\"signal-7429\"}"
+                }
+            ]
+        });
+
+        let err = normalize_openai_compat_request("/v1/responses", &mut body)
+            .expect_err("item id must not be treated as a tool call id");
+
+        assert_eq!(err.status().as_u16(), 400);
+        assert!(
+            err.to_string().contains("missing call_id"),
+            "unexpected error: {err}",
+        );
+        assert!(body.get("messages").is_none());
     }
 
     #[test]

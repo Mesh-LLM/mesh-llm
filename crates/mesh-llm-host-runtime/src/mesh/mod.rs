@@ -1856,12 +1856,12 @@ impl PeerInfo {
             .or_else(|| {
                 self.served_model_descriptors
                     .iter()
-                    .find(|descriptor| {
+                    .filter(|descriptor| {
                         let runtime_name = descriptor.identity.model_name.as_str();
                         runtime_name != model
                             && self.public_model_id_for_routable_model(runtime_name) == model
                     })
-                    .and_then(|descriptor| {
+                    .find_map(|descriptor| {
                         self.advertised_context_length_for_runtime_model(
                             &descriptor.identity.model_name,
                         )

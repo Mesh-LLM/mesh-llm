@@ -155,11 +155,6 @@ impl Session {
                         .pending_tools
                         .iter()
                         .rposition(|p| p.call_id == call_id && p.result.is_none())
-                        .or_else(|| {
-                            self.pending_tools
-                                .iter()
-                                .rposition(|p| p.call_id == call_id)
-                        })
                     {
                         let pending = &mut self.pending_tools[idx];
                         pending.result = Some(content);
@@ -234,6 +229,14 @@ impl Session {
             .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
             .and_then(extract_text_content)
             .unwrap_or_default()
+    }
+
+    /// The last user message in its original wire shape.
+    pub fn last_user_message(&self) -> Option<&Value> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
     }
 
     /// System prompt (first system message).
@@ -451,6 +454,31 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].result.as_deref(), Some("old result"));
         assert_eq!(pending[1].result.as_deref(), Some("new result"));
+    }
+
+    #[test]
+    fn duplicate_tool_result_id_does_not_overwrite_resolved_call() {
+        let mut s = Session::new();
+        s.ingest(
+            &[
+                json!({"role": "user", "content": "first"}),
+                json!({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_repeat",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{\"path\":\"old\"}"}
+                    }]
+                }),
+                json!({"role": "tool", "tool_call_id": "call_repeat", "content": "old result"}),
+                json!({"role": "tool", "tool_call_id": "call_repeat", "content": "late duplicate"}),
+            ],
+            &None,
+        );
+
+        let pending = s.pending_tool_calls();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].result.as_deref(), Some("old result"));
     }
 
     #[test]
