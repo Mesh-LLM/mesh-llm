@@ -234,6 +234,8 @@ async fn handle_query(
 ) -> TurnResult {
     let assignments = worker::assign_roles(&config.models);
     let grace_mode = grace_mode_for_turn(session, has_tools);
+    let tools_available_for_response = has_tools
+        && (!tools_explicitly_disabled(&session.last_user_text()) || forced_tool.is_some());
     let query_uses_tools = forced_tool.is_some() || matches!(grace_mode, GraceMode::Tool);
     let selected_tool_names = if let Some(tool) = forced_tool {
         vec![tool.name.clone()]
@@ -323,7 +325,7 @@ async fn handle_query(
             session,
             decision,
             outputs: &outputs,
-            has_tools: query_uses_tools,
+            has_tools: tools_available_for_response,
             selected_tool_names: &selected_tool_names,
             forced_tool,
             allowed_tools,
@@ -355,17 +357,27 @@ fn grace_mode_for_turn(session: &Session, has_tools: bool) -> GraceMode {
     if !has_tools {
         return GraceMode::Answer;
     }
-    if looks_like_tool_intent(&session.last_user_text()) {
+    let text = session.last_user_text();
+    if tools_explicitly_disabled(&text) {
+        return GraceMode::Answer;
+    }
+    let text_lc = text.to_ascii_lowercase();
+    if !explicitly_requested_tool_names(&session.tool_names(), &text_lc).is_empty()
+        || looks_like_tool_intent_lc(&text_lc)
+    {
         GraceMode::Tool
     } else {
         GraceMode::Answer
     }
 }
 
-fn looks_like_tool_intent(text: &str) -> bool {
-    let text = text.to_ascii_lowercase();
-    if contains_any(
-        &text,
+fn tools_explicitly_disabled(text: &str) -> bool {
+    tools_explicitly_disabled_lc(&text.to_ascii_lowercase())
+}
+
+fn tools_explicitly_disabled_lc(text: &str) -> bool {
+    contains_any(
+        text,
         &[
             "no tool",
             "without tool",
@@ -378,10 +390,10 @@ fn looks_like_tool_intent(text: &str) -> bool {
             "no lookup",
             "without lookup",
         ],
-    ) {
-        return false;
-    }
+    )
+}
 
+fn looks_like_tool_intent_lc(text: &str) -> bool {
     let tool_intent_phrases = [
         "use a tool",
         "using a tool",
@@ -401,6 +413,8 @@ fn looks_like_tool_intent(text: &str) -> bool {
         "folder",
         "list ",
         "run ",
+        "run:",
+        "exec",
         "execute",
         "terminal",
         "shell",
@@ -1623,6 +1637,27 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn explicit_tool_name_uses_tool_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use the exec tool exactly once to run: printf ok",
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
+        );
+
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Tool);
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["exec".to_string()]
+        );
+    }
+
+    #[test]
     fn negated_web_prompt_uses_answer_grace() {
         let mut session = Session::new();
         session.ingest(
@@ -1631,6 +1666,21 @@ mod response_builder_tests {
                 "content": "Plain check with no web lookup: reply OK",
             })],
             &Some(serde_json::json!([{"type": "function", "function": {"name": "web_search"}}])),
+        );
+        assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
+    }
+
+    #[test]
+    fn negated_explicit_tool_prompt_uses_answer_grace() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Do not use tools; explain what the exec tool does.",
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "exec"}}
+            ])),
         );
         assert_eq!(grace_mode_for_turn(&session, true), GraceMode::Answer);
     }

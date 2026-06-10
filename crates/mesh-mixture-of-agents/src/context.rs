@@ -26,6 +26,8 @@ const TOOL_RESULT_RAW_MAX_CHARS: usize = 2_400;
 const TOOL_RESULT_JSON_MAX_SCALARS: usize = 48;
 const TOOL_RESULT_JSON_MAX_ARRAY_ITEMS: usize = 12;
 const TOOL_RESULT_SCALAR_MAX_CHARS: usize = 180;
+const TOOL_RESULT_TEXT_PREVIEW_CHARS: usize = 1_600;
+const TOOL_RESULT_WEB_SEARCH_MAX_RESULTS: usize = 6;
 
 /// Packed context ready to send to a worker.
 pub struct PackedContext {
@@ -548,12 +550,17 @@ fn compact_tool_message(msg: &Value) -> Value {
 }
 
 fn compact_tool_result_text(result: &str) -> String {
-    if result.len() <= TOOL_RESULT_RAW_MAX_CHARS {
-        return result.to_string();
+    if let Ok(json) = serde_json::from_str::<Value>(result) {
+        if let Some(compacted) = compact_external_json_tool_result(result.len(), &json) {
+            return compacted;
+        }
+        if result.len() > TOOL_RESULT_RAW_MAX_CHARS {
+            return compact_json_tool_result(result.len(), &json);
+        }
     }
 
-    if let Ok(json) = serde_json::from_str::<Value>(result) {
-        return compact_json_tool_result(result.len(), &json);
+    if result.len() <= TOOL_RESULT_RAW_MAX_CHARS {
+        return result.to_string();
     }
 
     format!(
@@ -562,6 +569,117 @@ fn compact_tool_result_text(result: &str) -> String {
         result.len(),
         crate::worker::truncate_chars(result, TOOL_RESULT_RAW_MAX_CHARS - 96)
     )
+}
+
+fn compact_external_json_tool_result(original_len: usize, value: &Value) -> Option<String> {
+    let map = value.as_object()?;
+    let source = map
+        .get("externalContent")
+        .and_then(|external| external.get("source"))
+        .and_then(Value::as_str)?;
+
+    match source {
+        "web_fetch" => compact_web_fetch_result(original_len, map),
+        "web_search" => compact_web_search_result(original_len, map),
+        _ => None,
+    }
+}
+
+fn compact_web_fetch_result(
+    original_len: usize,
+    map: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    let text = map.get("text").and_then(Value::as_str)?;
+    let mut lines = vec![format!(
+        "Tool result compacted from {original_len} chars; original was web_fetch JSON."
+    )];
+    push_clean_json_field("Title", "title", map, &mut lines);
+    push_clean_json_field("URL", "url", map, &mut lines);
+    push_clean_json_field("Status", "status", map, &mut lines);
+
+    let preview = clean_external_tool_text(text);
+    if preview.is_empty() {
+        return None;
+    }
+    lines.push("Fetched content preview:".to_string());
+    lines.push(crate::worker::truncate_chars(&preview, TOOL_RESULT_TEXT_PREVIEW_CHARS).to_string());
+    Some(lines.join("\n"))
+}
+
+fn compact_web_search_result(
+    original_len: usize,
+    map: &serde_json::Map<String, Value>,
+) -> Option<String> {
+    let results = map.get("results").and_then(Value::as_array)?;
+    let mut lines = vec![format!(
+        "Tool result compacted from {original_len} chars; original was web_search JSON."
+    )];
+    push_clean_json_field("Query", "query", map, &mut lines);
+    lines.push("Search results:".to_string());
+
+    for (idx, result) in results
+        .iter()
+        .take(TOOL_RESULT_WEB_SEARCH_MAX_RESULTS)
+        .enumerate()
+    {
+        let Some(result) = result.as_object() else {
+            continue;
+        };
+        let title = clean_json_string_field(result, "title").unwrap_or_else(|| "Untitled".into());
+        let url = clean_json_string_field(result, "url").unwrap_or_default();
+        let snippet = clean_json_string_field(result, "snippet").unwrap_or_default();
+        let mut row = format!("{}. {title}", idx + 1);
+        if !snippet.is_empty() {
+            row.push_str(": ");
+            row.push_str(&snippet);
+        }
+        if !url.is_empty() {
+            row.push_str(" (");
+            row.push_str(&url);
+            row.push(')');
+        }
+        lines.push(row);
+    }
+
+    (lines.len() > 3).then(|| lines.join("\n"))
+}
+
+fn push_clean_json_field(
+    label: &str,
+    key: &str,
+    map: &serde_json::Map<String, Value>,
+    lines: &mut Vec<String>,
+) {
+    let Some(value) = clean_json_string_field(map, key) else {
+        return;
+    };
+    if !value.is_empty() {
+        lines.push(format!("{label}: {value}"));
+    }
+}
+
+fn clean_json_string_field(map: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    let value = map.get(key)?;
+    value
+        .as_str()
+        .map(clean_external_tool_text)
+        .or_else(|| scalar_to_string(value).map(|scalar| scalar.trim_matches('"').to_string()))
+}
+
+fn clean_external_tool_text(text: &str) -> String {
+    let body = unwrap_external_content_body(text).unwrap_or(text);
+    body.trim().to_string()
+}
+
+fn unwrap_external_content_body(text: &str) -> Option<&str> {
+    let marker_start = text.rfind("<<<EXTERNAL_UNTRUSTED_CONTENT")?;
+    let after_marker = &text[marker_start..];
+    let separator = after_marker.find("---")?;
+    let mut body = after_marker.get(separator + 3..)?.trim_start_matches('\n');
+    if let Some(end) = body.find("<<<END_EXTERNAL_UNTRUSTED_CONTENT") {
+        body = &body[..end];
+    }
+    Some(body.trim())
 }
 
 fn compact_json_tool_result(original_len: usize, value: &Value) -> String {
@@ -699,6 +817,9 @@ fn is_scalar(value: &Value) -> bool {
 const PREFERRED_JSON_KEYS: &[&str] = &[
     "number",
     "title",
+    "text",
+    "content",
+    "snippet",
     "name",
     "full_name",
     "state",
@@ -1209,6 +1330,66 @@ mod tests {
         assert!(
             !content.contains(&"x".repeat(512)),
             "large noisy fields should not be forwarded raw"
+        );
+    }
+
+    #[test]
+    fn web_fetch_tool_result_prefers_fetched_text_over_wrapper_keys() {
+        let result = json!({
+            "url": "https://www.smh.com.au",
+            "finalUrl": "https://www.smh.com.au",
+            "status": 200,
+            "title": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>\nSource: Web Fetch\n---\nAustralian Breaking News Headlines & World News Online\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>",
+            "externalContent": {
+                "untrusted": true,
+                "source": "web_fetch",
+                "wrapped": true
+            },
+            "text": "SECURITY NOTICE: external content.\n\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"body\">>>\nSource: Web Fetch\n---\n### World Cup of chaos\nThe World Cup returns to North America.\n\n### Modi wants more of Australia's uranium\nAustralia and India struck a historic deal.\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"body\">>>"
+        })
+        .to_string();
+
+        let compacted = compact_tool_result_text(&result);
+
+        assert!(compacted.contains("original was web_fetch JSON"));
+        assert!(compacted.contains("Fetched content preview:"));
+        assert!(compacted.contains("World Cup of chaos"));
+        assert!(compacted.contains("Modi wants more of Australia's uranium"));
+        assert!(
+            !compacted.contains("\"finalUrl\""),
+            "wrapper JSON keys should not dominate reducer context: {compacted}"
+        );
+    }
+
+    #[test]
+    fn web_search_tool_result_compacts_to_result_rows() {
+        let result = json!({
+            "query": "headlines from www.smh.com.au",
+            "provider": "duckduckgo",
+            "externalContent": {
+                "untrusted": true,
+                "source": "web_search",
+                "provider": "duckduckgo",
+                "wrapped": true
+            },
+            "results": [
+                {
+                    "title": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>\nSource: Web Search\n---\nLatest and Breaking News - The Sydney Morning Herald\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>",
+                    "url": "https://www.smh.com.au/breaking-news",
+                    "snippet": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>\nSource: Web Search\n---\nThe future of Australian swimming has arrived.\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>"
+                }
+            ]
+        })
+        .to_string();
+
+        let compacted = compact_tool_result_text(&result);
+
+        assert!(compacted.contains("original was web_search JSON"));
+        assert!(compacted.contains("Latest and Breaking News"));
+        assert!(compacted.contains("Australian swimming"));
+        assert!(
+            compacted.find("Search results:").unwrap() < compacted.find("Latest").unwrap(),
+            "result rows should be explicit and easy for the reducer to read: {compacted}"
         );
     }
 

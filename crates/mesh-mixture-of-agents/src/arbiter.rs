@@ -155,10 +155,7 @@ pub fn arbitrate(outputs: &[WorkerOutput], has_tools: bool) -> Decision {
 
     if !answers.is_empty() {
         // Pick the highest-confidence answer
-        let best = answers
-            .iter()
-            .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-            .unwrap();
+        let best = best_answer_output(outputs).expect("answers is not empty");
 
         // If confidence is low and there's critique, reducer
         if best.confidence < 0.5 && !critiques.is_empty() {
@@ -189,6 +186,7 @@ pub fn try_early_decision(
     total_workers: usize,
     total_finished: usize,
     has_tools: bool,
+    answer_priority_pending: bool,
 ) -> Option<Decision> {
     if outputs.is_empty() {
         // All workers finished but none succeeded
@@ -215,6 +213,9 @@ pub fn try_early_decision(
         let failed_count = total_finished - outputs.len();
         let majority_failed = failed_count > 0 && failed_count >= total_workers / 2;
         if !majority_failed {
+            return None;
+        }
+        if answer_priority_pending && single_output_would_return_answer(&outputs[0], has_tools) {
             return None;
         }
         // Majority failed — return the sole survivor
@@ -244,7 +245,7 @@ pub fn try_early_decision(
     };
     if let Some((cluster_size, best)) = agreeing_cluster {
         let majority = cluster_size * 2 >= answers.len();
-        if majority && best.confidence >= 0.5 {
+        if majority && best.confidence >= 0.5 && !answer_priority_pending {
             tracing::info!(
                 "moa: early exit — {}/{} workers agree on answer (conf={:.2}), {} still pending",
                 cluster_size,
@@ -474,6 +475,34 @@ fn single_output_decision(output: &WorkerOutput, has_tools: bool) -> Decision {
     }
 }
 
+fn single_output_would_return_answer(output: &WorkerOutput, has_tools: bool) -> bool {
+    !matches!(
+        single_output_decision(output, has_tools),
+        Decision::ToolCall { .. }
+    )
+}
+
+pub(crate) fn best_answer_output(outputs: &[WorkerOutput]) -> Option<&WorkerOutput> {
+    outputs
+        .iter()
+        .filter(|o| is_usable_answer(o))
+        .max_by(|a, b| answer_rank_score(a).total_cmp(&answer_rank_score(b)))
+}
+
+fn answer_rank_score(output: &WorkerOutput) -> f32 {
+    output.confidence + answer_role_bias(output.role)
+}
+
+fn answer_role_bias(role: crate::worker::WorkerRole) -> f32 {
+    match role {
+        crate::worker::WorkerRole::Reducer => 0.20,
+        crate::worker::WorkerRole::Strong => 0.15,
+        crate::worker::WorkerRole::Generalist => 0.10,
+        crate::worker::WorkerRole::Specialist => 0.05,
+        crate::worker::WorkerRole::Fast => 0.0,
+    }
+}
+
 fn is_usable_answer(output: &WorkerOutput) -> bool {
     output.kind == OutputKind::Answer
         && !crate::normalize::is_silent_reply_sentinel(&output.payload)
@@ -523,6 +552,19 @@ mod tests {
     }
 
     #[test]
+    fn answer_arbitration_biases_toward_strong_when_close() {
+        let mut fast = make_output(OutputKind::Answer, 0.86, "fast weaker answer");
+        fast.role = WorkerRole::Fast;
+        let mut strong = make_output(OutputKind::Answer, 0.75, "stronger model answer");
+        strong.role = WorkerRole::Strong;
+
+        match arbitrate(&[fast, strong], false) {
+            Decision::Answer(text) => assert_eq!(text, "stronger model answer"),
+            other => panic!("expected Answer, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn unanimous_tool_proposal() {
         let outputs = vec![
             make_tool_output(0.8, "read_file", serde_json::json!({"path": "a.rs"})),
@@ -564,7 +606,7 @@ mod tests {
     fn early_decision_none_with_one_of_three() {
         let outputs = vec![make_output(OutputKind::Answer, 0.9, "Paris")];
         // 1 of 3 — too early to decide
-        assert!(try_early_decision(&outputs, 3, outputs.len(), false).is_none());
+        assert!(try_early_decision(&outputs, 3, outputs.len(), false, false).is_none());
     }
 
     #[test]
@@ -574,10 +616,24 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "Paris is the capital"),
         ];
         // 2 of 3 agree — early exit
-        match try_early_decision(&outputs, 3, outputs.len(), false) {
+        match try_early_decision(&outputs, 3, outputs.len(), false, false) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn early_answer_decision_waits_for_pending_strong_worker() {
+        let outputs = vec![
+            make_output(OutputKind::Answer, 0.8, "Paris"),
+            make_output(OutputKind::Answer, 0.9, "Paris is the capital"),
+        ];
+
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, true);
+        assert!(
+            res.is_none(),
+            "answer early-exit must not bypass a pending strong worker"
+        );
     }
 
     #[test]
@@ -586,7 +642,7 @@ mod tests {
             make_tool_output(0.8, "read_file", serde_json::json!({"path": "a.rs"})),
             make_tool_output(0.7, "read_file", serde_json::json!({"path": "a.rs"})),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), true) {
+        match try_early_decision(&outputs, 3, outputs.len(), true, false) {
             Some(Decision::ToolCall { name, .. }) => assert_eq!(name, "read_file"),
             other => panic!("expected early ToolCall, got {other:?}"),
         }
@@ -598,7 +654,7 @@ mod tests {
             make_tool_output(0.7, "read_file", serde_json::json!({})),
             make_output(OutputKind::Answer, 0.8, "I know the answer"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), true) {
+        match try_early_decision(&outputs, 3, outputs.len(), true, false) {
             Some(Decision::NeedsReducer { .. }) => {}
             other => panic!("expected early NeedsReducer, got {other:?}"),
         }
@@ -614,7 +670,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "The capital of France is Paris"),
             make_output(OutputKind::Answer, 0.8, "The capital of France is Berlin"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false);
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, false);
         assert!(
             res.is_none(),
             "disagreeing answers should not trigger early-exit, got {res:?}"
@@ -630,7 +686,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.7, "Paris"),
             make_output(OutputKind::Answer, 0.9, "Paris is the capital of France"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), false) {
+        match try_early_decision(&outputs, 3, outputs.len(), false, false) {
             // Representative picks the most complete (most tokens) member.
             Some(Decision::Answer(text)) => {
                 let lower = text.to_lowercase();
@@ -653,7 +709,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.8, "Paris is the capital"),
             make_output(OutputKind::Answer, 0.6, "I think it's Lyon"),
         ];
-        match try_early_decision(&outputs, 4, outputs.len(), false) {
+        match try_early_decision(&outputs, 4, outputs.len(), false, false) {
             Some(Decision::Answer(text)) => assert!(
                 text.to_lowercase().contains("paris"),
                 "should pick from the agreeing cluster, got {text:?}"
@@ -673,7 +729,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "The capital of France is Berlin"),
             make_output(OutputKind::Answer, 0.5, "The capital of France is Madrid"),
         ];
-        let res = try_early_decision(&outputs, 4, outputs.len(), false);
+        let res = try_early_decision(&outputs, 4, outputs.len(), false, false);
         assert!(
             res.is_none(),
             "three disagreeing answers should not early-exit, got {res:?}"
@@ -689,7 +745,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "You should use grep"),
             make_output(OutputKind::Answer, 0.8, "You should not use grep"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false);
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, false);
         assert!(
             res.is_none(),
             "affirmative vs negated answer should not cluster, got {res:?}"
@@ -704,7 +760,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "Do that"),
             make_output(OutputKind::Answer, 0.8, "Don't do that"),
         ];
-        let res = try_early_decision(&outputs, 3, outputs.len(), false);
+        let res = try_early_decision(&outputs, 3, outputs.len(), false, false);
         assert!(
             res.is_none(),
             "affirmative vs negated should not cluster, got {res:?}"
@@ -718,7 +774,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.9, "42"),
             make_output(OutputKind::Answer, 0.8, "The answer is 42"),
         ];
-        match try_early_decision(&outputs, 3, outputs.len(), false) {
+        match try_early_decision(&outputs, 3, outputs.len(), false, false) {
             Some(Decision::Answer(text)) => assert!(text.contains("42")),
             other => panic!("expected numeric agreement, got {other:?}"),
         }
@@ -729,7 +785,7 @@ mod tests {
         // 1 success out of 3, other 2 failed — should return the single answer
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
         // total_workers=3, total_finished=3 (1 success + 2 failures), remaining=0
-        match try_early_decision(&outputs, 3, 3, false) {
+        match try_early_decision(&outputs, 3, 3, false, false) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => panic!("expected early Answer for sole survivor, got {other:?}"),
         }
@@ -742,7 +798,7 @@ mod tests {
             make_output(OutputKind::Answer, 0.4, "could be Paris"),
         ];
         // Both answers but low confidence — should wait for more
-        assert!(try_early_decision(&outputs, 3, outputs.len(), false).is_none());
+        assert!(try_early_decision(&outputs, 3, outputs.len(), false, false).is_none());
     }
 
     #[test]
@@ -785,7 +841,7 @@ mod tests {
         // 1 success, 3 failures, 1 still pending — majority failed, return sole survivor
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
         // total_workers=5, total_finished=4 (1 success + 3 failures), remaining=1
-        match try_early_decision(&outputs, 5, 4, false) {
+        match try_early_decision(&outputs, 5, 4, false, false) {
             Some(Decision::Answer(text)) => assert!(text.contains("Paris")),
             other => {
                 panic!("expected early Answer for sole survivor (majority failed), got {other:?}")
@@ -798,7 +854,7 @@ mod tests {
         // 1 success, 1 failure, 3 still pending — minority failed, wait for more
         let outputs = vec![make_output(OutputKind::Answer, 0.8, "Paris")];
         // total_workers=5, total_finished=2 (1 success + 1 failure), remaining=3
-        assert!(try_early_decision(&outputs, 5, 2, false).is_none());
+        assert!(try_early_decision(&outputs, 5, 2, false, false).is_none());
     }
 
     #[test]

@@ -292,7 +292,7 @@ fn translate_responses_content_item(item: &Value) -> Result<Value, OpenAiError> 
     let item_type = object.get("type").and_then(Value::as_str).unwrap_or("text");
 
     match item_type {
-        "input_text" | "text" => {
+        "input_text" | "output_text" | "text" => {
             let text = object
                 .get("text")
                 .and_then(Value::as_str)
@@ -1431,6 +1431,21 @@ mod tests {
         assert_eq!(body["messages"][0]["role"], "system");
         assert_eq!(body["messages"][1]["role"], "user");
         assert_eq!(body["messages"][1]["content"], "hello");
+    }
+
+    #[test]
+    fn normalize_responses_accepts_output_text_input_blocks() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [{
+                "role": "user",
+                "content": [{"type": "output_text", "text": "retry this request"}]
+            }]
+        });
+        normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], "retry this request");
     }
 
     #[test]

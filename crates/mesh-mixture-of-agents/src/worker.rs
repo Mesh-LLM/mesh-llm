@@ -144,7 +144,7 @@ pub(crate) fn is_single_digit_b_name(name: &str) -> bool {
     false
 }
 
-fn compare_model_strength(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
+pub(crate) fn compare_model_strength(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
     let left_big = !is_small_parameter_model(left);
     let right_big = !is_small_parameter_model(right);
     left_big
