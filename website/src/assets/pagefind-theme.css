@@ -34,6 +34,7 @@
   --pf-modal-max-height: min(80dvh, 760px);
   --pf-modal-top: 8dvh;
   --pf-dropdown-z-index: 60;
+
   color-scheme: dark;
 }
 

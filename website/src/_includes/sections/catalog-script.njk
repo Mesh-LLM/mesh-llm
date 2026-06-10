@@ -137,13 +137,17 @@
         btn.classList.remove('copied');
         if (typeof lucide !== 'undefined') lucide.createIcons();
       }, 1200);
+    }).catch(function (err) {
+      console.warn('Failed to copy to clipboard:', err);
+      btn.classList.remove('copied');
+      if (typeof lucide !== 'undefined') lucide.createIcons();
     });
   });
 
   document.addEventListener('keydown', function (e) {
     if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
       var tag = document.activeElement.tagName;
-      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') {
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !document.activeElement.isContentEditable) {
         e.preventDefault();
         searchInput.focus();
       }

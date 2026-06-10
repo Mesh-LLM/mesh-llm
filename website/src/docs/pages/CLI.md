@@ -308,7 +308,7 @@ Switches:
 
 ### `opencode`
 
-Use this to launch OpenCode already wired to mesh-llm’s OpenAI-compatible endpoint.
+Use this to launch OpenCode already wired to mesh-llm's OpenAI-compatible endpoint.
 
 It injects a temporary OpenCode config through `OPENCODE_CONFIG_CONTENT` at launch time, so it does not edit persistent OpenCode config files unless you explicitly pass `--write`.
 
@@ -317,6 +317,15 @@ Switches:
 - `--model <MODEL>`: model id from `/v1/models`.
 - `--host <HOST|HOST:PORT|URL>`: OpenCode target host or URL (default `127.0.0.1:9337`). Bare host forms assume `http`, default inference port `9337`, and default management port `3131`.
 - `--write`: write a merged `~/.config/opencode/opencode.json` that preserves unrelated root keys and sibling providers. If only `opencode.jsonc` exists, mesh-llm errors and tells you to rename or migrate it to `opencode.json` first.
+
+### `pi`
+
+Use this to launch Pi already wired to mesh-llm's OpenAI-compatible endpoint.
+
+Switches:
+
+- `--model <MODEL>`: model id from `/v1/models`.
+- `--host <HOST|HOST:PORT|URL>`: Pi target host or URL (default `127.0.0.1:9337`). Bare host forms assume `http`, default inference port `9337`, and default management port `3131`.
 
 ### `stop`
 

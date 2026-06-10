@@ -117,7 +117,7 @@ onScroll({
 ## Development Conventions
 
 ### File Structure
-```
+```text
 src/
 ├── assets/          /* CSS, images, fonts */
 │   ├── site.css     /* Core authored CSS/design tokens */

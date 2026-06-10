@@ -23,12 +23,16 @@ const fetchLatestReleaseTag = async (repo) => {
     });
 
     clearTimeout(timeoutId);
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.warn(`GitHub API returned ${response.status}; using fallback release version`);
+      return null;
+    }
 
     const release = await response.json();
     const tagName = typeof release?.tag_name === 'string' ? release.tag_name.trim() : '';
     return tagName || null;
-  } catch {
+  } catch (err) {
+    console.warn('Failed to fetch GitHub release, falling back to hardcoded version:', err);
     return null;
   }
 };

@@ -187,7 +187,7 @@ RDMA over Thunderbolt 5: macOS 26.2+ only. Requires specific hardware
 | Linux (CPU) | Tier 1 (release bundles) |
 | Linux (CUDA) | Tier 1 (release bundles for x86_64, aarch64, Blackwell) |
 | Linux (ROCm) | Tier 1 (release bundles) |
-| Linux (Vulnkan) | Tier 1 (release bundles) |
+| Linux (Vulkan) | Tier 1 (release bundles) |
 | Windows (CPU) | Tier 1 (release bundles) |
 | Windows (CUDA) | Tier 1 (release bundles) |
 | Windows (ROCm) | Tier 1 (release bundles) |

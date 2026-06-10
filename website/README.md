@@ -32,6 +32,6 @@ Source files live in `website/src`:
 - `docs/index.njk` - docs landing page
 - `docs/pages/*.md` - public documentation pages
 - `_includes/` - shared layouts, nav, footer, and hero visual
-- `assets/site.css` - shared styling
+- `assets/site.tailwind.css` - shared styling source (generates `site.generated.css`)
 
 The generated static output lives in `docs/`.

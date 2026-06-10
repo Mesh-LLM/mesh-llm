@@ -75,6 +75,12 @@
     var tabs = toArray(root.querySelectorAll(TAB_SELECTOR));
     var panels = toArray(root.querySelectorAll(PANEL_SELECTOR));
     var maps = toArray(root.querySelectorAll(MAP_SELECTOR));
+    var validModes = tabs
+      .map(function (tab) { return tab.getAttribute("data-topology-mode"); })
+      .filter(Boolean);
+    if (validModes.indexOf(mode) === -1) {
+      mode = validModes.indexOf("route") !== -1 ? "route" : validModes[0];
+    }
 
     tabs.forEach(function (tab) {
       var isActive = tab.getAttribute("data-topology-mode") === mode;
