@@ -7,8 +7,8 @@
 //! and varies the depth per role:
 //!
 //! - Fast:       system prompt + recent dialog + optional tool names
-//! - Specialist: system prompt + last 4 msgs + optional tool summaries/schemas
-//! - Strong:     system prompt + last 10 msgs + optional full tool schemas
+//! - Specialist: system prompt + recent dialog + optional tool summaries/schemas
+//! - Strong:     system prompt + deeper recent dialog + optional full tool schemas
 //! - Reducer:    system prompt + recent transcript + worker outputs + optional full tool schemas
 
 use crate::normalize::WorkerOutput;
@@ -17,9 +17,18 @@ use crate::worker::WorkerRole;
 use serde_json::{Value, json};
 
 const TOOL_RESULT_CONTEXT_WINDOW: usize = 10;
-const FAST_CONTEXT_WINDOW: usize = 4;
-const SPECIALIST_CONTEXT_WINDOW: usize = 4;
-const REDUCER_CONTEXT_WINDOW: usize = 8;
+const FAST_TOOL_CONTEXT_WINDOW: usize = 4;
+const FAST_PLAIN_CONTEXT_WINDOW: usize = 8;
+const SPECIALIST_TOOL_CONTEXT_WINDOW: usize = 4;
+const SPECIALIST_PLAIN_CONTEXT_WINDOW: usize = 12;
+const STRONG_TOOL_CONTEXT_WINDOW: usize = 10;
+const STRONG_PLAIN_CONTEXT_WINDOW: usize = 32;
+const REDUCER_TOOL_CONTEXT_WINDOW: usize = 8;
+const REDUCER_PLAIN_CONTEXT_WINDOW: usize = 32;
+const FAST_PLAIN_CONTEXT_MAX_BYTES: usize = 8 * 1024;
+const SPECIALIST_PLAIN_CONTEXT_MAX_BYTES: usize = 12 * 1024;
+const STRONG_PLAIN_CONTEXT_MAX_BYTES: usize = 32 * 1024;
+const REDUCER_PLAIN_CONTEXT_MAX_BYTES: usize = 32 * 1024;
 const TOOL_EVIDENCE_MAX_RESULTS: usize = 8;
 const TOOL_EVIDENCE_MAX_RESULT_CHARS: usize = 800;
 const TOOL_RESULT_RAW_MAX_CHARS: usize = 2_400;
@@ -155,7 +164,15 @@ fn system_with_tool_summaries(
 fn pack_fast(session: &Session, has_tools: bool, selected_tool_names: &[String]) -> PackedContext {
     let system = system_with_tool_names(session, has_tools, selected_tool_names);
     let mut messages = vec![json!({"role": "system", "content": system})];
-    append_recent_dialog_messages(&mut messages, session, FAST_CONTEXT_WINDOW);
+    let (window, max_bytes) = if has_tools {
+        (FAST_TOOL_CONTEXT_WINDOW, None)
+    } else {
+        (
+            FAST_PLAIN_CONTEXT_WINDOW,
+            Some(FAST_PLAIN_CONTEXT_MAX_BYTES),
+        )
+    };
+    append_recent_dialog_messages(&mut messages, session, window, max_bytes);
 
     // Per-request sessions: the caller owns the multi-turn loop and
     // sends the full history each request. Continuation context lives
@@ -169,7 +186,7 @@ fn pack_fast(session: &Session, has_tools: bool, selected_tool_names: &[String])
 }
 
 // ── Specialist worker ────────────────────────────────────────────────
-// System prompt + last 4 messages + tool name+description summaries.
+// System prompt + recent messages + tool name+description summaries.
 
 fn pack_specialist(
     session: &Session,
@@ -180,7 +197,15 @@ fn pack_specialist(
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
-    append_recent_dialog_messages(&mut messages, session, SPECIALIST_CONTEXT_WINDOW);
+    let (window, max_bytes) = if has_tools {
+        (SPECIALIST_TOOL_CONTEXT_WINDOW, None)
+    } else {
+        (
+            SPECIALIST_PLAIN_CONTEXT_WINDOW,
+            Some(SPECIALIST_PLAIN_CONTEXT_MAX_BYTES),
+        )
+    };
+    append_recent_dialog_messages(&mut messages, session, window, max_bytes);
 
     PackedContext {
         messages,
@@ -189,8 +214,13 @@ fn pack_specialist(
     }
 }
 
-fn append_recent_dialog_messages(messages: &mut Vec<Value>, session: &Session, window: usize) {
-    let recent = session.recent_messages(window);
+fn append_recent_dialog_messages(
+    messages: &mut Vec<Value>,
+    session: &Session,
+    window: usize,
+    max_bytes: Option<usize>,
+) {
+    let recent = bounded_recent_messages(session.recent_messages(window), max_bytes, true);
     for msg in &recent {
         if plain_dialog_message_for_compact_context(msg) {
             messages.push(msg.clone());
@@ -217,7 +247,7 @@ fn append_current_user_if_missing(messages: &mut Vec<Value>, session: &Session) 
 }
 
 // ── Strong worker ────────────────────────────────────────────────────
-// System prompt + last 10 messages + full tool schemas forwarded natively.
+// System prompt + deeper recent history + full tool schemas forwarded natively.
 // This worker gets the deepest context and the actual tool definitions so
 // it can produce native tool_calls if the backend supports it.
 
@@ -232,7 +262,15 @@ fn pack_strong(
 
     // Deep recent history — include tool result messages too since this
     // worker gets full tool schemas and can understand the context
-    let recent = session.recent_messages(10);
+    let (window, max_bytes) = if has_tools {
+        (STRONG_TOOL_CONTEXT_WINDOW, None)
+    } else {
+        (
+            STRONG_PLAIN_CONTEXT_WINDOW,
+            Some(STRONG_PLAIN_CONTEXT_MAX_BYTES),
+        )
+    };
+    let recent = bounded_recent_messages(session.recent_messages(window), max_bytes, true);
     for msg in &recent {
         let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
         if role != "system" && !role.is_empty() {
@@ -308,24 +346,62 @@ pub fn pack_for_reducer_selected(
     let tools = selected_tools(session, has_tools, selected_tool_names);
 
     let mut messages = vec![json!({"role": "system", "content": system_parts.join("\n")})];
-    messages.extend(reducer_recent_transcript_messages(session));
+    messages.extend(reducer_recent_transcript_messages(session, has_tools));
     append_current_user_if_missing(&mut messages, session);
 
     (messages, tools)
 }
 
-fn reducer_recent_transcript_messages(session: &Session) -> Vec<Value> {
+fn reducer_recent_transcript_messages(session: &Session, has_tools: bool) -> Vec<Value> {
     let all = session.messages();
     let Some(last_user_idx) = all.iter().rposition(|msg| message_role(msg) == "user") else {
         return Vec::new();
     };
 
-    let start_idx = last_user_idx.saturating_sub(REDUCER_CONTEXT_WINDOW);
-    all[start_idx..last_user_idx]
+    let (window, max_bytes) = if has_tools {
+        (REDUCER_TOOL_CONTEXT_WINDOW, None)
+    } else {
+        (
+            REDUCER_PLAIN_CONTEXT_WINDOW,
+            Some(REDUCER_PLAIN_CONTEXT_MAX_BYTES),
+        )
+    };
+    let start_idx = last_user_idx.saturating_sub(window);
+    let recent = bounded_recent_messages(all[start_idx..last_user_idx].to_vec(), max_bytes, false);
+    recent
         .iter()
         .filter(|msg| reducer_can_replay_message(msg))
         .cloned()
         .collect()
+}
+
+fn bounded_recent_messages(
+    messages: Vec<Value>,
+    max_bytes: Option<usize>,
+    keep_latest_when_oversized: bool,
+) -> Vec<Value> {
+    let Some(max_bytes) = max_bytes else {
+        return messages;
+    };
+    let mut selected_rev = Vec::new();
+    let mut used = 0usize;
+    for message in messages.into_iter().rev() {
+        let cost = estimated_message_context_bytes(&message);
+        let can_keep_oversized_latest = keep_latest_when_oversized && selected_rev.is_empty();
+        if !can_keep_oversized_latest && used.saturating_add(cost) > max_bytes {
+            break;
+        }
+        used = used.saturating_add(cost);
+        selected_rev.push(message);
+    }
+    selected_rev.reverse();
+    selected_rev
+}
+
+fn estimated_message_context_bytes(message: &Value) -> usize {
+    serde_json::to_string(message)
+        .map(|encoded| encoded.len())
+        .unwrap_or(0)
 }
 
 fn reducer_can_replay_message(msg: &Value) -> bool {
@@ -976,6 +1052,10 @@ mod tests {
             .to_string()
     }
 
+    fn serialized_messages(messages: &[Value]) -> String {
+        serde_json::to_string(messages).unwrap()
+    }
+
     // ── pack_for_worker: shape contract per role ─────────────────────
 
     #[test]
@@ -1180,6 +1260,62 @@ mod tests {
         );
         let last = packed.messages.last().unwrap();
         assert_eq!(last.get("content").and_then(|c| c.as_str()), Some("final"));
+    }
+
+    #[test]
+    fn plain_chat_strong_worker_keeps_earlier_same_chat_topic() {
+        let mut msgs = vec![
+            system_msg("Agent ST."),
+            user_msg("How do I run Windows commands over Tailscale from my Mac?"),
+            assistant_msg("We discussed using a reachable Windows host over Tailscale."),
+        ];
+        for i in 0..12 {
+            msgs.push(user_msg(&format!("follow-up topic {i}")));
+            msgs.push(assistant_msg(&format!("follow-up answer {i}")));
+        }
+        msgs.push(user_msg("What did we discuss earlier in this chat?"));
+        let s = session_with(&msgs, None);
+
+        let packed = pack_for_worker(&s, WorkerRole::Strong, false);
+        let body = serialized_messages(&packed.messages);
+
+        assert!(
+            body.contains("Windows commands over Tailscale"),
+            "plain-chat strong worker should retain earlier same-chat topics, got {body}",
+        );
+        assert!(
+            body.contains("What did we discuss earlier"),
+            "current user turn must still be present, got {body}",
+        );
+    }
+
+    #[test]
+    fn plain_chat_strong_worker_drops_oversized_prior_blob_before_current() {
+        let oversized_prior = format!(
+            "OVERSIZED_STRONG_PRIOR_{}",
+            "x".repeat(STRONG_PLAIN_CONTEXT_MAX_BYTES + 1024)
+        );
+        let s = session_with(
+            &[
+                system_msg("Agent ST."),
+                user_msg("Read this large pasted result."),
+                assistant_msg(&oversized_prior),
+                user_msg("What should I do next?"),
+            ],
+            None,
+        );
+
+        let packed = pack_for_worker(&s, WorkerRole::Strong, false);
+        let body = serialized_messages(&packed.messages);
+
+        assert!(
+            body.contains("What should I do next?"),
+            "current user turn must still be present, got {body}",
+        );
+        assert!(
+            !body.contains("OVERSIZED_STRONG_PRIOR_"),
+            "plain-chat strong context should not carry an oversized prior blob, got {body}",
+        );
     }
 
     #[test]
@@ -1670,6 +1806,70 @@ keep this",
                 .and_then(|message| message.get("content"))
                 .and_then(Value::as_str),
             Some("What were the two questions above in this same conversation?"),
+        );
+    }
+
+    #[test]
+    fn plain_chat_reducer_keeps_earlier_same_chat_topic_beyond_short_tail() {
+        let mut msgs = vec![
+            system_msg("Agent R."),
+            user_msg("How do I run Windows commands over Tailscale from my Mac?"),
+            assistant_msg("We discussed using a reachable Windows host over Tailscale."),
+        ];
+        for i in 0..12 {
+            msgs.push(user_msg(&format!("follow-up topic {i}")));
+            msgs.push(assistant_msg(&format!("follow-up answer {i}")));
+        }
+        msgs.push(user_msg("What did we discuss earlier in this chat?"));
+        let s = session_with(&msgs, None);
+        let outputs = vec![
+            worker_out("fast", "I only see the latest question."),
+            worker_out("strong", "Earlier history mentioned Windows and Tailscale."),
+        ];
+
+        let (messages, _tools) = pack_for_reducer(&s, &outputs, "history disagreement", false);
+        let body = serialized_messages(&messages);
+
+        assert!(
+            body.contains("Windows commands over Tailscale"),
+            "plain-chat reducer should retain earlier same-chat topics, got {body}",
+        );
+        assert!(
+            body.contains("What did we discuss earlier"),
+            "current user turn must still be present, got {body}",
+        );
+    }
+
+    #[test]
+    fn plain_chat_reducer_drops_oversized_prior_blob_before_current() {
+        let oversized_prior = format!(
+            "OVERSIZED_REDUCER_PRIOR_{}",
+            "x".repeat(REDUCER_PLAIN_CONTEXT_MAX_BYTES + 1024)
+        );
+        let s = session_with(
+            &[
+                system_msg("Agent R."),
+                user_msg("Read this large pasted result."),
+                assistant_msg(&oversized_prior),
+                user_msg("What should I do next?"),
+            ],
+            None,
+        );
+        let outputs = vec![
+            worker_out("fast", "Answer the current question only."),
+            worker_out("strong", "Do not replay the huge prior blob."),
+        ];
+
+        let (messages, _tools) = pack_for_reducer(&s, &outputs, "history disagreement", false);
+        let body = serialized_messages(&messages);
+
+        assert!(
+            body.contains("What should I do next?"),
+            "current user turn must still be present, got {body}",
+        );
+        assert!(
+            !body.contains("OVERSIZED_REDUCER_PRIOR_"),
+            "plain-chat reducer context should not carry an oversized prior blob, got {body}",
         );
     }
 
