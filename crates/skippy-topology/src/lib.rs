@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+mod edge_order;
+pub use edge_order::StageEdgeSignal;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologyPlanRequest {
     pub topology_id: String,
@@ -942,10 +945,19 @@ pub fn plan_package_aware_contiguous_with_signals(
     request: &TopologyPlanRequest,
     placement_signals: &[NodePlacementSignal],
 ) -> Result<TopologyPlan, PlanError> {
+    plan_package_aware_contiguous_with_transport(request, placement_signals, &[])
+}
+
+pub fn plan_package_aware_contiguous_with_transport(
+    request: &TopologyPlanRequest,
+    placement_signals: &[NodePlacementSignal],
+    edge_signals: &[StageEdgeSignal],
+) -> Result<TopologyPlan, PlanError> {
     validate_request(request)?;
 
     if !request.nodes.iter().any(|node| node.cached_slice_bytes > 0)
         && !placement_signals.iter().any(has_package_aware_signal)
+        && edge_signals.is_empty()
     {
         return plan_weighted_contiguous(request);
     }
@@ -964,6 +976,7 @@ pub fn plan_package_aware_contiguous_with_signals(
             .then_with(|| left_index.cmp(right_index))
             .then_with(|| left.node_id.cmp(&right.node_id))
     });
+    let nodes = edge_order::order_pipeline_nodes(nodes, placement_signals, edge_signals);
 
     let sorted_request = TopologyPlanRequest {
         topology_id: request.topology_id.clone(),
@@ -973,7 +986,9 @@ pub fn plan_package_aware_contiguous_with_signals(
         family: request.family.clone(),
         policy: request.policy,
     };
-    plan_weighted_contiguous_with_signals(&sorted_request, placement_signals)
+    let mut plan = plan_weighted_contiguous_with_signals(&sorted_request, placement_signals)?;
+    edge_order::append_edge_diagnostics(&mut plan, edge_signals);
+    Ok(plan)
 }
 
 pub fn plan_contiguous_with_splits(

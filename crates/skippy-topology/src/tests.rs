@@ -34,11 +34,82 @@ fn placement_signal(node_id: &str) -> NodePlacementSignal {
     }
 }
 
+fn edge(source: &str, target: &str, rtt_ms: u32) -> StageEdgeSignal {
+    StageEdgeSignal {
+        source_node_id: source.to_string(),
+        target_node_id: target.to_string(),
+        rtt_ms: Some(rtt_ms),
+        large_frame_bytes_per_sec: None,
+        direct_prediction_return_supported: true,
+    }
+}
+
 fn stage_layout(plan: &TopologyPlan) -> Vec<(&str, u32, u32)> {
     plan.stages
         .iter()
         .map(|stage| (stage.node_id.as_str(), stage.layer_start, stage.layer_end))
         .collect()
+}
+
+#[test]
+fn transport_aware_plan_orders_same_nodes_by_stage_edge_cost() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("node-a", 30),
+            weighted_node("node-b", 30),
+            weighted_node("node-c", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[],
+        &[
+            edge("node-a", "node-b", 200),
+            edge("node-b", "node-c", 200),
+            edge("node-a", "node-c", 5),
+            edge("node-c", "node-b", 5),
+        ],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("node-a", 0, 3), ("node-c", 3, 6), ("node-b", 6, 9)]
+    );
+    assert!(plan.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == PlanReasonCode::NetworkPipelineCost
+        && diagnostic.message.contains("node-a -> node-c")));
+}
+
+#[test]
+fn transport_aware_plan_preserves_package_order_when_edges_tie() {
+    let mut warm = placement_signal("warm");
+    warm.cached_slice_bytes = 64;
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("cold-a", 30),
+            weighted_node("warm", 30),
+            weighted_node("cold-b", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(&request, &[warm], &[]).expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("warm", 0, 3), ("cold-a", 3, 6), ("cold-b", 6, 9)]
+    );
 }
 
 #[test]
