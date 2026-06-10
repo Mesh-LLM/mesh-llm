@@ -1852,6 +1852,24 @@ impl PeerInfo {
     }
 
     pub fn advertised_context_length(&self, model: &str) -> Option<u32> {
+        self.advertised_context_length_for_runtime_model(model)
+            .or_else(|| {
+                self.served_model_descriptors
+                    .iter()
+                    .find(|descriptor| {
+                        let runtime_name = descriptor.identity.model_name.as_str();
+                        runtime_name != model
+                            && self.public_model_id_for_routable_model(runtime_name) == model
+                    })
+                    .and_then(|descriptor| {
+                        self.advertised_context_length_for_runtime_model(
+                            &descriptor.identity.model_name,
+                        )
+                    })
+            })
+    }
+
+    fn advertised_context_length_for_runtime_model(&self, model: &str) -> Option<u32> {
         self.served_model_runtime
             .iter()
             .find(|runtime| runtime.model_name == model)

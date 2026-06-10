@@ -86,14 +86,17 @@ fn build_config(
             moa::ModelEntry {
                 name: "test-fast".into(),
                 backend_index: 0,
+                parameter_count_b: None,
             },
             moa::ModelEntry {
                 name: "test-specialist".into(),
                 backend_index: 0,
+                parameter_count_b: None,
             },
             moa::ModelEntry {
                 name: "test-strong".into(),
                 backend_index: 0,
+                parameter_count_b: None,
             },
         ],
         worker_timeout: Duration::from_secs(5),

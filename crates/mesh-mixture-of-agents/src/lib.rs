@@ -911,10 +911,13 @@ fn repeated_same_tool_results(session: &Session) -> Option<(String, usize)> {
     last.result.as_ref()?;
 
     let tool_name = last.function_name.as_str();
+    let arguments = &last.arguments;
     let count = calls
         .iter()
         .rev()
-        .take_while(|call| call.function_name == tool_name && call.result.is_some())
+        .take_while(|call| {
+            call.function_name == tool_name && call.arguments == *arguments && call.result.is_some()
+        })
         .count();
 
     (count >= SAME_TOOL_FORCE_ANSWER_THRESHOLD).then(|| (tool_name.to_string(), count))
@@ -1121,6 +1124,13 @@ fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
     if let (true, Some(name)) = (has_tools, output.tool_name.as_ref()) {
         let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
         return tool_call_response(name, args);
+    }
+
+    if output.tool_name.is_some() {
+        return error_response(
+            "MoA selected a tool call, but tools are disabled for this turn",
+            MOA_ERR_NO_USABLE_ANSWER,
+        );
     }
 
     if output.payload.trim().is_empty() || normalize::is_silent_reply_sentinel(&output.payload) {
@@ -1344,15 +1354,22 @@ mod response_builder_tests {
 
     #[test]
     fn tool_proposal_response_does_not_emit_tool_call_when_tools_disabled() {
-        let resp = tool_proposal_response(&tool_proposal("I need to read README.md."), false);
+        let resp = tool_proposal_response(
+            &tool_proposal(r#"<|tool_call>call:read_file{path:<|"|>README.md<|"|>}<tool_call|>"#),
+            false,
+        );
         assert!(
             resp.pointer("/choices/0/message/tool_calls").is_none(),
             "disabled tools must not leak tool_calls: {resp}"
         );
         assert_eq!(
-            resp.pointer("/choices/0/message/content")
+            resp.pointer("/choices/0/finish_reason")
                 .and_then(Value::as_str),
-            Some("I need to read README.md.")
+            Some("error")
+        );
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_str),
+            Some(MOA_ERR_NO_USABLE_ANSWER)
         );
     }
 
@@ -1785,6 +1802,27 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn same_tool_different_arguments_do_not_force_answer() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "inspect project"}),
+                tool_call_msg_with_args("call_1", "tree", serde_json::json!({"path": "."})),
+                tool_result_msg("call_1", "root tree"),
+                tool_call_msg_with_args("call_2", "tree", serde_json::json!({"path": "facts/"})),
+                tool_result_msg("call_2", "facts tree"),
+                tool_call_msg_with_args("call_3", "tree", serde_json::json!({"path": "src/"})),
+                tool_result_msg("call_3", "src tree"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "tree"}}
+            ])),
+        );
+
+        assert_eq!(repeated_same_tool_results(&session), None);
+    }
+
+    #[test]
     fn repair_tool_result_answer_preserves_short_json_values_on_recall() {
         let mut session = Session::new();
         session.ingest(
@@ -1844,13 +1882,17 @@ mod response_builder_tests {
     }
 
     fn tool_call_msg(id: &str, name: &str) -> Value {
+        tool_call_msg_with_args(id, name, serde_json::json!({"query": "x"}))
+    }
+
+    fn tool_call_msg_with_args(id: &str, name: &str, arguments: Value) -> Value {
         serde_json::json!({
             "role": "assistant",
             "content": null,
             "tool_calls": [{
                 "id": id,
                 "type": "function",
-                "function": {"name": name, "arguments": "{\"query\":\"x\"}"}
+                "function": {"name": name, "arguments": arguments.to_string()}
             }]
         })
     }

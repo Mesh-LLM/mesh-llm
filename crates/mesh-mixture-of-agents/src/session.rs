@@ -151,9 +151,17 @@ impl Session {
                         .and_then(|c| c.as_str())
                         .unwrap_or("")
                         .to_string();
-                    if let Some(pending) =
-                        self.pending_tools.iter_mut().find(|p| p.call_id == call_id)
+                    if let Some(idx) = self
+                        .pending_tools
+                        .iter()
+                        .rposition(|p| p.call_id == call_id && p.result.is_none())
+                        .or_else(|| {
+                            self.pending_tools
+                                .iter()
+                                .rposition(|p| p.call_id == call_id)
+                        })
                     {
+                        let pending = &mut self.pending_tools[idx];
                         pending.result = Some(content);
                         tracing::info!(
                             "moa session: tool result received for {}({})",
@@ -408,6 +416,41 @@ mod tests {
             ])),
         );
         assert_eq!(s.tool_names(), vec!["read_file", "web_search"]);
+    }
+
+    #[test]
+    fn repeated_tool_call_ids_pair_with_latest_unresolved_call() {
+        let mut s = Session::new();
+        s.ingest(
+            &[
+                json!({"role": "user", "content": "first"}),
+                json!({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_repeat",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{\"path\":\"old\"}"}
+                    }]
+                }),
+                json!({"role": "tool", "tool_call_id": "call_repeat", "content": "old result"}),
+                json!({"role": "user", "content": "again"}),
+                json!({
+                    "role": "assistant",
+                    "tool_calls": [{
+                        "id": "call_repeat",
+                        "type": "function",
+                        "function": {"name": "read_file", "arguments": "{\"path\":\"new\"}"}
+                    }]
+                }),
+                json!({"role": "tool", "tool_call_id": "call_repeat", "content": "new result"}),
+            ],
+            &None,
+        );
+
+        let pending = s.pending_tool_calls();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].result.as_deref(), Some("old result"));
+        assert_eq!(pending[1].result.as_deref(), Some("new result"));
     }
 
     #[test]

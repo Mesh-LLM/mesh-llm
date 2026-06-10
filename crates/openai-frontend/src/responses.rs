@@ -418,6 +418,96 @@ fn translate_responses_input_message(message: &Value) -> Result<Map<String, Valu
     ]))
 }
 
+fn responses_input_item_is_conversation_item(item: &Value) -> bool {
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+    object.contains_key("role")
+        || object.contains_key("content")
+        || matches!(
+            object.get("type").and_then(Value::as_str),
+            Some("function_call" | "function_call_output" | "tool_call_output" | "tool_result")
+        )
+}
+
+fn translate_responses_conversation_item(item: &Value) -> Result<Value, OpenAiError> {
+    let Some(object) = item.as_object() else {
+        return Err(OpenAiError::unsupported(
+            "unsupported /v1/responses conversation item shape",
+        ));
+    };
+    match object.get("type").and_then(Value::as_str) {
+        Some("function_call") => translate_responses_function_call_item(object),
+        Some("function_call_output" | "tool_call_output" | "tool_result") => {
+            translate_responses_tool_result_item(object)
+        }
+        _ => translate_responses_input_message(item).map(Value::Object),
+    }
+}
+
+fn translate_responses_function_call_item(
+    object: &Map<String, Value>,
+) -> Result<Value, OpenAiError> {
+    let call_id = non_empty_response_string(object, &["call_id", "tool_call_id", "id"])
+        .ok_or_else(|| {
+            OpenAiError::invalid_request("responses function_call is missing call_id")
+        })?;
+    let name = non_empty_response_string(object, &["name"]).ok_or_else(|| {
+        OpenAiError::invalid_request("responses function_call is missing function name")
+    })?;
+    let arguments = response_item_text_field(object, &["arguments"]).unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": call_id,
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments,
+            },
+        }],
+    }))
+}
+
+fn translate_responses_tool_result_item(object: &Map<String, Value>) -> Result<Value, OpenAiError> {
+    let call_id = non_empty_response_string(object, &["call_id", "tool_call_id", "id"])
+        .ok_or_else(|| {
+            OpenAiError::invalid_request("responses function_call_output is missing call_id")
+        })?;
+    let content =
+        response_item_text_field(object, &["output", "content", "text"]).unwrap_or_default();
+
+    Ok(serde_json::json!({
+        "role": "tool",
+        "tool_call_id": call_id,
+        "content": content,
+    }))
+}
+
+fn non_empty_response_string(object: &Map<String, Value>, fields: &[&str]) -> Option<String> {
+    fields.iter().find_map(|field| {
+        object
+            .get(*field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn response_item_text_field(object: &Map<String, Value>, fields: &[&str]) -> Option<String> {
+    fields.iter().find_map(|field| {
+        let value = object.get(*field)?;
+        value.as_str().map(ToOwned::to_owned).or_else(|| {
+            serde_json::to_string(value)
+                .ok()
+                .filter(|text| !text.is_empty())
+        })
+    })
+}
+
 fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, OpenAiError> {
     match input {
         Value::String(text) => Ok(vec![serde_json::json!({
@@ -425,16 +515,10 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, Op
             "content": text,
         })]),
         Value::Array(items) => {
-            let looks_like_messages = items.iter().all(|item| {
-                item.as_object()
-                    .map(|object| object.contains_key("role") || object.contains_key("content"))
-                    .unwrap_or(false)
-            });
-            if looks_like_messages {
+            if items.iter().any(responses_input_item_is_conversation_item) {
                 items
                     .iter()
-                    .map(translate_responses_input_message)
-                    .map(|result| result.map(Value::Object))
+                    .map(translate_responses_conversation_item)
                     .collect()
             } else {
                 let content = translate_responses_message_content(input)?;
@@ -524,6 +608,74 @@ fn translate_openai_responses_input(object: &mut Map<String, Value>) -> Result<b
     Ok(changed)
 }
 
+fn normalize_responses_tool_shapes(object: &mut Map<String, Value>) -> bool {
+    let mut changed = false;
+
+    if let Some(Value::Array(tools)) = object.get_mut("tools") {
+        for tool in tools {
+            if let Some(normalized) = responses_function_tool_to_chat_shape(tool) {
+                *tool = Value::Object(normalized);
+                changed = true;
+            }
+        }
+    }
+
+    if let Some(tool_choice) = object.get_mut("tool_choice")
+        && let Some(normalized) = responses_function_tool_choice_to_chat_shape(tool_choice)
+    {
+        *tool_choice = normalized;
+        changed = true;
+    }
+
+    changed
+}
+
+fn responses_function_tool_to_chat_shape(tool: &Value) -> Option<Map<String, Value>> {
+    let object = tool.as_object()?;
+    if object.contains_key("function")
+        || object.get("type").and_then(Value::as_str) != Some("function")
+    {
+        return None;
+    }
+    let name = object.get("name").and_then(Value::as_str)?;
+    if name.trim().is_empty() {
+        return None;
+    }
+
+    let mut outer = object.clone();
+    let mut function = Map::new();
+    for key in ["name", "description", "parameters", "strict"] {
+        if let Some(value) = outer.remove(key) {
+            function.insert(key.to_string(), value);
+        }
+    }
+    outer.insert("function".to_string(), Value::Object(function));
+    Some(outer)
+}
+
+fn responses_function_tool_choice_to_chat_shape(tool_choice: &Value) -> Option<Value> {
+    let object = tool_choice.as_object()?;
+    if object.contains_key("function")
+        || object.get("type").and_then(Value::as_str) != Some("function")
+    {
+        return None;
+    }
+    let name = object.get("name").and_then(Value::as_str)?;
+    if name.trim().is_empty() {
+        return None;
+    }
+
+    let mut outer = object.clone();
+    outer.remove("name");
+    outer.insert(
+        "function".to_string(),
+        serde_json::json!({
+            "name": name,
+        }),
+    );
+    Some(Value::Object(outer))
+}
+
 fn responses_conversation_cache_key(value: &Value) -> Option<String> {
     if let Some(id) = value.as_str() {
         return Some(id.to_string());
@@ -560,6 +712,7 @@ pub fn normalize_openai_compat_request(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         changed |= translate_openai_responses_input(object)?;
+        changed |= normalize_responses_tool_shapes(object);
         rewritten_path = Some(rewrite_path_preserving_query(path, "/v1/chat/completions"));
         response_adapter = if is_stream {
             ResponseAdapterMode::OpenAiResponsesStream
@@ -1300,6 +1453,75 @@ mod tests {
         assert_eq!(body["response_format"]["type"], "json_schema");
         assert_eq!(body["logprobs"], true);
         assert_eq!(body["top_logprobs"], 3);
+    }
+
+    #[test]
+    fn normalize_responses_converts_function_tools_to_chat_shape() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": "call a tool",
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "description": "Lookup a key",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"]
+                },
+                "strict": true
+            }],
+            "tool_choice": {"type": "function", "name": "lookup"}
+        });
+        normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+
+        assert_eq!(body["tools"][0]["type"], "function");
+        assert_eq!(body["tools"][0]["function"]["name"], "lookup");
+        assert_eq!(body["tools"][0]["function"]["description"], "Lookup a key");
+        assert_eq!(body["tools"][0]["function"]["parameters"]["type"], "object");
+        assert_eq!(body["tools"][0]["function"]["strict"], true);
+        assert!(body["tools"][0].get("name").is_none());
+        assert_eq!(body["tool_choice"]["type"], "function");
+        assert_eq!(body["tool_choice"]["function"]["name"], "lookup");
+        assert!(body["tool_choice"].get("name").is_none());
+    }
+
+    #[test]
+    fn normalize_responses_converts_function_call_outputs_to_chat_tool_messages() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [
+                {"role": "user", "content": "look up the codeword"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_lookup",
+                    "name": "lookup_fixture_fact",
+                    "arguments": "{\"key\":\"codeword\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_lookup",
+                    "output": "{\"value\":\"signal-7429\"}"
+                }
+            ]
+        });
+        normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call_lookup");
+        assert_eq!(
+            messages[1]["tool_calls"][0]["function"]["name"],
+            "lookup_fixture_fact"
+        );
+        assert_eq!(
+            messages[1]["tool_calls"][0]["function"]["arguments"],
+            "{\"key\":\"codeword\"}"
+        );
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_lookup");
+        assert_eq!(messages[2]["content"], "{\"value\":\"signal-7429\"}");
     }
 
     #[test]

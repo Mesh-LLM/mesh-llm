@@ -217,7 +217,9 @@ export function ChatComposer({
             </Button>
           )}
           <Button
-            onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(event) => {
+              if (event.pointerType === 'mouse') event.preventDefault()
+            }}
             onClick={onSubmit}
             data-testid="chat-send"
             disabled={!canChat || (!input.trim() && pendingAttachments.length === 0) || !!attachmentPreparationMessage}

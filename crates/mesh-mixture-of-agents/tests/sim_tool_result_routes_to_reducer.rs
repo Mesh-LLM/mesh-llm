@@ -96,14 +96,17 @@ fn config_with_three_recording_workers() -> (
         moa::ModelEntry {
             name: "fast-3b".into(),
             backend_index: 0,
+            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "mid-13b".into(),
             backend_index: 1,
+            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "strong-32b".into(),
             backend_index: 2,
+            parameter_count_b: None,
         },
     ];
 

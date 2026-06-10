@@ -6,10 +6,10 @@
 //! synthetic "you are a worker" envelope.  It augments with a short preamble
 //! and varies the depth per role:
 //!
-//! - Fast:       system prompt + last user msg + optional tool names
+//! - Fast:       system prompt + recent dialog + optional tool names
 //! - Specialist: system prompt + last 4 msgs + optional tool summaries/schemas
 //! - Strong:     system prompt + last 10 msgs + optional full tool schemas
-//! - Reducer:    system prompt + worker outputs + optional full tool schemas
+//! - Reducer:    system prompt + recent transcript + worker outputs + optional full tool schemas
 
 use crate::normalize::WorkerOutput;
 use crate::session::Session;
@@ -17,6 +17,9 @@ use crate::worker::WorkerRole;
 use serde_json::{Value, json};
 
 const TOOL_RESULT_CONTEXT_WINDOW: usize = 10;
+const FAST_CONTEXT_WINDOW: usize = 4;
+const SPECIALIST_CONTEXT_WINDOW: usize = 4;
+const REDUCER_CONTEXT_WINDOW: usize = 8;
 const TOOL_EVIDENCE_MAX_RESULTS: usize = 8;
 const TOOL_EVIDENCE_MAX_RESULT_CHARS: usize = 800;
 const TOOL_RESULT_RAW_MAX_CHARS: usize = 2_400;
@@ -70,10 +73,11 @@ Respond with your best answer or tool call. Be direct.]";
 fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bool) -> String {
     match session.system_prompt() {
         Some(sp) => {
+            let prompt = strip_silent_reply_sections(&sp);
             let prompt = if include_tool_guidance {
-                sp
+                prompt
             } else {
-                strip_tool_guidance_sections(&sp)
+                strip_tool_guidance_sections(&prompt)
             };
             format!("{MOA_PREAMBLE}\n\n{prompt}")
         }
@@ -81,14 +85,20 @@ fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bo
     }
 }
 
-fn strip_tool_guidance_sections(prompt: &str) -> String {
-    const STRIPPED_HEADINGS: &[&str] = &["## Tooling", "## Tool Call Style"];
+fn strip_silent_reply_sections(prompt: &str) -> String {
+    strip_markdown_sections(prompt, &["## Silent Replies"])
+}
 
+fn strip_tool_guidance_sections(prompt: &str) -> String {
+    strip_markdown_sections(prompt, &["## Tooling", "## Tool Call Style"])
+}
+
+fn strip_markdown_sections(prompt: &str, stripped_headings: &[&str]) -> String {
     let mut out = Vec::new();
     let mut skipping = false;
     for line in prompt.lines() {
         if line.starts_with("## ") {
-            skipping = STRIPPED_HEADINGS
+            skipping = stripped_headings
                 .iter()
                 .any(|heading| line.trim() == *heading);
         }
@@ -133,22 +143,20 @@ fn system_with_tool_summaries(
 }
 
 // ── Fast worker ──────────────────────────────────────────────────────
-// System prompt + last user message + tool names only.
+// System prompt + recent dialog + tool names only.
 // Smallest context, quickest to respond.
 
 fn pack_fast(session: &Session, has_tools: bool, selected_tool_names: &[String]) -> PackedContext {
     let system = system_with_tool_names(session, has_tools, selected_tool_names);
-    let user_text = session.last_user_text();
+    let mut messages = vec![json!({"role": "system", "content": system})];
+    append_recent_dialog_messages(&mut messages, session, FAST_CONTEXT_WINDOW);
 
     // Per-request sessions: the caller owns the multi-turn loop and
     // sends the full history each request. Continuation context lives
-    // in `session.messages()`; this path intentionally trims to just
-    // the last user message to keep the fast worker's context small.
+    // in `session.messages()`. Keep this context small, but do not
+    // isolate follow-up questions from the visible same-chat history.
     PackedContext {
-        messages: vec![
-            json!({"role": "system", "content": system}),
-            json!({"role": "user", "content": user_text}),
-        ],
+        messages,
         max_tokens: 256,
         tools: None, // Fast worker doesn't get tool schemas — just names
     }
@@ -166,30 +174,41 @@ fn pack_specialist(
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
-    // Recent messages — skip system (already included), skip raw tool results
-    // (they'd confuse models that don't have the tool_call context)
-    let recent = session.recent_messages(4);
-    for msg in &recent {
-        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
-        if role == "user" || (role == "assistant" && msg.get("tool_calls").is_none()) {
-            messages.push(msg.clone());
-        }
-    }
-
-    // Ensure the last message is the current user turn
-    let user_text = session.last_user_text();
-    if messages
-        .last()
-        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
-        != Some(&user_text)
-    {
-        messages.push(json!({"role": "user", "content": user_text}));
-    }
+    append_recent_dialog_messages(&mut messages, session, SPECIALIST_CONTEXT_WINDOW);
 
     PackedContext {
         messages,
         max_tokens: 512,
         tools: selected_tools(session, has_tools, selected_tool_names),
+    }
+}
+
+fn append_recent_dialog_messages(messages: &mut Vec<Value>, session: &Session, window: usize) {
+    let recent = session.recent_messages(window);
+    for msg in &recent {
+        if plain_dialog_message_for_compact_context(msg) {
+            messages.push(msg.clone());
+        }
+    }
+    append_current_user_if_missing(messages, session);
+}
+
+fn plain_dialog_message_for_compact_context(msg: &Value) -> bool {
+    match message_role(msg) {
+        "user" => true,
+        "assistant" => msg.get("tool_calls").is_none(),
+        _ => false,
+    }
+}
+
+fn append_current_user_if_missing(messages: &mut Vec<Value>, session: &Session) {
+    let user_text = session.last_user_text();
+    if messages
+        .last()
+        .and_then(|m| m.get("content").and_then(Value::as_str))
+        != Some(&user_text)
+    {
+        messages.push(json!({"role": "user", "content": user_text}));
     }
 }
 
@@ -293,13 +312,33 @@ pub fn pack_for_reducer_selected(
 
     let tools = selected_tools(session, has_tools, selected_tool_names);
 
-    (
-        vec![
-            json!({"role": "system", "content": system_parts.join("\n")}),
-            json!({"role": "user", "content": user_text}),
-        ],
-        tools,
-    )
+    let mut messages = vec![json!({"role": "system", "content": system_parts.join("\n")})];
+    messages.extend(reducer_recent_transcript_messages(session));
+    messages.push(json!({"role": "user", "content": user_text}));
+
+    (messages, tools)
+}
+
+fn reducer_recent_transcript_messages(session: &Session) -> Vec<Value> {
+    let all = session.messages();
+    let Some(last_user_idx) = all.iter().rposition(|msg| message_role(msg) == "user") else {
+        return Vec::new();
+    };
+
+    let start_idx = last_user_idx.saturating_sub(REDUCER_CONTEXT_WINDOW);
+    all[start_idx..last_user_idx]
+        .iter()
+        .filter(|msg| reducer_can_replay_message(msg))
+        .cloned()
+        .collect()
+}
+
+fn reducer_can_replay_message(msg: &Value) -> bool {
+    match message_role(msg) {
+        "user" => true,
+        "assistant" => msg.get("tool_calls").is_none(),
+        _ => false,
+    }
 }
 
 fn selected_tools(
@@ -806,7 +845,7 @@ mod tests {
     // ── pack_for_worker: shape contract per role ─────────────────────
 
     #[test]
-    fn fast_worker_has_system_user_only_no_tools() {
+    fn fast_worker_has_recent_dialog_no_native_tools() {
         let s = session_with(
             &[
                 system_msg("You are a helpful assistant."),
@@ -823,19 +862,14 @@ mod tests {
             packed.tools.is_none(),
             "fast worker must not receive tool schemas"
         );
-        assert_eq!(packed.messages.len(), 2, "fast = system + last user only");
         assert_eq!(
             packed.messages[0].get("role").and_then(|r| r.as_str()),
             Some("system"),
         );
-        assert_eq!(
-            packed.messages[1].get("role").and_then(|r| r.as_str()),
-            Some("user"),
-        );
-        assert_eq!(
-            packed.messages[1].get("content").and_then(|c| c.as_str()),
-            Some("second"),
-            "fast worker sees only the LAST user message",
+        let body = serde_json::to_string(&packed.messages).unwrap();
+        assert!(
+            body.contains("first") && body.contains("first reply") && body.contains("second"),
+            "fast worker should see a compact recent dialog, got {body}",
         );
 
         // Tool *names* appear in system prompt; full schemas do not.
@@ -1254,6 +1288,36 @@ keep this";
         assert!(!stripped.contains("tool-call policy goes here"));
     }
 
+    #[test]
+    fn tool_context_strips_silent_reply_sections() {
+        let s = session_with(
+            &[
+                system_msg(
+                    "\
+You are helpful.
+## Silent Replies
+When you have nothing to say, respond with ONLY: NO_REPLY
+## Safety
+keep this",
+                ),
+                user_msg("Run the requested command."),
+            ],
+            Some(tools_two()),
+        );
+        let packed = pack_for_worker(&s, WorkerRole::Strong, true);
+        let sys = system_text(&packed.messages);
+
+        assert!(sys.contains("You are helpful."));
+        assert!(sys.contains("## Safety"));
+        assert!(sys.contains("keep this"));
+        assert!(!sys.contains("NO_REPLY"), "{sys}");
+        assert!(!sys.contains("Silent Replies"), "{sys}");
+        assert!(
+            packed.tools.is_some(),
+            "tool schemas should still be present"
+        );
+    }
+
     // ── pack_for_reducer: includes reason + worker outputs ───────────
 
     fn worker_out(model: &str, payload: &str) -> WorkerOutput {
@@ -1304,6 +1368,43 @@ keep this";
         assert_eq!(
             last.get("content").and_then(|c| c.as_str()),
             Some("which is bigger, 7^3 or 350?"),
+        );
+    }
+
+    #[test]
+    fn reducer_context_preserves_same_chat_recent_history_before_current_turn() {
+        let s = session_with(
+            &[
+                system_msg("Agent R."),
+                user_msg("How do I run commands on Windows via Tailscale from a Mac?"),
+                assistant_msg(
+                    "Use a reachable Windows host and run the command over the mesh or SSH tunnel.",
+                ),
+                user_msg("What were the two questions above in this same conversation?"),
+            ],
+            None,
+        );
+        let outputs = vec![
+            worker_out("fast", "Only two questions are visible in this request."),
+            worker_out("strong", "Earlier history mentioned Windows via Tailscale."),
+        ];
+        let (messages, _tools) = pack_for_reducer(&s, &outputs, "history disagreement", false);
+
+        let transcript = serde_json::to_string(&messages).unwrap();
+        assert!(
+            transcript.contains("Windows via Tailscale"),
+            "reducer should see recent same-chat history, got {transcript}",
+        );
+        assert!(
+            transcript.contains("What were the two questions above"),
+            "reducer should still receive the current user turn, got {transcript}",
+        );
+        assert_eq!(
+            messages
+                .last()
+                .and_then(|message| message.get("content"))
+                .and_then(Value::as_str),
+            Some("What were the two questions above in this same conversation?"),
         );
     }
 
