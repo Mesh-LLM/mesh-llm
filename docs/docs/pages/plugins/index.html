@@ -374,6 +374,86 @@
 <ul>
 <li><a href="telemetry.md">Telemetry</a> - built-in OTLP metrics-only runtime and routing telemetry</li>
 </ul>
+<h2 id="using-plugins" tabindex="-1">Using Plugins</h2>
+<p>Plugins extend mesh-llm with features managed as separate processes. The plugin system handles lifecycle, IPC, and exposing plugin capabilities through MCP and HTTP.</p>
+<h3 id="install-from-the-catalog" tabindex="-1">Install from the Catalog</h3>
+<p>Search available plugins:</p>
+<pre><code class="language-bash">mesh-llm plugins search
+mesh-llm plugins search blackboard
+</code></pre>
+<p>Install by name:</p>
+<pre><code class="language-bash">mesh-llm plugins install blackboard
+mesh-llm plugins install openai-endpoint
+mesh-llm plugins install flash-moe
+</code></pre>
+<p>Available Mesh-LLM organization plugins:</p>
+<table>
+<thead>
+<tr>
+<th>Plugin</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>blackboard</code></td>
+<td>Shared mesh notes</td>
+</tr>
+<tr>
+<td><code>openai-endpoint</code></td>
+<td>Connect external OpenAI-compatible backends (vLLM, TGI, Ollama, etc.)</td>
+</tr>
+<tr>
+<td><code>flash-moe</code></td>
+<td>Flash-MoE SSD backend for MoE model serving</td>
+</tr>
+</tbody>
+</table>
+<h3 id="configure-in-config-toml" tabindex="-1">Configure in <code>config.toml</code></h3>
+<p>Add a <code>[[plugin]]</code> entry to <code>~/.mesh-llm/config.toml</code> for each plugin:</p>
+<pre><code class="language-toml">[[plugin]]
+name = &quot;blackboard&quot;
+
+[[plugin]]
+name = &quot;openai-endpoint&quot;
+url = &quot;http://gpu-box:8000/v1&quot;
+
+[[plugin]]
+name = &quot;flash-moe&quot;
+</code></pre>
+<p>Available fields:</p>
+<ul>
+<li><code>name</code> (required): plugin identifier.</li>
+<li><code>enabled</code> (optional, default <code>true</code>): whether the plugin starts on launch.</li>
+<li><code>command</code> (optional): path to the plugin binary.</li>
+<li><code>args</code> (optional): command-line arguments (string array).</li>
+<li><code>url</code> (optional): URL for endpoint-style plugins.</li>
+<li><code>[plugin.startup]</code> (optional):
+<ul>
+<li><code>connect_timeout_secs</code>: max seconds for the initial connection.</li>
+<li><code>init_timeout_secs</code>: max seconds for initialization handshake.</li>
+<li><code>optional</code>: if <code>true</code>, startup failure is non-fatal.</li>
+<li><code>lazy_start</code>: if <code>true</code>, the plugin starts on first use instead of at launch.</li>
+</ul>
+</li>
+</ul>
+<h3 id="manage-installed-plugins" tabindex="-1">Manage Installed Plugins</h3>
+<pre><code class="language-bash">mesh-llm plugins list                 # list installed plugins
+mesh-llm plugins info blackboard      # show plugin details
+mesh-llm plugins enable blackboard    # enable a disabled plugin
+mesh-llm plugins disable blackboard   # disable without deleting
+mesh-llm plugins update blackboard    # update to latest version
+mesh-llm plugins delete blackboard    # remove permanently
+</code></pre>
+<h3 id="plugin-usage-blackboard" tabindex="-1">Plugin Usage: Blackboard</h3>
+<p>After installing the blackboard plugin, it runs as a managed process when mesh-llm starts. Interact through MCP tools and resources (available through the console's MCP endpoint):</p>
+<ul>
+<li>tool: <code>blackboard.feed</code></li>
+<li>tool: <code>blackboard.post</code></li>
+<li>resource: <code>blackboard://snapshot</code></li>
+</ul>
+<p>For detailed blackboard usage, see <a href="https://github.com/mesh-llm/blackboard">github.com/mesh-llm/blackboard</a>.</p>
+<hr>
 <p>The main goals are:</p>
 <ul>
 <li>keep <code>mesh-llm</code> decoupled from specific plugins</li>
@@ -988,6 +1068,8 @@ let plugin = mesh_llm_plugin::plugin! {
 
     <h2>☰ On this page</h2>
 
+
+        <a href="#using-plugins">Using Plugins</a>
 
         <a href="#design-summary">Design Summary</a>
 

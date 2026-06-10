@@ -75,8 +75,7 @@ Runtime switches:
 - `--publish`: publish your mesh for discovery.
 - `--mesh-name <MESH_NAME>`: friendly mesh name in discovery.
 - `--region <REGION>`: region hint for discovery.
-- `--blackboard`: enable blackboard on public meshes.
-- `--name <NAME>`: your blackboard display name.
+- `--name <NAME>`: display name for this node.
 - `--max-vram <MAX_VRAM>`: cap VRAM used for planning and fit decisions.
 - `--llama-flavor <LLAMA_FLAVOR>`: force backend binary flavor (`cpu|cuda|rocm|vulkan|metal`).
 - `--config <CONFIG>`: explicit config file path.
@@ -324,36 +323,34 @@ Switches:
 Use this to stop local `mesh-llm` instances tracked in the runtime root.
 
 
-### `blackboard`
+### `blackboard` (plugin)
 
-Use this to post/search/read shared mesh notes, or to run blackboard as MCP over stdio.
-
-Usage:
+Shared mesh notes — post, search, and read notes across the mesh. Blackboard was moved from a built-in command to an [installable plugin](plugins.md#using-plugins):
 
 ```bash
-mesh-llm blackboard
-mesh-llm blackboard "STATUS: testing gguf resolution"
-mesh-llm blackboard --search "gemma"
-mesh-llm blackboard --mcp
+mesh-llm plugins install blackboard
 ```
 
-Switches:
+Once installed, it runs as a managed plugin process when mesh-llm starts. See the [plugins documentation](plugins.md#using-plugins) for configuration and usage.
 
-- `--search <SEARCH>`: search blackboard entries.
-- `--from <FROM>`: filter by author.
-- `--since <SINCE>`: last N hours.
-- `--limit <LIMIT>`: max rows (default `20`).
-- `--port <PORT>`: target management/API port (default `3131`).
-- `--mcp`: run as MCP server over stdio.
+### `plugins` / `plugin`
 
-### `plugin`
+Use this to install, manage, and inspect plugins.
 
-Use this to inspect plugin status or run plugin compatibility shims.
+Both `mesh-llm plugins` and `mesh-llm plugin` work.
 
 Subcommands:
 
-- `plugin list`: list auto-registered/configured plugins.
-- `plugin install <NAME>`: old install workflow shim.
+- `plugins install <reference>`: install a plugin from the catalog by name or from a GitHub URL.
+- `plugins update <name>`: update an installed plugin.
+- `plugins enable <name>`: enable an installed plugin.
+- `plugins disable <name>`: disable an installed plugin.
+- `plugins delete <name>`: delete an installed plugin.
+- `plugins info <name>`: show plugin details.
+- `plugins search [query]`: search the plugin catalog.
+- `plugins list`: list installed/configured plugins.
+
+See [plugins documentation](plugins.md#using-plugins) for more detail.
 
 
 ### `auth`

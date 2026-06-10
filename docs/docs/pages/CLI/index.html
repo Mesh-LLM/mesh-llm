@@ -425,8 +425,7 @@ mesh-llm client --auto
 <li><code>--publish</code>: publish your mesh for discovery.</li>
 <li><code>--mesh-name &lt;MESH_NAME&gt;</code>: friendly mesh name in discovery.</li>
 <li><code>--region &lt;REGION&gt;</code>: region hint for discovery.</li>
-<li><code>--blackboard</code>: enable blackboard on public meshes.</li>
-<li><code>--name &lt;NAME&gt;</code>: your blackboard display name.</li>
+<li><code>--name &lt;NAME&gt;</code>: display name for this node.</li>
 <li><code>--max-vram &lt;MAX_VRAM&gt;</code>: cap VRAM used for planning and fit decisions.</li>
 <li><code>--llama-flavor &lt;LLAMA_FLAVOR&gt;</code>: force backend binary flavor (<code>cpu|cuda|rocm|vulkan|metal</code>).</li>
 <li><code>--config &lt;CONFIG&gt;</code>: explicit config file path.</li>
@@ -610,30 +609,26 @@ mesh-llm download Qwen3-0.6B-Q4_K_M --draft
 </ul>
 <h3 id="stop" tabindex="-1"><code>stop</code></h3>
 <p>Use this to stop local <code>mesh-llm</code> instances tracked in the runtime root.</p>
-<h3 id="blackboard" tabindex="-1"><code>blackboard</code></h3>
-<p>Use this to post/search/read shared mesh notes, or to run blackboard as MCP over stdio.</p>
-<p>Usage:</p>
-<pre><code class="language-bash">mesh-llm blackboard
-mesh-llm blackboard &quot;STATUS: testing gguf resolution&quot;
-mesh-llm blackboard --search &quot;gemma&quot;
-mesh-llm blackboard --mcp
+<h3 id="blackboard-plugin" tabindex="-1"><code>blackboard</code> (plugin)</h3>
+<p>Shared mesh notes — post, search, and read notes across the mesh. Blackboard was moved from a built-in command to an <a href="plugins.md#using-plugins">installable plugin</a>:</p>
+<pre><code class="language-bash">mesh-llm plugins install blackboard
 </code></pre>
-<p>Switches:</p>
-<ul>
-<li><code>--search &lt;SEARCH&gt;</code>: search blackboard entries.</li>
-<li><code>--from &lt;FROM&gt;</code>: filter by author.</li>
-<li><code>--since &lt;SINCE&gt;</code>: last N hours.</li>
-<li><code>--limit &lt;LIMIT&gt;</code>: max rows (default <code>20</code>).</li>
-<li><code>--port &lt;PORT&gt;</code>: target management/API port (default <code>3131</code>).</li>
-<li><code>--mcp</code>: run as MCP server over stdio.</li>
-</ul>
-<h3 id="plugin" tabindex="-1"><code>plugin</code></h3>
-<p>Use this to inspect plugin status or run plugin compatibility shims.</p>
+<p>Once installed, it runs as a managed plugin process when mesh-llm starts. See the <a href="plugins.md#using-plugins">plugins documentation</a> for configuration and usage.</p>
+<h3 id="plugins-plugin" tabindex="-1"><code>plugins</code> / <code>plugin</code></h3>
+<p>Use this to install, manage, and inspect plugins.</p>
+<p>Both <code>mesh-llm plugins</code> and <code>mesh-llm plugin</code> work.</p>
 <p>Subcommands:</p>
 <ul>
-<li><code>plugin list</code>: list auto-registered/configured plugins.</li>
-<li><code>plugin install &lt;NAME&gt;</code>: old install workflow shim.</li>
+<li><code>plugins install &lt;reference&gt;</code>: install a plugin from the catalog by name or from a GitHub URL.</li>
+<li><code>plugins update &lt;name&gt;</code>: update an installed plugin.</li>
+<li><code>plugins enable &lt;name&gt;</code>: enable an installed plugin.</li>
+<li><code>plugins disable &lt;name&gt;</code>: disable an installed plugin.</li>
+<li><code>plugins delete &lt;name&gt;</code>: delete an installed plugin.</li>
+<li><code>plugins info &lt;name&gt;</code>: show plugin details.</li>
+<li><code>plugins search [query]</code>: search the plugin catalog.</li>
+<li><code>plugins list</code>: list installed/configured plugins.</li>
 </ul>
+<p>See <a href="plugins.md#using-plugins">plugins documentation</a> for more detail.</p>
 <h3 id="auth" tabindex="-1"><code>auth</code></h3>
 <p>Use this to manage owner identity and keystore files.</p>
 <p>Subcommands:</p>

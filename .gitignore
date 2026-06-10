@@ -12,6 +12,7 @@ mesh-bundle.tar.gz
 crates/mesh-llm-ui/dist/
 evals/results/
 .sisyphus/
+.omo/
 .playwright-mcp/
 .envrc
 .moe-cache/
