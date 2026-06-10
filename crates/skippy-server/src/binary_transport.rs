@@ -1609,6 +1609,7 @@ fn binary_message_attrs(
     message: &StageWireMessage,
 ) -> std::collections::BTreeMap<String, serde_json::Value> {
     let mut attrs = lifecycle_attrs(config);
+    let epoch = message.request_epoch();
     attrs.insert(attr::SESSION_ID.to_string(), json!(session_id.to_string()));
     attrs.insert(
         attr::REQUEST_ID.to_string(),
@@ -1624,13 +1625,14 @@ fn binary_message_attrs(
     );
     attrs.insert("skippy.token_count".to_string(), json!(message.token_count));
     attrs.insert(
-        "skippy.prompt_token_count".to_string(),
-        json!(message.state.prompt_token_count),
+        "skippy.checkpoint_generation".to_string(),
+        json!(epoch.checkpoint_generation),
     );
     attrs.insert(
-        "skippy.decode_step".to_string(),
-        json!(message.state.decode_step),
+        "skippy.prompt_token_count".to_string(),
+        json!(epoch.prompt_token_count),
     );
+    attrs.insert("skippy.decode_step".to_string(), json!(epoch.decode_step));
     let layer_count = i64::from(config.layer_end.saturating_sub(config.layer_start));
     let kv_tokens_after = estimated_kv_tokens_after(message);
     attrs.insert("skippy.kv_tokens_after".to_string(), json!(kv_tokens_after));

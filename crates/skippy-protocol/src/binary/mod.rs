@@ -19,9 +19,9 @@ pub use types::{
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
     STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageReply,
-    StageReplyStats, StageSamplingConfig, StageStateHeader, StageWireMessage, WireActivationDType,
-    WireMessageKind, WireReplyKind, WireStagePhase, activation_frame_flags_from_state_flags,
-    activation_state_flags_from_frame_flags, state_flags,
+    StageReplyStats, StageRequestEpoch, StageSamplingConfig, StageStateHeader, StageWireMessage,
+    WireActivationDType, WireMessageKind, WireReplyKind, WireStagePhase,
+    activation_frame_flags_from_state_flags, activation_state_flags_from_frame_flags, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -153,6 +153,7 @@ mod tests {
     fn stage_message_round_trips_f32() {
         let mut state =
             StageStateHeader::new(WireMessageKind::DecodeEmbd, WireActivationDType::F32);
+        state.checkpoint_generation = 3;
         state.prompt_token_count = 1;
         state.decode_step = 0;
         state.current_token = 11;
@@ -192,6 +193,16 @@ mod tests {
         assert_eq!(decoded.state.source_stage_index, 0);
         assert_eq!(decoded.request_id, 7);
         assert_eq!(decoded.session_id, 11);
+        assert_eq!(
+            decoded.request_epoch(),
+            StageRequestEpoch {
+                request_id: 7,
+                session_id: 11,
+                checkpoint_generation: 3,
+                prompt_token_count: 1,
+                decode_step: 0,
+            }
+        );
         assert_ne!(decoded.state.flags & state_flags::SAMPLING, 0);
         assert_eq!(decoded.state.flags & state_flags::CHAT_SAMPLING_METADATA, 0);
         assert_eq!(decoded.chat_sampling_metadata, None);
@@ -201,6 +212,34 @@ mod tests {
         assert_eq!(sampling.logit_bias.len(), 1);
         assert_eq!(sampling.logit_bias[0].token_id, 123);
         assert_eq!(sampling.logit_bias[0].bias, -50.0);
+    }
+
+    #[test]
+    fn request_epoch_orders_only_matching_flows() {
+        let older = StageRequestEpoch {
+            request_id: 7,
+            session_id: 11,
+            checkpoint_generation: 1,
+            prompt_token_count: 8,
+            decode_step: 2,
+        };
+        let newer = StageRequestEpoch {
+            request_id: 7,
+            session_id: 11,
+            checkpoint_generation: 1,
+            prompt_token_count: 8,
+            decode_step: 3,
+        };
+        let different_session = StageRequestEpoch {
+            session_id: 12,
+            ..newer
+        };
+
+        assert!(older.same_flow(newer));
+        assert!(older.is_stale_for(newer));
+        assert!(!newer.is_stale_for(older));
+        assert!(!older.same_flow(different_session));
+        assert!(!older.is_stale_for(different_session));
     }
 
     #[test]
