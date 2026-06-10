@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+mod artifact_diagnostics;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologyPlanRequest {
     pub topology_id: String,
@@ -1087,6 +1089,7 @@ fn plan_ranges_with_signals(
     let diagnostics = diagnostics_for(
         &stages,
         &boundaries,
+        placement_signals,
         request.family.as_ref(),
         request.policy,
     );
@@ -1375,10 +1378,12 @@ pub fn wire_payload_bytes_per_token(activation_width: u32, dtype: WireDType) -> 
 fn diagnostics_for(
     stages: &[StagePlan],
     boundaries: &[BoundaryPlan],
+    placement_signals: &[NodePlacementSignal],
     family: Option<&FamilyCapabilityRecord>,
     policy: PlannerPolicy,
 ) -> Vec<PlanDiagnostic> {
     let mut diagnostics = Vec::new();
+    artifact_diagnostics::append_artifact_diagnostics(&mut diagnostics, stages, placement_signals);
     for stage in stages {
         if matches!(
             stage.migration_policy,

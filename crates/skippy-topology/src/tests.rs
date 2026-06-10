@@ -170,6 +170,70 @@ fn package_aware_plan_prefers_cached_peer_for_equal_capacity() {
 }
 
 #[test]
+fn package_aware_plan_reports_cold_start_artifact_totals() {
+    let mut transfer_ready = placement_signal("transfer-ready");
+    transfer_ready.missing_artifact_bytes = 32;
+    transfer_ready.artifact_transfer_supported = true;
+    let mut remote_fallback = placement_signal("remote-fallback");
+    remote_fallback.missing_artifact_bytes = 16;
+    remote_fallback.artifact_transfer_supported = false;
+    let mut warm = placement_signal("warm");
+    warm.cached_slice_bytes = 64;
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("transfer-ready", 30),
+            weighted_node("remote-fallback", 30),
+            weighted_node("warm", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_signals(
+        &request,
+        &[transfer_ready, remote_fallback, warm],
+    )
+    .expect("plan");
+
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == PlanReasonCode::ArtifactTransferPenalty)
+        .expect("artifact diagnostic");
+    assert!(diagnostic.message.contains("cached=64 bytes"));
+    assert!(diagnostic.message.contains("missing=48 bytes"));
+    assert!(
+        diagnostic
+            .message
+            .contains("peer-transfer-eligible=32 bytes")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("remote-download-fallback=16 bytes")
+    );
+}
+
+#[test]
+fn weighted_plan_without_artifact_signals_stays_diagnostic_quiet() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(6, 10),
+        nodes: vec![weighted_node("node-a", 30), weighted_node("node-b", 30)],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_weighted_contiguous(&request).expect("plan");
+
+    assert!(plan.diagnostics.is_empty());
+}
+
+#[test]
 fn package_aware_plan_penalizes_missing_untransferable_artifacts() {
     let mut cold = placement_signal("cold-high-vram");
     cold.missing_artifact_bytes = 64;
