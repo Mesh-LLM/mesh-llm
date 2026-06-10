@@ -1,22 +1,56 @@
+---
+title: Quickstart
+---
+
 # Quickstart
 
-The easiest way to try Mesh is to create your own private mesh. Start one node on this machine first, open the console, send a chat message, then try an agent. Later, you can add more machines or invite other people to join the same private mesh if you choose.
+The easiest way to try Mesh is to create your own private mesh. Start one node on this machine, send a chat message, then try an agent. Later, you can add more machines or invite other people to join the same private mesh.
 
 ## 1. Install Mesh
 
-macOS or Linux:
+Choose your platform for the fastest path:
+
+{% set macosQuick %}
+```sh
+curl -fsSL https://mesh-llm.cloud/install.sh | bash
+```
+{% endset %}
+{% set linuxQuick %}
+```sh
+curl -fsSL https://mesh-llm.cloud/install.sh | bash
+```
+{% endset %}
+{% set windowsQuick %}
+```powershell
+irm https://mesh-llm.cloud/install.ps1 | iex
+```
+{% endset %}
+
+**macOS** &mdash; Metal (Apple Silicon):
 
 ```sh
 curl -fsSL https://mesh-llm.cloud/install.sh | bash
 ```
 
-Windows PowerShell:
+Full guide: [Installing on macOS](/docs/pages/installing-macos/)
+
+**Linux** &mdash; CUDA, ROCm, Vulkan, or CPU:
+
+```sh
+curl -fsSL https://mesh-llm.cloud/install.sh | bash
+```
+
+Full guide: [Installing on Linux](/docs/pages/installing-linux/)
+
+**Windows** &mdash; CUDA, ROCm, Vulkan, or CPU:
 
 ```powershell
 irm https://mesh-llm.cloud/install.ps1 | iex
 ```
 
-Open a new terminal if the installer added Mesh to your `PATH`.
+Full guide: [Installing on Windows](/docs/pages/installing-windows/)
+
+Open a new terminal after install if the installer added Mesh to your `PATH`.
 
 ## 2. Start one private node
 

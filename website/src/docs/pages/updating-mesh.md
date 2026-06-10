@@ -25,7 +25,6 @@ Use `--flavor` when you want to switch the installed release bundle:
 
 ```sh
 mesh-llm update --flavor cuda
-mesh-llm update --flavor cuda-blackwell
 mesh-llm update --flavor rocm
 mesh-llm update --flavor vulkan
 mesh-llm update --flavor cpu

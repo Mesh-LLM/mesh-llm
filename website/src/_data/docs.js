@@ -4,18 +4,20 @@ export default [
     description: "Install Mesh, run the quickstart, and serve your first model.",
     links: [
       ["Quickstart", "/docs/pages/quickstart/"],
-      ["Installing Mesh", "/docs/pages/installing-mesh/"],
+      ["Installing on macOS", "/docs/pages/installing-macos/"],
+      ["Installing on Linux", "/docs/pages/installing-linux/"],
+      ["Installing on Windows", "/docs/pages/installing-windows/"],
       ["Updating Mesh", "/docs/pages/updating-mesh/"]
     ]
   },
   {
-    title: "Install",
-    description: "Platform-specific install notes and hardware expectations.",
+    title: "Configuration",
+    description: "Configure mesh-llm behavior, models, and defaults.",
     links: [
-      ["macOS", "/docs/pages/installing-mesh/#macos"],
-      ["Linux", "/docs/pages/installing-mesh/#linux"],
-      ["Windows", "/docs/pages/installing-mesh/#windows"],
-      ["Hardware support", "/docs/pages/hardware-support/"]
+      ["Config File", "/docs/pages/config-toml/"],
+      ["Config Defaults", "/docs/pages/config-defaults/"],
+      ["Config Models & Plugins", "/docs/pages/config-models/"],
+      ["Config Reference", "/docs/pages/config-reference/"]
     ]
   },
   {
@@ -23,9 +25,10 @@ export default [
     description: "Serve local models, use Hugging Face GGUFs, and scale across machines.",
     links: [
       ["Run your first model", "/docs/pages/quickstart/#serve-a-model"],
+      ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
-      ["Layer packages", "/docs/pages/contributing-layer-packages/"],
-      ["Catalog", "/catalog/"]
+      ["Console chat", "/docs/pages/console-chat/"],
+      ["Hardware support", "/docs/pages/hardware-support/"]
     ]
   },
   {
@@ -36,6 +39,16 @@ export default [
       ["Streaming", "/docs/pages/openai-compatible-api/#streaming"],
       ["Tool calling", "/docs/pages/openai-compatible-api/#tool-calling"],
       ["Structured outputs", "/docs/pages/openai-compatible-api/#structured-outputs"]
+    ]
+  },
+  {
+    title: "Plugins",
+    description: "Extend mesh-llm with managed plugin processes, MCP tools, and HTTP bindings.",
+    links: [
+      ["Plugins overview", "/docs/pages/plugins/"],
+      ["Plugin architecture", "/docs/pages/plugin-architecture/"],
+      ["Developing plugins", "/docs/pages/developing-plugins/"],
+      ["Plugin reference", "/docs/pages/plugin-reference/"]
     ]
   },
   {
@@ -60,19 +73,18 @@ export default [
     title: "Integrations",
     description: "Connect agent tools and OpenAI-compatible applications.",
     links: [
-      ["Integrations overview", "/docs/pages/agents/"],
-      ["Agent setup", "/docs/pages/agents/"],
-      ["exo comparison", "/docs/pages/exo-comparison/"],
-      ["Plugins", "/docs/pages/plugins/"]
+      ["Coding agents", "/docs/pages/agents/"],
+      ["exo comparison", "/docs/pages/exo-comparison/"]
     ]
   },
   {
-    title: "API Reference",
-    description: "Base URLs, endpoints, CLI commands, and compatibility notes.",
+    title: "Developers",
+    description: "API reference, CLI commands, testing, and technical reference documentation.",
     links: [
       ["API reference", "/docs/pages/api-reference/"],
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
-      ["CLI reference", "/docs/pages/CLI/"]
+      ["CLI reference", "/docs/pages/CLI/"],
+      ["Testing playbook", "/docs/pages/testing/"]
     ]
   },
   {
@@ -80,8 +92,7 @@ export default [
     description: "Common questions, troubleshooting, and operational checks.",
     links: [
       ["FAQ", "/docs/pages/faq/"],
-      ["Troubleshooting", "/docs/pages/troubleshooting/"],
-      ["Testing playbook", "/docs/pages/testing/"]
+      ["Troubleshooting", "/docs/pages/troubleshooting/"]
     ]
   },
   {

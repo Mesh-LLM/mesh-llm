@@ -62,6 +62,7 @@ jobs:
           cp docs/mesh-llm-logo.svg "$artifact_dir/"
           cp -R docs/assets "$artifact_dir/"
           cp -R docs/catalog "$artifact_dir/"
+          cp -R docs/.well-known "$artifact_dir/"
           cp -R docs/docs "$artifact_dir/"
           cp -R docs/pagefind "$artifact_dir/"
 

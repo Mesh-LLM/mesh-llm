@@ -235,7 +235,7 @@ Use this to update mesh-llm and exit.
 
 Switches:
 - `--version <VERSION>`: install a specific release tag or version, for example `v0.60.0`.
-- `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `cuda-blackwell`, `rocm`, `vulkan`, or `metal`).
+- `--flavor <FLAVOR>`: install or switch to a specific release bundle flavor (`cpu`, `cuda`, `rocm`, `vulkan`, or `metal`).
 - `--detect-flavor`: re-detect the best host backend flavor before selecting the release bundle. Cannot be combined with `--flavor`.
 - `--auto-update`: available on most commands; when set, mesh-llm checks for a newer bundled release before proceeding.
 

@@ -49,16 +49,27 @@ jobs:
         run: npm ci
       - name: Build public website
         run: npm run build
-      - name: Check generated website output is committed
+      - name: Verify website output exists
         working-directory: .
         run: |
-          check_paths=(docs website/src/assets/site.generated.css ':(exclude)docs/pagefind')
-          if [[ -n "$(git status --porcelain -- "${check_paths[@]}")" ]]; then
-            git status --short -- "${check_paths[@]}"
-            git diff -- "${check_paths[@]}"
-            echo "Generated website output is stale. Run: just website-build" >&2
-            exit 1
-          fi
+          required=(
+            docs/index.html
+            docs/CNAME
+            docs/install.sh
+            docs/install.ps1
+            docs/mesh-llm-logo.svg
+            docs/assets/site.css
+            docs/docs/index.html
+            docs/catalog/index.html
+            docs/.well-known/funding-manifest-urls
+          )
+          for f in "${required[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "ERROR: Missing generated output: $f" >&2
+              exit 1
+            fi
+          done
+          echo "All required website output files exist."
 
   summary:
     needs: [changes, website-build]

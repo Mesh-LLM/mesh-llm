@@ -7,6 +7,8 @@ const websiteDir = path.resolve(scriptDir, "..");
 const repoRoot = path.resolve(websiteDir, "..");
 
 const generatedPaths = [
+  "docs/funding.json",
+  "docs/.well-known",
   "docs/index.html",
   "docs/CNAME",
   "docs/install.sh",

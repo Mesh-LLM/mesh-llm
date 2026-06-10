@@ -1,4 +1,14 @@
+import hljs from "highlight.js/lib/core";
+import ini from "highlight.js/lib/languages/ini";
+import bash from "highlight.js/lib/languages/bash";
+import json from "highlight.js/lib/languages/json";
+import rust from "highlight.js/lib/languages/rust";
 import markdownItAnchor from "markdown-it-anchor";
+
+hljs.registerLanguage("ini", ini);
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("rust", rust);
 
 const decodeHtmlEntities = (value) =>
   value
@@ -21,6 +31,8 @@ export default function(eleventyConfig) {
     showAllHosts: true,
   });
 
+  eleventyConfig.addPassthroughCopy("src/funding.json");
+  eleventyConfig.addPassthroughCopy("src/.well-known");
   eleventyConfig.addPassthroughCopy("src/mesh-llm-logo.svg");
   eleventyConfig.addPassthroughCopy("src/CNAME");
   eleventyConfig.addPassthroughCopy("src/assets");
@@ -28,6 +40,20 @@ export default function(eleventyConfig) {
   eleventyConfig.addPassthroughCopy({ "../install.ps1": "install.ps1" });
 
   eleventyConfig.amendLibrary("md", (md) => {
+    md.set({
+      highlight: (str, lang) => {
+        const langMap = { toml: "ini" };
+        const hl = lang && langMap[lang] ? langMap[lang] : lang;
+        if (hl && hljs.getLanguage(hl)) {
+          try {
+            return `<pre class="language-${hl}"><code class="language-${hl}">${hljs.highlight(str, { language: hl, ignoreIllegals: true }).value}</code></pre>`;
+          } catch (e) {
+            console.debug("highlight.js error for lang=%s: %s", hl, e);
+          }
+        }
+        return `<pre><code>${md.utils.escapeHtml(str)}</code></pre>`;
+      },
+    });
     md.use(markdownItAnchor, {
       permalink: false,
       slugify: (value) =>
@@ -46,6 +72,11 @@ export default function(eleventyConfig) {
     return Array.from(content.matchAll(/<h2\s+[^>]*id="([^"]+)"[^>]*>([\s\S]*?)<\/h2>/g)).map(
       ([, id, text]) => ({ id, text: headingText(text) })
     );
+  });
+  eleventyConfig.addFilter("urlPath", (url) => {
+    if (!url) return url;
+    const hashIndex = url.indexOf("#");
+    return hashIndex !== -1 ? url.substring(0, hashIndex) : url;
   });
   eleventyConfig.addFilter("format", (fmt, ...args) => {
     let i = 0;

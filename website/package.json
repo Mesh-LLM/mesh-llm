@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "animejs": "^4.4.1",
+    "highlight.js": "^11.11.1",
     "lucide": "^1.17.0"
   }
 }

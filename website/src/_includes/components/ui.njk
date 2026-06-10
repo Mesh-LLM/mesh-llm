@@ -23,7 +23,7 @@
 <section class="{{ sectionClass }}">
   <h2 class="{{ headingClass }}">{{ group.title }}</h2>
   {% for link in group.links %}
-    <a class="{{ linkClass }}" href="{{ link[1] }}"{% if currentUrl == link[1] %} aria-current="page"{% endif %}>{{ link[0] }}</a>
+    <a class="{{ linkClass }}" href="{{ link[1] }}"{% if currentUrl == (link[1] | urlPath) %} aria-current="page"{% endif %}>{{ link[0] }}</a>
   {% endfor %}
 </section>
 {% endmacro %}
