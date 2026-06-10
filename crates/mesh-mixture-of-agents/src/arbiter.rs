@@ -482,15 +482,24 @@ fn single_output_would_return_answer(output: &WorkerOutput, has_tools: bool) -> 
     )
 }
 
+const ANSWER_ROLE_BIAS_TIE_EPSILON: f32 = 0.001;
+
 pub(crate) fn best_answer_output(outputs: &[WorkerOutput]) -> Option<&WorkerOutput> {
     outputs
         .iter()
         .filter(|o| is_usable_answer(o))
-        .max_by(|a, b| answer_rank_score(a).total_cmp(&answer_rank_score(b)))
+        .max_by(|a, b| compare_answer_rank(a, b))
 }
 
-fn answer_rank_score(output: &WorkerOutput) -> f32 {
-    output.confidence + answer_role_bias(output.role)
+fn compare_answer_rank(a: &WorkerOutput, b: &WorkerOutput) -> std::cmp::Ordering {
+    let confidence_gap = (a.confidence - b.confidence).abs();
+    if confidence_gap > ANSWER_ROLE_BIAS_TIE_EPSILON {
+        return a.confidence.total_cmp(&b.confidence);
+    }
+
+    answer_role_bias(a.role)
+        .total_cmp(&answer_role_bias(b.role))
+        .then_with(|| a.confidence.total_cmp(&b.confidence))
 }
 
 fn answer_role_bias(role: crate::worker::WorkerRole) -> f32 {
@@ -552,14 +561,27 @@ mod tests {
     }
 
     #[test]
-    fn answer_arbitration_biases_toward_strong_when_close() {
+    fn answer_arbitration_biases_toward_strong_when_confidence_ties() {
         let mut fast = make_output(OutputKind::Answer, 0.86, "fast weaker answer");
         fast.role = WorkerRole::Fast;
-        let mut strong = make_output(OutputKind::Answer, 0.75, "stronger model answer");
+        let mut strong = make_output(OutputKind::Answer, 0.86, "stronger model answer");
         strong.role = WorkerRole::Strong;
 
         match arbitrate(&[fast, strong], false) {
             Decision::Answer(text) => assert_eq!(text, "stronger model answer"),
+            other => panic!("expected Answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn answer_arbitration_keeps_confidence_primary() {
+        let mut fast = make_output(OutputKind::Answer, 0.90, "high confidence answer");
+        fast.role = WorkerRole::Fast;
+        let mut strong = make_output(OutputKind::Answer, 0.76, "strong lower confidence answer");
+        strong.role = WorkerRole::Strong;
+
+        match arbitrate(&[fast, strong], false) {
+            Decision::Answer(text) => assert_eq!(text, "high confidence answer"),
             other => panic!("expected Answer, got {other:?}"),
         }
     }

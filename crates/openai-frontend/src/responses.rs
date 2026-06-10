@@ -445,11 +445,19 @@ fn translate_responses_conversation_item(item: &Value) -> Result<Value, OpenAiEr
     }
 }
 
+fn translate_responses_standalone_input_item(item: &Value) -> Result<Value, OpenAiError> {
+    let content = translate_responses_message_content(item)?;
+    Ok(serde_json::json!({
+        "role": "user",
+        "content": content,
+    }))
+}
+
 fn translate_responses_function_call_item(
     object: &Map<String, Value>,
 ) -> Result<Value, OpenAiError> {
-    let call_id = non_empty_response_string(object, &["call_id", "tool_call_id", "id"])
-        .ok_or_else(|| {
+    let call_id =
+        non_empty_response_string(object, &["call_id", "tool_call_id"]).ok_or_else(|| {
             OpenAiError::invalid_request("responses function_call is missing call_id")
         })?;
     let name = non_empty_response_string(object, &["name"]).ok_or_else(|| {
@@ -518,7 +526,13 @@ fn translate_responses_input_to_messages(input: &Value) -> Result<Vec<Value>, Op
             if items.iter().any(responses_input_item_is_conversation_item) {
                 items
                     .iter()
-                    .map(translate_responses_conversation_item)
+                    .map(|item| {
+                        if responses_input_item_is_conversation_item(item) {
+                            translate_responses_conversation_item(item)
+                        } else {
+                            translate_responses_standalone_input_item(item)
+                        }
+                    })
                     .collect()
             } else {
                 let content = translate_responses_message_content(input)?;
@@ -1540,6 +1554,32 @@ mod tests {
     }
 
     #[test]
+    fn normalize_responses_function_call_requires_call_id_not_item_id() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [
+                {"role": "user", "content": "look up the codeword"},
+                {
+                    "type": "function_call",
+                    "id": "item_call_123",
+                    "name": "lookup_fixture_fact",
+                    "arguments": "{\"key\":\"codeword\"}"
+                }
+            ]
+        });
+
+        let err = normalize_openai_compat_request("/v1/responses", &mut body)
+            .expect_err("item id must not be treated as a function call id");
+
+        assert_eq!(err.status().as_u16(), 400);
+        assert!(
+            err.to_string().contains("missing call_id"),
+            "unexpected error: {err}",
+        );
+        assert!(body.get("messages").is_none());
+    }
+
+    #[test]
     fn normalize_responses_tool_result_requires_call_id_not_item_id() {
         let mut body = json!({
             "model": "qwen",
@@ -1562,6 +1602,30 @@ mod tests {
             "unexpected error: {err}",
         );
         assert!(body.get("messages").is_none());
+    }
+
+    #[test]
+    fn normalize_responses_preserves_plain_blocks_in_mixed_input_arrays() {
+        let mut body = json!({
+            "model": "qwen",
+            "input": [
+                {"role": "user", "content": "first turn"},
+                {"type": "input_text", "text": "plain follow-up block"},
+                {
+                    "type": "function_call",
+                    "call_id": "call_lookup",
+                    "name": "lookup_fixture_fact",
+                    "arguments": "{\"key\":\"codeword\"}"
+                }
+            ]
+        });
+        normalize_openai_compat_request("/v1/responses", &mut body).unwrap();
+
+        let messages = body["messages"].as_array().expect("messages");
+        assert_eq!(messages[0]["content"], "first turn");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "plain follow-up block");
+        assert_eq!(messages[2]["tool_calls"][0]["id"], "call_lookup");
     }
 
     #[test]

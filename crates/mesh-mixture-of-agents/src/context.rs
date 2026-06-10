@@ -28,6 +28,10 @@ const TOOL_RESULT_JSON_MAX_ARRAY_ITEMS: usize = 12;
 const TOOL_RESULT_SCALAR_MAX_CHARS: usize = 180;
 const TOOL_RESULT_TEXT_PREVIEW_CHARS: usize = 1_600;
 const TOOL_RESULT_WEB_SEARCH_MAX_RESULTS: usize = 6;
+const TOOL_RESULT_WEB_SEARCH_TITLE_MAX_CHARS: usize = 120;
+const TOOL_RESULT_WEB_SEARCH_SNIPPET_MAX_CHARS: usize = 200;
+const TOOL_RESULT_WEB_SEARCH_URL_MAX_CHARS: usize = 120;
+const TOOL_RESULT_WEB_SEARCH_ROW_MAX_CHARS: usize = 320;
 
 /// Packed context ready to send to a worker.
 pub struct PackedContext {
@@ -625,9 +629,17 @@ fn compact_web_search_result(
         let Some(result) = result.as_object() else {
             continue;
         };
-        let title = clean_json_string_field(result, "title").unwrap_or_else(|| "Untitled".into());
-        let url = clean_json_string_field(result, "url").unwrap_or_default();
-        let snippet = clean_json_string_field(result, "snippet").unwrap_or_default();
+        let title = clean_json_string_field(result, "title")
+            .map(|value| truncate_tool_result_field(&value, TOOL_RESULT_WEB_SEARCH_TITLE_MAX_CHARS))
+            .unwrap_or_else(|| "Untitled".into());
+        let url = clean_json_string_field(result, "url")
+            .map(|value| truncate_tool_result_field(&value, TOOL_RESULT_WEB_SEARCH_URL_MAX_CHARS))
+            .unwrap_or_default();
+        let snippet = clean_json_string_field(result, "snippet")
+            .map(|value| {
+                truncate_tool_result_field(&value, TOOL_RESULT_WEB_SEARCH_SNIPPET_MAX_CHARS)
+            })
+            .unwrap_or_default();
         let mut row = format!("{}. {title}", idx + 1);
         if !snippet.is_empty() {
             row.push_str(": ");
@@ -638,10 +650,22 @@ fn compact_web_search_result(
             row.push_str(&url);
             row.push(')');
         }
-        lines.push(row);
+        lines.push(truncate_tool_result_field(
+            &row,
+            TOOL_RESULT_WEB_SEARCH_ROW_MAX_CHARS,
+        ));
     }
 
     (lines.len() > 3).then(|| lines.join("\n"))
+}
+
+fn truncate_tool_result_field(value: &str, max_bytes: usize) -> String {
+    let truncated = crate::worker::truncate_chars(value, max_bytes);
+    if truncated.len() == value.len() {
+        truncated.to_string()
+    } else {
+        format!("{truncated}...")
+    }
 }
 
 fn push_clean_json_field(
@@ -1376,7 +1400,10 @@ mod tests {
                 {
                     "title": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>\nSource: Web Search\n---\nLatest and Breaking News - The Sydney Morning Herald\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>",
                     "url": "https://www.smh.com.au/breaking-news",
-                    "snippet": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>\nSource: Web Search\n---\nThe future of Australian swimming has arrived.\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>"
+                    "snippet": format!(
+                        "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>\nSource: Web Search\n---\nThe future of Australian swimming has arrived. {}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>",
+                        "noise ".repeat(200)
+                    )
                 }
             ]
         })
@@ -1390,6 +1417,10 @@ mod tests {
         assert!(
             compacted.find("Search results:").unwrap() < compacted.find("Latest").unwrap(),
             "result rows should be explicit and easy for the reducer to read: {compacted}"
+        );
+        assert!(
+            compacted.lines().all(|line| line.len() <= 360),
+            "web_search result rows should stay bounded: {compacted}"
         );
     }
 

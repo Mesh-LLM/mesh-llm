@@ -93,6 +93,7 @@ fn strip_tag_pairs(content: &str, start_tag: &str, end_tag: &str) -> String {
 }
 
 fn tool_call_candidates(content: &str) -> Vec<Value> {
+    let content = bounded_prefix(content, MAX_RESCUE_INPUT_BYTES);
     let mut candidates = Vec::new();
     for json_candidate in json_candidates(content) {
         if let Ok(value) = serde_json::from_str::<Value>(&json_candidate) {
@@ -713,6 +714,17 @@ mod tests {
 
         assert_eq!(calls[0].name, "exec");
         assert_eq!(calls[0].arguments["command"], "printf ok > /tmp/out");
+    }
+
+    #[test]
+    fn rescue_syntax_parsers_only_scan_bounded_prefix() {
+        let content = format!(
+            "{}<tool_call>exec{{command:\"printf late > /tmp/out\"}}<tool_call>",
+            "x".repeat(MAX_RESCUE_INPUT_BYTES + 16)
+        );
+        let error = rescue_tool_call_from_text(&content, &["exec".to_string()]).unwrap_err();
+
+        assert_eq!(error, ToolCallParseError::Malformed);
     }
 
     #[test]

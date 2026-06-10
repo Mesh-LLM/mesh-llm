@@ -378,7 +378,14 @@ async fn write_progress_body(
 ) -> std::io::Result<()> {
     let body = &moa_result.response_body;
     if is_moa_failure_body(body) {
-        return write_failure_as_sse_tail(&mut tcp_stream, body, adapter, completion_id).await;
+        return write_failure_as_sse_tail(
+            &mut tcp_stream,
+            body,
+            adapter,
+            completion_id,
+            continuation,
+        )
+        .await;
     }
     let text_stream_mode = final_text_stream_mode_for_result(moa_result);
     match adapter {
@@ -497,6 +504,7 @@ async fn write_failure_as_sse_tail(
     body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
+    continuation: Option<ProgressContinuation>,
 ) -> std::io::Result<()> {
     let err_msg = body
         .pointer("/error/message")
@@ -505,13 +513,16 @@ async fn write_failure_as_sse_tail(
 
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
-            let ev = serde_json::json!({
+            let mut ev = serde_json::json!({
                 "type": "response.failed",
                 "response": {
                     "id": completion_id,
                     "error": { "message": err_msg },
                 },
             });
+            if let Some(continuation) = continuation {
+                ev["sequence_number"] = serde_json::Value::from(continuation.next_sequence_number);
+            }
             format!("data: {ev}\n\n")
         }
         _ => {
@@ -775,6 +786,7 @@ mod tests {
     async fn capture_failure_tail(
         adapter: proxy::ResponseAdapter,
         body: serde_json::Value,
+        continuation: Option<ProgressContinuation>,
     ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -782,9 +794,15 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            write_failure_as_sse_tail(&mut socket, &body, adapter, TEST_COMPLETION_ID)
-                .await
-                .expect("write");
+            write_failure_as_sse_tail(
+                &mut socket,
+                &body,
+                adapter,
+                TEST_COMPLETION_ID,
+                continuation,
+            )
+            .await
+            .expect("write");
             socket.shutdown().await.expect("shutdown");
         });
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
@@ -804,7 +822,7 @@ mod tests {
         let body = serde_json::json!({
             "error": { "message": "All workers failed", "code": "all_workers_failed" }
         });
-        let raw = capture_failure_tail(proxy::ResponseAdapter::None, body).await;
+        let raw = capture_failure_tail(proxy::ResponseAdapter::None, body, None).await;
         assert!(
             raw.contains("\"finish_reason\":\"error\""),
             "failure tail must set finish_reason=error; got: {raw}"
@@ -819,6 +837,31 @@ mod tests {
         assert!(
             raw.contains(TEST_COMPLETION_ID),
             "expected completion id {TEST_COMPLETION_ID} on the error chunk; got: {raw}"
+        );
+    }
+
+    #[tokio::test]
+    async fn responses_failure_tail_keeps_progress_sequence_number() {
+        let body = serde_json::json!({
+            "error": { "message": "All workers failed", "code": "all_workers_failed" }
+        });
+        let raw = capture_failure_tail(
+            proxy::ResponseAdapter::OpenAiResponsesStream,
+            body,
+            Some(ProgressContinuation {
+                created_at: 1_700_000_000,
+                next_sequence_number: 7,
+            }),
+        )
+        .await;
+
+        assert!(
+            raw.contains(r#""sequence_number":7"#),
+            "Responses failure tail must continue progress sequence; got: {raw}"
+        );
+        assert!(
+            raw.contains("[DONE]"),
+            "failure tail must terminate the Responses SSE stream with [DONE]; got: {raw}"
         );
     }
 

@@ -1106,18 +1106,7 @@ async fn resolve_decision(
 // ─── Response builders ───────────────────────────────────────────────
 
 fn best_answer(outputs: &[WorkerOutput]) -> String {
-    outputs
-        .iter()
-        .filter(|o| {
-            matches!(o.kind, normalize::OutputKind::Answer)
-                && !normalize::is_silent_reply_sentinel(&o.payload)
-        })
-        // `total_cmp` is total over all f32 (including NaN/Inf); `partial_cmp`
-        // can return `None` on NaN, which would panic on `unwrap`.
-        // `normalize_worker_output` now sanitizes non-finite confidences
-        // before they reach here, but using `total_cmp` keeps this site
-        // panic-free even if a future caller skips the normalizer.
-        .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+    arbiter::best_answer_output(outputs)
         .map(|o| o.payload.clone())
         .unwrap_or_default()
 }
