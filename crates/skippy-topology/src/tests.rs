@@ -41,6 +41,13 @@ fn stage_layout(plan: &TopologyPlan) -> Vec<(&str, u32, u32)> {
         .collect()
 }
 
+fn role_layout(plan: &TopologyPlan) -> Vec<Vec<StageRole>> {
+    plan.stages
+        .iter()
+        .map(|stage| stage.roles.clone())
+        .collect()
+}
+
 #[test]
 fn dense_attention_plan_allows_costed_kv_migration() {
     let request = TopologyPlanRequest {
@@ -66,6 +73,52 @@ fn dense_attention_plan_allows_costed_kv_migration() {
             .all(|stage| stage.migration_policy == MigrationPolicy::CostedKv)
     );
     assert!(plan.diagnostics.is_empty());
+}
+
+#[test]
+fn split_topology_labels_driver_embedding_intermediate_and_readout_roles() {
+    let request = TopologyPlanRequest {
+        topology_id: "roles".to_string(),
+        model_id: "qwen3".to_string(),
+        layers: dense_attention_layers(9, 10),
+        nodes: nodes(3),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_even_contiguous(&request).expect("plan");
+
+    assert_eq!(
+        role_layout(&plan),
+        vec![
+            vec![StageRole::Driver, StageRole::Embedding],
+            vec![StageRole::Intermediate],
+            vec![StageRole::Readout],
+        ]
+    );
+}
+
+#[test]
+fn single_stage_topology_labels_combined_driver_embedding_and_readout() {
+    let request = TopologyPlanRequest {
+        topology_id: "single-roles".to_string(),
+        model_id: "qwen3".to_string(),
+        layers: dense_attention_layers(2, 10),
+        nodes: nodes(1),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_even_contiguous(&request).expect("plan");
+
+    assert_eq!(
+        role_layout(&plan),
+        vec![vec![
+            StageRole::Driver,
+            StageRole::Embedding,
+            StageRole::Readout,
+        ]]
+    );
 }
 
 #[test]
