@@ -25,14 +25,6 @@ use tokio::net::TcpStream;
 /// turn finishes in ~3s, so we emit two or three lines before the
 /// real answer starts streaming.
 const MOA_PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1000);
-const VISIBLE_PROGRESS_LINES: &[&str] = &[
-    "Routing through mesh...",
-    "Querying peer models...",
-    "Comparing responses...",
-    "Waiting on a slow peer...",
-    "Still gathering responses...",
-    "Keeping the mesh request alive...",
-];
 
 /// Streaming MoA turn with `reasoning_content` progress drip.
 ///
@@ -342,12 +334,9 @@ where
         }
         let text = progress_line(step, adapter);
         step += 1;
-        let write_result = if let Some(text) = text {
+        if let Err(e) =
             write_progress_event(stream, &text, adapter, completion_id, &mut sequence_number).await
-        } else {
-            write_progress_keepalive(stream).await
-        };
-        if let Err(e) = write_result {
+        {
             // Progress write failed — almost always means the client
             // closed the connection. Returning Err here drops the
             // pinned MoA future, cancelling worker dispatch and any
@@ -378,14 +367,7 @@ async fn write_progress_body(
 ) -> std::io::Result<()> {
     let body = &moa_result.response_body;
     if is_moa_failure_body(body) {
-        return write_failure_as_sse_tail(
-            &mut tcp_stream,
-            body,
-            adapter,
-            completion_id,
-            continuation,
-        )
-        .await;
+        return write_failure_as_sse_tail(&mut tcp_stream, body, adapter, completion_id).await;
     }
     let text_stream_mode = final_text_stream_mode_for_result(moa_result);
     match adapter {
@@ -406,20 +388,26 @@ async fn write_progress_body(
 
 /// The lines we drip into the thinking pane while MoA arbitrates.
 /// Short, factual, and grounded in what mesh-llm is actually doing —
-/// not invented model "thoughts". Once this finite list is exhausted,
-/// the stream switches to quiet SSE comments so clients stay connected
-/// without accumulating repeated thinking text.
-fn progress_line(step: usize, _adapter: proxy::ResponseAdapter) -> Option<String> {
-    VISIBLE_PROGRESS_LINES
-        .get(step)
-        .map(|line| format!("{line}\n"))
-}
-
-async fn write_progress_keepalive(stream: &mut TcpStream) -> std::io::Result<()> {
-    let data = ": moa-progress\n\n";
-    let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
-    stream.write_all(framed.as_bytes()).await?;
-    stream.flush().await
+/// not invented model "thoughts". The opening three lines fire
+/// once each at ~1s/2s/3s; the rest are a slow "waiting on a slow
+/// peer" cycle that explains a long tail without spamming repeats.
+fn progress_line(step: usize, _adapter: proxy::ResponseAdapter) -> String {
+    const OPENING: &[&str] = &[
+        "Routing through mesh…",
+        "Querying peer models…",
+        "Comparing responses…",
+    ];
+    const TAIL_CYCLE: &[&str] = &[
+        "Waiting on a slow peer…",
+        "Still gathering responses…",
+        "Hold on, this one's taking a moment…",
+    ];
+    let line = if step < OPENING.len() {
+        OPENING[step]
+    } else {
+        TAIL_CYCLE[(step - OPENING.len()) % TAIL_CYCLE.len()]
+    };
+    format!("{line}\n")
 }
 
 async fn write_progress_event(
@@ -504,7 +492,6 @@ async fn write_failure_as_sse_tail(
     body: &serde_json::Value,
     adapter: proxy::ResponseAdapter,
     completion_id: &str,
-    continuation: Option<ProgressContinuation>,
 ) -> std::io::Result<()> {
     let err_msg = body
         .pointer("/error/message")
@@ -513,16 +500,13 @@ async fn write_failure_as_sse_tail(
 
     let data = match adapter {
         proxy::ResponseAdapter::OpenAiResponsesStream => {
-            let mut ev = serde_json::json!({
+            let ev = serde_json::json!({
                 "type": "response.failed",
                 "response": {
                     "id": completion_id,
                     "error": { "message": err_msg },
                 },
             });
-            if let Some(continuation) = continuation {
-                ev["sequence_number"] = serde_json::Value::from(continuation.next_sequence_number);
-            }
             format!("data: {ev}\n\n")
         }
         _ => {
@@ -562,23 +546,24 @@ mod tests {
     const TEST_COMPLETION_ID: &str = "chatcmpl-moa-deadbeef";
 
     #[test]
-    fn progress_line_emits_finite_visible_updates_then_keepalive() {
-        let a = progress_line(0, proxy::ResponseAdapter::None).expect("line 0");
-        let b = progress_line(1, proxy::ResponseAdapter::None).expect("line 1");
-        let c = progress_line(2, proxy::ResponseAdapter::None).expect("line 2");
+    fn progress_line_walks_opening_then_cycles_tail() {
+        // First 3 lines are the opening; we never want to repeat one
+        // of those within the first three ticks.
+        let a = progress_line(0, proxy::ResponseAdapter::None);
+        let b = progress_line(1, proxy::ResponseAdapter::None);
+        let c = progress_line(2, proxy::ResponseAdapter::None);
         assert_ne!(a, b);
         assert_ne!(b, c);
         assert_ne!(a, c);
-
-        let d = progress_line(3, proxy::ResponseAdapter::None).expect("line 3");
-        let e = progress_line(4, proxy::ResponseAdapter::None).expect("line 4");
-        let f = progress_line(5, proxy::ResponseAdapter::None).expect("line 5");
+        // After the opening, the tail cycles so we never go silent.
+        let d = progress_line(3, proxy::ResponseAdapter::None);
+        let e = progress_line(4, proxy::ResponseAdapter::None);
+        let f = progress_line(5, proxy::ResponseAdapter::None);
+        let g = progress_line(6, proxy::ResponseAdapter::None);
         assert_ne!(d, e);
         assert_ne!(e, f);
-        assert!(
-            progress_line(6, proxy::ResponseAdapter::None).is_none(),
-            "after finite visible progress, the stream should switch to quiet keepalives"
-        );
+        // step=6 is one full TAIL_CYCLE past step=3 → must be equal.
+        assert_eq!(d, g, "tail must cycle so a slow MoA turn keeps printing");
     }
 
     /// Capture the wire bytes produced by `write_progress_event` for
@@ -614,7 +599,7 @@ mod tests {
         // delta.reasoning_content (so goose/openai-sdk-aware clients
         // route it to a thinking pane, not the main answer).
         let raw =
-            capture_progress_event(proxy::ResponseAdapter::None, "Routing through mesh...\n").await;
+            capture_progress_event(proxy::ResponseAdapter::None, "Routing through mesh…\n").await;
         let payload = raw
             .lines()
             .find_map(|l| l.strip_prefix("data: "))
@@ -623,7 +608,7 @@ mod tests {
         assert_eq!(
             v.pointer("/choices/0/delta/reasoning_content")
                 .and_then(|s| s.as_str()),
-            Some("Routing through mesh...\n"),
+            Some("Routing through mesh…\n"),
             "progress events for chat adapter must drip into \
              delta.reasoning_content so they don't pollute the answer; payload: {payload}"
         );
@@ -640,31 +625,6 @@ mod tests {
             "progress chunks must reuse completion_id so clients correlate the stream; \
              payload: {payload}"
         );
-    }
-
-    #[tokio::test]
-    async fn progress_keepalive_uses_sse_comment_not_reasoning_text() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind loopback");
-        let addr = listener.local_addr().expect("local_addr");
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
-            write_progress_keepalive(&mut socket)
-                .await
-                .expect("write keepalive");
-            socket.shutdown().await.expect("shutdown");
-        });
-        let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
-        use tokio::io::AsyncReadExt;
-        let mut bytes = Vec::new();
-        client.read_to_end(&mut bytes).await.expect("read");
-        server.await.expect("server task");
-
-        let raw = String::from_utf8_lossy(&bytes);
-        assert!(raw.contains(": moa-progress"));
-        assert!(!raw.contains("reasoning_content"));
-        assert!(!raw.contains("response.reasoning_text.delta"));
     }
 
     #[test]
@@ -786,7 +746,6 @@ mod tests {
     async fn capture_failure_tail(
         adapter: proxy::ResponseAdapter,
         body: serde_json::Value,
-        continuation: Option<ProgressContinuation>,
     ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -794,15 +753,9 @@ mod tests {
         let addr = listener.local_addr().expect("addr");
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
-            write_failure_as_sse_tail(
-                &mut socket,
-                &body,
-                adapter,
-                TEST_COMPLETION_ID,
-                continuation,
-            )
-            .await
-            .expect("write");
+            write_failure_as_sse_tail(&mut socket, &body, adapter, TEST_COMPLETION_ID)
+                .await
+                .expect("write");
             socket.shutdown().await.expect("shutdown");
         });
         let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
@@ -822,7 +775,7 @@ mod tests {
         let body = serde_json::json!({
             "error": { "message": "All workers failed", "code": "all_workers_failed" }
         });
-        let raw = capture_failure_tail(proxy::ResponseAdapter::None, body, None).await;
+        let raw = capture_failure_tail(proxy::ResponseAdapter::None, body).await;
         assert!(
             raw.contains("\"finish_reason\":\"error\""),
             "failure tail must set finish_reason=error; got: {raw}"
@@ -837,31 +790,6 @@ mod tests {
         assert!(
             raw.contains(TEST_COMPLETION_ID),
             "expected completion id {TEST_COMPLETION_ID} on the error chunk; got: {raw}"
-        );
-    }
-
-    #[tokio::test]
-    async fn responses_failure_tail_keeps_progress_sequence_number() {
-        let body = serde_json::json!({
-            "error": { "message": "All workers failed", "code": "all_workers_failed" }
-        });
-        let raw = capture_failure_tail(
-            proxy::ResponseAdapter::OpenAiResponsesStream,
-            body,
-            Some(ProgressContinuation {
-                created_at: 1_700_000_000,
-                next_sequence_number: 7,
-            }),
-        )
-        .await;
-
-        assert!(
-            raw.contains(r#""sequence_number":7"#),
-            "Responses failure tail must continue progress sequence; got: {raw}"
-        );
-        assert!(
-            raw.contains("[DONE]"),
-            "failure tail must terminate the Responses SSE stream with [DONE]; got: {raw}"
         );
     }
 
@@ -892,7 +820,7 @@ mod tests {
             let mut seq = 1i32;
             write_progress_event(
                 &mut socket,
-                "Routing through mesh...\n",
+                "Routing through mesh…\n",
                 proxy::ResponseAdapter::OpenAiResponsesStream,
                 TEST_COMPLETION_ID,
                 &mut seq,

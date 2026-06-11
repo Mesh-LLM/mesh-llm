@@ -105,7 +105,6 @@ const chatMock = vi.hoisted(() => {
       content: string | MultimodalContent
       model: string
       systemPrompt: string
-      priorBodies: string[]
     }>,
     reloadCalls: [] as string[],
     hookConversationIds: [] as string[],
@@ -278,15 +277,7 @@ vi.mock('@/features/chat/api/use-chat', async () => {
         return {
           messages,
           sendMessage: vi.fn(async (content: string | MultimodalContent) => {
-            chatMock.sendCalls.push({
-              conversationId,
-              content,
-              model,
-              systemPrompt,
-              priorBodies: messagesRef.current.map((message) =>
-                message.parts.map((part) => (part.type === 'text' ? part.content : '')).join('')
-              )
-            })
+            chatMock.sendCalls.push({ conversationId, content, model, systemPrompt })
             const body =
               typeof content === 'string'
                 ? content
@@ -901,30 +892,6 @@ describe('ChatPage', () => {
         'Retried assistant reply'
       ])
     })
-  })
-
-  it('sends follow-up prompts with same-conversation history', async () => {
-    const user = userEvent.setup()
-    chatMock.sendStatus = 'ready'
-    chatMock.sendAssistantText = 'First answer'
-
-    renderChatPage({ mode: 'live' })
-
-    await user.type(screen.getByLabelText('Prompt'), 'Remember alpha')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
-
-    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(1))
-    const conversationId = chatMock.sendCalls[0]?.conversationId
-    expect(conversationId).toBeTruthy()
-
-    chatMock.sendAssistantText = 'Second answer'
-    await user.type(screen.getByLabelText('Prompt'), 'What did I ask you to remember?')
-    await user.click(screen.getByRole('button', { name: 'Send' }))
-
-    await waitFor(() => expect(chatMock.sendCalls).toHaveLength(2))
-
-    expect(chatMock.sendCalls[1]?.conversationId).toBe(conversationId)
-    expect(chatMock.sendCalls[1]?.priorBodies).toEqual(['Remember alpha', 'First answer'])
   })
 
   it('renders streamed thinking separately, formats final markdown, and persists the raw assistant body', async () => {

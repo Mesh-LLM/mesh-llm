@@ -96,17 +96,14 @@ fn config_with_three_recording_workers() -> (
         moa::ModelEntry {
             name: "fast-3b".into(),
             backend_index: 0,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "mid-13b".into(),
             backend_index: 1,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "strong-32b".into(),
             backend_index: 2,
-            parameter_count_b: None,
         },
     ];
 
@@ -122,95 +119,6 @@ fn config_with_three_recording_workers() -> (
     (config, fast, mid, strong)
 }
 
-struct ReducerFailWorkerToolBackend {
-    calls: AtomicUsize,
-    reducer_calls: AtomicUsize,
-    worker_calls: AtomicUsize,
-}
-
-impl ReducerFailWorkerToolBackend {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            calls: AtomicUsize::new(0),
-            reducer_calls: AtomicUsize::new(0),
-            worker_calls: AtomicUsize::new(0),
-        })
-    }
-
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-
-    fn reducer_calls(&self) -> usize {
-        self.reducer_calls.load(Ordering::SeqCst)
-    }
-
-    fn worker_calls(&self) -> usize {
-        self.worker_calls.load(Ordering::SeqCst)
-    }
-}
-
-#[async_trait]
-impl moa::ModelBackend for ReducerFailWorkerToolBackend {
-    async fn chat_completion(
-        &self,
-        _model: &str,
-        _messages: &[Value],
-        _tools: Option<&Value>,
-        _max_tokens: u32,
-        _timeout: Duration,
-        sampling: moa::SamplingParams,
-    ) -> Result<Value, String> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        // Test double: reducer calls use low-temperature sampling, while
-        // worker calls use a higher temperature. Treat low-temperature calls
-        // as reducer timeouts so recovery can be exercised deterministically.
-        if sampling.temperature < 0.5 {
-            self.reducer_calls.fetch_add(1, Ordering::SeqCst);
-            return Err("remote timeout after 60s".to_string());
-        }
-
-        self.worker_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(json!({
-            "choices": [{
-                "message": {
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_shell",
-                        "type": "function",
-                        "function": {
-                            "name": "shell",
-                            "arguments": "{\"command\":\"cat facts/signal.md\"}"
-                        }
-                    }]
-                }
-            }]
-        }))
-    }
-}
-
-fn config_with_reducer_fail_worker_tool() -> (moa::GatewayConfig, Arc<ReducerFailWorkerToolBackend>)
-{
-    let backend = ReducerFailWorkerToolBackend::new();
-    let backends: Vec<Arc<dyn moa::ModelBackend>> = vec![backend.clone()];
-    let models = vec![moa::ModelEntry {
-        name: "agent-13b".into(),
-        backend_index: 0,
-        parameter_count_b: Some(13.0),
-    }];
-
-    let config = moa::GatewayConfig {
-        backends,
-        models,
-        worker_timeout: Duration::from_secs(2),
-        hedge_delay: Duration::from_millis(5),
-        reducer_timeout: Duration::from_secs(2),
-        first_answer_grace: Duration::ZERO,
-        enable_thinking: None,
-    };
-    (config, backend)
-}
-
 fn read_file_tool() -> Value {
     json!([{
         "type": "function",
@@ -224,35 +132,6 @@ fn read_file_tool() -> Value {
             }
         }
     }])
-}
-
-fn shell_and_tree_tools() -> Value {
-    json!([
-        {
-            "type": "function",
-            "function": {
-                "name": "tree",
-                "description": "List files",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "shell",
-                "description": "Run a shell command",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"command": {"type": "string"}},
-                    "required": ["command"],
-                }
-            }
-        }
-    ])
 }
 
 #[tokio::test]
@@ -364,48 +243,6 @@ async fn trailing_user_after_unsynthesised_tool_result_classifies_as_tool_result
         mid.calls(),
         strong.calls()
     );
-}
-
-#[tokio::test]
-async fn tool_result_reducer_timeout_recovers_with_worker_tool_call() {
-    // Live Goose regression: a mesh peer can time out every reducer candidate
-    // on a tool-result turn. MoA should make one compact recovery fanout and
-    // return a usable tool call instead of surfacing the timeout to the agent.
-    let (config, backend) = config_with_reducer_fail_worker_tool();
-
-    let body = json!({
-        "model": "mesh",
-        "tools": shell_and_tree_tools(),
-        "messages": [
-            {"role": "user", "content": "Inspect the repository, read files, edit src/smoke_calc.py, and run the tests."},
-            {
-                "role": "assistant",
-                "content": null,
-                "tool_calls": [{
-                    "id": "call_tree",
-                    "type": "function",
-                    "function": {"name": "tree", "arguments": "{\"path\":\".\"}"}
-                }]
-            },
-            {"role": "tool", "tool_call_id": "call_tree", "content": "facts/\n  signal.md\nsrc/\n  smoke_calc.py\n"},
-        ],
-        "max_tokens": 64,
-    });
-
-    let result = moa::handle_turn(&config, &body).await;
-
-    assert_eq!(result.turn_kind, moa::TurnKind::ToolResult);
-    assert!(result.reducer_used);
-    assert_eq!(result.reducer_attempts, 1);
-    assert_eq!(backend.reducer_calls(), 1);
-    assert_eq!(backend.worker_calls(), 1);
-    assert_eq!(backend.calls(), 2);
-
-    let tool_name = result
-        .response_body
-        .pointer("/choices/0/message/tool_calls/0/function/name")
-        .and_then(Value::as_str);
-    assert_eq!(tool_name, Some("shell"));
 }
 
 #[tokio::test]

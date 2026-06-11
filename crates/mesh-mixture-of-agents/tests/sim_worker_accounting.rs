@@ -88,12 +88,10 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
         moa::ModelEntry {
             name: "fast-a-3b".into(),
             backend_index: 0,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "fast-b-3b".into(),
             backend_index: 1,
-            parameter_count_b: None,
         },
         // The two big-tier models — one of them will be picked as
         // `Strong`. They are deliberately slow so the early-exit path
@@ -101,12 +99,10 @@ fn four_workers_two_fast_consensus() -> moa::GatewayConfig {
         moa::ModelEntry {
             name: "slow-a-32b".into(),
             backend_index: 2,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "slow-b-32b".into(),
             backend_index: 3,
-            parameter_count_b: None,
         },
     ];
 

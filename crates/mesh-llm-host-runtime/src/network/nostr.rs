@@ -1242,7 +1242,7 @@ fn model_tiers() -> Vec<(String, f64)> {
 ///
 /// Tiers:
 ///   <8GB:    Qwen3-4B (2.5G)
-///   8-24GB:  Gemma-4-E4B-it (4.6G)
+///   8-24GB:  Qwen3-8B (5G)
 ///   24-50GB: Qwen3.5-27B (17G) — vision + text
 ///   50-63GB: GLM-4.7-Flash (18G) — fast, tool calling
 ///   63-179GB: Qwen3-Coder-Next (48G) — frontier coder ~85B
@@ -1294,7 +1294,7 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
         },
         Pack {
             min_vram: 8.0,
-            models: vec![catalog_ref("Gemma-4-E4B-it-Q4_K_M")],
+            models: vec![catalog_ref("Qwen3-8B-Q4_K_M")],
         },
         Pack {
             min_vram: 0.0,
@@ -1408,13 +1408,13 @@ mod auto_pack_tests {
     #[test]
     fn pack_8gb_single_model() {
         let pack = auto_model_pack(8.0);
-        assert_single_pack_model(&pack, "Gemma-4-E4B-it-Q4_K_M");
+        assert_single_pack_model(&pack, "Qwen3-8B-Q4_K_M");
     }
 
     #[test]
     fn pack_16gb_single() {
         let pack = auto_model_pack(16.0);
-        assert_single_pack_model(&pack, "Gemma-4-E4B-it-Q4_K_M");
+        assert_single_pack_model(&pack, "Qwen3-8B-Q4_K_M");
     }
 
     #[test]

@@ -51,9 +51,8 @@ pub async fn try_handle_moa(
     };
 
     let enable_thinking = effective_enable_thinking_for_moa(&body_json);
-    let moa_required_tokens = context_budget::add_moa_context_reserve(&body_json, required_tokens);
 
-    let Some(mut config) = build_moa_config(node, targets, moa_required_tokens).await else {
+    let Some(mut config) = build_moa_config(node, targets, required_tokens).await else {
         let _ = proxy::send_503(tcp_stream, "MoA requires ≥2 models available in the mesh").await;
         return None;
     };
@@ -77,7 +76,6 @@ fn effective_enable_thinking_for_moa(body: &serde_json::Value) -> Option<bool> {
     extract_enable_thinking_override(body).or(Some(false))
 }
 
-mod context_budget;
 pub(in crate::network::openai) mod context_selection;
 mod progress;
 
@@ -380,7 +378,6 @@ pub async fn build_moa_config(
         .into_iter()
         .filter(|n| n != moa::VIRTUAL_MODEL_NAME)
         .collect();
-    let descriptors = node.all_served_model_descriptors().await;
 
     // Group aliases by canonical base. The old shape sorted by name
     // length, took the *first* alias per base, and dropped the rest —
@@ -397,7 +394,6 @@ pub async fn build_moa_config(
             &http,
             &aliases,
             required_tokens,
-            &descriptors,
             &mut backends,
             &mut models,
             &mut local_count,
@@ -482,7 +478,6 @@ async fn resolve_one_worker_from_aliases(
     http: &reqwest::Client,
     aliases: &[String],
     required_tokens: Option<u32>,
-    descriptors: &[mesh::ServedModelDescriptor],
     backends: &mut Vec<std::sync::Arc<dyn moa::ModelBackend>>,
     models: &mut Vec<moa::ModelEntry>,
     local_count: &mut usize,
@@ -492,7 +487,6 @@ async fn resolve_one_worker_from_aliases(
         targets,
         http,
         required_tokens,
-        descriptors,
     };
     for name in aliases {
         if add_worker_backend(&resolution, name, backends, models, local_count).await {
@@ -577,7 +571,6 @@ struct WorkerBackendResolution<'a> {
     targets: Option<&'a election::ModelTargets>,
     http: &'a reqwest::Client,
     required_tokens: Option<u32>,
-    descriptors: &'a [mesh::ServedModelDescriptor],
 }
 
 async fn add_worker_backend(
@@ -607,7 +600,6 @@ async fn add_worker_backend(
             models.push(moa::ModelEntry {
                 name: name.to_string(),
                 backend_index: backend_idx,
-                parameter_count_b: model_parameter_count_b(name, resolution.descriptors),
             });
             *local_count += 1;
             return true;
@@ -639,17 +631,10 @@ async fn add_worker_backend(
         models.push(moa::ModelEntry {
             name: name.to_string(),
             backend_index: backend_idx,
-            parameter_count_b: model_parameter_count_b(name, resolution.descriptors),
         });
         return true;
     }
     false
-}
-
-fn model_parameter_count_b(name: &str, descriptors: &[mesh::ServedModelDescriptor]) -> Option<f64> {
-    super::transport::descriptor_metadata_for_model(name, descriptors)
-        .and_then(|metadata| metadata.parameter_count_b)
-        .filter(|count| count.is_finite() && *count > 0.0)
 }
 
 /// Canonical name used for cross-peer dedup. Different peers advertise the
@@ -712,9 +697,6 @@ impl moa::ModelBackend for LocalModelBackend {
             body.as_object_mut()
                 .unwrap()
                 .insert("tools".to_string(), tools.clone());
-            body.as_object_mut()
-                .unwrap()
-                .insert("parallel_tool_calls".to_string(), serde_json::json!(false));
         }
         moa::apply_enable_thinking(&mut body, sampling.enable_thinking);
         let resp = self
@@ -769,9 +751,6 @@ impl moa::ModelBackend for RemoteModelBackend {
             body.as_object_mut()
                 .unwrap()
                 .insert("tools".to_string(), tools.clone());
-            body.as_object_mut()
-                .unwrap()
-                .insert("parallel_tool_calls".to_string(), serde_json::json!(false));
         }
         moa::apply_enable_thinking(&mut body, sampling.enable_thinking);
         let body_bytes = serde_json::to_vec(&body).map_err(|e| format!("serialize: {e}"))?;
@@ -1117,12 +1096,12 @@ fn content_pieces_for_streaming(
 /// that hit `/v1/responses` with `stream:true` get event shapes their parser
 /// understands.
 ///
-/// We synthesize the same text-output lifecycle that the standard Responses
-/// relay emits: response creation, output item/content part start, text delta,
-/// text/content/item done, and final completion. The text chunking mode is
-/// chosen from the completed MoA turn: committed non-reducer answers can be
-/// split for issue #618's visible streaming path, while reducer output remains
-/// one-shot until reducer streaming is implemented deliberately.
+/// We synthesize the minimum set the standard Responses-API stream emits:
+/// `response.created`, one or more `response.output_text.delta` events,
+/// `response.output_text.done`, and `response.completed`. The text chunking
+/// mode is chosen from the completed MoA turn: committed non-reducer answers
+/// can be split for issue #618's visible streaming path, while reducer output
+/// remains one-shot until reducer streaming is implemented deliberately.
 async fn send_moa_as_responses_sse(
     stream: TcpStream,
     response: &serde_json::Value,
@@ -1212,23 +1191,11 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_i
                 serde_json::Value::String(response_id.clone()),
             );
         }
-        write_responses_sse_event(&mut stream, "response.created", &created).await?;
+        let data = format!("data: {created}\n\n");
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
+        stream.flush().await?;
     }
-
-    if let Some(tool_call) = first_responses_tool_call_item(response, created_at) {
-        write_responses_tool_call_sse_events(&mut stream, response, &tool_call, sequence_number)
-            .await?;
-        write_responses_sse_done(&mut stream).await?;
-        return Ok(());
-    }
-
-    let item_added = resp::responses_stream_output_item_added_event(&item_id, sequence_number);
-    sequence_number = sequence_number.saturating_add(1);
-    write_responses_sse_event(&mut stream, "response.output_item.added", &item_added).await?;
-
-    let part_added = resp::responses_stream_content_part_added_event(&item_id, sequence_number);
-    sequence_number = sequence_number.saturating_add(1);
-    write_responses_sse_event(&mut stream, "response.content_part.added", &part_added).await?;
 
     let pieces = content_pieces_for_streaming(&content, text_stream_mode);
     let chunk_delay = MOA_STREAM_CHUNK_DELAY;
@@ -1245,7 +1212,10 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_i
             sequence_number,
         );
         sequence_number = sequence_number.saturating_add(1);
-        write_responses_sse_event(&mut stream, "response.output_text.delta", &delta_event).await?;
+        let data = format!("data: {}\n\n", delta_event);
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
+        stream.flush().await?;
         if let Some(delay) = inter_chunk_delay
             && idx + 1 < pieces.len()
         {
@@ -1256,12 +1226,6 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_i
     let text_done =
         resp::responses_stream_text_done_event_with_sequence(&item_id, &content, sequence_number);
     sequence_number = sequence_number.saturating_add(1);
-    let part_done =
-        resp::responses_stream_content_part_done_event(&item_id, &content, sequence_number);
-    sequence_number = sequence_number.saturating_add(1);
-    let item_done =
-        resp::responses_stream_output_item_done_event(&item_id, &content, sequence_number);
-    sequence_number = sequence_number.saturating_add(1);
     let completed = resp::responses_stream_completed_event_with_sequence(
         &response_id,
         created_at,
@@ -1271,167 +1235,20 @@ pub(in crate::network::openai::moa_gateway) async fn send_moa_as_responses_sse_i
         usage,
         sequence_number,
     );
-    let tail = [
-        ("response.output_text.done", text_done),
-        ("response.content_part.done", part_done),
-        ("response.output_item.done", item_done),
-        ("response.completed", completed),
-    ];
-    for (event_name, event) in &tail {
-        write_responses_sse_event(&mut stream, event_name, event).await?;
+    let tail = [text_done, completed];
+    for event in &tail {
+        let data = format!("data: {}\n\n", event);
+        let framed = format!("{:x}\r\n{}\r\n", data.len(), data);
+        stream.write_all(framed.as_bytes()).await?;
     }
 
-    write_responses_sse_done(&mut stream).await
-}
-
-struct ResponsesToolCallItem {
-    item_id: String,
-    call_id: String,
-    name: String,
-    arguments: String,
-}
-
-fn first_responses_tool_call_item(
-    response: &serde_json::Value,
-    created_at: i64,
-) -> Option<ResponsesToolCallItem> {
-    let tool_call = response
-        .pointer("/choices/0/message/tool_calls")
-        .and_then(serde_json::Value::as_array)?
-        .first()?;
-    let call_id = tool_call
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| format!("call_{created_at}_0"));
-    let function = tool_call
-        .get("function")
-        .and_then(serde_json::Value::as_object);
-    let name = function
-        .and_then(|function| function.get("name"))
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| tool_call.get("name").and_then(serde_json::Value::as_str))?
-        .trim();
-    if name.is_empty() {
-        return None;
-    }
-    let arguments = function
-        .and_then(|function| function.get("arguments"))
-        .or_else(|| tool_call.get("arguments"))
-        .map(|arguments| match arguments {
-            serde_json::Value::String(arguments) => arguments.clone(),
-            other => other.to_string(),
-        })
-        .unwrap_or_default();
-
-    Some(ResponsesToolCallItem {
-        item_id: format!("fc_moa_{}", short_id_from_response(response)),
-        call_id,
-        name: name.to_string(),
-        arguments,
-    })
-}
-
-async fn write_responses_tool_call_sse_events(
-    stream: &mut TcpStream,
-    response: &serde_json::Value,
-    tool_call: &ResponsesToolCallItem,
-    mut sequence_number: i32,
-) -> std::io::Result<()> {
-    let item_added = responses_tool_call_item_event(
-        "response.output_item.added",
-        tool_call,
-        "",
-        "in_progress",
-        sequence_number,
-    );
-    sequence_number = sequence_number.saturating_add(1);
-    write_responses_sse_event(stream, "response.output_item.added", &item_added).await?;
-
-    let args_delta = serde_json::json!({
-        "type": "response.function_call_arguments.delta",
-        "sequence_number": sequence_number,
-        "item_id": tool_call.item_id,
-        "output_index": 0,
-        "delta": tool_call.arguments,
-    });
-    sequence_number = sequence_number.saturating_add(1);
-    write_responses_sse_event(
-        stream,
-        "response.function_call_arguments.delta",
-        &args_delta,
-    )
-    .await?;
-
-    let args_done = serde_json::json!({
-        "type": "response.function_call_arguments.done",
-        "sequence_number": sequence_number,
-        "item_id": tool_call.item_id,
-        "output_index": 0,
-        "arguments": tool_call.arguments,
-    });
-    sequence_number = sequence_number.saturating_add(1);
-    write_responses_sse_event(stream, "response.function_call_arguments.done", &args_done).await?;
-
-    let item_done = responses_tool_call_item_event(
-        "response.output_item.done",
-        tool_call,
-        &tool_call.arguments,
-        "completed",
-        sequence_number,
-    );
-    sequence_number = sequence_number.saturating_add(1);
-    write_responses_sse_event(stream, "response.output_item.done", &item_done).await?;
-
-    let completed = serde_json::json!({
-        "type": "response.completed",
-        "sequence_number": sequence_number,
-        "response": chat_completion_to_responses_json(response),
-    });
-    write_responses_sse_event(stream, "response.completed", &completed).await
-}
-
-fn responses_tool_call_item_event(
-    event_type: &'static str,
-    tool_call: &ResponsesToolCallItem,
-    arguments: &str,
-    status: &'static str,
-    sequence_number: i32,
-) -> serde_json::Value {
-    serde_json::json!({
-        "type": event_type,
-        "sequence_number": sequence_number,
-        "output_index": 0,
-        "item": {
-            "id": tool_call.item_id,
-            "type": "function_call",
-            "status": status,
-            "call_id": tool_call.call_id,
-            "name": tool_call.name,
-            "arguments": arguments,
-        },
-    })
-}
-
-async fn write_responses_sse_done(stream: &mut TcpStream) -> std::io::Result<()> {
     let done = "data: [DONE]\n\n";
     let framed = format!("{:x}\r\n{}\r\n", done.len(), done);
     stream.write_all(framed.as_bytes()).await?;
-    stream.write_all(b"0\r\n\r\n").await?;
-    stream.shutdown().await
-}
 
-async fn write_responses_sse_event(
-    stream: &mut TcpStream,
-    event_name: &'static str,
-    event: &serde_json::Value,
-) -> std::io::Result<()> {
-    crate::network::openai::response_adapter::write_chunked_sse_event(
-        stream,
-        Some(event_name),
-        &event.to_string(),
-    )
-    .await
+    stream.write_all(b"0\r\n\r\n").await?;
+    stream.shutdown().await?;
+    Ok(())
 }
 
 /// Convert a chat.completion JSON body to a Responses-API JSON body.
@@ -1853,112 +1670,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_sse_emits_output_item_lifecycle() {
-        // Regression: MoA's Responses stream emitted text deltas and
-        // completion, but omitted the output-item/content-part lifecycle
-        // events that agent clients use to attach text to an assistant
-        // message.
-        let response = serde_json::json!({
-            "id": "chatcmpl-moa-lifecycle",
-            "object": "chat.completion",
-            "model": "mesh",
-            "choices": [{
-                "index": 0,
-                "message": { "role": "assistant", "content": "visible answer" },
-                "finish_reason": "stop"
-            }]
-        });
-
-        let raw =
-            capture_responses_sse_body_with_mode(response, MoaFinalTextStreamMode::OneShot).await;
-
-        let expected = vec![
-            "response.created".to_string(),
-            "response.output_item.added".to_string(),
-            "response.content_part.added".to_string(),
-            "response.output_text.delta".to_string(),
-            "response.output_text.done".to_string(),
-            "response.content_part.done".to_string(),
-            "response.output_item.done".to_string(),
-            "response.completed".to_string(),
-        ];
-        let events = response_sse_event_names(&raw);
-        assert_eq!(
-            events, expected,
-            "unexpected Responses SSE event sequence; raw: {raw}"
-        );
-
-        let payload_types = response_sse_payload_types(&raw);
-        assert_eq!(
-            payload_types, events,
-            "event names and payload types must agree; raw: {raw}"
-        );
-    }
-
-    #[tokio::test]
-    async fn responses_sse_emits_function_call_item_for_tool_calls() {
-        let response = serde_json::json!({
-            "id": "chatcmpl-moa-tool",
-            "object": "chat.completion",
-            "model": "mesh",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_lookup",
-                        "type": "function",
-                        "function": {
-                            "name": "lookup_fixture_fact",
-                            "arguments": "{\"key\":\"codeword\"}"
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        });
-
-        let raw =
-            capture_responses_sse_body_with_mode(response, MoaFinalTextStreamMode::OneShot).await;
-
-        assert_eq!(
-            response_sse_event_names(&raw),
-            [
-                "response.created",
-                "response.output_item.added",
-                "response.function_call_arguments.delta",
-                "response.function_call_arguments.done",
-                "response.output_item.done",
-                "response.completed"
-            ],
-            "unexpected Responses tool-call SSE event sequence; raw: {raw}"
-        );
-        let payload_types = response_sse_payload_types(&raw);
-        assert!(
-            !payload_types
-                .iter()
-                .any(|kind| kind == "response.output_text.delta"),
-            "tool-call stream must not emit empty output_text deltas; raw: {raw}"
-        );
-
-        let payloads = response_sse_payloads(&raw);
-        let completed = payloads
-            .iter()
-            .find(|event| event.get("type").and_then(|t| t.as_str()) == Some("response.completed"))
-            .expect("response.completed event");
-        assert_eq!(completed["response"]["output"][0]["type"], "function_call");
-        assert_eq!(
-            completed["response"]["output"][0]["name"],
-            "lookup_fixture_fact"
-        );
-        assert_eq!(
-            completed["response"]["output"][0]["arguments"],
-            "{\"key\":\"codeword\"}"
-        );
-    }
-
-    #[tokio::test]
     async fn responses_sse_emits_responses_shape_usage_not_chat_shape() {
         // Regression: MoA was forwarding the chat-completion `usage`
         // object (prompt_tokens/completion_tokens) straight into the
@@ -2007,32 +1718,6 @@ mod tests {
             !raw.contains("\"completion_tokens\":"),
             "chat-shape completion_tokens must NOT leak into Responses-API SSE; got: {raw}"
         );
-    }
-
-    fn response_sse_event_names(raw: &str) -> Vec<String> {
-        raw.lines()
-            .filter_map(|line| line.strip_prefix("event: "))
-            .map(ToOwned::to_owned)
-            .collect()
-    }
-
-    fn response_sse_payload_types(raw: &str) -> Vec<String> {
-        response_sse_payloads(raw)
-            .into_iter()
-            .filter_map(|v| {
-                v.get("type")
-                    .and_then(|t| t.as_str())
-                    .map(ToOwned::to_owned)
-            })
-            .collect()
-    }
-
-    fn response_sse_payloads(raw: &str) -> Vec<serde_json::Value> {
-        raw.lines()
-            .filter_map(|line| line.strip_prefix("data: "))
-            .filter(|payload| payload.trim() != "[DONE]")
-            .filter_map(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
-            .collect()
     }
 
     // ── extract_enable_thinking_override ────────────────────────────────

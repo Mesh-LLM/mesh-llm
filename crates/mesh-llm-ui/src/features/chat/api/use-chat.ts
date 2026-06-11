@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useChat } from '@tanstack/ai-react'
 import type { UseChatReturn } from '@tanstack/ai-react'
 import type { ThreadMessage } from '@/features/app-tabs/types'
@@ -50,7 +50,7 @@ export function useMeshChat({
   const hydratedMessages = useMemo(() => threadMessagesToUIMessages(initialMessages), [initialMessages])
   const chat = useChat({ id: conversationId, connection, initialMessages: hydratedMessages })
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const conversationChanged = previousConversationIdRef.current !== conversationId
     previousConversationIdRef.current = conversationId
 

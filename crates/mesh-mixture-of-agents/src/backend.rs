@@ -123,9 +123,6 @@ impl ModelBackend for HttpBackend {
             body.as_object_mut()
                 .unwrap()
                 .insert("tools".to_string(), tools.clone());
-            body.as_object_mut()
-                .unwrap()
-                .insert("parallel_tool_calls".to_string(), json!(false));
         }
         apply_enable_thinking(&mut body, sampling.enable_thinking);
 
@@ -163,8 +160,6 @@ pub struct ModelEntry {
     /// Index into the backends vec.  Multiple models can share a backend
     /// (e.g. all models behind the same proxy) or each have their own.
     pub backend_index: usize,
-    /// Total model parameter count in billions, when advertised by the mesh.
-    pub parameter_count_b: Option<f64>,
 }
 
 // ─── Backend call + text extraction ──────────────────────────────────
@@ -281,9 +276,7 @@ fn extract_text_from_response(resp: &Value) -> Result<String, String> {
         let name = tc
             .pointer("/function/name")
             .and_then(|n| n.as_str())
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| "malformed tool call: missing function.name".to_string())?;
+            .unwrap_or("unknown");
         let args = tc
             .pointer("/function/arguments")
             .and_then(|a| a.as_str())
@@ -369,59 +362,6 @@ mod tests {
         let resp: Value = serde_json::json!({"choices": []});
         let err = extract_text_from_response(&resp).unwrap_err();
         assert!(err.contains("missing choices"));
-    }
-
-    #[test]
-    fn extract_text_keeps_only_first_native_tool_call() {
-        let resp: Value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "tool_calls": [
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": "exec",
-                                "arguments": "{\"command\":\"pwd\"}"
-                            }
-                        },
-                        {
-                            "type": "function",
-                            "function": {
-                                "name": "read",
-                                "arguments": "{\"path\":\"README.md\"}"
-                            }
-                        }
-                    ]
-                }
-            }]
-        });
-
-        let text = extract_text_from_response(&resp).expect("tool proposal text");
-
-        assert!(text.contains("tool: exec"), "{text}");
-        assert!(text.contains("arguments: {\"command\":\"pwd\"}"), "{text}");
-        assert!(!text.contains("tool: read"), "{text}");
-    }
-
-    #[test]
-    fn extract_text_rejects_empty_native_tool_call_name() {
-        let resp: Value = serde_json::json!({
-            "choices": [{
-                "message": {
-                    "tool_calls": [{
-                        "type": "function",
-                        "function": {
-                            "name": "",
-                            "arguments": "{}"
-                        }
-                    }]
-                }
-            }]
-        });
-
-        let err = extract_text_from_response(&resp).unwrap_err();
-
-        assert!(err.contains("missing function.name"), "{err}");
     }
 
     #[test]

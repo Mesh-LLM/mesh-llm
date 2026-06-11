@@ -445,7 +445,7 @@ pub fn auto_model_pack(vram_gb: f64) -> Vec<String> {
         },
         Pack {
             min_vram: 8.0,
-            models: &["Gemma-4-E4B-it-Q4_K_M"],
+            models: &["Qwen3-8B-Q4_K_M"],
         },
         Pack {
             min_vram: 0.0,
@@ -510,13 +510,13 @@ mod auto_pack_tests {
     #[test]
     fn pack_8gb_single_model() {
         let pack = auto_model_pack(8.0);
-        assert_eq!(pack, vec!["Gemma-4-E4B-it-Q4_K_M"]);
+        assert_eq!(pack, vec!["Qwen3-8B-Q4_K_M"]);
     }
 
     #[test]
     fn pack_16gb_single() {
         let pack = auto_model_pack(16.0);
-        assert_eq!(pack, vec!["Gemma-4-E4B-it-Q4_K_M"]);
+        assert_eq!(pack, vec!["Qwen3-8B-Q4_K_M"]);
     }
 
     #[test]

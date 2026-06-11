@@ -1150,47 +1150,6 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
     }
 }
 
-#[test]
-fn peer_context_lookup_accepts_public_model_alias() {
-    let internal = "Qwen3-8B-Q4_K_M";
-    let stale_internal = "Qwen3-8B-Q4_K_M-stale";
-    let public = "unsloth/Qwen3-8B-GGUF:Q4_K_M";
-    let mut peer = make_test_peer_info(make_test_endpoint_id(23));
-    peer.role = super::NodeRole::Host { http_port: 9337 };
-    peer.serving_models = vec![internal.to_string()];
-    peer.served_model_descriptors = vec![
-        ServedModelDescriptor {
-            identity: ServedModelIdentity {
-                model_name: stale_internal.to_string(),
-                source_kind: ModelSourceKind::HuggingFace,
-                repository: Some("unsloth/Qwen3-8B-GGUF".to_string()),
-                artifact: Some("Qwen3-8B-Q4_K_M.gguf".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ServedModelDescriptor {
-            identity: ServedModelIdentity {
-                model_name: internal.to_string(),
-                source_kind: ModelSourceKind::HuggingFace,
-                repository: Some("unsloth/Qwen3-8B-GGUF".to_string()),
-                artifact: Some("Qwen3-8B-Q4_K_M.gguf".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    ];
-    peer.served_model_runtime = vec![ModelRuntimeDescriptor {
-        model_name: internal.to_string(),
-        identity_hash: Some("sha256:qwen3-8b".to_string()),
-        context_length: Some(32_768),
-        ready: true,
-    }];
-
-    assert!(peer.routes_http_model(public));
-    assert_eq!(peer.advertised_context_length(public), Some(32_768));
-}
-
 fn make_test_endpoint_id(seed: u8) -> EndpointId {
     let mut bytes = [0u8; 32];
     bytes[0] = seed;

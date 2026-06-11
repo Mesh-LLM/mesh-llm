@@ -4157,15 +4157,12 @@ fn models_list_json(
     let mut data: Vec<serde_json::Value> = models
         .iter()
         .filter_map(|m| {
-            let descriptor = descriptor_for_visible_model(descriptors, m);
-            let metadata_model_name = descriptor
-                .map(|descriptor| descriptor.identity.model_name.as_str())
-                .unwrap_or(m);
+            let descriptor = descriptor_for_model(descriptors, m);
             let public_id = public_model_id(m, descriptor);
             if !seen.insert(public_id.clone()) {
                 return None;
             }
-            let capabilities = capabilities_for_model(metadata_model_name, descriptors);
+            let capabilities = capabilities_for_model(m, descriptors);
             let has_multimodal = capabilities.supports_multimodal_runtime();
             let has_vision = capabilities.supports_vision_runtime();
             let has_audio = capabilities.supports_audio_runtime();
@@ -4198,7 +4195,7 @@ fn models_list_json(
                 "audio_status": capabilities.audio_status(),
                 "reasoning_status": capabilities.reasoning_status(),
             });
-            if let Some(metadata) = model_metadata_json(metadata_model_name, descriptor, runtimes)
+            if let Some(metadata) = model_metadata_json(m, descriptor, runtimes)
                 && let Some(object) = model.as_object_mut()
             {
                 object.insert("metadata".to_string(), metadata);
@@ -4221,7 +4218,10 @@ fn models_list_json(
             "audio_status": "unsupported",
             "reasoning_status": "unknown",
         });
-        if let Some(context_length) = virtual_mesh_context_length(models, descriptors, runtimes)
+        if let Some(context_length) =
+            crate::network::openai::moa_gateway::context_selection::virtual_mesh_context_length(
+                models, runtimes,
+            )
             && let Some(object) = model.as_object_mut()
         {
             object.insert(
@@ -4233,37 +4233,6 @@ fn models_list_json(
     }
 
     serde_json::json!({ "object": "list", "data": data })
-}
-
-fn virtual_mesh_context_length(
-    models: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-) -> Option<u32> {
-    let contexts = models.iter().filter_map(|model| {
-        if model == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME {
-            return None;
-        }
-        visible_model_context_entry(model, descriptors, runtimes)
-    });
-    crate::network::openai::moa_gateway::context_selection::virtual_mesh_context_length_from_known_contexts(contexts)
-}
-
-fn visible_model_context_entry(
-    model_name: &str,
-    descriptors: &[mesh::ServedModelDescriptor],
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-) -> Option<(String, u32)> {
-    let descriptor = descriptor_for_model(descriptors, model_name)
-        .or_else(|| descriptor_for_public_model_id(descriptors, model_name));
-    let runtime_model_name = descriptor
-        .map(|descriptor| descriptor.identity.model_name.as_str())
-        .unwrap_or(model_name);
-    let context = runtime_context_lengths_for_model(runtime_model_name, runtimes)?.max;
-    let model_key = descriptor
-        .and_then(|descriptor| descriptor.identity.identity_hash.clone())
-        .unwrap_or_else(|| public_model_id(runtime_model_name, descriptor));
-    Some((model_key, context))
 }
 
 fn model_metadata_json(
@@ -4384,23 +4353,6 @@ fn descriptor_for_model<'a>(
     descriptors
         .iter()
         .find(|descriptor| descriptor.identity.model_name == model_name)
-}
-
-fn descriptor_for_visible_model<'a>(
-    descriptors: &'a [mesh::ServedModelDescriptor],
-    model_name: &str,
-) -> Option<&'a mesh::ServedModelDescriptor> {
-    descriptor_for_model(descriptors, model_name)
-        .or_else(|| descriptor_for_public_model_id(descriptors, model_name))
-}
-
-fn descriptor_for_public_model_id<'a>(
-    descriptors: &'a [mesh::ServedModelDescriptor],
-    public_id: &str,
-) -> Option<&'a mesh::ServedModelDescriptor> {
-    descriptors.iter().find(|descriptor| {
-        public_model_id(&descriptor.identity.model_name, Some(descriptor)) == public_id
-    })
 }
 
 fn public_model_id(model_name: &str, descriptor: Option<&mesh::ServedModelDescriptor>) -> String {
@@ -5294,61 +5246,6 @@ mod tests {
 
         assert_eq!(mesh["display_name"], "Mesh (MoA)");
         assert_eq!(mesh["metadata"]["context_length"], 16_384);
-    }
-
-    #[test]
-    fn models_list_maps_public_aliases_to_runtime_context() {
-        let internal = "Falcon-H1-1.5B-Instruct-Q4_K_M";
-        let public = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M".to_string();
-        let descriptors = vec![hf_descriptor(internal)];
-        let runtimes = vec![mesh::ModelRuntimeDescriptor {
-            model_name: internal.to_string(),
-            identity_hash: Some("sha256:falcon".to_string()),
-            context_length: Some(32_768),
-            ready: true,
-        }];
-
-        let body = models_list_json(std::slice::from_ref(&public), &descriptors, &runtimes);
-        let model = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["id"] == public)
-            .expect("public model should be listed");
-
-        assert_eq!(model["metadata"]["context_length"], 32_768);
-    }
-
-    #[test]
-    fn virtual_mesh_context_counts_public_alias_runtime_contexts() {
-        let fast_internal = "Falcon-H1-1.5B-Instruct-Q4_K_M";
-        let fast_public = "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M".to_string();
-        let strong = "strong-32b".to_string();
-        let descriptors = vec![hf_descriptor(fast_internal)];
-        let runtimes = vec![
-            mesh::ModelRuntimeDescriptor {
-                model_name: fast_internal.to_string(),
-                identity_hash: Some("sha256:falcon".to_string()),
-                context_length: Some(32_768),
-                ready: true,
-            },
-            mesh::ModelRuntimeDescriptor {
-                model_name: strong.clone(),
-                identity_hash: Some("sha256:strong".to_string()),
-                context_length: Some(131_072),
-                ready: true,
-            },
-        ];
-
-        let body = models_list_json(&[fast_public, strong], &descriptors, &runtimes);
-        let mesh = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["id"] == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME)
-            .expect("virtual mesh model should be listed");
-
-        assert_eq!(mesh["metadata"]["context_length"], 32_768);
     }
 
     #[test]

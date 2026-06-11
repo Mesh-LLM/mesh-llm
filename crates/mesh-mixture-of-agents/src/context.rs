@@ -6,10 +6,10 @@
 //! synthetic "you are a worker" envelope.  It augments with a short preamble
 //! and varies the depth per role:
 //!
-//! - Fast:       system prompt + recent dialog + optional tool names
-//! - Specialist: system prompt + recent dialog + optional tool summaries/schemas
-//! - Strong:     system prompt + deeper recent dialog + optional full tool schemas
-//! - Reducer:    system prompt + recent transcript + worker outputs + optional full tool schemas
+//! - Fast:       system prompt + last user msg + optional tool names
+//! - Specialist: system prompt + last 4 msgs + optional tool summaries/schemas
+//! - Strong:     system prompt + last 10 msgs + optional full tool schemas
+//! - Reducer:    system prompt + worker outputs + optional full tool schemas
 
 use crate::normalize::WorkerOutput;
 use crate::session::Session;
@@ -17,31 +17,12 @@ use crate::worker::WorkerRole;
 use serde_json::{Value, json};
 
 const TOOL_RESULT_CONTEXT_WINDOW: usize = 10;
-const FAST_TOOL_CONTEXT_WINDOW: usize = 4;
-const FAST_PLAIN_CONTEXT_WINDOW: usize = 8;
-const SPECIALIST_TOOL_CONTEXT_WINDOW: usize = 4;
-const SPECIALIST_PLAIN_CONTEXT_WINDOW: usize = 12;
-const STRONG_TOOL_CONTEXT_WINDOW: usize = 10;
-const STRONG_PLAIN_CONTEXT_WINDOW: usize = 32;
-const REDUCER_TOOL_CONTEXT_WINDOW: usize = 8;
-const REDUCER_PLAIN_CONTEXT_WINDOW: usize = 32;
-const FAST_PLAIN_CONTEXT_MAX_BYTES: usize = 8 * 1024;
-const SPECIALIST_PLAIN_CONTEXT_MAX_BYTES: usize = 12 * 1024;
-const STRONG_PLAIN_CONTEXT_MAX_BYTES: usize = 32 * 1024;
-const REDUCER_PLAIN_CONTEXT_MAX_BYTES: usize = 32 * 1024;
 const TOOL_EVIDENCE_MAX_RESULTS: usize = 8;
 const TOOL_EVIDENCE_MAX_RESULT_CHARS: usize = 800;
 const TOOL_RESULT_RAW_MAX_CHARS: usize = 2_400;
 const TOOL_RESULT_JSON_MAX_SCALARS: usize = 48;
 const TOOL_RESULT_JSON_MAX_ARRAY_ITEMS: usize = 12;
 const TOOL_RESULT_SCALAR_MAX_CHARS: usize = 180;
-const TOOL_RESULT_TEXT_PREVIEW_CHARS: usize = 1_600;
-const TOOL_RESULT_WEB_SEARCH_MAX_RESULTS: usize = 6;
-const TOOL_RESULT_WEB_SEARCH_TITLE_MAX_CHARS: usize = 120;
-const TOOL_RESULT_WEB_SEARCH_SNIPPET_MAX_CHARS: usize = 200;
-const TOOL_RESULT_WEB_SEARCH_URL_MAX_CHARS: usize = 120;
-const TOOL_RESULT_WEB_SEARCH_ROW_MAX_CHARS: usize = 320;
-const TOOL_TASK_ANCHOR_MAX_CHARS: usize = 2_000;
 
 /// Packed context ready to send to a worker.
 pub struct PackedContext {
@@ -89,11 +70,10 @@ Respond with your best answer or tool call. Be direct.]";
 fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bool) -> String {
     match session.system_prompt() {
         Some(sp) => {
-            let prompt = strip_silent_reply_sections(&sp);
             let prompt = if include_tool_guidance {
-                prompt
+                sp
             } else {
-                strip_tool_guidance_sections(&prompt)
+                strip_tool_guidance_sections(&sp)
             };
             format!("{MOA_PREAMBLE}\n\n{prompt}")
         }
@@ -101,20 +81,14 @@ fn augmented_system_prompt_for_mode(session: &Session, include_tool_guidance: bo
     }
 }
 
-fn strip_silent_reply_sections(prompt: &str) -> String {
-    strip_markdown_sections(prompt, &["## Silent Replies"])
-}
-
 fn strip_tool_guidance_sections(prompt: &str) -> String {
-    strip_markdown_sections(prompt, &["## Tooling", "## Tool Call Style"])
-}
+    const STRIPPED_HEADINGS: &[&str] = &["## Tooling", "## Tool Call Style"];
 
-fn strip_markdown_sections(prompt: &str, stripped_headings: &[&str]) -> String {
     let mut out = Vec::new();
     let mut skipping = false;
     for line in prompt.lines() {
         if line.starts_with("## ") {
-            skipping = stripped_headings
+            skipping = STRIPPED_HEADINGS
                 .iter()
                 .any(|heading| line.trim() == *heading);
         }
@@ -159,35 +133,29 @@ fn system_with_tool_summaries(
 }
 
 // ── Fast worker ──────────────────────────────────────────────────────
-// System prompt + recent dialog + tool names only.
+// System prompt + last user message + tool names only.
 // Smallest context, quickest to respond.
 
 fn pack_fast(session: &Session, has_tools: bool, selected_tool_names: &[String]) -> PackedContext {
     let system = system_with_tool_names(session, has_tools, selected_tool_names);
-    let mut messages = vec![json!({"role": "system", "content": system})];
-    let (window, max_bytes) = if has_tools {
-        (FAST_TOOL_CONTEXT_WINDOW, None)
-    } else {
-        (
-            FAST_PLAIN_CONTEXT_WINDOW,
-            Some(FAST_PLAIN_CONTEXT_MAX_BYTES),
-        )
-    };
-    append_recent_dialog_messages(&mut messages, session, window, max_bytes, has_tools);
+    let user_text = session.last_user_text();
 
     // Per-request sessions: the caller owns the multi-turn loop and
     // sends the full history each request. Continuation context lives
-    // in `session.messages()`. Keep this context small, but do not
-    // isolate follow-up questions from the visible same-chat history.
+    // in `session.messages()`; this path intentionally trims to just
+    // the last user message to keep the fast worker's context small.
     PackedContext {
-        messages,
+        messages: vec![
+            json!({"role": "system", "content": system}),
+            json!({"role": "user", "content": user_text}),
+        ],
         max_tokens: 256,
         tools: None, // Fast worker doesn't get tool schemas — just names
     }
 }
 
 // ── Specialist worker ────────────────────────────────────────────────
-// System prompt + recent messages + tool name+description summaries.
+// System prompt + last 4 messages + tool name+description summaries.
 
 fn pack_specialist(
     session: &Session,
@@ -198,15 +166,25 @@ fn pack_specialist(
 
     let mut messages = vec![json!({"role": "system", "content": system})];
 
-    let (window, max_bytes) = if has_tools {
-        (SPECIALIST_TOOL_CONTEXT_WINDOW, None)
-    } else {
-        (
-            SPECIALIST_PLAIN_CONTEXT_WINDOW,
-            Some(SPECIALIST_PLAIN_CONTEXT_MAX_BYTES),
-        )
-    };
-    append_recent_dialog_messages(&mut messages, session, window, max_bytes, has_tools);
+    // Recent messages — skip system (already included), skip raw tool results
+    // (they'd confuse models that don't have the tool_call context)
+    let recent = session.recent_messages(4);
+    for msg in &recent {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role == "user" || (role == "assistant" && msg.get("tool_calls").is_none()) {
+            messages.push(msg.clone());
+        }
+    }
+
+    // Ensure the last message is the current user turn
+    let user_text = session.last_user_text();
+    if messages
+        .last()
+        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+        != Some(&user_text)
+    {
+        messages.push(json!({"role": "user", "content": user_text}));
+    }
 
     PackedContext {
         messages,
@@ -215,44 +193,8 @@ fn pack_specialist(
     }
 }
 
-fn append_recent_dialog_messages(
-    messages: &mut Vec<Value>,
-    session: &Session,
-    window: usize,
-    max_bytes: Option<usize>,
-    include_tool_task_anchor: bool,
-) {
-    let recent = bounded_recent_messages(session.recent_messages(window), max_bytes, true);
-    if include_tool_task_anchor {
-        append_tool_task_anchor_if_missing(messages, session, &recent);
-    }
-    for msg in &recent {
-        if plain_dialog_message_for_compact_context(msg) {
-            messages.push(msg.clone());
-        }
-    }
-    append_current_user_if_missing(messages, session);
-}
-
-fn plain_dialog_message_for_compact_context(msg: &Value) -> bool {
-    match message_role(msg) {
-        "user" => true,
-        "assistant" => msg.get("tool_calls").is_none(),
-        _ => false,
-    }
-}
-
-fn append_current_user_if_missing(messages: &mut Vec<Value>, session: &Session) {
-    let Some(last_user) = session.last_user_message() else {
-        return;
-    };
-    if messages.last() != Some(last_user) {
-        messages.push(last_user.clone());
-    }
-}
-
 // ── Strong worker ────────────────────────────────────────────────────
-// System prompt + deeper recent history + full tool schemas forwarded natively.
+// System prompt + last 10 messages + full tool schemas forwarded natively.
 // This worker gets the deepest context and the actual tool definitions so
 // it can produce native tool_calls if the backend supports it.
 
@@ -267,18 +209,7 @@ fn pack_strong(
 
     // Deep recent history — include tool result messages too since this
     // worker gets full tool schemas and can understand the context
-    let (window, max_bytes) = if has_tools {
-        (STRONG_TOOL_CONTEXT_WINDOW, None)
-    } else {
-        (
-            STRONG_PLAIN_CONTEXT_WINDOW,
-            Some(STRONG_PLAIN_CONTEXT_MAX_BYTES),
-        )
-    };
-    let recent = bounded_recent_messages(session.recent_messages(window), max_bytes, true);
-    if has_tools {
-        append_tool_task_anchor_if_missing(&mut messages, session, &recent);
-    }
+    let recent = session.recent_messages(10);
     for msg in &recent {
         let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
         if role != "system" && !role.is_empty() {
@@ -286,7 +217,14 @@ fn pack_strong(
         }
     }
 
-    append_current_user_if_missing(&mut messages, session);
+    let user_text = session.last_user_text();
+    if messages
+        .last()
+        .and_then(|m| m.get("content").and_then(|c| c.as_str()))
+        != Some(&user_text)
+    {
+        messages.push(json!({"role": "user", "content": user_text}));
+    }
 
     // Forward the real tool schemas — the strong worker can produce native
     // tool_calls through the OpenAI API
@@ -323,6 +261,8 @@ pub fn pack_for_reducer_selected(
     has_tools: bool,
     selected_tool_names: &[String],
 ) -> (Vec<Value>, Option<Value>) {
+    let user_text = session.last_user_text();
+
     let mut system_parts = vec![
         augmented_system_prompt_for_mode(session, has_tools),
         String::new(),
@@ -353,71 +293,13 @@ pub fn pack_for_reducer_selected(
 
     let tools = selected_tools(session, has_tools, selected_tool_names);
 
-    let mut messages = vec![json!({"role": "system", "content": system_parts.join("\n")})];
-    messages.extend(reducer_recent_transcript_messages(session, has_tools));
-    append_current_user_if_missing(&mut messages, session);
-
-    (messages, tools)
-}
-
-fn reducer_recent_transcript_messages(session: &Session, has_tools: bool) -> Vec<Value> {
-    let all = session.messages();
-    let Some(last_user_idx) = all.iter().rposition(|msg| message_role(msg) == "user") else {
-        return Vec::new();
-    };
-
-    let (window, max_bytes) = if has_tools {
-        (REDUCER_TOOL_CONTEXT_WINDOW, None)
-    } else {
-        (
-            REDUCER_PLAIN_CONTEXT_WINDOW,
-            Some(REDUCER_PLAIN_CONTEXT_MAX_BYTES),
-        )
-    };
-    let start_idx = last_user_idx.saturating_sub(window);
-    let recent = bounded_recent_messages(all[start_idx..last_user_idx].to_vec(), max_bytes, false);
-    recent
-        .iter()
-        .filter(|msg| reducer_can_replay_message(msg))
-        .cloned()
-        .collect()
-}
-
-fn bounded_recent_messages(
-    messages: Vec<Value>,
-    max_bytes: Option<usize>,
-    keep_latest_when_oversized: bool,
-) -> Vec<Value> {
-    let Some(max_bytes) = max_bytes else {
-        return messages;
-    };
-    let mut selected_rev = Vec::new();
-    let mut used = 0usize;
-    for message in messages.into_iter().rev() {
-        let cost = estimated_message_context_bytes(&message);
-        let can_keep_oversized_latest = keep_latest_when_oversized && selected_rev.is_empty();
-        if !can_keep_oversized_latest && used.saturating_add(cost) > max_bytes {
-            break;
-        }
-        used = used.saturating_add(cost);
-        selected_rev.push(message);
-    }
-    selected_rev.reverse();
-    selected_rev
-}
-
-fn estimated_message_context_bytes(message: &Value) -> usize {
-    serde_json::to_string(message)
-        .map(|encoded| encoded.len())
-        .unwrap_or(0)
-}
-
-fn reducer_can_replay_message(msg: &Value) -> bool {
-    match message_role(msg) {
-        "user" => true,
-        "assistant" => msg.get("tool_calls").is_none(),
-        _ => false,
-    }
+    (
+        vec![
+            json!({"role": "system", "content": system_parts.join("\n")}),
+            json!({"role": "user", "content": user_text}),
+        ],
+        tools,
+    )
 }
 
 fn selected_tools(
@@ -570,119 +452,20 @@ pub fn pack_for_tool_result_turn_selected(
                 .any(|msg| message_role(msg) == "user")
         });
 
-    let mut transcript = Vec::new();
     if let Some(user_idx) = prefix_user_idx {
-        transcript.push(all[user_idx].clone());
+        messages.push(all[user_idx].clone());
     }
 
     for msg in &all[start_idx..] {
         let role = message_role(msg);
         if role != "system" && !role.is_empty() {
-            transcript.push(compact_tool_message(msg));
+            messages.push(compact_tool_message(msg));
         }
     }
-    append_tool_task_anchor_if_missing(&mut messages, session, &transcript);
-    messages.extend(transcript);
 
     let tools = selected_tools(session, has_tools, selected_tool_names);
 
     (messages, tools)
-}
-
-fn append_tool_task_anchor_if_missing(
-    messages: &mut Vec<Value>,
-    session: &Session,
-    visible_messages: &[Value],
-) {
-    let Some(task) = first_user_task_text(session) else {
-        return;
-    };
-    if messages_contain_text(visible_messages, &task) {
-        return;
-    }
-
-    let task = truncate_with_ellipsis(&task, TOOL_TASK_ANCHOR_MAX_CHARS);
-    messages.push(json!({
-        "role": "system",
-        "content": format!("Original user task for this tool loop:\n{task}"),
-    }));
-}
-
-fn first_user_task_text(session: &Session) -> Option<String> {
-    session
-        .messages()
-        .iter()
-        .rev()
-        .find_map(|message| {
-            (message_role(message) == "user"
-                && !user_message_looks_like_tool_response(message)
-                && !user_message_looks_like_runtime_info(message))
-            .then(|| message_text_content(message))
-            .flatten()
-        })
-        .map(|text| text.trim().to_string())
-        .filter(|text| !text.is_empty())
-}
-
-fn user_message_looks_like_runtime_info(message: &Value) -> bool {
-    message_text_content(message).is_some_and(|text| {
-        let trimmed = text.trim_start();
-        trimmed.starts_with("<info-msg>")
-            || trimmed.starts_with("<environment_context>")
-            || trimmed.starts_with("<system-reminder>")
-    })
-}
-
-fn user_message_looks_like_tool_response(message: &Value) -> bool {
-    message
-        .get("content")
-        .and_then(Value::as_array)
-        .is_some_and(|parts| parts.iter().all(content_part_looks_like_tool_response))
-}
-
-fn content_part_looks_like_tool_response(part: &Value) -> bool {
-    matches!(
-        part.get("type").and_then(Value::as_str),
-        Some("toolResponse" | "tool_result" | "tool_call_output" | "function_call_output")
-    ) || part.get("toolResult").is_some()
-        || part.get("tool_result").is_some()
-        || part.get("tool_call_id").is_some()
-        || part.get("call_id").is_some()
-}
-
-fn messages_contain_text(messages: &[Value], needle: &str) -> bool {
-    messages
-        .iter()
-        .filter_map(message_text_content)
-        .any(|text| text.contains(needle))
-}
-
-fn message_text_content(message: &Value) -> Option<String> {
-    let content = message.get("content")?;
-    if let Some(text) = content.as_str() {
-        return Some(text.to_string());
-    }
-    let parts = content.as_array()?;
-    let text = parts
-        .iter()
-        .filter_map(|part| {
-            part.get("text")
-                .and_then(Value::as_str)
-                .or_else(|| part.get("input_text").and_then(Value::as_str))
-                .or_else(|| part.get("output_text").and_then(Value::as_str))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!text.is_empty()).then_some(text)
-}
-
-fn truncate_with_ellipsis(text: &str, max_bytes: usize) -> String {
-    let truncated = crate::worker::truncate_chars(text, max_bytes);
-    if truncated.len() == text.len() {
-        truncated.to_string()
-    } else {
-        format!("{truncated}...")
-    }
 }
 
 fn tool_evidence_message(session: &Session) -> Option<Value> {
@@ -717,16 +500,10 @@ fn tool_evidence_message(session: &Session) -> Option<Value> {
 }
 
 fn compact_tool_message(msg: &Value) -> Value {
-    match message_role(msg) {
-        "tool" => compact_role_tool_message(msg),
-        "user" if user_message_looks_like_tool_response(msg) => {
-            compact_user_tool_response_message(msg)
-        }
-        _ => msg.clone(),
+    if message_role(msg) != "tool" {
+        return msg.clone();
     }
-}
 
-fn compact_role_tool_message(msg: &Value) -> Value {
     let Some(content) = msg.get("content").and_then(Value::as_str) else {
         return msg.clone();
     };
@@ -742,108 +519,13 @@ fn compact_role_tool_message(msg: &Value) -> Value {
     compact
 }
 
-fn compact_user_tool_response_message(msg: &Value) -> Value {
-    let Some(parts) = msg.get("content").and_then(Value::as_array) else {
-        return msg.clone();
-    };
-
-    let mut changed = false;
-    let compact_parts = parts
-        .iter()
-        .map(|part| {
-            if !content_part_looks_like_tool_response(part) {
-                return part.clone();
-            }
-            let Some(text) = tool_response_part_text(part) else {
-                return part.clone();
-            };
-            changed = true;
-            json!({
-                "type": "text",
-                "text": format!("Tool result:\n{}", compact_tool_result_text(&text)),
-            })
-        })
-        .collect::<Vec<_>>();
-
-    if !changed {
-        return msg.clone();
-    }
-
-    let mut compact = msg.clone();
-    if let Some(obj) = compact.as_object_mut() {
-        obj.insert("content".to_string(), Value::Array(compact_parts));
-    }
-    compact
-}
-
-fn tool_response_part_text(part: &Value) -> Option<String> {
-    content_text_fields(part)
-        .or_else(|| part.get("output").and_then(value_text_content))
-        .or_else(|| {
-            part.pointer("/toolResult/value/content")
-                .and_then(content_array_text)
-        })
-        .or_else(|| {
-            part.pointer("/toolResult/value/structuredContent/stdout")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            part.pointer("/toolResult/value/structuredContent/stderr")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            part.pointer("/toolResult/value")
-                .and_then(value_text_content)
-        })
-        .or_else(|| {
-            part.pointer("/tool_result/content")
-                .and_then(value_text_content)
-        })
-}
-
-fn value_text_content(value: &Value) -> Option<String> {
-    if let Some(text) = value.as_str() {
-        return Some(text.to_string());
-    }
-    if let Some(text) = content_array_text(value) {
-        return Some(text);
-    }
-    value.as_object()?;
-    serde_json::to_string(value).ok()
-}
-
-fn content_array_text(value: &Value) -> Option<String> {
-    let parts = value.as_array()?;
-    let text = parts
-        .iter()
-        .filter_map(content_text_fields)
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!text.is_empty()).then_some(text)
-}
-
-fn content_text_fields(part: &Value) -> Option<String> {
-    part.get("text")
-        .and_then(Value::as_str)
-        .or_else(|| part.get("input_text").and_then(Value::as_str))
-        .or_else(|| part.get("output_text").and_then(Value::as_str))
-        .map(str::to_string)
-}
-
 fn compact_tool_result_text(result: &str) -> String {
-    if let Ok(json) = serde_json::from_str::<Value>(result) {
-        if let Some(compacted) = compact_external_json_tool_result(result.len(), &json) {
-            return compacted;
-        }
-        if result.len() > TOOL_RESULT_RAW_MAX_CHARS {
-            return compact_json_tool_result(result.len(), &json);
-        }
-    }
-
     if result.len() <= TOOL_RESULT_RAW_MAX_CHARS {
         return result.to_string();
+    }
+
+    if let Ok(json) = serde_json::from_str::<Value>(result) {
+        return compact_json_tool_result(result.len(), &json);
     }
 
     format!(
@@ -852,137 +534,6 @@ fn compact_tool_result_text(result: &str) -> String {
         result.len(),
         crate::worker::truncate_chars(result, TOOL_RESULT_RAW_MAX_CHARS - 96)
     )
-}
-
-fn compact_external_json_tool_result(original_len: usize, value: &Value) -> Option<String> {
-    let map = value.as_object()?;
-    let source = map
-        .get("externalContent")
-        .and_then(|external| external.get("source"))
-        .and_then(Value::as_str)?;
-
-    match source {
-        "web_fetch" => compact_web_fetch_result(original_len, map),
-        "web_search" => compact_web_search_result(original_len, map),
-        _ => None,
-    }
-}
-
-fn compact_web_fetch_result(
-    original_len: usize,
-    map: &serde_json::Map<String, Value>,
-) -> Option<String> {
-    let text = map.get("text").and_then(Value::as_str)?;
-    let mut lines = vec![format!(
-        "Tool result compacted from {original_len} chars; original was web_fetch JSON."
-    )];
-    push_clean_json_field("Title", "title", map, &mut lines);
-    push_clean_json_field("URL", "url", map, &mut lines);
-    push_clean_json_field("Status", "status", map, &mut lines);
-
-    let preview = clean_external_tool_text(text);
-    if preview.is_empty() {
-        return None;
-    }
-    lines.push("Fetched content preview:".to_string());
-    lines.push(crate::worker::truncate_chars(&preview, TOOL_RESULT_TEXT_PREVIEW_CHARS).to_string());
-    Some(lines.join("\n"))
-}
-
-fn compact_web_search_result(
-    original_len: usize,
-    map: &serde_json::Map<String, Value>,
-) -> Option<String> {
-    let results = map.get("results").and_then(Value::as_array)?;
-    let mut lines = vec![format!(
-        "Tool result compacted from {original_len} chars; original was web_search JSON."
-    )];
-    push_clean_json_field("Query", "query", map, &mut lines);
-    lines.push("Search results:".to_string());
-
-    for (idx, result) in results
-        .iter()
-        .take(TOOL_RESULT_WEB_SEARCH_MAX_RESULTS)
-        .enumerate()
-    {
-        let Some(result) = result.as_object() else {
-            continue;
-        };
-        let title = clean_json_string_field(result, "title")
-            .map(|value| truncate_tool_result_field(&value, TOOL_RESULT_WEB_SEARCH_TITLE_MAX_CHARS))
-            .unwrap_or_else(|| "Untitled".into());
-        let url = clean_json_string_field(result, "url")
-            .map(|value| truncate_tool_result_field(&value, TOOL_RESULT_WEB_SEARCH_URL_MAX_CHARS))
-            .unwrap_or_default();
-        let snippet = clean_json_string_field(result, "snippet")
-            .map(|value| {
-                truncate_tool_result_field(&value, TOOL_RESULT_WEB_SEARCH_SNIPPET_MAX_CHARS)
-            })
-            .unwrap_or_default();
-        let mut row = format!("{}. {title}", idx + 1);
-        if !snippet.is_empty() {
-            row.push_str(": ");
-            row.push_str(&snippet);
-        }
-        if !url.is_empty() {
-            row.push_str(" (");
-            row.push_str(&url);
-            row.push(')');
-        }
-        lines.push(truncate_tool_result_field(
-            &row,
-            TOOL_RESULT_WEB_SEARCH_ROW_MAX_CHARS,
-        ));
-    }
-
-    (lines.len() > 3).then(|| lines.join("\n"))
-}
-
-fn truncate_tool_result_field(value: &str, max_bytes: usize) -> String {
-    let truncated = crate::worker::truncate_chars(value, max_bytes);
-    if truncated.len() == value.len() {
-        truncated.to_string()
-    } else {
-        format!("{truncated}...")
-    }
-}
-
-fn push_clean_json_field(
-    label: &str,
-    key: &str,
-    map: &serde_json::Map<String, Value>,
-    lines: &mut Vec<String>,
-) {
-    let Some(value) = clean_json_string_field(map, key) else {
-        return;
-    };
-    if !value.is_empty() {
-        lines.push(format!("{label}: {value}"));
-    }
-}
-
-fn clean_json_string_field(map: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
-    let value = map.get(key)?;
-    value
-        .as_str()
-        .map(clean_external_tool_text)
-        .or_else(|| scalar_to_string(value).map(|scalar| scalar.trim_matches('"').to_string()))
-}
-
-fn clean_external_tool_text(text: &str) -> String {
-    let body = unwrap_external_content_body(text).unwrap_or(text);
-    body.trim().to_string()
-}
-
-fn unwrap_external_content_body(text: &str) -> Option<&str> {
-    let marker_start = text.rfind("<<<EXTERNAL_UNTRUSTED_CONTENT")?;
-    let after_marker = &text[marker_start..];
-    let separator = after_marker.find("---")?;
-    let mut body = after_marker.get(separator + 3..)?.trim_start_matches('\n');
-    if let Some(end) = body.find("<<<END_EXTERNAL_UNTRUSTED_CONTENT") {
-        body = &body[..end];
-    }
-    Some(body.trim())
 }
 
 fn compact_json_tool_result(original_len: usize, value: &Value) -> String {
@@ -1120,9 +671,6 @@ fn is_scalar(value: &Value) -> bool {
 const PREFERRED_JSON_KEYS: &[&str] = &[
     "number",
     "title",
-    "text",
-    "content",
-    "snippet",
     "name",
     "full_name",
     "state",
@@ -1202,22 +750,6 @@ mod tests {
     fn tool_result_msg(id: &str, text: &str) -> Value {
         json!({"role": "tool", "tool_call_id": id, "content": text})
     }
-    fn user_tool_response_msg(id: &str, text: &str) -> Value {
-        json!({
-            "role": "user",
-            "content": [{
-                "type": "toolResponse",
-                "id": id,
-                "toolResult": {
-                    "status": "success",
-                    "value": {
-                        "content": [{"type": "text", "text": text}],
-                        "isError": false,
-                    },
-                },
-            }],
-        })
-    }
     fn tools_two() -> Value {
         json!([
             {"type": "function", "function": {
@@ -1271,14 +803,10 @@ mod tests {
             .to_string()
     }
 
-    fn serialized_messages(messages: &[Value]) -> String {
-        serde_json::to_string(messages).unwrap()
-    }
-
     // ── pack_for_worker: shape contract per role ─────────────────────
 
     #[test]
-    fn fast_worker_has_recent_dialog_no_native_tools() {
+    fn fast_worker_has_system_user_only_no_tools() {
         let s = session_with(
             &[
                 system_msg("You are a helpful assistant."),
@@ -1295,14 +823,19 @@ mod tests {
             packed.tools.is_none(),
             "fast worker must not receive tool schemas"
         );
+        assert_eq!(packed.messages.len(), 2, "fast = system + last user only");
         assert_eq!(
             packed.messages[0].get("role").and_then(|r| r.as_str()),
             Some("system"),
         );
-        let body = serde_json::to_string(&packed.messages).unwrap();
-        assert!(
-            body.contains("first") && body.contains("first reply") && body.contains("second"),
-            "fast worker should see a compact recent dialog, got {body}",
+        assert_eq!(
+            packed.messages[1].get("role").and_then(|r| r.as_str()),
+            Some("user"),
+        );
+        assert_eq!(
+            packed.messages[1].get("content").and_then(|c| c.as_str()),
+            Some("second"),
+            "fast worker sees only the LAST user message",
         );
 
         // Tool *names* appear in system prompt; full schemas do not.
@@ -1353,70 +886,6 @@ mod tests {
         let last = packed.messages.last().unwrap();
         assert_eq!(last.get("role").and_then(|r| r.as_str()), Some("user"));
         assert_eq!(last.get("content").and_then(|c| c.as_str()), Some("m3"));
-    }
-
-    #[test]
-    fn worker_context_preserves_raw_current_user_message() {
-        let current_user = json!({
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": "use this structured prompt"},
-                {"type": "text", "text": "without rebuilding it"},
-            ],
-        });
-        let s = session_with(
-            &[
-                system_msg("Agent SP."),
-                assistant_msg("ready"),
-                current_user.clone(),
-            ],
-            None,
-        );
-
-        for role in [WorkerRole::Fast, WorkerRole::Specialist, WorkerRole::Strong] {
-            let packed = pack_for_worker(&s, role, false);
-            let user_messages = packed
-                .messages
-                .iter()
-                .filter(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
-                .collect::<Vec<_>>();
-            assert_eq!(
-                user_messages.len(),
-                1,
-                "{role:?} should not append a stringified duplicate current user message: {:?}",
-                packed.messages,
-            );
-            assert_eq!(user_messages[0], &current_user);
-        }
-    }
-
-    #[test]
-    fn reducer_context_preserves_raw_current_user_message() {
-        let current_user = json!({
-            "role": "user",
-            "content": [{"type": "input_text", "text": "structured final request"}],
-        });
-        let s = session_with(
-            &[
-                user_msg("earlier"),
-                assistant_msg("earlier reply"),
-                current_user.clone(),
-            ],
-            None,
-        );
-        let outputs = vec![WorkerOutput {
-            model: "worker-a".into(),
-            kind: OutputKind::Answer,
-            payload: "candidate answer".into(),
-            tool_name: None,
-            tool_arguments: None,
-            confidence: 0.4,
-            role: WorkerRole::Fast,
-            elapsed_ms: 10,
-        }];
-
-        let (messages, _tools) = pack_for_reducer(&s, &outputs, "conflict", false);
-        assert_eq!(messages.last(), Some(&current_user));
     }
 
     #[test]
@@ -1479,62 +948,6 @@ mod tests {
         );
         let last = packed.messages.last().unwrap();
         assert_eq!(last.get("content").and_then(|c| c.as_str()), Some("final"));
-    }
-
-    #[test]
-    fn plain_chat_strong_worker_keeps_earlier_same_chat_topic() {
-        let mut msgs = vec![
-            system_msg("Agent ST."),
-            user_msg("How do I run Windows commands over Tailscale from my Mac?"),
-            assistant_msg("We discussed using a reachable Windows host over Tailscale."),
-        ];
-        for i in 0..12 {
-            msgs.push(user_msg(&format!("follow-up topic {i}")));
-            msgs.push(assistant_msg(&format!("follow-up answer {i}")));
-        }
-        msgs.push(user_msg("What did we discuss earlier in this chat?"));
-        let s = session_with(&msgs, None);
-
-        let packed = pack_for_worker(&s, WorkerRole::Strong, false);
-        let body = serialized_messages(&packed.messages);
-
-        assert!(
-            body.contains("Windows commands over Tailscale"),
-            "plain-chat strong worker should retain earlier same-chat topics, got {body}",
-        );
-        assert!(
-            body.contains("What did we discuss earlier"),
-            "current user turn must still be present, got {body}",
-        );
-    }
-
-    #[test]
-    fn plain_chat_strong_worker_drops_oversized_prior_blob_before_current() {
-        let oversized_prior = format!(
-            "OVERSIZED_STRONG_PRIOR_{}",
-            "x".repeat(STRONG_PLAIN_CONTEXT_MAX_BYTES + 1024)
-        );
-        let s = session_with(
-            &[
-                system_msg("Agent ST."),
-                user_msg("Read this large pasted result."),
-                assistant_msg(&oversized_prior),
-                user_msg("What should I do next?"),
-            ],
-            None,
-        );
-
-        let packed = pack_for_worker(&s, WorkerRole::Strong, false);
-        let body = serialized_messages(&packed.messages);
-
-        assert!(
-            body.contains("What should I do next?"),
-            "current user turn must still be present, got {body}",
-        );
-        assert!(
-            !body.contains("OVERSIZED_STRONG_PRIOR_"),
-            "plain-chat strong context should not carry an oversized prior blob, got {body}",
-        );
     }
 
     #[test]
@@ -1713,73 +1126,6 @@ mod tests {
     }
 
     #[test]
-    fn web_fetch_tool_result_prefers_fetched_text_over_wrapper_keys() {
-        let result = json!({
-            "url": "https://www.smh.com.au",
-            "finalUrl": "https://www.smh.com.au",
-            "status": 200,
-            "title": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>\nSource: Web Fetch\n---\nAustralian Breaking News Headlines & World News Online\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>",
-            "externalContent": {
-                "untrusted": true,
-                "source": "web_fetch",
-                "wrapped": true
-            },
-            "text": "SECURITY NOTICE: external content.\n\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"body\">>>\nSource: Web Fetch\n---\n### World Cup of chaos\nThe World Cup returns to North America.\n\n### Modi wants more of Australia's uranium\nAustralia and India struck a historic deal.\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"body\">>>"
-        })
-        .to_string();
-
-        let compacted = compact_tool_result_text(&result);
-
-        assert!(compacted.contains("original was web_fetch JSON"));
-        assert!(compacted.contains("Fetched content preview:"));
-        assert!(compacted.contains("World Cup of chaos"));
-        assert!(compacted.contains("Modi wants more of Australia's uranium"));
-        assert!(
-            !compacted.contains("\"finalUrl\""),
-            "wrapper JSON keys should not dominate reducer context: {compacted}"
-        );
-    }
-
-    #[test]
-    fn web_search_tool_result_compacts_to_result_rows() {
-        let result = json!({
-            "query": "headlines from www.smh.com.au",
-            "provider": "duckduckgo",
-            "externalContent": {
-                "untrusted": true,
-                "source": "web_search",
-                "provider": "duckduckgo",
-                "wrapped": true
-            },
-            "results": [
-                {
-                    "title": "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>\nSource: Web Search\n---\nLatest and Breaking News - The Sydney Morning Herald\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"title\">>>",
-                    "url": "https://www.smh.com.au/breaking-news",
-                    "snippet": format!(
-                        "\n<<<EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>\nSource: Web Search\n---\nThe future of Australian swimming has arrived. {}\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\"snippet\">>>",
-                        "noise ".repeat(200)
-                    )
-                }
-            ]
-        })
-        .to_string();
-
-        let compacted = compact_tool_result_text(&result);
-
-        assert!(compacted.contains("original was web_search JSON"));
-        assert!(compacted.contains("Latest and Breaking News"));
-        assert!(compacted.contains("Australian swimming"));
-        assert!(
-            compacted.find("Search results:").unwrap() < compacted.find("Latest").unwrap(),
-            "result rows should be explicit and easy for the reducer to read: {compacted}"
-        );
-        assert!(
-            compacted.lines().all(|line| line.len() <= 360),
-            "web_search result rows should stay bounded: {compacted}"
-        );
-    }
-
-    #[test]
     fn tool_result_reducer_strips_tool_guidance_when_tools_disabled() {
         let s = session_with(
             &[
@@ -1841,129 +1187,6 @@ mod tests {
         assert_ne!(
             roles[3], "tool",
             "bounded recent tail must not start with a bare tool message",
-        );
-    }
-
-    #[test]
-    fn tool_result_reducer_anchors_original_task_when_latest_user_is_tool_wrapper() {
-        let mut messages = vec![
-            user_msg("Old chat about Windows and Tailscale."),
-            user_msg("Implement src/smoke_calc.py so the tests pass."),
-        ];
-        for idx in 0..8 {
-            let id = format!("call_tree_{idx}");
-            messages.push(assistant_tool_msg(
-                &id,
-                "tree",
-                json!({"path": format!("dir{idx}")}),
-            ));
-            messages.push(user_tool_response_msg(
-                &id,
-                &format!("tree result {idx}: src/smoke_calc.py"),
-            ));
-        }
-        messages.push(assistant_tool_msg(
-            "call_read",
-            "read_file",
-            json!({"path": "src/smoke_calc.py"}),
-        ));
-        messages.push(tool_result_msg(
-            "call_read",
-            "raise NotImplementedError(\"ci smoke fixture\")",
-        ));
-        let s = session_with(&messages, Some(tools_two()));
-
-        let recent_without_anchor =
-            s.recent_messages(TOOL_RESULT_CONTEXT_WINDOW)
-                .iter()
-                .any(|msg| {
-                    message_text_content(msg)
-                        .is_some_and(|text| text.contains("Implement src/smoke_calc.py"))
-                });
-        assert!(
-            !recent_without_anchor,
-            "test must push the original task outside the bounded recent tail",
-        );
-
-        let (messages, _tools) = pack_for_tool_result_turn(&s, true);
-        let body = serialized_messages(&messages);
-
-        assert!(
-            body.contains("Original user task for this tool loop"),
-            "tool-result context should add a bounded task anchor, got {body}",
-        );
-        assert!(
-            body.contains("Implement src/smoke_calc.py so the tests pass."),
-            "task anchor should preserve the real agent task, got {body}",
-        );
-        assert!(
-            !body.contains("Old chat about Windows and Tailscale"),
-            "task anchor should prefer the active task over older chat, got {body}",
-        );
-        assert!(
-            body.contains("NotImplementedError"),
-            "latest tool result should remain visible, got {body}",
-        );
-    }
-
-    #[test]
-    fn tool_worker_context_anchors_original_task_after_user_tool_wrappers() {
-        let mut messages = vec![
-            user_msg("Old chat about Windows and Tailscale."),
-            user_msg("Implement src/smoke_calc.py so the tests pass."),
-            user_msg("<info-msg>\nWorking directory: /tmp/project\n</info-msg>"),
-        ];
-        for idx in 0..8 {
-            let id = format!("call_{idx}");
-            messages.push(assistant_tool_msg(
-                &id,
-                "tree",
-                json!({"path": format!("dir{idx}")}),
-            ));
-            messages.push(user_tool_response_msg(
-                &id,
-                &format!("tree result {idx}: src/smoke_calc.py"),
-            ));
-        }
-        let s = session_with(&messages, Some(tools_two()));
-
-        let packed = pack_for_worker(&s, WorkerRole::Strong, true);
-        let body = serialized_messages(&packed.messages);
-
-        assert!(
-            body.contains("Original user task for this tool loop"),
-            "tool worker context should anchor the original task, got {body}",
-        );
-        assert!(
-            body.contains("Implement src/smoke_calc.py so the tests pass."),
-            "tool worker task anchor should preserve the real task, got {body}",
-        );
-        assert!(
-            !body.contains("Old chat about Windows and Tailscale"),
-            "tool worker anchor should prefer the active task over older chat, got {body}",
-        );
-    }
-
-    #[test]
-    fn user_wrapped_tool_result_is_compacted_for_reducer() {
-        let huge_result = "x".repeat(TOOL_RESULT_RAW_MAX_CHARS + 500);
-        let messages = vec![
-            user_msg("Read the large output."),
-            assistant_tool_msg("call_read", "read", json!({"path": "large.txt"})),
-            user_tool_response_msg("call_read", &huge_result),
-        ];
-        let s = session_with(&messages, Some(tools_two()));
-
-        let (messages, _tools) = pack_for_tool_result_turn(&s, true);
-        let body = serialized_messages(&messages);
-
-        assert!(
-            body.contains("Tool result compacted"),
-            "user-wrapped tool result should be compacted, got {body}",
-        );
-        assert!(
-            !body.contains(&huge_result),
-            "full nested user-wrapped tool result should not leak, got {body}",
         );
     }
 
@@ -2031,36 +1254,6 @@ keep this";
         assert!(!stripped.contains("tool-call policy goes here"));
     }
 
-    #[test]
-    fn tool_context_strips_silent_reply_sections() {
-        let s = session_with(
-            &[
-                system_msg(
-                    "\
-You are helpful.
-## Silent Replies
-When you have nothing to say, respond with ONLY: NO_REPLY
-## Safety
-keep this",
-                ),
-                user_msg("Run the requested command."),
-            ],
-            Some(tools_two()),
-        );
-        let packed = pack_for_worker(&s, WorkerRole::Strong, true);
-        let sys = system_text(&packed.messages);
-
-        assert!(sys.contains("You are helpful."));
-        assert!(sys.contains("## Safety"));
-        assert!(sys.contains("keep this"));
-        assert!(!sys.contains("NO_REPLY"), "{sys}");
-        assert!(!sys.contains("Silent Replies"), "{sys}");
-        assert!(
-            packed.tools.is_some(),
-            "tool schemas should still be present"
-        );
-    }
-
     // ── pack_for_reducer: includes reason + worker outputs ───────────
 
     fn worker_out(model: &str, payload: &str) -> WorkerOutput {
@@ -2111,107 +1304,6 @@ keep this",
         assert_eq!(
             last.get("content").and_then(|c| c.as_str()),
             Some("which is bigger, 7^3 or 350?"),
-        );
-    }
-
-    #[test]
-    fn reducer_context_preserves_same_chat_recent_history_before_current_turn() {
-        let s = session_with(
-            &[
-                system_msg("Agent R."),
-                user_msg("How do I run commands on Windows via Tailscale from a Mac?"),
-                assistant_msg(
-                    "Use a reachable Windows host and run the command over the mesh or SSH tunnel.",
-                ),
-                user_msg("What were the two questions above in this same conversation?"),
-            ],
-            None,
-        );
-        let outputs = vec![
-            worker_out("fast", "Only two questions are visible in this request."),
-            worker_out("strong", "Earlier history mentioned Windows via Tailscale."),
-        ];
-        let (messages, _tools) = pack_for_reducer(&s, &outputs, "history disagreement", false);
-
-        let transcript = serde_json::to_string(&messages).unwrap();
-        assert!(
-            transcript.contains("Windows via Tailscale"),
-            "reducer should see recent same-chat history, got {transcript}",
-        );
-        assert!(
-            transcript.contains("What were the two questions above"),
-            "reducer should still receive the current user turn, got {transcript}",
-        );
-        assert_eq!(
-            messages
-                .last()
-                .and_then(|message| message.get("content"))
-                .and_then(Value::as_str),
-            Some("What were the two questions above in this same conversation?"),
-        );
-    }
-
-    #[test]
-    fn plain_chat_reducer_keeps_earlier_same_chat_topic_beyond_short_tail() {
-        let mut msgs = vec![
-            system_msg("Agent R."),
-            user_msg("How do I run Windows commands over Tailscale from my Mac?"),
-            assistant_msg("We discussed using a reachable Windows host over Tailscale."),
-        ];
-        for i in 0..12 {
-            msgs.push(user_msg(&format!("follow-up topic {i}")));
-            msgs.push(assistant_msg(&format!("follow-up answer {i}")));
-        }
-        msgs.push(user_msg("What did we discuss earlier in this chat?"));
-        let s = session_with(&msgs, None);
-        let outputs = vec![
-            worker_out("fast", "I only see the latest question."),
-            worker_out("strong", "Earlier history mentioned Windows and Tailscale."),
-        ];
-
-        let (messages, _tools) = pack_for_reducer(&s, &outputs, "history disagreement", false);
-        let body = serialized_messages(&messages);
-
-        assert!(
-            body.contains("Windows commands over Tailscale"),
-            "plain-chat reducer should retain earlier same-chat topics, got {body}",
-        );
-        assert!(
-            body.contains("What did we discuss earlier"),
-            "current user turn must still be present, got {body}",
-        );
-    }
-
-    #[test]
-    fn plain_chat_reducer_drops_oversized_prior_blob_before_current() {
-        let oversized_prior = format!(
-            "OVERSIZED_REDUCER_PRIOR_{}",
-            "x".repeat(REDUCER_PLAIN_CONTEXT_MAX_BYTES + 1024)
-        );
-        let s = session_with(
-            &[
-                system_msg("Agent R."),
-                user_msg("Read this large pasted result."),
-                assistant_msg(&oversized_prior),
-                user_msg("What should I do next?"),
-            ],
-            None,
-        );
-        let outputs = vec![
-            worker_out("fast", "Answer the current question only."),
-            worker_out("strong", "Do not replay the huge prior blob."),
-        ];
-
-        let (messages, _tools) = pack_for_reducer(&s, &outputs, "history disagreement", false);
-        let body = serialized_messages(&messages);
-
-        assert!(
-            body.contains("What should I do next?"),
-            "current user turn must still be present, got {body}",
-        );
-        assert!(
-            !body.contains("OVERSIZED_REDUCER_PRIOR_"),
-            "plain-chat reducer context should not carry an oversized prior blob, got {body}",
         );
     }
 

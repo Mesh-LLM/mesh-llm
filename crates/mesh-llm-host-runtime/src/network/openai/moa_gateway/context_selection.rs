@@ -1,14 +1,11 @@
 use crate::mesh;
 
-const UNKNOWN_CONTEXT_FALLBACK_MAX_TOKENS: u32 = 8_192;
-
 pub(in crate::network::openai) fn context_can_satisfy(
     required_tokens: Option<u32>,
     context_length: Option<u32>,
 ) -> bool {
     match (required_tokens, context_length) {
         (Some(required), Some(context)) => context >= required,
-        (Some(required), None) => required <= UNKNOWN_CONTEXT_FALLBACK_MAX_TOKENS,
         _ => true,
     }
 }
@@ -33,34 +30,32 @@ pub(in crate::network::openai) async fn select_remote_host(
                     host.fmt_short()
                 );
             }
-            None if context_can_satisfy(Some(required_tokens), None) => {
-                unknown.get_or_insert(host);
-            }
             None => {
-                tracing::info!(
-                    "MoA: skipping remote worker {model} on {}; context is unknown and request needs {required_tokens} tokens",
-                    host.fmt_short()
-                );
+                unknown.get_or_insert(host);
             }
         }
     }
     unknown
 }
 
-pub(in crate::network::openai) fn virtual_mesh_context_length_from_known_contexts<I>(
-    contexts: I,
-) -> Option<u32>
-where
-    I: IntoIterator<Item = (String, u32)>,
-{
-    let mut by_model = std::collections::BTreeMap::<String, u32>::new();
-    for (model_key, context) in contexts {
-        by_model
-            .entry(model_key)
-            .and_modify(|existing| *existing = (*existing).max(context))
-            .or_insert(context);
+pub(in crate::network::openai) fn virtual_mesh_context_length(
+    models: &[String],
+    runtimes: &[mesh::ModelRuntimeDescriptor],
+) -> Option<u32> {
+    let mut contexts_by_model = Vec::new();
+    for model in models {
+        if model == mesh_mixture_of_agents::VIRTUAL_MODEL_NAME {
+            continue;
+        }
+        let context = runtimes
+            .iter()
+            .filter(|runtime| runtime.model_name == *model)
+            .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length)
+            .max();
+        if let Some(context) = context {
+            contexts_by_model.push(context);
+        }
     }
-    let mut contexts_by_model = by_model.into_values().collect::<Vec<_>>();
     contexts_by_model.sort_unstable_by(|left, right| right.cmp(left));
     contexts_by_model.get(1).copied()
 }
@@ -78,10 +73,18 @@ pub(in crate::network::openai) fn should_advertise_virtual_mesh(models: &[String
 mod tests {
     use super::*;
 
+    fn runtime(model_name: &str, context_length: Option<u32>) -> mesh::ModelRuntimeDescriptor {
+        mesh::ModelRuntimeDescriptor {
+            model_name: model_name.to_string(),
+            identity_hash: None,
+            context_length,
+            ready: true,
+        }
+    }
+
     #[test]
     fn context_can_satisfy_keeps_unknown_as_fallback() {
-        assert!(context_can_satisfy(Some(4_096), None));
-        assert!(!context_can_satisfy(Some(16_384), None));
+        assert!(context_can_satisfy(Some(16_384), None));
         assert!(context_can_satisfy(None, Some(4096)));
         assert!(context_can_satisfy(Some(16_384), Some(32_768)));
         assert!(!context_can_satisfy(Some(16_384), Some(4096)));
@@ -89,46 +92,52 @@ mod tests {
 
     #[test]
     fn virtual_mesh_context_is_minimum_when_only_two_known_contributors_fit() {
-        let contexts = vec![("small".to_string(), 8192), ("large".to_string(), 65_536)];
-        assert_eq!(
-            virtual_mesh_context_length_from_known_contexts(contexts),
-            Some(8192)
-        );
+        let models = vec![
+            "small".to_string(),
+            "large".to_string(),
+            mesh_mixture_of_agents::VIRTUAL_MODEL_NAME.to_string(),
+        ];
+        let runtimes = vec![runtime("small", Some(8192)), runtime("large", Some(65_536))];
+        assert_eq!(virtual_mesh_context_length(&models, &runtimes), Some(8192));
     }
 
     #[test]
     fn virtual_mesh_context_uses_second_highest_known_model_context() {
-        let contexts = vec![
-            ("small".to_string(), 32_768),
-            ("large-a".to_string(), 131_072),
-            ("large-b".to_string(), 131_072),
+        let models = vec![
+            "small".to_string(),
+            "large-a".to_string(),
+            "large-b".to_string(),
+        ];
+        let runtimes = vec![
+            runtime("small", Some(32_768)),
+            runtime("large-a", Some(131_072)),
+            runtime("large-b", Some(131_072)),
         ];
         assert_eq!(
-            virtual_mesh_context_length_from_known_contexts(contexts),
+            virtual_mesh_context_length(&models, &runtimes),
             Some(131_072)
         );
     }
 
     #[test]
     fn virtual_mesh_context_counts_each_model_once() {
-        let contexts = vec![
-            ("large".to_string(), 131_072),
-            ("large".to_string(), 131_072),
-            ("small".to_string(), 16_384),
+        let models = vec!["small".to_string(), "large".to_string()];
+        let runtimes = vec![
+            runtime("large", Some(131_072)),
+            runtime("large", Some(131_072)),
+            runtime("small", Some(16_384)),
         ];
         assert_eq!(
-            virtual_mesh_context_length_from_known_contexts(contexts),
+            virtual_mesh_context_length(&models, &runtimes),
             Some(16_384)
         );
     }
 
     #[test]
     fn virtual_mesh_context_needs_two_known_contributor_contexts() {
-        let contexts = vec![("known".to_string(), 32_768)];
-        assert_eq!(
-            virtual_mesh_context_length_from_known_contexts(contexts),
-            None
-        );
+        let models = vec!["unknown".to_string(), "known".to_string()];
+        let runtimes = vec![runtime("unknown", None), runtime("known", Some(32_768))];
+        assert_eq!(virtual_mesh_context_length(&models, &runtimes), None);
     }
 
     #[test]

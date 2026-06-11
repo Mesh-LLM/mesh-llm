@@ -23,18 +23,21 @@ use std::time::Duration;
 /// running a stale binary that 502s on tool calls) doesn't take down
 /// the whole reducer step.
 pub(crate) fn reducer_candidates(config: &GatewayConfig) -> Vec<(String, usize)> {
-    let mut sorted = config.models.clone();
-    sorted.sort_by(worker::compare_model_strength);
-
-    // Strongest first, then progressively smaller/weaker fallbacks.
+    let mut big = Vec::new();
+    let mut small = Vec::new();
+    for m in &config.models {
+        let entry = (m.name.clone(), m.backend_index);
+        if worker::is_single_digit_b_name(&m.name) {
+            small.push(entry);
+        } else {
+            big.push(entry);
+        }
+    }
+    big.extend(small);
     // Intentionally allow returning empty: hedged_reducer_call's empty-input
     // path surfaces the right error. A fake ("unknown", 0) entry would call
     // backend_index=0 with a bogus model name and mask real bugs.
-    sorted
-        .into_iter()
-        .rev()
-        .map(|m| (m.name, m.backend_index))
-        .collect()
+    big
 }
 
 /// Successful hedged-reducer outcome.
@@ -252,52 +255,6 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn test_config(models: Vec<crate::ModelEntry>) -> GatewayConfig {
-        GatewayConfig {
-            backends: Vec::new(),
-            models,
-            worker_timeout: Duration::from_secs(1),
-            hedge_delay: Duration::from_millis(10),
-            reducer_timeout: Duration::from_secs(1),
-            first_answer_grace: Duration::ZERO,
-            enable_thinking: None,
-        }
-    }
-
-    fn model(
-        name: &str,
-        backend_index: usize,
-        parameter_count_b: Option<f64>,
-    ) -> crate::ModelEntry {
-        crate::ModelEntry {
-            name: name.into(),
-            backend_index,
-            parameter_count_b,
-        }
-    }
-
-    #[test]
-    fn reducer_candidates_use_parameter_metadata_for_strength_order() {
-        let config = test_config(vec![
-            model("unknown-big-name", 0, None),
-            model("looks-70B-but-small", 1, Some(7.0)),
-            model("looks-7B-but-large", 2, Some(32.0)),
-            model("plain-70B", 3, Some(70.0)),
-        ]);
-
-        let candidates = reducer_candidates(&config);
-
-        assert_eq!(
-            candidates,
-            vec![
-                ("plain-70B".to_string(), 3),
-                ("looks-7B-but-large".to_string(), 2),
-                ("unknown-big-name".to_string(), 0),
-                ("looks-70B-but-small".to_string(), 1),
-            ]
-        );
-    }
 
     #[derive(Clone)]
     enum FakeBehavior {

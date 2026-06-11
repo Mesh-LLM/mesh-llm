@@ -74,17 +74,14 @@ fn config_with_three_workers_returning(text: &str) -> moa::GatewayConfig {
         moa::ModelEntry {
             name: "worker-a-3b".into(),
             backend_index: 0,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "worker-b-13b".into(),
             backend_index: 1,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "worker-c-32b".into(),
             backend_index: 2,
-            parameter_count_b: None,
         },
     ];
 

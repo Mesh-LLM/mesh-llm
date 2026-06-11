@@ -1,5 +1,4 @@
 import * as RadixTooltip from '@radix-ui/react-tooltip'
-import { useSyncExternalStore } from 'react'
 import type { ReactElement, ReactNode } from 'react'
 
 // eslint-disable-next-line react-refresh/only-export-components -- re-exports of Radix UI components for convenience
@@ -39,36 +38,7 @@ type TooltipProps = {
   side?: RadixTooltip.TooltipContentProps['side']
 }
 
-const TOUCH_TOOLTIP_QUERY = '(hover: none), (pointer: coarse)'
-
-function tooltipShouldBeDisabledForTouch() {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
-  return window.matchMedia(TOUCH_TOOLTIP_QUERY).matches
-}
-
-function subscribeToTouchTooltipChanges(onStoreChange: () => void) {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {}
-
-  const mediaQuery = window.matchMedia(TOUCH_TOOLTIP_QUERY)
-  const handleChange = () => onStoreChange()
-
-  if (typeof mediaQuery.addEventListener === 'function') {
-    mediaQuery.addEventListener('change', handleChange)
-    return () => mediaQuery.removeEventListener('change', handleChange)
-  }
-
-  mediaQuery.addListener(handleChange)
-  return () => mediaQuery.removeListener(handleChange)
-}
-
-function useTooltipDisabledForTouch() {
-  return useSyncExternalStore(subscribeToTouchTooltipChanges, tooltipShouldBeDisabledForTouch, () => false)
-}
-
 export function Tooltip({ children, content, side = 'top' }: TooltipProps) {
-  const disabledForTouch = useTooltipDisabledForTouch()
-  if (disabledForTouch) return children
-
   return (
     <RadixTooltip.Provider delayDuration={250} skipDelayDuration={120}>
       <RadixTooltip.Root>

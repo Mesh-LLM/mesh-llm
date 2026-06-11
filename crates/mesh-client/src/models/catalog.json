@@ -40,19 +40,6 @@
     "mmproj": null
   },
   {
-    "name": "Gemma-4-E4B-it-Q4_K_M",
-    "file": "gemma-4-E4B-it-Q4_K_M.gguf",
-    "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
-    "size": "4.6GB",
-    "description": "Gemma 4 E4B instruction model, strong mini-class default",
-    "draft": null,
-    "extra_files": [],
-    "mmproj": {
-      "file": "mmproj-F16.gguf",
-      "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf"
-    }
-  },
-  {
     "name": "Qwen2.5-Coder-7B-Instruct-Q4_K_M",
     "file": "Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf",
     "url": "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",

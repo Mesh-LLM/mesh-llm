@@ -55,14 +55,35 @@ pub(crate) async fn gather_workers_incremental(
     let dispatched_at = Instant::now();
     let grace_enabled = grace_mode != GraceMode::Disabled && !first_answer_grace.is_zero();
 
+    // Grace eligibility: once the grace window has elapsed and a qualifying
+    // partial decision exists, ship it instead of waiting for the slow tail.
+    // Answer grace handles ordinary chat, including tool-enabled clients that
+    // attach schemas to every request. Tool grace handles obvious tool-intent
+    // prompts, but only when a worker has actually proposed a valid tool.
+    let grace_eligible = |outs: &[WorkerOutput]| -> bool {
+        if !grace_enabled {
+            return false;
+        }
+        match grace_mode {
+            GraceMode::Disabled => false,
+            GraceMode::Answer => outs.iter().any(|o| {
+                o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
+            }),
+            GraceMode::Tool => outs.iter().any(|o| {
+                o.kind == normalize::OutputKind::ToolProposal
+                    && o.tool_name.is_some()
+                    && o.confidence >= TOOL_GRACE_MIN_CONFIDENCE
+            }),
+        }
+    };
+
     loop {
-        let answer_priority_pending = answer_priority_worker_pending(dispatched, &summaries);
-        let armed = grace_eligible(&outputs, grace_enabled, grace_mode, answer_priority_pending);
-        let grace_remaining = if armed {
+        let grace_remaining = if grace_eligible(&outputs) {
             first_answer_grace.saturating_sub(dispatched_at.elapsed())
         } else {
             Duration::from_secs(60 * 60)
         };
+        let armed = grace_eligible(&outputs);
 
         let join_result = tokio::select! {
             biased;
@@ -114,15 +135,9 @@ pub(crate) async fn gather_workers_incremental(
                 });
                 outputs.push(normalized);
 
-                let answer_priority_pending =
-                    answer_priority_worker_pending(dispatched, &summaries);
-                if let Some(decision) = arbiter::try_early_decision(
-                    &outputs,
-                    total_workers,
-                    total_finished,
-                    has_tools,
-                    answer_priority_pending,
-                ) {
+                if let Some(decision) =
+                    arbiter::try_early_decision(&outputs, total_workers, total_finished, has_tools)
+                {
                     drain_after_early_exit(join_set, &mut summaries).await;
                     reconcile_dispatched(dispatched, &mut summaries);
                     return (outputs, summaries, Some(decision));
@@ -146,15 +161,9 @@ pub(crate) async fn gather_workers_incremental(
                     confidence: None,
                 });
 
-                let answer_priority_pending =
-                    answer_priority_worker_pending(dispatched, &summaries);
-                if let Some(decision) = arbiter::try_early_decision(
-                    &outputs,
-                    total_workers,
-                    total_finished,
-                    has_tools,
-                    answer_priority_pending,
-                ) {
+                if let Some(decision) =
+                    arbiter::try_early_decision(&outputs, total_workers, total_finished, has_tools)
+                {
                     drain_after_early_exit(join_set, &mut summaries).await;
                     reconcile_dispatched(dispatched, &mut summaries);
                     return (outputs, summaries, Some(decision));
@@ -175,53 +184,16 @@ pub(crate) async fn gather_workers_incremental(
     (outputs, summaries, None)
 }
 
-fn grace_eligible(
-    outs: &[WorkerOutput],
-    grace_enabled: bool,
-    grace_mode: GraceMode,
-    answer_priority_pending: bool,
-) -> bool {
-    if !grace_enabled {
-        return false;
-    }
-    match grace_mode {
-        GraceMode::Disabled => false,
-        GraceMode::Answer => {
-            !answer_priority_pending
-                && outs.iter().any(|o| {
-                    o.kind == normalize::OutputKind::Answer && o.confidence >= GRACE_MIN_CONFIDENCE
-                })
-        }
-        GraceMode::Tool => outs.iter().any(|o| {
-            o.kind == normalize::OutputKind::ToolProposal
-                && o.tool_name.is_some()
-                && o.confidence >= TOOL_GRACE_MIN_CONFIDENCE
-        }),
-    }
-}
-
-fn answer_priority_worker_pending(
-    dispatched: &[DispatchedWorker],
-    summaries: &[WorkerSummary],
-) -> bool {
-    dispatched.iter().any(|worker| {
-        answer_priority_role(worker.role)
-            && !summaries
-                .iter()
-                .any(|summary| summary.model == worker.model)
-    })
-}
-
-fn answer_priority_role(role: WorkerRole) -> bool {
-    matches!(
-        role,
-        WorkerRole::Strong | WorkerRole::Generalist | WorkerRole::Reducer
-    )
-}
-
 fn grace_answer_decision(outputs: &[WorkerOutput]) -> arbiter::Decision {
-    let answer =
-        arbiter::best_answer_output(outputs).expect("answer grace requires at least one Answer");
+    let answer = outputs
+        .iter()
+        .filter(|o| o.kind == normalize::OutputKind::Answer)
+        .max_by(|a, b| {
+            a.confidence
+                .partial_cmp(&b.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("answer grace requires at least one Answer");
     let answer_count = outputs
         .iter()
         .filter(|o| o.kind == normalize::OutputKind::Answer)
@@ -385,7 +357,7 @@ mod tests {
             spawn_worker(
                 &mut js,
                 "slow2",
-                WorkerRole::Specialist,
+                WorkerRole::Strong,
                 5_000,
                 Ok(answer_text("agreed", 0.6)),
             ),
@@ -438,7 +410,7 @@ mod tests {
             spawn_worker(
                 &mut js,
                 "slow2",
-                WorkerRole::Specialist,
+                WorkerRole::Strong,
                 200,
                 Ok(answer_text("agreed", 0.6)),
             ),
@@ -463,50 +435,6 @@ mod tests {
         );
         assert_eq!(outputs.len(), 1, "grace should leave the slow tail pending");
         assert!(matches!(decision, Some(arbiter::Decision::Answer(_))));
-    }
-
-    #[tokio::test]
-    async fn answer_grace_waits_for_pending_strong_worker() {
-        let mut js = tokio::task::JoinSet::new();
-        let dispatched = vec![
-            spawn_worker(
-                &mut js,
-                "fast",
-                WorkerRole::Fast,
-                10,
-                Ok(answer_text("same answer", 0.8)),
-            ),
-            spawn_worker(
-                &mut js,
-                "strong",
-                WorkerRole::Strong,
-                180,
-                Ok(answer_text("same answer with stronger detail", 0.7)),
-            ),
-        ];
-
-        let started = std::time::Instant::now();
-        let (outputs, _summaries, decision) = gather_workers_incremental(
-            &mut js,
-            &dispatched,
-            false,
-            &[],
-            None,
-            Duration::from_millis(40),
-            GraceMode::Answer,
-        )
-        .await;
-        let elapsed = started.elapsed();
-
-        assert!(
-            elapsed >= Duration::from_millis(150),
-            "answer grace must wait for the strong worker; got {elapsed:?}"
-        );
-        assert_eq!(outputs.len(), 2);
-        match decision.expect("strong + fast agreement should early-decide") {
-            arbiter::Decision::Answer(text) => assert!(text.contains("same answer")),
-            other => panic!("expected answer decision, got {other:?}"),
-        }
     }
 
     #[tokio::test]
@@ -725,8 +653,8 @@ mod tests {
             ),
             spawn_worker(
                 &mut js,
-                "slow_specialist",
-                WorkerRole::Specialist,
+                "slow_strong",
+                WorkerRole::Strong,
                 5_000,
                 Ok(answer_text("Ready", 0.5)),
             ),
@@ -788,7 +716,7 @@ mod tests {
             spawn_worker(
                 &mut js,
                 "w_slow",
-                WorkerRole::Specialist,
+                WorkerRole::Strong,
                 5_000,
                 Ok(answer_text("slow_low", 0.4)),
             ),

@@ -74,17 +74,14 @@ fn three_failing_backends() -> moa::GatewayConfig {
         moa::ModelEntry {
             name: "alpha-3b".into(),
             backend_index: 0,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "beta-13b".into(),
             backend_index: 1,
-            parameter_count_b: None,
         },
         moa::ModelEntry {
             name: "gamma-32b".into(),
             backend_index: 2,
-            parameter_count_b: None,
         },
     ];
 

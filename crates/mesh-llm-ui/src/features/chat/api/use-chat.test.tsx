@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DEFAULT_SYSTEM_PROMPT } from '@/constants/system-prompt'
 import { useMeshChat } from '@/features/chat/api/use-chat'
-import type { ThreadMessage } from '@/features/app-tabs/types'
 
 type UseChatOptions = {
   id: string
@@ -23,19 +22,12 @@ function createUserMessage(content: string): UIMessage {
   }
 }
 
-async function drainMessageStream(adapter: ConnectConnectionAdapter, messages: UIMessage[]) {
-  for await (const chunk of adapter.connect(messages, undefined, undefined)) {
+async function drainStream(adapter: ConnectConnectionAdapter, message: UIMessage) {
+  for await (const chunk of adapter.connect([message], undefined, undefined)) {
     void chunk
     // Drain the stream so the request body is built and posted.
   }
 }
-
-const useChatMockState = vi.hoisted(() => ({
-  resetMessages: [] as unknown[][],
-  reset() {
-    this.resetMessages = []
-  }
-}))
 
 vi.mock('@tanstack/ai-react', async () => {
   const React = await import('react')
@@ -43,18 +35,11 @@ vi.mock('@tanstack/ai-react', async () => {
   return {
     useChat: vi.fn(({ connection, initialMessages }: UseChatOptions) => {
       const connectionRef = React.useRef(connection)
-      const messagesRef = React.useRef(initialMessages)
-      const setMessages = vi.fn((messages: UIMessage[]) => {
-        messagesRef.current = messages
-        useChatMockState.resetMessages.push(messages)
-      })
 
       return {
-        messages: messagesRef.current,
-        sendMessage: vi.fn((content: string) =>
-          drainMessageStream(connectionRef.current, [...messagesRef.current, createUserMessage(content)])
-        ),
-        setMessages,
+        messages: initialMessages,
+        sendMessage: vi.fn((content: string) => drainStream(connectionRef.current, createUserMessage(content))),
+        setMessages: vi.fn(),
         reload: vi.fn(),
         stop: vi.fn(),
         status: 'ready',
@@ -96,22 +81,18 @@ function SendFirstMessageOnLayout() {
 
 function SendMessageOnLayout({
   message,
-  conversationId = 'chat-1',
-  initialMessages = [],
   model,
   systemPrompt
 }: {
   message?: string
-  conversationId?: string
-  initialMessages?: ThreadMessage[]
   model: string
   systemPrompt: string
 }) {
   const chat = useMeshChat({
-    conversationId,
+    conversationId: 'chat-1',
     model,
     systemPrompt,
-    initialMessages
+    initialMessages: []
   })
 
   useLayoutEffect(() => {
@@ -126,7 +107,6 @@ function SendMessageOnLayout({
 describe('useMeshChat', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
-    useChatMockState.reset()
   })
 
   it('sends the default system prompt with the first message in a new chat', async () => {
@@ -163,47 +143,5 @@ describe('useMeshChat', () => {
     expect(body.model).toBe('model-b')
     expect(body.input[0]).toEqual({ role: 'system', content: 'prompt-b' })
     expect(body.input[1]).toEqual({ role: 'user', content: 'Use latest values' })
-  })
-
-  it('resets the underlying chat messages before a fresh conversation can send', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-
-    const oldThread: ThreadMessage[] = [
-      {
-        id: 'old-user',
-        messageRole: 'user',
-        timestamp: '2026-05-13T00:00:00.000Z',
-        body: 'Old Windows via Tailscale question'
-      },
-      {
-        id: 'old-assistant',
-        messageRole: 'assistant',
-        timestamp: '2026-05-13T00:00:01.000Z',
-        body: 'Old answer that must not leak'
-      }
-    ]
-
-    const { rerender } = render(
-      <SendMessageOnLayout conversationId="old-chat" initialMessages={oldThread} model="mesh" systemPrompt="" />
-    )
-
-    rerender(
-      <SendMessageOnLayout
-        conversationId="fresh-chat"
-        initialMessages={[]}
-        message="Only answer this fresh prompt"
-        model="mesh"
-        systemPrompt=""
-      />
-    )
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-
-    const request = fetchMock.mock.calls[0]?.[1]
-    const body = JSON.parse(String(request?.body)) as { input: Array<{ role: string; content: string }> }
-
-    expect(body.input).toEqual([{ role: 'user', content: 'Only answer this fresh prompt' }])
-    expect(JSON.stringify(body.input)).not.toContain('Windows via Tailscale')
   })
 })

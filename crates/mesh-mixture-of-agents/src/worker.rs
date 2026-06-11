@@ -54,18 +54,17 @@ pub fn assign_roles(models: &[ModelEntry]) -> Vec<Assignment> {
 
     // Reorder by capacity tier so role assignment lines up with model
     // capability instead of arbitrary list order:
-    //   - "small tier"  = advertised <10B metadata, or names advertising
-    //                     a single-digit billion-param count (1B-9B)
-    //   - "big tier"    = advertised >=10B metadata, or names that don't
-    //                     encode a size at all (MiniMax-M2.5, Coder-Next,
-    //                     fine-tune tags)
+    //   - "small tier"  = names advertising a single-digit billion-param
+    //                     count (1B-9B), e.g. Qwen3-8B, Qwen2.5-3B
+    //   - "big tier"    = everything else: multi-digit B (31B, 70B) or
+    //                     names that don't encode a size at all
+    //                     (MiniMax-M2.5, Coder-Next, fine-tune tags)
     //
     // This mirrors the same heuristic `pick_model_classified` uses in the
     // main router so MoA's reducer/strong worker matches what `auto` would
-    // pick. Within a tier, known parameter counts sort from smaller to
-    // larger so the strong/reducer role prefers the largest known model.
+    // pick.
     let mut sorted: Vec<ModelEntry> = models.to_vec();
-    sorted.sort_by(compare_model_strength);
+    sorted.sort_by_key(|m| !is_single_digit_b_name(&m.name));
     // After sort: small-tier first, big-tier last. That way:
     //   first  = fast       (smallest model)
     //   middle = specialist
@@ -144,36 +143,6 @@ pub(crate) fn is_single_digit_b_name(name: &str) -> bool {
     false
 }
 
-pub(crate) fn compare_model_strength(left: &ModelEntry, right: &ModelEntry) -> std::cmp::Ordering {
-    let left_big = !is_small_parameter_model(left);
-    let right_big = !is_small_parameter_model(right);
-    left_big
-        .cmp(&right_big)
-        .then_with(|| model_strength_value(left).total_cmp(&model_strength_value(right)))
-        .then_with(|| left.name.cmp(&right.name))
-}
-
-fn is_small_parameter_model(model: &ModelEntry) -> bool {
-    model
-        .parameter_count_b
-        .filter(|count| count.is_finite())
-        .map(|count| count < 10.0)
-        .unwrap_or_else(|| is_single_digit_b_name(&model.name))
-}
-
-fn model_strength_value(model: &ModelEntry) -> f64 {
-    model
-        .parameter_count_b
-        .filter(|count| count.is_finite() && *count > 0.0)
-        .unwrap_or_else(|| {
-            if is_single_digit_b_name(&model.name) {
-                9.0
-            } else {
-                10.0
-            }
-        })
-}
-
 /// Truncate `text` so the returned slice is at most `max_bytes` long,
 /// honouring UTF-8 char boundaries (never panics, unlike `&text[..N]`).
 pub fn truncate_chars(text: &str, max_bytes: usize) -> &str {
@@ -240,14 +209,6 @@ pub fn extract_thinking(text: &str) -> String {
 mod tests {
     use super::*;
 
-    fn model(name: &str, backend_index: usize, parameter_count_b: Option<f64>) -> ModelEntry {
-        ModelEntry {
-            name: name.into(),
-            backend_index,
-            parameter_count_b,
-        }
-    }
-
     #[test]
     fn truncate_chars_shorter_than_limit_is_passthrough() {
         assert_eq!(truncate_chars("hello", 100), "hello");
@@ -283,7 +244,16 @@ mod tests {
 
     #[test]
     fn assign_two_models() {
-        let models = vec![model("small", 0, None), model("big", 1, None)];
+        let models = vec![
+            ModelEntry {
+                name: "small".into(),
+                backend_index: 0,
+            },
+            ModelEntry {
+                name: "big".into(),
+                backend_index: 1,
+            },
+        ];
         let assignments = assign_roles(&models);
         assert_eq!(assignments.len(), 2);
         assert_eq!(assignments[0].role, WorkerRole::Fast);
@@ -293,9 +263,18 @@ mod tests {
     #[test]
     fn assign_three_models() {
         let models = vec![
-            model("small", 0, None),
-            model("mid", 1, None),
-            model("big", 2, None),
+            ModelEntry {
+                name: "small".into(),
+                backend_index: 0,
+            },
+            ModelEntry {
+                name: "mid".into(),
+                backend_index: 1,
+            },
+            ModelEntry {
+                name: "big".into(),
+                backend_index: 2,
+            },
         ];
         let assignments = assign_roles(&models);
         assert_eq!(assignments.len(), 3);
@@ -310,10 +289,22 @@ mod tests {
         // MiniMax (no digit) and Qwen3-32B (multi-digit) belong in the
         // big tier; Qwen2.5-3B and Qwen3-8B belong in the small tier.
         let models = vec![
-            model("MiniMax-M2.5", 0, None),
-            model("unsloth/Qwen3-32B-GGUF:Q4_K_M", 1, None),
-            model("Qwen3-8B", 2, None),
-            model("Qwen2.5-3B", 3, None),
+            ModelEntry {
+                name: "MiniMax-M2.5".into(),
+                backend_index: 0,
+            },
+            ModelEntry {
+                name: "unsloth/Qwen3-32B-GGUF:Q4_K_M".into(),
+                backend_index: 1,
+            },
+            ModelEntry {
+                name: "Qwen3-8B".into(),
+                backend_index: 2,
+            },
+            ModelEntry {
+                name: "Qwen2.5-3B".into(),
+                backend_index: 3,
+            },
         ];
         let assignments = assign_roles(&models);
         assert_eq!(assignments.len(), 4);
@@ -331,38 +322,6 @@ mod tests {
             "strong should be big-tier, got {}",
             assignments[3].model_name
         );
-    }
-
-    #[test]
-    fn assign_roles_prefers_largest_known_model_as_strong() {
-        let models = vec![
-            model("unknown-big-name", 0, None),
-            model("misleading-7B-name", 1, Some(32.0)),
-            model("plain-70B", 2, Some(70.0)),
-            model("Qwen3-8B", 3, Some(8.0)),
-        ];
-
-        let assignments = assign_roles(&models);
-
-        assert_eq!(assignments[0].role, WorkerRole::Fast);
-        assert_eq!(assignments[0].model_name, "Qwen3-8B");
-        assert_eq!(assignments[3].role, WorkerRole::Strong);
-        assert_eq!(assignments[3].model_name, "plain-70B");
-    }
-
-    #[test]
-    fn advertised_parameters_override_name_size_tier() {
-        let models = vec![
-            model("looks-70B-but-small", 0, Some(7.0)),
-            model("looks-7B-but-large", 1, Some(32.0)),
-        ];
-
-        let assignments = assign_roles(&models);
-
-        assert_eq!(assignments[0].role, WorkerRole::Fast);
-        assert_eq!(assignments[0].model_name, "looks-70B-but-small");
-        assert_eq!(assignments[1].role, WorkerRole::Strong);
-        assert_eq!(assignments[1].model_name, "looks-7B-but-large");
     }
 
     #[test]
