@@ -188,8 +188,8 @@ describe('TopNav', () => {
     renderTopNav({
       apiUrl: 'http://mesh.local:3131/v1',
       apiAccessLinks: [
-        { href: 'https://docs.meshllm.cloud/', label: 'Docs' },
-        { href: 'https://docs.meshllm.cloud/#install', label: 'Install' }
+        { href: 'https://meshllm.cloud/', label: 'Docs' },
+        { href: 'https://meshllm.cloud/#install', label: 'Install' }
       ],
       joinCommands: [
         {
@@ -210,9 +210,9 @@ describe('TopNav', () => {
         }
       ],
       joinLinks: [
-        { href: 'https://docs.meshllm.cloud/', label: 'Setup' },
-        { href: 'https://docs.meshllm.cloud/#install', label: 'Install' },
-        { href: 'https://docs.meshllm.cloud/#blackboard', label: 'Blackboard' }
+        { href: 'https://meshllm.cloud/', label: 'Setup' },
+        { href: 'https://meshllm.cloud/#install', label: 'Install' },
+        { href: 'https://meshllm.cloud/#blackboard', label: 'Blackboard' }
       ]
     })
 

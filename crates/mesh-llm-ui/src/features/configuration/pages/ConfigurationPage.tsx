@@ -71,7 +71,7 @@ type ConfigurationPageProps = {
 const OWNER_CONTROL_READ_ONLY_MESSAGE = 'No owner-control identity on this node, run both commands to unlock saving.'
 const OWNER_CONTROL_SAVE_ERROR = 'Config was not saved. Runtime control is disabled: missing owner identity.'
 const RUNTIME_CONTROL_SAVE_UNAVAILABLE_ERROR = 'Config was not saved. Runtime control config is unavailable.'
-const OWNER_CONTROL_DOCS_URL = 'https://docs.meshllm.cloud/'
+const OWNER_CONTROL_DOCS_URL = 'https://meshllm.cloud/'
 
 function formatRuntimeControlDisabledReason(bootstrap: RuntimeControlBootstrapPayload | undefined) {
   if (bootstrap?.disabled_reason === 'missing_owner_identity') return 'missing owner identity'

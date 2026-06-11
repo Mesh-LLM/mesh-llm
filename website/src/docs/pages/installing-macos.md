@@ -9,7 +9,7 @@ Install Mesh on every Mac that should serve a model or call into a mesh.
 ## Quick install
 
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 Open a new terminal after install if the installer added Mesh to your `PATH`.
@@ -37,7 +37,7 @@ The installer detects your Mac hardware, selects the `metal` bundle (optimized f
 The macOS installer auto-detects `metal`. Force a different flavor when auto-detection is wrong or you want to test a specific backend:
 
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash -s -- --flavor vulkan
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --flavor vulkan
 ```
 
 Available macOS flavors:
@@ -53,13 +53,13 @@ Available macOS flavors:
 Install the latest prerelease:
 
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash -s -- --pre-release
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --pre-release
 ```
 
 Install to a custom location:
 
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash -s -- --install-dir "$HOME/bin"
+curl -fsSL https://meshllm.cloud/install.sh | bash -s -- --install-dir "$HOME/bin"
 ```
 
 ## Next step
