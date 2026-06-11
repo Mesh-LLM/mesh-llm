@@ -41,6 +41,7 @@ const TOOL_RESULT_WEB_SEARCH_TITLE_MAX_CHARS: usize = 120;
 const TOOL_RESULT_WEB_SEARCH_SNIPPET_MAX_CHARS: usize = 200;
 const TOOL_RESULT_WEB_SEARCH_URL_MAX_CHARS: usize = 120;
 const TOOL_RESULT_WEB_SEARCH_ROW_MAX_CHARS: usize = 320;
+const TOOL_TASK_ANCHOR_MAX_CHARS: usize = 2_000;
 
 /// Packed context ready to send to a worker.
 pub struct PackedContext {
@@ -172,7 +173,7 @@ fn pack_fast(session: &Session, has_tools: bool, selected_tool_names: &[String])
             Some(FAST_PLAIN_CONTEXT_MAX_BYTES),
         )
     };
-    append_recent_dialog_messages(&mut messages, session, window, max_bytes);
+    append_recent_dialog_messages(&mut messages, session, window, max_bytes, has_tools);
 
     // Per-request sessions: the caller owns the multi-turn loop and
     // sends the full history each request. Continuation context lives
@@ -205,7 +206,7 @@ fn pack_specialist(
             Some(SPECIALIST_PLAIN_CONTEXT_MAX_BYTES),
         )
     };
-    append_recent_dialog_messages(&mut messages, session, window, max_bytes);
+    append_recent_dialog_messages(&mut messages, session, window, max_bytes, has_tools);
 
     PackedContext {
         messages,
@@ -219,8 +220,12 @@ fn append_recent_dialog_messages(
     session: &Session,
     window: usize,
     max_bytes: Option<usize>,
+    include_tool_task_anchor: bool,
 ) {
     let recent = bounded_recent_messages(session.recent_messages(window), max_bytes, true);
+    if include_tool_task_anchor {
+        append_tool_task_anchor_if_missing(messages, session, &recent);
+    }
     for msg in &recent {
         if plain_dialog_message_for_compact_context(msg) {
             messages.push(msg.clone());
@@ -271,6 +276,9 @@ fn pack_strong(
         )
     };
     let recent = bounded_recent_messages(session.recent_messages(window), max_bytes, true);
+    if has_tools {
+        append_tool_task_anchor_if_missing(&mut messages, session, &recent);
+    }
     for msg in &recent {
         let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
         if role != "system" && !role.is_empty() {
@@ -562,20 +570,107 @@ pub fn pack_for_tool_result_turn_selected(
                 .any(|msg| message_role(msg) == "user")
         });
 
+    let mut transcript = Vec::new();
     if let Some(user_idx) = prefix_user_idx {
-        messages.push(all[user_idx].clone());
+        transcript.push(all[user_idx].clone());
     }
 
     for msg in &all[start_idx..] {
         let role = message_role(msg);
         if role != "system" && !role.is_empty() {
-            messages.push(compact_tool_message(msg));
+            transcript.push(compact_tool_message(msg));
         }
     }
+    append_tool_task_anchor_if_missing(&mut messages, session, &transcript);
+    messages.extend(transcript);
 
     let tools = selected_tools(session, has_tools, selected_tool_names);
 
     (messages, tools)
+}
+
+fn append_tool_task_anchor_if_missing(
+    messages: &mut Vec<Value>,
+    session: &Session,
+    visible_messages: &[Value],
+) {
+    let Some(task) = first_user_task_text(session) else {
+        return;
+    };
+    if messages_contain_text(visible_messages, &task) {
+        return;
+    }
+
+    let task = truncate_with_ellipsis(&task, TOOL_TASK_ANCHOR_MAX_CHARS);
+    messages.push(json!({
+        "role": "system",
+        "content": format!("Original user task for this tool loop:\n{task}"),
+    }));
+}
+
+fn first_user_task_text(session: &Session) -> Option<String> {
+    session
+        .messages()
+        .iter()
+        .find_map(|message| {
+            (message_role(message) == "user" && !user_message_looks_like_tool_response(message))
+                .then(|| message_text_content(message))
+                .flatten()
+        })
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn user_message_looks_like_tool_response(message: &Value) -> bool {
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| parts.iter().all(content_part_looks_like_tool_response))
+}
+
+fn content_part_looks_like_tool_response(part: &Value) -> bool {
+    matches!(
+        part.get("type").and_then(Value::as_str),
+        Some("toolResponse" | "tool_result" | "tool_call_output" | "function_call_output")
+    ) || part.get("toolResult").is_some()
+        || part.get("tool_result").is_some()
+        || part.get("tool_call_id").is_some()
+        || part.get("call_id").is_some()
+}
+
+fn messages_contain_text(messages: &[Value], needle: &str) -> bool {
+    messages
+        .iter()
+        .filter_map(message_text_content)
+        .any(|text| text.contains(needle))
+}
+
+fn message_text_content(message: &Value) -> Option<String> {
+    let content = message.get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+    let parts = content.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| {
+            part.get("text")
+                .and_then(Value::as_str)
+                .or_else(|| part.get("input_text").and_then(Value::as_str))
+                .or_else(|| part.get("output_text").and_then(Value::as_str))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn truncate_with_ellipsis(text: &str, max_bytes: usize) -> String {
+    let truncated = crate::worker::truncate_chars(text, max_bytes);
+    if truncated.len() == text.len() {
+        truncated.to_string()
+    } else {
+        format!("{truncated}...")
+    }
 }
 
 fn tool_evidence_message(session: &Session) -> Option<Value> {
@@ -998,6 +1093,22 @@ mod tests {
     }
     fn tool_result_msg(id: &str, text: &str) -> Value {
         json!({"role": "tool", "tool_call_id": id, "content": text})
+    }
+    fn user_tool_response_msg(id: &str, text: &str) -> Value {
+        json!({
+            "role": "user",
+            "content": [{
+                "type": "toolResponse",
+                "id": id,
+                "toolResult": {
+                    "status": "success",
+                    "value": {
+                        "content": [{"type": "text", "text": text}],
+                        "isError": false,
+                    },
+                },
+            }],
+        })
     }
     fn tools_two() -> Value {
         json!([
@@ -1622,6 +1733,91 @@ mod tests {
         assert_ne!(
             roles[3], "tool",
             "bounded recent tail must not start with a bare tool message",
+        );
+    }
+
+    #[test]
+    fn tool_result_reducer_anchors_original_task_when_latest_user_is_tool_wrapper() {
+        let mut messages = vec![user_msg("Implement src/smoke_calc.py so the tests pass.")];
+        for idx in 0..8 {
+            let id = format!("call_tree_{idx}");
+            messages.push(assistant_tool_msg(
+                &id,
+                "tree",
+                json!({"path": format!("dir{idx}")}),
+            ));
+            messages.push(user_tool_response_msg(
+                &id,
+                &format!("tree result {idx}: src/smoke_calc.py"),
+            ));
+        }
+        messages.push(assistant_tool_msg(
+            "call_read",
+            "read_file",
+            json!({"path": "src/smoke_calc.py"}),
+        ));
+        messages.push(tool_result_msg(
+            "call_read",
+            "raise NotImplementedError(\"ci smoke fixture\")",
+        ));
+        let s = session_with(&messages, Some(tools_two()));
+
+        let recent_without_anchor =
+            s.recent_messages(TOOL_RESULT_CONTEXT_WINDOW)
+                .iter()
+                .any(|msg| {
+                    message_text_content(msg)
+                        .is_some_and(|text| text.contains("Implement src/smoke_calc.py"))
+                });
+        assert!(
+            !recent_without_anchor,
+            "test must push the original task outside the bounded recent tail",
+        );
+
+        let (messages, _tools) = pack_for_tool_result_turn(&s, true);
+        let body = serialized_messages(&messages);
+
+        assert!(
+            body.contains("Original user task for this tool loop"),
+            "tool-result context should add a bounded task anchor, got {body}",
+        );
+        assert!(
+            body.contains("Implement src/smoke_calc.py so the tests pass."),
+            "task anchor should preserve the real agent task, got {body}",
+        );
+        assert!(
+            body.contains("NotImplementedError"),
+            "latest tool result should remain visible, got {body}",
+        );
+    }
+
+    #[test]
+    fn tool_worker_context_anchors_original_task_after_user_tool_wrappers() {
+        let mut messages = vec![user_msg("Implement src/smoke_calc.py so the tests pass.")];
+        for idx in 0..8 {
+            let id = format!("call_{idx}");
+            messages.push(assistant_tool_msg(
+                &id,
+                "tree",
+                json!({"path": format!("dir{idx}")}),
+            ));
+            messages.push(user_tool_response_msg(
+                &id,
+                &format!("tree result {idx}: src/smoke_calc.py"),
+            ));
+        }
+        let s = session_with(&messages, Some(tools_two()));
+
+        let packed = pack_for_worker(&s, WorkerRole::Strong, true);
+        let body = serialized_messages(&packed.messages);
+
+        assert!(
+            body.contains("Original user task for this tool loop"),
+            "tool worker context should anchor the original task, got {body}",
+        );
+        assert!(
+            body.contains("Implement src/smoke_calc.py so the tests pass."),
+            "tool worker task anchor should preserve the real task, got {body}",
         );
     }
 

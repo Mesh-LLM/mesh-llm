@@ -453,6 +453,10 @@ fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> 
         }
     }
 
+    if selected.is_empty() && looks_like_tool_intent_lc(&text) {
+        return available;
+    }
+
     with_recent_tool_chain_names(session, &available, selected)
 }
 
@@ -792,21 +796,24 @@ async fn handle_tool_result(
                     "MoA reducer returned no usable answer",
                     MOA_ERR_NO_USABLE_ANSWER,
                 ),
-                _ => chat_response(&repair_tool_result_answer(session, &reduced.payload)),
+                _ => chat_response(&final_answer_text(session, &reduced.payload)),
             };
             (name, true, body)
         }
         None => {
             let err = last_err.unwrap_or_else(|| "no reducer candidates".into());
             tracing::warn!("moa: all {attempts} reducer candidates failed");
-            (
-                candidates.first().map(|c| c.0.clone()).unwrap_or_default(),
-                false,
-                error_response(
-                    &format!("Reducer failed (tried {attempts}): {err}"),
-                    MOA_ERR_ALL_REDUCERS_FAILED,
-                ),
-            )
+            return recover_tool_result_with_workers(ToolResultRecovery {
+                config,
+                session,
+                has_tools,
+                allowed_tools,
+                reducer_name: candidates.first().map(|c| c.0.clone()).unwrap_or_default(),
+                reducer_attempts: attempts,
+                reducer_error: err,
+                start,
+            })
+            .await;
         }
     };
 
@@ -825,6 +832,155 @@ async fn handle_tool_result(
         turn_kind: TurnKind::ToolResult,
         elapsed_ms: start.elapsed().as_millis() as u64,
     }
+}
+
+struct ToolResultRecovery<'a> {
+    config: &'a GatewayConfig,
+    session: &'a Session,
+    has_tools: bool,
+    allowed_tools: &'a [String],
+    reducer_name: String,
+    reducer_attempts: u32,
+    reducer_error: String,
+    start: Instant,
+}
+
+async fn recover_tool_result_with_workers(request: ToolResultRecovery<'_>) -> TurnResult {
+    let ToolResultRecovery {
+        config,
+        session,
+        has_tools,
+        allowed_tools,
+        reducer_name,
+        reducer_attempts,
+        reducer_error,
+        start,
+    } = request;
+
+    tracing::warn!(
+        "moa: reducer recovery fanout after {reducer_attempts} failed attempt(s): {reducer_error}"
+    );
+
+    let assignments = worker::assign_roles(&config.models);
+    let mut selected_tool_names = selected_tool_names_for_turn(session, allowed_tools);
+    if has_tools && selected_tool_names.is_empty() {
+        selected_tool_names = allowed_tools.to_vec();
+    }
+
+    let mut join_set = tokio::task::JoinSet::new();
+    let mut dispatched = Vec::with_capacity(assignments.len());
+    let enable_thinking = config.enable_thinking;
+
+    for assignment in &assignments {
+        let packed = context::pack_for_worker_selected(
+            session,
+            assignment.role,
+            has_tools,
+            &selected_tool_names,
+        );
+        let model_name = assignment.model_name.clone();
+        let role = assignment.role;
+        let backend = config.backends[assignment.backend_index].clone();
+        let timeout = config.worker_timeout;
+
+        dispatched.push(fanout::DispatchedWorker {
+            model: model_name.clone(),
+            role,
+        });
+
+        join_set.spawn(async move {
+            let t0 = Instant::now();
+            let result = call_backend(
+                &*backend,
+                &model_name,
+                &packed.messages,
+                packed.tools.as_ref(),
+                packed.max_tokens,
+                timeout,
+                SamplingParams::worker().with_thinking(enable_thinking),
+            )
+            .await;
+            let elapsed = t0.elapsed().as_millis() as u64;
+            (model_name, role, result, elapsed)
+        });
+    }
+
+    let (outputs, mut summaries, early_decision) = gather_workers_incremental(
+        &mut join_set,
+        &dispatched,
+        has_tools,
+        allowed_tools,
+        session.tools(),
+        config.first_answer_grace,
+        if has_tools {
+            GraceMode::Tool
+        } else {
+            GraceMode::Answer
+        },
+    )
+    .await;
+
+    summaries.insert(
+        0,
+        WorkerSummary {
+            model: reducer_name,
+            role: WorkerRole::Reducer,
+            succeeded: false,
+            elapsed_ms: config.reducer_timeout.as_millis() as u64,
+            output_kind: None,
+            confidence: None,
+        },
+    );
+
+    let response_body = recover_tool_result_response(session, has_tools, &outputs, early_decision);
+    TurnResult {
+        response_body,
+        worker_summaries: summaries,
+        reducer_used: true,
+        reducer_attempts,
+        turn_kind: TurnKind::ToolResult,
+        elapsed_ms: start.elapsed().as_millis() as u64,
+    }
+}
+
+fn recover_tool_result_response(
+    session: &Session,
+    has_tools: bool,
+    outputs: &[WorkerOutput],
+    early_decision: Option<arbiter::Decision>,
+) -> Value {
+    if outputs.is_empty() {
+        return error_response(
+            "Reducer failed and MoA recovery workers produced no usable output",
+            MOA_ERR_ALL_REDUCERS_FAILED,
+        );
+    }
+
+    match early_decision.unwrap_or_else(|| arbiter::arbitrate(outputs, has_tools)) {
+        arbiter::Decision::ToolCall { name, arguments } if has_tools => {
+            tool_call_response(&name, &arguments)
+        }
+        arbiter::Decision::ToolCall { .. } => error_response(
+            "MoA recovery selected a tool call, but tools are disabled for this turn",
+            MOA_ERR_NO_USABLE_ANSWER,
+        ),
+        arbiter::Decision::Answer(text) => chat_response(&final_answer_text(session, &text)),
+        arbiter::Decision::NeedsReducer { .. } => recovery_best_output_response(session, outputs),
+    }
+}
+
+fn recovery_best_output_response(session: &Session, outputs: &[WorkerOutput]) -> Value {
+    if let Some(tool) = outputs
+        .iter()
+        .filter(|output| {
+            output.kind == normalize::OutputKind::ToolProposal && output.tool_name.is_some()
+        })
+        .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
+    {
+        return tool_proposal_response(tool, true);
+    }
+
+    fallback_worker_response(session, outputs)
 }
 
 fn repair_tool_result_answer(session: &Session, answer: &str) -> String {
@@ -984,7 +1140,7 @@ async fn resolve_decision(
                     0,
                 )
             } else {
-                (chat_response(&text), false, 0)
+                (chat_response(&final_answer_text(session, &text)), false, 0)
             }
         }
         arbiter::Decision::ToolCall { name, arguments } => {
@@ -1067,7 +1223,7 @@ async fn resolve_decision(
                                 attempts,
                             )
                         } else {
-                            (fallback_worker_response(outputs), true, attempts)
+                            (fallback_worker_response(session, outputs), true, attempts)
                         }
                     }
                     _ => {
@@ -1078,7 +1234,11 @@ async fn resolve_decision(
                                 attempts,
                             )
                         } else {
-                            (chat_response(&reduced.payload), true, attempts)
+                            (
+                                chat_response(&final_answer_text(session, &reduced.payload)),
+                                true,
+                                attempts,
+                            )
                         }
                     }
                 },
@@ -1095,7 +1255,7 @@ async fn resolve_decision(
                             attempts,
                         )
                     } else {
-                        (fallback_worker_response(outputs), false, attempts)
+                        (fallback_worker_response(session, outputs), false, attempts)
                     }
                 }
             }
@@ -1111,7 +1271,7 @@ fn best_answer(outputs: &[WorkerOutput]) -> String {
         .unwrap_or_default()
 }
 
-fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
+fn fallback_worker_response(session: &Session, outputs: &[WorkerOutput]) -> Value {
     let answer = best_answer(outputs);
     if answer.is_empty() {
         error_response(
@@ -1119,8 +1279,118 @@ fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
             MOA_ERR_NO_USABLE_ANSWER,
         )
     } else {
-        chat_response(&answer)
+        chat_response(&final_answer_text(session, &answer))
     }
+}
+
+fn final_answer_text(session: &Session, answer: &str) -> String {
+    let strict = repair_strict_output_answer(session, answer);
+    repair_tool_result_answer(session, &strict)
+}
+
+fn repair_strict_output_answer(session: &Session, answer: &str) -> String {
+    if !strict_output_requested(session) {
+        return answer.to_string();
+    }
+
+    let unwrapped = unwrap_markdown_fence(answer.trim());
+    let lines: Vec<&str> = unwrapped.lines().map(str::trim_end).collect();
+    let Some(start_idx) = lines
+        .iter()
+        .position(|line| line_looks_like_key_value(line))
+    else {
+        return unwrapped.to_string();
+    };
+    let end_idx = lines[start_idx..]
+        .iter()
+        .position(|line| !line_looks_like_key_value(line))
+        .map_or(lines.len(), |offset| start_idx + offset);
+
+    if start_idx == 0 && end_idx == lines.len() {
+        unwrapped.to_string()
+    } else {
+        lines[start_idx..end_idx].join("\n")
+    }
+}
+
+fn strict_output_requested(session: &Session) -> bool {
+    session
+        .messages()
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(message_text)
+        .any(|text| strict_output_requested_lc(&text.to_ascii_lowercase()))
+}
+
+fn strict_output_requested_lc(text: &str) -> bool {
+    contains_any(
+        text,
+        &[
+            "answer exactly",
+            "respond exactly",
+            "reply exactly",
+            "output exactly",
+            "return exactly",
+            "no extra text",
+            "only output",
+            "no markdown",
+        ],
+    )
+}
+
+fn unwrap_markdown_fence(text: &str) -> &str {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else {
+        return text;
+    };
+    if !first.trim_start().starts_with("```") {
+        return text;
+    }
+    let Some(last_start) = text.rfind("```") else {
+        return text;
+    };
+    if last_start == 0 || !text[last_start..].trim().starts_with("```") {
+        return text;
+    }
+    let body_start = first.len() + 1;
+    text.get(body_start..last_start)
+        .map(str::trim)
+        .unwrap_or(text)
+}
+
+fn line_looks_like_key_value(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some((key, value)) = trimmed.split_once('=') else {
+        return false;
+    };
+    let key = key.trim();
+    let value = value.trim();
+    !key.is_empty()
+        && !value.is_empty()
+        && key.len() <= 64
+        && key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+}
+
+fn message_text(message: &Value) -> Option<String> {
+    let content = message.get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(text.to_string());
+    }
+
+    let parts = content.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| {
+            part.get("text")
+                .and_then(Value::as_str)
+                .or_else(|| part.get("input_text").and_then(Value::as_str))
+                .or_else(|| part.get("output_text").and_then(Value::as_str))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
 }
 
 fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
@@ -1320,7 +1590,8 @@ mod response_builder_tests {
     #[test]
     fn fallback_worker_response_errors_when_only_silent_sentinel_remains() {
         let outputs = vec![answer("a", 0.99, "NO_REPLY")];
-        let resp = fallback_worker_response(&outputs);
+        let session = Session::new();
+        let resp = fallback_worker_response(&session, &outputs);
         assert_eq!(
             resp.pointer("/error/code").and_then(Value::as_str),
             Some(MOA_ERR_NO_USABLE_ANSWER)
@@ -1330,6 +1601,55 @@ mod response_builder_tests {
                 .and_then(Value::as_str),
             Some("error")
         );
+    }
+
+    #[test]
+    fn strict_output_repair_strips_preface_before_key_value_lines() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                json!({
+                    "role": "user",
+                    "content": "Answer exactly these lines with no Markdown and no extra text:\nCODEWORD=<value>\nCHECKSUM=<value>"
+                }),
+                json!({
+                    "role": "user",
+                    "content": "<info-msg>\nWorking directory: /tmp/project\n</info-msg>"
+                }),
+            ],
+            &None,
+        );
+
+        let repaired = final_answer_text(
+            &session,
+            "The required values are:\nCODEWORD=signal-7429\nCHECKSUM=FS-319-DELTA\nThanks",
+        );
+
+        assert_eq!(repaired, "CODEWORD=signal-7429\nCHECKSUM=FS-319-DELTA");
+    }
+
+    #[test]
+    fn strict_output_repair_unwraps_markdown_fence() {
+        let mut session = Session::new();
+        session.ingest(
+            &[json!({
+                "role": "user",
+                "content": "Output exactly one line, no markdown:\nRESULT=<value>"
+            })],
+            &None,
+        );
+
+        let repaired = final_answer_text(&session, "```text\nRESULT=ok\n```");
+
+        assert_eq!(repaired, "RESULT=ok");
+    }
+
+    #[test]
+    fn strict_output_repair_leaves_normal_answers_alone() {
+        let session = Session::new();
+        let answer = "The required values are:\nCODEWORD=signal-7429";
+
+        assert_eq!(final_answer_text(&session, answer), answer);
     }
 
     fn tool_proposal(payload: &str) -> WorkerOutput {
@@ -1794,6 +2114,60 @@ mod response_builder_tests {
         assert_eq!(
             selected_tool_names_for_turn(&session, &[]),
             vec!["exec".to_string(), "read".to_string()]
+        );
+    }
+
+    #[test]
+    fn broad_tool_intent_keeps_unknown_agent_tools_available() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Inspect the repository, read files, edit src/smoke_calc.py, and run the tests."
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "tree"}},
+                {"type": "function", "function": {"name": "developer__text_editor"}},
+                {"type": "function", "function": {"name": "developer__shell"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec![
+                "tree".to_string(),
+                "developer__text_editor".to_string(),
+                "developer__shell".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn broad_agent_tool_loop_does_not_collapse_to_recent_tool_only() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Inspect the repository, read files, edit src/smoke_calc.py, and run the tests."
+                }),
+                tool_call_msg("call_tree", "tree"),
+                tool_result_msg("call_tree", "src\nsrc/smoke_calc.py\ntests"),
+            ],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "tree"}},
+                {"type": "function", "function": {"name": "developer__text_editor"}},
+                {"type": "function", "function": {"name": "developer__shell"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec![
+                "tree".to_string(),
+                "developer__text_editor".to_string(),
+                "developer__shell".to_string()
+            ]
         );
     }
 

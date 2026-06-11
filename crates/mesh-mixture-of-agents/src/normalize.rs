@@ -874,6 +874,22 @@ mod tests {
     }
 
     #[test]
+    fn minimax_namespaced_tool_call_block_uses_guardrail_rescue() {
+        let raw = r#"<minimax:tool_call>
+<invoke name="shell">
+<parameter name="command">cat src/smoke_calc.py</parameter>
+</invoke>
+</minimax:tool_call>"#;
+        let out = normalize_worker_output(raw, "minimax", WorkerRole::Fast, 100);
+        assert_eq!(out.kind, OutputKind::ToolProposal);
+        assert_eq!(out.tool_name.as_deref(), Some("shell"));
+        assert_eq!(
+            out.tool_arguments.expect("args")["command"],
+            "cat src/smoke_calc.py"
+        );
+    }
+
+    #[test]
     fn xml_tag_tool_call_uses_guardrail_rescue() {
         let raw = r#"<tool_call>
 <exec>printf ok > /tmp/out</exec>"#;

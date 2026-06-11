@@ -109,6 +109,9 @@ fn tool_call_candidates(content: &str) -> Vec<Value> {
     if let Some(value) = parse_openclaw_tool_call_syntax(content) {
         candidates.push(value);
     }
+    if let Some(value) = parse_minimax_tool_call_syntax(content) {
+        candidates.push(value);
+    }
     if let Some(value) = parse_xml_tag_tool_call_syntax(content) {
         candidates.push(value);
     }
@@ -320,6 +323,74 @@ fn parse_openclaw_tool_call_syntax(content: &str) -> Option<Value> {
     let json_text = first_balanced_object(args_tail)?;
     let arguments = parse_openclaw_args_object(&json_text)?;
     Some(json!({ "name": tool_name, "arguments": Value::Object(arguments) }))
+}
+
+fn parse_minimax_tool_call_syntax(content: &str) -> Option<Value> {
+    let body = minimax_tool_call_body(content)?;
+    let invoke_start = body.find("<invoke")?;
+    let invoke_open = &body[invoke_start + "<invoke".len()..];
+    let invoke_tag_end = invoke_open.find('>')?;
+    let invoke_attrs = &invoke_open[..invoke_tag_end];
+    let tool_name = xml_attr_value(invoke_attrs, "name")?;
+    if !valid_tool_name(&tool_name) {
+        return None;
+    }
+
+    let invoke_body = &invoke_open[invoke_tag_end + 1..];
+    let invoke_body = invoke_body
+        .find("</invoke>")
+        .map(|end| &invoke_body[..end])
+        .unwrap_or(invoke_body);
+    let arguments = parse_minimax_parameters(invoke_body);
+    Some(json!({ "name": tool_name, "arguments": Value::Object(arguments) }))
+}
+
+fn minimax_tool_call_body(content: &str) -> Option<&str> {
+    let start_tag = "<minimax:tool_call>";
+    let start_index = content.find(start_tag)?;
+    let after_start = &content[start_index + start_tag.len()..];
+    match after_start.find("</minimax:tool_call>") {
+        Some(end_index) => Some(&after_start[..end_index]),
+        None => Some(after_start),
+    }
+}
+
+fn parse_minimax_parameters(mut content: &str) -> Map<String, Value> {
+    let mut arguments = Map::new();
+    while let Some(parameter_start) = content.find("<parameter") {
+        let after_parameter = &content[parameter_start + "<parameter".len()..];
+        let Some(tag_end) = after_parameter.find('>') else {
+            break;
+        };
+        let attrs = &after_parameter[..tag_end];
+        let Some(name) = xml_attr_value(attrs, "name").filter(|name| valid_tool_name(name)) else {
+            content = &after_parameter[tag_end + 1..];
+            continue;
+        };
+        let after_tag = &after_parameter[tag_end + 1..];
+        let Some(value_end) = after_tag.find("</parameter>") else {
+            break;
+        };
+        arguments.insert(
+            name,
+            Value::String(after_tag[..value_end].trim().to_string()),
+        );
+        content = &after_tag[value_end + "</parameter>".len()..];
+    }
+    arguments
+}
+
+fn xml_attr_value(attrs: &str, attr: &str) -> Option<String> {
+    let marker = format!("{attr}=");
+    let start = attrs.find(&marker)? + marker.len();
+    let rest = attrs[start..].trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value = &rest[quote.len_utf8()..];
+    let end = value.find(quote)?;
+    Some(value[..end].to_string())
 }
 
 fn parse_xml_tag_tool_call_syntax(content: &str) -> Option<Value> {
@@ -689,6 +760,22 @@ mod tests {
 
         assert_eq!(calls[0].name, "exec");
         assert_eq!(calls[0].arguments["command"], "printf ok > /tmp/out");
+    }
+
+    #[test]
+    fn rescues_minimax_namespaced_tool_call_block() {
+        let calls = rescue_tool_call_from_text(
+            r#"<minimax:tool_call>
+<invoke name="shell">
+<parameter name="command">cat src/smoke_calc.py</parameter>
+</invoke>
+</minimax:tool_call>"#,
+            &["shell".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(calls[0].name, "shell");
+        assert_eq!(calls[0].arguments["command"], "cat src/smoke_calc.py");
     }
 
     #[test]
