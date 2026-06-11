@@ -977,6 +977,19 @@ Invoke-InRepo {
         "-DGGML_HIP=OFF",
         "-DGGML_VULKAN=OFF",
         "-DGGML_OPENMP=ON",
+        # Do not optimize for the build runner's CPU. windows-2025 runners can
+        # expose AVX-512 / AVX-VNNI / BMI2 that consumer desktops (e.g. Alder
+        # Lake i5/i7) lack; a GGML_NATIVE build then crashes with
+        # STATUS_ILLEGAL_INSTRUCTION (0xC000001D) on those machines the moment a
+        # ggml compute kernel runs. Pin GGML_NATIVE=OFF (matching the Linux and
+        # macOS builds in scripts/build-llama.sh) and select a portable AVX2
+        # baseline, which every x86-64 CPU since ~2013 supports. On MSVC, F16C
+        # and FMA are implied by AVX2.
+        "-DGGML_NATIVE=OFF",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX2=ON",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_BMI2=OFF",
         "-DBUILD_SHARED_LIBS=OFF",
         "-DLLAMA_CURL=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
