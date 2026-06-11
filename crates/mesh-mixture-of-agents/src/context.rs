@@ -612,13 +612,25 @@ fn first_user_task_text(session: &Session) -> Option<String> {
     session
         .messages()
         .iter()
+        .rev()
         .find_map(|message| {
-            (message_role(message) == "user" && !user_message_looks_like_tool_response(message))
-                .then(|| message_text_content(message))
-                .flatten()
+            (message_role(message) == "user"
+                && !user_message_looks_like_tool_response(message)
+                && !user_message_looks_like_runtime_info(message))
+            .then(|| message_text_content(message))
+            .flatten()
         })
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
+}
+
+fn user_message_looks_like_runtime_info(message: &Value) -> bool {
+    message_text_content(message).is_some_and(|text| {
+        let trimmed = text.trim_start();
+        trimmed.starts_with("<info-msg>")
+            || trimmed.starts_with("<environment_context>")
+            || trimmed.starts_with("<system-reminder>")
+    })
 }
 
 fn user_message_looks_like_tool_response(message: &Value) -> bool {
@@ -705,10 +717,16 @@ fn tool_evidence_message(session: &Session) -> Option<Value> {
 }
 
 fn compact_tool_message(msg: &Value) -> Value {
-    if message_role(msg) != "tool" {
-        return msg.clone();
+    match message_role(msg) {
+        "tool" => compact_role_tool_message(msg),
+        "user" if user_message_looks_like_tool_response(msg) => {
+            compact_user_tool_response_message(msg)
+        }
+        _ => msg.clone(),
     }
+}
 
+fn compact_role_tool_message(msg: &Value) -> Value {
     let Some(content) = msg.get("content").and_then(Value::as_str) else {
         return msg.clone();
     };
@@ -722,6 +740,96 @@ fn compact_tool_message(msg: &Value) -> Value {
         obj.insert("content".to_string(), Value::String(compacted));
     }
     compact
+}
+
+fn compact_user_tool_response_message(msg: &Value) -> Value {
+    let Some(parts) = msg.get("content").and_then(Value::as_array) else {
+        return msg.clone();
+    };
+
+    let mut changed = false;
+    let compact_parts = parts
+        .iter()
+        .map(|part| {
+            if !content_part_looks_like_tool_response(part) {
+                return part.clone();
+            }
+            let Some(text) = tool_response_part_text(part) else {
+                return part.clone();
+            };
+            changed = true;
+            json!({
+                "type": "text",
+                "text": format!("Tool result:\n{}", compact_tool_result_text(&text)),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if !changed {
+        return msg.clone();
+    }
+
+    let mut compact = msg.clone();
+    if let Some(obj) = compact.as_object_mut() {
+        obj.insert("content".to_string(), Value::Array(compact_parts));
+    }
+    compact
+}
+
+fn tool_response_part_text(part: &Value) -> Option<String> {
+    content_text_fields(part)
+        .or_else(|| part.get("output").and_then(value_text_content))
+        .or_else(|| {
+            part.pointer("/toolResult/value/content")
+                .and_then(content_array_text)
+        })
+        .or_else(|| {
+            part.pointer("/toolResult/value/structuredContent/stdout")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            part.pointer("/toolResult/value/structuredContent/stderr")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            part.pointer("/toolResult/value")
+                .and_then(value_text_content)
+        })
+        .or_else(|| {
+            part.pointer("/tool_result/content")
+                .and_then(value_text_content)
+        })
+}
+
+fn value_text_content(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_string());
+    }
+    if let Some(text) = content_array_text(value) {
+        return Some(text);
+    }
+    value.as_object()?;
+    serde_json::to_string(value).ok()
+}
+
+fn content_array_text(value: &Value) -> Option<String> {
+    let parts = value.as_array()?;
+    let text = parts
+        .iter()
+        .filter_map(content_text_fields)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn content_text_fields(part: &Value) -> Option<String> {
+    part.get("text")
+        .and_then(Value::as_str)
+        .or_else(|| part.get("input_text").and_then(Value::as_str))
+        .or_else(|| part.get("output_text").and_then(Value::as_str))
+        .map(str::to_string)
 }
 
 fn compact_tool_result_text(result: &str) -> String {
@@ -1738,7 +1846,10 @@ mod tests {
 
     #[test]
     fn tool_result_reducer_anchors_original_task_when_latest_user_is_tool_wrapper() {
-        let mut messages = vec![user_msg("Implement src/smoke_calc.py so the tests pass.")];
+        let mut messages = vec![
+            user_msg("Old chat about Windows and Tailscale."),
+            user_msg("Implement src/smoke_calc.py so the tests pass."),
+        ];
         for idx in 0..8 {
             let id = format!("call_tree_{idx}");
             messages.push(assistant_tool_msg(
@@ -1786,6 +1897,10 @@ mod tests {
             "task anchor should preserve the real agent task, got {body}",
         );
         assert!(
+            !body.contains("Old chat about Windows and Tailscale"),
+            "task anchor should prefer the active task over older chat, got {body}",
+        );
+        assert!(
             body.contains("NotImplementedError"),
             "latest tool result should remain visible, got {body}",
         );
@@ -1793,7 +1908,11 @@ mod tests {
 
     #[test]
     fn tool_worker_context_anchors_original_task_after_user_tool_wrappers() {
-        let mut messages = vec![user_msg("Implement src/smoke_calc.py so the tests pass.")];
+        let mut messages = vec![
+            user_msg("Old chat about Windows and Tailscale."),
+            user_msg("Implement src/smoke_calc.py so the tests pass."),
+            user_msg("<info-msg>\nWorking directory: /tmp/project\n</info-msg>"),
+        ];
         for idx in 0..8 {
             let id = format!("call_{idx}");
             messages.push(assistant_tool_msg(
@@ -1818,6 +1937,33 @@ mod tests {
         assert!(
             body.contains("Implement src/smoke_calc.py so the tests pass."),
             "tool worker task anchor should preserve the real task, got {body}",
+        );
+        assert!(
+            !body.contains("Old chat about Windows and Tailscale"),
+            "tool worker anchor should prefer the active task over older chat, got {body}",
+        );
+    }
+
+    #[test]
+    fn user_wrapped_tool_result_is_compacted_for_reducer() {
+        let huge_result = "x".repeat(TOOL_RESULT_RAW_MAX_CHARS + 500);
+        let messages = vec![
+            user_msg("Read the large output."),
+            assistant_tool_msg("call_read", "read", json!({"path": "large.txt"})),
+            user_tool_response_msg("call_read", &huge_result),
+        ];
+        let s = session_with(&messages, Some(tools_two()));
+
+        let (messages, _tools) = pack_for_tool_result_turn(&s, true);
+        let body = serialized_messages(&messages);
+
+        assert!(
+            body.contains("Tool result compacted"),
+            "user-wrapped tool result should be compacted, got {body}",
+        );
+        assert!(
+            !body.contains(&huge_result),
+            "full nested user-wrapped tool result should not leak, got {body}",
         );
     }
 

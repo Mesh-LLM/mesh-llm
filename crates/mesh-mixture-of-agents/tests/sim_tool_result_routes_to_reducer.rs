@@ -162,6 +162,9 @@ impl moa::ModelBackend for ReducerFailWorkerToolBackend {
         sampling: moa::SamplingParams,
     ) -> Result<Value, String> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        // Test double: reducer calls use low-temperature sampling, while
+        // worker calls use a higher temperature. Treat low-temperature calls
+        // as reducer timeouts so recovery can be exercised deterministically.
         if sampling.temperature < 0.5 {
             self.reducer_calls.fetch_add(1, Ordering::SeqCst);
             return Err("remote timeout after 60s".to_string());

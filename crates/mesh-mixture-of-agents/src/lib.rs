@@ -965,18 +965,28 @@ fn recover_tool_result_response(
             MOA_ERR_NO_USABLE_ANSWER,
         ),
         arbiter::Decision::Answer(text) => chat_response(&final_answer_text(session, &text)),
-        arbiter::Decision::NeedsReducer { .. } => recovery_best_output_response(session, outputs),
+        arbiter::Decision::NeedsReducer { .. } => {
+            recovery_best_output_response(session, has_tools, outputs)
+        }
     }
 }
 
-fn recovery_best_output_response(session: &Session, outputs: &[WorkerOutput]) -> Value {
-    if let Some(tool) = outputs
-        .iter()
-        .filter(|output| {
-            output.kind == normalize::OutputKind::ToolProposal && output.tool_name.is_some()
+fn recovery_best_output_response(
+    session: &Session,
+    has_tools: bool,
+    outputs: &[WorkerOutput],
+) -> Value {
+    let tool = has_tools
+        .then(|| {
+            outputs
+                .iter()
+                .filter(|output| {
+                    output.kind == normalize::OutputKind::ToolProposal && output.tool_name.is_some()
+                })
+                .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
         })
-        .max_by(|a, b| a.confidence.total_cmp(&b.confidence))
-    {
+        .flatten();
+    if let Some(tool) = tool {
         return tool_proposal_response(tool, true);
     }
 
@@ -1317,9 +1327,15 @@ fn strict_output_requested(session: &Session) -> bool {
     session
         .messages()
         .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(message_text)
-        .any(|text| strict_output_requested_lc(&text.to_ascii_lowercase()))
+        .rev()
+        .find_map(|message| {
+            (message.get("role").and_then(Value::as_str) == Some("user")
+                && !user_message_looks_like_tool_response(message)
+                && !user_message_looks_like_runtime_info(message))
+            .then(|| message_text(message))
+            .flatten()
+        })
+        .is_some_and(|text| strict_output_requested_lc(&text.to_ascii_lowercase()))
 }
 
 fn strict_output_requested_lc(text: &str) -> bool {
@@ -1336,6 +1352,32 @@ fn strict_output_requested_lc(text: &str) -> bool {
             "no markdown",
         ],
     )
+}
+
+fn user_message_looks_like_tool_response(message: &Value) -> bool {
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| parts.iter().all(content_part_looks_like_tool_response))
+}
+
+fn content_part_looks_like_tool_response(part: &Value) -> bool {
+    matches!(
+        part.get("type").and_then(Value::as_str),
+        Some("toolResponse" | "tool_result" | "tool_call_output" | "function_call_output")
+    ) || part.get("toolResult").is_some()
+        || part.get("tool_result").is_some()
+        || part.get("tool_call_id").is_some()
+        || part.get("call_id").is_some()
+}
+
+fn user_message_looks_like_runtime_info(message: &Value) -> bool {
+    message_text(message).is_some_and(|text| {
+        let trimmed = text.trim_start();
+        trimmed.starts_with("<info-msg>")
+            || trimmed.starts_with("<environment_context>")
+            || trimmed.starts_with("<system-reminder>")
+    })
 }
 
 fn unwrap_markdown_fence(text: &str) -> &str {
@@ -1652,6 +1694,59 @@ mod response_builder_tests {
         assert_eq!(final_answer_text(&session, answer), answer);
     }
 
+    #[test]
+    fn strict_output_repair_ignores_stale_prior_user_directive() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                json!({
+                    "role": "user",
+                    "content": "Answer exactly these lines with no extra text:\nCODEWORD=<value>"
+                }),
+                json!({
+                    "role": "assistant",
+                    "content": "CODEWORD=old"
+                }),
+                json!({
+                    "role": "user",
+                    "content": "Now explain what happened in prose."
+                }),
+            ],
+            &None,
+        );
+        let answer = "The required values are:\nCODEWORD=signal-7429";
+
+        assert_eq!(final_answer_text(&session, answer), answer);
+    }
+
+    #[test]
+    fn strict_output_repair_survives_user_tool_wrappers() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                json!({
+                    "role": "user",
+                    "content": "Answer exactly these lines with no Markdown and no extra text:\nCODEWORD=<value>"
+                }),
+                json!({
+                    "role": "user",
+                    "content": [{
+                        "type": "toolResponse",
+                        "toolResult": {
+                            "status": "success",
+                            "value": {"content": [{"type": "text", "text": "CODEWORD=signal-7429"}]},
+                        },
+                    }]
+                }),
+            ],
+            &None,
+        );
+
+        let repaired = final_answer_text(&session, "Here:\nCODEWORD=signal-7429\nDone.");
+
+        assert_eq!(repaired, "CODEWORD=signal-7429");
+    }
+
     fn tool_proposal(payload: &str) -> WorkerOutput {
         WorkerOutput {
             kind: normalize::OutputKind::ToolProposal,
@@ -1693,6 +1788,27 @@ mod response_builder_tests {
         assert_eq!(
             resp.pointer("/error/code").and_then(Value::as_str),
             Some(MOA_ERR_NO_USABLE_ANSWER)
+        );
+    }
+
+    #[test]
+    fn recovery_best_output_respects_disabled_tools() {
+        let session = Session::new();
+        let outputs = vec![
+            tool_proposal("Need to read."),
+            answer("fallback", 0.4, "Final answer."),
+        ];
+
+        let resp = recovery_best_output_response(&session, false, &outputs);
+
+        assert!(
+            resp.pointer("/choices/0/message/tool_calls").is_none(),
+            "disabled recovery must not emit tool_calls: {resp}"
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/content")
+                .and_then(Value::as_str),
+            Some("Final answer.")
         );
     }
 
