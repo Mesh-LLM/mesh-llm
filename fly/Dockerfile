@@ -7,7 +7,7 @@
 # syntax=docker/dockerfile:1.7
 
 FROM node:24-alpine AS ui-builder
-ARG VITE_API_URL=https://meshllm.cloud
+ARG VITE_API_URL=https://public.meshllm.cloud
 ARG VITE_APP_VERSION=
 ARG VITE_STORAGE_NAMESPACE=mesh-llm-ui-production
 ARG NODE_ENV=production
