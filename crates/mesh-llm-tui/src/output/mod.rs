@@ -3883,7 +3883,7 @@ fn render_mesh_events(state: &DashboardState) -> Vec<String> {
         .map(|event| {
             let (badge_text, _) = event_severity_badge(event);
             format!(
-                "{} {:<PRETTY_TUI_EVENT_LEVEL_WIDTH$} {}",
+                "{} {:<PRETTY_TUI_EVENT_LEVEL_WIDTH$}{}",
                 event.timestamp,
                 badge_text,
                 sanitize_mesh_event_message(&event.summary)
@@ -7042,7 +7042,6 @@ fn startup_history_summary(event: &OutputEvent) -> Option<String> {
         | OutputEvent::ApiReady { .. }
         | OutputEvent::RuntimeReady { .. }
         | OutputEvent::Error { .. }
-        | OutputEvent::Fatal { .. }
         | OutputEvent::Warning { .. } => Some(event.summary_line()),
         OutputEvent::ModelDownloadProgress { status, .. } => {
             if matches!(status, ModelProgressStatus::Ready) {
@@ -7403,7 +7402,7 @@ fn event_line(event: &MeshEventState, width: usize) -> Line<'static> {
         event.timestamp, badge_text
     );
     let prefix_len = prefix.chars().count();
-    let remaining = width.saturating_sub(prefix_len + 1);
+    let remaining = width.saturating_sub(prefix_len);
     if remaining == 0 {
         return Line::from(vec![Span::styled(
             truncate_with_ellipsis(&prefix, width),
@@ -7415,7 +7414,6 @@ fn event_line(event: &MeshEventState, width: usize) -> Line<'static> {
         Span::styled(event.timestamp.clone(), Style::default().fg(theme.dim)),
         Span::raw(" "),
         event_severity_badge_span(event),
-        Span::raw(" "),
         Span::styled(
             truncate_with_ellipsis(&message, remaining),
             Style::default().fg(theme.text),
@@ -7431,8 +7429,7 @@ fn wrapped_event_lines(event: &MeshEventState, width: usize) -> Vec<Line<'static
         .chars()
         .count()
         .saturating_add(1)
-        .saturating_add(PRETTY_TUI_EVENT_LEVEL_WIDTH)
-        .saturating_add(1);
+        .saturating_add(PRETTY_TUI_EVENT_LEVEL_WIDTH);
     let message_width = width.saturating_sub(prefix_width);
     if message_width == 0 {
         return vec![event_line(event, width)];
@@ -7446,7 +7443,6 @@ fn wrapped_event_lines(event: &MeshEventState, width: usize) -> Vec<Line<'static
                 Span::styled(event.timestamp.clone(), Style::default().fg(theme.dim)),
                 Span::raw(" "),
                 event_severity_badge_span(event),
-                Span::raw(" "),
                 Span::styled(chunk, Style::default().fg(theme.text)),
             ]));
         } else {
@@ -7662,10 +7658,23 @@ pub struct InteractiveDashboardFormatter {
     state: DashboardState,
     terminal: Option<TuiTerminal>,
     terminal_active: bool,
+    tui_entered: Arc<AtomicBool>,
     dirty: bool,
 }
 
 impl InteractiveDashboardFormatter {
+    fn with_tui_entered(tui_entered: Arc<AtomicBool>) -> Self {
+        Self {
+            tui_entered,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    fn tui_entered(&self) -> bool {
+        self.tui_entered.load(Ordering::Acquire)
+    }
+
     fn handle_output_event(&mut self, event: &OutputEvent) -> io::Result<Option<String>> {
         self.state
             .reduce(DashboardAction::OutputEvent(event.clone()));
@@ -7711,6 +7720,7 @@ impl InteractiveDashboardFormatter {
         // cleanup: the terminal may already be in alternate-screen/raw-input
         // state even if ratatui terminal construction or cursor hiding fails.
         self.terminal_active = true;
+        self.tui_entered.store(true, Ordering::Release);
         self.dirty = true;
     }
 
@@ -7723,7 +7733,11 @@ impl InteractiveDashboardFormatter {
         }
         self.terminal_active = false;
         self.dirty = false;
-        write_tui_exit()
+        let result = write_tui_exit();
+        if result.is_ok() {
+            self.tui_entered.store(false, Ordering::Release);
+        }
+        result
     }
 
     fn render_if_dirty(&mut self) -> io::Result<bool> {
@@ -7886,14 +7900,27 @@ impl Formatter for FormatterSelection {
     }
 }
 
+#[cfg(test)]
 fn select_formatter(
     mode: LogFormat,
     console_session_mode: ConsoleSessionMode,
 ) -> FormatterSelection {
+    select_formatter_with_tui_entered(
+        mode,
+        console_session_mode,
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+fn select_formatter_with_tui_entered(
+    mode: LogFormat,
+    console_session_mode: ConsoleSessionMode,
+    tui_entered: Arc<AtomicBool>,
+) -> FormatterSelection {
     match mode {
         LogFormat::Pretty => match console_session_mode {
             ConsoleSessionMode::InteractiveDashboard => {
-                FormatterSelection::InteractiveDashboard(InteractiveDashboardFormatter::default())
+                FormatterSelection::InteractiveDashboard(InteractiveDashboardFormatter::with_tui_entered(tui_entered))
             }
             ConsoleSessionMode::Fallback => {
                 FormatterSelection::DashboardFallback(DashboardFormatter::default())
@@ -7907,6 +7934,7 @@ fn select_formatter(
 struct OutputManagerState {
     tx: tokio::sync::mpsc::UnboundedSender<OutputCommand>,
     ready_prompt_active: Arc<AtomicBool>,
+    tui_entered: Arc<AtomicBool>,
     mode: LogFormat,
     console_session_mode: Option<ConsoleSessionMode>,
     dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>>,
@@ -8040,12 +8068,18 @@ impl OutputManager {
     ) -> OutputManagerState {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputCommand>();
         let ready_prompt_active = Arc::new(AtomicBool::new(false));
+        let tui_entered = Arc::new(AtomicBool::new(false));
         let worker_prompt_active = ready_prompt_active.clone();
+        let worker_tui_entered = tui_entered.clone();
         let dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>> =
             Arc::new(RwLock::new(None));
         let worker_snapshot_provider = dashboard_snapshot_provider.clone();
         tokio::spawn(async move {
-            let mut formatter = select_formatter(mode, console_session_mode);
+            let mut formatter = select_formatter_with_tui_entered(
+                mode,
+                console_session_mode,
+                worker_tui_entered,
+            );
             let mut redraw_tick = time::interval(PRETTY_TUI_REDRAW_INTERVAL);
             redraw_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut snapshot_tick = time::interval(PRETTY_TUI_SNAPSHOT_INTERVAL);
@@ -8124,6 +8158,7 @@ impl OutputManager {
         OutputManagerState {
             tx,
             ready_prompt_active,
+            tui_entered,
             mode,
             console_session_mode: matches!(mode, LogFormat::Pretty).then_some(console_session_mode),
             dashboard_snapshot_provider,
@@ -8223,6 +8258,13 @@ impl OutputManager {
             .read()
             .map(|state| state.console_session_mode)
             .unwrap_or(None)
+    }
+
+    fn tui_entered(&self) -> bool {
+        self.state
+            .read()
+            .map(|state| state.tui_entered.load(Ordering::Acquire))
+            .unwrap_or(false)
     }
 
     pub fn register_dashboard_snapshot_provider(
@@ -8485,6 +8527,10 @@ pub fn force_restore_tui_terminal() -> io::Result<()> {
 }
 
 pub fn force_restore_tui_after_panic() {
+    if !GLOBAL_OUTPUT_MANAGER.get().is_some_and(|output_manager| output_manager.tui_entered()) {
+        return;
+    }
+
     let _ = force_restore_tui_terminal();
     let _ = disable_raw_mode();
 }
@@ -12430,6 +12476,41 @@ mod tests {
     }
 
     #[test]
+    fn fatal_events_do_not_consume_startup_history_slots() {
+        let mut formatter = InteractiveDashboardFormatter::default();
+        let fatal = OutputEvent::Fatal {
+            message: "panic occurred".to_string(),
+            context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+        };
+
+        formatter
+            .handle_output_event(&OutputEvent::Startup {
+                version: "v0.68.0".to_string(),
+                message: None,
+            })
+            .expect("startup event should reduce cleanly");
+        formatter
+            .handle_output_event(&fatal)
+            .expect("fatal event should reduce cleanly");
+
+        assert_eq!(formatter.state.startup_history.len(), 1);
+        assert!(
+            formatter
+                .state
+                .startup_history
+                .iter()
+                .all(|event| !event.summary.contains("panic occurred"))
+        );
+        assert!(
+            formatter
+                .state
+                .mesh_events
+                .iter()
+                .any(|event| event.summary.contains("panic occurred"))
+        );
+    }
+
+    #[test]
     fn startup_failures_surface_in_tui_events_and_status() {
         let mut formatter = InteractiveDashboardFormatter::default();
         for event in [
@@ -13817,8 +13898,20 @@ tail line"
         formatter.mark_terminal_escape_written();
 
         assert!(formatter.terminal_active);
+        assert!(formatter.tui_entered());
         assert!(formatter.dirty);
         assert!(formatter.terminal.is_none());
+    }
+
+    #[test]
+    fn tui_panic_restore_flag_tracks_terminal_entry() {
+        let mut formatter = InteractiveDashboardFormatter::default();
+
+        assert!(!formatter.tui_entered());
+        formatter.mark_terminal_escape_written();
+        assert!(formatter.tui_entered());
+        formatter.exit_terminal().expect("exit should succeed");
+        assert!(!formatter.tui_entered());
     }
 
     #[test]
