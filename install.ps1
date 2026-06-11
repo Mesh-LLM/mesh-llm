@@ -1,8 +1,7 @@
 param(
     [switch]$PreRelease,
     [string]$InstallDir = $env:MESH_LLM_INSTALL_DIR,
-    [ValidateSet("cpu", "cuda", "cuda-blackwell", "rocm", "vulkan")]
-    [string]$Flavor = $env:MESH_LLM_INSTALL_FLAVOR,
+    [string]$Flavor,
     [switch]$NoPathUpdate,
     [switch]$Help
 )
@@ -25,6 +24,10 @@ if (Test-Truthy $env:MESH_LLM_INSTALL_PRERELEASE) {
 }
 
 $RequireChecksum = Test-Truthy $env:MESH_LLM_REQUIRE_CHECKSUM
+
+if (-not $Flavor -and $env:MESH_LLM_INSTALL_FLAVOR) {
+    $Flavor = $env:MESH_LLM_INSTALL_FLAVOR
+}
 
 if (-not $InstallDir) {
     $localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME "AppData\Local" }
@@ -305,7 +308,14 @@ function Test-MissingChecksumResponse {
 
     $response = $ErrorRecord.Exception.Response
     if (-not $response) {
-        return $false
+        # Windows PowerShell 5.1 follows the GitHub release redirect and then,
+        # on a 404 target, surfaces the failure as a response-less WebException
+        # ("The request was aborted: The connection was closed unexpectedly.")
+        # rather than a clean 404 HttpWebResponse. Treat a response-less
+        # WebException as a missing sidecar so the warn-and-continue path
+        # remains reachable on 5.1. A genuinely required checksum is still
+        # enforced by the caller via $RequireSidecar.
+        return $ErrorRecord.Exception -is [System.Net.WebException]
     }
 
     $statusCode = [int]$response.StatusCode
