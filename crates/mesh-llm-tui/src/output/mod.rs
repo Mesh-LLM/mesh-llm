@@ -4,7 +4,7 @@ use chrono::{Local, SecondsFormat, Utc};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute,
-    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode},
 };
 pub use mesh_llm_events::{
     ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
@@ -354,7 +354,7 @@ enum TuiEventListRenderer {
     Scrollbar,
 }
 
-const PRETTY_TUI_EVENT_LEVEL_WIDTH: usize = 4;
+const PRETTY_TUI_EVENT_LEVEL_WIDTH: usize = 5;
 
 const _: TuiEventListRenderer = TuiEventListRenderer::Legacy;
 
@@ -531,7 +531,9 @@ impl OutputEventPresentation for OutputEvent {
                 *total_bytes,
                 status,
             ),
-            OutputEvent::Error { context, message } | OutputEvent::Warning { message, context } => {
+            OutputEvent::Error { context, message }
+            | OutputEvent::Warning { message, context }
+            | OutputEvent::Fatal { message, context } => {
                 Self::contextual_summary(context.as_deref(), message)
             }
             OutputEvent::LlamaNativeLog { message, .. } => message.clone(),
@@ -789,11 +791,10 @@ impl OutputEventPresentation for OutputEvent {
                 json!({ "warning": message, "context": context })
             }
             OutputEvent::Error { message, context } => {
-                json!({
-                    "error": message,
-                    "context": context,
-                    "error_type": classify_error_type(message, context.as_deref()),
-                })
+                classified_error_json("error", message, context.as_deref())
+            }
+            OutputEvent::Fatal { message, context } => {
+                classified_error_json("fatal", message, context.as_deref())
             }
             OutputEvent::ShutdownRequested { signal } => json!({ "signal": signal }),
             OutputEvent::Shutdown { reason } => json!({ "reason": reason }),
@@ -811,6 +812,14 @@ impl OutputEventPresentation for OutputEvent {
             _ => Map::new(),
         }
     }
+}
+
+fn classified_error_json(field: &str, message: &str, context: Option<&str>) -> Value {
+    json!({
+        field: message,
+        "context": context,
+        "error_type": classify_error_type(message, context),
+    })
 }
 
 fn format_message_with_params(message: &str, params: &[(String, Value)]) -> String {
@@ -2090,7 +2099,7 @@ impl DashboardState {
                 self.startup_lifecycle
                     .finalize_for_runtime_ready(api_url, console_url.as_deref());
             }
-            OutputEvent::Error { message, context } => {
+            OutputEvent::Error { message, context } | OutputEvent::Fatal { message, context } => {
                 if self.runtime_ready || self.shutdown_in_progress {
                     return;
                 }
@@ -2470,7 +2479,7 @@ impl DashboardState {
             OutputEvent::ShutdownRequested { .. } | OutputEvent::Shutdown { .. } => {
                 self.mark_runtime_shutting_down();
             }
-            OutputEvent::Error { .. } => {
+            OutputEvent::Error { .. } | OutputEvent::Fatal { .. } => {
                 if let Some(model) = self.running_models.last_mut() {
                     model.status = RuntimeStatus::Error;
                 }
@@ -7033,6 +7042,7 @@ fn startup_history_summary(event: &OutputEvent) -> Option<String> {
         | OutputEvent::ApiReady { .. }
         | OutputEvent::RuntimeReady { .. }
         | OutputEvent::Error { .. }
+        | OutputEvent::Fatal { .. }
         | OutputEvent::Warning { .. } => Some(event.summary_line()),
         OutputEvent::ModelDownloadProgress { status, .. } => {
             if matches!(status, ModelProgressStatus::Ready) {
@@ -7318,7 +7328,14 @@ fn empty_panel_message(state: &DashboardState, panel: DashboardPanel) -> &'stati
 fn event_severity_badge(event: &MeshEventState) -> (&'static str, Style) {
     let theme = tui_theme();
     let summary_lower = event.summary.to_lowercase();
-    if matches!(event.level, OutputLevel::Error)
+    if matches!(event.level, OutputLevel::Fatal) {
+        (
+            "FATAL",
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if matches!(event.level, OutputLevel::Error)
         || summary_lower.contains("err")
         || summary_lower.contains("failed")
     {
@@ -8371,7 +8388,7 @@ fn build_fatal_error_event(err: &AnyhowError) -> OutputEvent {
         .skip(1)
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    OutputEvent::Error {
+    OutputEvent::Fatal {
         message,
         context: (!context.is_empty()).then(|| context.join(": ")),
     }
@@ -8379,6 +8396,30 @@ fn build_fatal_error_event(err: &AnyhowError) -> OutputEvent {
 
 pub fn emit_fatal_error(err: &AnyhowError) -> io::Result<()> {
     emit_event(build_fatal_error_event(err))
+}
+
+pub fn emit_fatal_panic(message: impl Into<String>, context: Option<String>) -> io::Result<()> {
+    let event = OutputEvent::Fatal {
+        message: message.into(),
+        context,
+    };
+    write_emergency_event(&event)
+}
+
+fn write_emergency_event(event: &OutputEvent) -> io::Result<()> {
+    let mode = GLOBAL_OUTPUT_MANAGER
+        .get()
+        .map(OutputManager::mode)
+        .unwrap_or(LogFormat::Pretty);
+    let rendered = render_emergency_event(mode, event)?;
+    write_rendered_output(mode, &rendered)
+}
+
+fn render_emergency_event(mode: LogFormat, event: &OutputEvent) -> io::Result<String> {
+    match mode {
+        LogFormat::Pretty => PrettyFormatter.format(event),
+        LogFormat::Json => JsonFormatter.format(event),
+    }
 }
 
 pub fn json_mode_enabled() -> bool {
@@ -8441,6 +8482,11 @@ pub fn force_restore_tui_terminal() -> io::Result<()> {
     // intentionally bypasses the OutputManager so terminal recovery still has a
     // chance if its worker is wedged; SIGKILL cannot be recovered in-process.
     write_tui_exit()
+}
+
+pub fn force_restore_tui_after_panic() {
+    let _ = force_restore_tui_terminal();
+    let _ = disable_raw_mode();
 }
 
 fn write_tui_enter_to_writer<W: Write>(writer: &mut W) -> io::Result<()> {
@@ -9191,6 +9237,10 @@ mod tests {
             OutputEvent::Error {
                 message: "❌ llama-server exited".to_string(),
                 context: Some("model=Qwen3-32B port=9337".to_string()),
+            },
+            OutputEvent::Fatal {
+                message: "panic occurred".to_string(),
+                context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
             },
             OutputEvent::Shutdown {
                 reason: Some("user requested shutdown".to_string()),
@@ -14953,6 +15003,39 @@ tail line"
         assert_eq!(value["event"], "warning");
         assert_eq!(value["warning"], "Failed to start llama-server: bind error");
         assert_eq!(value["context"], "model=Qwen3-32B mode=dense port=9337");
+    }
+
+    #[test]
+    fn json_formatter_includes_fatal_level_and_context() {
+        let mut formatter = JsonFormatter;
+        let rendered = formatter
+            .format(&OutputEvent::Fatal {
+                message: "panic occurred".to_string(),
+                context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+            })
+            .expect("fatal render should succeed");
+        let value: Value = serde_json::from_str(rendered.trim_end()).expect("line should parse");
+
+        assert_eq!(value["event"], "fatal");
+        assert_eq!(value["level"], "fatal");
+        assert_eq!(value["fatal"], "panic occurred");
+        assert_eq!(value["context"], "panic at crates/mesh-llm/src/lib.rs:42");
+    }
+
+    #[test]
+    fn emergency_fatal_event_renders_without_dashboard_worker() {
+        let event = OutputEvent::Fatal {
+            message: "panic occurred".to_string(),
+            context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+        };
+
+        let rendered = render_emergency_event(LogFormat::Pretty, &event)
+            .expect("emergency fatal render should succeed");
+
+        assert_eq!(
+            rendered,
+            "panic at crates/mesh-llm/src/lib.rs:42: panic occurred\n"
+        );
     }
 
     #[test]

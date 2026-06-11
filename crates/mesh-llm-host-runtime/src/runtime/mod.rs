@@ -286,26 +286,85 @@ impl MeshTracingStderrWriter {
             }
 
             routing.set(true);
-            let event = match self.level {
-                tracing::Level::ERROR => OutputEvent::Error {
-                    message: message.clone(),
-                    context: Some("stderr".to_string()),
-                },
-                tracing::Level::WARN => OutputEvent::Warning {
-                    message: message.clone(),
-                    context: Some("stderr".to_string()),
-                },
-                _ => OutputEvent::Info {
-                    message: message.clone(),
-                    context: Some("stderr".to_string()),
-                },
-            };
+            let dashboard_message = strip_ansi_escape_sequences(&message);
+            let event = self.dashboard_event_for_message(&dashboard_message);
             let result =
                 mesh_llm_events::emit_event(event).or_else(|_| write_stderr_line(&message));
             routing.set(false);
             result
         })
     }
+
+    fn dashboard_event_for_message(&self, message: &str) -> OutputEvent {
+        let (message, context) = normalize_tracing_message(&self.target, message);
+        match self.level {
+            tracing::Level::ERROR => OutputEvent::Error { message, context },
+            tracing::Level::WARN => OutputEvent::Warning { message, context },
+            _ => OutputEvent::Info { message, context },
+        }
+    }
+}
+
+fn normalize_tracing_message(target: &str, message: &str) -> (String, Option<String>) {
+    let message = message.trim().to_string();
+    if target.starts_with("noq_proto") {
+        return (
+            normalize_noq_proto_message(target, &message),
+            Some("transport".to_string()),
+        );
+    }
+
+    (message, Some("stderr".to_string()))
+}
+
+fn normalize_noq_proto_message(target: &str, message: &str) -> String {
+    let without_prefix = message
+        .find(target)
+        .and_then(|target_index| {
+            message[target_index + target.len()..]
+                .find(':')
+                .map(|colon_index| message[target_index + target.len() + colon_index + 1..].trim())
+        })
+        .unwrap_or(message)
+        .trim();
+    format_noq_proto_fields(without_prefix)
+}
+
+fn format_noq_proto_fields(message: &str) -> String {
+    let Some(rest) = message.strip_prefix("err=") else {
+        return message.to_string();
+    };
+    let Some((err, detail)) = rest.split_once(' ') else {
+        return message.to_string();
+    };
+    if detail.trim().is_empty() {
+        message.to_string()
+    } else {
+        format!("{} (err={err})", detail.trim())
+    }
+}
+
+fn strip_ansi_escape_sequences(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            output.push(ch);
+            continue;
+        }
+
+        if matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        }
+    }
+
+    output
 }
 
 impl Write for MeshTracingStderrWriter {
@@ -9055,6 +9114,34 @@ mod tests {
             // TODO: Audit that the environment access only happens in single-threaded code.
             unsafe { std::env::remove_var(key) };
         }
+    }
+
+    #[test]
+    fn noq_proto_tracing_messages_use_transport_context() {
+        let message = "2026-06-11T03:49:18.033043Z  WARN noq_proto::connection: err=LastOpenPath failed closing path";
+
+        let (message, context) = normalize_tracing_message("noq_proto::connection", message);
+
+        assert_eq!(message, "failed closing path (err=LastOpenPath)");
+        assert_eq!(context.as_deref(), Some("transport"));
+    }
+
+    #[test]
+    fn routed_tracing_messages_strip_ansi_sequences() {
+        let formatted = "\u{1b}[2m2026-06-11T03:49:18.033043Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m";
+
+        assert_eq!(
+            strip_ansi_escape_sequences(formatted),
+            "2026-06-11T03:49:18.033043Z  WARN"
+        );
+    }
+
+    #[test]
+    fn non_proto_tracing_messages_keep_stderr_context() {
+        let (message, context) = normalize_tracing_message("mesh_llm::runtime", "runtime warning");
+
+        assert_eq!(message, "runtime warning");
+        assert_eq!(context.as_deref(), Some("stderr"));
     }
 
     fn reconciliation_target_with_required_bytes(

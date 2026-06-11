@@ -364,6 +364,7 @@ pub enum OutputLevel {
     Info,
     Warn,
     Error,
+    Fatal,
 }
 
 impl OutputLevel {
@@ -373,6 +374,7 @@ impl OutputLevel {
             OutputLevel::Info => "info",
             OutputLevel::Warn => "warn",
             OutputLevel::Error => "error",
+            OutputLevel::Fatal => "fatal",
         }
     }
 }
@@ -559,6 +561,10 @@ pub enum OutputEvent {
         message: String,
         context: Option<String>,
     },
+    Fatal {
+        message: String,
+        context: Option<String>,
+    },
     ShutdownRequested {
         signal: &'static str,
     },
@@ -611,6 +617,7 @@ impl OutputEvent {
             OutputEvent::RequestRouted { .. } => "request_routed",
             OutputEvent::Warning { .. } => "warning",
             OutputEvent::Error { .. } => "error",
+            OutputEvent::Fatal { .. } => "fatal",
             OutputEvent::ShutdownRequested { signal } => signal,
             OutputEvent::Shutdown { .. } => "shutdown",
             OutputEvent::LlamaNativeLog { category, .. } => category,
@@ -625,6 +632,7 @@ impl OutputEvent {
             OutputEvent::LlamaNativeLog { .. } => OutputLevel::Debug,
             OutputEvent::Warning { .. } => OutputLevel::Warn,
             OutputEvent::Error { .. } => OutputLevel::Error,
+            OutputEvent::Fatal { .. } => OutputLevel::Fatal,
             _ => OutputLevel::Info,
         }
     }
@@ -780,6 +788,7 @@ impl OutputEvent {
             }
             OutputEvent::Warning { message, .. } => message.clone(),
             OutputEvent::Error { message, .. } => message.clone(),
+            OutputEvent::Fatal { message, .. } => message.clone(),
             OutputEvent::ShutdownRequested { signal } => format!("shutdown requested ({signal})"),
             OutputEvent::Shutdown { reason } => reason
                 .clone()

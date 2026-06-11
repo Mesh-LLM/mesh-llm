@@ -1,12 +1,14 @@
 #![recursion_limit = "256"]
 
-use std::time::Duration;
+use std::{panic::PanicHookInfo, sync::Once, time::Duration};
 
 use clap::{CommandFactory, Parser};
 
 mod commands;
 
 pub use mesh_llm_host_runtime::*;
+
+static PANIC_HOOK: Once = Once::new();
 
 pub async fn run_main() -> i32 {
     match run_cli_entrypoint().await {
@@ -39,6 +41,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         cli.log_format,
         mesh_llm_host_runtime::console_session_mode_for_runtime_surface(explicit_surface),
     );
+    install_terminal_panic_hook();
 
     mesh_llm_host_runtime::run_runtime_initialized(
         runtime_options_from_cli(cli),
@@ -46,6 +49,32 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         warning,
     )
     .await
+}
+
+fn install_terminal_panic_hook() {
+    PANIC_HOOK.call_once(|| {
+        let previous_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            mesh_llm_tui::force_restore_tui_after_panic();
+            let _ = mesh_llm_tui::emit_fatal_panic(panic_message(info), panic_context(info));
+            previous_hook(info);
+        }));
+    });
+}
+
+fn panic_message(info: &PanicHookInfo<'_>) -> String {
+    if let Some(message) = info.payload().downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = info.payload().downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "panic occurred".to_string()
+    }
+}
+
+fn panic_context(info: &PanicHookInfo<'_>) -> Option<String> {
+    info.location()
+        .map(|location| format!("panic at {}:{}", location.file(), location.line()))
 }
 
 fn maybe_print_binary_help_and_exit() {
