@@ -21,7 +21,7 @@
       },
       "repositoryUrl": {
         "url": "https://github.com/Mesh-LLM/mesh-llm",
-        "wellKnown": "https://docs.meshllm.cloud/.well-known/funding-manifest-urls"
+        "wellKnown": "https://meshllm.cloud/.well-known/funding-manifest-urls"
       },
       "licenses": [
         "spdx:Apache-2.0"

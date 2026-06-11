@@ -1,7 +1,7 @@
 const site = {
   title: 'Mesh LLM',
   description: 'Mesh serves large local models across multiple machines through one OpenAI-compatible endpoint.',
-  url: 'https://docs.meshllm.cloud',
+  url: 'https://meshllm.cloud',
   publicMeshUrl: 'https://public.meshllm.cloud',
   githubUrl: 'https://github.com/Mesh-LLM/mesh-llm',
   githubRepo: 'Mesh-LLM/mesh-llm',
