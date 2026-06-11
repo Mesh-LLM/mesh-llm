@@ -354,7 +354,7 @@ enum TuiEventListRenderer {
     Scrollbar,
 }
 
-const PRETTY_TUI_EVENT_LEVEL_WIDTH: usize = 5;
+const PRETTY_TUI_EVENT_LEVEL_WIDTH: usize = 6;
 
 const _: TuiEventListRenderer = TuiEventListRenderer::Legacy;
 
@@ -1536,9 +1536,9 @@ impl DashboardState {
         let llama_component =
             self.startup_component_for_truthful_status(TruthfulStartupStatusKey::LlamaServer);
 
-        if let Some(webserver) = &mut self.webserver
-            && let Some(key) = Self::truthful_startup_key_for_endpoint(&webserver.label)
-        {
+        if let Some((webserver, key)) = self.webserver.as_mut().and_then(|webserver| {
+            Self::truthful_startup_key_for_endpoint(&webserver.label).map(|key| (webserver, key))
+        }) {
             webserver.status = Self::truthful_runtime_status_for_component(
                 match key {
                     TruthfulStartupStatusKey::Console => &console_component,
@@ -1548,9 +1548,9 @@ impl DashboardState {
                 &webserver.status,
             );
         }
-        if let Some(api) = &mut self.api
-            && let Some(key) = Self::truthful_startup_key_for_endpoint(&api.label)
-        {
+        if let Some((api, key)) = self.api.as_mut().and_then(|api| {
+            Self::truthful_startup_key_for_endpoint(&api.label).map(|key| (api, key))
+        }) {
             api.status = Self::truthful_runtime_status_for_component(
                 match key {
                     TruthfulStartupStatusKey::Console => &console_component,
@@ -1862,9 +1862,9 @@ impl DashboardState {
             return None;
         }
 
-        if let Some(progress) = self.model_progress.as_ref()
-            && let Some(ratio) = model_download_progress_ratio(progress)
-        {
+        if let Some((progress, ratio)) = self.model_progress.as_ref().and_then(|progress| {
+            model_download_progress_ratio(progress).map(|ratio| (progress, ratio))
+        }) {
             return Some(LoadingProgressState {
                 ratio,
                 detail: loading_progress_detail(model_progress_detail(progress), ratio, None),
@@ -2479,7 +2479,7 @@ impl DashboardState {
             OutputEvent::ShutdownRequested { .. } | OutputEvent::Shutdown { .. } => {
                 self.mark_runtime_shutting_down();
             }
-            OutputEvent::Error { .. } | OutputEvent::Fatal { .. } => {
+            OutputEvent::Error { .. } => {
                 if let Some(model) = self.running_models.last_mut() {
                     model.status = RuntimeStatus::Error;
                 }
@@ -7905,11 +7905,7 @@ fn select_formatter(
     mode: LogFormat,
     console_session_mode: ConsoleSessionMode,
 ) -> FormatterSelection {
-    select_formatter_with_tui_entered(
-        mode,
-        console_session_mode,
-        Arc::new(AtomicBool::new(false)),
-    )
+    select_formatter_with_tui_entered(mode, console_session_mode, Arc::new(AtomicBool::new(false)))
 }
 
 fn select_formatter_with_tui_entered(
@@ -7919,9 +7915,9 @@ fn select_formatter_with_tui_entered(
 ) -> FormatterSelection {
     match mode {
         LogFormat::Pretty => match console_session_mode {
-            ConsoleSessionMode::InteractiveDashboard => {
-                FormatterSelection::InteractiveDashboard(InteractiveDashboardFormatter::with_tui_entered(tui_entered))
-            }
+            ConsoleSessionMode::InteractiveDashboard => FormatterSelection::InteractiveDashboard(
+                InteractiveDashboardFormatter::with_tui_entered(tui_entered),
+            ),
             ConsoleSessionMode::Fallback => {
                 FormatterSelection::DashboardFallback(DashboardFormatter::default())
             }
@@ -8075,11 +8071,8 @@ impl OutputManager {
             Arc::new(RwLock::new(None));
         let worker_snapshot_provider = dashboard_snapshot_provider.clone();
         tokio::spawn(async move {
-            let mut formatter = select_formatter_with_tui_entered(
-                mode,
-                console_session_mode,
-                worker_tui_entered,
-            );
+            let mut formatter =
+                select_formatter_with_tui_entered(mode, console_session_mode, worker_tui_entered);
             let mut redraw_tick = time::interval(PRETTY_TUI_REDRAW_INTERVAL);
             redraw_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut snapshot_tick = time::interval(PRETTY_TUI_SNAPSHOT_INTERVAL);
@@ -8527,7 +8520,10 @@ pub fn force_restore_tui_terminal() -> io::Result<()> {
 }
 
 pub fn force_restore_tui_after_panic() {
-    if !GLOBAL_OUTPUT_MANAGER.get().is_some_and(|output_manager| output_manager.tui_entered()) {
+    if !GLOBAL_OUTPUT_MANAGER
+        .get()
+        .is_some_and(|output_manager| output_manager.tui_entered())
+    {
         return;
     }
 
@@ -9752,7 +9748,7 @@ mod tests {
 
         assert_eq!(
             spans_plain_text(&line.spans),
-            "12:34:56 OK   joined mesh poker-night"
+            "12:34:56 OK    joined mesh poker-night"
         );
     }
 
@@ -10318,7 +10314,7 @@ mod tests {
         assert!(
             rendered_lines
                 .iter()
-                .any(|line| line.contains("INFO plain operati")),
+                .any(|line| line.contains("INFO  plain operati")),
             "expected INFO badge row to remain visible: {rendered_lines:?}"
         );
         assert!(
@@ -10354,7 +10350,7 @@ mod tests {
             .expect("expected timestamp token");
         assert_hh_mm_ss(timestamp);
         assert!(
-            event_line.contains(" OK   joined mesh poker-night"),
+            event_line.contains(" OK    joined mesh poker-night"),
             "expected compact log row in {event_line}"
         );
         assert!(event_line.contains("joined mesh poker-night"));

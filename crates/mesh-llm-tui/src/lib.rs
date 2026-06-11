@@ -13,8 +13,8 @@ pub fn install_terminal_panic_hook() {
     PANIC_HOOK.call_once(|| {
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            force_restore_tui_after_panic();
-            let _ = emit_fatal_panic(panic_message(info), panic_context(info));
+            output::force_restore_tui_after_panic();
+            let _ = output::emit_fatal_panic(panic_message(info), panic_context(info));
             previous_hook(info);
         }));
     });
@@ -48,6 +48,7 @@ mod tests {
 
     #[test]
     fn install_terminal_panic_hook_chains_previous_hook() {
+        let previous_hook = panic::take_hook();
         let previous_hook_calls = Arc::new(AtomicUsize::new(0));
         let previous_payload = Arc::new(Mutex::new(None));
         let previous_location = Arc::new(Mutex::new(None));
@@ -73,6 +74,8 @@ mod tests {
             panic!("panic hook smoke test");
         }));
 
+        panic::set_hook(previous_hook);
+
         assert!(result.is_err());
         assert_eq!(previous_hook_calls.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -80,10 +83,7 @@ mod tests {
             Some("panic hook smoke test")
         );
         assert_eq!(
-            previous_location
-                .lock()
-                .expect("location lock")
-                .as_deref(),
+            previous_location.lock().expect("location lock").as_deref(),
             Some(file!())
         );
     }
