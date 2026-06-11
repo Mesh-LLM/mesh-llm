@@ -1426,25 +1426,40 @@ section.hero::after {
 }
 .hero-copy.copied { color: var(--green-2); }
 .hero-copy.failed { color: #fca5a5; }
-.hero-learn {
+.hero-learn,
+.hero-public {
   min-height: 48px;
   display: inline-flex;
   align-items: center;
   gap: 10px;
   padding: 0 16px;
-  border: 1px solid var(--line-3);
   border-radius: var(--radius);
-  color: var(--fg-2);
   font-weight: 500;
   transition: border-color 0.16s ease, color 0.16s ease, background-color 0.16s ease;
+}
+.hero-learn {
+  border: 1px solid var(--line-3);
+  background: transparent;
+  color: var(--fg-2);
 }
 .hero-learn:hover {
   border-color: rgba(59,130,246,0.48);
   background: var(--blue-soft);
   color: var(--fg);
 }
+.hero-public {
+  border: 1px solid var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.hero-public:hover {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
+}
 .hero-copy:focus-visible,
 .hero-learn:focus-visible,
+.hero-public:focus-visible,
 .sponsor-slot:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
@@ -1452,7 +1467,9 @@ section.hero::after {
 .hero-copy svg,
 .hero-copy i,
 .hero-learn svg,
-.hero-learn i {
+.hero-learn i,
+.hero-public svg,
+.hero-public i {
   width: 16px;
   height: 16px;
   stroke-width: 1.8;
@@ -1461,6 +1478,10 @@ section.hero::after {
 .hero-learn i {
   color: var(--subtle);
   will-change: transform, opacity;
+}
+.hero-public svg,
+.hero-public i {
+  color: currentColor;
 }
 .hero-sponsor {
   flex: 0 0 auto;
@@ -1582,21 +1603,25 @@ section.hero::after {
   }
   .hero-footer-actions {
     display: grid;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
     width: 100%;
   }
   .hero-sponsor {
     display: none;
   }
   .hero-install,
-  .hero-learn {
+  .hero-learn,
+  .hero-public {
     width: 100%;
     max-width: none;
   }
   .hero-install {
+    grid-column: 1 / -1;
     justify-content: space-between;
   }
-  .hero-learn {
+  .hero-learn,
+  .hero-public {
     justify-content: center;
   }
   .hero-title-loop {
