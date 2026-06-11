@@ -2479,11 +2479,7 @@ impl DashboardState {
             OutputEvent::ShutdownRequested { .. } | OutputEvent::Shutdown { .. } => {
                 self.mark_runtime_shutting_down();
             }
-            OutputEvent::Error { .. } => {
-                if let Some(model) = self.running_models.last_mut() {
-                    model.status = RuntimeStatus::Error;
-                }
-            }
+            OutputEvent::Error { .. } => {}
             OutputEvent::InviteToken {
                 token,
                 mesh_id,
@@ -7659,13 +7655,15 @@ pub struct InteractiveDashboardFormatter {
     terminal: Option<TuiTerminal>,
     terminal_active: bool,
     tui_entered: Arc<AtomicBool>,
+    panic_restored: Arc<AtomicBool>,
     dirty: bool,
 }
 
 impl InteractiveDashboardFormatter {
-    fn with_tui_entered(tui_entered: Arc<AtomicBool>) -> Self {
+    fn with_tui_state(tui_entered: Arc<AtomicBool>, panic_restored: Arc<AtomicBool>) -> Self {
         Self {
             tui_entered,
+            panic_restored,
             ..Self::default()
         }
     }
@@ -7675,7 +7673,22 @@ impl InteractiveDashboardFormatter {
         self.tui_entered.load(Ordering::Acquire)
     }
 
+    fn panic_restored(&self) -> bool {
+        self.panic_restored.load(Ordering::Acquire)
+    }
+
+    fn mark_panic_restored(&mut self) {
+        self.terminal = None;
+        self.terminal_active = false;
+        self.dirty = false;
+        self.tui_entered.store(false, Ordering::Release);
+        self.panic_restored.store(true, Ordering::Release);
+    }
+
     fn handle_output_event(&mut self, event: &OutputEvent) -> io::Result<Option<String>> {
+        if self.panic_restored() {
+            return Ok(None);
+        }
         self.state
             .reduce(DashboardAction::OutputEvent(event.clone()));
         if self.terminal_active {
@@ -7687,6 +7700,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn handle_snapshot(&mut self, snapshot: DashboardSnapshot) {
+        if self.panic_restored() {
+            return;
+        }
         self.state
             .reduce(DashboardAction::SnapshotUpdated(snapshot));
         if self.terminal_active {
@@ -7695,6 +7711,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn handle_tui_event(&mut self, event: TuiEvent) -> TuiControlFlow {
+        if self.panic_restored() {
+            return TuiControlFlow::Continue;
+        }
         let control = self.state.apply_tui_event(event);
         if self.terminal_active {
             self.dirty = true;
@@ -7703,6 +7722,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn enter_terminal(&mut self) -> io::Result<()> {
+        if self.panic_restored() {
+            return Ok(());
+        }
         if self.terminal_active {
             return Ok(());
         }
@@ -7741,6 +7763,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn render_if_dirty(&mut self) -> io::Result<bool> {
+        if self.panic_restored() {
+            return Ok(false);
+        }
         if self
             .state
             .clear_expired_join_token_copy_status(Instant::now())
@@ -7877,6 +7902,12 @@ impl FormatterSelection {
         }
     }
 
+    fn mark_panic_restored(&mut self) {
+        if let Self::InteractiveDashboard(formatter) = self {
+            formatter.mark_panic_restored();
+        }
+    }
+
     fn render_interactive_if_dirty(&mut self) -> io::Result<bool> {
         match self {
             Self::InteractiveDashboard(formatter) => formatter.render_if_dirty(),
@@ -7905,18 +7936,24 @@ fn select_formatter(
     mode: LogFormat,
     console_session_mode: ConsoleSessionMode,
 ) -> FormatterSelection {
-    select_formatter_with_tui_entered(mode, console_session_mode, Arc::new(AtomicBool::new(false)))
+    select_formatter_with_tui_state(
+        mode,
+        console_session_mode,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    )
 }
 
-fn select_formatter_with_tui_entered(
+fn select_formatter_with_tui_state(
     mode: LogFormat,
     console_session_mode: ConsoleSessionMode,
     tui_entered: Arc<AtomicBool>,
+    panic_restored: Arc<AtomicBool>,
 ) -> FormatterSelection {
     match mode {
         LogFormat::Pretty => match console_session_mode {
             ConsoleSessionMode::InteractiveDashboard => FormatterSelection::InteractiveDashboard(
-                InteractiveDashboardFormatter::with_tui_entered(tui_entered),
+                InteractiveDashboardFormatter::with_tui_state(tui_entered, panic_restored),
             ),
             ConsoleSessionMode::Fallback => {
                 FormatterSelection::DashboardFallback(DashboardFormatter::default())
@@ -7931,6 +7968,7 @@ struct OutputManagerState {
     tx: tokio::sync::mpsc::UnboundedSender<OutputCommand>,
     ready_prompt_active: Arc<AtomicBool>,
     tui_entered: Arc<AtomicBool>,
+    panic_restored: Arc<AtomicBool>,
     mode: LogFormat,
     console_session_mode: Option<ConsoleSessionMode>,
     dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>>,
@@ -8016,6 +8054,7 @@ enum OutputCommand {
         response: tokio::sync::oneshot::Sender<io::Result<TuiControlFlow>>,
     },
     RenderTui(tokio::sync::oneshot::Sender<io::Result<bool>>),
+    PanicRestored,
 }
 
 static GLOBAL_OUTPUT_MANAGER: OnceLock<OutputManager> = OnceLock::new();
@@ -8065,14 +8104,20 @@ impl OutputManager {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputCommand>();
         let ready_prompt_active = Arc::new(AtomicBool::new(false));
         let tui_entered = Arc::new(AtomicBool::new(false));
+        let panic_restored = Arc::new(AtomicBool::new(false));
         let worker_prompt_active = ready_prompt_active.clone();
         let worker_tui_entered = tui_entered.clone();
+        let worker_panic_restored = panic_restored.clone();
         let dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>> =
             Arc::new(RwLock::new(None));
         let worker_snapshot_provider = dashboard_snapshot_provider.clone();
         tokio::spawn(async move {
-            let mut formatter =
-                select_formatter_with_tui_entered(mode, console_session_mode, worker_tui_entered);
+            let mut formatter = select_formatter_with_tui_state(
+                mode,
+                console_session_mode,
+                worker_tui_entered,
+                worker_panic_restored,
+            );
             let mut redraw_tick = time::interval(PRETTY_TUI_REDRAW_INTERVAL);
             redraw_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut snapshot_tick = time::interval(PRETTY_TUI_SNAPSHOT_INTERVAL);
@@ -8125,6 +8170,9 @@ impl OutputManager {
                             OutputCommand::RenderTui(response) => {
                                 let _ = response.send(formatter.render_interactive_if_dirty());
                             }
+                            OutputCommand::PanicRestored => {
+                                formatter.mark_panic_restored();
+                            }
                         }
                     }
                     _ = redraw_tick.tick(), if formatter.is_interactive_dashboard() => {
@@ -8152,6 +8200,7 @@ impl OutputManager {
             tx,
             ready_prompt_active,
             tui_entered,
+            panic_restored,
             mode,
             console_session_mode: matches!(mode, LogFormat::Pretty).then_some(console_session_mode),
             dashboard_snapshot_provider,
@@ -8258,6 +8307,21 @@ impl OutputManager {
             .read()
             .map(|state| state.tui_entered.load(Ordering::Acquire))
             .unwrap_or(false)
+    }
+
+    fn mark_panic_restored(&self) {
+        let tx = match self.state.read() {
+            Ok(state) => {
+                state.panic_restored.store(true, Ordering::Release);
+                state.tui_entered.store(false, Ordering::Release);
+                state.tx.clone()
+            }
+            Err(err) => {
+                tracing::warn!("output manager state lock poisoned during panic restore: {err}");
+                return;
+            }
+        };
+        let _ = tx.send(OutputCommand::PanicRestored);
     }
 
     pub fn register_dashboard_snapshot_provider(
@@ -8520,13 +8584,14 @@ pub fn force_restore_tui_terminal() -> io::Result<()> {
 }
 
 pub fn force_restore_tui_after_panic() {
-    if !GLOBAL_OUTPUT_MANAGER
-        .get()
-        .is_some_and(|output_manager| output_manager.tui_entered())
-    {
+    let Some(output_manager) = GLOBAL_OUTPUT_MANAGER.get() else {
+        return;
+    };
+    if !output_manager.tui_entered() {
         return;
     }
 
+    output_manager.mark_panic_restored();
     let _ = force_restore_tui_terminal();
     let _ = disable_raw_mode();
 }
@@ -12611,6 +12676,30 @@ mod tests {
     }
 
     #[test]
+    fn generic_error_does_not_guess_last_running_model() {
+        let mut state = DashboardState::default();
+        state.reduce(DashboardAction::OutputEvent(OutputEvent::ModelReady {
+            model: "Qwen3-32B".to_string(),
+            internal_port: Some(9338),
+            role: Some("host".to_string()),
+        }));
+
+        state.reduce(DashboardAction::OutputEvent(OutputEvent::Error {
+            message: "transport stderr surfaced".to_string(),
+            context: Some("stderr".to_string()),
+        }));
+
+        assert!(matches!(
+            state
+                .running_models
+                .iter()
+                .find(|model| model.model == "Qwen3-32B")
+                .map(|model| &model.status),
+            Some(RuntimeStatus::Ready)
+        ));
+    }
+
+    #[test]
     fn discovery_and_join_failures_mark_startup_mesh_component_failed() {
         let mut discovery_failed = DashboardState::default();
         discovery_failed.reduce(DashboardAction::OutputEvent(OutputEvent::Startup {
@@ -13908,6 +13997,39 @@ tail line"
         assert!(formatter.tui_entered());
         formatter.exit_terminal().expect("exit should succeed");
         assert!(!formatter.tui_entered());
+    }
+
+    #[test]
+    fn tui_panic_restore_disables_interactive_redraws() {
+        let tui_entered = Arc::new(AtomicBool::new(false));
+        let panic_restored = Arc::new(AtomicBool::new(false));
+        let mut formatter = InteractiveDashboardFormatter::with_tui_state(
+            tui_entered.clone(),
+            panic_restored.clone(),
+        );
+        formatter.mark_terminal_escape_written();
+
+        formatter.mark_panic_restored();
+
+        assert!(!formatter.terminal_active);
+        assert!(!formatter.dirty);
+        assert!(!tui_entered.load(Ordering::Acquire));
+        assert!(panic_restored.load(Ordering::Acquire));
+        assert_eq!(
+            formatter
+                .handle_output_event(&OutputEvent::Shutdown { reason: None })
+                .expect("panic-restored formatter should ignore output events"),
+            None
+        );
+        assert_eq!(
+            formatter.handle_tui_event(TuiEvent::Key(TuiKeyEvent::Char('q'))),
+            TuiControlFlow::Continue
+        );
+        assert!(
+            !formatter
+                .render_if_dirty()
+                .expect("panic-restored formatter should skip redraws")
+        );
     }
 
     #[test]
