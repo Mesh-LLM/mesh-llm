@@ -4968,6 +4968,7 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
   --stage2-aperture-radial-pos: 50% 50%;
   --stage2-aperture-grid-y-pos: 0px 17px;
   --stage2-aperture-grid-x-pos: 17px 0px;
+
   content: "";
   position: absolute;
   inset: 0;
