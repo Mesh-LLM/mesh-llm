@@ -57,6 +57,7 @@ jobs:
 
           cp docs/index.html "$artifact_dir/"
           cp docs/CNAME "$artifact_dir/"
+          cp docs/funding.json "$artifact_dir/"
           cp docs/install.sh "$artifact_dir/"
           cp docs/install.ps1 "$artifact_dir/"
           cp docs/mesh-llm-logo.svg "$artifact_dir/"

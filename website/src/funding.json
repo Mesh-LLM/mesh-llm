@@ -5,7 +5,7 @@
     "type": "organisation",
     "role": "owner",
     "name": "Mesh LLM",
-    "email": "",
+    "email": "michael.neale@gmail.com",
     "description": "Democratize and Decentralize Models and Agents. Mesh LLM pools GPUs and memory across machines and exposes the result as one OpenAI-compatible API for distributed AI/LLM inference.",
     "webpageUrl": {
       "url": "https://meshllm.cloud"
@@ -21,7 +21,7 @@
       },
       "repositoryUrl": {
         "url": "https://github.com/Mesh-LLM/mesh-llm",
-        "wellKnown": "https://meshllm.cloud/.well-known/funding-manifest-urls"
+        "wellKnown": "https://github.com/Mesh-LLM/mesh-llm/blob/main/.well-known/funding-manifest-urls"
       },
       "licenses": [
         "spdx:Apache-2.0"
