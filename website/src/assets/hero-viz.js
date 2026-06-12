@@ -710,6 +710,38 @@
     updatePanelConnector(viz, svg, scene, left, top, width, height);
   }
 
+  function titleTextRect(scene) {
+    var headingRect = scene.titleHeading ? scene.titleHeading.getBoundingClientRect() : null;
+    var subtitleRect = scene.subtitle ? scene.subtitle.getBoundingClientRect() : null;
+
+    if (!headingRect && !subtitleRect) {
+      return scene.title ? scene.title.getBoundingClientRect() : null;
+    }
+
+    if (!headingRect) return subtitleRect;
+    if (!subtitleRect) return headingRect;
+
+    return {
+      left: Math.min(headingRect.left, subtitleRect.left),
+      right: Math.max(headingRect.right, subtitleRect.right),
+      top: Math.min(headingRect.top, subtitleRect.top),
+      bottom: Math.max(headingRect.bottom, subtitleRect.bottom),
+      width: Math.max(headingRect.right, subtitleRect.right) - Math.min(headingRect.left, subtitleRect.left),
+      height: Math.max(headingRect.bottom, subtitleRect.bottom) - Math.min(headingRect.top, subtitleRect.top),
+    };
+  }
+
+  function shortPhoneTitleFooterReserve(viewportWidth, stageHeight, footerGap, isTouchLandscape) {
+    var shortStageProgress;
+
+    if (isTouchLandscape || viewportWidth > 390) return 0;
+
+    shortStageProgress = clamp((660 - stageHeight) / 48, 0, 1);
+    if (shortStageProgress <= 0) return 0;
+
+    return Math.round(clamp(footerGap * 0.5 + shortStageProgress * 8, 14, 20));
+  }
+
   function positionTitle(viz, svg, scene) {
     var fallbackFooterTop;
     var footer;
@@ -733,9 +765,12 @@
     var targetY;
     var titleHeight;
     var titleMin;
+    var titleRect;
     var titleVizClearance;
     var top;
     var vizRect;
+    var viewportWidth;
+    var titleFooterReserve;
 
     if (!scene.title || !scene.target) return;
 
@@ -749,19 +784,22 @@
     footer = section.querySelector('.hero-footer');
     stageRect = stage ? stage.getBoundingClientRect() : sectionRect;
     stageHeight = stage ? stage.clientHeight : section.clientHeight;
+    viewportWidth = window.innerWidth;
     isTouchLandscape = window.matchMedia && window.matchMedia('(pointer: coarse) and (orientation: landscape)').matches;
     targetY = vizRect.top - stageRect.top + layout.padY + scene.target.y * layout.scale;
     targetRadius = scene.target.r * layout.scale;
-    responsive = clamp((window.innerWidth - 360) / 760, 0, 1);
+    responsive = clamp((viewportWidth - 360) / 760, 0, 1);
     titleVizClearance = clamp(viz.clientWidth * 0.014, 10, 18);
     top = targetY + Math.max(70, targetRadius + 54) + 22 * responsive + titleVizClearance;
-    titleHeight = scene.title.offsetHeight || 124;
+    titleRect = titleTextRect(scene);
+    titleHeight = titleRect && titleRect.height > 0 ? titleRect.height : scene.title.offsetHeight || 124;
     titleMin = isTouchLandscape ? clamp(stageHeight * 0.28, 120, 220) : clamp(stageHeight * 0.34, 220, 292);
     fallbackFooterTop = stageHeight - clamp(stageHeight * 0.16, 128, 160);
     footerRect = footer ? footer.getBoundingClientRect() : null;
     footerTop = footerRect && footerRect.height > 0 ? footerRect.top - stageRect.top : fallbackFooterTop;
     footerGap = clamp(stageHeight * 0.04, 24, 42);
-    maxTop = Math.max(18, footerTop - footerGap - titleHeight);
+    titleFooterReserve = shortPhoneTitleFooterReserve(viewportWidth, stageHeight, footerGap, isTouchLandscape);
+    maxTop = Math.max(18, footerTop - footerGap - titleHeight - titleFooterReserve);
 
     if (scene.panel) {
       panelRect = scene.panel.getBoundingClientRect();
