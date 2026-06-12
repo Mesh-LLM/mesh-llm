@@ -1,4 +1,11 @@
-# Deploy mesh-llm to a remote Linux GPU node (CUDA / Vast.ai etc.)
+---
+name: deploy-linux-gpu
+description: Use this skill when deploying, installing, launching, or serving mesh-llm on a remote Linux GPU node (rented GPUs like Vast.ai or RunPod, or a self-managed CUDA server), including installing the CUDA build, choosing a model and quant, launching serve with --auto, keeping it running under supervisor, and verifying inference.
+metadata:
+  short-description: Deploy mesh-llm on a remote Linux GPU node
+---
+
+# deploy-linux-gpu
 
 Use this when standing up mesh-llm on a remote Linux GPU box (rented GPU like
 Vast.ai / RunPod, or your own server) to serve a specific model and join the
