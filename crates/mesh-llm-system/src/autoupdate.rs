@@ -256,10 +256,23 @@ async fn fetch_release_info(url: &str) -> Option<ReleaseInfo> {
 }
 
 pub fn version_newer(a: &str, b: &str) -> bool {
-    match (semver::Version::parse(a), semver::Version::parse(b)) {
-        (Ok(a), Ok(b)) => a > b,
-        _ => false,
+    let (Ok(a_parsed), Ok(b_parsed)) = (semver::Version::parse(a), semver::Version::parse(b))
+    else {
+        return false;
+    };
+
+    let a_is_sha = mesh_llm_build_info::is_sha_build(a);
+    let b_is_sha = mesh_llm_build_info::is_sha_build(b);
+
+    if !a_is_sha && b_is_sha {
+        return false;
     }
+
+    if a_is_sha && !b_is_sha {
+        return true;
+    }
+
+    a_parsed > b_parsed
 }
 
 fn should_attempt_auto_update(options: AutoUpdateOptions) -> bool {
@@ -1512,6 +1525,16 @@ mod tests {
         assert!(version_newer("0.33.0", "0.33.0-rc.1"));
         assert!(!version_newer("0.33.0-rc.1", "0.33.0"));
         assert!(version_newer("0.33.0-rc.2", "0.33.0-rc.1"));
+        assert!(!version_newer("0.99.0", "0.68.0+gAB131C"));
+        assert!(version_newer("0.68.0+gAB131C", "0.99.0"));
+        assert!(!version_newer("0.99.0", "0.68.0+gAB131C.dirty"));
+        assert!(version_newer("0.68.0+gAB131C.dirty", "0.99.0"));
+        assert!(version_newer("0.69.0", "0.68.0"));
+        assert!(!version_newer("not-a-version", "0.68.0"));
+        assert!(!version_newer("0.68.0", "not-a-version"));
+        assert!(!version_newer("not-a-version+gAB131C", "0.99.0"));
+        assert!(!version_newer("not-a-version+gAB131C.dirty", "0.99.0"));
+        assert!(!version_newer("0.99.0", "not-a-version+gAB131C"));
     }
 
     #[test]

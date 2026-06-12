@@ -19,7 +19,7 @@ pub async fn run_update(cli: &Cli) -> Result<()> {
         flavor,
         detect_flavor,
         requested_version,
-        current_version: env!("CARGO_PKG_VERSION"),
+        current_version: mesh_llm_build_info::BUILD_VERSION,
     })
     .await
 }

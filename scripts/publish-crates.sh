@@ -340,6 +340,7 @@ unpublished_registry_deps() {
             ;;
         mesh-llm-runtime-install)
             printf '%s\n' \
+                mesh-llm-build-info \
                 mesh-llm-hardware-profile \
                 mesh-llm-native-runtime \
                 skippy-ffi
@@ -362,6 +363,7 @@ unpublished_registry_deps() {
             ;;
         mesh-llm-cli)
             printf '%s\n' \
+                mesh-llm-build-info \
                 mesh-llm-events
             ;;
         mesh-llm-tui)
@@ -374,6 +376,7 @@ unpublished_registry_deps() {
             ;;
         mesh-llm-system)
             printf '%s\n' \
+                mesh-llm-build-info \
                 mesh-llm-gpu-bench \
                 skippy-runtime
             ;;
@@ -419,6 +422,7 @@ unpublished_registry_deps() {
         mesh-llm-host-runtime)
             printf '%s\n' \
                 mesh-llm-api-server \
+                mesh-llm-build-info \
                 mesh-llm-client \
                 mesh-llm-config \
                 mesh-llm-events \
@@ -508,6 +512,7 @@ publish_crates=(
     mesh-llm-client
     mesh-llm-api-client
     mesh-llm-events
+    mesh-llm-build-info
     mesh-llm-config
     mesh-llm-ui
     mesh-llm-console-server
