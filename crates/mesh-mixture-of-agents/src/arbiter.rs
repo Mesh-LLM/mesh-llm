@@ -282,10 +282,12 @@ pub fn try_early_decision(
     };
     if let Some((cluster_size, best)) = agreeing_cluster {
         let majority = cluster_size * 2 >= answers.len();
-        if majority
-            && best.confidence >= 0.5
-            && let Some(decision) =
+        let qualifies = majority && best.confidence >= 0.5;
+        if let Some(decision) = qualifies
+            .then(|| {
                 tier_aware_consensus_decision(&answers, cluster_size, best, strong_gate, remaining)
+            })
+            .flatten()
         {
             return Some(decision);
         }
@@ -357,10 +359,10 @@ fn tier_aware_consensus_decision(
             strong_pending: true
         }
     );
-    let strong_agrees = answers
+    let strong_answer = answers
         .iter()
-        .any(|a| a.role == WorkerRole::Strong && is_usable_answer(a));
-    if strong_pending && !strong_agrees {
+        .find(|a| a.role == WorkerRole::Strong && is_usable_answer(a));
+    if strong_pending && strong_answer.is_none() {
         tracing::info!(
             "moa: consensus held — {}/{} small-tier workers agree but strong worker \
              still pending (patience window active)",
@@ -369,6 +371,33 @@ fn tier_aware_consensus_decision(
         );
         return None;
     }
+
+    // Strong landed but does NOT share the small-tier cluster: prefer the
+    // strong worker's answer over small-model consensus. Holding for the
+    // strong worker only buys it a seat; this is what makes its answer
+    // actually win on disagreement. When the strong worker IS in the
+    // cluster (its content agrees with the representative under the same
+    // bidirectional-subset rule the clusterer uses), the cluster
+    // representative already reflects its content, so ship that.
+    if let Some(strong) = strong_answer {
+        let strong_tokens = content_tokens(&strong.payload);
+        let best_tokens = content_tokens(&best.payload);
+        let in_cluster = !strong_tokens.is_empty()
+            && !best_tokens.is_empty()
+            && !has_negation_mismatch(&strong_tokens, &best_tokens)
+            && (strong_tokens.is_subset(&best_tokens) || best_tokens.is_subset(&strong_tokens));
+        if !in_cluster {
+            tracing::info!(
+                "moa: strong worker dissents from {}/{} small-tier consensus — preferring \
+                 strong answer (conf={:.2})",
+                cluster_size,
+                answers.len(),
+                strong.confidence,
+            );
+            return Some(Decision::Answer(strong.payload.clone()));
+        }
+    }
+
     tracing::info!(
         "moa: early exit — {}/{} workers agree on answer (conf={:.2}), {} still pending",
         cluster_size,
@@ -1028,6 +1057,28 @@ mod tests {
         match try_early_decision(&outputs, 3, 2, true, GATE_PENDING) {
             Some(Decision::ToolCall { name, .. }) => assert_eq!(name, "read_file"),
             other => panic!("tool proposals must not be gated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn strong_dissent_wins_over_small_consensus() {
+        // Two small workers agree on "Sydney"; the strong worker landed
+        // with a different answer ("Canberra"). Gate no longer pending.
+        // The strong worker's answer must win, not the small consensus.
+        let outputs = vec![
+            make_role_output(OutputKind::Answer, 0.9, "Sydney", WorkerRole::Fast),
+            make_role_output(OutputKind::Answer, 0.9, "Sydney", WorkerRole::Specialist),
+            make_role_output(OutputKind::Answer, 0.7, "Canberra", WorkerRole::Strong),
+        ];
+        let gate = StrongGate::Active {
+            strong_pending: false,
+        };
+        match try_early_decision(&outputs, 3, outputs.len(), false, gate) {
+            Some(Decision::Answer(text)) => assert!(
+                text.contains("Canberra"),
+                "strong dissent must win over small consensus, got {text:?}"
+            ),
+            other => panic!("expected strong's Answer, got {other:?}"),
         }
     }
 

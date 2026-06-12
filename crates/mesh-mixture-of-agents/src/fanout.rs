@@ -258,9 +258,15 @@ pub(crate) async fn gather_workers_incremental(
                 total_finished += 1;
                 tracing::warn!("moa: worker task panicked or was cancelled: {e}");
                 // No (model, role) payload available from a JoinError, so
-                // we cannot attribute this slot here. `reconcile_dispatched`
-                // at the end picks up any dispatched worker that has not
-                // produced a summary by name.
+                // we cannot attribute this slot here — including whether it
+                // was the Strong worker. If a panicking Strong leaves
+                // `strong_finished` false, the tier gate simply holds until
+                // `strong_patience` expires (its bounded fallback) rather
+                // than releasing immediately. Panicking workers are rare and
+                // the worst case is one extra patience window of latency, so
+                // we don't add fragile JoinError↔slot correlation to shave
+                // it. `reconcile_dispatched` still attributes the slot by
+                // name at the end for accounting.
             }
         }
     }

@@ -142,6 +142,16 @@ async fn small_consensus_is_held_until_strong_lands() {
             .map(|w| (&w.model, w.succeeded))
             .collect::<Vec<_>>()
     );
+    // The contract is "when the strong worker lands with a usable answer,
+    // it wins" — not merely "it was allowed to finish". The strong worker
+    // disagrees with the small-tier consensus ("Sydney"), so its answer
+    // ("Canberra") must be the one that ships.
+    assert!(
+        response_text(&result).contains("Canberra"),
+        "strong worker's answer must win over small-tier consensus once it lands; \
+         got {:?}",
+        response_text(&result)
+    );
 }
 
 #[tokio::test]
@@ -158,9 +168,13 @@ async fn patience_expiry_releases_held_consensus() {
     let result = moa::handle_turn(&config, &user_turn("Capital of Australia? One word.")).await;
     let elapsed = started.elapsed();
 
+    // Pin the bound near the configured patience window (500ms) with
+    // scheduler slack, so a regression that pushes release out toward
+    // worker_timeout (30s) is actually caught — a loose 5s bound would
+    // silently pass several-second regressions.
     assert!(
-        elapsed < Duration::from_secs(5),
-        "held consensus must be released at patience expiry (~500ms), \
+        elapsed < Duration::from_millis(1500),
+        "held consensus must be released promptly at patience expiry (~500ms), \
          not block on the hung strong worker; took {elapsed:?}"
     );
     assert!(
