@@ -1,14 +1,25 @@
 # Virtual LLM Engine
 
-Callback hooks from llama-server into mesh-llm during inference.
+Callback hooks from the serving runtime into mesh-llm during inference.
 
 Related: [#183](https://github.com/michaelneale/mesh-llm/issues/183), [#165](https://github.com/michaelneale/mesh-llm/issues/165), [PR #225](https://github.com/michaelneale/mesh-llm/pull/225)
+
+> **Note:** This design predates the embedded staged runtime. Where it says
+> "llama-server", read "the serving runtime". The hook concept and the Rust-side
+> handlers (`inference/virtual_llm.rs`, `inference/consult.rs`,
+> `api/routes/mesh_hook.rs`, `openai-frontend/src/hooks.rs`) are current; the
+> embedded Skippy path applies the same hooks in-process
+> (`inference/skippy/hooks.rs`, `skippy-server` before-chat hooks) rather than
+> over a localhost HTTP callback from an external process. The
+> "Temporary co-iteration setup" section is historical — `llama-patches/` and
+> `sync.sh` no longer exist; C++ changes live in the
+> `third_party/llama.cpp/patches` queue.
 
 ---
 
 ## What it does
 
-llama-server detects when it might need help and calls mesh-llm on localhost. mesh-llm consults other models in the mesh and replies with context to inject. The caller sees one seamless response.
+The serving runtime detects when it might need help and calls mesh-llm. mesh-llm consults other models in the mesh and replies with context to inject. The caller sees one seamless response.
 
 Three hook points (Hook 1, Hook 2, Hook 2b), all synchronous — each is a blocking POST to `http://localhost:{mesh_port}/mesh/hook`.
 

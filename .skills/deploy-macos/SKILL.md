@@ -18,6 +18,7 @@ you see instructions mentioning those, they are outdated.
 Related skills/docs:
 
 - `deploy-linux-gpu` — remote Linux/CUDA nodes
+- `deploy-windows` — Windows nodes
 - `mesh-join` — creating/joining private and public meshes (tokens, NAT, multi-node)
 - `connect-agents` — pointing Goose/Claude Code/OpenCode/Pi at a running mesh
 - `docs/USAGE.md` — install details, service mode, model storage

@@ -23,8 +23,10 @@ Each QUIC connection carries multiple logical streams, distinguished by a 1-byte
 | 0x07 | PEER_LEAVING | send | protobuf `PeerLeaving` |
 | 0x08 | PLUGIN_CHANNEL | bidirectional | plugin protocol |
 | 0x09 | PLUGIN_BULK_TRANSFER | send | plugin protocol bulk data |
+| 0x0a | PLUGIN_MESH_STREAM | bidirectional | plugin protocol mesh stream |
 | 0x0b | CONFIG_SUBSCRIBE | reserved | legacy mesh-plane config stream ID; do not reuse |
 | 0x0c | CONFIG_PUSH | reserved | legacy mesh-plane config stream ID; do not reuse |
+| 0x0d | SUBPROTOCOL | bidirectional | protobuf `MeshSubprotocolOpen`, then subprotocol-owned framing |
 
 Streams 0x02 and 0x04 are raw TCP relay tunnels. They carry llama.cpp RPC and HTTP traffic respectively and are not subject to protobuf framing or generation validation.
 

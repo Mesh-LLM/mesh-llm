@@ -1,5 +1,20 @@
 # Releasing mesh-llm
 
+## Preferred path: dispatch from GitHub
+
+Releases are normally cut by running the **Release** workflow
+(`.github/workflows/release.yml`) from the GitHub Actions UI via
+`workflow_dispatch` with the version input (for example `v0.31.0`). The
+dispatched workflow bumps versions, generates and patches the SwiftPM
+manifest, packages SDK console assets, creates and pushes the release tag,
+builds all platform bundles, and publishes the GitHub release. Dispatch inputs
+include `skip_gpu_bundles` and `canary` (dry-run: build and smoke everything
+without publishing).
+
+The sections below document the underlying steps. They matter when releasing
+manually via a tag push, debugging the workflow, or validating bundles
+locally.
+
 ## Prerequisites
 
 - `just` installed

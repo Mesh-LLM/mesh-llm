@@ -1,6 +1,6 @@
 ---
 name: deploy-linux-gpu
-description: Use this skill when deploying, installing, launching, or serving mesh-llm on a remote Linux GPU node (rented GPUs like Vast.ai or RunPod, or a self-managed CUDA server), including installing the CUDA build, choosing a model and running
+description: Use this skill when deploying, installing, launching, or serving mesh-llm on a remote Linux GPU node (rented GPUs like Vast.ai or RunPod, or a self-managed CUDA server), including installing the CUDA build, choosing a model, keeping it alive under a supervisor, and verifying it serves.
 metadata:
   short-description: Deploy mesh-llm on a remote Linux GPU node
 ---
@@ -18,6 +18,7 @@ runtime. There are no `.dylib`/`codesign`/quarantine steps on Linux.
 note --auto flag tells it to join the public mesh. serve command with --model tells it to run a specific model.
 Examples here are for solo serving — don't read this in isolation:
 
+- `deploy-macos` / `deploy-windows` — other platforms
 - `mesh-join` — creating/joining private and public meshes (tokens, NAT, multi-node)
 - `connect-agents` — pointing Goose/Claude Code/OpenCode/Pi at a running mesh
 - `docs/USAGE.md` — install details, service mode, model storage

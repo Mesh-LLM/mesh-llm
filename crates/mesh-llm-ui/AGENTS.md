@@ -14,7 +14,7 @@ From repo root:
 
 - `just ui-dev`
 - `just ui-test`
-- `just clean-ui`
+- `just ui-clean`
 - `scripts/build-ui.sh crates/mesh-llm-ui`
 
 Package-local scripts:

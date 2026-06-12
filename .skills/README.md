@@ -7,6 +7,7 @@ Each is a focused, current how-to; deeper reference lives in `docs/`.
 |---|---|
 | [deploy-macos](deploy-macos/SKILL.md) | Install/launch mesh-llm on a macOS node (release install or dev-build bundle, codesign/quarantine, verify serving) |
 | [deploy-linux-gpu](deploy-linux-gpu/SKILL.md) | Install/launch mesh-llm on a remote Linux GPU node (Vast.ai/RunPod/self-managed CUDA, supervisor/systemd, verify serving) |
+| [deploy-windows](deploy-windows/SKILL.md) | Install/launch mesh-llm on Windows (install.ps1 via `irm \| iex`, flavor selection CUDA/ROCm/Vulkan/CPU, contrib helper scripts, PowerShell gotchas) |
 | [mesh-join](mesh-join/SKILL.md) | Create/join/publish meshes: invite tokens, `--auto`, named meshes, client-only nodes, NAT/bind issues, multi-node verification |
 | [connect-agents](connect-agents/SKILL.md) | Point Goose/Claude Code/OpenCode/Pi or any OpenAI client at a running mesh; tool-call validation; blackboard |
 
