@@ -18,7 +18,7 @@ lives in `mesh-llm-cli`, one-shot command handlers in `mesh-llm-commands`, and
 the host-side runtime in `mesh-llm-host-runtime`, whose module layout carries
 most of the behavior described in this document:
 
-```
+```text
 crates/mesh-llm-host-runtime/src/
 ├── lib.rs                   Crate entry; runtime entrypoints called by the binary
 ├── api/                     Management API (:3131): status, models, search, events, discover
