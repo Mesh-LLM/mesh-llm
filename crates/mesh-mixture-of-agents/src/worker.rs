@@ -99,6 +99,28 @@ pub fn assign_roles(models: &[ModelEntry]) -> Vec<Assignment> {
     assignments
 }
 
+/// Does this worker pool have a real quality gap?
+///
+/// Takes `(model_name, role)` pairs. True when the Strong-role worker
+/// is big-tier (multi-digit-B or no advertised size) AND at least one
+/// other worker is small-tier (single-digit-B). This is the "MiniMax +
+/// small Qwens" shape where mixing tiers can pull answers down. When
+/// all workers are the same tier (e.g. several small models lifting
+/// each other via consensus) there is no gap and tier-aware patience
+/// stays disabled.
+pub fn has_quality_gap<'a>(workers: impl IntoIterator<Item = (&'a str, WorkerRole)>) -> bool {
+    let mut strong_is_big = false;
+    let mut any_small_non_strong = false;
+    for (name, role) in workers {
+        if role == WorkerRole::Strong {
+            strong_is_big = !is_single_digit_b_name(name);
+        } else if is_single_digit_b_name(name) {
+            any_small_non_strong = true;
+        }
+    }
+    strong_is_big && any_small_non_strong
+}
+
 /// Return true if `name` advertises a single-digit billion-parameter
 /// count, e.g. "Qwen3.5-2B-Q4_K_M" or "llama-3-7b-instruct".
 ///
@@ -388,5 +410,43 @@ mod tests {
         // Multibyte characters outside think blocks must survive intact.
         assert_eq!(strip_thinking("<think>思</think>答案"), "答案");
         assert_eq!(strip_thinking("前置</think>中间<think>隐"), "前置中间");
+    }
+
+    #[test]
+    fn quality_gap_minimax_plus_small_qwens() {
+        // The motivating shape: big-tier strong + small-tier workers.
+        let workers = [
+            ("Qwen2.5-3B-Instruct", WorkerRole::Fast),
+            ("Qwen3-8B", WorkerRole::Specialist),
+            ("MiniMax-M2.5", WorkerRole::Strong),
+        ];
+        assert!(has_quality_gap(workers.iter().copied()));
+    }
+
+    #[test]
+    fn no_quality_gap_when_all_small_tier() {
+        // "Many small models lift each other" — gate must stay off so
+        // same-tier consensus keeps its current latency profile.
+        let workers = [
+            ("Qwen2.5-3B-Instruct", WorkerRole::Fast),
+            ("llama-3-7b-instruct", WorkerRole::Specialist),
+            ("Qwen3-8B", WorkerRole::Strong),
+        ];
+        assert!(!has_quality_gap(workers.iter().copied()));
+    }
+
+    #[test]
+    fn no_quality_gap_when_all_big_tier() {
+        let workers = [
+            ("Qwen3-32B", WorkerRole::Fast),
+            ("MiniMax-M2.5", WorkerRole::Strong),
+        ];
+        assert!(!has_quality_gap(workers.iter().copied()));
+    }
+
+    #[test]
+    fn no_quality_gap_without_strong_role() {
+        let workers = [("Qwen2.5-3B-Instruct", WorkerRole::Generalist)];
+        assert!(!has_quality_gap(workers.iter().copied()));
     }
 }

@@ -100,6 +100,7 @@ fn build_config(
         reducer_timeout: Duration::from_secs(5),
         hedge_delay: Duration::from_secs(1),
         first_answer_grace: Duration::ZERO,
+        strong_patience: Duration::ZERO,
         enable_thinking,
     }
 }
