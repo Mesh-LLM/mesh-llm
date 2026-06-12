@@ -461,9 +461,12 @@ Pull request titles and descriptions should be user-focused by default.
 ### Deploy to Remote
 
 ```bash
-just bundle
-# scp bundle to remote, tar xzf, codesign -s - the three binaries
+just bundle    # /tmp/mesh-llm-bundle.tar.gz — single mesh-llm binary
+# scp bundle to remote, tar xzf, then on macOS: codesign -s - mesh-llm && xattr -cr <dir>
 ```
+
+For the full per-platform deploy flows, see the repo skills `.skills/deploy-macos/`
+and `.skills/deploy-linux-gpu/`.
 
 ### Cleanup
 
