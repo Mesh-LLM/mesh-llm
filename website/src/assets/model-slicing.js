@@ -70,6 +70,8 @@
   var STAGE_INTRO_PROGRESS = 0.16;
   // Leaves the final slice of the stage as a settled hold after the aperture closes.
   var STAGE_ANIMATION_END_PROGRESS = 0.955;
+  var APERTURE_OPEN_START = 0.245;
+  var APERTURE_OPEN_END = 0.380;
   var APERTURE_CLOSE_START = 1.095;
   var APERTURE_CLOSE_END = 1.153;
   var APERTURE_FADE_START = 1.125;
@@ -78,6 +80,7 @@
   var APERTURE_WORKBENCH_EXIT_END = 1.148;
   var APERTURE_RING_RETURN_END = 1.125;
   var APERTURE_SCRUBBER_EXIT_END = 1.142;
+  var DESKTOP_APERTURE_ENTRY_SCROLL_FACTOR = 0.5;
   var TITLE_SNAP_LEAD_START_PROGRESS = 0.035;
   var TITLE_SNAP_FORWARD_PROGRESS = 0.085;
   var TITLE_SNAP_REVERSE_PROGRESS = 0.065;
@@ -329,6 +332,16 @@
 
     delete sectionVarCache[name];
     section.style.removeProperty(name);
+  }
+
+  function syncHeroChromeMetrics() {
+    var chromeHeight = nav ? nav.getBoundingClientRect().height : 0;
+
+    if (!chromeHeight) chromeHeight = 64;
+
+    chromeHeight = Math.round(chromeHeight * 100) / 100;
+    setVar('--hero-initial-chrome', chromeHeight + 'px');
+    setVar('--hero-sticky-top', chromeHeight + 'px');
   }
 
   function syncCompletedGridClip() {
@@ -972,12 +985,54 @@
     return cachedApertureMaxRadius;
   }
 
-  function stageProgressFromScrollProgress(progress) {
+  function linearStageProgressFromScrollProgress(progress) {
     return clamp((progress - STAGE_INTRO_PROGRESS) / (STAGE_ANIMATION_END_PROGRESS - STAGE_INTRO_PROGRESS), 0, 1) * SCRUBBER_END;
   }
 
-  function scrollProgressFromStageProgress(progress) {
+  function linearScrollProgressFromStageProgress(progress) {
     return STAGE_INTRO_PROGRESS + (clamp(progress, 0, SCRUBBER_END) / SCRUBBER_END) * (STAGE_ANIMATION_END_PROGRESS - STAGE_INTRO_PROGRESS);
+  }
+
+  function useDesktopApertureEntryTiming() {
+    return !useTouchScrollProfile();
+  }
+
+  function desktopApertureEntryScrollProgress() {
+    return linearScrollProgressFromStageProgress(APERTURE_OPEN_START);
+  }
+
+  function desktopApertureEntryTargetScrollProgress() {
+    return STAGE_INTRO_PROGRESS + (desktopApertureEntryScrollProgress() - STAGE_INTRO_PROGRESS) * DESKTOP_APERTURE_ENTRY_SCROLL_FACTOR;
+  }
+
+  function stageProgressFromScrollProgress(progress) {
+    var clampedProgress = clamp(progress, 0, 1);
+    var apertureEntryTarget;
+
+    if (!useDesktopApertureEntryTiming()) return linearStageProgressFromScrollProgress(clampedProgress);
+    if (clampedProgress <= STAGE_INTRO_PROGRESS) return 0;
+
+    apertureEntryTarget = desktopApertureEntryTargetScrollProgress();
+    if (clampedProgress <= apertureEntryTarget) {
+      return lerp(0, APERTURE_OPEN_START, ramp(clampedProgress, STAGE_INTRO_PROGRESS, apertureEntryTarget));
+    }
+
+    return lerp(APERTURE_OPEN_START, SCRUBBER_END, ramp(clampedProgress, apertureEntryTarget, STAGE_ANIMATION_END_PROGRESS));
+  }
+
+  function scrollProgressFromStageProgress(progress) {
+    var clampedProgress = clamp(progress, 0, SCRUBBER_END);
+    var apertureEntryTarget;
+
+    if (!useDesktopApertureEntryTiming()) return linearScrollProgressFromStageProgress(clampedProgress);
+    if (clampedProgress <= 0) return STAGE_INTRO_PROGRESS;
+
+    apertureEntryTarget = desktopApertureEntryTargetScrollProgress();
+    if (clampedProgress <= APERTURE_OPEN_START) {
+      return lerp(STAGE_INTRO_PROGRESS, apertureEntryTarget, ramp(clampedProgress, 0, APERTURE_OPEN_START));
+    }
+
+    return lerp(apertureEntryTarget, STAGE_ANIMATION_END_PROGRESS, ramp(clampedProgress, APERTURE_OPEN_START, SCRUBBER_END));
   }
 
   function modelShrinkProgressFromPlacement(stageProgress, phaseLocal) {
@@ -998,7 +1053,7 @@
 
   function setChromeProgress(progress, stageProgress) {
     var navOut = ramp(progress, 0.015, 0.18);
-    var navReturn = easeOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END));
+    var navReturn = stageProgress >= SCRUBBER_END ? 1 : 0;
     var navHidden = navOut * (1 - navReturn);
     var footerOut = ramp(stageProgress, FOOTER_CLEAR_START_STAGE_PROGRESS, FOOTER_CLEAR_END_STAGE_PROGRESS);
     var heroReady = document.body.classList.contains('is-hero-complete') || !document.body.classList.contains('home-intro');
@@ -1045,11 +1100,11 @@
     progress = clamp(progress, 0, SCRUBBER_END);
     var stageProgress = stageProgressFromScrollProgress(progress);
     var server;
-    var apertureOpen = ramp(stageProgress, 0.245, 0.380);
+    var apertureOpen = ramp(stageProgress, APERTURE_OPEN_START, APERTURE_OPEN_END);
     var apertureCloseRaw = ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END);
     var apertureClose = fastCloseEase(apertureCloseRaw);
     var aperture = clamp(apertureOpen - apertureClose, 0, 1);
-    var apertureFadeIn = easeOut(ramp(stageProgress, 0.245, 0.292));
+    var apertureFadeIn = easeOut(ramp(stageProgress, APERTURE_OPEN_START, 0.292));
     var apertureFadeOut = easeInOut(ramp(stageProgress, APERTURE_FADE_START, APERTURE_FADE_END));
     var light = clamp(apertureFadeIn - apertureFadeOut, 0, 1);
     var closeDetailFade = easeOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_DETAIL_FADE_END));
@@ -1058,7 +1113,7 @@
     var heroGrid = 1 - (heroGridRetreat * 0.46);
     var apertureRadius;
     var ringOpacity = clamp(ramp(stageProgress, 0.235, 0.270) - ramp(stageProgress, 0.365, 0.430) + ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_RING_RETURN_END) - ramp(stageProgress, APERTURE_FADE_START, APERTURE_CLOSE_END), 0, 1);
-    var meshZoom = clamp(ramp(stageProgress, 0.165, 0.380) - easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END)), 0, 1);
+    var meshZoom = clamp(ramp(stageProgress, 0.165, APERTURE_OPEN_END) - easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_CLOSE_END)), 0, 1);
     var meshScale = lerp(1, 1.115, easeInOut(meshZoom));
     var scrubberEnter = ramp(stageProgress, 0.360, 0.435);
     var scrubberExit = easeInOut(ramp(stageProgress, APERTURE_CLOSE_START, APERTURE_SCRUBBER_EXIT_END));
@@ -1133,7 +1188,10 @@
 
     if (!reduceMotion) {
       document.body.classList.toggle('is-stage2-active', stageProgress > 0.002 && stageProgress < SCRUBBER_END);
+      document.body.classList.toggle('is-stage2-aperture-active', stageProgress >= APERTURE_CLOSE_START && stageProgress < SCRUBBER_END);
       document.body.classList.toggle('is-stage2-complete', stageProgress >= SCRUBBER_END);
+    } else {
+      document.body.classList.remove('is-stage2-aperture-active');
     }
 
     if (stageProgress >= SCRUBBER_END - 0.01) syncCompletedGridClip();
@@ -1379,6 +1437,7 @@
   }
 
   function handleGeometryChange() {
+    syncHeroChromeMetrics();
     invalidateGeometry();
     syncCompletedGridClip();
     requestUpdate(true);
@@ -2797,6 +2856,7 @@
     }
 
     initTimeline();
+    syncHeroChromeMetrics();
     initStage2Layout();
     initSliceTimeline();
     renderStage2NodeIcons();

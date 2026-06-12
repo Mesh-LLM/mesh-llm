@@ -784,6 +784,8 @@
       if (child.tagName.toLowerCase() !== 'defs') child.remove();
     });
     var defs = svg.querySelector('defs') || el('defs', {}, svg);
+    var meshGridPattern = defs.querySelector('#mesh-grid');
+    if (meshGridPattern) meshGridPattern.setAttribute('patternTransform', 'translate(18 18)');
 
     var bg = el('g', { class: 'mesh-bg' }, svg);
     var bgPlane = el('rect', { class: 'mesh-grid-plane', width: roundSvg(layout.width), height: roundSvg(layout.height), fill: 'url(#mesh-grid)' }, bg);
