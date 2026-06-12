@@ -207,14 +207,11 @@ mod dynamic {
         let cache_mesh_version = artifact
             .mesh_version_or(manifest.mesh_version.as_str())
             .to_string();
-        let installed = cache
-            .find_installed(&cache_mesh_version, artifact.native_runtime_id())?
-            .with_context(|| {
-                format!(
-                    "selected native runtime {} disappeared from the cache",
-                    artifact.native_runtime_id()
-                )
-            })?;
+        let Some(installed) =
+            cache.find_installed(&cache_mesh_version, artifact.native_runtime_id())?
+        else {
+            return Ok(None);
+        };
         let load_plan = installed.load_plan()?;
         Ok(Some(startup_load_plan_from_installed(
             cache_mesh_version,
@@ -407,6 +404,39 @@ mod dynamic {
             assert_eq!(plan.cache_mesh_version, release_version);
             assert_eq!(plan.root, runtime_dir);
             assert_eq!(plan.source, NativeRuntimePlanSource::PostInstall);
+        }
+
+        #[test]
+        fn disappeared_cache_entry_is_treated_as_cache_miss() {
+            let temp = tempfile::tempdir().unwrap();
+            let cache = NativeRuntimeCache::new(temp.path().join("cache"));
+            let runtime_id = "meshllm-native-runtime-test-cpu";
+            let release_version = "0.68.0";
+            let manifest = NativeRuntimeReleaseManifest {
+                mesh_version: release_version.to_string(),
+                skippy_abi: "0.1.25".to_string(),
+                artifacts: Vec::new(),
+            };
+            let artifact = NativeRuntimeArtifact {
+                id: runtime_id.to_string(),
+                mesh_version: Some(release_version.to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: NativeRuntimePlatform {
+                    os: std::env::consts::OS.to_string(),
+                    arch: std::env::consts::ARCH.to_string(),
+                    target: None,
+                },
+                backend: NativeRuntimeBackend::cpu(),
+                rank: 0,
+                libraries: vec![test_library_rel_path().to_string_lossy().to_string()],
+                url: None,
+                sha256: None,
+                signature: None,
+            };
+
+            let plan = load_plan_from_candidate(&cache, &manifest, artifact).unwrap();
+
+            assert!(plan.is_none());
         }
 
         #[test]
