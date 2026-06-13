@@ -22,7 +22,8 @@
   var SUBTITLE_CHAR_IN_DURATION = 150;
   var SUBTITLE_DOT_LERP = 0.84;
   var SUBTITLE_DOT_SNAP = 0.35;
-  var NODE_ICON_SCALE = 0.9;
+  var NODE_PLATE_RATIO = 0.48;
+  var NODE_ICON_DIAMETER_RATIO = 0.576;
   var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var isSafari = /^((?!chrome|android|crios|fxios).)*safari/i.test(window.navigator.userAgent);
 
@@ -307,7 +308,7 @@
   }
 
   function iconScaleFor(item) {
-    return (item.r >= 42 ? 0.86 : item.r >= 36 ? 0.82 : item.r <= 28 ? 0.68 : 0.74) * NODE_ICON_SCALE;
+    return ((item.r * NODE_PLATE_RATIO * 2) * NODE_ICON_DIAMETER_RATIO) / 24;
   }
 
   function setCircle(circle, attrs) {
@@ -343,7 +344,7 @@
       if (!scene || !item.group) return;
       item.group.setAttribute('transform', 'translate(' + item.x + ' ' + item.y + ')');
       item.halo.setAttribute('r', item.r);
-      item.plate.setAttribute('r', roundSvg(item.r * 0.48));
+      item.plate.setAttribute('r', roundSvg(item.r * NODE_PLATE_RATIO));
       item.icon.setAttribute('transform', 'scale(' + roundSvg(iconScaleFor(item)) + ')');
       item.labelEl.setAttribute('y', roundSvg(item.r * 0.92));
       item.typeEl.setAttribute('y', roundSvg(item.r * 0.92 + 13));
@@ -868,7 +869,7 @@
       var glowId = ensureGlow(defs, item);
       var group = el('g', { class: 'mesh-node', 'data-node-id': item.id, transform: 'translate(' + item.x + ' ' + item.y + ')', opacity: 0 }, nodeGroup);
       var halo = el('circle', { class: 'node-halo', r: item.r, fill: 'url(#' + glowId + ')', opacity: 1 }, group);
-      var plate = el('circle', { class: 'node-plate', r: item.r * 0.48, fill: '#0e1014', stroke: item.color, 'stroke-opacity': 0.72, 'stroke-width': 1.2 }, group);
+      var plate = el('circle', { class: 'node-plate', r: item.r * NODE_PLATE_RATIO, fill: '#0e1014', stroke: item.color, 'stroke-opacity': 0.72, 'stroke-width': 1.2 }, group);
       var iconScale = iconScaleFor(item);
       var icon = el('g', { class: 'node-icon', transform: 'scale(' + iconScale + ')', fill: 'none', stroke: item.color, 'stroke-width': 1.8, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, group);
       drawLucideIcon(item.icon, icon);

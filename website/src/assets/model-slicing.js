@@ -10,6 +10,11 @@
   var heroViz = null;
   var heroTitle = null;
   var heroFooter = null;
+  var finalHookLines = [];
+  var finalHookBiggerWords = [];
+  var finalHookPulseTimeline = null;
+  var finalHookWordAnimationPlayed = false;
+  var finalHookPreviousStageProgress = 0;
   var serverPlate = null;
   var tensorStack = null;
   var layoutRoot = null;
@@ -81,14 +86,21 @@
   var APERTURE_RING_RETURN_END = 1.125;
   var APERTURE_SCRUBBER_EXIT_END = 1.142;
   var DESKTOP_APERTURE_ENTRY_SCROLL_FACTOR = 0.5;
+  var FINAL_HOOK_FADE_START = 1.136;
+  var FINAL_HOOK_FADE_END = 1.153;
+  var FINAL_HOOK_PULSE_TRIGGER_PROGRESS = 1.154;
+  var FINAL_HOOK_PULSE_SCALE = 1.1125;
+  var FINAL_HOOK_PULSE_DURATION = 920;
+  var FINAL_HOOK_PULSE_PEAK_DURATION = 310;
+  var FINAL_HOOK_PULSE_GAP = 1500;
   var TITLE_SNAP_LEAD_START_PROGRESS = 0.035;
   var TITLE_SNAP_FORWARD_PROGRESS = 0.085;
   var TITLE_SNAP_REVERSE_PROGRESS = 0.065;
   var TOUCH_LANDSCAPE_TITLE_SNAP_REVERSE_PROGRESS = 0.155;
   var TITLE_SNAP_LEAD_PROGRESS = 0;
   var TITLE_SNAP_Y = -570;
-  var TITLE_CLEAR_START_STAGE_PROGRESS = 0.315;
-  var TITLE_CLEAR_END_STAGE_PROGRESS = 0.435;
+  var TITLE_CLEAR_START_STAGE_PROGRESS = 0.205;
+  var TITLE_CLEAR_END_STAGE_PROGRESS = 0.245;
   var FOOTER_CLEAR_START_STAGE_PROGRESS = 0.245;
   var FOOTER_CLEAR_END_STAGE_PROGRESS = 0.405;
 
@@ -109,7 +121,6 @@
   var ALIGN_PHASE_INDEX = 6;
   var SCRUBBER_START = PHASES[0].start;
   var SCRUBBER_END = PHASES[PHASES.length - 1].end;
-  var LEARN_MORE_START_SCROLL_PROGRESS = 0.300;
   var LEARN_MORE_TARGET_PROGRESS = SCRUBBER_END;
   var LEARN_MORE_SCRUB_SPEED_MULTIPLIER = 16;
   var scrubberTickCount = 73;
@@ -203,6 +214,11 @@
     return clamp(sticky.clientHeight * 0.16, 96, 150);
   }
 
+  function phonePortraitTitleLift() {
+    if (!sticky || !usePhonePortraitStage()) return 0;
+    return clamp(sticky.clientHeight * 0.055, 34, 58);
+  }
+
   function heroVizStageY() {
     return Math.max(landscapeVizStageY(), phonePortraitVizStageY());
   }
@@ -279,6 +295,7 @@
     var diagramAnchoredTop = blockerTop === null ? serverAnchoredTop : blockerTop + remainingVizStageY - diagramGap - titleHeight;
     var targetTop = clamp(Math.min(serverAnchoredTop, diagramAnchoredTop), safeTop, safeBottom);
 
+    targetTop = Math.max(24, targetTop - phonePortraitTitleLift());
     cachedTitleSnapY = Math.round(targetTop - titleTop);
     return cachedTitleSnapY;
   }
@@ -415,6 +432,9 @@
       return;
     }
 
+    if (!cachedServer) {
+      heroViz.style.transform = heroVizTransform(currentHeroVizStageY, 1);
+    }
     server = syncServerGeometry();
     heroVizLeft = heroViz.offsetLeft - heroViz.offsetWidth / 2;
     originX = server.baseX - heroVizLeft;
@@ -527,10 +547,9 @@
     }
   }
 
-  function syncTitleFromScroll() {
+  function syncTitleFromProgress(titleProgress, stageProgress) {
     if (!heroTitle || !section) return;
 
-    var titleProgress = progressFromScroll();
     var heroReady = document.body.classList.contains('is-hero-complete') || !document.body.classList.contains('home-intro');
     if (titleProgress > 0.01) {
       document.body.classList.add('is-hero-complete');
@@ -539,13 +558,17 @@
     }
     if (!heroReady && titleProgress < 0.001) return;
 
-    var stageProgress = stageProgressFromScrollProgress(titleProgress);
     var titleOut = ramp(stageProgress, TITLE_CLEAR_START_STAGE_PROGRESS, TITLE_CLEAR_END_STAGE_PROGRESS);
-    titleFadeProgress = easeInOut(titleOut);
-    section.classList.toggle('is-stage2-title-cleared', titleOut > 0.985);
+    titleFadeProgress = easeOut(titleOut);
+    section.classList.toggle('is-stage2-title-cleared', titleFadeProgress > 0.985);
     syncTitleSnap(titleProgress);
-    heroTitle.style.opacity = String(1 - titleOut);
+    heroTitle.style.opacity = String(Math.round((1 - titleFadeProgress) * 10000) / 10000);
     applyTitleSnapTransform();
+  }
+
+  function syncTitleFromScroll() {
+    var titleProgress = progressFromScroll();
+    syncTitleFromProgress(titleProgress, stageProgressFromScrollProgress(titleProgress));
   }
 
   function progressFromScrubberProgress(progress) {
@@ -578,6 +601,242 @@
 
   function phaseProgress(phase, progress) {
     return ramp(progress, phase.start, phase.end);
+  }
+
+  function titlePresence(stageProgress, enterStart, enterEnd, exitStart, exitEnd) {
+    return clamp(easeOut(ramp(stageProgress, enterStart, enterEnd)) - easeInOut(ramp(stageProgress, exitStart, exitEnd)), 0, 1);
+  }
+
+  function phaseTitleModelOffset(titleOpacity) {
+    var width = window.innerWidth || (sticky ? sticky.clientWidth : 1440);
+    var height = window.innerHeight || (sticky ? sticky.clientHeight : 900);
+    var offset = 64;
+
+    if (height <= 480 && width > height) {
+      offset = 74;
+    } else if (width <= 640) {
+      offset = 68;
+      if (height <= 760) offset = 84;
+      if (height <= 650) offset = 98;
+      if (width <= 380) offset += 8;
+    } else if (height <= 780) {
+      offset = 92;
+    }
+
+    return Math.round(offset * clamp(titleOpacity, 0, 1));
+  }
+
+  function finalHookWordText(word) {
+    return (word.textContent || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  }
+
+  function fallbackSplitFinalHookLineWords(line) {
+    var parts = (line.textContent || '').split(/(\s+)/);
+    var words = [];
+
+    line.textContent = '';
+    parts.forEach(function (part) {
+      var word;
+
+      if (!part) return;
+      if (/^\s+$/.test(part)) {
+        line.appendChild(document.createTextNode(part));
+        return;
+      }
+
+      word = document.createElement('span');
+      word.className = 'stage2-final-word';
+      word.textContent = part;
+      line.appendChild(word);
+      words.push(word);
+    });
+
+    return words;
+  }
+
+  function splitFinalHookLineWords(line) {
+    var split = null;
+    var words = [];
+
+    if (!line) return words;
+    line.setAttribute('data-stage2-final-line-text', (line.textContent || '').trim());
+
+    if (window.anime && typeof window.anime.splitText === 'function') {
+      try {
+        split = window.anime.splitText(line, {
+          words: { class: 'stage2-final-word' },
+          accessible: false,
+        });
+        if (split && split.words) words = Array.prototype.slice.call(split.words);
+      } catch (error) {
+        words = [];
+      }
+    }
+
+    if (!words.length) words = fallbackSplitFinalHookLineWords(line);
+
+    words.forEach(function (word) {
+      word.setAttribute('data-stage2-final-word', '');
+      if (finalHookWordText(word) === 'bigger') {
+        word.setAttribute('data-stage2-final-keyword', 'bigger');
+        finalHookBiggerWords.push(word);
+      }
+    });
+
+    return words;
+  }
+
+  function initFinalHookWords() {
+    finalHookBiggerWords = [];
+    finalHookLines.forEach(splitFinalHookLineWords);
+  }
+
+  function clearFinalHookPulseTimeline() {
+    if (finalHookPulseTimeline && typeof finalHookPulseTimeline.pause === 'function') {
+      finalHookPulseTimeline.pause();
+    }
+    finalHookPulseTimeline = null;
+  }
+
+  function setFinalHookPulseClass(word, active) {
+    if (!word) return;
+    word.classList.toggle('is-stage2-final-word-pulsing', active);
+    if (active) word.style.transform = 'scale(1)';
+  }
+
+  function setFinalHookWordGlow(word, state) {
+    if (!word || !state) return;
+    word.style.setProperty('--stage2-final-word-glow', String(Math.round(state.glow * 1000) / 1000));
+    word.style.setProperty('--stage2-final-word-core', String(Math.round(state.core * 1000) / 1000));
+    word.style.setProperty('--stage2-final-word-glow-x', Math.round(state.sweep * 100) + '%');
+    word.style.setProperty('--stage2-final-word-glow-stretch', String(Math.round(state.stretch * 1000) / 1000));
+  }
+
+  function clearFinalHookWordGlow(word) {
+    if (!word) return;
+    word.style.removeProperty('--stage2-final-word-glow');
+    word.style.removeProperty('--stage2-final-word-core');
+    word.style.removeProperty('--stage2-final-word-glow-x');
+    word.style.removeProperty('--stage2-final-word-glow-stretch');
+  }
+
+  function clearFinalHookWordPulseStyles() {
+    finalHookBiggerWords.forEach(function (word) {
+      word.classList.remove('is-stage2-final-word-pulsing');
+      word.style.transform = '';
+      clearFinalHookWordGlow(word);
+    });
+  }
+
+  function resetFinalHookWordPulse() {
+    finalHookWordAnimationPlayed = false;
+    clearFinalHookPulseTimeline();
+    if (window.anime && typeof window.anime.remove === 'function') {
+      window.anime.remove(finalHookBiggerWords);
+    }
+    clearFinalHookWordPulseStyles();
+  }
+
+  function addFinalHookWordPulse(timeline, word, start) {
+    var releaseDuration = FINAL_HOOK_PULSE_DURATION - FINAL_HOOK_PULSE_PEAK_DURATION;
+    var riseEase = 'out(4.2)';
+    var releaseEase = 'inOut(2.8)';
+
+    if (!timeline || !word) return;
+
+    timeline.add(word, {
+      scale: [
+        { to: FINAL_HOOK_PULSE_SCALE, duration: FINAL_HOOK_PULSE_PEAK_DURATION, ease: riseEase },
+        { to: 1, duration: releaseDuration, ease: releaseEase },
+      ],
+      '--stage2-final-word-glow-x': ['0%', '100%'],
+      '--stage2-final-word-glow': [
+        { to: 1, duration: FINAL_HOOK_PULSE_PEAK_DURATION, ease: riseEase },
+        { to: 0, duration: releaseDuration, ease: releaseEase },
+      ],
+      '--stage2-final-word-core': [
+        { to: 1, duration: FINAL_HOOK_PULSE_PEAK_DURATION, ease: riseEase },
+        { to: 0, duration: releaseDuration, ease: releaseEase },
+      ],
+      '--stage2-final-word-glow-stretch': [
+        { to: 1.34, duration: FINAL_HOOK_PULSE_PEAK_DURATION, ease: riseEase },
+        { to: 0.98, duration: releaseDuration, ease: releaseEase },
+      ],
+      duration: FINAL_HOOK_PULSE_DURATION,
+      ease: 'inOut(6)',
+      composition: 'replace',
+      onBegin: function () {
+        setFinalHookPulseClass(word, true);
+        setFinalHookWordGlow(word, {
+          glow: 0,
+          core: 0,
+          sweep: 0,
+          stretch: 0.88,
+        });
+      },
+      onComplete: function () {
+        setFinalHookPulseClass(word, false);
+        word.style.transform = '';
+        clearFinalHookWordGlow(word);
+      },
+    }, start);
+  }
+
+  function playFinalHookWordPulseTimeline() {
+    var topWord = finalHookBiggerWords[0];
+    var bottomWord = finalHookBiggerWords[1];
+    var secondPulseStart = FINAL_HOOK_PULSE_DURATION + FINAL_HOOK_PULSE_GAP;
+
+    if (finalHookWordAnimationPlayed || !topWord || !bottomWord) return;
+
+    finalHookWordAnimationPlayed = true;
+    if (reduceMotion || !window.anime || typeof window.anime.createTimeline !== 'function') return;
+
+    clearFinalHookPulseTimeline();
+    if (typeof window.anime.remove === 'function') window.anime.remove(finalHookBiggerWords);
+    clearFinalHookWordPulseStyles();
+
+    finalHookPulseTimeline = window.anime.createTimeline({
+      autoplay: false,
+      defaults: { ease: 'out(3)' },
+      onComplete: function () {
+        finalHookPulseTimeline = null;
+        clearFinalHookWordPulseStyles();
+      },
+    });
+
+    addFinalHookWordPulse(finalHookPulseTimeline, topWord, 0);
+    addFinalHookWordPulse(finalHookPulseTimeline, bottomWord, secondPulseStart);
+    finalHookPulseTimeline.play();
+  }
+
+  function syncFinalHookWordPulse(stageProgress) {
+    var crossedForward = finalHookPreviousStageProgress < FINAL_HOOK_PULSE_TRIGGER_PROGRESS && stageProgress >= FINAL_HOOK_PULSE_TRIGGER_PROGRESS;
+
+    if (crossedForward) {
+      playFinalHookWordPulseTimeline();
+    } else if (stageProgress < FINAL_HOOK_PULSE_TRIGGER_PROGRESS - 0.012) {
+      finalHookWordAnimationPlayed = false;
+    }
+
+    if (stageProgress <= FINAL_HOOK_FADE_START - 0.02) resetFinalHookWordPulse();
+    finalHookPreviousStageProgress = stageProgress;
+  }
+
+  function setStage2TitleProgress(stageProgress) {
+    var split = titlePresence(stageProgress, 0.486, 0.522, 0.622, 0.662);
+    var nodes = titlePresence(stageProgress, 0.666, 0.704, 0.754, 0.810);
+    var place = titlePresence(stageProgress, 0.794, 0.836, 0.948, 1.012);
+    var phaseTitle = Math.max(split, nodes, place);
+    var final = easeOut(ramp(stageProgress, FINAL_HOOK_FADE_START, FINAL_HOOK_FADE_END));
+
+    setVar('--stage2-title-split-opacity', Math.round(split * 10000) / 10000);
+    setVar('--stage2-title-nodes-opacity', Math.round(nodes * 10000) / 10000);
+    setVar('--stage2-title-place-opacity', Math.round(place * 10000) / 10000);
+    setVar('--stage2-title-final-opacity', Math.round(final * 10000) / 10000);
+    setVar('--stage2-title-model-offset', phaseTitleModelOffset(phaseTitle) + 'px');
+    syncFinalHookWordPulse(stageProgress);
+    if (section) section.classList.toggle('is-stage2-final-hook-visible', final > 0.02);
   }
 
   function modelTargetSize() {
@@ -1073,7 +1332,7 @@
       nav.style.pointerEvents = navHidden > 0.92 ? 'none' : '';
     }
 
-    syncTitleFromScroll();
+    syncTitleFromProgress(progress, stageProgress);
 
     if (heroFooter) {
       heroFooter.style.opacity = String(1 - footerOut);
@@ -1131,6 +1390,7 @@
     nodeContentOpacity = nodeShapeProgress * easeOutQuart(ramp(meshPhaseProgress, 0.52, 0.70)) * (1 - easeOutQuart(ramp(alignPhaseProgress, 0.04, 0.24)));
     nodeIconOpacity = nodeRevealProgress * (1 - nodeShapeProgress) * (1 - closeDetailFade);
 
+    setStage2TitleProgress(stageProgress);
     setVar('--stage2-p', stageProgress);
     setVar('--stage2-pct', Math.round((stageProgress / SCRUBBER_END) * 10000) / 100 + '%');
     setVar('--stage2-scrubber-pct', Math.round(scrubberProgressFromProgress(stageProgress) * 10000) / 100 + '%');
@@ -2775,34 +3035,82 @@
     });
   }
 
+  function targetForAnchor(link) {
+    var id;
+
+    if (!link || !link.hash || link.hash === '#') return null;
+
+    try {
+      id = decodeURIComponent(link.hash.slice(1));
+    } catch (_error) {
+      id = link.hash.slice(1);
+    }
+
+    return id ? document.getElementById(id) : null;
+  }
+
+  function pushAnchorHash(hash) {
+    if (!hash) return;
+
+    if (window.history && typeof window.history.pushState === 'function') {
+      window.history.pushState(null, '', hash);
+      return;
+    }
+
+    window.location.hash = hash.slice(1);
+  }
+
+  function restoreScrollBehaviorSoon() {
+    window.requestAnimationFrame(function () {
+      restoreScrollBehavior();
+    });
+  }
+
+  function scrollToAnchorTarget(target) {
+    var scrollMarginTop;
+
+    if (!target) return;
+
+    scrollMarginTop = Number.parseFloat(window.getComputedStyle(target).scrollMarginTop) || 0;
+    window.scrollTo({ top: window.scrollY + target.getBoundingClientRect().top - scrollMarginTop, behavior: 'auto' });
+  }
+
+  function lockCompletedStageAtAnchor(target) {
+    scrollToAnchorTarget(target);
+    beginManualStageSeekOverride();
+    applyProgress(1);
+  }
+
   function initLearnMore() {
     var link = document.querySelector('.hero-learn');
     if (!link) return;
 
     link.addEventListener('click', function (event) {
-      var targetTop;
-      var startTop;
-      var referenceDistance;
+      var target;
 
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button) return;
 
+      target = targetForAnchor(link);
+      if (!target) return;
+
       event.preventDefault();
+      cancelScrubScrollAnimation();
+      cancelScrollSmoothing();
+      clearManualStageSeekOverride();
+      if (window.anime && window.anime.remove) window.anime.remove(smoothState);
       document.body.classList.add('is-hero-complete');
+      document.body.classList.add('is-stage2-complete');
+      document.body.classList.remove('is-stage2-active');
       document.body.classList.remove('home-intro');
-      targetTop = scrollTopForStageProgress(LEARN_MORE_TARGET_PROGRESS);
-      referenceDistance = Math.abs(targetTop - scrollTopForScrollProgress(0));
-
-      if (progressFromScroll() < LEARN_MORE_START_SCROLL_PROGRESS) {
-        startTop = scrollTopForScrollProgress(LEARN_MORE_START_SCROLL_PROGRESS);
-        forceInstantScrollBehavior();
-        window.scrollTo({ top: startTop, behavior: 'auto' });
-        smoothTo(LEARN_MORE_START_SCROLL_PROGRESS, true);
-        syncTitleFromScroll();
-      }
-
-      scrubToStageProgress(LEARN_MORE_TARGET_PROGRESS, null, {
-        preserveScrollSpeed: true,
-        referenceDistance: referenceDistance,
+      forceInstantScrollBehavior();
+      lockCompletedStageAtAnchor(target);
+      pushAnchorHash(link.hash);
+      window.requestAnimationFrame(function () {
+        lockCompletedStageAtAnchor(target);
+        window.requestAnimationFrame(function () {
+          lockCompletedStageAtAnchor(target);
+          restoreScrollBehaviorSoon();
+        });
       });
     });
   }
@@ -2842,6 +3150,7 @@
     heroViz = section.querySelector('.hero-viz');
     heroTitle = section.querySelector('.hero-title-loop');
     heroFooter = section.querySelector('.hero-footer');
+    finalHookLines = Array.prototype.slice.call(section.querySelectorAll('[data-stage2-final-line]'));
     serverPlate = section.querySelector('.hero-viz [data-node-id="server"] .node-plate');
     tensorStack = section.querySelector('[data-stage2-tensor-stack]');
     layoutRoot = section.querySelector('[data-stage2-layout-root]');
@@ -2859,6 +3168,7 @@
     syncHeroChromeMetrics();
     initStage2Layout();
     initSliceTimeline();
+    initFinalHookWords();
     renderStage2NodeIcons();
     initScrubber();
     initLayerInteractions();

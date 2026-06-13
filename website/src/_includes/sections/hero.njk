@@ -2,13 +2,21 @@
   <div class="hero-stage-sticky">
     {% include "hero-viz.njk" %}
 
+    <div class="stage2-final-hook shell" aria-hidden="true">
+      <p>
+        <span data-stage2-final-line>Run bigger models</span>
+        <span data-stage2-final-line>without buying</span>
+        <span data-stage2-final-line>bigger GPUs.</span>
+      </p>
+    </div>
+
     <div class="hero-title-loop shell">
       <h1 class="hero-title-heading">Distributed<br>Model Inference</h1>
       <p class="hero-title-subtitle">
         <span class="hero-subtitle-copy"><span class="hero-subtitle-prefix"></span><span class="hero-subtitle-animated"><span class="hero-subtitle-dynamic"></span><span class="hero-subtitle-dot">.</span></span></span>
       </p>
     </div>
-    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet.</p>
+    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet. Large models get split into smaller pieces, memory-bound GPUs run smaller layer slices, and layers land on right-sized nodes.</p>
 
     <div class="hero-footer shell mx-auto flex w-[min(100%-1.5rem,75rem)] md:w-[min(100%-4rem,75rem)]" aria-label="Hero actions">
       <div class="hero-footer-actions min-w-0">
@@ -140,6 +148,11 @@
                 <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="mini"></div></div>
               </div>
 
+            </div>
+            <div class="stage2-phase-copy" aria-hidden="true">
+              <p class="stage2-phase-title stage2-phase-title--split">Large models get split into smaller pieces</p>
+              <p class="stage2-phase-title stage2-phase-title--nodes">Memory-bound GPUs run smaller layer slices</p>
+              <p class="stage2-phase-title stage2-phase-title--place">Layers land on right-sized nodes</p>
             </div>
             <section class="stage2-phase-panel" data-stage2-phase-panel="phase-1"></section>
             <section class="stage2-phase-panel" data-stage2-phase-panel="phase-2"></section>
