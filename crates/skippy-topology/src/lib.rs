@@ -976,6 +976,11 @@ pub fn plan_package_aware_contiguous_with_transport(
             .then_with(|| left_index.cmp(right_index))
             .then_with(|| left.node_id.cmp(&right.node_id))
     });
+    let nodes = nodes
+        .into_iter()
+        .map(|(_, node)| node)
+        .enumerate()
+        .collect::<Vec<_>>();
     let nodes = edge_order::order_pipeline_nodes(nodes, placement_signals, edge_signals);
 
     let sorted_request = TopologyPlanRequest {

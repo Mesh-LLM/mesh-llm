@@ -88,6 +88,30 @@ fn transport_aware_plan_orders_same_nodes_by_stage_edge_cost() {
 }
 
 #[test]
+fn transport_aware_plan_orders_two_stages_by_edge_cost() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(6, 10),
+        nodes: vec![weighted_node("node-a", 30), weighted_node("node-b", 30)],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[],
+        &[edge("node-a", "node-b", 200), edge("node-b", "node-a", 5)],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("node-b", 0, 3), ("node-a", 3, 6)]
+    );
+}
+
+#[test]
 fn transport_aware_plan_preserves_package_order_when_edges_tie() {
     let mut warm = placement_signal("warm");
     warm.cached_slice_bytes = 64;
@@ -104,7 +128,19 @@ fn transport_aware_plan_preserves_package_order_when_edges_tie() {
         policy: PlannerPolicy::default(),
     };
 
-    let plan = plan_package_aware_contiguous_with_transport(&request, &[warm], &[]).expect("plan");
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[warm],
+        &[
+            edge("warm", "cold-a", 10),
+            edge("warm", "cold-b", 10),
+            edge("cold-a", "warm", 10),
+            edge("cold-a", "cold-b", 10),
+            edge("cold-b", "warm", 10),
+            edge("cold-b", "cold-a", 10),
+        ],
+    )
+    .expect("plan");
 
     assert_eq!(
         stage_layout(&plan),

@@ -24,7 +24,7 @@ pub(crate) fn order_pipeline_nodes(
     placement_signals: &[NodePlacementSignal],
     edge_signals: &[StageEdgeSignal],
 ) -> Vec<(usize, NodeSpec)> {
-    if nodes.len() < 3 || edge_signals.is_empty() {
+    if nodes.len() < 2 || edge_signals.is_empty() {
         return nodes;
     }
     if nodes.len() <= MAX_EXHAUSTIVE_STAGE_COUNT {
