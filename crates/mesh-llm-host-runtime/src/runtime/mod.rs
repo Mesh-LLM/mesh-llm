@@ -5748,7 +5748,7 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
             policy: relay_policy_for_runtime_options(options),
         },
         mesh::QuicBindSelection {
-            ip: options.bind_ip,
+            ip: effective_quic_bind_ip(options),
             port: options.bind_port,
         },
         Some(0.0),
@@ -5993,7 +5993,7 @@ async fn start_run_auto_node_and_plugins(
             policy: relay_policy_for_runtime_options(options),
         },
         mesh::QuicBindSelection {
-            ip: options.bind_ip,
+            ip: effective_quic_bind_ip(options),
             port: options.bind_port,
         },
         max_vram,
@@ -6028,6 +6028,28 @@ fn relay_policy_for_runtime_options(options: &RuntimeOptions) -> mesh::RelayPoli
     } else {
         relay_policy_for_mesh_discovery_mode(options.mesh_discovery_mode)
     }
+}
+
+/// Resolve the QUIC bind IP for this node.
+///
+/// Honors an explicit `--bind-ip`. Otherwise auto-pins to the detected primary
+/// LAN IPv4 so multi-homed hosts (many `utun`/VPN interfaces) send from the
+/// correct interface. Binding `0.0.0.0` on such hosts lets the kernel pick a
+/// wrong source for an unconnected QUIC `sendmsg`, yielding `EHOSTUNREACH` or a
+/// slow WAN-hairpin path, which breaks or degrades direct LAN connectivity in
+/// either dial direction. Combined with the direct-path repair, this lets two
+/// LAN peers reach a clean direct path from a shared token regardless of which
+/// node started. Falls back to `0.0.0.0` (`None`) only when no LAN IP is found.
+fn effective_quic_bind_ip(options: &RuntimeOptions) -> Option<std::net::IpAddr> {
+    if let Some(ip) = options.bind_ip {
+        return Some(ip);
+    }
+    if let Some(ip) = mesh::detect_primary_lan_ipv4() {
+        tracing::info!("Auto-binding QUIC to detected LAN IP {ip} (multi-homed source pinning)");
+        return Some(ip);
+    }
+    tracing::debug!("Could not detect a primary LAN IP; binding QUIC to 0.0.0.0");
+    None
 }
 
 fn relay_policy_for_mesh_discovery_mode(

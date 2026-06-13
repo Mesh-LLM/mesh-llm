@@ -444,6 +444,29 @@ fn default_control_bind_addr() -> std::net::SocketAddr {
     std::net::SocketAddr::from(([127, 0, 0, 1], 0))
 }
 
+/// Detect this host's primary LAN IPv4 without sending any packets.
+///
+/// Opens an unconnected UDP socket and `connect()`s it to a routable target so
+/// the kernel populates the socket's local address with the source IP it would
+/// use to reach that target. No datagrams are sent. Returns `None` if the local
+/// address is unspecified/loopback or detection fails.
+///
+/// Used to auto-pin QUIC's bind address to the real LAN interface on
+/// multi-homed hosts (e.g. macOS with several `utun`/VPN interfaces). Binding
+/// `0.0.0.0` on such hosts lets the kernel pick a wrong source for an
+/// unconnected QUIC `sendmsg` (yielding `EHOSTUNREACH` or a slow WAN-hairpin
+/// path) and breaks/degrades direct LAN connectivity in either dial direction.
+pub fn detect_primary_lan_ipv4() -> Option<IpAddr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    // 192.88.99.1 is a routable, globally-assigned target; connecting a UDP
+    // socket to it only drives route/source selection — it sends nothing.
+    socket.connect((Ipv4Addr::new(192, 88, 99, 1), 9)).ok()?;
+    match socket.local_addr().ok()?.ip() {
+        IpAddr::V4(v4) if !v4.is_unspecified() && !v4.is_loopback() => Some(IpAddr::V4(v4)),
+        _ => None,
+    }
+}
+
 fn is_public_ipv4_candidate(socket: &SocketAddr) -> bool {
     match socket.ip() {
         IpAddr::V4(ip) => is_global_ipv4_candidate(ip),
@@ -2086,6 +2109,19 @@ async fn bind_mesh_endpoint(
 
     if let Some(addr) = quic_bind_addr(quic_bind) {
         tracing::info!("Binding QUIC to {addr}");
+        if !relay.policy.uses_relay() && addr.is_ipv4() {
+            // LAN-only (relay-disabled) mode with a specific IPv4 bind: clear the
+            // pre-configured default sockets first. `bind_addr` only replaces the
+            // default for the *same* address family, so binding a specific IPv4
+            // would otherwise leave the default IPv6 `[::]` socket in place. That
+            // extra local IPv6 path becomes a second candidate, and with no relay
+            // iroh's multipath negotiation across the IPv4+IPv6 locals fails with
+            // `MultipathNotNegotiated`, stalling the connection with no fallback.
+            // Pinning a single IPv4 socket keeps one local path family so the LAN
+            // direct path establishes cleanly. In relay (public) mode we keep the
+            // defaults so relay/IPv6 reachability is unaffected.
+            builder = builder.clear_ip_transports();
+        }
         builder = builder.bind_addr(addr)?;
     }
 
