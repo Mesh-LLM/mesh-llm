@@ -233,7 +233,7 @@ describe('MessageRow', () => {
     expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
       'Thinking trace'
     )
-    expect(screen.getByText('Check geography facts before answering.')).toHaveClass('select-text')
+    expect(screen.getByText('Check geography facts before answering.').closest('.select-text')).toBeInTheDocument()
     expect(screen.getByText('The capital of France is Paris.').closest('.select-text')).toBeInTheDocument()
   })
 
@@ -287,6 +287,30 @@ describe('MessageRow', () => {
     expect(screen.getByText('Paris').closest('.select-text')).toBeInTheDocument()
   })
 
+  it('formats thinking trace text as markdown', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body={'<think>1. **Analyze input**\n   - Check the `route`\n   - Keep it *brief*</think> Final response.'}
+        timestamp="12:11"
+        model="Qwen3-8B"
+      />
+    )
+
+    const thinkingTrace = screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')
+
+    expect(thinkingTrace).toBeInstanceOf(HTMLElement)
+    const thinkingTraceElement = thinkingTrace as HTMLElement
+
+    expect(screen.queryByText(/\*\*Analyze input\*\*/)).not.toBeInTheDocument()
+    expect(within(thinkingTraceElement).getByText('Analyze input').tagName.toLowerCase()).toBe('strong')
+    expect(within(thinkingTraceElement).getByText('route').tagName.toLowerCase()).toBe('code')
+    expect(within(thinkingTraceElement).getByText('brief').tagName.toLowerCase()).toBe('em')
+    expect(thinkingTraceElement.querySelector('ol')).toHaveClass('list-decimal')
+    expect(thinkingTraceElement.querySelector('ul')).toHaveClass('list-disc')
+    expect(screen.getByText('Final response.')).toBeInTheDocument()
+  })
+
   it('renders assistant markdown tables with semantic compact cell styling', () => {
     render(
       <MessageRow
@@ -338,7 +362,7 @@ describe('MessageRow', () => {
     )
 
     expect(container.querySelector('.whitespace-pre-wrap')).not.toBeInTheDocument()
-    expect(screen.getByText('First item').parentElement).toHaveClass('[&>span]:my-0', '[&>span]:inline')
+    expect(screen.getByText('First item').parentElement).toHaveClass('marker:text-fg-faint', '[&>p]:my-0')
   })
 
   it('marks an open thinking segment as in progress while streaming', () => {
@@ -353,7 +377,7 @@ describe('MessageRow', () => {
     )
 
     expect(screen.getByText('Thinking').closest('[data-thinking-state="active"]')).toHaveTextContent('Thinking')
-    expect(screen.getByText('Checking the current capital from memory')).toHaveClass('select-text')
+    expect(screen.getByText('Checking the current capital from memory').closest('.select-text')).toBeInTheDocument()
     expect(screen.getByText('Streaming response...')).toBeInTheDocument()
   })
 
@@ -371,7 +395,9 @@ describe('MessageRow', () => {
     const thinkingContainer = screen.getByText('Thinking').closest('[data-thinking-state="active"]')
 
     expect(thinkingContainer).toHaveTextContent('The user asked for a long story, so plan the structure first.')
-    expect(screen.getByText('The user asked for a long story, so plan the structure first.')).toHaveClass('select-text')
+    expect(
+      screen.getByText('The user asked for a long story, so plan the structure first.').closest('.select-text')
+    ).toBeInTheDocument()
     expect(screen.getByText('Streaming response...')).toBeInTheDocument()
   })
 
