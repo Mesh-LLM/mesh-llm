@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+mod artifact_diagnostics;
+mod edge_order;
+pub use edge_order::StageEdgeSignal;
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct TopologyPlanRequest {
     pub topology_id: String,
@@ -70,6 +74,8 @@ pub struct StagePlan {
     pub stage_id: String,
     pub stage_index: u32,
     pub node_id: String,
+    #[serde(default)]
+    pub roles: Vec<StageRole>,
     pub layer_start: u32,
     pub layer_end: u32,
     pub layer_count: u32,
@@ -84,6 +90,15 @@ pub struct StagePlan {
     pub missing_artifact_bytes: u64,
     #[serde(default)]
     pub rtt_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageRole {
+    Driver,
+    Embedding,
+    Intermediate,
+    Readout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -942,10 +957,19 @@ pub fn plan_package_aware_contiguous_with_signals(
     request: &TopologyPlanRequest,
     placement_signals: &[NodePlacementSignal],
 ) -> Result<TopologyPlan, PlanError> {
+    plan_package_aware_contiguous_with_transport(request, placement_signals, &[])
+}
+
+pub fn plan_package_aware_contiguous_with_transport(
+    request: &TopologyPlanRequest,
+    placement_signals: &[NodePlacementSignal],
+    edge_signals: &[StageEdgeSignal],
+) -> Result<TopologyPlan, PlanError> {
     validate_request(request)?;
 
     if !request.nodes.iter().any(|node| node.cached_slice_bytes > 0)
         && !placement_signals.iter().any(has_package_aware_signal)
+        && edge_signals.is_empty()
     {
         return plan_weighted_contiguous(request);
     }
@@ -964,6 +988,12 @@ pub fn plan_package_aware_contiguous_with_signals(
             .then_with(|| left_index.cmp(right_index))
             .then_with(|| left.node_id.cmp(&right.node_id))
     });
+    let nodes = nodes
+        .into_iter()
+        .map(|(_, node)| node)
+        .enumerate()
+        .collect::<Vec<_>>();
+    let nodes = edge_order::order_pipeline_nodes(nodes, placement_signals, edge_signals);
 
     let sorted_request = TopologyPlanRequest {
         topology_id: request.topology_id.clone(),
@@ -973,7 +1003,9 @@ pub fn plan_package_aware_contiguous_with_signals(
         family: request.family.clone(),
         policy: request.policy,
     };
-    plan_weighted_contiguous_with_signals(&sorted_request, placement_signals)
+    let mut plan = plan_weighted_contiguous_with_signals(&sorted_request, placement_signals)?;
+    edge_order::append_edge_diagnostics(&mut plan, edge_signals);
+    Ok(plan)
 }
 
 pub fn plan_contiguous_with_splits(
@@ -1066,6 +1098,7 @@ fn plan_ranges_with_signals(
             stage_id: format!("stage-{stage_index}"),
             stage_index: stage_index as u32,
             node_id,
+            roles: stage_roles(stage_index, ranges.len()),
             layer_start,
             layer_end,
             layer_count: (end - start) as u32,
@@ -1087,6 +1120,7 @@ fn plan_ranges_with_signals(
     let diagnostics = diagnostics_for(
         &stages,
         &boundaries,
+        placement_signals,
         request.family.as_ref(),
         request.policy,
     );
@@ -1235,6 +1269,20 @@ fn stage_reason_codes(
     codes
 }
 
+fn stage_roles(stage_index: usize, stage_count: usize) -> Vec<StageRole> {
+    let mut roles = Vec::new();
+    if stage_index == 0 {
+        roles.push(StageRole::Driver);
+        roles.push(StageRole::Embedding);
+    }
+    if stage_index + 1 == stage_count {
+        roles.push(StageRole::Readout);
+    } else if stage_index > 0 {
+        roles.push(StageRole::Intermediate);
+    }
+    roles
+}
+
 fn boundaries_for(
     stages: &[StagePlan],
     family: Option<&FamilyCapabilityRecord>,
@@ -1375,10 +1423,12 @@ pub fn wire_payload_bytes_per_token(activation_width: u32, dtype: WireDType) -> 
 fn diagnostics_for(
     stages: &[StagePlan],
     boundaries: &[BoundaryPlan],
+    placement_signals: &[NodePlacementSignal],
     family: Option<&FamilyCapabilityRecord>,
     policy: PlannerPolicy,
 ) -> Vec<PlanDiagnostic> {
     let mut diagnostics = Vec::new();
+    artifact_diagnostics::append_artifact_diagnostics(&mut diagnostics, stages, placement_signals);
     for stage in stages {
         if matches!(
             stage.migration_policy,

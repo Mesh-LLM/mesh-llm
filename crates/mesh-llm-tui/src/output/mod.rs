@@ -4,7 +4,7 @@ use chrono::{Local, SecondsFormat, Utc};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute,
-    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode},
 };
 pub use mesh_llm_events::{
     ConsoleSessionMode, DashboardAcceptedRequestBucket, DashboardEndpointRow, DashboardLaunchPlan,
@@ -354,7 +354,7 @@ enum TuiEventListRenderer {
     Scrollbar,
 }
 
-const PRETTY_TUI_EVENT_LEVEL_WIDTH: usize = 4;
+const PRETTY_TUI_EVENT_LEVEL_WIDTH: usize = 6;
 
 const _: TuiEventListRenderer = TuiEventListRenderer::Legacy;
 
@@ -531,7 +531,9 @@ impl OutputEventPresentation for OutputEvent {
                 *total_bytes,
                 status,
             ),
-            OutputEvent::Error { context, message } | OutputEvent::Warning { message, context } => {
+            OutputEvent::Error { context, message }
+            | OutputEvent::Warning { message, context }
+            | OutputEvent::Fatal { message, context } => {
                 Self::contextual_summary(context.as_deref(), message)
             }
             OutputEvent::LlamaNativeLog { message, .. } => message.clone(),
@@ -789,11 +791,10 @@ impl OutputEventPresentation for OutputEvent {
                 json!({ "warning": message, "context": context })
             }
             OutputEvent::Error { message, context } => {
-                json!({
-                    "error": message,
-                    "context": context,
-                    "error_type": classify_error_type(message, context.as_deref()),
-                })
+                classified_error_json("error", message, context.as_deref())
+            }
+            OutputEvent::Fatal { message, context } => {
+                classified_error_json("fatal", message, context.as_deref())
             }
             OutputEvent::ShutdownRequested { signal } => json!({ "signal": signal }),
             OutputEvent::Shutdown { reason } => json!({ "reason": reason }),
@@ -811,6 +812,14 @@ impl OutputEventPresentation for OutputEvent {
             _ => Map::new(),
         }
     }
+}
+
+fn classified_error_json(field: &str, message: &str, context: Option<&str>) -> Value {
+    json!({
+        field: message,
+        "context": context,
+        "error_type": classify_error_type(message, context),
+    })
 }
 
 fn format_message_with_params(message: &str, params: &[(String, Value)]) -> String {
@@ -1527,9 +1536,9 @@ impl DashboardState {
         let llama_component =
             self.startup_component_for_truthful_status(TruthfulStartupStatusKey::LlamaServer);
 
-        if let Some(webserver) = &mut self.webserver
-            && let Some(key) = Self::truthful_startup_key_for_endpoint(&webserver.label)
-        {
+        if let Some((webserver, key)) = self.webserver.as_mut().and_then(|webserver| {
+            Self::truthful_startup_key_for_endpoint(&webserver.label).map(|key| (webserver, key))
+        }) {
             webserver.status = Self::truthful_runtime_status_for_component(
                 match key {
                     TruthfulStartupStatusKey::Console => &console_component,
@@ -1539,9 +1548,9 @@ impl DashboardState {
                 &webserver.status,
             );
         }
-        if let Some(api) = &mut self.api
-            && let Some(key) = Self::truthful_startup_key_for_endpoint(&api.label)
-        {
+        if let Some((api, key)) = self.api.as_mut().and_then(|api| {
+            Self::truthful_startup_key_for_endpoint(&api.label).map(|key| (api, key))
+        }) {
             api.status = Self::truthful_runtime_status_for_component(
                 match key {
                     TruthfulStartupStatusKey::Console => &console_component,
@@ -1853,9 +1862,9 @@ impl DashboardState {
             return None;
         }
 
-        if let Some(progress) = self.model_progress.as_ref()
-            && let Some(ratio) = model_download_progress_ratio(progress)
-        {
+        if let Some((progress, ratio)) = self.model_progress.as_ref().and_then(|progress| {
+            model_download_progress_ratio(progress).map(|ratio| (progress, ratio))
+        }) {
             return Some(LoadingProgressState {
                 ratio,
                 detail: loading_progress_detail(model_progress_detail(progress), ratio, None),
@@ -2090,7 +2099,7 @@ impl DashboardState {
                 self.startup_lifecycle
                     .finalize_for_runtime_ready(api_url, console_url.as_deref());
             }
-            OutputEvent::Error { message, context } => {
+            OutputEvent::Error { message, context } | OutputEvent::Fatal { message, context } => {
                 if self.runtime_ready || self.shutdown_in_progress {
                     return;
                 }
@@ -2470,11 +2479,7 @@ impl DashboardState {
             OutputEvent::ShutdownRequested { .. } | OutputEvent::Shutdown { .. } => {
                 self.mark_runtime_shutting_down();
             }
-            OutputEvent::Error { .. } => {
-                if let Some(model) = self.running_models.last_mut() {
-                    model.status = RuntimeStatus::Error;
-                }
-            }
+            OutputEvent::Error { .. } => {}
             OutputEvent::InviteToken {
                 token,
                 mesh_id,
@@ -3874,7 +3879,7 @@ fn render_mesh_events(state: &DashboardState) -> Vec<String> {
         .map(|event| {
             let (badge_text, _) = event_severity_badge(event);
             format!(
-                "{} {:<PRETTY_TUI_EVENT_LEVEL_WIDTH$} {}",
+                "{} {:<PRETTY_TUI_EVENT_LEVEL_WIDTH$}{}",
                 event.timestamp,
                 badge_text,
                 sanitize_mesh_event_message(&event.summary)
@@ -7318,7 +7323,14 @@ fn empty_panel_message(state: &DashboardState, panel: DashboardPanel) -> &'stati
 fn event_severity_badge(event: &MeshEventState) -> (&'static str, Style) {
     let theme = tui_theme();
     let summary_lower = event.summary.to_lowercase();
-    if matches!(event.level, OutputLevel::Error)
+    if matches!(event.level, OutputLevel::Fatal) {
+        (
+            "FATAL",
+            Style::default()
+                .fg(theme.error)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else if matches!(event.level, OutputLevel::Error)
         || summary_lower.contains("err")
         || summary_lower.contains("failed")
     {
@@ -7386,7 +7398,7 @@ fn event_line(event: &MeshEventState, width: usize) -> Line<'static> {
         event.timestamp, badge_text
     );
     let prefix_len = prefix.chars().count();
-    let remaining = width.saturating_sub(prefix_len + 1);
+    let remaining = width.saturating_sub(prefix_len);
     if remaining == 0 {
         return Line::from(vec![Span::styled(
             truncate_with_ellipsis(&prefix, width),
@@ -7398,7 +7410,6 @@ fn event_line(event: &MeshEventState, width: usize) -> Line<'static> {
         Span::styled(event.timestamp.clone(), Style::default().fg(theme.dim)),
         Span::raw(" "),
         event_severity_badge_span(event),
-        Span::raw(" "),
         Span::styled(
             truncate_with_ellipsis(&message, remaining),
             Style::default().fg(theme.text),
@@ -7414,8 +7425,7 @@ fn wrapped_event_lines(event: &MeshEventState, width: usize) -> Vec<Line<'static
         .chars()
         .count()
         .saturating_add(1)
-        .saturating_add(PRETTY_TUI_EVENT_LEVEL_WIDTH)
-        .saturating_add(1);
+        .saturating_add(PRETTY_TUI_EVENT_LEVEL_WIDTH);
     let message_width = width.saturating_sub(prefix_width);
     if message_width == 0 {
         return vec![event_line(event, width)];
@@ -7429,7 +7439,6 @@ fn wrapped_event_lines(event: &MeshEventState, width: usize) -> Vec<Line<'static
                 Span::styled(event.timestamp.clone(), Style::default().fg(theme.dim)),
                 Span::raw(" "),
                 event_severity_badge_span(event),
-                Span::raw(" "),
                 Span::styled(chunk, Style::default().fg(theme.text)),
             ]));
         } else {
@@ -7645,11 +7654,41 @@ pub struct InteractiveDashboardFormatter {
     state: DashboardState,
     terminal: Option<TuiTerminal>,
     terminal_active: bool,
+    tui_entered: Arc<AtomicBool>,
+    panic_restored: Arc<AtomicBool>,
     dirty: bool,
 }
 
 impl InteractiveDashboardFormatter {
+    fn with_tui_state(tui_entered: Arc<AtomicBool>, panic_restored: Arc<AtomicBool>) -> Self {
+        Self {
+            tui_entered,
+            panic_restored,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    fn tui_entered(&self) -> bool {
+        self.tui_entered.load(Ordering::Acquire)
+    }
+
+    fn panic_restored(&self) -> bool {
+        self.panic_restored.load(Ordering::Acquire)
+    }
+
+    fn mark_panic_restored(&mut self) {
+        self.terminal = None;
+        self.terminal_active = false;
+        self.dirty = false;
+        self.tui_entered.store(false, Ordering::Release);
+        self.panic_restored.store(true, Ordering::Release);
+    }
+
     fn handle_output_event(&mut self, event: &OutputEvent) -> io::Result<Option<String>> {
+        if self.panic_restored() {
+            return Ok(None);
+        }
         self.state
             .reduce(DashboardAction::OutputEvent(event.clone()));
         if self.terminal_active {
@@ -7661,6 +7700,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn handle_snapshot(&mut self, snapshot: DashboardSnapshot) {
+        if self.panic_restored() {
+            return;
+        }
         self.state
             .reduce(DashboardAction::SnapshotUpdated(snapshot));
         if self.terminal_active {
@@ -7669,6 +7711,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn handle_tui_event(&mut self, event: TuiEvent) -> TuiControlFlow {
+        if self.panic_restored() {
+            return TuiControlFlow::Continue;
+        }
         let control = self.state.apply_tui_event(event);
         if self.terminal_active {
             self.dirty = true;
@@ -7677,6 +7722,9 @@ impl InteractiveDashboardFormatter {
     }
 
     fn enter_terminal(&mut self) -> io::Result<()> {
+        if self.panic_restored() {
+            return Ok(());
+        }
         if self.terminal_active {
             return Ok(());
         }
@@ -7694,6 +7742,7 @@ impl InteractiveDashboardFormatter {
         // cleanup: the terminal may already be in alternate-screen/raw-input
         // state even if ratatui terminal construction or cursor hiding fails.
         self.terminal_active = true;
+        self.tui_entered.store(true, Ordering::Release);
         self.dirty = true;
     }
 
@@ -7706,10 +7755,17 @@ impl InteractiveDashboardFormatter {
         }
         self.terminal_active = false;
         self.dirty = false;
-        write_tui_exit()
+        let result = write_tui_exit();
+        if result.is_ok() {
+            self.tui_entered.store(false, Ordering::Release);
+        }
+        result
     }
 
     fn render_if_dirty(&mut self) -> io::Result<bool> {
+        if self.panic_restored() {
+            return Ok(false);
+        }
         if self
             .state
             .clear_expired_join_token_copy_status(Instant::now())
@@ -7846,6 +7902,12 @@ impl FormatterSelection {
         }
     }
 
+    fn mark_panic_restored(&mut self) {
+        if let Self::InteractiveDashboard(formatter) = self {
+            formatter.mark_panic_restored();
+        }
+    }
+
     fn render_interactive_if_dirty(&mut self) -> io::Result<bool> {
         match self {
             Self::InteractiveDashboard(formatter) => formatter.render_if_dirty(),
@@ -7869,15 +7931,30 @@ impl Formatter for FormatterSelection {
     }
 }
 
+#[cfg(test)]
 fn select_formatter(
     mode: LogFormat,
     console_session_mode: ConsoleSessionMode,
 ) -> FormatterSelection {
+    select_formatter_with_tui_state(
+        mode,
+        console_session_mode,
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
+fn select_formatter_with_tui_state(
+    mode: LogFormat,
+    console_session_mode: ConsoleSessionMode,
+    tui_entered: Arc<AtomicBool>,
+    panic_restored: Arc<AtomicBool>,
+) -> FormatterSelection {
     match mode {
         LogFormat::Pretty => match console_session_mode {
-            ConsoleSessionMode::InteractiveDashboard => {
-                FormatterSelection::InteractiveDashboard(InteractiveDashboardFormatter::default())
-            }
+            ConsoleSessionMode::InteractiveDashboard => FormatterSelection::InteractiveDashboard(
+                InteractiveDashboardFormatter::with_tui_state(tui_entered, panic_restored),
+            ),
             ConsoleSessionMode::Fallback => {
                 FormatterSelection::DashboardFallback(DashboardFormatter::default())
             }
@@ -7890,6 +7967,8 @@ fn select_formatter(
 struct OutputManagerState {
     tx: tokio::sync::mpsc::UnboundedSender<OutputCommand>,
     ready_prompt_active: Arc<AtomicBool>,
+    tui_entered: Arc<AtomicBool>,
+    panic_restored: Arc<AtomicBool>,
     mode: LogFormat,
     console_session_mode: Option<ConsoleSessionMode>,
     dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>>,
@@ -7975,6 +8054,7 @@ enum OutputCommand {
         response: tokio::sync::oneshot::Sender<io::Result<TuiControlFlow>>,
     },
     RenderTui(tokio::sync::oneshot::Sender<io::Result<bool>>),
+    PanicRestored,
 }
 
 static GLOBAL_OUTPUT_MANAGER: OnceLock<OutputManager> = OnceLock::new();
@@ -8023,12 +8103,21 @@ impl OutputManager {
     ) -> OutputManagerState {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<OutputCommand>();
         let ready_prompt_active = Arc::new(AtomicBool::new(false));
+        let tui_entered = Arc::new(AtomicBool::new(false));
+        let panic_restored = Arc::new(AtomicBool::new(false));
         let worker_prompt_active = ready_prompt_active.clone();
+        let worker_tui_entered = tui_entered.clone();
+        let worker_panic_restored = panic_restored.clone();
         let dashboard_snapshot_provider: Arc<RwLock<Option<Arc<dyn DashboardSnapshotProvider>>>> =
             Arc::new(RwLock::new(None));
         let worker_snapshot_provider = dashboard_snapshot_provider.clone();
         tokio::spawn(async move {
-            let mut formatter = select_formatter(mode, console_session_mode);
+            let mut formatter = select_formatter_with_tui_state(
+                mode,
+                console_session_mode,
+                worker_tui_entered,
+                worker_panic_restored,
+            );
             let mut redraw_tick = time::interval(PRETTY_TUI_REDRAW_INTERVAL);
             redraw_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
             let mut snapshot_tick = time::interval(PRETTY_TUI_SNAPSHOT_INTERVAL);
@@ -8081,6 +8170,9 @@ impl OutputManager {
                             OutputCommand::RenderTui(response) => {
                                 let _ = response.send(formatter.render_interactive_if_dirty());
                             }
+                            OutputCommand::PanicRestored => {
+                                formatter.mark_panic_restored();
+                            }
                         }
                     }
                     _ = redraw_tick.tick(), if formatter.is_interactive_dashboard() => {
@@ -8107,6 +8199,8 @@ impl OutputManager {
         OutputManagerState {
             tx,
             ready_prompt_active,
+            tui_entered,
+            panic_restored,
             mode,
             console_session_mode: matches!(mode, LogFormat::Pretty).then_some(console_session_mode),
             dashboard_snapshot_provider,
@@ -8206,6 +8300,28 @@ impl OutputManager {
             .read()
             .map(|state| state.console_session_mode)
             .unwrap_or(None)
+    }
+
+    fn tui_entered(&self) -> bool {
+        self.state
+            .read()
+            .map(|state| state.tui_entered.load(Ordering::Acquire))
+            .unwrap_or(false)
+    }
+
+    fn mark_panic_restored(&self) {
+        let tx = match self.state.read() {
+            Ok(state) => {
+                state.panic_restored.store(true, Ordering::Release);
+                state.tui_entered.store(false, Ordering::Release);
+                state.tx.clone()
+            }
+            Err(err) => {
+                tracing::warn!("output manager state lock poisoned during panic restore: {err}");
+                return;
+            }
+        };
+        let _ = tx.send(OutputCommand::PanicRestored);
     }
 
     pub fn register_dashboard_snapshot_provider(
@@ -8371,7 +8487,7 @@ fn build_fatal_error_event(err: &AnyhowError) -> OutputEvent {
         .skip(1)
         .map(ToString::to_string)
         .collect::<Vec<_>>();
-    OutputEvent::Error {
+    OutputEvent::Fatal {
         message,
         context: (!context.is_empty()).then(|| context.join(": ")),
     }
@@ -8379,6 +8495,30 @@ fn build_fatal_error_event(err: &AnyhowError) -> OutputEvent {
 
 pub fn emit_fatal_error(err: &AnyhowError) -> io::Result<()> {
     emit_event(build_fatal_error_event(err))
+}
+
+pub fn emit_fatal_panic(message: impl Into<String>, context: Option<String>) -> io::Result<()> {
+    let event = OutputEvent::Fatal {
+        message: message.into(),
+        context,
+    };
+    write_emergency_event(&event)
+}
+
+fn write_emergency_event(event: &OutputEvent) -> io::Result<()> {
+    let mode = GLOBAL_OUTPUT_MANAGER
+        .get()
+        .map(OutputManager::mode)
+        .unwrap_or(LogFormat::Pretty);
+    let rendered = render_emergency_event(mode, event)?;
+    write_rendered_output(mode, &rendered)
+}
+
+fn render_emergency_event(mode: LogFormat, event: &OutputEvent) -> io::Result<String> {
+    match mode {
+        LogFormat::Pretty => PrettyFormatter.format(event),
+        LogFormat::Json => JsonFormatter.format(event),
+    }
 }
 
 pub fn json_mode_enabled() -> bool {
@@ -8441,6 +8581,19 @@ pub fn force_restore_tui_terminal() -> io::Result<()> {
     // intentionally bypasses the OutputManager so terminal recovery still has a
     // chance if its worker is wedged; SIGKILL cannot be recovered in-process.
     write_tui_exit()
+}
+
+pub fn force_restore_tui_after_panic() {
+    let Some(output_manager) = GLOBAL_OUTPUT_MANAGER.get() else {
+        return;
+    };
+    if !output_manager.tui_entered() {
+        return;
+    }
+
+    output_manager.mark_panic_restored();
+    let _ = force_restore_tui_terminal();
+    let _ = disable_raw_mode();
 }
 
 fn write_tui_enter_to_writer<W: Write>(writer: &mut W) -> io::Result<()> {
@@ -9192,6 +9345,10 @@ mod tests {
                 message: "❌ llama-server exited".to_string(),
                 context: Some("model=Qwen3-32B port=9337".to_string()),
             },
+            OutputEvent::Fatal {
+                message: "panic occurred".to_string(),
+                context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+            },
             OutputEvent::Shutdown {
                 reason: Some("user requested shutdown".to_string()),
             },
@@ -9656,7 +9813,7 @@ mod tests {
 
         assert_eq!(
             spans_plain_text(&line.spans),
-            "12:34:56 OK   joined mesh poker-night"
+            "12:34:56 OK    joined mesh poker-night"
         );
     }
 
@@ -10222,7 +10379,7 @@ mod tests {
         assert!(
             rendered_lines
                 .iter()
-                .any(|line| line.contains("INFO plain operati")),
+                .any(|line| line.contains("INFO  plain operati")),
             "expected INFO badge row to remain visible: {rendered_lines:?}"
         );
         assert!(
@@ -10258,7 +10415,7 @@ mod tests {
             .expect("expected timestamp token");
         assert_hh_mm_ss(timestamp);
         assert!(
-            event_line.contains(" OK   joined mesh poker-night"),
+            event_line.contains(" OK    joined mesh poker-night"),
             "expected compact log row in {event_line}"
         );
         assert!(event_line.contains("joined mesh poker-night"));
@@ -12380,6 +12537,41 @@ mod tests {
     }
 
     #[test]
+    fn fatal_events_do_not_consume_startup_history_slots() {
+        let mut formatter = InteractiveDashboardFormatter::default();
+        let fatal = OutputEvent::Fatal {
+            message: "panic occurred".to_string(),
+            context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+        };
+
+        formatter
+            .handle_output_event(&OutputEvent::Startup {
+                version: "v0.68.0".to_string(),
+                message: None,
+            })
+            .expect("startup event should reduce cleanly");
+        formatter
+            .handle_output_event(&fatal)
+            .expect("fatal event should reduce cleanly");
+
+        assert_eq!(formatter.state.startup_history.len(), 1);
+        assert!(
+            formatter
+                .state
+                .startup_history
+                .iter()
+                .all(|event| !event.summary.contains("panic occurred"))
+        );
+        assert!(
+            formatter
+                .state
+                .mesh_events
+                .iter()
+                .any(|event| event.summary.contains("panic occurred"))
+        );
+    }
+
+    #[test]
     fn startup_failures_surface_in_tui_events_and_status() {
         let mut formatter = InteractiveDashboardFormatter::default();
         for event in [
@@ -12480,6 +12672,30 @@ mod tests {
                 .find(|model| model.model == "Qwen3-32B")
                 .map(|model| &model.status),
             Some(RuntimeStatus::Error)
+        ));
+    }
+
+    #[test]
+    fn generic_error_does_not_guess_last_running_model() {
+        let mut state = DashboardState::default();
+        state.reduce(DashboardAction::OutputEvent(OutputEvent::ModelReady {
+            model: "Qwen3-32B".to_string(),
+            internal_port: Some(9338),
+            role: Some("host".to_string()),
+        }));
+
+        state.reduce(DashboardAction::OutputEvent(OutputEvent::Error {
+            message: "transport stderr surfaced".to_string(),
+            context: Some("stderr".to_string()),
+        }));
+
+        assert!(matches!(
+            state
+                .running_models
+                .iter()
+                .find(|model| model.model == "Qwen3-32B")
+                .map(|model| &model.status),
+            Some(RuntimeStatus::Ready)
         ));
     }
 
@@ -13767,8 +13983,53 @@ tail line"
         formatter.mark_terminal_escape_written();
 
         assert!(formatter.terminal_active);
+        assert!(formatter.tui_entered());
         assert!(formatter.dirty);
         assert!(formatter.terminal.is_none());
+    }
+
+    #[test]
+    fn tui_panic_restore_flag_tracks_terminal_entry() {
+        let mut formatter = InteractiveDashboardFormatter::default();
+
+        assert!(!formatter.tui_entered());
+        formatter.mark_terminal_escape_written();
+        assert!(formatter.tui_entered());
+        formatter.exit_terminal().expect("exit should succeed");
+        assert!(!formatter.tui_entered());
+    }
+
+    #[test]
+    fn tui_panic_restore_disables_interactive_redraws() {
+        let tui_entered = Arc::new(AtomicBool::new(false));
+        let panic_restored = Arc::new(AtomicBool::new(false));
+        let mut formatter = InteractiveDashboardFormatter::with_tui_state(
+            tui_entered.clone(),
+            panic_restored.clone(),
+        );
+        formatter.mark_terminal_escape_written();
+
+        formatter.mark_panic_restored();
+
+        assert!(!formatter.terminal_active);
+        assert!(!formatter.dirty);
+        assert!(!tui_entered.load(Ordering::Acquire));
+        assert!(panic_restored.load(Ordering::Acquire));
+        assert_eq!(
+            formatter
+                .handle_output_event(&OutputEvent::Shutdown { reason: None })
+                .expect("panic-restored formatter should ignore output events"),
+            None
+        );
+        assert_eq!(
+            formatter.handle_tui_event(TuiEvent::Key(TuiKeyEvent::Char('q'))),
+            TuiControlFlow::Continue
+        );
+        assert!(
+            !formatter
+                .render_if_dirty()
+                .expect("panic-restored formatter should skip redraws")
+        );
     }
 
     #[test]
@@ -14953,6 +15214,39 @@ tail line"
         assert_eq!(value["event"], "warning");
         assert_eq!(value["warning"], "Failed to start llama-server: bind error");
         assert_eq!(value["context"], "model=Qwen3-32B mode=dense port=9337");
+    }
+
+    #[test]
+    fn json_formatter_includes_fatal_level_and_context() {
+        let mut formatter = JsonFormatter;
+        let rendered = formatter
+            .format(&OutputEvent::Fatal {
+                message: "panic occurred".to_string(),
+                context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+            })
+            .expect("fatal render should succeed");
+        let value: Value = serde_json::from_str(rendered.trim_end()).expect("line should parse");
+
+        assert_eq!(value["event"], "fatal");
+        assert_eq!(value["level"], "fatal");
+        assert_eq!(value["fatal"], "panic occurred");
+        assert_eq!(value["context"], "panic at crates/mesh-llm/src/lib.rs:42");
+    }
+
+    #[test]
+    fn emergency_fatal_event_renders_without_dashboard_worker() {
+        let event = OutputEvent::Fatal {
+            message: "panic occurred".to_string(),
+            context: Some("panic at crates/mesh-llm/src/lib.rs:42".to_string()),
+        };
+
+        let rendered = render_emergency_event(LogFormat::Pretty, &event)
+            .expect("emergency fatal render should succeed");
+
+        assert_eq!(
+            rendered,
+            "panic at crates/mesh-llm/src/lib.rs:42: panic occurred\n"
+        );
     }
 
     #[test]

@@ -906,6 +906,10 @@ nav.top {
   -webkit-backdrop-filter: blur(16px) saturate(140%);
   background: rgba(8,9,11,0.72);
   border-bottom: 1px solid var(--line);
+  transition:
+    opacity 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity, transform;
 }
 .js body.home-intro nav.top,
 .js body.home-intro .hero-footer {
@@ -4958,16 +4962,22 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
 }
 
 .stage2-workspace::before {
+  --stage2-aperture-radial-bg: radial-gradient(circle at var(--stage2-aperture-x, 50%) var(--stage2-aperture-y, 42%), rgba(59, 130, 246, var(--stage2-aperture-blue-alpha, 0.08)), transparent 34%);
+  --stage2-aperture-grid-y-bg: linear-gradient(rgba(9, 9, 11, var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px);
+  --stage2-aperture-grid-x-bg: linear-gradient(90deg, rgba(9, 9, 11, var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px);
+  --stage2-aperture-radial-pos: 50% 50%;
+  --stage2-aperture-grid-y-pos: 0px 17px;
+  --stage2-aperture-grid-x-pos: 17px 0px;
+
   content: "";
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   background:
-    radial-gradient(circle at var(--stage2-aperture-x, 50%) var(--stage2-aperture-y, 42%), rgba(59,130,246,var(--stage2-aperture-blue-alpha, 0.08)), transparent 34%),
-    linear-gradient(rgba(9,9,11,var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(9,9,11,var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px);
-  background-size: auto, 34px 34px, 34px 34px;
+    var(--stage2-aperture-radial-bg) var(--stage2-aperture-radial-pos) / auto no-repeat,
+    var(--stage2-aperture-grid-y-bg) var(--stage2-aperture-grid-y-pos) / 34px 34px repeat,
+    var(--stage2-aperture-grid-x-bg) var(--stage2-aperture-grid-x-pos) / 34px 34px repeat;
   mask-image: linear-gradient(to bottom, #000 0%, #000 var(--stage2-grid-mask-solid, 78%), transparent var(--stage2-grid-mask-end, 100%));
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 var(--stage2-grid-mask-solid, 78%), transparent var(--stage2-grid-mask-end, 100%));
 }
@@ -6043,12 +6053,14 @@ body.is-stage2-complete .hero-stage-sticky {
 }
 
 section.hero.stage2-scroll::after {
+  --stage2-hero-grid-y-pos: 0px 0px;
+  --stage2-hero-grid-x-pos: 18px 0px;
   top: -60px;
   bottom: 0;
   opacity: 0.92;
-  background-image:
-    linear-gradient(rgba(255,255,255,0.068) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.068) 1px, transparent 1px);
+  background:
+    linear-gradient(rgba(255,255,255,0.068) 1px, transparent 1px) var(--stage2-hero-grid-y-pos) / 36px 36px repeat,
+    linear-gradient(90deg, rgba(255,255,255,0.068) 1px, transparent 1px) var(--stage2-hero-grid-x-pos) / 36px 36px repeat;
   mask-image: linear-gradient(to bottom, #000 0%, #000 86%, transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 86%, transparent 100%);
 }
@@ -6111,10 +6123,6 @@ section.hero.stage2-scroll.is-stage2-footer-cleared .hero-footer {
   transform: translateY(168px) !important;
 }
 
-body.is-stage2-active nav.top {
-  transition: none;
-}
-
 body.is-stage2-complete nav.top {
   opacity: 1 !important;
   pointer-events: auto !important;
@@ -6122,6 +6130,12 @@ body.is-stage2-complete nav.top {
 }
 
 body.is-stage2-active section.hero.stage2-scroll::before {
+  --stage2-aperture-active-radial-bg: radial-gradient(circle at var(--stage2-aperture-x, 50%) calc(var(--stage2-aperture-y, 42%) + var(--hero-sticky-top)), rgba(59, 130, 246, var(--stage2-aperture-blue-alpha, 0.08)), transparent 34%);
+  --stage2-aperture-active-grid-y-bg: linear-gradient(rgba(9, 9, 11, var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px);
+  --stage2-aperture-active-grid-x-bg: linear-gradient(90deg, rgba(9, 9, 11, var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px);
+  --stage2-aperture-active-radial-pos: 50% 50%;
+  --stage2-aperture-active-grid-y-pos: 0px 17px;
+  --stage2-aperture-active-grid-x-pos: 17px 0px;
   top: 0;
   left: 0;
   width: 100vw;
@@ -6130,11 +6144,10 @@ body.is-stage2-active section.hero.stage2-scroll::before {
   z-index: 4;
   opacity: var(--stage2-light-opacity);
   background:
-    radial-gradient(circle at var(--stage2-aperture-x, 50%) calc(var(--stage2-aperture-y, 42%) + var(--hero-sticky-top)), rgba(59,130,246,var(--stage2-aperture-blue-alpha, 0.08)), transparent 34%),
-    linear-gradient(rgba(9,9,11,var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(9,9,11,var(--stage2-aperture-grid-alpha, 0.045)) 1px, transparent 1px),
+    var(--stage2-aperture-active-radial-bg) var(--stage2-aperture-active-radial-pos) / auto no-repeat,
+    var(--stage2-aperture-active-grid-y-bg) var(--stage2-aperture-active-grid-y-pos) / 34px 34px repeat,
+    var(--stage2-aperture-active-grid-x-bg) var(--stage2-aperture-active-grid-x-pos) / 34px 34px repeat,
     #fbfaf7;
-  background-size: auto, 34px 34px, 34px 34px, auto;
   clip-path: circle(var(--stage2-aperture-radius) at var(--stage2-aperture-x) calc(var(--stage2-aperture-y) + var(--hero-sticky-top)));
   -webkit-clip-path: circle(var(--stage2-aperture-radius) at var(--stage2-aperture-x) calc(var(--stage2-aperture-y) + var(--hero-sticky-top)));
 }
@@ -6384,6 +6397,10 @@ body.is-stage2-active .stage2-aperture-ring {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  nav.top {
+    transition: none;
+  }
+
   .title-reveal,
   .title-reveal.is-title-revealing,
   .title-reveal.is-title-revealed {

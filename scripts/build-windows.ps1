@@ -192,6 +192,66 @@ function Configure-CompilerCache {
     )
 }
 
+function Set-BuildVersionStamp {
+    if ($env:MESH_LLM_BUILD_VERSION) {
+        Write-Host "Using preset MESH_LLM_BUILD_VERSION: $($env:MESH_LLM_BUILD_VERSION)"
+        return
+    }
+
+    $pkgid = $null
+    try {
+        Push-Location $repoRoot
+        $pkgid = (& cargo pkgid -p mesh-llm 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $pkgid) {
+            Write-Warning "Unable to derive build version; cargo pkgid unavailable."
+            Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+            return
+        }
+    } finally {
+        Pop-Location
+    }
+
+    $releaseVersion = $pkgid.Substring($pkgid.LastIndexOf('#') + 1)
+    if (-not $releaseVersion -or $releaseVersion -eq $pkgid) {
+        Write-Warning "Unable to derive build version; cargo pkgid output was unexpected."
+        Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+        return
+    }
+
+    $sha = $null
+    try {
+        $sha = (& git -C $repoRoot rev-parse --short=6 HEAD 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $sha) {
+            Write-Warning "Unable to derive build version; git SHA unavailable."
+            Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+            return
+        }
+    } catch {
+        Write-Warning "Unable to derive build version; git SHA unavailable."
+        Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+        return
+    }
+    $sha = $sha.ToUpperInvariant()
+
+    $statusOutput = $null
+    try {
+        $statusOutput = (& git -C $repoRoot status --porcelain --untracked-files=all 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Unable to derive build version; git status unavailable."
+            Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+            return
+        }
+    } catch {
+        Write-Warning "Unable to derive build version; git status unavailable."
+        Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+        return
+    }
+
+    $dirtySuffix = if ($statusOutput) { ".dirty" } else { "" }
+    $env:MESH_LLM_BUILD_VERSION = "$releaseVersion+g$sha$dirtySuffix"
+    Write-Host "Derived MESH_LLM_BUILD_VERSION: $($env:MESH_LLM_BUILD_VERSION)"
+}
+
 function Test-Sccache {
     return $compilerCacheBin -and ((Split-Path -Leaf $compilerCacheBin).ToLowerInvariant() -like "sccache*")
 }
@@ -1091,6 +1151,7 @@ Invoke-InRepo {
         "cuda" { $cargoFeatureArgs = @("--features", "gpu-bench-cuda") }
         "rocm" { $cargoFeatureArgs = @("--features", "gpu-bench-hip") }
     }
+    Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {
             Invoke-NativeCommand "cargo" (@("build", "-p", "mesh-llm", "--bin", "mesh-llm") + $cargoFeatureArgs)

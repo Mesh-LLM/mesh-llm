@@ -343,6 +343,41 @@ impl Default for StageStateHeader {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StageRequestEpoch {
+    pub request_id: u64,
+    pub session_id: u64,
+    pub checkpoint_generation: i32,
+    pub prompt_token_count: i32,
+    pub decode_step: i32,
+}
+
+impl StageRequestEpoch {
+    pub fn same_flow(self, other: Self) -> bool {
+        self.request_id == other.request_id && self.session_id == other.session_id
+    }
+
+    /// Returns true when this epoch is strictly older than `current` within the
+    /// same request/session flow.
+    ///
+    /// Epochs from different flows are never comparable. For matching flows,
+    /// staleness uses lexicographic ordering of checkpoint generation, prompt
+    /// token count, and decode step, so a newer checkpoint dominates prompt and
+    /// decode progress, and prompt progress dominates decode progress.
+    pub fn is_stale_for(self, current: Self) -> bool {
+        self.same_flow(current)
+            && (
+                self.checkpoint_generation,
+                self.prompt_token_count,
+                self.decode_step,
+            ) < (
+                current.checkpoint_generation,
+                current.prompt_token_count,
+                current.decode_step,
+            )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StageWireMessage {
     pub kind: WireMessageKind,
@@ -360,6 +395,46 @@ pub struct StageWireMessage {
 }
 
 impl StageWireMessage {
+    pub fn estimated_wire_bytes(&self) -> usize {
+        let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
+            STAGE_SAMPLING_CONFIG_BASE_BYTES
+                + sampling.logit_bias.len().min(MAX_STAGE_LOGIT_BIAS) * STAGE_LOGIT_BIAS_WIRE_BYTES
+        });
+        let chat_metadata_bytes = self
+            .chat_sampling_metadata
+            .as_ref()
+            .map_or(0, |metadata| std::mem::size_of::<u32>() + metadata.len());
+        STAGE_WIRE_FIXED_HEADER_BYTES
+            .saturating_add(sampling_bytes)
+            .saturating_add(chat_metadata_bytes)
+            .saturating_add(self.payload_wire_bytes())
+    }
+
+    fn payload_wire_bytes(&self) -> usize {
+        if self.kind == WireMessageKind::StateImport {
+            return self.raw_bytes.len();
+        }
+        self.tokens
+            .len()
+            .saturating_mul(std::mem::size_of::<i32>())
+            .saturating_add(
+                self.positions
+                    .len()
+                    .saturating_mul(std::mem::size_of::<i32>()),
+            )
+            .saturating_add(self.activation.len())
+    }
+
+    pub fn request_epoch(&self) -> StageRequestEpoch {
+        StageRequestEpoch {
+            request_id: self.request_id,
+            session_id: self.session_id,
+            checkpoint_generation: self.state.checkpoint_generation,
+            prompt_token_count: self.state.prompt_token_count,
+            decode_step: self.state.decode_step,
+        }
+    }
+
     pub fn stop(dtype: WireActivationDType) -> Self {
         Self::stop_with_identity(dtype, 0, 0)
     }

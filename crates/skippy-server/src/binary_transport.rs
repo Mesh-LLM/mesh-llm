@@ -26,9 +26,8 @@ use skippy_metrics::{attr, metric};
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-        STAGE_WIRE_FIXED_HEADER_BYTES, StageReply, StageReplyStats, StageSamplingConfig,
-        StageStateHeader, StageWireMessage, WireActivationDType, WireMessageKind, WireReplyKind,
+        StageReply, StageReplyStats, StageSamplingConfig, StageStateHeader, StageWireMessage,
+        WireActivationDType, WireMessageKind, WireReplyKind,
         activation_frame_flags_from_state_flags, read_stage_message, recv_reply, send_ready,
         send_reply_ack, send_reply_ack_with_stats, state_flags,
     },
@@ -446,7 +445,7 @@ fn handle_binary_connection(
             );
             recv_attrs.insert(
                 "llama_stage.message_wire_bytes".to_string(),
-                json!(estimated_stage_message_wire_bytes(&message)),
+                json!(message.estimated_wire_bytes()),
             );
             recv_attrs.insert(
                 "skippy.activation_bytes".to_string(),
@@ -1540,30 +1539,6 @@ fn insert_optional_unix_nanos(attrs: &mut BTreeMap<String, Value>, key: &str, va
     }
 }
 
-fn estimated_stage_message_wire_bytes(message: &StageWireMessage) -> usize {
-    let sampling_bytes = message.sampling.as_ref().map_or(0, |sampling| {
-        STAGE_SAMPLING_CONFIG_BASE_BYTES
-            + sampling
-                .logit_bias
-                .len()
-                .min(skippy_protocol::binary::MAX_STAGE_LOGIT_BIAS)
-                * STAGE_LOGIT_BIAS_WIRE_BYTES
-    });
-    let chat_metadata_bytes = message
-        .chat_sampling_metadata
-        .as_ref()
-        .map_or(0, |metadata| std::mem::size_of::<u32>() + metadata.len());
-    let payload_bytes = if message.kind == WireMessageKind::StateImport {
-        message.raw_bytes.len()
-    } else {
-        message.tokens.len() * std::mem::size_of::<i32>()
-            + message.positions.len() * std::mem::size_of::<i32>()
-            + message.activation.len()
-    };
-
-    STAGE_WIRE_FIXED_HEADER_BYTES + sampling_bytes + chat_metadata_bytes + payload_bytes
-}
-
 pub(crate) fn stage_output_activation_capacity(
     config: &StageConfig,
     token_count: i32,
@@ -1672,28 +1647,27 @@ fn binary_message_attrs(
     message: &StageWireMessage,
 ) -> std::collections::BTreeMap<String, serde_json::Value> {
     let mut attrs = lifecycle_attrs(config);
+    let epoch = message.request_epoch();
     attrs.insert(attr::SESSION_ID.to_string(), json!(session_id.to_string()));
     attrs.insert(
         attr::REQUEST_ID.to_string(),
         json!(binary_message_request_id(message)),
     );
+    attrs.insert(attr::PROMPT_INDEX.to_string(), json!(message.state.seq_id));
     attrs.insert(
-        "skippy.prompt_index".to_string(),
-        json!(message.state.seq_id),
-    );
-    attrs.insert(
-        "skippy.message_kind".to_string(),
+        attr::MESSAGE_KIND.to_string(),
         json!(format!("{:?}", message.kind)),
     );
-    attrs.insert("skippy.token_count".to_string(), json!(message.token_count));
+    attrs.insert(attr::TOKEN_COUNT.to_string(), json!(message.token_count));
     attrs.insert(
-        "skippy.prompt_token_count".to_string(),
-        json!(message.state.prompt_token_count),
+        attr::CHECKPOINT_GENERATION.to_string(),
+        json!(epoch.checkpoint_generation),
     );
     attrs.insert(
-        "skippy.decode_step".to_string(),
-        json!(message.state.decode_step),
+        attr::PROMPT_TOKEN_COUNT.to_string(),
+        json!(epoch.prompt_token_count),
     );
+    attrs.insert(attr::DECODE_STEP.to_string(), json!(epoch.decode_step));
     let layer_count = i64::from(config.layer_end.saturating_sub(config.layer_start));
     let kv_tokens_after = estimated_kv_tokens_after(message);
     attrs.insert("skippy.kv_tokens_after".to_string(), json!(kv_tokens_after));
@@ -3098,9 +3072,9 @@ impl BinaryRequestSummary {
         if let Some(request_id) = self.request_id.as_ref() {
             attrs.insert(attr::REQUEST_ID.to_string(), json!(request_id));
         }
-        attrs.insert("skippy.prompt_index".to_string(), json!(self.prompt_index));
+        attrs.insert(attr::PROMPT_INDEX.to_string(), json!(self.prompt_index));
         attrs.insert(
-            "skippy.prompt_token_count".to_string(),
+            attr::PROMPT_TOKEN_COUNT.to_string(),
             json!(self.prompt_token_count),
         );
         attrs.insert(

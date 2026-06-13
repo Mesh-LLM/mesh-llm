@@ -28,6 +28,7 @@ workspace = true
 
 [dependencies]
 bytes = "1"
+mesh-llm-build-info.workspace = true
 mesh-mixture-of-agents = { path = "../mesh-mixture-of-agents", version = "0.68.0"  }
 mesh-llm-config = { path = "../mesh-llm-config", version = "0.68.0"  }
 mesh-llm-events = { path = "../mesh-llm-events", version = "0.68.0"  }

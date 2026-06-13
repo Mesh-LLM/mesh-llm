@@ -34,11 +34,125 @@ fn placement_signal(node_id: &str) -> NodePlacementSignal {
     }
 }
 
+fn edge(source: &str, target: &str, rtt_ms: u32) -> StageEdgeSignal {
+    StageEdgeSignal {
+        source_node_id: source.to_string(),
+        target_node_id: target.to_string(),
+        rtt_ms: Some(rtt_ms),
+        large_frame_bytes_per_sec: None,
+        direct_prediction_return_supported: true,
+    }
+}
+
 fn stage_layout(plan: &TopologyPlan) -> Vec<(&str, u32, u32)> {
     plan.stages
         .iter()
         .map(|stage| (stage.node_id.as_str(), stage.layer_start, stage.layer_end))
         .collect()
+}
+
+fn role_layout(plan: &TopologyPlan) -> Vec<Vec<StageRole>> {
+    plan.stages
+        .iter()
+        .map(|stage| stage.roles.clone())
+        .collect()
+}
+
+#[test]
+fn transport_aware_plan_orders_same_nodes_by_stage_edge_cost() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("node-a", 30),
+            weighted_node("node-b", 30),
+            weighted_node("node-c", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[],
+        &[
+            edge("node-a", "node-b", 200),
+            edge("node-b", "node-c", 200),
+            edge("node-a", "node-c", 5),
+            edge("node-c", "node-b", 5),
+        ],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("node-a", 0, 3), ("node-c", 3, 6), ("node-b", 6, 9)]
+    );
+    assert!(plan.diagnostics.iter().any(|diagnostic| diagnostic.code
+        == PlanReasonCode::NetworkPipelineCost
+        && diagnostic.message.contains("node-a -> node-c")));
+}
+
+#[test]
+fn transport_aware_plan_orders_two_stages_by_edge_cost() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(6, 10),
+        nodes: vec![weighted_node("node-a", 30), weighted_node("node-b", 30)],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[],
+        &[edge("node-a", "node-b", 200), edge("node-b", "node-a", 5)],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("node-b", 0, 3), ("node-a", 3, 6)]
+    );
+}
+
+#[test]
+fn transport_aware_plan_preserves_package_order_when_edges_tie() {
+    let mut warm = placement_signal("warm");
+    warm.cached_slice_bytes = 64;
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("cold-a", 30),
+            weighted_node("warm", 30),
+            weighted_node("cold-b", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_transport(
+        &request,
+        &[warm],
+        &[
+            edge("warm", "cold-a", 10),
+            edge("warm", "cold-b", 10),
+            edge("cold-a", "warm", 10),
+            edge("cold-a", "cold-b", 10),
+            edge("cold-b", "warm", 10),
+            edge("cold-b", "cold-a", 10),
+        ],
+    )
+    .expect("plan");
+
+    assert_eq!(
+        stage_layout(&plan),
+        vec![("warm", 0, 3), ("cold-a", 3, 6), ("cold-b", 6, 9)]
+    );
 }
 
 #[test]
@@ -66,6 +180,52 @@ fn dense_attention_plan_allows_costed_kv_migration() {
             .all(|stage| stage.migration_policy == MigrationPolicy::CostedKv)
     );
     assert!(plan.diagnostics.is_empty());
+}
+
+#[test]
+fn split_topology_labels_driver_embedding_intermediate_and_readout_roles() {
+    let request = TopologyPlanRequest {
+        topology_id: "roles".to_string(),
+        model_id: "qwen3".to_string(),
+        layers: dense_attention_layers(9, 10),
+        nodes: nodes(3),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_even_contiguous(&request).expect("plan");
+
+    assert_eq!(
+        role_layout(&plan),
+        vec![
+            vec![StageRole::Driver, StageRole::Embedding],
+            vec![StageRole::Intermediate],
+            vec![StageRole::Readout],
+        ]
+    );
+}
+
+#[test]
+fn single_stage_topology_labels_combined_driver_embedding_and_readout() {
+    let request = TopologyPlanRequest {
+        topology_id: "single-roles".to_string(),
+        model_id: "qwen3".to_string(),
+        layers: dense_attention_layers(2, 10),
+        nodes: nodes(1),
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_even_contiguous(&request).expect("plan");
+
+    assert_eq!(
+        role_layout(&plan),
+        vec![vec![
+            StageRole::Driver,
+            StageRole::Embedding,
+            StageRole::Readout,
+        ]]
+    );
 }
 
 #[test]
@@ -167,6 +327,70 @@ fn package_aware_plan_prefers_cached_peer_for_equal_capacity() {
             .reason_codes
             .contains(&PlanReasonCode::ArtifactTransferPenalty)
     );
+}
+
+#[test]
+fn package_aware_plan_reports_cold_start_artifact_totals() {
+    let mut transfer_ready = placement_signal("transfer-ready");
+    transfer_ready.missing_artifact_bytes = 32;
+    transfer_ready.artifact_transfer_supported = true;
+    let mut remote_fallback = placement_signal("remote-fallback");
+    remote_fallback.missing_artifact_bytes = 16;
+    remote_fallback.artifact_transfer_supported = false;
+    let mut warm = placement_signal("warm");
+    warm.cached_slice_bytes = 64;
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(9, 10),
+        nodes: vec![
+            weighted_node("transfer-ready", 30),
+            weighted_node("remote-fallback", 30),
+            weighted_node("warm", 30),
+        ],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_package_aware_contiguous_with_signals(
+        &request,
+        &[transfer_ready, remote_fallback, warm],
+    )
+    .expect("plan");
+
+    let diagnostic = plan
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == PlanReasonCode::ArtifactTransferPenalty)
+        .expect("artifact diagnostic");
+    assert!(diagnostic.message.contains("cached=30 bytes"));
+    assert!(diagnostic.message.contains("missing=46 bytes"));
+    assert!(
+        diagnostic
+            .message
+            .contains("peer-transfer-eligible=30 bytes")
+    );
+    assert!(
+        diagnostic
+            .message
+            .contains("remote-download-fallback=16 bytes")
+    );
+}
+
+#[test]
+fn weighted_plan_without_artifact_signals_stays_diagnostic_quiet() {
+    let request = TopologyPlanRequest {
+        topology_id: "topology-a".into(),
+        model_id: "model-a".into(),
+        layers: dense_attention_layers(6, 10),
+        nodes: vec![weighted_node("node-a", 30), weighted_node("node-b", 30)],
+        family: None,
+        policy: PlannerPolicy::default(),
+    };
+
+    let plan = plan_weighted_contiguous(&request).expect("plan");
+
+    assert!(plan.diagnostics.is_empty());
 }
 
 #[test]

@@ -14,6 +14,15 @@ mesh-llm models --help
 mesh-llm models <subcommand> --help
 ```
 
+## Check the running version
+
+```bash
+mesh-llm --version
+```
+
+Release builds report the released package version, such as `mesh-llm 0.68.0`.
+Local source builds may include build metadata, such as `mesh-llm 0.68.0+gABCDEF.dirty`, so you can tell exactly which commit produced the binary. Compatibility checks, native-runtime cache paths, and release identity still use the plain release version.
+
 ## Start here (common tasks)
 
 If you want to:
