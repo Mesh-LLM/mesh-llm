@@ -564,15 +564,12 @@ mod dynamic {
     dynamic_symbols! {
         llama_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
         ggml_log_set(log_callback: LlamaLogCallback, user_data: *mut c_void);
-        skippy_abi_features() -> u64;
         skippy_status_string(status: Status) -> *const c_char;
         skippy_error_free(error: *mut Error);
         skippy_backend_device_count(out_count: *mut usize, out_error: *mut *mut Error) -> Status;
         skippy_backend_device_at(index: usize, out_device: *mut BackendDevice, out_error: *mut *mut Error) -> Status;
         skippy_model_open(path: *const c_char, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
         skippy_model_open_from_parts(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
-        skippy_model_open_with_events(path: *const c_char, config: *const RuntimeConfig, reporter: *const SkippyRuntimeEventReporterV1, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
-        skippy_model_open_from_parts_with_events(paths: *const *const c_char, path_count: usize, config: *const RuntimeConfig, reporter: *const SkippyRuntimeEventReporterV1, out_model: *mut *mut Model, out_error: *mut *mut Error) -> Status;
         skippy_model_free(model: *mut Model, out_error: *mut *mut Error) -> Status;
         skippy_model_llama_model(model: *const Model) -> *const Opaque;
         skippy_session_create(model: *mut Model, out_session: *mut *mut Session, out_error: *mut *mut Error) -> Status;
@@ -653,10 +650,80 @@ mod dynamic {
         mtmd_helper_eval_chunks(ctx: *mut MtmdContext, lctx: *mut Opaque, chunks: *const MtmdInputChunks, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
         mtmd_helper_eval_chunk_single(ctx: *mut MtmdContext, lctx: *mut Opaque, chunk: *const Opaque, n_past: i32, seq_id: i32, n_batch: i32, logits_last: bool, new_n_past: *mut i32) -> c_int;
     }
+
+    // -----------------------------------------------------------------------
+    // Optional symbols — not required for library load.
+    // Older runtimes may lack these and callers must check availability first.
+    // -----------------------------------------------------------------------
+
+    type SkippyAbiFeaturesFn = unsafe extern "C" fn() -> u64;
+    type SkippyModelOpenWithEventsFn = unsafe extern "C" fn(
+        path: *const c_char,
+        config: *const RuntimeConfig,
+        reporter: *const SkippyRuntimeEventReporterV1,
+        out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+    type SkippyModelOpenFromPartsWithEventsFn = unsafe extern "C" fn(
+        paths: *const *const c_char,
+        path_count: usize,
+        config: *const RuntimeConfig,
+        reporter: *const SkippyRuntimeEventReporterV1,
+        out_model: *mut *mut Model,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    impl Symbols {
+        fn lookup_optional<Sym>(&self, name: &[u8]) -> Option<Sym>
+        where
+            Sym: Copy + 'static,
+        {
+            for library in self._libraries.iter().rev() {
+                if let Ok(sym) = unsafe { library.get::<Sym>(name) } {
+                    return Some(*sym);
+                }
+            }
+            None
+        }
+    }
+
+    pub fn skippy_abi_features_optional() -> Option<SkippyAbiFeaturesFn> {
+        static CACHE: OnceLock<Option<SkippyAbiFeaturesFn>> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            symbols().lookup_optional::<SkippyAbiFeaturesFn>(b"skippy_abi_features\0")
+        })
+    }
+
+    pub fn skippy_model_open_with_events_fn() -> Option<SkippyModelOpenWithEventsFn> {
+        static CACHE: OnceLock<Option<SkippyModelOpenWithEventsFn>> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            symbols()
+                .lookup_optional::<SkippyModelOpenWithEventsFn>(b"skippy_model_open_with_events\0")
+        })
+    }
+
+    pub fn skippy_model_open_from_parts_with_events_fn()
+    -> Option<SkippyModelOpenFromPartsWithEventsFn> {
+        static CACHE: OnceLock<Option<SkippyModelOpenFromPartsWithEventsFn>> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            symbols().lookup_optional::<SkippyModelOpenFromPartsWithEventsFn>(
+                b"skippy_model_open_from_parts_with_events\0",
+            )
+        })
+    }
 }
 
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::*;
+
+#[cfg(feature = "dynamic-runtime")]
+/// Returns the skippy ABI feature bitmask.
+/// Requires the native runtime to be loaded first (checked by caller).
+pub fn skippy_abi_features() -> u64 {
+    let fns = dynamic::skippy_abi_features_optional()
+        .expect("skippy_abi_features not available in loaded runtime");
+    unsafe { fns() }
+}
 
 #[cfg(not(feature = "dynamic-runtime"))]
 unsafe extern "C" {
@@ -689,23 +756,6 @@ unsafe extern "C" {
         paths: *const *const c_char,
         path_count: usize,
         config: *const RuntimeConfig,
-        out_model: *mut *mut Model,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
-    pub fn skippy_model_open_with_events(
-        path: *const c_char,
-        config: *const RuntimeConfig,
-        reporter: *const SkippyRuntimeEventReporterV1,
-        out_model: *mut *mut Model,
-        out_error: *mut *mut Error,
-    ) -> Status;
-
-    pub fn skippy_model_open_from_parts_with_events(
-        paths: *const *const c_char,
-        path_count: usize,
-        config: *const RuntimeConfig,
-        reporter: *const SkippyRuntimeEventReporterV1,
         out_model: *mut *mut Model,
         out_error: *mut *mut Error,
     ) -> Status;

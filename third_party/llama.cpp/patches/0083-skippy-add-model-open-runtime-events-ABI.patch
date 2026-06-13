@@ -367,16 +367,19 @@ index f0f14820e..8c04b87da 100644
 +static enum skippy_status skippy_validate_runtime_event_reporter(
 +        const struct skippy_runtime_event_reporter_v1 * reporter,
 +        struct skippy_error ** out_error) {
-+    if (reporter == nullptr || reporter->callback == nullptr) {
++    if (reporter == nullptr) {
++        return SKIPPY_STATUS_OK;
++    }
++    if (reporter->struct_size < sizeof(struct skippy_runtime_event_reporter_v1)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "runtime event reporter struct is too small");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (reporter->callback == nullptr) {
 +        return SKIPPY_STATUS_OK;
 +    }
 +    if (reporter->abi_version != SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "unsupported runtime event reporter ABI version");
 +        return SKIPPY_STATUS_UNSUPPORTED;
-+    }
-+    if (reporter->struct_size < sizeof(skippy_runtime_event_reporter_v1)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "runtime event reporter struct is too small");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
 +    }
 +    return SKIPPY_STATUS_OK;
 +}

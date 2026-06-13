@@ -12,13 +12,14 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
+pub use skippy_ffi::Status;
 use skippy_ffi::{
     ActivationDType, ActivationDesc as RawActivationDesc, ActivationLayout,
     ChatMessage as RawChatMessage, Error as RawError,
     GenerationSignalWindow as RawGenerationSignalWindow, KvPageDesc as RawKvPageDesc, LoadMode,
     LogitBias as RawLogitBias, Model as RawModel, ModelInfo as RawModelInfo,
     RuntimeConfig as RawRuntimeConfig, SamplingConfig as RawSamplingConfig, Session as RawSession,
-    SlicePlan as RawSlicePlan, Status, TensorInfo as RawTensorInfo, TensorRole,
+    SlicePlan as RawSlicePlan, TensorInfo as RawTensorInfo, TensorRole,
     TokenSignal as RawTokenSignal,
 };
 use tokio::sync::mpsc;

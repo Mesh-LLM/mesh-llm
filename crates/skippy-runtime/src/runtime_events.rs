@@ -327,11 +327,18 @@ fn lookup_model_open_with_events_symbol(_name: &[u8]) -> Option<*mut c_void> {
 pub(crate) fn model_open_with_events_symbol() -> Option<RawModelOpenWithEventsFn> {
     static SYMBOL: OnceLock<Option<RawModelOpenWithEventsFn>> = OnceLock::new();
     *SYMBOL.get_or_init(|| {
-        lookup_model_open_with_events_symbol(b"skippy_model_open_with_events\0").map(
-            |symbol| unsafe {
-                std::mem::transmute::<*mut c_void, RawModelOpenWithEventsFn>(symbol)
-            },
-        )
+        #[cfg(feature = "dynamic-native-runtime")]
+        {
+            skippy_ffi::skippy_model_open_with_events_fn()
+        }
+        #[cfg(not(feature = "dynamic-native-runtime"))]
+        {
+            lookup_model_open_with_events_symbol(b"skippy_model_open_with_events\0").map(
+                |symbol| unsafe {
+                    std::mem::transmute::<*mut c_void, RawModelOpenWithEventsFn>(symbol)
+                },
+            )
+        }
     })
 }
 
@@ -339,11 +346,18 @@ pub(crate) fn model_open_from_parts_with_events_symbol() -> Option<RawModelOpenF
 {
     static SYMBOL: OnceLock<Option<RawModelOpenFromPartsWithEventsFn>> = OnceLock::new();
     *SYMBOL.get_or_init(|| {
-        lookup_model_open_with_events_symbol(b"skippy_model_open_from_parts_with_events\0").map(
-            |symbol| unsafe {
-                std::mem::transmute::<*mut c_void, RawModelOpenFromPartsWithEventsFn>(symbol)
-            },
-        )
+        #[cfg(feature = "dynamic-native-runtime")]
+        {
+            skippy_ffi::skippy_model_open_from_parts_with_events_fn()
+        }
+        #[cfg(not(feature = "dynamic-native-runtime"))]
+        {
+            lookup_model_open_with_events_symbol(b"skippy_model_open_from_parts_with_events\0").map(
+                |symbol| unsafe {
+                    std::mem::transmute::<*mut c_void, RawModelOpenFromPartsWithEventsFn>(symbol)
+                },
+            )
+        }
     })
 }
 
@@ -352,9 +366,21 @@ pub(crate) fn model_open_events_supported() -> bool {
         && skippy_ffi::ABI_VERSION_MINOR == 1
         && skippy_ffi::ABI_VERSION_PATCH >= 26
         && skippy_ffi::native_runtime_loaded()
-        && (unsafe { skippy_ffi::skippy_abi_features() } & skippy_ffi::FEATURE_RUNTIME_EVENTS) != 0
+        && abi_features_bitmask()
+            .is_some_and(|features| (features & skippy_ffi::FEATURE_RUNTIME_EVENTS) != 0)
         && model_open_with_events_symbol().is_some()
         && model_open_from_parts_with_events_symbol().is_some()
+}
+
+fn abi_features_bitmask() -> Option<u64> {
+    #[cfg(feature = "dynamic-native-runtime")]
+    {
+        skippy_ffi::skippy_abi_features_optional().map(|features| unsafe { features() })
+    }
+    #[cfg(not(feature = "dynamic-native-runtime"))]
+    {
+        Some(unsafe { skippy_ffi::skippy_abi_features() })
+    }
 }
 
 #[cfg(test)]

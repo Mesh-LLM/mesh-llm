@@ -150,7 +150,7 @@ fn native_model_open_reporter_emits_visibility_only_events() {
             } else {
                 skippy_runtime::RuntimeEventFailureCode::None
             },
-            status: unsafe { std::mem::transmute(0_i32) },
+            status: skippy_runtime::Status::Ok,
             detail_bytes: b"Metal GPU 0".to_vec(),
         });
     }
