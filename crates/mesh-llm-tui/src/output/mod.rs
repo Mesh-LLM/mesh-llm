@@ -8494,12 +8494,19 @@ fn build_fatal_error_event(err: &AnyhowError) -> OutputEvent {
 }
 
 pub fn emit_fatal_error(err: &AnyhowError) -> io::Result<()> {
-    let event = build_fatal_error_event(err);
-    if GLOBAL_OUTPUT_MANAGER.get().is_some() {
-        emit_event(event)
-    } else {
-        write_emergency_event(&event)
-    }
+    emit_event_or_write_emergency(
+        build_fatal_error_event(err),
+        emit_event,
+        write_emergency_event,
+    )
+}
+
+fn emit_event_or_write_emergency(
+    event: OutputEvent,
+    emit: impl FnOnce(OutputEvent) -> io::Result<()>,
+    write_emergency: impl FnOnce(&OutputEvent) -> io::Result<()>,
+) -> io::Result<()> {
+    emit(event.clone()).or_else(|_| write_emergency(&event))
 }
 
 pub fn emit_fatal_panic(message: impl Into<String>, context: Option<String>) -> io::Result<()> {
@@ -15253,6 +15260,35 @@ tail line"
             rendered,
             "panic at crates/mesh-llm/src/lib.rs:42: panic occurred\n"
         );
+    }
+
+    #[test]
+    fn fatal_error_emits_emergency_event_when_output_worker_fails() {
+        let event = OutputEvent::Fatal {
+            message: "fatal startup failure".to_string(),
+            context: Some("output manager worker unavailable".to_string()),
+        };
+        let mut emitted_event = None;
+        let mut emergency_event = None;
+
+        emit_event_or_write_emergency(
+            event.clone(),
+            |attempted_event| {
+                emitted_event = Some(attempted_event);
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "output manager worker unavailable",
+                ))
+            },
+            |fallback_event| {
+                emergency_event = Some(fallback_event.clone());
+                Ok(())
+            },
+        )
+        .expect("emergency fallback should handle failed output worker");
+
+        assert_eq!(emitted_event, Some(event.clone()));
+        assert_eq!(emergency_event, Some(event));
     }
 
     #[test]
