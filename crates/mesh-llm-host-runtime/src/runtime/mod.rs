@@ -6157,6 +6157,7 @@ async fn build_run_auto_node_setup(
     node.start_rtt_refresh();
     node.start_direct_path_maintenance();
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
+    spawn_mdns_reverse_dial(options, &node);
 
     if !is_client {
         spawn_node_benchmark_task(&node, bin_dir);
@@ -7916,6 +7917,52 @@ async fn spawn_run_auto_nostr_publisher(
             None
         }
     }
+}
+
+/// Spawn the mDNS reverse-dial bootstrap (LAN dial-back) for relay-less direct
+/// paths. Runs on both host and joiner in mDNS mode.
+///
+/// Every node browses the LAN and dials back any advertised peer it is not
+/// already connected to, using the peer's advertised `EndpointAddr`. This
+/// rescues the case where a multi-homed node cannot initiate a relay-less
+/// direct connection itself but can be dialed by a single-homed peer.
+///
+/// Also ensures the node publishes its own `ep_addr` via mDNS when the standard
+/// publish path (gated on `--publish`) is not active, so peers can learn a
+/// dial-back address. Re-registering the same mDNS service is idempotent.
+fn spawn_mdns_reverse_dial(options: &RuntimeOptions, node: &mesh::Node) {
+    if options.mesh_discovery_mode != mesh_discovery::MeshDiscoveryMode::Mdns {
+        return;
+    }
+
+    // Ensure an mDNS advertisement (carrying our ep_addr) exists even without
+    // --publish, so peers can discover a dial-back address. The standard
+    // publish path only runs with --publish; spawn a publisher here otherwise.
+    if !options.publish {
+        tokio::spawn(Box::pin(mesh_discovery::publish_lan_loop(
+            node.clone(),
+            mesh_discovery::LanPublishConfig {
+                name: options.mesh_name.clone(),
+                region: options.region.clone(),
+                max_clients: options.max_clients,
+                api_port: options.console,
+                details_reachable: options.listen_all,
+                interval_secs: 30,
+                status_tx: None,
+            },
+        )));
+    }
+
+    tokio::spawn(Box::pin(crate::network::mdns_reverse_dial::run_loop(
+        node.clone(),
+        options.mesh_name.clone(),
+        options.region.clone(),
+    )));
+
+    // Raw-multicast LAN beacon: a mDNS-independent direct-path bootstrap that
+    // works on multi-homed hosts where the mDNS service daemon's advertisement
+    // does not reach the LAN. Uses a socket pinned to the bound LAN interface.
+    crate::network::lan_beacon::spawn(node.clone());
 }
 
 fn spawn_run_auto_mdns_publisher(

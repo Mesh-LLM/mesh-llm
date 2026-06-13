@@ -398,6 +398,7 @@ async fn make_test_node_with_requirements(
         genesis_policy: Arc::new(Mutex::new(None)),
         signed_genesis_policy: Arc::new(Mutex::new(None)),
         bootstrap_token: Arc::new(Mutex::new(None)),
+        join_targets: Arc::new(Mutex::new(Vec::new())),
         first_joined_mesh_ts: Arc::new(Mutex::new(None)),
         accepting: Arc::new((
             tokio::sync::Notify::new(),
