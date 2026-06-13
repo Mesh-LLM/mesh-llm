@@ -7,11 +7,11 @@ pub(crate) fn append_artifact_diagnostics(
 ) {
     let cached_bytes = stages
         .iter()
-        .map(|stage| stage.cached_slice_bytes)
+        .map(cached_artifact_bytes_for_stage)
         .sum::<u64>();
     let missing_bytes = stages
         .iter()
-        .map(|stage| stage.missing_artifact_bytes)
+        .map(missing_artifact_bytes_for_stage)
         .sum::<u64>();
 
     if cached_bytes == 0 && missing_bytes == 0 {
@@ -49,6 +49,14 @@ fn missing_bytes_by_transfer_support(
                 .find(|signal| signal.node_id == stage.node_id)
                 .is_some_and(|signal| signal.artifact_transfer_supported == transfer_supported)
         })
-        .map(|stage| stage.missing_artifact_bytes)
+        .map(missing_artifact_bytes_for_stage)
         .sum()
+}
+
+fn cached_artifact_bytes_for_stage(stage: &StagePlan) -> u64 {
+    stage.cached_slice_bytes.min(stage.parameter_bytes)
+}
+
+fn missing_artifact_bytes_for_stage(stage: &StagePlan) -> u64 {
+    stage.missing_artifact_bytes.min(stage.parameter_bytes)
 }

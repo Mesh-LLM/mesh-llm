@@ -203,12 +203,12 @@ fn package_aware_plan_reports_cold_start_artifact_totals() {
         .iter()
         .find(|diagnostic| diagnostic.code == PlanReasonCode::ArtifactTransferPenalty)
         .expect("artifact diagnostic");
-    assert!(diagnostic.message.contains("cached=64 bytes"));
-    assert!(diagnostic.message.contains("missing=48 bytes"));
+    assert!(diagnostic.message.contains("cached=30 bytes"));
+    assert!(diagnostic.message.contains("missing=46 bytes"));
     assert!(
         diagnostic
             .message
-            .contains("peer-transfer-eligible=32 bytes")
+            .contains("peer-transfer-eligible=30 bytes")
     );
     assert!(
         diagnostic
