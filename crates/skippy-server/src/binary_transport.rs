@@ -1615,24 +1615,21 @@ fn binary_message_attrs(
         attr::REQUEST_ID.to_string(),
         json!(binary_message_request_id(message)),
     );
+    attrs.insert(attr::PROMPT_INDEX.to_string(), json!(message.state.seq_id));
     attrs.insert(
-        "skippy.prompt_index".to_string(),
-        json!(message.state.seq_id),
-    );
-    attrs.insert(
-        "skippy.message_kind".to_string(),
+        attr::MESSAGE_KIND.to_string(),
         json!(format!("{:?}", message.kind)),
     );
-    attrs.insert("skippy.token_count".to_string(), json!(message.token_count));
+    attrs.insert(attr::TOKEN_COUNT.to_string(), json!(message.token_count));
     attrs.insert(
-        "skippy.checkpoint_generation".to_string(),
+        attr::CHECKPOINT_GENERATION.to_string(),
         json!(epoch.checkpoint_generation),
     );
     attrs.insert(
-        "skippy.prompt_token_count".to_string(),
+        attr::PROMPT_TOKEN_COUNT.to_string(),
         json!(epoch.prompt_token_count),
     );
-    attrs.insert("skippy.decode_step".to_string(), json!(epoch.decode_step));
+    attrs.insert(attr::DECODE_STEP.to_string(), json!(epoch.decode_step));
     let layer_count = i64::from(config.layer_end.saturating_sub(config.layer_start));
     let kv_tokens_after = estimated_kv_tokens_after(message);
     attrs.insert("skippy.kv_tokens_after".to_string(), json!(kv_tokens_after));
@@ -3020,9 +3017,9 @@ impl BinaryRequestSummary {
         if let Some(request_id) = self.request_id.as_ref() {
             attrs.insert(attr::REQUEST_ID.to_string(), json!(request_id));
         }
-        attrs.insert("skippy.prompt_index".to_string(), json!(self.prompt_index));
+        attrs.insert(attr::PROMPT_INDEX.to_string(), json!(self.prompt_index));
         attrs.insert(
-            "skippy.prompt_token_count".to_string(),
+            attr::PROMPT_TOKEN_COUNT.to_string(),
             json!(self.prompt_token_count),
         );
         attrs.insert(

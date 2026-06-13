@@ -357,6 +357,13 @@ impl StageRequestEpoch {
         self.request_id == other.request_id && self.session_id == other.session_id
     }
 
+    /// Returns true when this epoch is strictly older than `current` within the
+    /// same request/session flow.
+    ///
+    /// Epochs from different flows are never comparable. For matching flows,
+    /// staleness uses lexicographic ordering of checkpoint generation, prompt
+    /// token count, and decode step, so a newer checkpoint dominates prompt and
+    /// decode progress, and prompt progress dominates decode progress.
     pub fn is_stale_for(self, current: Self) -> bool {
         self.same_flow(current)
             && (

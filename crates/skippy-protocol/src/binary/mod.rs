@@ -243,6 +243,40 @@ mod tests {
     }
 
     #[test]
+    fn request_epoch_staleness_orders_generation_before_prompt_before_decode() {
+        let base = StageRequestEpoch {
+            request_id: 7,
+            session_id: 11,
+            checkpoint_generation: 1,
+            prompt_token_count: 8,
+            decode_step: 3,
+        };
+        let newer_checkpoint = StageRequestEpoch {
+            checkpoint_generation: 2,
+            prompt_token_count: 0,
+            decode_step: 0,
+            ..base
+        };
+        let newer_prompt = StageRequestEpoch {
+            prompt_token_count: 9,
+            decode_step: 0,
+            ..base
+        };
+        let newer_decode = StageRequestEpoch {
+            decode_step: 4,
+            ..base
+        };
+
+        assert!(base.same_flow(newer_checkpoint));
+        assert!(base.is_stale_for(newer_checkpoint));
+        assert!(!newer_checkpoint.is_stale_for(base));
+        assert!(base.is_stale_for(newer_prompt));
+        assert!(!newer_prompt.is_stale_for(base));
+        assert!(base.is_stale_for(newer_decode));
+        assert!(!newer_decode.is_stale_for(base));
+    }
+
+    #[test]
     fn generation_config_round_trips_sampling_metadata() {
         let message = StageWireMessage::configure_generation(
             WireActivationDType::F32,
