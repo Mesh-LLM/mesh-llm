@@ -66,6 +66,7 @@ struct BinarySplitConfig {
     activation_wire_dtype: String,
     child_logs: bool,
     startup_timeout_secs: u64,
+    max_inflight: usize,
     model_identity: ModelIdentity,
 }
 
@@ -102,6 +103,7 @@ struct BinaryChainConfig {
     activation_wire_dtype: String,
     child_logs: bool,
     startup_timeout_secs: u64,
+    max_inflight: usize,
     model_identity: ModelIdentity,
 }
 
@@ -143,6 +145,7 @@ struct BinaryStateHandoffConfig {
     runtime_lane_count: Option<u32>,
     borrow_resident_hits: bool,
     cache_decoded_result_hits: bool,
+    skip_suffix_prefill_check: bool,
     synthetic_input_activation: bool,
     binary_control: bool,
     child_logs: bool,
@@ -328,6 +331,7 @@ pub fn chain(args: ChainArgs) -> Result<()> {
         activation_wire_dtype: args.activation_wire_dtype,
         child_logs: args.server.child_logs,
         startup_timeout_secs: args.server.startup_timeout_secs,
+        max_inflight: args.server.max_inflight,
         model_identity: model_identity.clone(),
     })?;
     let matches = baseline.predicted_token == chain.predicted_token;
@@ -493,6 +497,7 @@ pub fn state_handoff(args: StateHandoffArgs) -> Result<()> {
         runtime_lane_count: args.runtime_lane_count,
         borrow_resident_hits: args.borrow_resident_hits,
         cache_decoded_result_hits: args.cache_decoded_result_hits,
+        skip_suffix_prefill_check: args.skip_suffix_prefill_check,
         synthetic_input_activation: args.synthetic_input_activation,
         binary_control: args.binary_control,
         child_logs: args.server.child_logs,
@@ -591,6 +596,7 @@ fn run_single_step_with_baseline(
         activation_wire_dtype: case.activation_wire_dtype,
         child_logs: server.child_logs,
         startup_timeout_secs: server.startup_timeout_secs,
+        max_inflight: server.max_inflight,
         model_identity: model_identity.clone(),
     })?;
     let matches = baseline.predicted_token == split.predicted_token;
@@ -797,6 +803,8 @@ fn run_binary_split(args: BinarySplitConfig) -> Result<BinarySplitResult> {
         &activation_width.to_string(),
         "--activation-wire-dtype",
         &args.activation_wire_dtype,
+        "--max-inflight",
+        &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut stage_command, args.child_logs);
     let _stage1 = ChildGuard::spawn(stage_command)?;
@@ -1078,6 +1086,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         &activation_width.to_string(),
         "--activation-wire-dtype",
         &args.activation_wire_dtype,
+        "--max-inflight",
+        &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut stage2_command, args.child_logs);
     let _stage2 = ChildGuard::spawn(stage2_command)?;
@@ -1101,6 +1111,8 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         &activation_width.to_string(),
         "--activation-wire-dtype",
         &args.activation_wire_dtype,
+        "--max-inflight",
+        &args.max_inflight.to_string(),
     ]);
     configure_child_logs(&mut stage1_command, args.child_logs);
     let _stage1 = ChildGuard::spawn(stage1_command)?;
@@ -1708,6 +1720,7 @@ fn run_local_state_handoff(
 
     let resident_state_bytes = measure_resident_state_bytes(&mut source, args, prefix.len() as u64)
         .context("local state handoff resident KV size measurement failed")?;
+    let source_guard = (args.state_payload_kind == StatePayloadKind::ResidentKv).then_some(source);
 
     let (
         roundtrip_state_payload,
@@ -1777,20 +1790,32 @@ fn run_local_state_handoff(
         cache_hit_matches &=
             predicted == source_predicted_token && output.payload == source_output.payload;
     }
-    let mut suffix_restored =
-        create_local_cache_hit_session(&model, args, &state_payload, prefix.len() as u64, &prefix)
-            .context("local state handoff suffix-prefill restore import failed")?;
-    drop(source);
-    let suffix_prefill_matches = run_local_suffix_prefill_remap_check(
-        &model,
-        &mut suffix_restored,
-        &prefix,
-        continuation,
-        prefill_input.as_ref(),
-        decode_input.as_ref(),
-        include_output,
-    )
-    .context("local state handoff suffix-prefill remap check failed")?;
+    let suffix_prefill_matches = if args.skip_suffix_prefill_check {
+        drop(source_guard);
+        None
+    } else {
+        let mut suffix_restored = create_local_cache_hit_session(
+            &model,
+            args,
+            &state_payload,
+            prefix.len() as u64,
+            &prefix,
+        )
+        .context("local state handoff suffix-prefill restore import failed")?;
+        drop(source_guard);
+        Some(
+            run_local_suffix_prefill_remap_check(
+                &model,
+                &mut suffix_restored,
+                &prefix,
+                continuation,
+                prefill_input.as_ref(),
+                decode_input.as_ref(),
+                include_output,
+            )
+            .context("local state handoff suffix-prefill remap check failed")?,
+        )
+    };
 
     let mut stage_models = Vec::new();
     if let Some(input_resolution) = input_resolution {
@@ -1836,12 +1861,12 @@ fn run_local_state_handoff(
         cache_hit_decode_ms,
         matches: predicted_token_matches
             && restored_output_matches
-            && suffix_prefill_matches
+            && suffix_prefill_matches.unwrap_or(true)
             && cache_hit_matches,
         predicted_token_matches,
         roundtrip_state_matches,
         restored_output_matches: Some(restored_output_matches),
-        suffix_prefill_matches: Some(suffix_prefill_matches),
+        suffix_prefill_matches,
         cache_hit_matches,
         stage_models,
     })

@@ -72,6 +72,8 @@ pub struct ServerArgs {
     pub child_logs: bool,
     #[arg(long, default_value_t = 60)]
     pub startup_timeout_secs: u64,
+    #[arg(long, default_value_t = 4)]
+    pub max_inflight: usize,
 }
 
 #[derive(Args)]
@@ -188,6 +190,8 @@ pub struct StateHandoffArgs {
     pub borrow_resident_hits: bool,
     #[arg(long)]
     pub cache_decoded_result_hits: bool,
+    #[arg(long)]
+    pub skip_suffix_prefill_check: bool,
     #[arg(long)]
     pub synthetic_input_activation: bool,
     #[arg(long)]

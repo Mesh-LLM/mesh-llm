@@ -1620,7 +1620,7 @@ impl StageModel {
         #[cfg(test)]
         {
             let _ = event_reporter;
-            return Self::open_path_with_optional_event_reporter(path, config, None);
+            Self::open_path_with_optional_event_reporter(path, config, None)
         }
 
         #[cfg(not(test))]
@@ -1639,7 +1639,7 @@ impl StageModel {
         #[cfg(test)]
         {
             let _ = event_reporter;
-            return Self::open_parts_with_optional_event_reporter(paths, config, None);
+            Self::open_parts_with_optional_event_reporter(paths, config, None)
         }
 
         #[cfg(not(test))]

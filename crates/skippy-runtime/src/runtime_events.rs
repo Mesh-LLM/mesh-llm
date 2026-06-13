@@ -313,13 +313,13 @@ where
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "dynamic-native-runtime")))]
 fn lookup_model_open_with_events_symbol(name: &[u8]) -> Option<*mut c_void> {
     let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr().cast()) };
     (!symbol.is_null()).then_some(symbol)
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(unix), not(feature = "dynamic-native-runtime")))]
 fn lookup_model_open_with_events_symbol(_name: &[u8]) -> Option<*mut c_void> {
     None
 }

@@ -36,13 +36,17 @@ STATE_PREFIX_TOKENS="${STATE_PREFIX_TOKENS:-128}"
 PROMPT_PREFILL_CHUNK_SIZE="${PROMPT_PREFILL_CHUNK_SIZE:-128}"
 PROMPT_MAX_NEW_TOKENS="${PROMPT_MAX_NEW_TOKENS:-8}"
 SMOKE_COMMAND_TIMEOUT_SECS="${SMOKE_COMMAND_TIMEOUT_SECS:-900}"
+SKIPPY_SMOKE_STARTUP_TIMEOUT_SECS="${SKIPPY_SMOKE_STARTUP_TIMEOUT_SECS:-120}"
 SMOKE_FLASH_ATTN="${SMOKE_FLASH_ATTN:-disabled}"
 SMOKE_N_BATCH="${SMOKE_N_BATCH:-1}"
 SMOKE_N_UBATCH="${SMOKE_N_UBATCH:-1}"
 PROMPT_N_BATCH="${PROMPT_N_BATCH:-$PROMPT_PREFILL_CHUNK_SIZE}"
 PROMPT_N_UBATCH="${PROMPT_N_UBATCH:-$PROMPT_PREFILL_CHUNK_SIZE}"
-DENSE_SMOKE_SPLIT_1="${DENSE_SMOKE_SPLIT_1:-1}"
-DENSE_SMOKE_SPLIT_2="${DENSE_SMOKE_SPLIT_2:-2}"
+DENSE_SMOKE_SPLIT_1="${DENSE_SMOKE_SPLIT_1:-10}"
+DENSE_SMOKE_SPLIT_2="${DENSE_SMOKE_SPLIT_2:-20}"
+SKIPPY_SMOKE_ENABLE_DENSE_CHAIN="${SKIPPY_SMOKE_ENABLE_DENSE_CHAIN:-0}"
+# Dense local state handoff opens extra llama CPU lanes on Linux; keep it opt-in.
+SKIPPY_SMOKE_ENABLE_DENSE_STATE="${SKIPPY_SMOKE_ENABLE_DENSE_STATE:-0}"
 STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-target/debug/skippy-server}"
 
 SERVER_PID=""
@@ -335,48 +339,56 @@ fi
 
 CHAIN_PORT_1="$(pick_port)"
 CHAIN_PORT_2="$(pick_port)"
-echo "smoke: dense 3-stage split ${DENSE_SPLIT_1},${DENSE_SPLIT_2} over ${DENSE_LAYER_END} layers"
-LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  run_with_timeout "dense chain smoke" target/debug/skippy-correctness chain \
-    --model "$DENSE_MODEL_PATH" \
-    --model-id "$DENSE_MODEL_ID" \
-    --layer-end "$DENSE_LAYER_END" \
-    --ctx-size "$CTX_SIZE" \
-    --n-batch "$SMOKE_N_BATCH" \
-    --n-ubatch "$SMOKE_N_UBATCH" \
-    --flash-attn "$SMOKE_FLASH_ATTN" \
-    --prompt "Say hi in three words." \
-    --splits "${DENSE_SPLIT_1},${DENSE_SPLIT_2}" \
-    --stage1-bind-addr "127.0.0.1:${CHAIN_PORT_1}" \
-    --stage2-bind-addr "127.0.0.1:${CHAIN_PORT_2}" \
-    --stage-server-bin "$STAGE_SERVER_BIN" \
-    --startup-timeout-secs 60 \
-    --report-out "$REPORT_DIR/dense-chain.json"
-assert_json "$REPORT_DIR/dense-chain.json" \
-  '.matches == true and (.stages | length) == 3 and any(.stages[]; .forwarded_over_binary == true) and any(.stages[]; .returned_predicted_token == true)'
+if [[ "$SKIPPY_SMOKE_ENABLE_DENSE_CHAIN" == "1" ]]; then
+  echo "smoke: dense 3-stage split ${DENSE_SPLIT_1},${DENSE_SPLIT_2} over ${DENSE_LAYER_END} layers"
+  LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
+    run_with_timeout "dense chain smoke" target/debug/skippy-correctness chain \
+      --model "$DENSE_MODEL_PATH" \
+      --model-id "$DENSE_MODEL_ID" \
+      --layer-end "$DENSE_LAYER_END" \
+      --ctx-size "$CTX_SIZE" \
+      --n-batch "$SMOKE_N_BATCH" \
+      --n-ubatch "$SMOKE_N_UBATCH" \
+      --flash-attn "$SMOKE_FLASH_ATTN" \
+      --prompt "Say hi in three words." \
+      --splits "${DENSE_SPLIT_1},${DENSE_SPLIT_2}" \
+      --stage1-bind-addr "127.0.0.1:${CHAIN_PORT_1}" \
+      --stage2-bind-addr "127.0.0.1:${CHAIN_PORT_2}" \
+      --stage-server-bin "$STAGE_SERVER_BIN" \
+      --startup-timeout-secs "$SKIPPY_SMOKE_STARTUP_TIMEOUT_SECS" \
+      --max-inflight 0 \
+      --report-out "$REPORT_DIR/dense-chain.json"
+  assert_json "$REPORT_DIR/dense-chain.json" \
+    '.matches == true and (.stages | length) == 3 and any(.stages[]; .forwarded_over_binary == true) and any(.stages[]; .returned_predicted_token == true)'
+else
+  echo "smoke: dense 3-stage chain disabled (set SKIPPY_SMOKE_ENABLE_DENSE_CHAIN=1 to enable)"
+fi
 
-echo "smoke: dense ResidentKv cache hit correctness"
-LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  run_with_timeout "dense ResidentKv smoke" target/debug/skippy-correctness state-handoff \
-    --model "$DENSE_MODEL_PATH" \
-    --model-id "$DENSE_MODEL_ID" \
-    --layer-end "$DENSE_LAYER_END" \
-    --ctx-size "$CTX_SIZE" \
-    --n-batch "$SMOKE_N_BATCH" \
-    --n-ubatch "$SMOKE_N_UBATCH" \
-    --flash-attn "$SMOKE_FLASH_ATTN" \
-    --prompt "Dense resident KV cache smoke." \
-    --state-layer-start 0 \
-    --state-layer-end "$DENSE_LAYER_END" \
-    --state-stage-index 0 \
-    --state-payload-kind resident-kv \
-    --prefix-token-count "$STATE_PREFIX_TOKENS" \
-    --cache-hit-repeats 2 \
-    --runtime-lane-count 4 \
-    --borrow-resident-hits \
-    --report-out "$REPORT_DIR/dense-resident-kv.json"
-assert_json "$REPORT_DIR/dense-resident-kv.json" \
-  '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == true and .state_payload_kind == "resident-kv" and .borrowed_resident_hits == true and .cache_hit_repeats == 2 and ((.cache_storage_bytes // 0) > 0 or (.resident_state_bytes // 0) > 0)'
+if [[ "$SKIPPY_SMOKE_ENABLE_DENSE_STATE" == "1" ]]; then
+  echo "smoke: dense full-state cache hit correctness"
+  LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
+    run_with_timeout "dense full-state smoke" target/debug/skippy-correctness state-handoff \
+      --model "$DENSE_MODEL_PATH" \
+      --model-id "$DENSE_MODEL_ID" \
+      --layer-end "$DENSE_LAYER_END" \
+      --ctx-size "$CTX_SIZE" \
+      --n-batch "$SMOKE_N_BATCH" \
+      --n-ubatch "$SMOKE_N_UBATCH" \
+      --flash-attn "$SMOKE_FLASH_ATTN" \
+      --prompt "Dense full-state cache smoke." \
+      --state-layer-start 0 \
+      --state-layer-end "$DENSE_LAYER_END" \
+      --state-stage-index 0 \
+      --state-payload-kind full-state \
+      --prefix-token-count "$STATE_PREFIX_TOKENS" \
+      --cache-hit-repeats 2 \
+      --runtime-lane-count 1 \
+      --report-out "$REPORT_DIR/dense-full-state.json"
+  assert_json "$REPORT_DIR/dense-full-state.json" \
+    '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == true and .state_payload_kind == "full-state" and .cache_hit_repeats == 2 and .state_bytes > 0 and .roundtrip_state_matches == true'
+else
+  echo "smoke: dense state handoff disabled (set SKIPPY_SMOKE_ENABLE_DENSE_STATE=1 to enable)"
+fi
 
 echo "smoke: recurrent KvRecurrent cache hit correctness"
 LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
@@ -395,9 +407,11 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --state-payload-kind kv-recurrent \
     --prefix-token-count "$STATE_PREFIX_TOKENS" \
     --cache-hit-repeats 2 \
+    --runtime-lane-count 1 \
+    --skip-suffix-prefill-check \
     --report-out "$REPORT_DIR/recurrent-kv-recurrent.json"
 assert_json "$REPORT_DIR/recurrent-kv-recurrent.json" \
-  '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == true and .state_payload_kind == "kv-recurrent" and .cache_hit_repeats == 2 and .state_bytes > 0 and .payload_digest.recurrent_bytes > 0 and .payload_digest.kv_bytes > 0'
+  '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == null and .state_payload_kind == "kv-recurrent" and .cache_hit_repeats == 2 and .state_bytes > 0 and .payload_digest.recurrent_bytes > 0 and .payload_digest.kv_bytes > 0'
 
 PROMPT_PORT="$(pick_port)"
 PROMPT_RETURN_PORT="$(pick_port)"

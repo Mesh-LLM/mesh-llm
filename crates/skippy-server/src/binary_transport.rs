@@ -187,7 +187,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         metrics_otlp_grpc,
         telemetry_queue_capacity,
         telemetry_level,
-        max_inflight: _,
+        max_inflight,
         reply_credit_limit,
         async_prefill_forward,
         downstream_wire_condition,
@@ -195,7 +195,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
         openai,
     } = options;
     validate_config(&config, topology.as_ref())?;
-    let max_inflight = config.lane_count as usize;
+    let max_inflight = max_inflight.min(config.lane_count as usize);
     let telemetry = Telemetry::new(
         metrics_otlp_grpc,
         telemetry_queue_capacity,
@@ -204,7 +204,7 @@ fn run_binary_stage(options: BinaryStageOptions, shutdown: Arc<AtomicBool>) -> R
     );
     telemetry.emit("stage.binary_server_start", lifecycle_attrs(&config));
     let runtime = load_runtime(&config)?.context("binary stage server requires model_path")?;
-    {
+    if max_inflight > 0 {
         let timer = Instant::now();
         let sessions = runtime
             .lock()
