@@ -6,8 +6,8 @@ Subject: [PATCH] skippy: add model-open runtime events ABI
 ---
  include/skippy.h        |  15 ++
  include/skippy/common.h |  86 ++++++++-
- src/skippy.cpp          | 411 +++++++++++++++++++++++++++++++++++++---
- 3 files changed, 485 insertions(+), 27 deletions(-)
+ src/skippy.cpp          | 414 +++++++++++++++++++++++++++++++++++++---
+ 3 files changed, 488 insertions(+), 27 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
 index 84173c028..075850e38 100644
@@ -157,7 +157,7 @@ diff --git a/src/skippy.cpp b/src/skippy.cpp
 index f0f14820e..8c04b87da 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
-@@ -205,6 +205,234 @@ static uint64_t skippy_backend_device_caps_from_ggml(const ggml_backend_dev_caps
+@@ -205,6 +205,237 @@ static uint64_t skippy_backend_device_caps_from_ggml(const ggml_backend_dev_caps
      return out;
  }
  
@@ -395,7 +395,7 @@ index f0f14820e..8c04b87da 100644
  static int32_t skippy_layer_from_name(const char * name) {
      if (name == nullptr) {
          return -1;
-@@ -626,6 +854,22 @@ static enum skippy_status skippy_apply_selected_backend_device(
+@@ -626,6 +857,22 @@ static enum skippy_status skippy_apply_selected_backend_device(
      return SKIPPY_STATUS_OK;
  }
  
@@ -418,7 +418,7 @@ index f0f14820e..8c04b87da 100644
  struct skippy_filter_scope {
      explicit skippy_filter_scope(const skippy_runtime_config * config) {
          if (config != nullptr && config->filter_tensors_on_load) {
-@@ -1766,6 +2010,7 @@ uint64_t skippy_abi_features(void) {
+@@ -1766,6 +2013,7 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_PACKAGE_PART_LOAD |
             SKIPPY_FEATURE_GENERATION_SIGNALS |
             SKIPPY_FEATURE_EXTERNAL_MEDIA_PREFILL |
@@ -426,7 +426,7 @@ index f0f14820e..8c04b87da 100644
             SKIPPY_FEATURE_BACKEND_DEVICES;
  }
  
-@@ -1862,6 +2107,7 @@ enum skippy_status skippy_backend_device_at(
+@@ -1862,6 +2110,7 @@ enum skippy_status skippy_backend_device_at(
  static enum skippy_status skippy_finish_model_open(
          llama_model * model,
          const struct skippy_runtime_config * config,
@@ -434,7 +434,7 @@ index f0f14820e..8c04b87da 100644
          struct skippy_model ** out_model,
          struct skippy_error ** out_error) {
      if (config != nullptr && config->filter_tensors_on_load) {
-@@ -1972,27 +2218,47 @@ static enum skippy_status skippy_finish_model_open(
+@@ -1972,27 +2221,47 @@ static enum skippy_status skippy_finish_model_open(
              model->arch != LLM_ARCH_STABLELM &&
              model->arch != LLM_ARCH_XVERSE) {
              llama_model_free(model);
@@ -487,7 +487,7 @@ index f0f14820e..8c04b87da 100644
              return SKIPPY_STATUS_INVALID_ARGUMENT;
          }
      }
-@@ -2027,40 +2293,62 @@ static enum skippy_status skippy_finish_model_open(
+@@ -2027,40 +2296,62 @@ static enum skippy_status skippy_finish_model_open(
      skippy_graph_filter_scope graph_filter_scope(config);
      stage_model->ctx = llama_init_from_model(model, params);
      if (stage_model->ctx == nullptr) {
@@ -558,7 +558,7 @@ index f0f14820e..8c04b87da 100644
          return SKIPPY_STATUS_UNSUPPORTED;
      }
  
-@@ -2071,6 +2359,10 @@ enum skippy_status skippy_model_open(
+@@ -2071,6 +2362,10 @@ enum skippy_status skippy_model_open(
              params.use_extra_bufts = false;
          }
      }
@@ -569,7 +569,7 @@ index f0f14820e..8c04b87da 100644
  
      llama_backend_init();
      if (!ggml_backend_reg_count()) {
-@@ -2079,31 +2371,52 @@ enum skippy_status skippy_model_open(
+@@ -2079,31 +2374,52 @@ enum skippy_status skippy_model_open(
      std::vector<ggml_backend_dev_t> selected_devices;
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
@@ -627,7 +627,7 @@ index f0f14820e..8c04b87da 100644
              return SKIPPY_STATUS_INVALID_ARGUMENT;
          }
      }
-@@ -2111,15 +2424,16 @@ enum skippy_status skippy_model_open_from_parts(
+@@ -2111,15 +2427,16 @@ enum skippy_status skippy_model_open_from_parts(
      *out_model = nullptr;
  
      if (config != nullptr && config->filter_tensors_on_load && (config->layer_start < 0 || config->layer_start >= config->layer_end)) {
@@ -649,7 +649,7 @@ index f0f14820e..8c04b87da 100644
          return SKIPPY_STATUS_UNSUPPORTED;
      }
  
-@@ -2130,6 +2444,10 @@ enum skippy_status skippy_model_open_from_parts(
+@@ -2130,6 +2447,10 @@ enum skippy_status skippy_model_open_from_parts(
              params.use_extra_bufts = false;
          }
      }
@@ -660,7 +660,7 @@ index f0f14820e..8c04b87da 100644
  
      llama_backend_init();
      if (!ggml_backend_reg_count()) {
-@@ -2138,16 +2456,59 @@ enum skippy_status skippy_model_open_from_parts(
+@@ -2138,16 +2459,59 @@ enum skippy_status skippy_model_open_from_parts(
      std::vector<ggml_backend_dev_t> selected_devices;
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
@@ -724,4 +724,3 @@ index f0f14820e..8c04b87da 100644
  enum skippy_status skippy_model_free(
 -- 
 2.50.1 (Apple Git-155)
-
