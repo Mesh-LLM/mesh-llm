@@ -1,7 +1,7 @@
-From 8ace67fd637a3dfa103abfecffb44ee3c6d9200a Mon Sep 17 00:00:00 2001
+From 82da00b8bab66f9b0e9c303611d184c93a7c094f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 20:29:25 +1000
-Subject: [PATCH 76/81] Support Gemma3n runtime slices
+Subject: [PATCH 76/82] Support Gemma3n runtime slices
 
 ---
  include/skippy.h           |   3 +-
@@ -13,7 +13,7 @@ Subject: [PATCH 76/81] Support Gemma3n runtime slices
  6 files changed, 216 insertions(+), 15 deletions(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index eb6da73e..f1ff7852 100644
+index eb6da73ef..f1ff7852b 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -99,7 +99,8 @@ enum skippy_activation_layout {
@@ -27,10 +27,10 @@ index eb6da73e..f1ff7852 100644
  struct skippy_model;
  struct skippy_session;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 5b434f58..5c67d271 100644
+index ec748bcaf..5e8bf4835 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -21,6 +21,7 @@
+@@ -22,6 +22,7 @@
  static thread_local skippy_graph_filter g_skippy_graph_filter;
  static thread_local skippy_activation_tokens g_skippy_activation_tokens;
  static thread_local skippy_activation_rwkv7_v_first g_skippy_rwkv7_v_first;
@@ -38,7 +38,7 @@ index 5b434f58..5c67d271 100644
  
  void skippy_graph_set_filter(const skippy_graph_filter & filter) {
      g_skippy_graph_filter = filter;
-@@ -58,6 +59,18 @@ const skippy_activation_rwkv7_v_first & skippy_graph_get_rwkv7_v_first() {
+@@ -59,6 +60,18 @@ const skippy_activation_rwkv7_v_first & skippy_graph_get_rwkv7_v_first() {
      return g_skippy_rwkv7_v_first;
  }
  
@@ -57,7 +57,7 @@ index 5b434f58..5c67d271 100644
  // dedup helpers
  
  static ggml_tensor * build_attn_inp_kq_mask(
-@@ -167,6 +180,20 @@ bool llm_graph_input_rwkv7_v_first::can_reuse(const llm_graph_params & params) {
+@@ -204,6 +217,20 @@ bool llm_graph_input_rwkv7_v_first::can_reuse(const llm_graph_params & params) {
      return values && values->ne[0] == n_embd && values->ne[1] == params.ubatch.n_tokens;
  }
  
@@ -78,29 +78,29 @@ index 5b434f58..5c67d271 100644
  void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
      if (ubatch->pos && pos) {
          const int64_t n_tokens = ubatch->n_tokens;
-@@ -899,6 +926,7 @@ void llm_graph_result::reset() {
+@@ -980,6 +1007,7 @@ void llm_graph_result::reset() {
      t_embd        = nullptr;
      t_embd_pooled = nullptr;
      t_skippy_rwkv7_v_first = nullptr;
 +    t_skippy_gemma3n_altup = nullptr;
-     t_sampled.clear();
-     t_sampled_probs.clear();
-     t_sampled_logits.clear();
-@@ -943,6 +971,9 @@ void llm_graph_result::set_outputs() {
+ 
+     t_layer_inp.resize(LLAMA_MAX_LAYERS);
+     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
+@@ -1028,6 +1056,9 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
      if (t_skippy_rwkv7_v_first != nullptr) {
          ggml_set_output(t_skippy_rwkv7_v_first);
      }
 +    if (t_skippy_gemma3n_altup != nullptr) {
 +        ggml_set_output(t_skippy_gemma3n_altup);
 +    }
-     for (auto & [seq_id, t] : t_sampled) {
-         if (t != nullptr) {
-             ggml_set_output(t);
+     {
+         const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
+         for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index 8bd370f7..cfb01a5e 100644
+index 3414f3477..57054cd68 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -46,6 +46,13 @@ struct skippy_activation_rwkv7_v_first {
+@@ -47,6 +47,13 @@ struct skippy_activation_rwkv7_v_first {
      uint32_t n_embd = 0;
  };
  
@@ -114,7 +114,7 @@ index 8bd370f7..cfb01a5e 100644
  void skippy_graph_set_filter(const skippy_graph_filter & filter);
  void skippy_graph_clear_filter();
  const skippy_graph_filter & skippy_graph_get_filter();
-@@ -55,6 +62,9 @@ const skippy_activation_tokens & skippy_graph_get_activation_tokens();
+@@ -56,6 +63,9 @@ const skippy_activation_tokens & skippy_graph_get_activation_tokens();
  void skippy_graph_set_rwkv7_v_first(const skippy_activation_rwkv7_v_first & values);
  void skippy_graph_clear_rwkv7_v_first();
  const skippy_activation_rwkv7_v_first & skippy_graph_get_rwkv7_v_first();
@@ -124,7 +124,7 @@ index 8bd370f7..cfb01a5e 100644
  
  // certain models (typically multi-modal) can produce different types of graphs
  enum llm_graph_type {
-@@ -177,6 +187,22 @@ private:
+@@ -196,6 +206,22 @@ private:
      int64_t n_embd;
  };
  
@@ -147,27 +147,27 @@ index 8bd370f7..cfb01a5e 100644
  class llm_graph_input_pos : public llm_graph_input_i {
  public:
      llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
-@@ -704,6 +730,7 @@ public:
+@@ -761,6 +787,7 @@ public:
      ggml_tensor * get_embd_pooled() const { return t_embd_pooled; }
-     ggml_tensor * get_h_pre_norm()  const { return t_h_pre_norm; }
+     ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
      ggml_tensor * get_skippy_rwkv7_v_first() const { return t_skippy_rwkv7_v_first; }
 +    ggml_tensor * get_skippy_gemma3n_altup() const { return t_skippy_gemma3n_altup; }
  
-     ggml_cgraph  * get_gf()  const { return gf; }
-     ggml_context * get_ctx() const { return ctx_compute.get(); }
-@@ -734,6 +761,7 @@ public:
+     ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
+ 
+@@ -793,6 +820,7 @@ public:
      ggml_tensor * t_embd_pooled = nullptr;
-     ggml_tensor * t_h_pre_norm  = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
      ggml_tensor * t_skippy_rwkv7_v_first = nullptr;
 +    ggml_tensor * t_skippy_gemma3n_altup = nullptr;
  
-     std::map<llama_seq_id, ggml_tensor*> t_sampled_logits;
-     std::map<llama_seq_id, ggml_tensor*> t_candidates;
+     std::vector<ggml_tensor *> t_layer_inp;
+ 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 0d6792fb..6beadf7b 100644
+index 8bfc15b2a..1e7ec54cd 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1183,6 +1183,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1185,6 +1185,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                         tn.tensor == LLM_TENSOR_PER_LAYER_MODEL_PROJ ||
                         tn.tensor == LLM_TENSOR_PER_LAYER_PROJ_NORM;
              }
@@ -181,7 +181,7 @@ index 0d6792fb..6beadf7b 100644
  
              if (!keep) {
                  if (t_meta) {
-@@ -1190,7 +1197,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
+@@ -1192,7 +1199,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                              !(flags & TENSOR_NOT_REQUIRED) || requested_shape_matches(t_meta);
                      const std::string tensor_name = tn.str();
                      bool first_filtered_request = true;
@@ -191,7 +191,7 @@ index 0d6792fb..6beadf7b 100644
                      }
                      const size_t nbytes = ggml_nbytes(t_meta);
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index 6ec3a006..625de79d 100644
+index 83eb8250a..c1f6a3f61 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -98,11 +98,28 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
@@ -298,7 +298,7 @@ index 6ec3a006..625de79d 100644
          // Multimodal embedding path: use padding token (ID=0) embedding
          // TODO: verify if this is the correct behavior in transformers implementation
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index e6cca846..75479955 100644
+index 3f7571691..d61f922c9 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -670,6 +670,34 @@ struct skippy_rwkv7_v_first_scope {
@@ -502,5 +502,5 @@ index e6cca846..75479955 100644
              model->arch != LLM_ARCH_GLM_DSA &&
              model->arch != LLM_ARCH_GLM4 &&
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

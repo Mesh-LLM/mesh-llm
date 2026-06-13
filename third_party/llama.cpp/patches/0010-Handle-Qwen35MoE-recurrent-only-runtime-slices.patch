@@ -1,7 +1,7 @@
-From 0ed8fa35c7407ab110b9e464d0d175270085a9bc Mon Sep 17 00:00:00 2001
+From efaf311c737a9a0768e573649929cbbd9eddf34b Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 15:44:46 +1000
-Subject: [PATCH 10/81] Handle Qwen35MoE recurrent-only runtime slices
+Subject: [PATCH 10/82] Handle Qwen35MoE recurrent-only runtime slices
 
 ---
  src/llama-graph.cpp      | 24 +++++++++++++++++-------
@@ -9,10 +9,10 @@ Subject: [PATCH 10/81] Handle Qwen35MoE recurrent-only runtime slices
  2 files changed, 25 insertions(+), 8 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 2e7ae884..68248ac5 100644
+index 3f6342b2a..f6042d81a 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -603,17 +603,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
+@@ -680,17 +680,22 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
  }
  
  void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
@@ -40,7 +40,7 @@ index 2e7ae884..68248ac5 100644
      }
  
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
-@@ -656,9 +661,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
+@@ -733,9 +738,14 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
  // Instead of creating a hybrid input, the graph can simply create 2 separate inputs.
  // Refactoring is required in the future.
  void llm_graph_input_mem_hybrid_k::set_input(const llama_ubatch * ubatch) {
@@ -58,16 +58,16 @@ index 2e7ae884..68248ac5 100644
      const int64_t n_rs = mctx->get_recr()->get_n_rs();
  
 diff --git a/src/models/qwen35moe.cpp b/src/models/qwen35moe.cpp
-index 5aa6242d..be71fa0e 100644
+index 2c46e5f12..c290344c8 100644
 --- a/src/models/qwen35moe.cpp
 +++ b/src/models/qwen35moe.cpp
-@@ -178,6 +178,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+@@ -172,6 +172,13 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
      const bool stage_filtered = stage_filter.enabled;
-     const int il_start = stage_filtered ? std::min(stage_filter.layer_start, n_transformer_layers) : 0;
-     const int il_end   = stage_filtered ? std::min(stage_filter.layer_end,   n_transformer_layers) : n_transformer_layers;
+     const int il_start = stage_filtered ? std::min<int>(stage_filter.layer_start, static_cast<int>(n_layer)) : 0;
+     const int il_end   = stage_filtered ? std::min<int>(stage_filter.layer_end,   static_cast<int>(n_layer)) : n_layer;
 +    bool has_attention_layer = false;
 +    for (int il = il_start; il < il_end; ++il) {
-+        if (!hparams.is_recurrent(il)) {
++        if (!hparams.is_recr(il)) {
 +            has_attention_layer = true;
 +            break;
 +        }
@@ -75,7 +75,7 @@ index 5aa6242d..be71fa0e 100644
  
      inpL = build_inp_embd(stage_filtered && il_start > 0 ? nullptr : model.tok_embd);
  
-@@ -185,7 +192,7 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
+@@ -179,7 +186,7 @@ llama_model_qwen35moe::graph::graph(const llama_model & model, const llm_graph_p
  
      auto * inp = build_inp_mem_hybrid();
  
@@ -83,7 +83,6 @@ index 5aa6242d..be71fa0e 100644
 +    ggml_tensor * inp_pos     = has_attention_layer ? build_inp_pos() : nullptr;
      ggml_tensor * inp_out_ids = (!stage_filtered || stage_filter.include_output) ? build_inp_out_ids() : nullptr;
  
-     for (int il = il_start; il < il_end; ++il) {
+     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
 -- 
-2.50.1 (Apple Git-155)
-
+2.54.0 (Apple Git-156)

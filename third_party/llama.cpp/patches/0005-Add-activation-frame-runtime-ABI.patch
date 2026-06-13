@@ -1,7 +1,7 @@
-From 82245852930b1698669cfb15bf0f5609353bf9c3 Mon Sep 17 00:00:00 2001
+From 1da4c2df3ba0ea3ca20f9671ab173ba21c8c67dd Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 12:15:31 +1000
-Subject: [PATCH 05/81] Add activation frame runtime ABI
+Subject: [PATCH 05/82] Add activation frame runtime ABI
 
 ---
  include/skippy.h |  50 +++++++++++++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 05/81] Add activation frame runtime ABI
  2 files changed, 161 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy.h b/include/skippy.h
-index b0f3d227..cd72379d 100644
+index b0f3d227f..cd72379df 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -36,6 +36,7 @@ enum skippy_feature {
@@ -91,7 +91,7 @@ index b0f3d227..cd72379d 100644
          struct skippy_session * session,
          int32_t layer_start,
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 10876ee5..4aef362a 100644
+index 10876ee50..4aef362ab 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -187,6 +187,44 @@ static llama_token skippy_greedy_sample(skippy_session * session) {
@@ -228,5 +228,5 @@ index 10876ee5..4aef362a 100644
          struct skippy_session * session,
          int32_t layer_start,
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

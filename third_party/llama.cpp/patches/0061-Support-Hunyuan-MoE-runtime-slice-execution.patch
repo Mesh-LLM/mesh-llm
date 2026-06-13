@@ -1,7 +1,7 @@
-From e8047b4922f4c9b2f75636271fba73dacc573614 Mon Sep 17 00:00:00 2001
+From e109e50b70e8cfe2525b1d2f76082f82006ff1ca Mon Sep 17 00:00:00 2001
 From: mesh-llm <mesh-llm@example.com>
 Date: Wed, 6 May 2026 00:00:00 +1000
-Subject: [PATCH 61/81] Support Hunyuan-MoE runtime-slice execution
+Subject: [PATCH 61/82] Support Hunyuan-MoE runtime-slice execution
 
 ---
  src/models/hunyuan-moe.cpp | 20 ++++++++++++++++----
@@ -9,7 +9,7 @@ Subject: [PATCH 61/81] Support Hunyuan-MoE runtime-slice execution
  2 files changed, 17 insertions(+), 4 deletions(-)
 
 diff --git a/src/models/hunyuan-moe.cpp b/src/models/hunyuan-moe.cpp
-index deb3c967..e36de832 100644
+index 4d55f5e7f..3abe5aef4 100644
 --- a/src/models/hunyuan-moe.cpp
 +++ b/src/models/hunyuan-moe.cpp
 @@ -62,7 +62,12 @@ llama_model_hunyuan_moe::graph::graph(const llama_model & model, const llm_graph
@@ -62,7 +62,7 @@ index deb3c967..e36de832 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 7f427aba..f977754c 100644
+index 8a1583dff..338fe94b2 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1589,6 +1589,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -74,5 +74,5 @@ index 7f427aba..f977754c 100644
              model->arch != LLM_ARCH_JAMBA &&
              model->arch != LLM_ARCH_LFM2 &&
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

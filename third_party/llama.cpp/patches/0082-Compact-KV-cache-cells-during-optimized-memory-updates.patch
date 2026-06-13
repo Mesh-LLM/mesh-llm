@@ -1,7 +1,7 @@
-From d683f8a5a1ca50a7f6021b6948e23a8250a4abf4 Mon Sep 17 00:00:00 2001
+From e2980a82ca766a3b9f44c1875cb65e4574df7899 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 30 May 2026 13:13:23 -0700
-Subject: [PATCH] Compact KV cache cells during optimized memory updates
+Subject: [PATCH 82/82] Compact KV cache cells during optimized memory updates
 
 ---
  include/skippy/common.h |   2 +-
@@ -11,25 +11,25 @@ Subject: [PATCH] Compact KV cache cells during optimized memory updates
  4 files changed, 145 insertions(+), 21 deletions(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 26e944d8..a680d342 100644
+index 26e944d8b..a680d3421 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -26,7 +26,7 @@ extern "C" {
-
+ 
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 24
 +#define SKIPPY_ABI_VERSION_PATCH 25
-
+ 
  enum skippy_feature {
      SKIPPY_FEATURE_RUNTIME_SLICE          = 1 << 0,
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 044fbeb8..b4f02eb8 100644
+index 8a3fb5482..0957c6c8b 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -673,11 +673,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
+@@ -751,11 +751,28 @@ llama_memory_context_ptr llama_kv_cache::init_full() {
  }
-
+ 
  llama_memory_context_ptr llama_kv_cache::init_update(llama_context * lctx, bool optimize) {
 -    GGML_UNUSED(optimize);
 -
@@ -48,7 +48,7 @@ index 044fbeb8..b4f02eb8 100644
 +            LLAMA_LOG_DEBUG("%s: compacted %zu KV cells\n", __func__, moves.size());
 +        }
 +    }
-
+ 
 -    return std::make_unique<llama_kv_cache_context>(this, lctx, do_shift, std::move(sc_info));
 +    return std::make_unique<llama_kv_cache_context>(
 +            this,
@@ -57,12 +57,12 @@ index 044fbeb8..b4f02eb8 100644
 +            std::move(sc_info),
 +            did_compact);
  }
-
+ 
  llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_ubatch> & ubatches) {
-@@ -1094,6 +1111,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
+@@ -1182,6 +1199,93 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch &
      }
  }
-
+ 
 +std::vector<llama_kv_cache::compaction_move> llama_kv_cache::compact_cells() {
 +    std::vector<compaction_move> moves;
 +
@@ -153,7 +153,7 @@ index 044fbeb8..b4f02eb8 100644
  bool llama_kv_cache::get_can_shift() const {
      // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
      if (model.arch == LLM_ARCH_STEP35) {
-@@ -2764,8 +2868,9 @@ llama_kv_cache_context::llama_kv_cache_context(
+@@ -2877,8 +2981,9 @@ llama_kv_cache_context::llama_kv_cache_context(
          llama_kv_cache * kv,
          llama_context * lctx,
          bool do_shift,
@@ -166,13 +166,13 @@ index 044fbeb8..b4f02eb8 100644
      }
  }
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index be3c23a0..0783b359 100644
+index 52a013fc7..c1fdfbd5c 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -95,6 +95,12 @@ public:
-
+ 
      using slot_info_vec_t = std::vector<slot_info>;
-
+ 
 +    struct compaction_move {
 +        uint32_t strm;
 +        uint32_t src;
@@ -182,10 +182,10 @@ index be3c23a0..0783b359 100644
      // TODO: refactor the memory instances to not depend on `llama_model`
      //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
      //       likely through `struct llama_memory_params`
-@@ -212,6 +218,10 @@ public:
+@@ -214,6 +220,10 @@ public:
      // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
      void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
-
+ 
 +    // move used cells toward the beginning of each stream and copy the backing KV rows
 +    std::vector<compaction_move> compact_cells();
 +    void copy_compacted_cells(const std::vector<compaction_move> & moves) const;
@@ -193,23 +193,23 @@ index be3c23a0..0783b359 100644
      //
      // input API
      //
-@@ -349,7 +359,8 @@ public:
+@@ -356,7 +366,8 @@ public:
              llama_kv_cache * kv,
              llama_context * lctx,
              bool do_shift,
 -            stream_copy_info sc_info);
 +            stream_copy_info sc_info,
 +            bool did_compact);
-
+ 
      // used to create a batch processing context from a batch
      llama_kv_cache_context(
 diff --git a/src/llama-kv-cells.h b/src/llama-kv-cells.h
-index 10063bf4..73ff1db0 100644
+index fddd31a0b..c1c8dad93 100644
 --- a/src/llama-kv-cells.h
 +++ b/src/llama-kv-cells.h
 @@ -97,24 +97,32 @@ public:
      }
-
+ 
      // move cell isrc to idst (used during defrag)
 -    //void mv(uint32_t isrc, uint32_t idst) {
 -    //    assert(isrc < pos.size());
@@ -218,18 +218,18 @@ index 10063bf4..73ff1db0 100644
 +        assert(isrc < pos.size());
 +        assert(idst < pos.size());
 +        assert(isrc != idst);
-
+ 
 -    //    assert(pos[idst] == -1);
 -    //    assert(pos[isrc] != -1);
 +        assert(pos[idst] == -1);
 +        assert(seq[idst].none());
 +        assert(pos[isrc] != -1);
-
+ 
 -    //    pos  [idst] = pos  [isrc];
 -    //    shift[idst] = shift[isrc];
 -    //    seq  [idst] = seq  [isrc];
 +        seq_pos_rm(isrc);
-
+ 
 -    //    pos  [isrc] = -1;
 -    //    shift[isrc] =  0;
 -    //    seq  [isrc].reset();
@@ -237,7 +237,7 @@ index 10063bf4..73ff1db0 100644
 +        ext  [idst] = ext  [isrc];
 +        shift[idst] = shift[isrc];
 +        seq  [idst] = seq  [isrc];
-
+ 
 -    //    used.erase (isrc);
 -    //    used.insert(idst);
 -    //}
@@ -251,8 +251,9 @@ index 10063bf4..73ff1db0 100644
 +
 +        seq_pos_add(idst);
 +    }
-
+ 
      // copy the state of cells [i, i + n) (used for save/restore the state of the cells)
      llama_kv_cells cp(uint32_t i, uint32_t n) const {
---
-2.50.1 (Apple Git-155)
+-- 
+2.54.0 (Apple Git-156)
+

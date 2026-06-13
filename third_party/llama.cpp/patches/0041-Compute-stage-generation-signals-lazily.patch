@@ -1,14 +1,14 @@
-From e04796e77aed02288e3248b80a2882012c7aebc9 Mon Sep 17 00:00:00 2001
+From 7d67125ac20300c414867cafbea1c3ca9d7eec9a Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 5 May 2026 19:35:00 +1000
-Subject: [PATCH 41/81] Compute stage generation signals lazily
+Subject: [PATCH 41/82] Compute stage generation signals lazily
 
 ---
  src/skippy.cpp | 6 +++---
  1 file changed, 3 insertions(+), 3 deletions(-)
 
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index dccea7d4..e11c31f8 100644
+index bea61d65c..81e661ebf 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -773,9 +773,6 @@ static enum skippy_status skippy_decode_tokens(
@@ -21,7 +21,7 @@ index dccea7d4..e11c31f8 100644
      }
      return status;
  }
-@@ -1802,6 +1799,9 @@ enum skippy_status skippy_session_last_token_signal(
+@@ -1800,6 +1797,9 @@ enum skippy_status skippy_session_last_token_signal(
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and out_signal are required");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
      }
@@ -32,5 +32,5 @@ index dccea7d4..e11c31f8 100644
          skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "no token signal is available");
          return SKIPPY_STATUS_INVALID_ARGUMENT;
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

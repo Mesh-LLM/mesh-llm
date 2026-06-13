@@ -1,17 +1,17 @@
-From b5fe6650b44b2d3574c6733b615affba1ea45294 Mon Sep 17 00:00:00 2001
+From f1c58bae80d2032a58a0f47409813a28e7b7b3bd Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Thu, 7 May 2026 17:40:58 +1000
-Subject: [PATCH 70/81] Skip recurrent layers in native KV page export
+Subject: [PATCH 70/82] Skip recurrent layers in native KV page export
 
 ---
  src/llama-kv-cache.cpp | 42 ++++++++++++++++++++++++++----------------
  1 file changed, 26 insertions(+), 16 deletions(-)
 
 diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
-index 6bdbf42c..8467a433 100644
+index 6fe172866..8a3fb5482 100644
 --- a/src/llama-kv-cache.cpp
 +++ b/src/llama-kv-cache.cpp
-@@ -1206,14 +1206,16 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1300,14 +1300,16 @@ bool llama_kv_cache::stage_export_kv_page(
          if (il < static_cast<uint32_t>(layer_start) || il >= static_cast<uint32_t>(layer_end)) {
              continue;
          }
@@ -33,7 +33,7 @@ index 6bdbf42c..8467a433 100644
  
          if (k_row > std::numeric_limits<uint32_t>::max() ||
                  v_row > std::numeric_limits<uint32_t>::max() ||
-@@ -1226,19 +1228,19 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1320,19 +1322,19 @@ bool llama_kv_cache::stage_export_kv_page(
              v_row_bytes = static_cast<uint32_t>(v_row);
              v_element_bytes = static_cast<uint32_t>(v_el);
              k_type = static_cast<uint32_t>(layer.k_stream[strm]->type);
@@ -58,7 +58,7 @@ index 6bdbf42c..8467a433 100644
          const uint64_t k_bytes = token_count * k_row;
          if (payload_bytes > std::numeric_limits<uint64_t>::max() - k_bytes ||
                  payload_bytes + k_bytes > std::numeric_limits<uint64_t>::max() - v_bytes) {
-@@ -1292,6 +1294,9 @@ bool llama_kv_cache::stage_export_kv_page(
+@@ -1386,6 +1388,9 @@ bool llama_kv_cache::stage_export_kv_page(
  
      if (!v_trans) {
          for (const auto * layer : selected) {
@@ -68,7 +68,7 @@ index 6bdbf42c..8467a433 100644
              auto * v = layer->v_stream[strm];
              for (uint32_t cell_idx : cell_idxs) {
                  ggml_backend_tensor_get(v, dst, static_cast<size_t>(cell_idx) * v_row_bytes, v_row_bytes);
-@@ -1370,15 +1375,17 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1464,15 +1469,17 @@ bool llama_kv_cache::stage_import_kv_page(
          if (il < static_cast<uint32_t>(desc.layer_start) || il >= static_cast<uint32_t>(desc.layer_end)) {
              continue;
          }
@@ -92,7 +92,7 @@ index 6bdbf42c..8467a433 100644
                  desc.k_row_bytes != k_row ||
                  desc.v_row_bytes != v_row ||
                  desc.v_element_bytes != v_el) {
-@@ -1461,6 +1468,9 @@ bool llama_kv_cache::stage_import_kv_page(
+@@ -1555,6 +1562,9 @@ bool llama_kv_cache::stage_import_kv_page(
      auto & cells = v_cells[strm];
      if (!v_trans) {
          for (const auto * layer : selected) {
@@ -103,5 +103,5 @@ index 6bdbf42c..8467a433 100644
              for (uint32_t i = 0; i < n_tokens; ++i) {
                  ggml_backend_tensor_set(v, src, static_cast<size_t>(sinfo.idxs[0][i]) * desc.v_row_bytes, desc.v_row_bytes);
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

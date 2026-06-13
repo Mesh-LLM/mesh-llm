@@ -1,7 +1,7 @@
-From 423e9f683be01d8ca10ff1d5c4231a58d876b12f Mon Sep 17 00:00:00 2001
+From f94f60e90f76e946c00bdfff41e8fe52bccf61b1 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 10:02:20 +1000
-Subject: [PATCH 54/81] Support RWKV6 runtime-slice execution
+Subject: [PATCH 54/82] Support RWKV6 runtime-slice execution
 
 ---
  src/models/rwkv6.cpp | 25 +++++++++++++++++++------
@@ -9,7 +9,7 @@ Subject: [PATCH 54/81] Support RWKV6 runtime-slice execution
  2 files changed, 20 insertions(+), 6 deletions(-)
 
 diff --git a/src/models/rwkv6.cpp b/src/models/rwkv6.cpp
-index ba2a9dfa..9cdd1df7 100644
+index 0b5013dc7..bb9471ea5 100644
 --- a/src/models/rwkv6.cpp
 +++ b/src/models/rwkv6.cpp
 @@ -62,7 +62,7 @@ void llama_model_rwkv6::load_arch_tensors(llama_model_loader &) {
@@ -74,7 +74,7 @@ index ba2a9dfa..9cdd1df7 100644
      cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
  
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 5e660d90..3670218b 100644
+index 04e69456a..59db84419 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1487,6 +1487,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -86,5 +86,5 @@ index 5e660d90..3670218b 100644
              model->arch != LLM_ARCH_GEMMA2 &&
              model->arch != LLM_ARCH_GEMMA3 &&
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

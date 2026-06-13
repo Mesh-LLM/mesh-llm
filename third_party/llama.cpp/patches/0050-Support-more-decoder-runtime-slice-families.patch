@@ -1,7 +1,7 @@
-From 06158f0b2fe9739c72360fd0b0c352568b70b9a6 Mon Sep 17 00:00:00 2001
+From 7195721fad16be16aa8f34bd8d0f2898d96d2a6f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 08:58:17 +1000
-Subject: [PATCH 50/81] Support more decoder runtime-slice families
+Subject: [PATCH 50/82] Support more decoder runtime-slice families
 
 ---
  src/models/gpt2.cpp    | 33 +++++++++++++++++++++++----------
@@ -14,10 +14,10 @@ Subject: [PATCH 50/81] Support more decoder runtime-slice families
  7 files changed, 111 insertions(+), 32 deletions(-)
 
 diff --git a/src/models/gpt2.cpp b/src/models/gpt2.cpp
-index e2dcc8b1..5f66cf4d 100644
+index 45afbccc1..cf3c658a9 100644
 --- a/src/models/gpt2.cpp
 +++ b/src/models/gpt2.cpp
-@@ -63,22 +63,28 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
+@@ -64,22 +64,28 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
      ggml_tensor * pos;
      ggml_tensor * inpL;
  
@@ -55,7 +55,7 @@ index e2dcc8b1..5f66cf4d 100644
          cur = build_norm(inpL,
                  model.layers[il].attn_norm,
                  model.layers[il].attn_norm_b,
-@@ -95,7 +101,7 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
+@@ -96,7 +102,7 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
  
@@ -64,7 +64,7 @@ index e2dcc8b1..5f66cf4d 100644
              cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
              inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
          }
-@@ -130,6 +136,13 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
+@@ -131,6 +137,13 @@ llama_model_gpt2::graph::graph(const llama_model & model, const llm_graph_params
          inpL = cur;
      }
  
@@ -79,7 +79,7 @@ index e2dcc8b1..5f66cf4d 100644
              model.output_norm,
              model.output_norm_b,
 diff --git a/src/models/mpt.cpp b/src/models/mpt.cpp
-index 0229d20e..45b4ec19 100644
+index d094fd9f8..3b008a5db 100644
 --- a/src/models/mpt.cpp
 +++ b/src/models/mpt.cpp
 @@ -73,11 +73,16 @@ llama_model_mpt::graph::graph(const llama_model & model, const llm_graph_params
@@ -137,7 +137,7 @@ index 0229d20e..45b4ec19 100644
  
      cb(cur, "result_norm", -1);
 diff --git a/src/models/olmo2.cpp b/src/models/olmo2.cpp
-index 7cc262f5..8fc8fa0a 100644
+index cb52cdef7..38b3de364 100644
 --- a/src/models/olmo2.cpp
 +++ b/src/models/olmo2.cpp
 @@ -71,7 +71,12 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
@@ -190,10 +190,10 @@ index 7cc262f5..8fc8fa0a 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/olmoe.cpp b/src/models/olmoe.cpp
-index 7976ae44..32d56a60 100644
+index 1e2baeb20..4c6c4ef81 100644
 --- a/src/models/olmoe.cpp
 +++ b/src/models/olmoe.cpp
-@@ -58,16 +58,21 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -59,16 +59,21 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -218,7 +218,7 @@ index 7976ae44..32d56a60 100644
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -120,7 +125,7 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -121,7 +126,7 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
                      model.layers[il].wo, NULL, model.layers[il].wo_s,
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
@@ -227,7 +227,7 @@ index 7976ae44..32d56a60 100644
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -156,6 +161,13 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
+@@ -157,6 +162,13 @@ llama_model_olmoe::graph::graph(const llama_model & model, const llm_graph_param
      }
      cur = inpL;
  
@@ -242,7 +242,7 @@ index 7976ae44..32d56a60 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen2vl.cpp b/src/models/qwen2vl.cpp
-index d79db682..d5f8ba3a 100644
+index d79db682c..d5f8ba3ac 100644
 --- a/src/models/qwen2vl.cpp
 +++ b/src/models/qwen2vl.cpp
 @@ -48,7 +48,12 @@ llama_model_qwen2vl::graph::graph(const llama_model & model, const llm_graph_par
@@ -295,10 +295,10 @@ index d79db682..d5f8ba3a 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/models/qwen3vl.cpp b/src/models/qwen3vl.cpp
-index 5defd893..030861a5 100644
+index 724d6140d..f5a2a691e 100644
 --- a/src/models/qwen3vl.cpp
 +++ b/src/models/qwen3vl.cpp
-@@ -62,7 +62,12 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+@@ -63,7 +63,12 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
      ggml_tensor * cur;
      ggml_tensor * inpL;
  
@@ -312,7 +312,7 @@ index 5defd893..030861a5 100644
  
      int sections[4];
      std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-@@ -72,9 +77,9 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+@@ -73,9 +78,9 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
  
      auto * inp_attn = build_attn_inp_kv();
  
@@ -324,7 +324,7 @@ index 5defd893..030861a5 100644
          ggml_tensor * inpSA = inpL;
  
          // norm
-@@ -116,7 +121,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+@@ -117,7 +122,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
                      Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
          }
  
@@ -333,7 +333,7 @@ index 5defd893..030861a5 100644
              cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
              inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
          }
-@@ -143,7 +148,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+@@ -144,7 +149,7 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
          cur = build_cvec(cur, il);
          cb(cur, "l_out", il);
  
@@ -342,7 +342,7 @@ index 5defd893..030861a5 100644
              ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], (il + 1) * n_embd * sizeof(float));
              cur = ggml_add(ctx0, cur, ds);
              cb(cur, "deepstack_out", il);
-@@ -155,6 +160,13 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
+@@ -156,6 +161,13 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
  
      cur = inpL;
  
@@ -357,7 +357,7 @@ index 5defd893..030861a5 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index eeacbfa6..3b97c709 100644
+index 788ea9991..5eadfbeec 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1468,13 +1468,19 @@ static enum skippy_status skippy_finish_model_open(
@@ -381,5 +381,5 @@ index eeacbfa6..3b97c709 100644
              model->arch != LLM_ARCH_QWEN3MOE &&
              model->arch != LLM_ARCH_GEMMA &&
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

@@ -1,7 +1,7 @@
-From 05adff769be57ce7481b401cfa513c80fd2b56ce Mon Sep 17 00:00:00 2001
+From e3b1686355e0bca045ee85c5ac27839910ecdfc5 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Tue, 28 Apr 2026 00:00:00 +1000
-Subject: [PATCH 27/81] Expose stage chat template thinking toggle
+Subject: [PATCH 27/82] Expose stage chat template thinking toggle
 
 ---
  common/stage-chat.cpp | 15 +++++++++++++++
@@ -9,7 +9,7 @@ Subject: [PATCH 27/81] Expose stage chat template thinking toggle
  2 files changed, 18 insertions(+), 1 deletion(-)
 
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
-index 39d6331a..60d53fc4 100644
+index 39d6331ac..60d53fc49 100644
 --- a/common/stage-chat.cpp
 +++ b/common/stage-chat.cpp
 @@ -50,6 +50,8 @@ enum skippy_status skippy_apply_chat_template(
@@ -42,7 +42,7 @@ index 39d6331a..60d53fc4 100644
  
      for (size_t i = 0; i < message_count; ++i) {
 diff --git a/include/skippy.h b/include/skippy.h
-index 302ad3b4..69293d6d 100644
+index 302ad3b46..69293d6d3 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -26,7 +26,7 @@ extern "C" {
@@ -64,5 +64,5 @@ index 302ad3b4..69293d6d 100644
          size_t output_text_capacity,
          size_t * out_text_bytes,
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 

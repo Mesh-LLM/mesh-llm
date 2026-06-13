@@ -1,7 +1,7 @@
-From 646fcbca3c6981bce82d8de44dbc366058fac072 Mon Sep 17 00:00:00 2001
+From 443fde64580ce7773587466424daf20a7ff2b20f Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 6 May 2026 09:27:42 +1000
-Subject: [PATCH 51/81] Support LFM2 runtime-slice execution
+Subject: [PATCH 51/82] Support LFM2 runtime-slice execution
 
 ---
  src/models/lfm2.cpp | 30 +++++++++++++++++++++++++-----
@@ -9,10 +9,10 @@ Subject: [PATCH 51/81] Support LFM2 runtime-slice execution
  2 files changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index 29081344..d456a832 100644
+index 97da8a6ab..8a0d75840 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
-@@ -213,7 +213,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -217,7 +217,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
      };
  
      // actual graph construction starts here
@@ -24,7 +24,7 @@ index 29081344..d456a832 100644
 +
 +    bool has_attention_layer = false;
 +    for (int il = il_start; il < il_end; ++il) {
-+        if (!hparams.is_recurrent(il)) {
++        if (!hparams.is_recr(il)) {
 +            has_attention_layer = true;
 +            break;
 +        }
@@ -34,7 +34,7 @@ index 29081344..d456a832 100644
      cb(cur, "model.embed_tokens", -1);
  
      ggml_build_forward_expand(gf, cur);
-@@ -225,10 +238,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -229,10 +242,10 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          inp_hybrid = build_inp_mem_hybrid();
      }
  
@@ -48,16 +48,16 @@ index 29081344..d456a832 100644
          const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
  
          auto * prev_cur = cur;
-@@ -238,7 +251,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
-         cur = hparams.is_recurrent(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
-                                          build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
+@@ -242,7 +255,7 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+         cur = hparams.is_recr(il) ? build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
+                                     build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il);
  
 -        if (il == n_layer - 1 && inp_out_ids) {
 +        if (il == il_end - 1 && inp_out_ids) {
              cur      = ggml_get_rows(ctx0, cur, inp_out_ids);
              prev_cur = ggml_get_rows(ctx0, prev_cur, inp_out_ids);
          }
-@@ -258,6 +271,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
+@@ -262,6 +275,13 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
          cb(cur, "l_out", il);
      }
  
@@ -72,7 +72,7 @@ index 29081344..d456a832 100644
      cb(cur, "result_norm", -1);
      res->t_embd = cur;
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 3b97c709..39990dd4 100644
+index 5eadfbeec..daa3b249a 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1472,6 +1472,7 @@ static enum skippy_status skippy_finish_model_open(
@@ -84,5 +84,4 @@ index 3b97c709..39990dd4 100644
              model->arch != LLM_ARCH_MPT &&
              model->arch != LLM_ARCH_OLMO2 &&
 -- 
-2.50.1 (Apple Git-155)
-
+2.54.0 (Apple Git-156)

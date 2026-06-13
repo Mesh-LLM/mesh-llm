@@ -1,7 +1,7 @@
-From fab9a753c08883775e7a3a53784bbfeb8c8dcaba Mon Sep 17 00:00:00 2001
+From ad8f9af6588f8f1482089b9bbd0ab71ae015363d Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 25 Apr 2026 12:33:30 +1000
-Subject: [PATCH 06/81] Execute runtime-slice activation frames
+Subject: [PATCH 06/82] Execute runtime-slice activation frames
 
 ---
  src/llama-graph.cpp  |  52 ++++---
@@ -11,10 +11,10 @@ Subject: [PATCH 06/81] Execute runtime-slice activation frames
  4 files changed, 365 insertions(+), 53 deletions(-)
 
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index fc027de8..2e7ae884 100644
+index 7468bd9b7..3f6342b2a 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
-@@ -18,6 +18,20 @@
+@@ -19,6 +19,20 @@
  #include <sstream>
  #include <unordered_set>
  
@@ -35,7 +35,7 @@ index fc027de8..2e7ae884 100644
  // dedup helpers
  
  static ggml_tensor * build_attn_inp_kq_mask(
-@@ -1747,28 +1761,32 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
+@@ -1842,28 +1856,32 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
      {
          auto & cur = inps[0];
  
@@ -86,10 +86,10 @@ index fc027de8..2e7ae884 100644
      }
  
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index bf677823..f01cbabd 100644
+index cc5cfe51d..84b7124a1 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
-@@ -27,6 +27,18 @@ class llama_memory_recurrent_context;
+@@ -28,6 +28,18 @@ class llama_memory_recurrent_context;
  class llama_memory_hybrid_context;
  class llama_memory_hybrid_iswa_context;
  
@@ -109,7 +109,7 @@ index bf677823..f01cbabd 100644
  enum llm_graph_type {
      LLM_GRAPH_TYPE_DEFAULT,
 diff --git a/src/models/llama.cpp b/src/models/llama.cpp
-index cef66d05..581826b0 100644
+index 4bfebc884..23864f0dd 100644
 --- a/src/models/llama.cpp
 +++ b/src/models/llama.cpp
 @@ -105,7 +105,12 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
@@ -135,10 +135,10 @@ index cef66d05..581826b0 100644
  
 -    for (int il = 0; il < n_layer; ++il) {
 +    for (int il = il_start; il < il_end; ++il) {
-         ggml_tensor * inpSA = inpL;
+         res->t_layer_inp[il] = inpL;
  
-         // norm
-@@ -226,6 +231,13 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
+         ggml_tensor * inpSA = inpL;
+@@ -228,6 +233,13 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
      }
      cur = inpL;
  
@@ -153,7 +153,7 @@ index cef66d05..581826b0 100644
              model.output_norm, NULL,
              LLM_NORM_RMS, -1);
 diff --git a/src/skippy.cpp b/src/skippy.cpp
-index 4aef362a..732a1a15 100644
+index 4aef362ab..732a1a15c 100644
 --- a/src/skippy.cpp
 +++ b/src/skippy.cpp
 @@ -1,6 +1,8 @@
@@ -612,5 +612,5 @@ index 4aef362a..732a1a15 100644
  
  enum skippy_status skippy_export_state(
 -- 
-2.50.1 (Apple Git-155)
+2.54.0 (Apple Git-156)
 
