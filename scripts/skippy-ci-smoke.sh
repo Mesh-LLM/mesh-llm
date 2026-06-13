@@ -41,8 +41,9 @@ SMOKE_N_BATCH="${SMOKE_N_BATCH:-1}"
 SMOKE_N_UBATCH="${SMOKE_N_UBATCH:-1}"
 PROMPT_N_BATCH="${PROMPT_N_BATCH:-$PROMPT_PREFILL_CHUNK_SIZE}"
 PROMPT_N_UBATCH="${PROMPT_N_UBATCH:-$PROMPT_PREFILL_CHUNK_SIZE}"
-DENSE_SMOKE_SPLIT_1="${DENSE_SMOKE_SPLIT_1:-1}"
-DENSE_SMOKE_SPLIT_2="${DENSE_SMOKE_SPLIT_2:-2}"
+DENSE_SMOKE_SPLIT_1="${DENSE_SMOKE_SPLIT_1:-}"
+DENSE_SMOKE_SPLIT_2="${DENSE_SMOKE_SPLIT_2:-}"
+DENSE_CHAIN_STARTUP_TIMEOUT_SECS="${DENSE_CHAIN_STARTUP_TIMEOUT_SECS:-180}"
 STAGE_SERVER_BIN="${STAGE_SERVER_BIN:-target/debug/skippy-server}"
 
 SERVER_PID=""
@@ -326,8 +327,26 @@ fi
 echo "smoke: dense model has ${DENSE_LAYER_END} layers"
 echo "smoke: recurrent model has ${RECURRENT_LAYER_END} layers"
 
-DENSE_SPLIT_1="$DENSE_SMOKE_SPLIT_1"
-DENSE_SPLIT_2="$DENSE_SMOKE_SPLIT_2"
+if [[ -n "$DENSE_SMOKE_SPLIT_1" || -n "$DENSE_SMOKE_SPLIT_2" ]]; then
+  if [[ -z "$DENSE_SMOKE_SPLIT_1" || -z "$DENSE_SMOKE_SPLIT_2" ]]; then
+    echo "set both DENSE_SMOKE_SPLIT_1 and DENSE_SMOKE_SPLIT_2, or leave both unset for balanced splits" >&2
+    exit 1
+  fi
+  DENSE_SPLIT_1="$DENSE_SMOKE_SPLIT_1"
+  DENSE_SPLIT_2="$DENSE_SMOKE_SPLIT_2"
+else
+  DENSE_SPLIT_1=$((DENSE_LAYER_END / 3))
+  if [[ "$DENSE_SPLIT_1" -lt 1 ]]; then
+    DENSE_SPLIT_1=1
+  fi
+  DENSE_SPLIT_2=$(((DENSE_LAYER_END * 2) / 3))
+  if [[ "$DENSE_SPLIT_2" -le "$DENSE_SPLIT_1" ]]; then
+    DENSE_SPLIT_2=$((DENSE_SPLIT_1 + 1))
+  fi
+  if [[ "$DENSE_SPLIT_2" -ge "$DENSE_LAYER_END" ]]; then
+    DENSE_SPLIT_2=$((DENSE_LAYER_END - 1))
+  fi
+fi
 if [[ "$DENSE_SPLIT_1" -lt 1 || "$DENSE_SPLIT_1" -ge "$DENSE_SPLIT_2" || "$DENSE_SPLIT_2" -ge "$DENSE_LAYER_END" ]]; then
   echo "dense smoke splits ${DENSE_SPLIT_1},${DENSE_SPLIT_2} must partition 0..${DENSE_LAYER_END}" >&2
   exit 1
@@ -350,7 +369,7 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --stage1-bind-addr "127.0.0.1:${CHAIN_PORT_1}" \
     --stage2-bind-addr "127.0.0.1:${CHAIN_PORT_2}" \
     --stage-server-bin "$STAGE_SERVER_BIN" \
-    --startup-timeout-secs 60 \
+    --startup-timeout-secs "$DENSE_CHAIN_STARTUP_TIMEOUT_SECS" \
     --report-out "$REPORT_DIR/dense-chain.json"
 assert_json "$REPORT_DIR/dense-chain.json" \
   '.matches == true and (.stages | length) == 3 and any(.stages[]; .forwarded_over_binary == true) and any(.stages[]; .returned_predicted_token == true)'
