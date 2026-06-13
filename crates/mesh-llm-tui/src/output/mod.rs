@@ -8494,7 +8494,12 @@ fn build_fatal_error_event(err: &AnyhowError) -> OutputEvent {
 }
 
 pub fn emit_fatal_error(err: &AnyhowError) -> io::Result<()> {
-    emit_event(build_fatal_error_event(err))
+    let event = build_fatal_error_event(err);
+    if GLOBAL_OUTPUT_MANAGER.get().is_some() {
+        emit_event(event)
+    } else {
+        write_emergency_event(&event)
+    }
 }
 
 pub fn emit_fatal_panic(message: impl Into<String>, context: Option<String>) -> io::Result<()> {

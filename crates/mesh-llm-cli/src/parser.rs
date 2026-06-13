@@ -1479,66 +1479,47 @@ mod tests {
     }
 
     #[test]
-    fn gpus_command_parses_without_subcommand() {
-        let cli = Cli::parse_from(["mesh-llm", "gpus"]);
+    fn gpu_and_gpus_spellings_are_synonymous() {
+        let cases = [
+            (&["gpus"][..], false, None),
+            (&["gpu"][..], false, None),
+            (&["gpus", "--json"][..], true, None),
+            (&["gpu", "--json"][..], true, None),
+            (&["gpus", "detect"][..], false, Some(false)),
+            (&["gpu", "detect"][..], false, Some(false)),
+            (&["gpus", "detect", "--json"][..], false, Some(true)),
+            (&["gpu", "detect", "--json"][..], false, Some(true)),
+        ];
 
-        match cli.command.expect("gpu command expected") {
-            Command::Gpus { json, command } => {
-                assert!(!json);
-                assert!(command.is_none());
-            }
-            other => panic!("unexpected command: {other:?}"),
+        for (args, expected_command_json, expected_detect_json) in cases {
+            assert_gpu_command_parse(args, expected_command_json, expected_detect_json);
         }
     }
 
-    #[test]
-    fn gpu_alias_parses_without_subcommand() {
-        let cli = Cli::parse_from(["mesh-llm", "gpu"]);
+    fn assert_gpu_command_parse(
+        args: &[&str],
+        expected_command_json: bool,
+        expected_detect_json: Option<bool>,
+    ) {
+        let cli = Cli::parse_from(std::iter::once("mesh-llm").chain(args.iter().copied()));
 
         match cli.command.expect("gpu command expected") {
             Command::Gpus { json, command } => {
-                assert!(!json);
-                assert!(command.is_none());
+                assert_eq!(json, expected_command_json, "command json for {args:?}");
+                match (command, expected_detect_json) {
+                    (None, None) => {}
+                    (Some(GpuCommand::Detect { json }), Some(expected_json)) => {
+                        assert_eq!(json, expected_json, "detect json for {args:?}");
+                    }
+                    (actual, expected) => {
+                        panic!(
+                            "unexpected detect command for {args:?}: {actual:?}, expected {expected:?}"
+                        );
+                    }
+                }
             }
-            other => panic!("unexpected command: {other:?}"),
+            other => panic!("unexpected command for {args:?}: {other:?}"),
         }
-    }
-
-    #[test]
-    fn gpus_command_accepts_json_flag() {
-        let cli = Cli::parse_from(["mesh-llm", "gpus", "--json"]);
-
-        match cli.command.expect("gpu command expected") {
-            Command::Gpus { json, command } => {
-                assert!(json);
-                assert!(command.is_none());
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn gpu_detect_subcommand_parses() {
-        let cli = Cli::parse_from(["mesh-llm", "gpu", "detect"]);
-        assert!(matches!(
-            cli.command,
-            Some(Command::Gpus {
-                json: false,
-                command: Some(GpuCommand::Detect { json: false }),
-            })
-        ));
-    }
-
-    #[test]
-    fn gpu_detect_subcommand_accepts_json_flag() {
-        let cli = Cli::parse_from(["mesh-llm", "gpu", "detect", "--json"]);
-        assert!(matches!(
-            cli.command,
-            Some(Command::Gpus {
-                json: false,
-                command: Some(GpuCommand::Detect { json: true }),
-            })
-        ));
     }
 
     #[test]

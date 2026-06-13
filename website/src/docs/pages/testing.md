@@ -7,11 +7,11 @@
 ```bash
 mesh-llm gpus
 mesh-llm gpus --json | jq .
-mesh-llm gpu benchmark --json | jq .
+mesh-llm gpus detect --json | jq .
 ```
 
 - Prints local GPU entries with stable IDs, backend devices, VRAM, unified-memory status, and cached bandwidth when a fingerprint is available
-- `--json` emits machine-readable inventory and benchmark payloads suitable for automation
+- `gpus --json` emits machine-readable inventory; `gpus detect --json` refreshes the cached benchmark fingerprint and emits the benchmark payload for automation
 
 ### 0a. Startup config smoke
 

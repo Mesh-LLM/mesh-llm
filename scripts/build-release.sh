@@ -175,7 +175,11 @@ MESH_LLM_BUILD_PROFILE=release "$SCRIPT_DIR/build-ui.sh" "$UI_DIR"
 echo "Building mesh-llm..."
 cargo_features=()
 if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
-    cargo_features=(--features dynamic-native-runtime)
+    cargo_features+=(--features dynamic-native-runtime)
 fi
+case "$BACKEND" in
+    cuda) cargo_features+=(--features gpu-bench-cuda) ;;
+    rocm) cargo_features+=(--features gpu-bench-hip) ;;
+esac
 stamp_build_version
 (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm "${cargo_features[@]}")
