@@ -171,12 +171,14 @@ For the current PR build topology, see [`ci/ci.md`](ci/ci.md). For workflow-edit
 
 ### What triggers what
 
-| Changed paths | `PR Quality Checks` | `PR Builds` CPU rows | Backend target rows |
+| Changed paths | `PR Quality Checks` | `PR Builds` CPU/artifact rows | Backend target rows |
 | --- | --- | --- | --- |
-| Rust crate or build-script changes | ✅ fmt/clippy | ✅ Linux/macOS/Windows CPU routing as needed | ⏭ skipped unless backend inputs changed |
-| `third_party/llama.cpp/**`, backend build scripts, `.github/workflows/pr_*.yml`, cache-version, `Justfile` | ✅ fmt/clippy | ✅ runs | ✅ CUDA/ROCm/Vulkan rows run where supported |
-| `crates/mesh-llm-ui/**` | ✅ UI quality | ✅ Linux/macOS UI build paths | ⏭ skipped |
-| `**/*.md`, `docs/**`, anything docs-only | ✅ changes summary only | ⏭ skipped | ⏭ skipped |
+| Runtime-facing Rust crates | ✅ fmt/clippy | ✅ Linux/macOS artifacts and Windows routing as needed | ⏭ skipped unless backend inputs changed |
+| Rust tooling crates such as `tools/xtask/**` | ✅ fmt/clippy | ⏭ skipped unless another runtime/backend input changed | ⏭ skipped |
+| `third_party/llama.cpp/**`, `crates/skippy-ffi/**`, backend build scripts, cache-version, backend-relevant `Justfile` hunks | ✅ fmt/clippy when Rust is affected | ✅ runs | ✅ CUDA/ROCm/Vulkan rows run where supported |
+| Public website inputs (`website/**`, root install scripts, generated website paths) | ✅ website build canary | ⏭ skipped | ⏭ skipped |
+| `crates/mesh-llm-ui/**` | ✅ React console UI quality | ✅ Linux/macOS UI artifact paths | ⏭ skipped |
+| `**/*.md`, authored `docs/**`, anything docs-only | ✅ changes summary only | ⏭ skipped | ⏭ skipped |
 | Manual `workflow_dispatch` | ✅ runs | ✅ runs | ✅ runs |
 
 ### Verifying path filtering works
@@ -184,6 +186,8 @@ For the current PR build topology, see [`ci/ci.md`](ci/ci.md). For workflow-edit
 To confirm builds are skipped on a docs-only change, open a PR and push a commit that touches only a `.md` file (e.g. add a blank line to `README.md`). All build jobs should appear as **Skipped** in the Actions tab — only the `changes` job runs.
 
 To confirm UI-only changes skip backend jobs, push a commit touching only `crates/mesh-llm-ui/**`. UI quality and the CPU producer rows run, while Linux/Windows CUDA, ROCm, and Vulkan backend rows stay skipped.
+
+To confirm public website changes stay separate from Rust artifacts, push a commit touching only `website/**` or public website passthrough inputs. `PR Quality Checks` should run the website build canary, while `PR Builds` should skip Linux/macOS inference artifacts and Windows backend builds unless the same PR also changes runtime/backend inputs.
 
 ### Adding new paths
 

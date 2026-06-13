@@ -1,0 +1,21 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+{% set pageTitle %}{{ title }}{% if title != site.title %} - {{ site.title }}{% endif %}{% endset %}
+{% set pageDescription = description or site.description %}
+{% set canonicalUrl = site.url + page.url %}
+<title>{{ pageTitle }}</title>
+<meta name="description" content="{{ pageDescription }}">
+<link rel="canonical" href="{{ canonicalUrl }}">
+<meta name="theme-color" content="#09090b">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ pageTitle }}">
+<meta property="og:description" content="{{ pageDescription }}">
+<meta property="og:url" content="{{ canonicalUrl }}">
+<meta property="og:site_name" content="{{ site.title }}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{{ pageTitle }}">
+<meta name="twitter:description" content="{{ pageDescription }}">
+<link rel="icon" href="/mesh-llm-logo.svg" type="image/svg+xml">
+{% if loadPagefindStyles or page.url == "/docs/" or "/docs/pages/" in page.url %}<link href="/pagefind/pagefind-component-ui.css" rel="stylesheet">{% endif %}
+<link rel="stylesheet" href="/assets/site.generated.css">
+{% if loadPagefindStyles or page.url == "/docs/" or "/docs/pages/" in page.url %}<link href="/assets/pagefind-theme.css" rel="stylesheet">{% endif %}

@@ -135,9 +135,7 @@ pub(crate) fn is_single_digit_b_name(name: &str) -> bool {
             continue;
         }
         // Byte after must not be another digit (avoid BF16-like continuations)
-        if let Some(&after) = bytes.get(i + 2)
-            && after.is_ascii_digit()
-        {
+        if bytes.get(i + 2).is_some_and(u8::is_ascii_digit) {
             continue;
         }
         return true;

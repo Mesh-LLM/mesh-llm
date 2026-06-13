@@ -1,0 +1,188 @@
+<section class="hero stage2-scroll" data-stage2-scroll aria-label="Distributed inference animation">
+  <div class="hero-stage-sticky">
+    {% include "hero-viz.njk" %}
+
+    <div class="hero-title-loop shell">
+      <h1 class="hero-title-heading">Distributed<br>Model Inference</h1>
+      <p class="hero-title-subtitle">
+        <span class="hero-subtitle-copy"><span class="hero-subtitle-prefix"></span><span class="hero-subtitle-animated"><span class="hero-subtitle-dynamic"></span><span class="hero-subtitle-dot">.</span></span></span>
+      </p>
+    </div>
+    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet.</p>
+
+    <div class="hero-footer shell mx-auto flex w-[min(100%-1.5rem,75rem)] md:w-[min(100%-4rem,75rem)]" aria-label="Hero actions">
+      <div class="hero-footer-actions min-w-0">
+        <div class="hero-install flex min-h-12 min-w-0 items-center gap-2 overflow-hidden rounded-mesh border border-line-soft bg-void/80 px-3 shadow-terminal" aria-label="Install Mesh">
+          <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
+            <span class="cmd">curl</span>
+            <span class="flag">-fsSL</span>
+            <span class="value">https://meshllm.cloud/install.sh</span>
+            <span class="pipe">|</span>
+            <span class="cmd">bash</span>
+          </code>
+          <button class="hero-copy inline-flex shrink-0 items-center justify-center p-0 text-muted hover:text-fg" type="button" data-copy-text="curl -fsSL https://meshllm.cloud/install.sh | bash" aria-label="Copy install command" title="Copy install command">
+            <i data-lucide="copy" aria-hidden="true"></i>
+          </button>
+        </div>
+        <a class="hero-public inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="{{ site.publicMeshUrl }}">
+          <span>Public mesh</span>
+          <i data-lucide="share-2" aria-hidden="true"></i>
+        </a>
+        <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="#topology">
+          <span>Learn more</span>
+          <i data-lucide="arrow-down" aria-hidden="true"></i>
+        </a>
+      </div>
+
+      <div class="hero-sponsor shrink-0 items-center gap-3 text-sm text-subtle" aria-label="Sponsor slot">
+        <span>Sponsored by</span>
+        <a class="sponsor-slot" href="{{ site.githubUrl }}" aria-label="Sponsor Mesh">
+          <svg aria-hidden="true" viewBox="0 0 50 50" fill="none">
+            <rect x="0.75" y="0.75" width="48.5" height="48.5" rx="7.25" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M25 4.5V45.5M4.5 25H45.5M9 9H41V41H9V9Z" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+            <path d="M25 4.5L45.5 25L25 45.5L4.5 25L25 4.5Z" stroke="var(--sponsor-line)" stroke-width="1"/>
+            <circle cx="25" cy="25" r="18.5" stroke="var(--sponsor-line)" stroke-width="1"/>
+            <circle cx="25" cy="25" r="12" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+
+    <div class="stage2-aperture-portal">
+      <div class="stage2-workspace">
+        <div class="stage2-bench">
+          <div class="stage2-phase-stage" data-stage2-phase-stage data-stage2-layout-root>
+            <div class="stage2-model-block" data-stage2-model style="--stage2-model-piece-count: 10;">
+              <div class="stage2-model-shell">
+                <div class="stage2-model-header">
+                  <div>
+                    <span class="stage2-model-kicker">LLM container</span>
+                    <strong>BigModel V3 XL</strong>
+                  </div>
+                  <span class="stage2-model-status">ready to shard</span>
+                </div>
+                <dl class="stage2-model-metrics">
+                  <div><dt>params</dt><dd>120B</dd></div>
+                  <div><dt>weights</dt><dd>242GB</dd></div>
+                  <div><dt>layers</dt><dd>10</dd></div>
+                </dl>
+                <div class="stage2-tensor-stack" data-stage2-tensor-stack>
+                  {% for pieceIndex in range(0, 10) %}
+                    <div class="stage2-model-layer" data-stage2-model-piece="{{ pieceIndex }}" data-stage2-model-layer="{{ pieceIndex }}" data-layout-id="stage2-layer-{{ pieceIndex }}" style="--stage2-model-piece-index: {{ pieceIndex }};">
+                      <span class="stage2-layer-handle" aria-hidden="true"></span>
+                      <span class="stage2-layer-label">L{{ pieceIndex }}</span>
+                      <span class="stage2-layer-bars" aria-hidden="true">
+                        {% for barIndex in range(0, 8) %}<i></i>{% endfor %}
+                      </span>
+                      <span class="stage2-layer-param">{{ 9 + pieceIndex }}B</span>
+                    </div>
+                  {% endfor %}
+                  <span class="stage2-slice-cutter" data-stage2-slice-cutter aria-hidden="true"></span>
+                </div>
+                <div class="stage2-model-lock" data-stage2-lock-status role="group" aria-labelledby="stage2-lock-title" aria-describedby="stage2-lock-summary">
+                  <span class="stage2-lock-mark" aria-hidden="true"></span>
+                  <div class="stage2-lock-copy">
+                    <strong id="stage2-lock-title">Split plan committed</strong>
+                    <span class="stage2-lock-summary" id="stage2-lock-summary">10 layers mapped across 6 nodes</span>
+                    <span class="stage2-lock-chips" aria-hidden="true">
+                      <span>L0-L9</span>
+                      <span>6 nodes</span>
+                      <span class="stage2-lock-chip--live">live</span>
+                    </span>
+                  </div>
+                  <div class="stage2-lock-route" aria-hidden="true">
+                    <span class="stage2-lock-route-label">commit route</span>
+                    <span class="stage2-lock-route-rail">
+                      <span class="stage2-lock-route-line"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 0;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 1;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 2;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 3;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 4;"></span>
+                      <span class="stage2-lock-route-node" style="--route-i: 5;"></span>
+                      <span class="stage2-lock-packet"></span>
+                    </span>
+                    <span class="stage2-lock-route-ack">6 ACK</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="stage2-mesh-field" data-stage2-mesh-field>
+              <div class="stage2-mesh-node stage2-mesh-node--server" data-stage2-node="server" data-stage2-capacity="768GB" data-stage2-target-layers="0,1,2,3" style="--stage2-node-color: #22c55e; --stage2-node-scale: 1.16;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Server" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>server</strong><span>768GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="server"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--cloud" data-stage2-node="cloud" data-stage2-capacity="192GB" data-stage2-target-layers="4,5" style="--stage2-node-color: #a5b4fc; --stage2-node-scale: 0.95;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Cloud" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>cloud node</strong><span>192GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="cloud"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--workstation" data-stage2-node="workstation" data-stage2-capacity="96GB" data-stage2-target-layers="6" style="--stage2-node-color: #60a5fa; --stage2-node-scale: 0.9;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Monitor" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>workstation</strong><span>96GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="workstation"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--gpu" data-stage2-node="gpu" data-stage2-capacity="32GB" data-stage2-target-layers="7" style="--stage2-node-color: #86efac; --stage2-node-scale: 0.86;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Gpu" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>gpu rig</strong><span>32GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="gpu"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--laptop" data-stage2-node="laptop" data-stage2-capacity="24GB" data-stage2-target-layers="8" style="--stage2-node-color: #93c5fd; --stage2-node-scale: 0.78;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Laptop" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>laptop</strong><span>24GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="laptop"></div></div>
+              </div>
+              <div class="stage2-mesh-node stage2-mesh-node--mini" data-stage2-node="mini" data-stage2-capacity="8GB" data-stage2-target-layers="9" style="--stage2-node-color: #38bdf8; --stage2-node-scale: 0.7;">
+                <span class="stage2-node-icon" data-stage2-node-icon="Router" aria-hidden="true"></span>
+                <div class="stage2-node-head"><strong>mini pc</strong><span>8GB</span></div>
+                <div class="stage2-host-zone"><span>hosted layers</span><div class="stage2-node-slots" data-stage2-node-slots="mini"></div></div>
+              </div>
+
+            </div>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-1"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-2"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-3"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-4"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-5"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-6"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-7"></section>
+            <section class="stage2-phase-panel" data-stage2-phase-panel="phase-8"></section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage2-aperture-ring" aria-hidden="true"></div>
+
+    <div class="stage2-scrubber" aria-label="Stage 2 sequence scrubber">
+      <div class="stage2-scrubber-meta" aria-live="polite">
+        <span class="stage2-phase-name">phase 1</span>
+        <span class="stage2-phase-index">01 / 08</span>
+      </div>
+      <div class="stage2-scrubber-track" aria-hidden="true">
+        <span class="stage2-scrubber-ticks"></span>
+        <span class="stage2-scrubber-majors"></span>
+        <span class="stage2-scrubber-thumb"></span>
+      </div>
+      <input class="stage2-scrubber-input" type="range" min="0" max="1000" value="0" aria-label="Stage 2 sequence position" aria-valuemin="0" aria-valuemax="1000" aria-valuenow="0">
+    </div>
+  </div>
+</section>
+
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const arrow = document.querySelector('.hero-learn svg, .hero-learn [data-lucide="arrow-down"]');
+    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (arrow && !prefersReducedMotion && typeof anime !== 'undefined') {
+      anime.animate(arrow, {
+        translateY: [0, 5, 0],
+        opacity: [0.72, 1, 0.72],
+        duration: 1200,
+        loop: true,
+        ease: 'inOut(2)'
+      });
+    }
+  });
+</script>

@@ -1,6 +1,7 @@
 use super::capacity::{model_fits_runtime_capacity, runtime_model_required_bytes};
 use super::context_planning::{
-    RuntimeResourcePlan, RuntimeResourcePlanInput, plan_runtime_resources,
+    RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
+    plan_runtime_resources,
 };
 use super::split_planning::{
     PlannedRuntimeSliceTopology, RuntimeSliceStagePlan, SplitTopologyResourceInputs, format_gb,
@@ -197,6 +198,7 @@ pub(super) struct LocalRuntimeModelStartSpec<'a> {
     pub(super) n_ubatch_override: Option<u32>,
     pub(super) flash_attention_override: FlashAttentionType,
     pub(super) parallel_override: Option<usize>,
+    pub(super) planning_profile: RuntimeResourcePlanningProfile,
     pub(super) openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     pub(super) skippy_telemetry: skippy::SkippyTelemetryOptions,
     pub(super) survey_telemetry: survey::SurveyTelemetry,
@@ -628,6 +630,7 @@ pub(super) async fn start_runtime_local_model(
         metadata: compact_meta.as_ref(),
         kv_cache_quant,
         local_layer_fraction,
+        planning_profile: spec.planning_profile,
     });
 
     if let Some(package) = layer_package {
@@ -4268,6 +4271,7 @@ max_tokens = 222
             n_ubatch_override: None,
             flash_attention_override: FlashAttentionType::Auto,
             parallel_override: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
             openai_guardrail_policy: openai_guardrail_policy_handle(
                 openai_frontend::GuardrailMode::Disabled,
             ),

@@ -1,0 +1,172 @@
+{% from "components/ui.njk" import sectionHead %}
+
+<section class="sec py-14 sm:py-20" id="topology">
+  <div class="shell">
+    {{ sectionHead(
+      '<span class="title-line">One local API.</span><br/><span class="title-line">Two mesh modes.</span>',
+      "Point tools at localhost while Mesh routes by model or splits one large model across nearby GPUs."
+    ) }}
+
+    <div class="topology" data-topology-switcher>
+      <div class="topology-command">
+        <div class="min-w-0">
+          <span class="topology-command__label">OpenAI ingress</span>
+          <code class="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap">OPENAI_BASE_URL=http://localhost:9337/v1</code>
+        </div>
+        <div class="topology-mode-tabs" role="tablist" aria-label="Topology mode">
+          <button class="topology-mode-tab is-active" type="button" role="tab" id="topology-tab-route" aria-label="Run many models" aria-selected="true" aria-controls="topology-panel-route" data-topology-mode="route">
+            <span class="topology-mode-tab__full">Run many models</span>
+            <span class="topology-mode-tab__short" aria-hidden="true">Many</span>
+            <small>route by model</small>
+          </button>
+          <button class="topology-mode-tab" type="button" role="tab" id="topology-tab-split" aria-label="Split one large model" aria-selected="false" aria-controls="topology-panel-split" data-topology-mode="split">
+            <span class="topology-mode-tab__full">Split one large model</span>
+            <span class="topology-mode-tab__short" aria-hidden="true">Split</span>
+            <small>place layer stages</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="topology-stage">
+        <div class="topology-mode-panel is-active" role="tabpanel" id="topology-panel-route" aria-labelledby="topology-tab-route" data-topology-panel="route">
+          <p class="topology-kicker">Router mode</p>
+          <h3>The model field selects a host.</h3>
+          <div class="topology-terminal" aria-label="Route many models example">
+<span class="muted">GET /v1/models</span>
+<code class="topology-json"><span class="json-punctuation">{</span>
+  <span class="json-key">"data"</span><span class="json-punctuation">:</span> <span class="json-punctuation">[</span>
+    <span class="json-punctuation">{</span> <span class="json-key">"id"</span><span class="json-punctuation">:</span> <span class="json-string">"llama-3.2-1b"</span> <span class="json-punctuation">}</span><span class="json-punctuation">,</span>
+    <span class="json-punctuation">{</span> <span class="json-key">"id"</span><span class="json-punctuation">:</span> <span class="json-string">"qwen3-4b"</span> <span class="json-punctuation">}</span>
+  <span class="json-punctuation">]</span>
+<span class="json-punctuation">}</span></code>
+<span class="muted">POST /v1/chat/completions</span>
+<code class="topology-json"><span class="json-punctuation">{</span>
+  <span class="json-key">"model"</span><span class="json-punctuation">:</span> <span class="json-string">"qwen3-4b"</span><span class="json-punctuation">,</span>
+  <span class="json-key">"messages"</span><span class="json-punctuation">:</span> <span class="json-punctuation">[</span><span class="json-string">"..."</span><span class="json-punctuation">]</span>
+<span class="json-punctuation">}</span></code>
+          </div>
+        </div>
+
+        <div class="topology-mode-panel" role="tabpanel" id="topology-panel-split" aria-labelledby="topology-tab-split" data-topology-panel="split" hidden>
+          <p class="topology-kicker">Split mode</p>
+          <h3>Layer ranges become a pipeline.</h3>
+          <div class="topology-terminal" aria-label="Split one large model example">
+<span class="muted">POST /v1/chat/completions</span>
+<code class="topology-json"><span class="json-punctuation">{</span>
+  <span class="json-key">"model"</span><span class="json-punctuation">:</span> <span class="json-string">"glm-4.5-air"</span><span class="json-punctuation">,</span>
+  <span class="json-key">"messages"</span><span class="json-punctuation">:</span> <span class="json-punctuation">[</span><span class="json-string">"..."</span><span class="json-punctuation">]</span>
+<span class="json-punctuation">}</span></code>
+<span class="muted">mesh planner</span>
+<span>L0-26 → L27-52 → L53-78</span>
+          </div>
+        </div>
+
+        <div class="topology-visual">
+          <div class="topology-map topology-map--route is-active" data-topology-map="route" aria-label="Run many models topology">
+            <svg class="topology-links topology-links--desktop-route" viewBox="0 0 960 460" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active" d="M 178 230 H 438" />
+              <path class="topology-edge topology-edge--warm" d="M 522 230 H 610 Q 620 230 620 220 V 122 Q 620 112 630 112 H 758" />
+              <path class="topology-edge topology-edge--active" d="M 522 230 H 758" />
+              <path class="topology-edge topology-edge--warm" d="M 522 230 H 610 Q 620 230 620 240 V 338 Q 620 348 630 348 H 758" />
+            </svg>
+            <svg class="topology-links topology-links--mobile-route" viewBox="0 0 270 308" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 135 56 V 78" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 135 152 V 158 Q 135 164 129 164 H 74 Q 68 164 68 170 V 176" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 135 152 V 158 Q 135 164 141 164 H 196 Q 202 164 202 170 V 176" />
+              <path class="topology-edge topology-edge--warm topology-edge--mobile-flow" d="M 135 152 V 244" />
+            </svg>
+
+            <div class="mesh-node mesh-node--client route-client">
+              <span class="mesh-node__role">client</span>
+              <strong>your-computer</strong>
+              <small>localhost:9337</small>
+              <code>model=qwen3-4b</code>
+            </div>
+
+            <div class="mesh-core route-core" aria-label="Mesh router">
+              <span></span>
+              <i data-lucide="network" aria-hidden="true"></i>
+              <small>inventory + route</small>
+            </div>
+
+            <div class="mesh-node mesh-node--model route-model route-model--llama is-serving">
+              <span class="mesh-node__role">warm</span>
+              <strong>node-01</strong>
+              <small>llama-3.2-1b</small>
+            </div>
+            <div class="mesh-node mesh-node--model route-model route-model--qwen is-active-route">
+              <span class="mesh-node__role">selected</span>
+              <strong>node-02</strong>
+              <small>qwen3-4b</small>
+            </div>
+            <div class="mesh-node mesh-node--model route-model route-model--glm is-serving">
+              <span class="mesh-node__role">warm</span>
+              <strong>node-03</strong>
+              <small>glm-4.5-air</small>
+            </div>
+          </div>
+
+          <div class="topology-map topology-map--split" data-topology-map="split" aria-label="Split one large model topology" hidden>
+            <svg class="topology-links topology-links--desktop-split" viewBox="0 0 960 460" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active" d="M 190 230 H 272" />
+              <path class="topology-edge topology-edge--active" d="M 343 230 H 414" />
+              <path class="topology-edge topology-edge--active" d="M 546 230 H 587" />
+              <path class="topology-edge topology-edge--active" d="M 719 230 H 770" />
+              <path class="topology-edge topology-edge--idle topology-edge--return" d="M 835 270 V 332 Q 835 342 825 342 H 135 Q 125 342 125 332 V 270" />
+            </svg>
+            <svg class="topology-links topology-links--tablet-split" viewBox="0 0 960 460" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active" d="M 179 230 H 243" />
+              <path class="topology-edge topology-edge--active" d="M 333 230 H 394" />
+              <path class="topology-edge topology-edge--active" d="M 531 230 H 590" />
+              <path class="topology-edge topology-edge--active" d="M 726 230 H 781" />
+              <path class="topology-edge topology-edge--idle topology-edge--return" d="M 822 270 V 332 Q 822 342 812 342 H 148 Q 138 342 138 332 V 270" />
+            </svg>
+            <svg class="topology-links topology-links--mobile-split" viewBox="0 0 320 420" preserveAspectRatio="none" aria-hidden="true">
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 55 V 84" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 156 V 182" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 236 V 250" />
+              <path class="topology-edge topology-edge--active topology-edge--mobile-flow" d="M 160 305 V 318" />
+              <path class="topology-edge topology-edge--return topology-edge--mobile-return" d="M 224 346 H 250 Q 256 346 256 340 V 34 Q 256 28 250 28 H 218" />
+            </svg>
+
+            <div class="mesh-node mesh-node--client split-client">
+              <span class="mesh-node__role">client</span>
+              <strong>your-computer</strong>
+              <small>same /v1 call</small>
+            </div>
+
+            <div class="mesh-core split-core" aria-label="Split coordinator">
+              <span></span>
+              <i data-lucide="network" aria-hidden="true"></i>
+            </div>
+
+            <div class="split-stage split-stage--host split-stage--one">
+              <span>L0-26</span>
+              <strong>M3 Ultra</strong>
+              <small>prompt ingest · 4 ms</small>
+            </div>
+            <div class="split-stage split-stage--two">
+              <span>L27-52</span>
+              <strong>RX 7800 XT</strong>
+              <small>activations · 11 ms</small>
+            </div>
+            <div class="split-stage split-stage--three">
+              <span>L53-78</span>
+              <strong>RTX 3090</strong>
+              <small>tokens return</small>
+            </div>
+
+            <div class="split-callout split-callout--weights">weights stay local</div>
+            <div class="split-callout split-callout--activations">activations over QUIC</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="topology-legend" aria-label="Topology legend">
+        <span><i class="topology-legend__active"></i>active request path</span>
+        <span><i class="topology-legend__warm"></i>warm model</span>
+        <span class="topology-legend__status">3 nodes · 168 GB mesh</span>
+      </div>
+    </div>
+  </div>
+</section>

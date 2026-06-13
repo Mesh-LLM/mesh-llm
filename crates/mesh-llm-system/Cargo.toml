@@ -14,6 +14,7 @@ clap = { version = "4", features = ["derive"] }
 dirs = "6.0.0"
 hex = "0.4.3"
 libc = "0.2.183"
+mesh-llm-build-info.workspace = true
 mesh-llm-gpu-bench = { path = "../mesh-llm-gpu-bench", version = "0.68.0"  }
 reqwest = { version = "0.12", features = ["stream", "json"] }
 semver = "1"

@@ -1,0 +1,394 @@
+---
+layout: base.njk
+title: Mesh Catalog
+description: Browse mesh-ready models, layer packages, Hugging Face repositories, and run commands for Mesh LLM.
+permalink: /catalog/index.html
+---
+<header class="shell page-hero">
+  <h1>Catalog</h1>
+  <p class="lead">Browse mesh-ready models, layer packages, Hugging Face repositories, hardware guidance, and commands for public or private meshes.</p>
+</header>
+
+<main class="shell catalog">
+  <div class="toolbar" aria-label="Catalog filters" id="catalog-toolbar">
+    <label class="control control-search">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+      <span class="sr-only">Search models</span>
+      <input type="text" id="catalog-search" class="ctrl-input" placeholder="Search models, refs, or families…" aria-label="Search models">
+    </label>
+    <div class="filter-group" aria-label="Filter controls">
+    <label class="control control-select" for="filter-capability">
+      <span class="control-label">Capability</span>
+      <select id="filter-capability" aria-label="Filter by capability">
+        <option value="">Any</option>
+        <option value="Code">Code</option>
+        <option value="Vision">Vision</option>
+        <option value="Long context">Long context</option>
+      </select>
+    </label>
+    <label class="control control-select" for="filter-runtime">
+      <span class="control-label">Runtime</span>
+      <select id="filter-runtime" aria-label="Filter by runtime">
+        <option value="">Any</option>
+        <option value="Multi-machine">Multi-machine</option>
+        <option value="Single machine">Single machine</option>
+      </select>
+    </label>
+    <label class="control control-select" for="filter-hardware">
+      <span class="control-label">Hardware</span>
+      <select id="filter-hardware" aria-label="Filter by hardware">
+        <option value="">Any</option>
+        <option value="&le; 8 GB">&le; 8 GB</option>
+        <option value="11–20 GB">11–20 GB</option>
+        <option value="40 GB +">40 GB+</option>
+      </select>
+    </label>
+    <label class="control control-select" for="filter-source">
+      <span class="control-label">Source</span>
+      <select id="filter-source" aria-label="Filter by source">
+        <option value="">Any</option>
+        <option value="unsloth">unsloth</option>
+        <option value="Qwen">Qwen</option>
+        <option value="bartowski">bartowski</option>
+        <option value="glogwa68">glogwa68</option>
+      </select>
+    </label>
+    </div>
+  </div>
+
+  <div class="table-card" id="catalog-table">
+    <table aria-describedby="catalog-count">
+      <colgroup>
+        <col class="col-model">
+        <col class="col-size">
+        <col class="col-run">
+        <col class="col-package">
+        <col class="col-ref">
+        <col class="col-links">
+      </colgroup>
+      <thead>
+        <tr>
+          <th scope="col" class="col-model">Model</th>
+          <th scope="col" class="col-size">Size / quant</th>
+          <th scope="col" class="col-run">Run mode</th>
+          <th scope="col" class="col-package">Layer packages</th>
+          <th scope="col" class="col-ref">Model ref</th>
+          <th scope="col" class="col-links">Links</th>
+        </tr>
+      </thead>
+      <tbody id="catalog-rows">
+        <tr data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Qwen3">
+          <td class="model-cell col-model" data-label="Model"><strong>Qwen3 32B</strong><br><span>Strongest dense Qwen3 &middot; thinking modes</span></td>
+          <td class="size-cell col-size" data-label="Size / quant">19.8GB<br><span class="badge">Q4_K_M</span></td>
+          <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
+          <td class="package-cell col-package" data-label="Layers"><span class="badge green">Available</span></td>
+          <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>unsloth/Qwen3-32B-GGUF:Q4_K_M</code><button class="copy" type="button" data-copy-ref="unsloth/Qwen3-32B-GGUF:Q4_K_M" aria-label="Copy model ref"><i data-lucide="clipboard-copy"></i></button></div></td>
+          <td class="links-cell col-links" data-label="Links"><div class="table-link-actions"><a class="table-link-action" href="https://huggingface.co/unsloth/Qwen3-32B-GGUF" target="_blank" rel="noopener" aria-label="Open source model on Hugging Face"><i data-lucide="external-link"></i></a></div></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="catalog-foot">
+      <span class="live" id="catalog-count">Loading live catalog data from Hugging Face...</span>
+      <div class="pg"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const catalogRows = document.getElementById('catalog-rows');
+  const catalogCount = document.getElementById('catalog-count');
+  const searchInput = document.getElementById('catalog-search');
+  const filterCapability = document.getElementById('filter-capability');
+  const filterRuntime = document.getElementById('filter-runtime');
+  const filterHardware = document.getElementById('filter-hardware');
+  const filterSource = document.getElementById('filter-source');
+  const catalogTable = document.getElementById('catalog-table');
+  const rowsEndpoint = 'https://datasets-server.huggingface.co/rows?dataset=meshllm%2Fcatalog&config=default&split=train&offset=0&length=100';
+
+  var PAGE_SIZE = 10;
+  var currentPage = 1;
+  var filteredRows = [];
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  function badge(text, tone = '') {
+    return `<span class="badge ${tone}">${escapeHtml(text)}</span>`;
+  }
+
+  const clipboardSvg = '<i data-lucide="clipboard-copy"></i>';
+  const externalSvg = '<i data-lucide="external-link"></i>';
+  const packageSvg = '<i data-lucide="package"></i>';
+
+  function repoHref(repo) {
+    return `https://huggingface.co/${encodeURIComponent(repo).replaceAll('%2F', '/')}`;
+  }
+
+  function linksCell(row) {
+    const links = [];
+    const sourceRepo = row.source_model_repo || row.source_repo;
+    if (sourceRepo) links.push(`<a class="table-link-action" href="${repoHref(sourceRepo)}" target="_blank" rel="noopener" aria-label="Open source model on Hugging Face">${externalSvg}</a>`);
+    if (row.primary_package_repo) links.push(`<a class="table-link-action" href="${repoHref(row.primary_package_repo)}" target="_blank" rel="noopener" aria-label="Open layer package on Hugging Face">${packageSvg}</a>`);
+    return links.length ? `<div class="table-link-actions">${links.join('')}</div>` : '<span class="table-link-empty">—</span>';
+  }
+
+  function layerPackageCell(row) {
+    if (!row.layer_package_available) return '<span class="badge">Not available</span>';
+    const details = row.primary_package_layer_count ? `${row.primary_package_layer_count} layers` : 'Available';
+    return `<div class="badge-row">${badge(details, 'green')}</div>`;
+  }
+
+  function quantFrom(row) {
+    const candidates = [row.source_file, row.name, row.variant_id].filter(Boolean);
+    for (const candidate of candidates) {
+      const parts = String(candidate).split('/');
+      for (const part of parts) {
+        const exact = part.replace(/\.gguf$/i, '');
+        if (/^(?:UD-)?(?:Q\d(?:_[A-Z0-9]+)+|IQ\d(?:_[A-Z0-9]+)+|F16|BF16|F32)$/i.test(exact)) return exact;
+      }
+      const match = String(candidate).match(/(?:^|[-_/])((?:UD-)?(?:Q\d(?:_[A-Z0-9]+)+|IQ\d(?:_[A-Z0-9]+)+|F16|BF16|F32))(?:\.gguf)?$/i);
+      if (match) return match[1];
+    }
+    return '';
+  }
+
+  function sizeLooksLikeLayerCount(value) {
+    return /^\s*\d+\s+layers?\s*$/i.test(String(value || ''));
+  }
+
+  function knownSizeOverride(row) {
+    const repo = String(row.source_model_repo || row.source_repo || '').toLowerCase();
+    const quant = String(quantFrom(row) || row.name || row.variant_id || '').toLowerCase();
+    const key = `${repo}:${quant}`;
+    const sizes = {
+      'unsloth/kimi-k2-thinking-gguf:ud-q4_k_xl': '646.2 GB',
+      'unsloth/gemma-4-26b-a4b-it-gguf:ud-q4_k_m': '16.9 GB',
+    };
+    return sizes[key] || '';
+  }
+
+  function displaySize(row) {
+    const size = row.size || '';
+    if (sizeLooksLikeLayerCount(size)) return knownSizeOverride(row) || 'Size pending';
+    return size || 'Size pending';
+  }
+
+  function sizeCell(row) {
+    const quant = quantFrom(row);
+    const size = displaySize(row);
+    if (!quant) return escapeHtml(size);
+    return `${escapeHtml(size)}<br>${badge(quant)}`;
+  }
+
+  function modelRef(row) {
+    const repo = row.source_model_repo || row.source_repo || '';
+    const quant = quantFrom(row) || row.name || row.variant_id || '';
+    if (!repo || !quant) return quant || repo || '';
+    return `${repo}:${quant}`;
+  }
+
+  function runMode(row) {
+    return row.layer_package_available ? 'Multi-machine' : 'Single machine';
+  }
+
+  function runModeCell(mode) {
+    const tone = mode === 'Multi-machine' ? 'run-multi' : 'run-single';
+    return `<span class="run-mode ${tone}">${escapeHtml(mode)}</span>`;
+  }
+
+  function parseSizeInGb(sizeStr) {
+    const raw = String(sizeStr || '').trim();
+    const match = raw.match(/^([\d.]+)\s*(TB|GB|MB|KB)?$/i);
+    if (!match) return NaN;
+    const value = parseFloat(match[1]);
+    const unit = (match[2] || 'GB').toUpperCase();
+    if (unit === 'TB') return value * 1024;
+    if (unit === 'MB') return value / 1024;
+    if (unit === 'KB') return value / (1024 * 1024);
+    return value;
+  }
+
+  function guessHardware(sizeStr) {
+    if (sizeLooksLikeLayerCount(sizeStr)) return '';
+    const num = parseSizeInGb(sizeStr);
+    if (isNaN(num)) return '';
+    if (num <= 8) return '&le; 8 GB';
+    if (num <= 20) return '11–20 GB';
+    return '40 GB +';
+  }
+
+  function copyButton(ref) {
+    return `<button class="copy" type="button" data-copy-ref="${escapeHtml(ref)}" aria-label="Copy model ref">${clipboardSvg}</button>`;
+  }
+
+  function renderRows(rows) {
+    catalogRows.innerHTML = rows.map(function (item) {
+      var row = item.row;
+      const ref = modelRef(row);
+      const rt = runMode(row);
+      const hw = guessHardware(displaySize(row));
+      return `
+        <tr data-capability="${escapeHtml(row.capabilities || '')}" data-runtime="${escapeHtml(rt)}" data-hardware="${escapeHtml(hw)}" data-source="${escapeHtml((row.source_model_repo || row.source_repo || '').split('/')[0] || '')}">
+          <td class="model-cell col-model" data-label="Model"><strong>${escapeHtml(row.name || row.variant_id)}</strong><br><span>${escapeHtml(row.description || row.source_file || '')}</span></td>
+          <td class="size-cell col-size" data-label="Size / quant">${sizeCell(row)}</td>
+          <td class="run-cell col-run" data-label="Run mode">${runModeCell(rt)}</td>
+          <td class="package-cell col-package" data-label="Layers">${layerPackageCell(row)}</td>
+          <td class="ref-cell col-ref" data-label="Model ref"><div class="ref ref-copy"><code>${escapeHtml(ref)}</code>${copyButton(ref)}</div></td>
+          <td class="links-cell col-links" data-label="Links">${linksCell(row)}</td>
+        </tr>
+      `;
+    }).join('');
+
+    catalogCount.textContent = `Loaded ${rows.length} live catalog entries from Hugging Face.`;
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  }
+
+  function applyFilters() {
+    const query = searchInput.value.toLowerCase().trim();
+    const capability = filterCapability ? filterCapability.value : '';
+    const runtime = filterRuntime ? filterRuntime.value : '';
+    const hardware = filterHardware ? filterHardware.value : '';
+    const source = filterSource ? filterSource.value : '';
+
+    var rows = catalogRows.querySelectorAll('tr');
+    filteredRows = [];
+
+    rows.forEach(function (row) {
+      var name = row.querySelector('strong')?.textContent || '';
+      var ref = row.querySelector('code')?.textContent || '';
+      var caps = row.getAttribute('data-capability') || '';
+      var rt = row.getAttribute('data-runtime') || '';
+      var hw = row.getAttribute('data-hardware') || '';
+      var src = row.getAttribute('data-source') || '';
+
+      var matchesSearch = !query || name.toLowerCase().includes(query) || ref.toLowerCase().includes(query);
+      var matchesCapability = !capability || caps.split(' ').some(function (c) { return c.toLowerCase() === capability.toLowerCase(); });
+      var matchesRuntime = !runtime || rt.toLowerCase() === runtime.toLowerCase();
+      var matchesHardware = !hardware || hw.toLowerCase() === hardware.toLowerCase();
+      var matchesSource = !source || src.toLowerCase() === source.toLowerCase();
+
+      row.style.display = 'none';
+      if (matchesSearch && matchesCapability && matchesRuntime && matchesHardware && matchesSource) {
+        filteredRows.push(row);
+      }
+    });
+
+    currentPage = 1;
+    renderPage();
+  }
+
+  function renderPage() {
+    var totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    if (currentPage < 1) currentPage = 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    var start = (currentPage - 1) * PAGE_SIZE;
+    var end = start + PAGE_SIZE;
+
+    filteredRows.forEach(function (row, i) {
+      row.style.display = (i >= start && i < end) ? '' : 'none';
+    });
+
+    updatePagination(filteredRows.length, totalPages);
+  }
+
+  function updatePagination(total, totalPages) {
+    var pgEl = catalogTable.querySelector('.catalog-foot .pg');
+    if (!pgEl) return;
+
+    if (totalPages <= 1) {
+      pgEl.style.display = 'none';
+      catalogCount.textContent = total + ' entries found';
+      return;
+    }
+    pgEl.style.display = '';
+
+    var totalPagesNum = totalPages;
+    var html = '';
+
+    // Prev button
+    html += '<a href="#" class="pg-prev"' + (currentPage === 1 ? ' style="opacity:0.3;pointer-events:none"' : '') + '>←</a>';
+
+    // Page numbers with ellipsis
+    if (totalPagesNum <= 7) {
+      for (var i = 1; i <= totalPagesNum; i++) {
+        html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
+      }
+    } else {
+      html += '<a href="#" class="pg-num' + (1 === currentPage ? ' now' : '') + '" data-page="1">1</a>';
+      if (currentPage > 3) html += '<span style="padding:4px 6px;color:var(--muted)">…</span>';
+      var rangeStart = Math.max(2, currentPage - 1);
+      var rangeEnd = Math.min(totalPagesNum - 1, currentPage + 1);
+      if (currentPage <= 3) rangeEnd = Math.min(4, totalPagesNum - 1);
+      if (currentPage >= totalPagesNum - 2) rangeStart = Math.max(3, totalPagesNum - 2);
+      for (var i = rangeStart; i <= rangeEnd; i++) {
+        html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
+      }
+      if (currentPage < totalPagesNum - 2) html += '<span style="padding:4px 6px;color:var(--muted)">…</span>';
+      html += '<a href="#" class="pg-num' + (totalPagesNum === currentPage ? ' now' : '') + '" data-page="' + totalPagesNum + '">' + totalPagesNum + '</a>';
+    }
+
+    // Next button
+    html += '<a href="#" class="pg-next"' + (currentPage === totalPagesNum ? ' style="opacity:0.3;pointer-events:none"' : '') + '>→</a>';
+
+    pgEl.innerHTML = html;
+
+    catalogCount.textContent = 'Showing ' + ((currentPage - 1) * PAGE_SIZE + 1) + '–' + Math.min(currentPage * PAGE_SIZE, total) + ' of ' + total;
+  }
+
+  // Pagination click handler
+  catalogTable.addEventListener('click', function (e) {
+    var pgBtn = e.target.closest('.pg-prev, .pg-next, .pg-num');
+    if (!pgBtn) return;
+    e.preventDefault();
+
+    if (pgBtn.classList.contains('pg-prev')) currentPage = Math.max(1, currentPage - 1);
+    else if (pgBtn.classList.contains('pg-next')) currentPage = currentPage + 1;
+    else if (pgBtn.hasAttribute('data-page')) currentPage = parseInt(pgBtn.getAttribute('data-page'), 10);
+
+    renderPage();
+  });
+
+  searchInput.addEventListener('input', applyFilters);
+  filterCapability.addEventListener('change', applyFilters);
+  filterRuntime.addEventListener('change', applyFilters);
+  filterHardware.addEventListener('change', applyFilters);
+  filterSource.addEventListener('change', applyFilters);
+
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-copy-ref]');
+    if (!button) return;
+    var value = button.getAttribute('data-copy-ref');
+    navigator.clipboard.writeText(value).then(function () {
+      var previous = button.innerHTML;
+      button.classList.add('copied');
+      button.textContent = '✓';
+      setTimeout(function () {
+        button.innerHTML = previous;
+        button.classList.remove('copied');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      }, 1200);
+    });
+  });
+
+  fetch(rowsEndpoint)
+    .then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    })
+    .then(function (data) {
+      if (!Array.isArray(data.rows) || data.rows.length === 0) throw new Error('No rows returned');
+      renderRows(data.rows);
+      applyFilters();
+    })
+    .catch(function (error) {
+      catalogCount.innerHTML = 'Using static fallback rows. <span class="error">Live Hugging Face catalog unavailable: ' + escapeHtml(error.message) + '</span>';
+    });
+</script>

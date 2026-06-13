@@ -18,6 +18,7 @@ use self::capacity::{
     RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityRequest, RuntimeCapacityReservation,
     model_fits_runtime_capacity,
 };
+use self::context_planning::RuntimeResourcePlanningProfile;
 use self::discovery::{lan_rediscovery, nostr_rediscovery, start_new_mesh};
 use self::interactive::InitialPromptMode;
 use self::local::{
@@ -285,26 +286,85 @@ impl MeshTracingStderrWriter {
             }
 
             routing.set(true);
-            let event = match self.level {
-                tracing::Level::ERROR => OutputEvent::Error {
-                    message: message.clone(),
-                    context: Some("stderr".to_string()),
-                },
-                tracing::Level::WARN => OutputEvent::Warning {
-                    message: message.clone(),
-                    context: Some("stderr".to_string()),
-                },
-                _ => OutputEvent::Info {
-                    message: message.clone(),
-                    context: Some("stderr".to_string()),
-                },
-            };
+            let dashboard_message = strip_ansi_escape_sequences(&message);
+            let event = self.dashboard_event_for_message(&dashboard_message);
             let result =
                 mesh_llm_events::emit_event(event).or_else(|_| write_stderr_line(&message));
             routing.set(false);
             result
         })
     }
+
+    fn dashboard_event_for_message(&self, message: &str) -> OutputEvent {
+        let (message, context) = normalize_tracing_message(&self.target, message);
+        match self.level {
+            tracing::Level::ERROR => OutputEvent::Error { message, context },
+            tracing::Level::WARN => OutputEvent::Warning { message, context },
+            _ => OutputEvent::Info { message, context },
+        }
+    }
+}
+
+fn normalize_tracing_message(target: &str, message: &str) -> (String, Option<String>) {
+    let message = message.trim().to_string();
+    if target.starts_with("noq_proto") {
+        return (
+            normalize_noq_proto_message(target, &message),
+            Some("transport".to_string()),
+        );
+    }
+
+    (message, Some("stderr".to_string()))
+}
+
+fn normalize_noq_proto_message(target: &str, message: &str) -> String {
+    let without_prefix = message
+        .find(target)
+        .and_then(|target_index| {
+            message[target_index + target.len()..]
+                .find(':')
+                .map(|colon_index| message[target_index + target.len() + colon_index + 1..].trim())
+        })
+        .unwrap_or(message)
+        .trim();
+    format_noq_proto_fields(without_prefix)
+}
+
+fn format_noq_proto_fields(message: &str) -> String {
+    let Some(rest) = message.strip_prefix("err=") else {
+        return message.to_string();
+    };
+    let Some((err, detail)) = rest.split_once(' ') else {
+        return message.to_string();
+    };
+    if detail.trim().is_empty() {
+        message.to_string()
+    } else {
+        format!("{} (err={err})", detail.trim())
+    }
+}
+
+fn strip_ansi_escape_sequences(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            output.push(ch);
+            continue;
+        }
+
+        if matches!(chars.peek(), Some('[')) {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        }
+    }
+
+    output
 }
 
 impl Write for MeshTracingStderrWriter {
@@ -1220,6 +1280,7 @@ struct StartupLocalModelTask {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    resource_planning_profile: RuntimeResourcePlanningProfile,
     openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     split: bool,
     skippy_telemetry: skippy::SkippyTelemetryOptions,
@@ -1299,6 +1360,7 @@ struct StartupLoopContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    resource_planning_profile: RuntimeResourcePlanningProfile,
     openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
@@ -1371,6 +1433,7 @@ struct StartupLaunchRuntimeContext<'a> {
     n_ubatch: Option<u32>,
     flash_attention: FlashAttentionType,
     parallel_override: Option<usize>,
+    resource_planning_profile: RuntimeResourcePlanningProfile,
     openai_guardrail_policy: OpenAiGuardrailPolicyHandle,
     skippy_telemetry: &'a skippy::SkippyTelemetryOptions,
     survey_telemetry: &'a survey::SurveyTelemetry,
@@ -1841,6 +1904,7 @@ async fn startup_handle_local_fallback_event(
             n_ubatch_override: ctx.n_ubatch,
             flash_attention_override: ctx.flash_attention,
             parallel_override: ctx.parallel_override,
+            planning_profile: ctx.resource_planning_profile,
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: ctx.skippy_telemetry.clone(),
             survey_telemetry: ctx.survey_telemetry.clone(),
@@ -2173,6 +2237,7 @@ async fn startup_launch_runtime(
         n_ubatch,
         flash_attention,
         parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy,
         skippy_telemetry,
         survey_telemetry,
@@ -2200,6 +2265,7 @@ async fn startup_launch_runtime(
         n_ubatch_override: n_ubatch,
         flash_attention_override: flash_attention,
         parallel_override,
+        planning_profile: resource_planning_profile,
         openai_guardrail_policy: openai_guardrail_policy.clone(),
         skippy_telemetry: skippy_telemetry.clone(),
         survey_telemetry: survey_telemetry.clone(),
@@ -2313,6 +2379,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy,
         split,
         skippy_telemetry,
@@ -2372,6 +2439,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
             n_ubatch,
             flash_attention,
             parallel_override,
+            resource_planning_profile,
             openai_guardrail_policy: openai_guardrail_policy.clone(),
             skippy_telemetry: &skippy_telemetry,
             survey_telemetry: &survey_telemetry,
@@ -2426,6 +2494,7 @@ async fn startup_local_model_loop(params: StartupLocalModelTask) {
         n_ubatch,
         flash_attention,
         parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy,
         skippy_telemetry: &skippy_telemetry,
         survey_telemetry: &survey_telemetry,
@@ -3170,7 +3239,7 @@ fn write_runtime_owner_metadata(
     let owner_meta = serde_json::json!({
         "pid": std::process::id(),
         "api_port": console_port,
-        "version": crate::VERSION,
+        "version": crate::BUILD_VERSION,
         "started_at_unix": started_at,
         "mesh_llm_binary": std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
@@ -3559,13 +3628,13 @@ async fn run_runtime_cli(
         plugin_requested: options.plugin.is_some(),
         command_is_update: options.command_is_update,
         llama_flavor: options.llama_flavor,
-        current_version: crate::VERSION,
+        current_version: crate::BUILD_VERSION,
     })
     .await?;
 
     // Finish the release check before startup continues.
     if !checked_updates && !options.command_is_update && !options.command_uses_machine_output {
-        autoupdate::check_for_update(crate::VERSION).await;
+        autoupdate::check_for_update(crate::BUILD_VERSION).await;
     }
 
     let config = plugin::load_config(options.config.as_deref())?;
@@ -3633,6 +3702,7 @@ fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "client" | "--client" => options.client = true,
             "--auto" => options.auto = true,
             "--publish" => options.publish = true,
+            "--discover" => options.discover = Some(next_test_arg(&mut iter, arg).to_string()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
@@ -5968,6 +6038,23 @@ fn relay_policy_for_mesh_discovery_mode(
     }
 }
 
+fn runtime_resource_planning_profile(options: &RuntimeOptions) -> RuntimeResourcePlanningProfile {
+    if options.auto || options.publish || options.discover.is_some() || !options.join.is_empty() {
+        RuntimeResourcePlanningProfile::SharedMesh
+    } else {
+        RuntimeResourcePlanningProfile::DedicatedLocal
+    }
+}
+
+fn runtime_model_ctx_size_override(
+    options: &RuntimeOptions,
+    model_overrides: Option<&plugin::ModelConfigEntry>,
+) -> Option<u32> {
+    options
+        .ctx_size
+        .or_else(|| model_overrides.and_then(|model| model.ctx_size))
+}
+
 fn should_start_relay_health_monitor(mode: mesh_discovery::MeshDiscoveryMode) -> bool {
     matches!(
         relay_policy_for_mesh_discovery_mode(mode),
@@ -6739,6 +6826,7 @@ async fn spawn_run_auto_startup_model_tasks(
     let primary_parallel_override = primary_startup_model
         .and_then(|m| m.parallel)
         .or(config.gpu.parallel);
+    let resource_planning_profile = runtime_resource_planning_profile(options);
     let console_state_for_election = console_state.cloned();
     let interactive_console_state = console_state.cloned();
     let primary_mmproj = primary_startup_model.and_then(|model| model.mmproj_path.clone());
@@ -6777,6 +6865,7 @@ async fn spawn_run_auto_startup_model_tasks(
         n_ubatch: primary_n_ubatch,
         flash_attention: primary_flash_attention,
         parallel_override: primary_parallel_override,
+        resource_planning_profile,
         openai_guardrail_policy: runtime_state.openai_guardrail_policy.clone(),
         split: options.split,
         skippy_telemetry: skippy_telemetry.clone(),
@@ -7042,6 +7131,7 @@ async fn run_auto_load_runtime_model(
             })
     };
     let model_overrides = ctx.config.models.iter().find(|m| m.model == spec);
+    let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = model_overrides
         .and_then(|m| m.parallel)
         .or(ctx.config.gpu.parallel);
@@ -7065,7 +7155,7 @@ async fn run_auto_load_runtime_model(
             model_path: &model_path,
             model_bytes,
             mmproj_override: None,
-            ctx_size_override: ctx.options.ctx_size,
+            ctx_size_override,
             pinned_gpu: None,
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
@@ -7076,6 +7166,7 @@ async fn run_auto_load_runtime_model(
                 .and_then(|m| m.flash_attention)
                 .unwrap_or(FlashAttentionType::Auto),
             parallel_override,
+            planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             skippy_telemetry: skippy_telemetry_options(ctx.options),
             survey_telemetry: ctx.survey_telemetry.clone(),
@@ -7095,7 +7186,7 @@ async fn run_auto_load_runtime_model(
                     launch_kind: survey::SurveyLaunchKind::RuntimeLoad,
                     pinned_gpu: None,
                     backend: None,
-                    context_length: ctx.options.ctx_size.map(u64::from),
+                    context_length: ctx_size_override.map(u64::from),
                 },
                 launch_started.elapsed(),
                 survey::classify_launch_failure(&err),
@@ -7892,6 +7983,7 @@ async fn spawn_run_auto_additional_model_tasks(ctx: RunAutoAdditionalModelsConte
             n_ubatch: extra_model.n_ubatch,
             flash_attention: extra_model.flash_attention,
             parallel_override: extra_model.parallel.or(ctx.config.gpu.parallel),
+            resource_planning_profile: runtime_resource_planning_profile(ctx.options),
             openai_guardrail_policy: ctx.openai_guardrail_policy.clone(),
             split: ctx.options.split,
             skippy_telemetry: ctx.skippy_telemetry.clone(),
@@ -9022,6 +9114,34 @@ mod tests {
             // TODO: Audit that the environment access only happens in single-threaded code.
             unsafe { std::env::remove_var(key) };
         }
+    }
+
+    #[test]
+    fn noq_proto_tracing_messages_use_transport_context() {
+        let message = "2026-06-11T03:49:18.033043Z  WARN noq_proto::connection: err=LastOpenPath failed closing path";
+
+        let (message, context) = normalize_tracing_message("noq_proto::connection", message);
+
+        assert_eq!(message, "failed closing path (err=LastOpenPath)");
+        assert_eq!(context.as_deref(), Some("transport"));
+    }
+
+    #[test]
+    fn routed_tracing_messages_strip_ansi_sequences() {
+        let formatted = "\u{1b}[2m2026-06-11T03:49:18.033043Z\u{1b}[0m \u{1b}[33m WARN\u{1b}[0m";
+
+        assert_eq!(
+            strip_ansi_escape_sequences(formatted),
+            "2026-06-11T03:49:18.033043Z  WARN"
+        );
+    }
+
+    #[test]
+    fn non_proto_tracing_messages_keep_stderr_context() {
+        let (message, context) = normalize_tracing_message("mesh_llm::runtime", "runtime warning");
+
+        assert_eq!(message, "runtime warning");
+        assert_eq!(context.as_deref(), Some("stderr"));
     }
 
     fn reconciliation_target_with_required_bytes(
@@ -10932,6 +11052,71 @@ mod tests {
         assert!(
             !line.contains("Management API"),
             "default passive output must not contain 'Management API', got: {line}"
+        );
+    }
+
+    #[test]
+    fn runtime_load_ctx_size_uses_model_override_when_cli_is_unset() {
+        let options = runtime_options_for_test(&["mesh-llm"]);
+        let model = plugin::ModelConfigEntry {
+            model: "runtime/model".to_string(),
+            ctx_size: Some(16_384),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            runtime_model_ctx_size_override(&options, Some(&model)),
+            Some(16_384)
+        );
+    }
+
+    #[test]
+    fn runtime_load_ctx_size_prefers_cli_override_over_model_override() {
+        let options = runtime_options_for_test(&["mesh-llm", "--ctx-size", "8192"]);
+        let model = plugin::ModelConfigEntry {
+            model: "runtime/model".to_string(),
+            ctx_size: Some(16_384),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            runtime_model_ctx_size_override(&options, Some(&model)),
+            Some(8192)
+        );
+    }
+
+    #[test]
+    fn shared_mesh_modes_use_concurrency_preserving_resource_planning_profile() {
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&["mesh-llm"])),
+            RuntimeResourcePlanningProfile::DedicatedLocal
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&["mesh-llm", "--auto"])),
+            RuntimeResourcePlanningProfile::SharedMesh
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&[
+                "mesh-llm",
+                "--publish"
+            ])),
+            RuntimeResourcePlanningProfile::SharedMesh
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&[
+                "mesh-llm",
+                "--discover",
+                "lab",
+            ])),
+            RuntimeResourcePlanningProfile::SharedMesh
+        );
+        assert_eq!(
+            runtime_resource_planning_profile(&runtime_options_for_test(&[
+                "mesh-llm",
+                "--join",
+                "mesh-token",
+            ])),
+            RuntimeResourcePlanningProfile::SharedMesh
         );
     }
 

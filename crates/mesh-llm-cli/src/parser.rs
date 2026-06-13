@@ -392,7 +392,7 @@ impl MeshGuardrailCliMode {
 #[derive(Parser, Debug)]
 #[command(
     name = "mesh-llm",
-    version = env!("CARGO_PKG_VERSION"),
+    version = mesh_llm_build_info::BUILD_VERSION,
     about = "Pool GPUs over the internet for LLM inference",
     after_help = "Preferred runtime entrypoints:\n  mesh-llm serve\n  mesh-llm serve --model Qwen3-8B-Q4_K_M\n  mesh-llm client --auto\n  mesh-llm gpus\n\n`mesh-llm serve` loads startup models from ~/.mesh-llm/config.toml.\nRun with --help-advanced for all options.\n\nExternal backends (vLLM, TGI, Ollama):\n  Install the plugin:\n    mesh-llm plugins install openai-endpoint\n  Add to ~/.mesh-llm/config.toml:\n    [[plugin]]\n    name = \"openai-endpoint\"\n    url = \"http://gpu-box:8000/v1\"\n  Then: mesh-llm serve     (or: mesh-llm client  for client-only mode)\n\nFlash-MoE SSD backend:\n  Install the plugin:\n    mesh-llm plugins install flash-moe\n  Add [[plugin]] name = \"flash-moe\" with url or plugin-owned args.\n  Then: mesh-llm serve     (or: mesh-llm client  for client-only mode)"
 )]

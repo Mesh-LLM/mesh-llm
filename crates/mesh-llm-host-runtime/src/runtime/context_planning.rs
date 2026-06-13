@@ -36,6 +36,30 @@ const MIN_AUTO_CONTEXT_LENGTH: u32 = 512;
 const MAX_AUTO_PARALLEL_SLOTS: usize = 4;
 const KV_CACHE_BUDGET_NUMERATOR: u64 = 85;
 const KV_CACHE_BUDGET_DENOMINATOR: u64 = 100;
+const FALLBACK_CONTEXT_8K_FREE_BYTES: u64 = 3_000_000_000;
+const FALLBACK_CONTEXT_16K_FREE_BYTES: u64 = 6_000_000_000;
+const FALLBACK_CONTEXT_32K_FREE_BYTES: u64 = 12_000_000_000;
+const FALLBACK_CONTEXT_64K_FREE_BYTES: u64 = 30_000_000_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeResourcePlanningProfile {
+    /// Prefer the deepest safe local context when the operator did not ask for
+    /// a shared mesh-serving surface.
+    DedicatedLocal,
+    /// Prefer the default llama-server/skippy auto concurrency target for
+    /// shared mesh-serving launches, then choose the deepest context that still
+    /// fits it.
+    SharedMesh,
+}
+
+impl RuntimeResourcePlanningProfile {
+    fn context_slot_target(self) -> u64 {
+        match self {
+            Self::DedicatedLocal => 1,
+            Self::SharedMesh => MAX_AUTO_PARALLEL_SLOTS as u64,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeResourcePlan {
@@ -58,6 +82,7 @@ pub(super) struct RuntimeResourcePlanInput<'a> {
     /// Fraction of the model's layers that reside on this node (0.0–1.0).
     /// `None` means the whole model is local (fraction = 1.0).
     pub(super) local_layer_fraction: Option<f64>,
+    pub(super) planning_profile: RuntimeResourcePlanningProfile,
 }
 
 /// Plan context length and parallel slots.
@@ -80,16 +105,17 @@ pub(super) fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> Run
 }
 
 fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
+    let fallback_context = fallback_context_length(input);
     let Some(metadata) = input.metadata else {
-        return DEFAULT_CONTEXT_LENGTH;
+        return fallback_context;
     };
     let native_context = metadata.context_length;
     if native_context == 0 {
-        return DEFAULT_CONTEXT_LENGTH;
+        return fallback_context;
     }
     let Some(kv_bytes_per_token_full) = input.kv_cache_quant.kv_cache_bytes_per_token(metadata)
     else {
-        return DEFAULT_CONTEXT_LENGTH.min(native_context);
+        return fallback_context.min(native_context);
     };
 
     // In a pipeline-parallel split each stage only holds KV state for its
@@ -100,7 +126,11 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     if kv_bytes_per_token == 0 {
         return native_context;
     }
-    let max_affordable_context = kv_budget / kv_bytes_per_token;
+    let slot_target = context_slot_target(input);
+    let Some(kv_bytes_for_target_slots) = kv_bytes_per_token.checked_mul(slot_target) else {
+        return MIN_AUTO_CONTEXT_LENGTH.min(native_context);
+    };
+    let max_affordable_context = kv_budget / kv_bytes_for_target_slots;
     if max_affordable_context == 0 {
         return MIN_AUTO_CONTEXT_LENGTH.min(native_context);
     }
@@ -114,6 +144,13 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
     } else {
         snap_context_length_down(planned).max(minimum)
     }
+}
+
+fn context_slot_target(input: &RuntimeResourcePlanInput<'_>) -> u64 {
+    input
+        .parallel_override
+        .map(|slots| slots.max(1) as u64)
+        .unwrap_or_else(|| input.planning_profile.context_slot_target())
 }
 
 fn planned_parallel_slots(input: &RuntimeResourcePlanInput<'_>, context_length: u32) -> usize {
@@ -152,6 +189,21 @@ fn usable_kv_cache_budget(vram_bytes: u64, model_bytes: u64) -> u64 {
     let budget = u128::from(free_bytes) * u128::from(KV_CACHE_BUDGET_NUMERATOR)
         / u128::from(KV_CACHE_BUDGET_DENOMINATOR);
     budget.min(u128::from(u64::MAX)) as u64
+}
+
+fn fallback_context_length(input: &RuntimeResourcePlanInput<'_>) -> u32 {
+    let free_bytes = input.vram_bytes.saturating_sub(input.model_bytes);
+    if free_bytes >= FALLBACK_CONTEXT_64K_FREE_BYTES {
+        65_536
+    } else if free_bytes >= FALLBACK_CONTEXT_32K_FREE_BYTES {
+        32_768
+    } else if free_bytes >= FALLBACK_CONTEXT_16K_FREE_BYTES {
+        16_384
+    } else if free_bytes >= FALLBACK_CONTEXT_8K_FREE_BYTES {
+        8192
+    } else {
+        DEFAULT_CONTEXT_LENGTH
+    }
 }
 
 fn snap_parallel_slots_down(raw_slots: u64) -> usize {
@@ -202,6 +254,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert_eq!(plan.context_length, 16_384);
@@ -219,6 +272,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert_eq!(
@@ -242,6 +296,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::F16,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
         let q8_plan = plan_runtime_resources(RuntimeResourcePlanInput {
             ctx_size_override: None,
@@ -251,6 +306,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert!(
@@ -267,14 +323,50 @@ mod tests {
             ctx_size_override: None,
             parallel_override: None,
             model_bytes: 5_000_000_000,
-            vram_bytes: 24_000_000_000,
+            vram_bytes: 16_000_000_000,
             metadata: None,
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
-        assert_eq!(plan.context_length, 4096);
+        assert_eq!(plan.context_length, 16_384);
         assert_eq!(plan.slots, 4);
+    }
+
+    #[test]
+    fn shared_mesh_profile_prefers_concurrency_when_native_context_would_allow_only_one_slot() {
+        let metadata = gqa_metadata(131_072);
+        let dedicated_plan = plan_runtime_resources(RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override: None,
+            model_bytes: 5_000_000_000,
+            vram_bytes: 16_000_000_000,
+            metadata: Some(&metadata),
+            kv_cache_quant: GgufKvCacheQuant::Q8_0,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+        });
+        let shared_plan = plan_runtime_resources(RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override: None,
+            model_bytes: 5_000_000_000,
+            vram_bytes: 16_000_000_000,
+            metadata: Some(&metadata),
+            kv_cache_quant: GgufKvCacheQuant::Q8_0,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::SharedMesh,
+        });
+
+        assert_eq!(dedicated_plan.context_length, 131_072);
+        assert_eq!(dedicated_plan.slots, 1);
+        assert!(
+            shared_plan.context_length < dedicated_plan.context_length,
+            "shared mesh should trade context for concurrency: shared={}, dedicated={}",
+            shared_plan.context_length,
+            dedicated_plan.context_length
+        );
+        assert_eq!(shared_plan.slots, 4);
     }
 
     #[test]
@@ -288,6 +380,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert_eq!(plan.context_length, 32_768);
@@ -319,6 +412,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert_eq!(plan.context_length, 32_768);
@@ -342,6 +436,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert_eq!(plan.slots, 8);
@@ -372,6 +467,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         // With split awareness: local model ~174 GB, local KV fraction 0.66
@@ -383,6 +479,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: Some(local_fraction),
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert!(
@@ -409,6 +506,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q8_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
         let q4_plan = plan_runtime_resources(RuntimeResourcePlanInput {
             ctx_size_override: None,
@@ -418,6 +516,7 @@ mod tests {
             metadata: Some(&metadata),
             kv_cache_quant: GgufKvCacheQuant::Q4_0,
             local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
         });
 
         assert_eq!(q8_plan.context_length, q4_plan.context_length);

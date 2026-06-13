@@ -59,15 +59,16 @@ use crate::{
     binary_transport::{
         PredictionReturnHub, PredictionReturnReceiver, WireCondition, connect_binary_downstream,
         forwarded_stage_message, forwarded_stage_message_timed, run_binary_stage_message,
-        write_stage_message_conditioned,
+        stage_output_activation_capacity, write_stage_message_conditioned,
     },
     cli::ServeOpenAiArgs,
     config::{load_json, validate_config},
-    kv_integration::KvStageIntegration,
+    kv_integration::{KvStageIntegration, proactive_eviction_attrs, proactive_eviction_error_kind},
     runtime_state::{RuntimeSessionStats, RuntimeState, load_runtime},
     telemetry::{Telemetry, lifecycle_attrs, now_unix_nanos},
 };
 
+mod admission;
 mod backend;
 mod embedded_execution;
 mod embedded_generation;
@@ -81,7 +82,14 @@ mod speculative;
 mod util;
 mod wire_messages;
 
-use self::{prefill::*, request::*, speculative::*, util::*, wire_messages::*};
+use self::{
+    admission::{GenerationTokenBudget, GenerationTokenBudgetRequest},
+    prefill::*,
+    request::*,
+    speculative::*,
+    util::*,
+    wire_messages::*,
+};
 
 static OPENAI_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -181,6 +189,7 @@ pub async fn serve_openai(args: ServeOpenAiArgs) -> Result<()> {
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         kv,
     });
@@ -525,6 +534,7 @@ pub fn embedded_openai_backend(args: EmbeddedOpenAiArgs) -> Result<EmbeddedOpenA
         generation_limit: Arc::new(Semaphore::new(args.generation_concurrency)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: args.generation_concurrency,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: args.hook_policy,
         kv,
     });
@@ -563,6 +573,7 @@ struct StageOpenAiBackend {
     generation_limit: Arc<Semaphore>,
     generation_queue_depth: Arc<AtomicUsize>,
     generation_queue_limit: usize,
+    generation_token_budget: Arc<GenerationTokenBudget>,
     hook_policy: Option<Arc<dyn OpenAiHookPolicy>>,
     kv: Option<Arc<KvStageIntegration>>,
 }
@@ -1307,6 +1318,12 @@ impl OpenAiBackendMode {
         match self {
             Self::LocalRuntime => "local-runtime",
             Self::EmbeddedStageZero { .. } => "embedded-stage0",
+        }
+    }
+
+    fn reserves_local_kv_tokens(&self) -> bool {
+        match self {
+            Self::LocalRuntime | Self::EmbeddedStageZero { .. } => true,
         }
     }
 }

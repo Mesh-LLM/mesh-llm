@@ -1,0 +1,29 @@
+{
+  "name": "mesh-llm-website",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/assets/site.tailwind.css -o ./src/assets/site.generated.css --minify",
+    "build:pagefind": "pagefind --site ../docs",
+    "build": "npm run build:css && eleventy && npm run build:pagefind",
+    "watch:css": "tailwindcss -i ./src/assets/site.tailwind.css -o ./src/assets/site.generated.css --watch",
+    "dev": "npm run build:css && eleventy && npm run build:pagefind && sh -c 'npm run watch:css & css_pid=$!; eleventy --serve --watch --incremental --port=8765; kill $css_pid'",
+    "clean": "node ./scripts/clean-generated-site.mjs"
+  },
+  "devDependencies": {
+    "@11ty/eleventy": "^3.1.2",
+    "@tailwindcss/cli": "4.3.0",
+    "markdown-it-anchor": "^9.2.0",
+    "pagefind": "^1.5.2",
+    "playwright": "^1.60.0",
+    "tailwindcss": "4.3.0"
+  },
+  "dependencies": {
+    "animejs": "^4.4.1",
+    "highlight.js": "^11.11.1",
+    "lucide": "^1.17.0"
+  }
+}

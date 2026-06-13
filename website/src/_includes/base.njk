@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  {% include "components/document-head.njk" %}
+  <script>
+    document.documentElement.classList.add('js');
+    {% if bodyClass == "home-intro" %}
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    if (!location.hash && !location.search) window.scrollTo(0, 0);
+    {% endif %}
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Rajdhani:wght@700&family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="/assets/lucide.min.js" defer></script>
+  <script src="/assets/github-stars.js" defer></script>
+  {% if bodyClass == "home-intro" %}
+  <script src="/assets/anime.min.js" defer></script>
+  <script src="/assets/title-reveal.js" defer></script>
+  <script src="/assets/hero-viz.js" defer></script>
+  <script src="/assets/topology-switcher.js" defer></script>
+  <script src="/assets/model-slicing.js" defer></script>
+  <script src="/assets/plugin-architecture.js" defer></script>
+  <script src="/assets/copy-code.js" defer></script>
+  {% endif %}
+  <script>window.addEventListener('DOMContentLoaded', () => { if (typeof lucide !== 'undefined') lucide.createIcons(); });</script>
+</head>
+<body{% if bodyClass %} class="{{ bodyClass }}"{% endif %}>
+  {% include "nav.njk" %}
+  {{ content | safe }}
+  {% include "footer.njk" %}
+</body>
+</html>

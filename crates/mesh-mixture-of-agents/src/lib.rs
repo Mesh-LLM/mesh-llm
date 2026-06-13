@@ -50,7 +50,7 @@ pub(crate) use tool_guard::enforce_tool_call_contract;
 
 use backend::call_backend;
 use fanout::{GraceMode, gather_workers_incremental};
-use mesh_llm_guardrails::tool_arguments_wire_string;
+use mesh_llm_guardrails::{sanitize_tool_arguments_for_tool, tool_arguments_wire_string};
 use normalize::WorkerOutput;
 use reducer::{hedged_reducer_call, reducer_candidates};
 use serde_json::{Value, json};
@@ -153,6 +153,22 @@ pub struct WorkerSummary {
     pub confidence: Option<f32>,
 }
 
+#[derive(Debug, Clone)]
+struct ForcedToolChoice {
+    name: String,
+    fallback_arguments: Value,
+}
+
+struct DecisionResolution<'a> {
+    session: &'a Session,
+    decision: arbiter::Decision,
+    outputs: &'a [WorkerOutput],
+    has_tools: bool,
+    selected_tool_names: &'a [String],
+    forced_tool: Option<&'a ForcedToolChoice>,
+    allowed_tools: &'a [String],
+}
+
 // ─── Gateway entry point ─────────────────────────────────────────────
 
 /// Process one MoA turn.
@@ -178,6 +194,7 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
     session.ingest(&incoming_messages, &tools);
 
     let turn_type = session.classify_turn();
+    let forced_tool = forced_tool_choice(body, &session, &tools);
     tracing::info!(
         "moa: turn={:?}, {} models, tools={}",
         turn_type,
@@ -192,7 +209,15 @@ pub async fn handle_turn(config: &GatewayConfig, body: &Value) -> TurnResult {
             handle_tool_result(config, &session, has_tools, &allowed_tools, start).await
         }
         session::TurnType::Fresh => {
-            handle_query(config, &session, has_tools, &allowed_tools, start).await
+            handle_query(
+                config,
+                &session,
+                has_tools,
+                &allowed_tools,
+                forced_tool.as_ref(),
+                start,
+            )
+            .await
         }
     }
 }
@@ -204,12 +229,15 @@ async fn handle_query(
     session: &Session,
     has_tools: bool,
     allowed_tools: &[String],
+    forced_tool: Option<&ForcedToolChoice>,
     start: Instant,
 ) -> TurnResult {
     let assignments = worker::assign_roles(&config.models);
     let grace_mode = grace_mode_for_turn(session, has_tools);
-    let query_uses_tools = matches!(grace_mode, GraceMode::Tool);
-    let selected_tool_names = if query_uses_tools {
+    let query_uses_tools = forced_tool.is_some() || matches!(grace_mode, GraceMode::Tool);
+    let selected_tool_names = if let Some(tool) = forced_tool {
+        vec![tool.name.clone()]
+    } else if query_uses_tools {
         selected_tool_names_for_turn(session, allowed_tools)
     } else {
         Vec::new()
@@ -291,12 +319,15 @@ async fn handle_query(
     let decision = early_decision.unwrap_or_else(|| arbiter::arbitrate(&outputs, query_uses_tools));
     let (response_body, reducer_used, reducer_attempts) = resolve_decision(
         config,
-        session,
-        decision,
-        &outputs,
-        query_uses_tools,
-        &selected_tool_names,
-        allowed_tools,
+        DecisionResolution {
+            session,
+            decision,
+            outputs: &outputs,
+            has_tools: query_uses_tools,
+            selected_tool_names: &selected_tool_names,
+            forced_tool,
+            allowed_tools,
+        },
     )
     .await;
 
@@ -395,6 +426,11 @@ fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> 
     }
 
     let text = session.last_user_text().to_ascii_lowercase();
+    let explicit = explicitly_requested_tool_names(&available, &text);
+    if !explicit.is_empty() {
+        return with_recent_tool_chain_names(session, &available, explicit);
+    }
+
     let mut selected = Vec::new();
     for tool in &available {
         let tool_lc = tool.to_ascii_lowercase();
@@ -403,6 +439,14 @@ fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> 
         }
     }
 
+    with_recent_tool_chain_names(session, &available, selected)
+}
+
+fn with_recent_tool_chain_names(
+    session: &Session,
+    available: &[String],
+    mut selected: Vec<String>,
+) -> Vec<String> {
     for tool in recent_tool_chain_names(session) {
         if available.iter().any(|available| available == &tool) && !selected.contains(&tool) {
             selected.push(tool);
@@ -410,10 +454,42 @@ fn selected_tool_names_for_turn(session: &Session, allowed_tools: &[String]) -> 
     }
 
     if selected.is_empty() && available.len() == 1 {
-        available
+        available.to_vec()
     } else {
         selected
     }
+}
+
+fn explicitly_requested_tool_names(available: &[String], text: &str) -> Vec<String> {
+    available
+        .iter()
+        .filter(|tool| tool_name_is_explicitly_requested(&tool.to_ascii_lowercase(), text))
+        .cloned()
+        .collect()
+}
+
+fn tool_name_is_explicitly_requested(tool: &str, text: &str) -> bool {
+    if tool.len() < 3 {
+        return false;
+    }
+
+    let spaced = tool.replace('_', " ");
+    let patterns = [
+        format!("use {tool}"),
+        format!("use the {tool}"),
+        format!("{tool} tool"),
+        format!("tool {tool}"),
+        format!("call {tool}"),
+        format!("call the {tool}"),
+        format!("use {spaced}"),
+        format!("use the {spaced}"),
+        format!("{spaced} tool"),
+        format!("tool {spaced}"),
+        format!("call {spaced}"),
+        format!("call the {spaced}"),
+    ];
+
+    patterns.iter().any(|pattern| text.contains(pattern))
 }
 
 fn recent_tool_chain_names(session: &Session) -> Vec<String> {
@@ -516,6 +592,108 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
 }
 
+fn forced_tool_choice(
+    body: &Value,
+    session: &Session,
+    tools: &Option<Value>,
+) -> Option<ForcedToolChoice> {
+    let name = body
+        .get("tool_choice")?
+        .get("function")?
+        .get("name")?
+        .as_str()?;
+    if name.is_empty() || !session.tool_names().iter().any(|tool| tool == name) {
+        return None;
+    }
+
+    let inferred =
+        infer_tool_arguments_from_prompt(name, tools.as_ref(), &session.last_user_text());
+    let fallback_arguments =
+        sanitize_tool_arguments_for_tool(name, &inferred, tools.as_ref()).unwrap_or(inferred);
+
+    Some(ForcedToolChoice {
+        name: name.to_string(),
+        fallback_arguments,
+    })
+}
+
+fn infer_tool_arguments_from_prompt(name: &str, tools: Option<&Value>, prompt: &str) -> Value {
+    let Some(parameters) = tool_parameters(name, tools) else {
+        return json!({});
+    };
+    let Some(required) = parameters.get("required").and_then(Value::as_array) else {
+        return json!({});
+    };
+    let Some(properties) = parameters.get("properties").and_then(Value::as_object) else {
+        return json!({});
+    };
+
+    let mut args = serde_json::Map::new();
+    for field in required.iter().filter_map(Value::as_str) {
+        let Some(schema) = properties.get(field) else {
+            continue;
+        };
+        if let Some(value) = infer_string_argument(field, schema, prompt) {
+            args.insert(field.to_string(), Value::String(value));
+        }
+    }
+    Value::Object(args)
+}
+
+fn infer_string_argument(field: &str, schema: &Value, prompt: &str) -> Option<String> {
+    if !schema_allows_string(schema) {
+        return None;
+    }
+
+    infer_enum_argument(schema, prompt).or_else(|| infer_assignment_argument(field, prompt))
+}
+
+fn schema_allows_string(schema: &Value) -> bool {
+    match schema.get("type") {
+        Some(Value::String(value)) => value == "string",
+        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some("string")),
+        None => true,
+        _ => false,
+    }
+}
+
+fn infer_enum_argument(schema: &Value, prompt: &str) -> Option<String> {
+    let prompt_lc = prompt.to_ascii_lowercase();
+    schema
+        .get("enum")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|candidate| prompt_lc.contains(&candidate.to_ascii_lowercase()))
+        .map(str::to_string)
+}
+
+fn infer_assignment_argument(field: &str, prompt: &str) -> Option<String> {
+    let prompt_lc = prompt.to_ascii_lowercase();
+    let field_lc = field.to_ascii_lowercase();
+    let marker = format!("{field_lc}=");
+    let start = prompt_lc.find(&marker)? + marker.len();
+    let tail = prompt_lc.get(start..)?;
+    let value = tail
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`');
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn tool_parameters<'a>(tool_name: &str, tools: Option<&'a Value>) -> Option<&'a Value> {
+    tools?
+        .as_array()?
+        .iter()
+        .find(|tool| {
+            tool.pointer("/function/name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name == tool_name)
+        })?
+        .pointer("/function/parameters")
+}
+
 // ─── Tool result handling ────────────────────────────────────────────
 
 async fn handle_tool_result(
@@ -600,7 +778,7 @@ async fn handle_tool_result(
                     "MoA reducer returned no usable answer",
                     MOA_ERR_NO_USABLE_ANSWER,
                 ),
-                _ => chat_response(&reduced.payload),
+                _ => chat_response(&repair_tool_result_answer(session, &reduced.payload)),
             };
             (name, true, body)
         }
@@ -635,6 +813,98 @@ async fn handle_tool_result(
     }
 }
 
+fn repair_tool_result_answer(session: &Session, answer: &str) -> String {
+    if !tool_evidence_should_be_preserved(&session.last_user_text()) {
+        return answer.to_string();
+    }
+
+    let missing = missing_tool_evidence_values(session, answer);
+    if missing.is_empty() {
+        return answer.to_string();
+    }
+
+    let mut repaired = answer.trim().to_string();
+    if !repaired.is_empty() {
+        repaired.push_str("\n\n");
+    }
+    repaired.push_str("Tool facts: ");
+    repaired.push_str(&missing.join(", "));
+    repaired
+}
+
+fn tool_evidence_should_be_preserved(user_text: &str) -> bool {
+    let text = user_text.to_ascii_lowercase();
+    contains_any(
+        &text,
+        &[
+            "tool fact",
+            "tool facts",
+            "tool result",
+            "tool output",
+            "final recall",
+            "include both",
+            "include all",
+            "answer with the tool",
+            "return the tool",
+        ],
+    )
+}
+
+fn missing_tool_evidence_values(session: &Session, answer: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    for (_, result) in session.recent_tool_results() {
+        for value in short_tool_result_values(&result) {
+            if !answer.contains(&value) && !missing.iter().any(|seen| seen == &value) {
+                missing.push(value);
+            }
+        }
+    }
+    missing
+}
+
+fn short_tool_result_values(result: &str) -> Vec<String> {
+    let Ok(parsed) = serde_json::from_str::<Value>(result) else {
+        return Vec::new();
+    };
+
+    let mut values = Vec::new();
+    collect_short_tool_result_values(&parsed, &mut values);
+    values
+}
+
+fn collect_short_tool_result_values(value: &Value, values: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, nested) in map {
+                if !tool_result_value_key_is_evidence(key) {
+                    continue;
+                }
+                if let Some(scalar) = nested.as_str().filter(|s| short_exact_value(s)) {
+                    values.push(scalar.to_string());
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_short_tool_result_values(item, values);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn tool_result_value_key_is_evidence(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "value" | "fact" | "result" | "answer"
+    )
+}
+
+fn short_exact_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed.len() <= 160 && !trimmed.contains('\n')
+}
+
 fn repeated_same_tool_results(session: &Session) -> Option<(String, usize)> {
     let calls = session.pending_tool_calls();
     let last = calls.last()?;
@@ -657,11 +927,14 @@ fn append_tool_loop_answer_instruction(messages: &mut [Value], tool: &str, count
          If the evidence is incomplete, say what can be determined and what is missing."
     );
 
-    if let Some(system) = messages
+    let system_content = messages
         .iter_mut()
         .find(|msg| msg.get("role").and_then(Value::as_str) == Some("system"))
-        && let Some(content) = system.get("content").and_then(Value::as_str)
-    {
+        .and_then(|system| {
+            let content = system.get("content").and_then(Value::as_str)?.to_string();
+            Some((system, content))
+        });
+    if let Some((system, content)) = system_content {
         let mut updated = content.to_string();
         updated.push_str(&instruction);
         system["content"] = Value::String(updated);
@@ -673,15 +946,30 @@ fn append_tool_loop_answer_instruction(messages: &mut [Value], tool: &str, count
 /// Returns (response body, reducer_used, reducer_attempts).
 async fn resolve_decision(
     config: &GatewayConfig,
-    session: &Session,
-    decision: arbiter::Decision,
-    outputs: &[WorkerOutput],
-    has_tools: bool,
-    selected_tool_names: &[String],
-    allowed_tools: &[String],
+    request: DecisionResolution<'_>,
 ) -> (Value, bool, u32) {
+    let DecisionResolution {
+        session,
+        decision,
+        outputs,
+        has_tools,
+        selected_tool_names,
+        forced_tool,
+        allowed_tools,
+    } = request;
+
     match decision {
-        arbiter::Decision::Answer(text) => (chat_response(&text), false, 0),
+        arbiter::Decision::Answer(text) => {
+            if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                (
+                    tool_call_response(&tool.name, &tool.fallback_arguments),
+                    false,
+                    0,
+                )
+            } else {
+                (chat_response(&text), false, 0)
+            }
+        }
         arbiter::Decision::ToolCall { name, arguments } => {
             if has_tools {
                 (tool_call_response(&name, &arguments), false, 0)
@@ -755,9 +1043,27 @@ async fn resolve_decision(
                         (tool_proposal_response(&reduced, has_tools), true, attempts)
                     }
                     normalize::OutputKind::Uncertainty => {
-                        (fallback_worker_response(outputs), true, attempts)
+                        if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                            (
+                                tool_call_response(&tool.name, &tool.fallback_arguments),
+                                true,
+                                attempts,
+                            )
+                        } else {
+                            (fallback_worker_response(outputs), true, attempts)
+                        }
                     }
-                    _ => (chat_response(&reduced.payload), true, attempts),
+                    _ => {
+                        if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                            (
+                                tool_call_response(&tool.name, &tool.fallback_arguments),
+                                true,
+                                attempts,
+                            )
+                        } else {
+                            (chat_response(&reduced.payload), true, attempts)
+                        }
+                    }
                 },
                 None => {
                     tracing::warn!("moa: all reducer candidates failed, using best worker");
@@ -765,7 +1071,15 @@ async fn resolve_decision(
                     // produce the output we're returning — we fell back to
                     // a worker. attempts still reflects what was spawned so
                     // observability can see "we tried N times and all failed".
-                    (fallback_worker_response(outputs), false, attempts)
+                    if let Some(tool) = forced_tool.filter(|_| has_tools) {
+                        (
+                            tool_call_response(&tool.name, &tool.fallback_arguments),
+                            false,
+                            attempts,
+                        )
+                    } else {
+                        (fallback_worker_response(outputs), false, attempts)
+                    }
                 }
             }
         }
@@ -804,7 +1118,7 @@ fn fallback_worker_response(outputs: &[WorkerOutput]) -> Value {
 }
 
 fn tool_proposal_response(output: &WorkerOutput, has_tools: bool) -> Value {
-    if has_tools && let Some(name) = output.tool_name.as_ref() {
+    if let (true, Some(name)) = (has_tools, output.tool_name.as_ref()) {
         let args = output.tool_arguments.as_ref().unwrap_or(&Value::Null);
         return tool_call_response(name, args);
     }
@@ -1132,6 +1446,133 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn forced_tool_choice_infers_enum_argument_from_prompt() {
+        let body = serde_json::json!({
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "lookup_probe_fact"}
+            },
+            "messages": [{
+                "role": "user",
+                "content": "Use lookup_probe_fact with primary and report the result."
+            }],
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "lookup_probe_fact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "key": {
+                                "type": "string",
+                                "enum": ["primary", "secondary"]
+                            }
+                        },
+                        "required": ["key"]
+                    }
+                }
+            }]
+        });
+        let tools = body.get("tools").cloned();
+        let mut session = Session::new();
+        let messages = body
+            .get("messages")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap();
+        session.ingest(&messages, &tools);
+
+        let forced = forced_tool_choice(&body, &session, &tools).expect("forced tool");
+
+        assert_eq!(forced.name, "lookup_probe_fact");
+        assert_eq!(forced.fallback_arguments, json!({"key": "primary"}));
+    }
+
+    #[test]
+    fn forced_tool_choice_infers_assignment_argument_from_prompt() {
+        let tools = Some(serde_json::json!([{
+            "type": "function",
+            "function": {
+                "name": "lookup_probe_fact",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                    "required": ["key"]
+                }
+            }
+        }]));
+
+        let args = infer_tool_arguments_from_prompt(
+            "lookup_probe_fact",
+            tools.as_ref(),
+            "Use key=Primary",
+        );
+
+        assert_eq!(args, json!({"key": "primary"}));
+    }
+
+    #[tokio::test]
+    async fn forced_tool_choice_overrides_answer_decision() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use lookup_probe_fact with primary"
+            })],
+            &Some(serde_json::json!([{
+                "type": "function",
+                "function": {"name": "lookup_probe_fact"}
+            }])),
+        );
+        let config = GatewayConfig {
+            backends: Vec::new(),
+            models: Vec::new(),
+            worker_timeout: Duration::from_secs(1),
+            reducer_timeout: Duration::from_secs(1),
+            hedge_delay: Duration::from_millis(10),
+            first_answer_grace: Duration::from_millis(10),
+            enable_thinking: Some(false),
+        };
+        let forced_tool = ForcedToolChoice {
+            name: "lookup_probe_fact".to_string(),
+            fallback_arguments: json!({"key": "primary"}),
+        };
+        let selected_tool_names = ["lookup_probe_fact".to_string()];
+        let allowed_tools = ["lookup_probe_fact".to_string()];
+        let (resp, reducer_used, attempts) = resolve_decision(
+            &config,
+            DecisionResolution {
+                session: &session,
+                decision: arbiter::Decision::Answer("I would call the tool.".to_string()),
+                outputs: &[],
+                has_tools: true,
+                selected_tool_names: &selected_tool_names,
+                forced_tool: Some(&forced_tool),
+                allowed_tools: &allowed_tools,
+            },
+        )
+        .await;
+
+        assert!(!reducer_used);
+        assert_eq!(attempts, 0);
+        assert_eq!(
+            resp.pointer("/choices/0/finish_reason")
+                .and_then(Value::as_str),
+            Some("tool_calls")
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/name")
+                .and_then(Value::as_str),
+            Some("lookup_probe_fact")
+        );
+        assert_eq!(
+            resp.pointer("/choices/0/message/tool_calls/0/function/arguments")
+                .and_then(Value::as_str),
+            Some("{\"key\":\"primary\"}")
+        );
+    }
+
+    #[test]
     fn error_response_reports_message_based_completion_tokens() {
         let resp = error_response("All MoA workers failed", MOA_ERR_ALL_WORKERS_FAILED);
         let tokens = resp
@@ -1259,6 +1700,48 @@ mod response_builder_tests {
     }
 
     #[test]
+    fn explicit_exec_request_suppresses_url_broadened_tools() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use exec exactly once. Command: curl https://api.github.com/repos/Mesh-LLM/mesh-llm/issues"
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "web_search"}},
+                {"type": "function", "function": {"name": "web_fetch"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["exec".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_multiple_tool_request_keeps_named_tools() {
+        let mut session = Session::new();
+        session.ingest(
+            &[serde_json::json!({
+                "role": "user",
+                "content": "Use the exec tool once to run pwd, then use read to inspect USER.md."
+            })],
+            &Some(serde_json::json!([
+                {"type": "function", "function": {"name": "exec"}},
+                {"type": "function", "function": {"name": "read"}},
+                {"type": "function", "function": {"name": "web_search"}}
+            ])),
+        );
+
+        assert_eq!(
+            selected_tool_names_for_turn(&session, &[]),
+            vec!["exec".to_string(), "read".to_string()]
+        );
+    }
+
+    #[test]
     fn two_same_tool_results_do_not_force_answer() {
         let mut session = Session::new();
         session.ingest(
@@ -1299,6 +1782,65 @@ mod response_builder_tests {
             repeated_same_tool_results(&session),
             Some(("web_search".to_string(), 3))
         );
+    }
+
+    #[test]
+    fn repair_tool_result_answer_preserves_short_json_values_on_recall() {
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "lookup"),
+                tool_result_msg("call_1", r#"{"key":"primary","value":"PRIMARY-FACT-123"}"#),
+                tool_call_msg("call_2", "lookup"),
+                tool_result_msg(
+                    "call_2",
+                    r#"{"key":"secondary","value":"SECONDARY-FACT-456"}"#,
+                ),
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Final recall: include both tool facts."
+                }),
+            ],
+            &None,
+        );
+
+        let repaired =
+            repair_tool_result_answer(&session, "The secondary fact is SECONDARY-FACT-456.");
+
+        assert!(repaired.contains("PRIMARY-FACT-123"));
+        assert!(repaired.contains("SECONDARY-FACT-456"));
+        assert!(!repaired.contains("primary"));
+    }
+
+    #[test]
+    fn repair_tool_result_answer_ignores_large_or_non_evidence_tool_values() {
+        let huge = "x".repeat(200);
+        let mut session = Session::new();
+        session.ingest(
+            &[
+                serde_json::json!({"role": "user", "content": "search"}),
+                tool_call_msg("call_1", "lookup"),
+                tool_result_msg(
+                    "call_1",
+                    &serde_json::json!({
+                        "value": huge,
+                        "debug": "SHORT-BUT-NOT-EVIDENCE",
+                        "result": "multi\nline",
+                    })
+                    .to_string(),
+                ),
+                serde_json::json!({
+                    "role": "user",
+                    "content": "Final recall: include tool facts."
+                }),
+            ],
+            &None,
+        );
+
+        let repaired = repair_tool_result_answer(&session, "Done.");
+
+        assert_eq!(repaired, "Done.");
     }
 
     fn tool_call_msg(id: &str, name: &str) -> Value {

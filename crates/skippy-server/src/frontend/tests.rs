@@ -1105,6 +1105,7 @@ fn local_openai_backend(config: StageConfig) -> Result<StageOpenAiBackend> {
         generation_limit: Arc::new(Semaphore::new(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         kv: None,
     })
@@ -1288,6 +1289,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         generation_limit: Arc::new(Semaphore::new(1)),
         generation_queue_depth: Arc::new(AtomicUsize::new(0)),
         generation_queue_limit: 1,
+        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
         hook_policy: None,
         kv: None,
     };
@@ -1490,6 +1492,55 @@ fn restore_prefill_decode_message_carries_chat_sampling_metadata() {
     assert_eq!(decoded.tokens, vec![101, 102, 103, 104]);
     assert_eq!(decoded.sampling, Some(sampling));
     assert_eq!(decoded.chat_sampling_metadata.as_deref(), Some(metadata));
+}
+
+#[test]
+fn reusable_decode_message_updates_hot_path_fields() {
+    let sampling = WireSamplingConfig {
+        flags: 1,
+        seed: 7,
+        ..WireSamplingConfig::default()
+    };
+    let mut message = ReusableDecodeMessage::new(
+        WireActivationDType::F16,
+        ReusableDecodeMessageArgs {
+            request_id: 11,
+            session_id: 13,
+            prompt_token_count: 4,
+            base_pos_start: 4,
+            sampling: Some(sampling.clone()),
+            sideband_capacity: 4,
+        },
+    )
+    .unwrap();
+
+    let first = message.update(0, 104).unwrap();
+    assert_eq!(first.kind, WireMessageKind::DecodeEmbd);
+    assert_eq!(first.request_id, 11);
+    assert_eq!(first.session_id, 13);
+    assert_eq!(first.sampling, Some(sampling.clone()));
+    assert_eq!(first.pos_start, 4);
+    assert_eq!(first.token_count, 1);
+    assert_eq!(first.state.prompt_token_count, 4);
+    assert_eq!(first.state.decode_step, 0);
+    assert_eq!(first.state.current_token, 104);
+    assert_eq!(first.tokens, vec![104]);
+
+    let second = message
+        .update_with_tokens(1, 105, &[101, 102, 104, 105])
+        .unwrap();
+    assert_eq!(second.request_id, 11);
+    assert_eq!(second.session_id, 13);
+    assert_eq!(second.sampling, Some(sampling));
+    assert_eq!(second.pos_start, 5);
+    assert_eq!(second.token_count, 1);
+    assert_eq!(second.state.prompt_token_count, 4);
+    assert_eq!(second.state.decode_step, 1);
+    assert_eq!(second.state.current_token, 105);
+    assert_eq!(second.tokens, vec![101, 102, 104, 105]);
+    assert!(second.positions.is_empty());
+    assert!(second.activation.is_empty());
+    assert!(second.raw_bytes.is_empty());
 }
 
 #[test]

@@ -1,0 +1,52 @@
+<div class="cta-terminal" aria-label="Mesh install and serve commands">
+  <div class="cta-terminal-bar">
+    <div class="cta-window-dots" aria-hidden="true">
+      <span class="red"></span>
+      <span class="yellow"></span>
+      <span class="green"></span>
+    </div>
+    <div class="cta-terminal-tabs" role="tablist" aria-label="Install methods">
+      <button class="active" type="button" role="tab" aria-selected="true" data-install-method="curl" data-install-copy="curl -fsSL https://meshllm.cloud/install.sh | bash">curl</button>
+      <button type="button" role="tab" aria-selected="false" data-install-method="brew" data-install-copy="brew install mesh-llm/tap/mesh-llm">brew</button>
+      <button type="button" role="tab" aria-selected="false" data-install-method="cargo" data-install-copy="cargo install mesh-llm">cargo</button>
+    </div>
+    <div class="cta-terminal-meta">~ &middot; zsh &middot; mesh-llm</div>
+    <button class="cta-copy" type="button" data-copy-text="curl -fsSL https://meshllm.cloud/install.sh | bash" aria-label="Copy install command">COPY</button>
+  </div>
+
+  <div class="cta-terminal-body">
+    <div class="cta-terminal-block">
+      <p class="comment"># Install Mesh (macOS, Linux, Windows &middot; ~18 MB)</p>
+      <p class="cta-install-command" data-install-command-display aria-live="polite"><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="value">https://meshllm.cloud/install.sh</span> <span class="pipe">|</span> <span class="cmd">bash</span></p>
+      <template data-install-template="curl"><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="value">https://meshllm.cloud/install.sh</span> <span class="pipe">|</span> <span class="cmd">bash</span></template>
+      <template data-install-template="brew"><span class="prompt">$</span> <span class="cmd">brew</span> <span class="cmd">install</span> <span class="value">mesh-llm/tap/mesh-llm</span></template>
+      <template data-install-template="cargo"><span class="prompt">$</span> <span class="cmd">cargo</span> <span class="cmd">install</span> <span class="value">mesh-llm</span></template>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Join the public mesh and serve if this machine can</p>
+      <p><span class="prompt">$</span> <span class="cmd">mesh-llm</span> <span class="cmd">serve</span> <span class="flag">--auto</span></p>
+      <p class="status"><span class="caret">&rsaquo;</span> discovering peers via nostr... <span class="ok">[ok]</span></p>
+      <p class="status"><span class="caret">&rsaquo;</span> joined "public" (217 peers) <span class="ok">[ok]</span></p>
+      <p class="status"><span class="caret">&rsaquo;</span> proxy listening on <span class="value">localhost:3131</span> <span class="ok">[ok]</span></p>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Or serve an 8GB VRAM-friendly catalog model</p>
+      <p><span class="prompt">$</span> <span class="cmd">mesh-llm</span> <span class="cmd">serve</span> <span class="flag">--model</span> <span class="value">gemma-4-26B-A4B-it-UD-Q4_K_M</span></p>
+    </div>
+
+    <div class="cta-terminal-block">
+      <p class="comment"># Point any OpenAI client at Mesh</p>
+      <p><span class="prompt">$</span> <span class="cmd">export</span> <span class="value">OPENAI_BASE_URL=http://localhost:3131/v1</span></p>
+    </div>
+  </div>
+
+  <div class="cta-terminal-footer">
+    <span class="live-dot" aria-hidden="true"></span>
+    <span>stream</span>
+    <strong><span class="caret">&rsaquo;</span> GLM-4.5-Air-Q4_K_M</strong>
+    <span>42 t/s &middot; ttft 187 ms</span>
+    <span>pipeline-split &middot; 3 peers</span>
+  </div>
+</div>

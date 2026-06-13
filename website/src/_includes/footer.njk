@@ -1,0 +1,75 @@
+{% from "components/ui.njk" import footerRow %}
+
+<footer class="site-footer" id="footer" data-pagefind-ignore="all">
+  <div class="shell">
+    <div class="footer-rule" aria-hidden="true"></div>
+
+    <div class="footer-grid">
+      <section class="footer-sponsors" aria-labelledby="footer-sponsors-title">
+        <h2 id="footer-sponsors-title">Sponsors</h2>
+        <div class="footer-list">
+          {{ footerRow("Become a sponsor", site.githubUrl, "arrow-up-right", "sponsor-row") }}
+        </div>
+
+        <div class="footer-brand-block">
+          <a class="brand" href="/" aria-label="Mesh LLM home">{% set showBrandVersion = true %}{% include "brand.njk" %}{% set showBrandVersion = false %}</a>
+          <span>© <script>document.write(new Date().getFullYear())</script> mesh-llm</span>
+        </div>
+      </section>
+
+      <div class="footer-links-block">
+        <section class="footer-column" aria-labelledby="footer-site-title">
+          <h2 id="footer-site-title">Site</h2>
+          <nav class="footer-list" aria-label="Footer site links">
+            {{ footerRow("Home", "/") }}
+            {{ footerRow("Documentation", "/docs/") }}
+            {{ footerRow("Model catalog", "/catalog/") }}
+            {{ footerRow("Install Mesh", "/docs/pages/installing-mesh/") }}
+          </nav>
+        </section>
+
+        <section class="footer-column" aria-labelledby="footer-socials-title">
+          <h2 id="footer-socials-title">Socials</h2>
+          <nav class="footer-list" aria-label="Footer social links">
+            {{ footerRow("GitHub", site.githubUrl, "arrow-up-right") }}
+            {{ footerRow("Public Mesh", site.publicMeshUrl, "arrow-up-right") }}
+            {{ footerRow("Roadmap", site.githubUrl + "/blob/main/ROADMAP.md", "arrow-up-right") }}
+            {{ footerRow("License", site.githubUrl + "/blob/main/LICENSE", "arrow-up-right") }}
+          </nav>
+        </section>
+
+        <form class="footer-subscribe" id="footer-subscribe-form" novalidate>
+          <label for="footer-email">Stay in the loop</label>
+          <div class="footer-subscribe-row">
+            <input id="footer-email" name="email" type="email" autocomplete="email" placeholder="Enter your email" required>
+            <button type="submit" id="footer-subscribe-btn">Subscribe</button>
+          </div>
+        </form>
+
+<script>
+(function () {
+  var form = document.getElementById('footer-subscribe-form');
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = document.getElementById('footer-email');
+    var btn = document.getElementById('footer-subscribe-btn');
+    if (!email || !btn) return;
+    if (!email.value || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.value)) {
+      email.focus();
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Subscribed ✓';
+    email.value = '';
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.textContent = 'Subscribe';
+    }, 3000);
+  });
+})();
+</script>
+      </div>
+    </div>
+  </div>
+</footer>

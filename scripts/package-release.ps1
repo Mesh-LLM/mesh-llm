@@ -147,6 +147,36 @@ function New-ZipArchive {
     )
 }
 
+function Get-Sha256Hex {
+    param([string]$Path)
+
+    # Use the .NET SHA-256 API directly instead of Get-FileHash. Under
+    # `powershell -NoProfile` on the CI runners, Microsoft.PowerShell.Utility
+    # module autoloading does not always resolve Get-FileHash, which caused
+    # release bundling to fail with CommandNotFoundException. The .NET API is
+    # always available regardless of module autoloading.
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $bytes = $sha256.ComputeHash($stream)
+        } finally {
+            $stream.Dispose()
+        }
+    } finally {
+        $sha256.Dispose()
+    }
+    return [System.BitConverter]::ToString($bytes).Replace("-", "").ToLowerInvariant()
+}
+
+function New-ChecksumSidecar {
+    param([string]$Path)
+
+    $hash = Get-Sha256Hex $Path
+    $name = Split-Path -Leaf $Path
+    Set-Content -Path "$Path.sha256" -Value "$hash  $name" -NoNewline
+}
+
 function Require-File {
     param([string]$Path)
 
@@ -404,7 +434,9 @@ try {
     $stablePath = Join-Path $resolvedOutputDir $stableAsset
 
     New-ZipArchive -SourceDir $bundleDir -ArchivePath $versionedPath
+    New-ChecksumSidecar -Path $versionedPath
     New-ZipArchive -SourceDir $bundleDir -ArchivePath $stablePath
+    New-ChecksumSidecar -Path $stablePath
 
     Write-Host "Created release archives:"
     Get-ChildItem -Path $resolvedOutputDir -File | Sort-Object Name | ForEach-Object {

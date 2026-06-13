@@ -23,6 +23,13 @@ else
 fi
 echo ""
 
+export MESH_HF_RETRY_MAX_ATTEMPTS="${MESH_HF_RETRY_MAX_ATTEMPTS:-8}"
+export MESH_HF_RETRY_BASE_DELAY_MS="${MESH_HF_RETRY_BASE_DELAY_MS:-750}"
+
+echo "  HF retry attempts: ${MESH_HF_RETRY_MAX_ATTEMPTS}"
+echo "  HF retry base ms:  ${MESH_HF_RETRY_BASE_DELAY_MS}"
+echo ""
+
 run_hf_test_group() {
   local label="$1"
   shift

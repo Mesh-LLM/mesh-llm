@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+mod artifact_diagnostics;
 mod edge_order;
 pub use edge_order::StageEdgeSignal;
 
@@ -73,6 +74,8 @@ pub struct StagePlan {
     pub stage_id: String,
     pub stage_index: u32,
     pub node_id: String,
+    #[serde(default)]
+    pub roles: Vec<StageRole>,
     pub layer_start: u32,
     pub layer_end: u32,
     pub layer_count: u32,
@@ -87,6 +90,15 @@ pub struct StagePlan {
     pub missing_artifact_bytes: u64,
     #[serde(default)]
     pub rtt_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StageRole {
+    Driver,
+    Embedding,
+    Intermediate,
+    Readout,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -1086,6 +1098,7 @@ fn plan_ranges_with_signals(
             stage_id: format!("stage-{stage_index}"),
             stage_index: stage_index as u32,
             node_id,
+            roles: stage_roles(stage_index, ranges.len()),
             layer_start,
             layer_end,
             layer_count: (end - start) as u32,
@@ -1107,6 +1120,7 @@ fn plan_ranges_with_signals(
     let diagnostics = diagnostics_for(
         &stages,
         &boundaries,
+        placement_signals,
         request.family.as_ref(),
         request.policy,
     );
@@ -1255,6 +1269,20 @@ fn stage_reason_codes(
     codes
 }
 
+fn stage_roles(stage_index: usize, stage_count: usize) -> Vec<StageRole> {
+    let mut roles = Vec::new();
+    if stage_index == 0 {
+        roles.push(StageRole::Driver);
+        roles.push(StageRole::Embedding);
+    }
+    if stage_index + 1 == stage_count {
+        roles.push(StageRole::Readout);
+    } else if stage_index > 0 {
+        roles.push(StageRole::Intermediate);
+    }
+    roles
+}
+
 fn boundaries_for(
     stages: &[StagePlan],
     family: Option<&FamilyCapabilityRecord>,
@@ -1395,10 +1423,12 @@ pub fn wire_payload_bytes_per_token(activation_width: u32, dtype: WireDType) -> 
 fn diagnostics_for(
     stages: &[StagePlan],
     boundaries: &[BoundaryPlan],
+    placement_signals: &[NodePlacementSignal],
     family: Option<&FamilyCapabilityRecord>,
     policy: PlannerPolicy,
 ) -> Vec<PlanDiagnostic> {
     let mut diagnostics = Vec::new();
+    artifact_diagnostics::append_artifact_diagnostics(&mut diagnostics, stages, placement_signals);
     for stage in stages {
         if matches!(
             stage.migration_policy,

@@ -207,6 +207,16 @@ This avoids silently presenting unsigned downloads as stronger than they are.
 Checksum-only verification is the default policy for the first release artifact
 lane.
 
+The public installers use release-archive `.sha256` sidecars as
+backward-compatible rollout metadata. New release/package jobs should keep
+publishing sidecars, but installers must not assume every historical, pinned, or
+alternate-repository asset has one. `install.sh` and `install.ps1` should try to
+download `<archive>.sha256`; when it exists, malformed checksum data or a digest
+mismatch is fatal. When the sidecar is missing, installers warn and continue by
+default. Setting `MESH_LLM_REQUIRE_CHECKSUM=1` opts into fail-closed behavior for
+missing release-archive sidecars. Do not rely on backfilling old release assets
+to make installer checksum verification safe.
+
 ## Query And Management API
 
 Consumers need explicit runtime inventory and cache management. The Rust API

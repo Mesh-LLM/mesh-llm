@@ -10,6 +10,7 @@ use crate::network::affinity::{
 };
 use crate::network::openai::auto_route;
 use crate::network::openai::response_adapter;
+use crate::network::openai::response_quality::{self, ResponseQualityFailure};
 use crate::network::openai::tool_call_ids::{
     ChatStreamNormalizationState, normalize_chat_completion_json_body,
 };
@@ -112,10 +113,26 @@ enum RouteAttemptResult {
     RetryableTimeout,
     RetryableUnavailable,
     RetryableContextOverflow,
+    RetryableResponseQuality(ResponseQualityFailure),
     ClientDisconnected,
 }
 
 const REMOTE_UNCOMMITTED_RETRIES: usize = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResponseRetryPolicy {
+    context_overflow: bool,
+    response_quality: bool,
+}
+
+impl ResponseRetryPolicy {
+    fn next_target_available(available: bool) -> Self {
+        Self {
+            context_overflow: available,
+            response_quality: available,
+        }
+    }
+}
 
 fn route_attempt_result_label(result: &RouteAttemptResult) -> &'static str {
     match result {
@@ -123,6 +140,7 @@ fn route_attempt_result_label(result: &RouteAttemptResult) -> &'static str {
         RouteAttemptResult::RetryableTimeout => "retryable_timeout",
         RouteAttemptResult::RetryableUnavailable => "retryable_unavailable",
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
+        RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
         RouteAttemptResult::ClientDisconnected => "client_disconnected",
     }
 }
@@ -139,6 +157,7 @@ fn target_health_outcome_for_attempt(result: &RouteAttemptResult) -> TargetHealt
         RouteAttemptResult::RetryableTimeout => TargetHealthOutcome::Timeout,
         RouteAttemptResult::RetryableUnavailable => TargetHealthOutcome::Unavailable,
         RouteAttemptResult::RetryableContextOverflow => TargetHealthOutcome::ContextOverflow,
+        RouteAttemptResult::RetryableResponseQuality(_) => TargetHealthOutcome::Rejected,
         RouteAttemptResult::ClientDisconnected => TargetHealthOutcome::ClientDisconnected,
     }
 }
@@ -1238,6 +1257,21 @@ fn parse_completion_tokens_from_json_body(body: &[u8]) -> Option<u64> {
         .and_then(|value| value.as_u64())
 }
 
+fn retryable_quality_result(
+    body: &[u8],
+    policy: ResponseRetryPolicy,
+) -> Option<RouteAttemptResult> {
+    if !policy.response_quality {
+        return None;
+    }
+    let failure = response_quality::failure_from_json_body(body)?;
+    tracing::warn!(
+        reason = failure.label(),
+        "API proxy: upstream returned retryable low-quality success response before commit"
+    );
+    Some(RouteAttemptResult::RetryableResponseQuality(failure))
+}
+
 fn response_is_event_stream(headers: &ParsedResponseHeaders) -> bool {
     headers
         .content_type
@@ -1257,9 +1291,9 @@ async fn relay_normalized_chat_completion_stream<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
 ) -> Result<RouteAttemptResult> {
-    if retry_context_overflow && probe.retryable_context_overflow {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
@@ -1270,7 +1304,7 @@ async fn relay_normalized_chat_completion_stream<R: AsyncRead + Unpin>(
     let parsed = try_parse_response_headers(&probe.buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
     if !response_is_event_stream(&parsed) {
-        return relay_success_response(tcp_stream, reader, probe, parsed).await;
+        return relay_success_response(tcp_stream, reader, probe, parsed, retry_policy).await;
     }
 
     let mut carry = String::from_utf8_lossy(&probe.buffered[parsed.header_end..]).to_string();
@@ -1359,7 +1393,7 @@ async fn relay_translated_responses_stream<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
 ) -> Result<RouteAttemptResult> {
     fn should_parse_stream_chunk(data: &str, model_missing: bool, usage_missing: bool) -> bool {
         model_missing
@@ -1370,7 +1404,7 @@ async fn relay_translated_responses_stream<R: AsyncRead + Unpin>(
             || data.contains("\"usage\"")
     }
 
-    if retry_context_overflow && probe.retryable_context_overflow {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
@@ -1711,9 +1745,9 @@ async fn relay_translated_responses_json<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
 ) -> Result<RouteAttemptResult> {
-    if retry_context_overflow && probe.retryable_context_overflow {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
@@ -1725,8 +1759,11 @@ async fn relay_translated_responses_json<R: AsyncRead + Unpin>(
 
     let parsed = try_parse_response_headers(&buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    let translated_body =
-        response_adapter::translate_chat_completion_to_responses(&buffered[parsed.header_end..])?;
+    let body = &buffered[parsed.header_end..];
+    if let Some(result) = retryable_quality_result(body, retry_policy) {
+        return Ok(result);
+    }
+    let translated_body = response_adapter::translate_chat_completion_to_responses(body)?;
     let completion_tokens = parse_completion_tokens_from_json_body(&translated_body);
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -1745,9 +1782,9 @@ async fn relay_normalized_chat_completion_json<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
 ) -> Result<RouteAttemptResult> {
-    if retry_context_overflow && probe.retryable_context_overflow {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
 
@@ -1770,6 +1807,9 @@ async fn relay_normalized_chat_completion_json<R: AsyncRead + Unpin>(
     let body = &buffered[parsed.header_end..body_end];
     let normalized_body =
         normalize_chat_completion_json_body(body).unwrap_or_else(|| body.to_vec());
+    if let Some(result) = retryable_quality_result(&normalized_body, retry_policy) {
+        return Ok(result);
+    }
     let completion_tokens = parse_completion_tokens_from_json_body(&normalized_body);
     let header = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -2123,6 +2163,7 @@ async fn relay_success_response<R: AsyncRead + Unpin>(
     reader: &mut R,
     probe: ResponseProbe,
     parsed: ParsedResponseHeaders,
+    retry_policy: ResponseRetryPolicy,
 ) -> Result<RouteAttemptResult> {
     if let Some(content_length) = parsed.content_length {
         const MAX_SUCCESS_METRICS_BODY_BYTES: usize = 1024 * 1024;
@@ -2130,6 +2171,11 @@ async fn relay_success_response<R: AsyncRead + Unpin>(
             let mut buffered = probe.buffered;
             while buffered.len() < parsed.header_end + content_length {
                 read_response_chunk(reader, &mut buffered).await?;
+            }
+            if let Some(result) =
+                retryable_quality_result(&buffered[parsed.header_end..], retry_policy)
+            {
+                return Ok(result);
             }
             let completion_tokens =
                 parse_completion_tokens_from_json_body(&buffered[parsed.header_end..]);
@@ -2157,14 +2203,14 @@ async fn relay_probed_response<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> Result<RouteAttemptResult> {
     if let Some(result) = relay_adapted_response(
         tcp_stream,
         reader,
         probe.clone(),
-        retry_context_overflow,
+        retry_policy,
         response_adapter,
     )
     .await?
@@ -2172,7 +2218,7 @@ async fn relay_probed_response<R: AsyncRead + Unpin>(
         return Ok(result);
     }
 
-    if retry_context_overflow && probe.retryable_context_overflow {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
     if !(200..300).contains(&probe.status_code) {
@@ -2181,42 +2227,29 @@ async fn relay_probed_response<R: AsyncRead + Unpin>(
 
     let parsed = try_parse_response_headers(&probe.buffered)?
         .ok_or_else(|| anyhow!("incomplete HTTP response"))?;
-    relay_success_response(tcp_stream, reader, probe, parsed).await
+    relay_success_response(tcp_stream, reader, probe, parsed, retry_policy).await
 }
 
 async fn relay_adapted_response<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> Result<Option<RouteAttemptResult>> {
     match response_adapter {
         ResponseAdapter::OpenAiChatCompletionsJson => Ok(Some(
-            relay_normalized_chat_completion_json(
-                tcp_stream,
-                reader,
-                probe,
-                retry_context_overflow,
-            )
-            .await?,
+            relay_normalized_chat_completion_json(tcp_stream, reader, probe, retry_policy).await?,
         )),
         ResponseAdapter::OpenAiChatCompletionsStream => Ok(Some(
-            relay_normalized_chat_completion_stream(
-                tcp_stream,
-                reader,
-                probe,
-                retry_context_overflow,
-            )
-            .await?,
+            relay_normalized_chat_completion_stream(tcp_stream, reader, probe, retry_policy)
+                .await?,
         )),
         ResponseAdapter::OpenAiResponsesJson => Ok(Some(
-            relay_translated_responses_json(tcp_stream, reader, probe, retry_context_overflow)
-                .await?,
+            relay_translated_responses_json(tcp_stream, reader, probe, retry_policy).await?,
         )),
         ResponseAdapter::OpenAiResponsesStream => Ok(Some(
-            relay_translated_responses_stream(tcp_stream, reader, probe, retry_context_overflow)
-                .await?,
+            relay_translated_responses_stream(tcp_stream, reader, probe, retry_policy).await?,
         )),
         ResponseAdapter::None => Ok(None),
     }
@@ -2227,7 +2260,7 @@ async fn route_local_attempt(
     tcp_stream: &mut TcpStream,
     port: u16,
     prefetched: &[u8],
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     match TcpStream::connect(format!("127.0.0.1:{port}")).await {
@@ -2244,7 +2277,7 @@ async fn route_local_attempt(
                 tcp_stream,
                 &mut upstream,
                 port,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
             )
             .await
@@ -2260,7 +2293,7 @@ async fn route_local_attempt_after_forward(
     tcp_stream: &mut TcpStream,
     upstream: &mut TcpStream,
     port: u16,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     match probe_http_response_local(upstream).await {
@@ -2269,7 +2302,7 @@ async fn route_local_attempt_after_forward(
                 tcp_stream,
                 upstream,
                 probe,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
                 "API proxy (local): downstream client disconnected during relay",
                 "API proxy (local) ended after commit",
@@ -2294,7 +2327,7 @@ async fn route_remote_attempt(
     tcp_stream: &mut TcpStream,
     host_id: iroh::EndpointId,
     prefetched: &[u8],
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     match node.open_http_tunnel(host_id).await {
@@ -2310,7 +2343,7 @@ async fn route_remote_attempt(
                 tcp_stream,
                 &mut quic_recv,
                 host_id,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
             )
             .await
@@ -2329,7 +2362,7 @@ async fn route_remote_attempt_after_forward(
     tcp_stream: &mut TcpStream,
     quic_recv: &mut iroh::endpoint::RecvStream,
     host_id: iroh::EndpointId,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     match probe_http_response(quic_recv).await {
@@ -2338,7 +2371,7 @@ async fn route_remote_attempt_after_forward(
                 tcp_stream,
                 quic_recv,
                 probe,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
                 "API proxy (remote): downstream client disconnected during relay",
                 "API proxy (remote) ended after commit",
@@ -2360,7 +2393,7 @@ async fn route_http_endpoint_attempt(
     base_url: &str,
     prefetched: &[u8],
     request_path: &str,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     let target = match build_external_endpoint_target(base_url, request_path, prefetched) {
@@ -2378,7 +2411,7 @@ async fn route_http_endpoint_attempt(
         tcp_stream,
         &mut upstream,
         base_url,
-        retry_context_overflow,
+        retry_policy,
         response_adapter,
     )
     .await
@@ -2428,7 +2461,7 @@ async fn route_http_endpoint_attempt_after_forward(
     tcp_stream: &mut TcpStream,
     upstream: &mut TcpStream,
     base_url: &str,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     match probe_http_response(upstream).await {
@@ -2437,7 +2470,7 @@ async fn route_http_endpoint_attempt_after_forward(
                 tcp_stream,
                 upstream,
                 probe,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
                 "API proxy (external endpoint): downstream client disconnected during relay",
                 "API proxy (external endpoint) ended after commit",
@@ -2463,21 +2496,13 @@ async fn relay_attempted_response<R: AsyncRead + Unpin>(
     tcp_stream: &mut TcpStream,
     reader: &mut R,
     probe: ResponseProbe,
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     disconnect_message: &str,
     commit_message: &str,
 ) -> RouteAttemptResult {
     let status_code = probe.status_code;
-    match relay_probed_response(
-        tcp_stream,
-        reader,
-        probe,
-        retry_context_overflow,
-        response_adapter,
-    )
-    .await
-    {
+    match relay_probed_response(tcp_stream, reader, probe, retry_policy, response_adapter).await {
         Ok(result) => result,
         Err(err) => {
             if is_client_disconnect_error(&err) {
@@ -2514,6 +2539,9 @@ fn attempt_outcome_for_result(
         }
         RouteAttemptResult::RetryableContextOverflow => {
             crate::network::metrics::AttemptOutcome::ContextOverflow
+        }
+        RouteAttemptResult::RetryableResponseQuality(_) => {
+            crate::network::metrics::AttemptOutcome::Rejected
         }
         RouteAttemptResult::ClientDisconnected => {
             crate::network::metrics::AttemptOutcome::Unavailable
@@ -3061,7 +3089,7 @@ async fn route_mesh_request_attempts(
             &mut tcp_stream,
             *target_host,
             &request.raw,
-            idx + 1 < total_targets,
+            ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
             request.response_adapter,
         )
         .await;
@@ -3152,6 +3180,9 @@ fn handle_mesh_attempt_result(
             handle_delivered_mesh_attempt(context, status_code)
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
+        RouteAttemptResult::RetryableResponseQuality(failure) => {
+            handle_retryable_mesh_response_quality(context, failure)
+        }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
         RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
         RouteAttemptResult::ClientDisconnected => {
@@ -3204,6 +3235,25 @@ fn handle_retryable_context_overflow(
     );
     tracing::warn!(
         "Host {} rejected request with context overflow-style 400, trying next",
+        context.target_host.fmt_short()
+    );
+    context.state.last_retryable = true;
+    MeshAttemptDisposition::Continue
+}
+
+fn handle_retryable_mesh_response_quality(
+    context: &mut MeshAttemptResultContext<'_>,
+    failure: ResponseQualityFailure,
+) -> MeshAttemptDisposition {
+    forget_mesh_cached_target(
+        context.effective_model,
+        context.prepared,
+        context.attempt_target,
+        context.affinity,
+    );
+    tracing::warn!(
+        reason = failure.label(),
+        "Host {} returned low-quality success response, trying next",
         context.target_host.fmt_short()
     );
     context.state.last_retryable = true;
@@ -3466,7 +3516,7 @@ async fn route_attempt_for_target(
     tcp_stream: &mut TcpStream,
     target: &election::InferenceTarget,
     prefetched: &[u8],
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     match target {
@@ -3476,7 +3526,7 @@ async fn route_attempt_for_target(
                 tcp_stream,
                 *port,
                 prefetched,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
             )
             .await
@@ -3487,7 +3537,7 @@ async fn route_attempt_for_target(
                 tcp_stream,
                 *host_id,
                 prefetched,
-                retry_context_overflow,
+                retry_policy,
                 response_adapter,
             )
             .await
@@ -3501,7 +3551,7 @@ async fn route_remote_attempt_with_retry(
     tcp_stream: &mut TcpStream,
     host_id: iroh::EndpointId,
     prefetched: &[u8],
-    retry_context_overflow: bool,
+    retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
 ) -> RouteAttemptResult {
     let mut result = route_remote_attempt(
@@ -3509,7 +3559,7 @@ async fn route_remote_attempt_with_retry(
         tcp_stream,
         host_id,
         prefetched,
-        retry_context_overflow,
+        retry_policy,
         response_adapter,
     )
     .await;
@@ -3528,7 +3578,7 @@ async fn route_remote_attempt_with_retry(
             tcp_stream,
             host_id,
             prefetched,
-            retry_context_overflow,
+            retry_policy,
             response_adapter,
         )
         .await;
@@ -3639,13 +3689,13 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> bool {
     for (idx, target) in ordered.into_iter().enumerate() {
         state.attempts += 1;
         let attempt_started = Instant::now();
-        let retry_context_overflow = idx + 1 < total_targets;
+        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
         let attempt_result = route_attempt_for_target(
             &node,
             &mut tcp_stream,
             &target,
             &request.raw,
-            retry_context_overflow,
+            retry_policy,
             request.response_adapter,
         )
         .await;
@@ -3793,6 +3843,11 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableContextOverflow => {
             handle_retryable_route_model_context(model, target, selection, affinity)
         }
+        RouteAttemptResult::RetryableResponseQuality(failure) => {
+            handle_retryable_route_model_response_quality(
+                model, target, selection, affinity, failure,
+            )
+        }
         RouteAttemptResult::RetryableTimeout => {
             handle_retryable_route_model_timeout(node, model, target, selection, state, affinity)
         }
@@ -3849,6 +3904,21 @@ fn handle_retryable_route_model_context(
     forget_selected_route_model_target(model, target, selection, affinity);
     tracing::warn!(
         "Target {target:?} rejected request with context overflow-style 400, trying next"
+    );
+    RouteModelDisposition::Continue
+}
+
+fn handle_retryable_route_model_response_quality(
+    model: &str,
+    target: &election::InferenceTarget,
+    selection: &TargetSelection,
+    affinity: &AffinityRouter,
+    failure: ResponseQualityFailure,
+) -> RouteModelDisposition {
+    forget_selected_route_model_target(model, target, selection, affinity);
+    tracing::warn!(
+        reason = failure.label(),
+        "Target {target:?} returned low-quality success response, trying next"
     );
     RouteModelDisposition::Continue
 }
@@ -3948,7 +4018,7 @@ pub async fn route_to_target(
         &mut tcp_stream,
         &target,
         prefetched,
-        false,
+        ResponseRetryPolicy::next_target_available(false),
         response_adapter,
     )
     .await;
@@ -3977,6 +4047,7 @@ pub async fn route_to_target(
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(
                 model,
@@ -4009,7 +4080,7 @@ pub async fn route_http_endpoint_request(
         base_url,
         prefetched,
         request_path,
-        false,
+        ResponseRetryPolicy::next_target_available(false),
         response_adapter,
     )
     .await;
@@ -4045,6 +4116,7 @@ pub async fn route_http_endpoint_request(
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(
                 model,
@@ -5346,6 +5418,12 @@ mod tests {
             "retryable_context_overflow"
         );
         assert_eq!(
+            route_attempt_result_label(&RouteAttemptResult::RetryableResponseQuality(
+                ResponseQualityFailure::EmptyAssistantOutput
+            )),
+            "retryable_response_quality"
+        );
+        assert_eq!(
             route_attempt_result_label(&RouteAttemptResult::ClientDisconnected),
             "client_disconnected"
         );
@@ -5379,6 +5457,12 @@ mod tests {
             TargetHealthOutcome::ContextOverflow
         );
         assert_eq!(
+            target_health_outcome_for_attempt(&RouteAttemptResult::RetryableResponseQuality(
+                ResponseQualityFailure::LengthFinishReason
+            )),
+            TargetHealthOutcome::Rejected
+        );
+        assert_eq!(
             target_health_outcome_for_attempt(&RouteAttemptResult::RetryableTimeout),
             TargetHealthOutcome::Timeout
         );
@@ -5394,6 +5478,11 @@ mod tests {
         ));
         assert!(!should_retry_uncommitted_remote_attempt(
             RouteAttemptResult::RetryableContextOverflow
+        ));
+        assert!(!should_retry_uncommitted_remote_attempt(
+            RouteAttemptResult::RetryableResponseQuality(
+                ResponseQualityFailure::EmptyAssistantOutput
+            )
         ));
         assert!(!should_retry_uncommitted_remote_attempt(
             RouteAttemptResult::ClientDisconnected
@@ -6274,7 +6363,7 @@ mod tests {
                 &mut client_socket,
                 &mut upstream_reader,
                 probe,
-                false,
+                ResponseRetryPolicy::next_target_available(false),
             )
             .await
             .expect("relay")
@@ -6527,7 +6616,7 @@ mod tests {
                 &mut client_socket,
                 &mut upstream_reader,
                 probe,
-                false,
+                ResponseRetryPolicy::next_target_available(false),
             )
             .await
             .expect("relay")

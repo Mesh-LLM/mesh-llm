@@ -31,8 +31,8 @@ jobs:
       benchmarks: ${{ steps.filter.outputs.benchmarks }}
       sdk: ${{ steps.filter.outputs.sdk }}
       nodejs_release: ${{ steps.filter.outputs.nodejs_release }}
-      windows_cpu: ${{ steps.filter.outputs.windows_cpu }}
-      windows_gpu: ${{ steps.filter.outputs.windows_gpu }}
+      windows_cpu: ${{ steps.compute.outputs.windows_cpu_build_required }}
+      windows_gpu: ${{ steps.compute.outputs.windows_gpu_build_required }}
       docs: ${{ steps.filter.outputs.docs }}
       affected_crates: ${{ steps.compute.outputs.affected_crates }}
       test_crates: ${{ steps.compute.outputs.test_crates }}
@@ -40,11 +40,14 @@ jobs:
       all_rust: ${{ steps.compute.outputs.all_rust }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
       rust_changed: ${{ steps.compute.outputs.rust_changed }}
+      website_changed: ${{ steps.compute.outputs.website_changed }}
       backend_changed: ${{ steps.compute.outputs.backend_changed }}
+      inference_artifact_required: ${{ steps.compute.outputs.inference_artifact_required }}
+      backend_recipe_changed: ${{ steps.compute.outputs.backend_recipe_changed }}
       sdk_smoke_required: ${{ steps.compute.outputs.sdk_smoke_required }}
       ui_dist_cache_key: ${{ steps.ui_key.outputs.ui_dist_cache_key }}
-      linux_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.rust_changed == 'true' || steps.filter.outputs.ui == 'true' }}
-      macos_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.rust_changed == 'true' || steps.filter.outputs.ui == 'true' || steps.filter.outputs.benchmarks == 'true' }}
+      linux_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.inference_artifact_required == 'true' }}
+      macos_inference_artifact_required: ${{ github.event_name == 'workflow_dispatch' || steps.compute.outputs.inference_artifact_required == 'true' || steps.filter.outputs.benchmarks == 'true' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -112,14 +115,12 @@ jobs:
               - 'third_party/llama.cpp/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'Justfile'
               - '.github/cache-version.txt'
             windows_gpu:
               - 'crates/skippy-ffi/**'
               - 'scripts/build-windows.ps1'
               - 'scripts/install-windows-sdk.ps1'
               - 'third_party/llama.cpp/**'
-              - 'Justfile'
               - '.github/cache-version.txt'
               - '.github/actions/setup-windows-rocm-sdk/**'
 
@@ -425,7 +426,7 @@ jobs:
 
   linux_test_groups:
     needs: [changes, linux_cpu_artifact]
-    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust_changed == 'true' || needs.changes.outputs.ui == 'true') }}
+    if: ${{ needs.linux_cpu_artifact.result == 'success' && needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.linux_inference_artifact_required == 'true' }}
     name: Linux tests (${{ matrix.group }})
     runs-on: ubuntu-24.04
     container:

@@ -1,0 +1,21 @@
+---
+layout: docs-base.njk
+---
+<main class="docs-shell grid min-w-0">
+  {% include "docs-sidebar.njk" %}
+  <article class="doc min-w-0 overflow-hidden" data-pagefind-body>
+    <div class="crumb mb-5 truncate text-sm text-muted"><a class="hover:text-fg" href="/docs/">Docs</a> / {{ title }}</div>
+    {{ content | safe }}
+  </article>
+  <aside class="docs-toc min-w-0" aria-label="On this page" data-pagefind-ignore="all">
+    {% set tocHeadings = content | tocHeadings %}
+    <h2>☰ On this page</h2>
+    {% if tocHeadings.length %}
+      {% for heading in tocHeadings %}
+        <a href="#{{ heading.id }}">{{ heading.text }}</a>
+      {% endfor %}
+    {% else %}
+      <a href="#{{ title | slugify }}">{{ title }}</a>
+    {% endif %}
+  </aside>
+</main>

@@ -1,0 +1,161 @@
+.docs-body pagefind-modal[data-pf-theme="dark"],
+.docs-body pagefind-modal-trigger {
+  --pf-text: var(--fg);
+  --pf-text-secondary: var(--muted);
+  --pf-text-muted: var(--subtle);
+  --pf-background: #101013;
+  --pf-border: rgba(96, 165, 250, 0.18);
+  --pf-border-focus: var(--blue-2);
+  --pf-skeleton: rgba(96, 165, 250, 0.1);
+  --pf-skeleton-shine: rgba(147, 197, 253, 0.14);
+  --pf-hover: rgba(96, 165, 250, 0.08);
+  --pf-mark: #bfdbfe;
+  --pf-scroll-shadow: rgba(0, 0, 0, 0.32);
+  --pf-shadow-sm: none;
+  --pf-shadow-md: 0 18px 48px rgba(0, 0, 0, 0.42);
+  --pf-shadow-lg: 0 28px 72px rgba(0, 0, 0, 0.58);
+  --pf-error-bg: rgba(248, 113, 113, 0.08);
+  --pf-error-border: rgba(248, 113, 113, 0.28);
+  --pf-error-text: #fca5a5;
+  --pf-error-text-secondary: #fecaca;
+  --pf-outline-focus: var(--blue-2);
+  --pf-outline-width: 2px;
+  --pf-outline-offset: 3px;
+  --pf-font: var(--font-sans);
+  --pf-input-height: 42px;
+  --pf-input-font-size: 16px;
+  --pf-summary-font-size: 13px;
+  --pf-result-title-font-size: 15px;
+  --pf-result-excerpt-font-size: 13px;
+  --pf-border-radius: 8px;
+  --pf-results-gap: 10px;
+  --pf-modal-backdrop: rgba(5, 5, 6, 0.82);
+  --pf-modal-max-width: min(720px, calc(100vw - 24px));
+  --pf-modal-max-height: min(80dvh, 760px);
+  --pf-modal-top: 8dvh;
+  --pf-dropdown-z-index: 60;
+
+  color-scheme: dark;
+}
+
+.docs-body pagefind-modal {
+  color-scheme: dark;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-trigger-btn {
+  min-height: 40px;
+  border-color: rgba(96, 165, 250, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent),
+    var(--surface);
+  color: var(--muted);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-trigger-btn:hover {
+  border-color: rgba(96, 165, 250, 0.48);
+  background:
+    linear-gradient(180deg, rgba(96, 165, 250, 0.08), transparent),
+    var(--surface-2);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-trigger-icon,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-input-wrapper::before {
+  background-color: var(--blue-3);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-trigger-text {
+  color: var(--muted);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-key,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-trigger-key,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-modal-footer-key,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-keyboard-key {
+  border-color: rgba(96, 165, 250, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-family: var(--mono);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) dialog.pf-modal {
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  background: #0d0d10;
+  border-radius: 10px;
+  box-shadow: var(--pf-shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) dialog.pf-modal::backdrop {
+  backdrop-filter: blur(2px);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) pagefind-modal-header,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-modal-header {
+  border-bottom-color: rgba(96, 165, 250, 0.16);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) pagefind-modal-header .pf-input,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-modal-header .pf-input {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) pagefind-modal-body,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-modal-body {
+  background:
+    linear-gradient(rgba(96, 165, 250, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(96, 165, 250, 0.03) 1px, transparent 1px),
+    #0d0d10;
+  background-size: 28px 28px, 28px 28px, 100% 100%;
+  scrollbar-color: var(--docs-scrollbar-thumb) transparent;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-summary {
+  color: var(--muted);
+  font-family: var(--mono);
+  letter-spacing: -0.01em;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #111114;
+  border-radius: 7px;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-card:hover {
+  border-color: rgba(96, 165, 250, 0.32);
+  background: #121821;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-card:has([data-pf-selected]),
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-card:has(.pf-result-link:focus-visible),
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-modal-body .pf-result-card:has([data-pf-selected]) {
+  border-color: var(--blue-2);
+  background:
+    linear-gradient(90deg, rgba(59, 130, 246, 0.2), transparent 44%),
+    #111827;
+  box-shadow: inset 0 0 0 1px rgba(147, 197, 253, 0.26);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-link {
+  color: var(--fg);
+  font-weight: 650;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-excerpt {
+  color: var(--muted);
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-result-excerpt mark {
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.2);
+  border-radius: 3px;
+}
+
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) pagefind-modal-footer,
+.docs-body :is(*, #\#):is(*, #\#):is(*, #\#) .pf-modal-footer {
+  border-top-color: rgba(96, 165, 250, 0.16);
+  background: rgba(255, 255, 255, 0.025);
+  font-family: var(--mono);
+}

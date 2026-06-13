@@ -39,7 +39,9 @@ pub use mesh::requirements::{
 
 use anyhow::Result;
 
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const BUILD_VERSION: &str = mesh_llm_build_info::BUILD_VERSION;
+pub const RELEASE_VERSION: &str = mesh_llm_build_info::RELEASE_VERSION;
+pub const VERSION: &str = RELEASE_VERSION;
 
 pub use runtime::{
     MeshGuardrailMode, RuntimeOptions, RuntimeSurface, console_session_mode_for_runtime_surface,

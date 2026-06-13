@@ -1346,7 +1346,7 @@ impl ServerHandler for PluginMcpServer {
                 .build(),
         )
         .with_server_info(
-            Implementation::new("mesh-plugins", env!("CARGO_PKG_VERSION"))
+            Implementation::new("mesh-plugins", crate::BUILD_VERSION)
                 .with_title("Mesh Plugin MCP")
                 .with_description(
                     "Re-exposes mesh-llm plugins as a single MCP server with the standard MCP surface.",

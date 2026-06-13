@@ -1,0 +1,230 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2025-01-13T10:00:00Z",
+  "title": "Design System: Mesh LLM Website",
+  "extensions": {
+    "colorMeta": {
+      "bg-deep": {
+        "role": "neutral",
+        "displayName": "Deep Void",
+        "canonical": "#09090b",
+        "tonalRamp": ["#050506", "#0a0a0c", "#0f0f12", "#141417", "#1a1a1e", "#232328", "#2e2e34", "#3d3d44"]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Surface",
+        "canonical": "#0c0c0f",
+        "tonalRamp": ["#070709", "#0b0b0e", "#101014", "#15151a", "#1b1b21", "#24242b", "#303038", "#40404a"]
+      },
+      "electric-blue": {
+        "role": "primary",
+        "displayName": "Electric Blue",
+        "canonical": "#3b82f6",
+        "tonalRamp": ["#1e3a8a", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe", "#dbeafe"]
+      },
+      "live-green": {
+        "role": "secondary",
+        "displayName": "Live Green",
+        "canonical": "#22c55e",
+        "tonalRamp": ["#14532d", "#166534", "#15803d", "#22c55e", "#4ade80", "#86efac", "#bbf7d0", "#dcfce7"]
+      },
+      "amber": {
+        "role": "tertiary",
+        "displayName": "Amber",
+        "canonical": "#f59e0b",
+        "tonalRamp": ["#78350f", "#92400e", "#a16207", "#d97706", "#f59e0b", "#fbbf24", "#fcd34d", "#fef3c7"]
+      },
+      "text-primary": {
+        "role": "neutral",
+        "displayName": "Text Primary",
+        "canonical": "#f4f4f5",
+        "tonalRamp": ["#18181b", "#27272a", "#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#fafafa"]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted",
+        "canonical": "#a1a1aa",
+        "tonalRamp": ["#3f3f46", "#52525b", "#71717a", "#a1a1aa", "#d4d4d8", "#e4e4e7", "#f4f4f5", "#fafafa"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Hero headline only. Maximum visual impact with tight line-height."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Section titles on homepage and feature cards."
+      },
+      "body": {
+        "displayName": "Body Lead",
+        "purpose": "Hero description text and section copy. Max-width: 650px."
+      },
+      "label": {
+        "displayName": "Label / Mono",
+        "purpose": "Section kickers, badges, table headers, terminal content."
+      }
+    },
+    "shadows": [
+      {
+        "name": "terminal-float",
+        "value": "0 24px 60px rgba(0,0,0,0.35)",
+        "purpose": "Deepest elevation in the system. Applied to terminal/code containers floating above card layers."
+      }
+    ],
+    "motion": [
+      {
+        "name": "mesh-line-pulse",
+        "value": "ease-in-out 5.6s infinite (opacity: 0.36 → 0.62)",
+        "purpose": "Animated dashed connection lines in hero topology diagram."
+      },
+      {
+        "name": "packet-traverse",
+        "value": "linear 7.8-11s infinite (staggered delays)",
+        "purpose": "Glowing dots traversing node-to-node paths on mesh network visualization."
+      },
+      {
+        "name": "node-pulse",
+        "value": "ease-in-out 4.4s infinite (scale: 1 → 1.22, opacity: 0.82 → 1)",
+        "purpose": "Node core breathing animation in topology diagram."
+      }
+    ],
+    "breakpoints": [
+      { "name": "lg", "value": "900px" },
+      { "name": "sm", "value": "640px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Main call-to-action. White-on-dark fill with compact sizing.",
+      "html": "<button class=\"ds-btn-primary\">GET STARTED</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 14px; border-radius: 8px; border: 1px solid #fafafa; background: #fafafa; color: #09090b; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer; } .ds-btn-primary:hover { background: #e4e4e7; border-color: #e4e4e7; } .ds-btn-primary:focus-visible { outline: 2px solid rgba(96,165,250,0.8); outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary actions and navigation links styled as buttons.",
+      "html": "<button class=\"ds-btn-ghost\">Documentation</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 0 14px; border-radius: 8px; border: 1px solid #27272a; background: transparent; color: #a1a1aa; font-size: 14px; font-weight: 500; white-space: nowrap; cursor: pointer; } .ds-btn-ghost:hover { color: #ffffff; border-color: #3f3f46; } .ds-btn-ghost:focus-visible { outline: 2px solid rgba(96,165,250,0.8); outline-offset: 2px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Feature cards in homepage grid. Flat surface with border definition.",
+      "html": "<div class=\"ds-card\"><h3>Automatic Placement</h3><p>Distributed model shards placed across available peers for optimal throughput.</p></div>",
+      "css": ".ds-card { min-height: 100%; border: 1px solid #27272a; border-radius: 8px; background: #0c0c0f; padding: 18px; } .ds-card h3 { margin: 0 0 8px; font-size: 16px; line-height: 1.2; color: #f4f4f5; } .ds-card p { margin: 0; color: #a1a1aa; font-size: 14px; }"
+    },
+    {
+      "name": "Badge — Blue",
+      "kind": "chip",
+      "refersTo": "badge-blue",
+      "description": "Technology tags and feature labels. Fully rounded pill shape.",
+      "html": "<span class=\"ds-badge-blue\">distributed</span>",
+      "css": ".ds-badge-blue { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: 999px; border: 1px solid rgba(59,130,246,0.25); background: rgba(59,130,246,0.12); color: #bfdbfe; font-size: 12px; font-weight: 500; white-space: nowrap; }"
+    },
+    {
+      "name": "Badge — Green",
+      "kind": "chip",
+      "refersTo": "badge-green",
+      "description": "Status badges for live nodes and active peers.",
+      "html": "<span class=\"ds-badge-green\">online</span>",
+      "css": ".ds-badge-green { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border-radius: 999px; border: 1px solid rgba(34,197,94,0.25); background: rgba(34,197,94,0.12); color: #bbf7d0; font-size: 12px; font-weight: 500; white-space: nowrap; }"
+    },
+    {
+      "name": "Eyebrow Label",
+      "kind": "custom",
+      "refersTo": "eyebrow",
+      "description": "Hero eyebrow with status dot. Signals version, category, or release info above headlines.",
+      "html": "<div class=\"ds-eyebrow\"><span class=\"ds-dot\"></span>Mesh v1.0 — Distributed Inference Network</div>",
+      "css": ".ds-eyebrow { display: inline-flex; align-items: center; gap: 8px; width: fit-content; padding: 5px 10px; border: 1px solid rgba(59,130,246,0.25); border-radius: 999px; background: rgba(59,130,246,0.12); color: #bfdbfe; font-size: 12px; font-weight: 500; } .ds-dot { width: 7px; height: 7px; border-radius: 999px; background: #22c55e; flex-shrink: 0; }"
+    },
+    {
+      "name": "Terminal Container",
+      "kind": "custom",
+      "refersTo": "terminal",
+      "description": "Code/terminal mockup with window chrome, deep float shadow, and fixed dark background.",
+      "html": "<div class=\"ds-terminal\"><div class=\"ds-terminal-head\"><span class=\"ds-dot\"></span><span class=\"ds-dot\"></span><span class=\"ds-dot\"></span></div><pre>mesh --listen :8093</pre></div>",
+      "css": ".ds-terminal { overflow: hidden; border: 1px solid #27272a; border-radius: 8px; background: #050506; box-shadow: 0 24px 60px rgba(0,0,0,0.35); } .ds-terminal-head { display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; border-bottom: 1px solid #1f1f23; color: #71717a; font-size: 13px; } .ds-terminal .ds-dot { width: 10px; height: 10px; border-radius: 999px; background: #3f3f46; } .ds-terminal pre { margin: 0; padding: 22px; overflow-x: auto; color: #e4e4e7; font-size: 14px; line-height: 1.9; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }"
+    },
+    {
+      "name": "Section Header",
+      "kind": "layout",
+      "refersTo": "components/ui.njk#sectionHead",
+      "description": "Reusable two-column section heading with structural headline and constrained supporting copy.",
+      "html": "{{ sectionHead(\"One endpoint.<br>Many machines.\", \"Mesh handles discovery, placement, routing, and model serving.\") }}",
+      "css": ".sec-head { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(260px, 0.62fr); gap: clamp(20px, 4vw, 72px); align-items: end; } .sec-copy { max-width: 650px; color: #a1a1aa; }"
+    },
+    {
+      "name": "Metric Meter",
+      "kind": "data-viz",
+      "refersTo": "components/ui.njk#meter",
+      "description": "Compact label/value/progress pattern for performance claims inside feature tiles.",
+      "html": "{{ meter(\"model load\", \"111 s &rarr; 5 s\", \"5%\") }}",
+      "css": ".meter .lbl { display: flex; justify-content: space-between; gap: 10px; font-family: var(--mono); } .meter .bar { height: 6px; border-radius: 999px; background: rgba(255,255,255,0.08); overflow: hidden; } .meter .bar div { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #3b82f6, #22c55e); }"
+    },
+    {
+      "name": "Plugin Architecture Diagram",
+      "kind": "diagram",
+      "refersTo": "components/plugin-architecture.njk",
+      "description": "Reusable architecture figure with shared node markup and Anime.js motion in assets/plugin-architecture.js.",
+      "html": "{% include \"components/plugin-architecture.njk\" %}",
+      "css": ".arch-diag { position: relative; overflow: hidden; border: 1px solid #27272a; border-radius: 8px; background: #0c0c0f; } .arch-node { position: absolute; border-radius: 8px; }"
+    },
+    {
+      "name": "Navigation Bar",
+      "kind": "nav",
+      "refersTo": "nav",
+      "description": "Sticky header with backdrop blur, semi-transparent background, and bottom border.",
+      "html": "<nav class=\"ds-nav\"><div class=\"ds-nav-inner\"><span class=\"ds-brand\">mesh<span>·llm</span></span><a href=\"#\" class=\"ds-nav-link\">Docs</a><a href=\"#\" class=\"ds-nav-link\">Catalog</a><button class=\"ds-btn-ghost\">GitHub</button></div></nav>",
+      "css": ".ds-nav { position: sticky; top: 0; z-index: 20; border-bottom: 1px solid #1f1f23; background: rgba(9,9,11,0.88); backdrop-filter: blur(16px); } .ds-nav-inner { height: 64px; display: flex; align-items: center; gap: 24px; max-width: 1120px; margin: 0 auto; padding: 0 16px; width: 100%; } .ds-brand { color: #f4f4f5; font-size: 18px; font-weight: 700; line-height: 1; letter-spacing: 0; } .ds-brand span { color: #3b82f6; } .ds-nav-link { color: #a1a1aa; font-size: 14px; text-decoration: none; } .ds-nav-link:hover { color: #ffffff; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Mesh Architecture",
+    "overview": "This is a developer infrastructure surface for an MIT-licensed tool that pools machines into a distributed inference network. The design reads like something you'd find in your terminal — capable, precise, built by engineers who ship real systems. Every pixel serves the product: animated topology diagrams demonstrate mesh networking, terminal mockups show actual commands, and the model catalog presents live data from Hugging Face.\n\nThe system explicitly rejects SaaS cream-beige marketing aesthetics, playful startup illustrations, gradient text, glassmorphism cards, and corporate cloud-provider sales pages. This is infrastructure tooling — it should feel like a well-engineered CLI, not a pitch deck.",
+    "keyCharacteristics": [
+      "Deep dark surfaces with structural shadow hierarchy (mechanical layer separation)",
+      "Functional color palette: one accent blue for primary actions, green/amber for status only",
+      "Tight typographic scale using Geist Sans with clamp-based fluid sizing",
+      "Minimal radius (8px) — edges are gently curved, never soft",
+      "Monospace treatment for all technical content (commands, flags, values)"
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "Electric Blue is the only interactive accent color. It marks primary buttons, active nav items, brand elements, and section kickers. Every other interaction uses neutral surfaces with text weight changes.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tight Headline Rule",
+        "body": "All display and headline type uses line-height ≤ 1.05 with letter-spacing: 0. The type should feel compressed and structural — like it's holding up the layout, not decorating it.",
+        "section": "typography"
+      },
+      {
+        "name": "The Structural Shadow Rule",
+        "body": "Shadows exist to separate layers, not create atmosphere. If a surface has a shadow, it should be because the content sits physically above another layer in the hierarchy.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use Electric Blue (#3b82f6) as the sole interactive accent — primary buttons, active nav, brand mark, section kickers.",
+      "Do keep headlines tight: line-height ≤ 1.05, letter-spacing: 0, weight 700. The type should feel structural.",
+      "Do use monospace for all technical content: commands, flags, values, model names, terminal output.",
+      "Do apply the Terminal Float shadow (24px offset, 60px blur) to code containers — this is the deepest elevation in the system.",
+      "Do respect the surface hierarchy: bg-deep → surface → surface-2. Each step up signals one layer of structural elevation.",
+      "Do constrain body copy to 650px max-width for readability."
+    ],
+    "donts": [
+      "Don't use gradient text, glassmorphism cards, or side-stripe borders. These are SaaS marketing clichés that belong to the anti-references this system explicitly rejects.",
+      "Don't use green (#22c55e) or amber (#f59e0b) as button colors or interactive accents. They signal status — live nodes, warnings, model availability. Nothing else.",
+      "Don't apply shadows to flat cards. Cards define their layer through surface color + border. Shadows are reserved for elevated containers (terminals, sticky navs).",
+      "Don't exceed 8px radius on standard components. The system uses gently curved edges — not soft, rounded startup aesthetics.",
+      "Don't use playful illustrations or decorative graphics. If it doesn't demonstrate architecture, show data, or display a command, it doesn't belong."
+    ]
+  }
+}

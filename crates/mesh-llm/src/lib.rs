@@ -39,6 +39,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
         cli.log_format,
         mesh_llm_host_runtime::console_session_mode_for_runtime_surface(explicit_surface),
     );
+    mesh_llm_tui::install_terminal_panic_hook();
 
     mesh_llm_host_runtime::run_runtime_initialized(
         runtime_options_from_cli(cli),

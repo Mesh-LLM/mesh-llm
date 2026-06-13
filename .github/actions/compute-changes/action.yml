@@ -36,6 +36,15 @@ outputs:
   ui_changed:
     description: 'Boolean: true if UI files changed'
     value: ${{ steps.derive.outputs.ui_changed }}
+  website_changed:
+    description: 'Boolean: true if public website inputs changed'
+    value: ${{ steps.derive.outputs.website_changed }}
+  website_docs_changed:
+    description: 'Boolean: true if public website docs or command examples changed'
+    value: ${{ steps.derive.outputs.website_docs_changed }}
+  cli_surface_changed:
+    description: 'Boolean: true if Rust CLI definition files changed'
+    value: ${{ steps.derive.outputs.cli_surface_changed }}
   docs_only:
     description: 'Boolean: true if only docs changed'
     value: ${{ steps.derive.outputs.docs_only }}
@@ -45,6 +54,18 @@ outputs:
   backend_changed:
     description: 'Boolean: true if PR platform/backend binaries must rebuild'
     value: ${{ steps.derive.outputs.backend_changed }}
+  inference_artifact_required:
+    description: 'Boolean: true if PR builds need mesh-llm inference artifacts'
+    value: ${{ steps.derive.outputs.inference_artifact_required }}
+  backend_recipe_changed:
+    description: 'Boolean: true if native build/release Justfile recipes changed'
+    value: ${{ steps.derive.outputs.backend_recipe_changed }}
+  windows_cpu_build_required:
+    description: 'Boolean: true if Windows CPU build inputs changed'
+    value: ${{ steps.derive.outputs.windows_cpu_build_required }}
+  windows_gpu_build_required:
+    description: 'Boolean: true if Windows GPU build inputs changed'
+    value: ${{ steps.derive.outputs.windows_gpu_build_required }}
   sdk_smoke_required:
     description: 'Boolean: true if SDK smoke tests should run as soon as a binary is ready'
     value: ${{ steps.derive.outputs.sdk_smoke_required }}
@@ -98,6 +119,7 @@ runs:
         BATCHES=$(echo "$CRATES_JSON" | jq -c '.batches // []')
         ALL_RUST=$(echo "$CRATES_JSON" | jq -r '.all_rust // false')
         UI_CHANGED=$(echo "$CRATES_JSON" | jq -r '.ui_changed // false')
+        WEBSITE_CHANGED=$(echo "$CRATES_JSON" | jq -r '.website_changed // false')
 
         if [[ "$ALL_RUST" == "true" ]]; then
           CLIPPY_BATCHES=$(bash scripts/plan-clippy-batches.sh --all)
@@ -108,9 +130,10 @@ runs:
         # Read changed files for docs_only and rust_changed logic
         CHANGED_FILES=$(cat /tmp/changed_files.txt | grep -v "^__force_all__$" || true)
 
-        # Determine docs_only: true if all_rust=false AND ui_changed=false AND all files match docs patterns
+        # Determine docs_only: true if all_rust=false, UI/website are unchanged,
+        # and all files match authored docs patterns.
         DOCS_ONLY="false"
-        if [[ "$ALL_RUST" == "false" ]] && [[ "$UI_CHANGED" == "false" ]]; then
+        if [[ "$ALL_RUST" == "false" ]] && [[ "$UI_CHANGED" == "false" ]] && [[ "$WEBSITE_CHANGED" == "false" ]]; then
           # Check if all changed files match docs patterns (*.md or docs/**)
           if [[ -n "$CHANGED_FILES" ]]; then
             NON_DOCS=$(echo "$CHANGED_FILES" | grep -v -E '(\.md$|^docs/)' || true)
@@ -128,15 +151,146 @@ runs:
           RUST_CHANGED="true"
         fi
 
+        # CLI surface definitions are public documentation inputs. Keep this
+        # limited to Clap/parser sources, not the React console UI or command
+        # handler internals, so website docs sync is precise and explainable.
+        CLI_SURFACE_CHANGED="false"
+        if [[ -n "$CHANGED_FILES" ]]; then
+          CLI_SURFACE_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^crates/mesh-llm-cli/src/(parser|models|runtime|benchmark)\.rs$' || true)
+          if [[ -n "$CLI_SURFACE_INPUTS" ]]; then
+            CLI_SURFACE_CHANGED="true"
+          fi
+        fi
+
+        WEBSITE_DOCS_CHANGED="false"
+        if [[ -n "$CHANGED_FILES" ]]; then
+          WEBSITE_DOC_INPUTS=$(echo "$CHANGED_FILES" | grep -E '^website/src/(docs/pages/|_includes/)' || true)
+          if [[ -n "$WEBSITE_DOC_INPUTS" ]]; then
+            WEBSITE_DOCS_CHANGED="true"
+          fi
+        fi
+
+        justfile_backend_recipe_lines() {
+          local justfile_path="$1"
+          awk '
+            function recipe_name(line, parts) {
+              if (line ~ /^[[:alnum:]_-]/ && line !~ /^[[:alnum:]_-]+[[:space:]]*:=/ && line ~ /:/) {
+                split(line, parts, /[[:space:]:]/)
+                return parts[1]
+              }
+              return ""
+            }
+
+            function is_backend_recipe(name) {
+              return name ~ /^(with-lld|build|build-dev|build-mac|build-linux|build-runtime|release-build|release-build-[[:alnum:]-]+|llama-prepare|llama-prepare-latest|llama-build|bundle|release-bundle|release-bundle-[[:alnum:]-]+)$/
+            }
+
+            {
+              name = recipe_name($0)
+              if (name != "") {
+                backend = is_backend_recipe(name)
+              }
+              if (backend) {
+                print NR
+              }
+            }
+          ' "$justfile_path"
+        }
+
+        justfile_changed_line_ranges() {
+          awk '
+            function emit_range(spec, label, parts, start, count, i) {
+              gsub(/^[-+]/, "", spec)
+              split(spec, parts, ",")
+              start = parts[1]
+              count = (parts[2] == "" ? 1 : parts[2])
+              for (i = 0; i < count; i++) {
+                print label, start + i
+              }
+            }
+
+            /^@@ / {
+              emit_range($2, "old")
+              emit_range($3, "new")
+            }
+          '
+        }
+
+        changed_range_touches_backend_recipe() {
+          local backend_lines_file="$1"
+          local changed_lines_file="$2"
+          local side="$3"
+          awk -v side="$side" '
+            NR == FNR { backend[$1] = 1; next }
+            $1 == side && backend[$2] { found = 1 }
+            END { exit found ? 0 : 1 }
+          ' "$backend_lines_file" "$changed_lines_file"
+        }
+
+        # A Justfile edit is not automatically a native build input. Inspect the
+        # changed hunk ranges so website recipes can stay light while every line
+        # inside native build, ABI, release, and bundle recipes exercises backend
+        # lanes.
+        BACKEND_RECIPE_CHANGED="false"
+        if echo "$CHANGED_FILES" | grep -qx 'Justfile'; then
+          JUSTFILE_DIFF=""
+          JUSTFILE_BASE="$(mktemp)"
+          JUSTFILE_BASE_AVAILABLE="false"
+          if [[ "${{ inputs.event_name }}" == "pull_request" ]]; then
+            JUSTFILE_DIFF=$(git diff -U0 "${{ inputs.base_sha }}...${{ inputs.head_sha }}" -- Justfile || true)
+            if git show "${{ inputs.base_sha }}:Justfile" > "$JUSTFILE_BASE" 2>/dev/null; then
+              JUSTFILE_BASE_AVAILABLE="true"
+            fi
+          elif [[ "${{ inputs.event_name }}" == "push" ]]; then
+            JUSTFILE_DIFF=$(git diff -U0 HEAD^ HEAD -- Justfile || true)
+            if git show HEAD^:Justfile > "$JUSTFILE_BASE" 2>/dev/null; then
+              JUSTFILE_BASE_AVAILABLE="true"
+            fi
+          fi
+
+          JUSTFILE_CHANGED_LINES="$(mktemp)"
+          JUSTFILE_BACKEND_LINES_HEAD="$(mktemp)"
+          JUSTFILE_BACKEND_LINES_BASE="$(mktemp)"
+          printf '%s\n' "$JUSTFILE_DIFF" | justfile_changed_line_ranges > "$JUSTFILE_CHANGED_LINES"
+          justfile_backend_recipe_lines Justfile > "$JUSTFILE_BACKEND_LINES_HEAD"
+          if [[ "$JUSTFILE_BASE_AVAILABLE" == "true" ]]; then
+            justfile_backend_recipe_lines "$JUSTFILE_BASE" > "$JUSTFILE_BACKEND_LINES_BASE"
+          fi
+
+          if changed_range_touches_backend_recipe "$JUSTFILE_BACKEND_LINES_HEAD" "$JUSTFILE_CHANGED_LINES" new; then
+            BACKEND_RECIPE_CHANGED="true"
+          elif [[ "$JUSTFILE_BASE_AVAILABLE" == "true" ]] && changed_range_touches_backend_recipe "$JUSTFILE_BACKEND_LINES_BASE" "$JUSTFILE_CHANGED_LINES" old; then
+            BACKEND_RECIPE_CHANGED="true"
+          elif [[ -n "$JUSTFILE_DIFF" ]] && [[ "$JUSTFILE_BASE_AVAILABLE" != "true" ]] && [[ -s "$JUSTFILE_CHANGED_LINES" ]]; then
+            BACKEND_RECIPE_CHANGED="true"
+          fi
+        fi
+
         # Backend/platform lanes rebuild only for all-rust escalations or files
-        # that can alter the native ABI/backend build products.
+        # that can alter the native ABI/backend build products. Keep broad
+        # orchestration files like Justfile out of this path unless changed
+        # hunks touch native build/release recipes; cache keys still include
+        # them when backend jobs run for concrete build inputs.
         BACKEND_CHANGED="false"
         if [[ "$ALL_RUST" == "true" ]]; then
           BACKEND_CHANGED="true"
         elif [[ -n "$CHANGED_FILES" ]]; then
-          BACKEND_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^third_party/llama\.cpp/|^crates/skippy-ffi/|^scripts/(build-llama|prepare-llama|build-linux|build-mac|build-windows|install-windows-sdk)\.|^\.github/actions/setup-windows-rocm-sdk/|^\.github/cache-version\.txt$|^Justfile$)' || true)
-          if [[ -n "$BACKEND_INPUTS" ]]; then
+          BACKEND_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^third_party/llama\.cpp/|^crates/skippy-ffi/|^scripts/(build-llama|prepare-llama|build-linux|build-linux-rocm|build-mac|build-windows|install-windows-sdk)\.|^\.github/actions/setup-windows-rocm-sdk/|^\.github/cache-version\.txt$)' || true)
+          if [[ -n "$BACKEND_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
             BACKEND_CHANGED="true"
+          fi
+        fi
+
+        WINDOWS_CPU_BUILD_REQUIRED="false"
+        WINDOWS_GPU_BUILD_REQUIRED="false"
+        if [[ -n "$CHANGED_FILES" ]]; then
+          WINDOWS_CPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/mesh-llm-nodejs/|^crates/skippy-ffi/|^scripts/build-windows\.ps1$|^third_party/llama\.cpp/|^Cargo\.toml$|^Cargo\.lock$|^\.github/cache-version\.txt$)' || true)
+          WINDOWS_GPU_INPUTS=$(echo "$CHANGED_FILES" | grep -E '(^crates/skippy-ffi/|^scripts/build-windows\.ps1$|^scripts/install-windows-sdk\.ps1$|^third_party/llama\.cpp/|^\.github/cache-version\.txt$|^\.github/actions/setup-windows-rocm-sdk/)' || true)
+          if [[ -n "$WINDOWS_CPU_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
+            WINDOWS_CPU_BUILD_REQUIRED="true"
+          fi
+          if [[ -n "$WINDOWS_GPU_INPUTS" ]] || [[ "$BACKEND_RECIPE_CHANGED" == "true" ]]; then
+            WINDOWS_GPU_BUILD_REQUIRED="true"
           fi
         fi
 
@@ -154,6 +308,17 @@ runs:
           fi
         fi
 
+        # Inference artifacts are needed for runtime-facing changes, SDK smoke
+        # tests, backend/native inputs, or embedded React console changes. Do
+        # not build mesh-llm artifacts just because Rust tooling such as xtask
+        # changed; PR Quality's targeted fmt/clippy jobs cover those crates.
+        INFERENCE_ARTIFACT_REQUIRED="false"
+        if [[ "$ALL_RUST" == "true" ]] || [[ "$UI_CHANGED" == "true" ]] || [[ "$BACKEND_CHANGED" == "true" ]] || [[ "$SDK_SMOKE_REQUIRED" == "true" ]]; then
+          INFERENCE_ARTIFACT_REQUIRED="true"
+        elif echo "$AFFECTED_CRATES" | jq -e 'index("mesh-llm") or index("mesh-llm-host-runtime") or index("mesh-llm-client") or index("openai-frontend") or index("skippy-server") or index("skippy-runtime") or index("model-artifact")' >/dev/null; then
+          INFERENCE_ARTIFACT_REQUIRED="true"
+        fi
+
         # Set outputs using GITHUB_OUTPUT
         {
           echo "changed_files<<EOF"
@@ -165,8 +330,15 @@ runs:
           echo "clippy_batches_json=$CLIPPY_BATCHES"
           echo "all_rust=$ALL_RUST"
           echo "ui_changed=$UI_CHANGED"
+          echo "website_changed=$WEBSITE_CHANGED"
+          echo "website_docs_changed=$WEBSITE_DOCS_CHANGED"
+          echo "cli_surface_changed=$CLI_SURFACE_CHANGED"
           echo "docs_only=$DOCS_ONLY"
           echo "rust_changed=$RUST_CHANGED"
           echo "backend_changed=$BACKEND_CHANGED"
+          echo "inference_artifact_required=$INFERENCE_ARTIFACT_REQUIRED"
+          echo "backend_recipe_changed=$BACKEND_RECIPE_CHANGED"
+          echo "windows_cpu_build_required=$WINDOWS_CPU_BUILD_REQUIRED"
+          echo "windows_gpu_build_required=$WINDOWS_GPU_BUILD_REQUIRED"
           echo "sdk_smoke_required=$SDK_SMOKE_REQUIRED"
         } >> "$GITHUB_OUTPUT"

@@ -1,0 +1,159 @@
+<script>
+(function () {
+  var searchInput = document.getElementById('catalog-search');
+  var filterCapability = document.getElementById('filter-capability');
+  var filterRuntime = document.getElementById('filter-runtime');
+  var filterHardware = document.getElementById('filter-hardware');
+  var filterSource = document.getElementById('filter-source');
+  var catalogCard = document.getElementById('catalog-card');
+
+  if (!searchInput || !catalogCard) return;
+
+  var PAGE_SIZE = 10;
+  var currentPage = 1;
+  var filteredRows = [];
+
+  function applyFilters() {
+    var query = searchInput.value.toLowerCase().trim();
+    var capability = filterCapability ? filterCapability.value : '';
+    var runtime = filterRuntime ? filterRuntime.value : '';
+    var hardware = filterHardware ? filterHardware.value : '';
+    var source = filterSource ? filterSource.value : '';
+
+    var rows = catalogCard.querySelectorAll('tbody tr');
+    filteredRows = [];
+
+    rows.forEach(function (row) {
+      var name = (row.querySelector('strong')?.textContent || '').toLowerCase();
+      var ref = (row.querySelector('.ref-copy code')?.textContent || '').toLowerCase();
+      var desc = (row.querySelector('.model-cell span')?.textContent || '').toLowerCase();
+      var caps = row.getAttribute('data-capability') || '';
+      var rt = row.getAttribute('data-runtime') || '';
+      var hw = row.getAttribute('data-hardware') || '';
+      var src = row.getAttribute('data-source') || '';
+
+      var matchesSearch = !query || name.indexOf(query) !== -1 || ref.indexOf(query) !== -1 || desc.indexOf(query) !== -1;
+      var matchesCapability = !capability || caps.split(' ').some(function (c) { return c.toLowerCase() === capability.toLowerCase(); });
+      var matchesRuntime = !runtime || rt.toLowerCase() === runtime.toLowerCase();
+      var matchesHardware = !hardware || hw.toLowerCase() === hardware.toLowerCase();
+      var matchesSource = !source || src.toLowerCase() === source.toLowerCase();
+
+      row.style.display = 'none';
+      if (matchesSearch && matchesCapability && matchesRuntime && matchesHardware && matchesSource) {
+        filteredRows.push(row);
+      }
+    });
+
+    currentPage = 1;
+    renderPage();
+  }
+
+  function renderPage() {
+    var totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    var start = (currentPage - 1) * PAGE_SIZE;
+    var end = start + PAGE_SIZE;
+
+    filteredRows.forEach(function (row, i) {
+      row.style.display = (i >= start && i < end) ? '' : 'none';
+    });
+
+    updatePagination(filteredRows.length, totalPages);
+  }
+
+  function updatePagination(total, totalPages) {
+    var pgEl = catalogCard.querySelector('.catalog-foot .pg');
+    if (!pgEl) return;
+
+    if (totalPages <= 1) {
+      pgEl.style.display = 'none';
+      return;
+    }
+    pgEl.style.display = '';
+
+    var totalPagesNum = totalPages;
+    var html = '';
+
+    html += '<a href="#" class="pg-prev"' + (currentPage === 1 ? ' style="opacity:0.3;pointer-events:none"' : '') + '>←</a>';
+
+    if (totalPagesNum <= 7) {
+      for (var i = 1; i <= totalPagesNum; i++) {
+        html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
+      }
+    } else {
+      html += '<a href="#" class="pg-num' + (1 === currentPage ? ' now' : '') + '" data-page="1">1</a>';
+      if (currentPage > 3) html += '<span style="padding:4px 6px;color:var(--muted)">…</span>';
+      var rangeStart = Math.max(2, currentPage - 1);
+      var rangeEnd = Math.min(totalPagesNum - 1, currentPage + 1);
+      if (currentPage <= 3) rangeEnd = Math.min(4, totalPagesNum - 1);
+      if (currentPage >= totalPagesNum - 2) rangeStart = Math.max(3, totalPagesNum - 2);
+      for (var i = rangeStart; i <= rangeEnd; i++) {
+        html += '<a href="#" class="pg-num' + (i === currentPage ? ' now' : '') + '" data-page="' + i + '">' + i + '</a>';
+      }
+      if (currentPage < totalPagesNum - 2) html += '<span style="padding:4px 6px;color:var(--muted)">…</span>';
+      html += '<a href="#" class="pg-num' + (totalPagesNum === currentPage ? ' now' : '') + '" data-page="' + totalPagesNum + '">' + totalPagesNum + '</a>';
+    }
+
+    html += '<a href="#" class="pg-next"' + (currentPage === totalPagesNum ? ' style="opacity:0.3;pointer-events:none"' : '') + '>→</a>';
+
+    pgEl.innerHTML = html;
+
+    var liveEl = catalogCard.querySelector('.catalog-foot .live');
+    if (liveEl) {
+      liveEl.innerHTML = 'Showing ' + ((currentPage - 1) * PAGE_SIZE + 1) + '–' + Math.min(currentPage * PAGE_SIZE, total) + ' of ' + total;
+    }
+  }
+
+  catalogCard.addEventListener('click', function (e) {
+    var pgBtn = e.target.closest('.pg-prev, .pg-next, .pg-num');
+    if (!pgBtn) return;
+    e.preventDefault();
+
+    if (pgBtn.classList.contains('pg-prev')) currentPage--;
+    else if (pgBtn.classList.contains('pg-next')) currentPage++;
+    else if (pgBtn.hasAttribute('data-page')) currentPage = parseInt(pgBtn.getAttribute('data-page'));
+
+    renderPage();
+  });
+
+  searchInput.addEventListener('input', applyFilters);
+  if (filterCapability) filterCapability.addEventListener('change', applyFilters);
+  if (filterRuntime) filterRuntime.addEventListener('change', applyFilters);
+  if (filterHardware) filterHardware.addEventListener('change', applyFilters);
+  if (filterSource) filterSource.addEventListener('change', applyFilters);
+
+  catalogCard.addEventListener('click', function (e) {
+    var btn = e.target.closest('.copy');
+    if (!btn) return;
+    var row = btn.closest('tr');
+    var ref = row.querySelector('.ref-copy code')?.textContent || '';
+    navigator.clipboard.writeText(ref).then(function () {
+      var original = btn.innerHTML;
+      btn.classList.add('copied');
+      btn.textContent = '✓';
+      setTimeout(function () {
+        btn.innerHTML = original;
+        btn.classList.remove('copied');
+        if (typeof lucide !== 'undefined') lucide.createIcons();
+      }, 1200);
+    }).catch(function (err) {
+      console.warn('Failed to copy to clipboard:', err);
+      btn.classList.remove('copied');
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if ((e.key === 'k' || e.key === 'K') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      var tag = document.activeElement.tagName;
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT' && !document.activeElement.isContentEditable) {
+        e.preventDefault();
+        searchInput.focus();
+      }
+    }
+  });
+
+  applyFilters();
+})();
+</script>

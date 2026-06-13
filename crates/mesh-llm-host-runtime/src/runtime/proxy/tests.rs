@@ -1687,6 +1687,129 @@ async fn test_api_proxy_rejects_request_when_all_known_contexts_too_small() {
 }
 
 #[tokio::test]
+async fn test_api_proxy_retries_empty_success_response_to_next_target() {
+    let empty_body = json!({
+        "id": "chatcmpl-empty",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": ""},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let healthy_body = json!({
+        "id": "chatcmpl-healthy",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "recovered answer"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let (empty_port, empty_rx, empty_handle) = spawn_capturing_upstream(&empty_body).await;
+    let (healthy_port, healthy_rx, healthy_handle) = spawn_capturing_upstream(&healthy_body).await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness(single_model_targets("test", &[empty_port, healthy_port]))
+            .await;
+
+    let body = json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "empty then retry"}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let empty_raw = String::from_utf8(empty_rx.await.unwrap()).unwrap();
+    let healthy_raw = String::from_utf8(
+        tokio::time::timeout(Duration::from_secs(2), healthy_rx)
+            .await
+            .expect("proxy did not retry empty success response to the healthy target")
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("recovered answer"));
+    assert!(!response.contains("chatcmpl-empty"));
+    assert!(empty_raw.contains("empty then retry"));
+    assert!(healthy_raw.contains("empty then retry"));
+
+    proxy_handle.abort();
+    let _ = empty_handle.await;
+    let _ = healthy_handle.await;
+}
+
+#[tokio::test]
+async fn test_api_proxy_retries_length_finish_success_response_to_next_target() {
+    let truncated_body = json!({
+        "id": "chatcmpl-length",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "partial"},
+            "finish_reason": "length"
+        }]
+    })
+    .to_string();
+    let healthy_body = json!({
+        "id": "chatcmpl-healthy",
+        "object": "chat.completion",
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": "complete answer"},
+            "finish_reason": "stop"
+        }]
+    })
+    .to_string();
+    let (truncated_port, truncated_rx, truncated_handle) =
+        spawn_capturing_upstream(&truncated_body).await;
+    let (healthy_port, healthy_rx, healthy_handle) = spawn_capturing_upstream(&healthy_body).await;
+    let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness(single_model_targets(
+        "test",
+        &[truncated_port, healthy_port],
+    ))
+    .await;
+
+    let body = json!({
+        "model": "test",
+        "messages": [{"role": "user", "content": "length then retry"}],
+    })
+    .to_string();
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    );
+
+    let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+    let truncated_raw = String::from_utf8(truncated_rx.await.unwrap()).unwrap();
+    let healthy_raw = String::from_utf8(
+        tokio::time::timeout(Duration::from_secs(2), healthy_rx)
+            .await
+            .expect("proxy did not retry length-truncated success response to the healthy target")
+            .unwrap(),
+    )
+    .unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK"));
+    assert!(response.contains("complete answer"));
+    assert!(!response.contains("chatcmpl-length"));
+    assert!(truncated_raw.contains("length then retry"));
+    assert!(healthy_raw.contains("length then retry"));
+
+    proxy_handle.abort();
+    let _ = truncated_handle.await;
+    let _ = healthy_handle.await;
+}
+
+#[tokio::test]
 async fn test_api_proxy_does_not_retry_generic_bad_request() {
     let bad_request_body = r#"{"error":{"message":"missing required field: messages"}}"#;
     let (bad_port, bad_rx, bad_handle) =

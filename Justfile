@@ -4,7 +4,7 @@ llama_dir := env("MESH_LLM_LLAMA_DIR", ".deps/llama.cpp")
 llama_build_root := env("MESH_LLM_LLAMA_BUILD_ROOT", ".deps/llama-build")
 mesh_dir := "crates/mesh-llm"
 ui_dir := "crates/mesh-llm-ui"
-ui_legacy_dir := "crates/mesh-llm/ui-legacy"
+website_dir := "website"
 home_dir := if os_family() == "windows" { env("USERPROFILE") } else { env("HOME") }
 xdg_cache_dir := env("XDG_CACHE_HOME", home_dir / ".cache")
 hf_home := env("HF_HOME", xdg_cache_dir / "huggingface")
@@ -332,17 +332,19 @@ ui-dev api="http://127.0.0.1:3131" port="5173":
     MESH_UI_API_ORIGIN="{{ api }}" VITE_API_URL="{{ api }}" pnpm run dev -- --host 0.0.0.0 --port {{ port }}
 
 # Run the UI dev server proxying to the public meshllm.cloud API
-ui-dev-public: (ui-dev "https://meshllm.cloud")
+ui-dev-public: (ui-dev "https://public.meshllm.cloud")
 
-# Run the legacy UI dev server with Vite HMR (default: http://127.0.0.1:3131)
-ui-legacy api="http://127.0.0.1:3131" port="5174":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "{{ ui_legacy_dir }}"
-    MESH_UI_API_ORIGIN="{{ api }}" npm run dev -- --host 0.0.0.0 --port {{ port }}
+# Build the public website into docs/ for static hosting.
+website-build:
+    cd "{{ website_dir }}" && npm run build
 
-# Run the legacy UI dev server proxying to the public meshllm.cloud API
-ui-legacy-public: (ui-legacy "https://meshllm.cloud")
+# Run the public website dev server on port 8765.
+website-dev:
+    cd "{{ website_dir }}" && npm run dev
+
+# Remove generated public website output while preserving docs/ source markdown.
+website-clean:
+    cd "{{ website_dir }}" && npm run clean
 
 # Run UI unit tests (vitest)
 ui-test:
@@ -420,7 +422,7 @@ test-all:
         echo "No server on port 3131 — starting UI dev server with public mesh..."
 
         # Start dev server in background, capture PID tree for cleanup
-        MESH_UI_API_ORIGIN="https://meshllm.cloud" VITE_API_URL="https://meshllm.cloud" bash -c 'cd "{{ ui_dir }}" && pnpm exec vite --host 0.0.0.0 --port 5173' &
+        MESH_UI_API_ORIGIN="https://public.meshllm.cloud" VITE_API_URL="https://public.meshllm.cloud" bash -c 'cd "{{ ui_dir }}" && pnpm exec vite --host 0.0.0.0 --port 5173' &
         DEV_PID=$!
 
         # Wait for dev server to be ready (up to 30s)

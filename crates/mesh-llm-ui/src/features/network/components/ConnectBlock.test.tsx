@@ -5,7 +5,7 @@ import { ConnectBlock, type ConnectApiTargetLiveness } from '@/features/network/
 function renderConnectBlock(apiTargetLiveness?: ConnectApiTargetLiveness) {
   render(
     <ConnectBlock
-      installHref="https://docs.meshllm.cloud/#install"
+      installHref="https://meshllm.cloud/#install"
       apiUrl="http://127.0.0.1:9337/v1"
       apiStatus="configured target"
       apiTargetLiveness={apiTargetLiveness}

@@ -879,6 +879,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --out release-artifacts/native-runtimes.json \
             release-artifacts/meshllm-native-runtime-*.tar.gz
+          shasum -a 256 release-artifacts/native-runtimes.json | awk '{print $1 "  native-runtimes.json"}' > release-artifacts/native-runtimes.json.sha256
 
       - name: Download generated SwiftPM manifest
         if: github.event_name == 'workflow_dispatch'

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://fundingjson.org/schema/v1.1.0.json",
+  "version": "v1.1.0",
+  "entity": {
+    "type": "organisation",
+    "role": "owner",
+    "name": "Mesh LLM",
+    "email": "michael.neale@gmail.com",
+    "description": "Democratize and Decentralize Models and Agents. Mesh LLM pools GPUs and memory across machines and exposes the result as one OpenAI-compatible API for distributed AI/LLM inference.",
+    "webpageUrl": {
+      "url": "https://meshllm.cloud"
+    }
+  },
+  "projects": [
+    {
+      "guid": "mesh-llm",
+      "name": "Mesh LLM",
+      "description": "Distributed AI/LLM for the people. Share compute privately or publicly to power your agents and chat. Pools GPUs and memory across machines for distributed LLM inference using llama.cpp.",
+      "webpageUrl": {
+        "url": "https://meshllm.cloud"
+      },
+      "repositoryUrl": {
+        "url": "https://github.com/Mesh-LLM/mesh-llm",
+        "wellKnown": "https://github.com/Mesh-LLM/mesh-llm/blob/main/.well-known/funding-manifest-urls"
+      },
+      "licenses": [
+        "spdx:Apache-2.0"
+      ],
+      "tags": [
+        "ai",
+        "llm",
+        "inference",
+        "distributed",
+        "decentralized",
+        "agents",
+        "gpu-clustering",
+        "openai-compatible"
+      ]
+    }
+  ],
+  "funding": {
+    "channels": [
+      {
+        "guid": "github-sponsors",
+        "type": "payment-provider",
+        "address": "https://github.com/sponsors/ndizazzo",
+        "description": "GitHub Sponsors for one-time or recurring donations"
+      }
+    ],
+    "plans": [
+      {
+        "guid": "any-amount",
+        "status": "active",
+        "name": "General support",
+        "description": "Support Mesh LLM development with any amount via GitHub Sponsors.",
+        "amount": 0,
+        "currency": "USD",
+        "frequency": "one-time",
+        "channels": [
+          "github-sponsors"
+        ]
+      },
+      {
+        "guid": "monthly-support",
+        "status": "active",
+        "name": "Monthly supporter",
+        "description": "Recurring monthly support for ongoing Mesh LLM development and infrastructure.",
+        "amount": 0,
+        "currency": "USD",
+        "frequency": "monthly",
+        "channels": [
+          "github-sponsors"
+        ]
+      }
+    ]
+  }
+}

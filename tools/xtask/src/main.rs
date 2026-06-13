@@ -745,8 +745,12 @@ fn resolve_runtime_version(repo_root: &Path) -> DynResult<String> {
 fn extract_runtime_version(repo_root: &Path, contents: &str) -> DynResult<String> {
     const LITERAL_PREFIX: &str = "pub const VERSION: &str = \"";
     const CARGO_PKG_VERSION: &str = "pub const VERSION: &str = env!(\"CARGO_PKG_VERSION\");";
+    const RELEASE_VERSION_ALIAS: &str = "pub const VERSION: &str = RELEASE_VERSION;";
     for line in contents.lines().map(str::trim) {
         if line == CARGO_PKG_VERSION {
+            return host_runtime_package_version(repo_root);
+        }
+        if line == RELEASE_VERSION_ALIAS {
             return host_runtime_package_version(repo_root);
         }
         if let Some(rest) = line.strip_prefix(LITERAL_PREFIX) {
@@ -1364,6 +1368,14 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     let pr_builds_workflow = fs::read_to_string(repo_root.join(".github/workflows/pr_builds.yml"))?;
     let pr_quality_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_quality.yml"))?;
+    let pr_website_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/pr_website.yml"))?;
+    let website_pages_workflow =
+        fs::read_to_string(repo_root.join(".github/workflows/website-pages.yml"))?;
+    let compute_changes_action =
+        fs::read_to_string(repo_root.join(".github/actions/compute-changes/action.yml"))?;
+    let affected_crates_script = fs::read_to_string(repo_root.join("scripts/affected-crates.sh"))?;
+    let ci_docs = fs::read_to_string(repo_root.join("ci/ci.md"))?;
     let pr_cleanup_workflow =
         fs::read_to_string(repo_root.join(".github/workflows/pr_cleanup.yml"))?;
     let windows_warm_caches_workflow =
@@ -1488,6 +1500,217 @@ fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
         &pr_quality_workflow,
         "cargo run -p xtask -- repo-consistency ci-crate-lists",
         "PR quality CI crate-list drift check",
+    )?;
+    ensure_not_contains(
+        &pr_quality_workflow,
+        "website-build:",
+        "PR quality should not own public website builds",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "website_changed",
+        "compute-changes public website change output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "website_docs_changed",
+        "compute-changes public website docs output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "cli_surface_changed",
+        "compute-changes CLI surface output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "inference_artifact_required",
+        "compute-changes inference artifact output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "backend_recipe_changed",
+        "compute-changes backend Justfile recipe output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "windows_cpu_build_required",
+        "compute-changes Windows CPU build output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "windows_gpu_build_required",
+        "compute-changes Windows GPU build output",
+    )?;
+    ensure_contains(
+        &compute_changes_action,
+        "build-linux-rocm",
+        "compute-changes Linux ROCm build script route",
+    )?;
+    ensure_contains(
+        &affected_crates_script,
+        "is_website_input",
+        "affected-crates public website input classifier",
+    )?;
+    ensure_contains(
+        &pr_website_workflow,
+        "name: PR Website Checks",
+        "PR website workflow display name",
+    )?;
+    ensure_contains(
+        &pr_website_workflow,
+        "./.github/actions/compute-changes",
+        "PR website compute-changes route",
+    )?;
+    ensure_contains(
+        &pr_website_workflow,
+        "website_changed",
+        "PR website public website change gate",
+    )?;
+    ensure_contains(
+        &pr_website_workflow,
+        "website-build:",
+        "PR website public website build gate",
+    )?;
+    ensure_contains(
+        &pr_website_workflow,
+        "npm run build",
+        "PR website public website build command",
+    )?;
+    ensure_contains(
+        &pr_website_workflow,
+        "PR Website Checks",
+        "PR website Markdown summary output",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "cli-docs-sync:",
+        "PR quality CLI docs sync gate",
+    )?;
+    ensure_contains(
+        &pr_quality_workflow,
+        "GITHUB_STEP_SUMMARY",
+        "PR quality Markdown summary output",
+    )?;
+    ensure_contains(
+        &pr_builds_workflow,
+        "website_changed",
+        "PR Builds public website change output",
+    )?;
+    ensure_contains(
+        &pr_builds_workflow,
+        "inference_artifact_required",
+        "PR Builds inference artifact gate",
+    )?;
+    ensure_contains(
+        &pr_builds_workflow,
+        "backend_recipe_changed",
+        "PR Builds backend recipe route",
+    )?;
+    ensure_contains(
+        &pr_builds_workflow,
+        "steps.compute.outputs.windows_cpu_build_required",
+        "PR Builds Windows CPU compute route",
+    )?;
+    ensure_contains(
+        &pr_builds_workflow,
+        "steps.compute.outputs.windows_gpu_build_required",
+        "PR Builds Windows GPU compute route",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "website_changed?",
+        "CI topology public website route",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "inference_artifact_required?",
+        "CI topology inference artifact route",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "backend_recipe_changed?",
+        "CI topology backend Justfile recipe route",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "windows_cpu_build_required?",
+        "CI topology Windows CPU compute route",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "windows_gpu_build_required?",
+        "CI topology Windows GPU compute route",
+    )?;
+    ensure_contains(&ci_docs, "cli-docs-sync", "CI topology CLI docs sync gate")?;
+    ensure_contains(
+        &ci_docs,
+        "pr_website.yml",
+        "CI topology PR website workflow",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "name: Public Website Deploy",
+        "public website deploy workflow name",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "branches: [main]",
+        "public website deploy main trigger",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "workflow_dispatch:",
+        "public website manual deploy trigger",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'",
+        "public website manual deploy main-ref guard",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "npm run clean",
+        "public website clean generated output step",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "public-website-artifact",
+        "public website staged artifact directory",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "path: public-website-artifact",
+        "public website staged Pages artifact upload",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "actions/upload-pages-artifact@v3",
+        "public website Pages artifact upload",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "actions/deploy-pages@v4",
+        "public website Pages deploy action",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "pages: write",
+        "public website deploy Pages permission",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "id-token: write",
+        "public website deploy OIDC permission",
+    )?;
+    ensure_contains(
+        &website_pages_workflow,
+        "name: Public Website",
+        "public website custom environment",
+    )?;
+    ensure_contains(
+        &ci_docs,
+        "website-pages.yml",
+        "CI topology public website deploy workflow",
     )?;
     ensure_contains(
         &pr_cleanup_workflow,
@@ -2293,6 +2516,14 @@ fn ensure_contains(haystack: &str, needle: &str, context: &str) -> DynResult<()>
         Ok(())
     } else {
         Err(format!("{context}: missing `{needle}`").into())
+    }
+}
+
+fn ensure_not_contains(haystack: &str, needle: &str, context: &str) -> DynResult<()> {
+    if haystack.contains(needle) {
+        Err(format!("{context}: unexpected `{needle}`").into())
+    } else {
+        Ok(())
     }
 }
 

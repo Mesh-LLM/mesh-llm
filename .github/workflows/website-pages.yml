@@ -1,0 +1,92 @@
+name: Public Website Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "install.sh"
+      - "install.ps1"
+      - ".github/workflows/website-pages.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-website-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build public website
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+
+      - name: Clean generated website output
+        working-directory: website
+        run: npm run clean
+
+      - name: Build public website
+        working-directory: website
+        run: npm run build
+
+      - name: Stage Pages artifact
+        run: |
+          set -euo pipefail
+
+          artifact_dir="public-website-artifact"
+          rm -rf "$artifact_dir"
+          mkdir -p "$artifact_dir"
+
+          cp docs/index.html "$artifact_dir/"
+          cp docs/CNAME "$artifact_dir/"
+          cp docs/funding.json "$artifact_dir/"
+          cp docs/install.sh "$artifact_dir/"
+          cp docs/install.ps1 "$artifact_dir/"
+          cp docs/mesh-llm-logo.svg "$artifact_dir/"
+          cp -R docs/assets "$artifact_dir/"
+          cp -R docs/catalog "$artifact_dir/"
+          cp -R docs/.well-known "$artifact_dir/"
+          cp -R docs/docs "$artifact_dir/"
+          cp -R docs/pagefind "$artifact_dir/"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public-website-artifact
+
+  deploy:
+    name: Deploy public website
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      pages: write
+      id-token: write
+
+    environment:
+      name: Public Website
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

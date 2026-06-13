@@ -145,6 +145,20 @@ else:
 PY
 }
 
+write_checksum_sidecar() {
+    local file="$1"
+    local digest
+    if command -v shasum >/dev/null 2>&1; then
+        digest="$(shasum -a 256 "$file" | awk '{print tolower($1)}')"
+    elif command -v sha256sum >/dev/null 2>&1; then
+        digest="$(sha256sum "$file" | awk '{print tolower($1)}')"
+    else
+        echo "shasum or sha256sum is required to write checksum sidecars" >&2
+        exit 1
+    fi
+    printf '%s  %s\n' "$digest" "$(basename "$file")" > "$file.sha256"
+}
+
 validate_attestation_env() {
     if [[ -n "$ATTESTATION_SIGNING_KEY_FILE" && -z "$ATTESTATION_PUBLIC_KEY_FILE" ]]; then
         echo "MESH_RELEASE_ATTESTATION_PUBLIC_KEY_FILE is required when MESH_RELEASE_ATTESTATION_SIGNING_KEY_FILE is set" >&2
@@ -493,7 +507,9 @@ main() {
     stamp_bundle_binary "$bundle_binary"
 
     create_archive "$bundle_dir" "$output_dir/$versioned_asset" "$ARCHIVE_EXT"
+    write_checksum_sidecar "$output_dir/$versioned_asset"
     create_archive "$bundle_dir" "$output_dir/$STABLE_ASSET" "$ARCHIVE_EXT"
+    write_checksum_sidecar "$output_dir/$STABLE_ASSET"
 
     echo "Created release archives:"
     find "$output_dir" -maxdepth 1 -type f -print | sort

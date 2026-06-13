@@ -10,6 +10,7 @@ INSTALL_PRERELEASE="${MESH_LLM_INSTALL_PRERELEASE:-0}"
 INSTALL_SERVICE="${MESH_LLM_INSTALL_SERVICE:-0}"
 INSTALL_SERVICE_ARGS="${MESH_LLM_INSTALL_SERVICE_ARGS:-}"
 INSTALL_SERVICE_START="${MESH_LLM_INSTALL_SERVICE_START:-1}"
+REQUIRE_CHECKSUM="${MESH_LLM_REQUIRE_CHECKSUM:-0}"
 
 SERVICE_NAME="mesh-llm"
 SERVICE_LABEL="com.mesh-llm.mesh-llm"
@@ -68,6 +69,7 @@ Environment overrides:
   MESH_LLM_INSTALL_REF=main
   MESH_LLM_INSTALL_SERVICE=1
   MESH_LLM_INSTALL_SERVICE_START=0
+  MESH_LLM_REQUIRE_CHECKSUM=1
 EOF
 }
 
@@ -595,6 +597,105 @@ release_url() {
     printf 'https://github.com/%s/releases/latest/download/%s\n' "$REPO" "$asset"
 }
 
+checksum_url() {
+    printf '%s.sha256\n' "$1"
+}
+
+sha256_file() {
+    local file="$1"
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print tolower($1)}'
+        return 0
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print tolower($1)}'
+        return 0
+    fi
+    echo "error: shasum or sha256sum is required to verify release artifacts" >&2
+    return 1
+}
+
+checksum_from_sidecar() {
+    local sidecar="$1"
+    local expected
+    expected="$(awk 'match($0, /[A-Fa-f0-9]{64}/) { print substr($0, RSTART, RLENGTH); exit }' "$sidecar" | tr '[:upper:]' '[:lower:]')"
+    if [[ -z "$expected" ]]; then
+        echo "error: checksum sidecar did not contain a SHA-256 digest: $sidecar" >&2
+        return 1
+    fi
+    printf '%s\n' "$expected"
+}
+
+download_checksum_sidecar() {
+    local url="$1"
+    local sidecar="$2"
+    local status
+
+    status="$(curl -sSL -w '%{http_code}' -o "$sidecar" "$url")" || {
+        rm -f -- "$sidecar"
+        echo "error: could not download checksum sidecar: $url" >&2
+        return 2
+    }
+
+    case "$status" in
+        2*)
+            return 0
+            ;;
+        404|410)
+            rm -f -- "$sidecar"
+            return 1
+            ;;
+        *)
+            rm -f -- "$sidecar"
+            echo "error: checksum sidecar download returned HTTP $status: $url" >&2
+            return 2
+            ;;
+    esac
+}
+
+verify_downloaded_file() {
+    local file="$1"
+    local url="$2"
+    local require_checksum="${3:-$REQUIRE_CHECKSUM}"
+    local sidecar="$file.sha256"
+    local sidecar_url
+    local sidecar_status
+    local expected
+    local actual
+
+    sidecar_url="$(checksum_url "$url")"
+    sidecar_status=0
+    download_checksum_sidecar "$sidecar_url" "$sidecar" || sidecar_status=$?
+    if [[ "$sidecar_status" -ne 0 ]]; then
+        case "$sidecar_status" in
+            1)
+                if bool_is_true "$require_checksum"; then
+                    echo "error: checksum sidecar is required but missing: $sidecar_url" >&2
+                    return 1
+                fi
+                echo "warning: checksum sidecar not found; continuing without archive verification: $sidecar_url" >&2
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    fi
+    if ! expected="$(checksum_from_sidecar "$sidecar")"; then
+        return 1
+    fi
+    if ! actual="$(sha256_file "$file")"; then
+        return 1
+    fi
+    if [[ "$actual" != "$expected" ]]; then
+        echo "error: checksum mismatch for $(basename "$file")" >&2
+        echo "expected: $expected" >&2
+        echo "actual:   $actual" >&2
+        return 1
+    fi
+    echo "Verified checksum: $(basename "$file")"
+}
+
 stale_binary_names() {
     cat <<'EOF'
 mesh-llm
@@ -647,6 +748,10 @@ install_recommended_native_runtime() {
     fi
     if ! curl -fsSL "$manifest_url" -o "$manifest_path"; then
         echo "Native runtime manifest was not available for this release; skipping runtime install."
+        return 0
+    fi
+    if ! verify_downloaded_file "$manifest_path" "$manifest_url" 1; then
+        echo "warning: native runtime manifest could not be verified; skipping runtime install." >&2
         return 0
     fi
 
@@ -918,6 +1023,7 @@ main() {
     fi
     echo "Downloading $url"
     curl -fsSL "$url" -o "$archive"
+    verify_downloaded_file "$archive" "$url"
 
     tar -xzf "$archive" -C "$tmp_dir"
 

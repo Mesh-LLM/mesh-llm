@@ -12,6 +12,7 @@ mesh-bundle.tar.gz
 crates/mesh-llm-ui/dist/
 evals/results/
 .sisyphus/
+.omo/
 .playwright-mcp/
 .envrc
 .moe-cache/
@@ -37,3 +38,17 @@ sdk/swift/Sources/MeshLLM/Generated/*
 sdk/swift/Generated/FFI/
 sdk/swift/Generated/MeshLLMFFI.xcframework/
 .impeccable.md
+
+# Generated website output (source: website/src/)
+/docs/funding.json
+/docs/.well-known/
+/docs/index.html
+/docs/CNAME
+/docs/install.sh
+/docs/install.ps1
+/docs/mesh-llm-logo.svg
+/docs/assets/
+/docs/catalog/
+/docs/docs/
+/docs/pagefind/
+/website/src/assets/site.generated.css

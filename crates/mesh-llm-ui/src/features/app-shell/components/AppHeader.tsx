@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
 import { env } from '@/lib/env'
 import type { TopSection } from '@/features/app-shell/lib/routes'
 
-const DOCS_URL = 'https://docs.anarchai.org'
+const DOCS_URL = 'https://meshllm.cloud'
 
 type ThemeMode = 'auto' | 'light' | 'dark'
 

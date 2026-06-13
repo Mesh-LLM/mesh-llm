@@ -29,6 +29,8 @@ jobs:
       clippy_batches_json: ${{ steps.compute.outputs.clippy_batches_json }}
       all_rust: ${{ steps.compute.outputs.all_rust }}
       ui_changed: ${{ steps.compute.outputs.ui_changed }}
+      website_docs_changed: ${{ steps.compute.outputs.website_docs_changed }}
+      cli_surface_changed: ${{ steps.compute.outputs.cli_surface_changed }}
       docs_only: ${{ steps.compute.outputs.docs_only }}
       rust_changed: ${{ steps.compute.outputs.rust_changed }}
     steps:
@@ -139,8 +141,40 @@ jobs:
       - name: Test
         run: pnpm test
 
+  cli-docs-sync:
+    needs: changes
+    if: needs.changes.outputs.cli_surface_changed == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require public website docs update
+        env:
+          WEBSITE_DOCS_CHANGED: ${{ needs.changes.outputs.website_docs_changed }}
+        run: |
+          if [[ "$WEBSITE_DOCS_CHANGED" != "true" ]]; then
+            cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          ## CLI documentation sync failed
+
+          Rust CLI definition files changed, but no public website docs or command examples changed.
+
+          Update at least one relevant file under:
+
+          - `website/src/docs/pages/`
+          - `website/src/_includes/`
+
+          The primary CLI reference is `website/src/docs/pages/CLI.md`.
+          EOF
+            echo "ERROR: Rust CLI surface changed without a public website docs/example update." >&2
+            exit 1
+          fi
+
+          cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          ## CLI documentation sync passed
+
+          Rust CLI definition files changed and public website docs/examples were updated in this PR.
+          EOF
+
   summary:
-    needs: [changes, rust-fmt, rust-clippy, ui-quality]
+    needs: [changes, rust-fmt, rust-clippy, ui-quality, cli-docs-sync]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -150,26 +184,28 @@ jobs:
           FMT: ${{ needs.rust-fmt.result }}
           CLIPPY: ${{ needs.rust-clippy.result }}
           UI: ${{ needs.ui-quality.result }}
+          CLI_DOCS: ${{ needs.cli-docs-sync.result }}
         run: |
-          echo "┌────────────────────┬──────────────────────┐"
-          echo "│ Check              │ Result               │"
-          echo "├────────────────────┼──────────────────────┤"
-          printf "│ %-18s │ %-20s │\n" "changes"     "$CHANGES"
-          printf "│ %-18s │ %-20s │\n" "rust-fmt"    "$FMT"
-          printf "│ %-18s │ %-20s │\n" "rust-clippy" "$CLIPPY"
-          printf "│ %-18s │ %-20s │\n" "ui-quality"  "$UI"
-          echo "└────────────────────┴──────────────────────┘"
+          {
+            echo "## PR Quality Checks"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            printf '| %s | %s |\n' "changes" "$CHANGES"
+            printf '| %s | %s |\n' "rust-fmt" "$FMT"
+            printf '| %s | %s |\n' "rust-clippy" "$CLIPPY"
+            printf '| %s | %s |\n' "ui-quality" "$UI"
+            printf '| %s | %s |\n' "cli-docs-sync" "$CLI_DOCS"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           FAILED=false
-          for STATUS in "$CHANGES" "$FMT" "$CLIPPY" "$UI"; do
+          for STATUS in "$CHANGES" "$FMT" "$CLIPPY" "$UI" "$CLI_DOCS"; do
             if [[ "$STATUS" == "failure" || "$STATUS" == "cancelled" ]]; then
               FAILED=true
             fi
           done
 
           if [[ "$FAILED" == "true" ]]; then
-            echo "ERROR: One or more quality checks failed."
+            echo "ERROR: One or more quality checks failed." >&2
             exit 1
           fi
-
-          echo "All quality checks passed (or were skipped)."

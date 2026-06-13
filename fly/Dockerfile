@@ -7,7 +7,7 @@
 # syntax=docker/dockerfile:1.7
 
 FROM node:24-alpine AS ui-builder
-ARG VITE_API_URL=https://meshllm.cloud
+ARG VITE_API_URL=https://public.meshllm.cloud
 ARG VITE_APP_VERSION=
 ARG VITE_STORAGE_NAMESPACE=mesh-llm-ui-production
 ARG NODE_ENV=production
@@ -80,6 +80,15 @@ COPY crates/llama-spec-bench/ crates/llama-spec-bench/
 COPY crates/skippy-bench/ crates/skippy-bench/
 COPY crates/skippy-prompt/ crates/skippy-prompt/
 COPY crates/mesh-mixture-of-agents/ crates/mesh-mixture-of-agents/
+COPY crates/mesh-llm-cli/ crates/mesh-llm-cli/
+COPY crates/mesh-llm-commands/ crates/mesh-llm-commands/
+COPY crates/mesh-llm-embedded-runtime/ crates/mesh-llm-embedded-runtime/
+COPY crates/mesh-llm-events/ crates/mesh-llm-events/
+COPY crates/mesh-llm-hardware-profile/ crates/mesh-llm-hardware-profile/
+COPY crates/mesh-llm-native-runtime/ crates/mesh-llm-native-runtime/
+COPY crates/mesh-llm-runtime-install/ crates/mesh-llm-runtime-install/
+COPY crates/mesh-llm-sdk/ crates/mesh-llm-sdk/
+COPY crates/mesh-llm-tui/ crates/mesh-llm-tui/
 COPY tools/xtask/ tools/xtask/
 COPY scripts/prepare-llama.sh scripts/build-llama.sh scripts/
 COPY third_party/llama.cpp/upstream.txt third_party/llama.cpp/upstream.txt

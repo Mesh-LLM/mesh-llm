@@ -1,0 +1,106 @@
+name: PR Website Checks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      website_changed: ${{ steps.compute.outputs.website_changed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/compute-changes
+        id: compute
+        with:
+          event_name: ${{ github.event_name }}
+          base_sha: ${{ github.event.pull_request.base.sha || '' }}
+          head_sha: ${{ github.event.pull_request.head.sha || '' }}
+
+  website-build:
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.website_changed == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build public website
+        run: npm run build
+      - name: Verify website output exists
+        working-directory: .
+        run: |
+          required=(
+            docs/index.html
+            docs/CNAME
+            docs/funding.json
+            docs/install.sh
+            docs/install.ps1
+            docs/mesh-llm-logo.svg
+            docs/assets/site.css
+            docs/docs/index.html
+            docs/catalog/index.html
+            docs/.well-known/funding-manifest-urls
+          )
+          for f in "${required[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "ERROR: Missing generated output: $f" >&2
+              exit 1
+            fi
+          done
+          echo "All required website output files exist."
+
+  summary:
+    needs: [changes, website-build]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check website gate
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          WEBSITE_CHANGED: ${{ needs.changes.outputs.website_changed }}
+          WEBSITE_BUILD: ${{ needs.website-build.result }}
+        run: |
+          {
+            echo "## PR Website Checks"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            printf '| %s | %s |\n' "changes" "$CHANGES"
+            printf '| %s | %s |\n' "website_changed" "${WEBSITE_CHANGED:-false}"
+            printf '| %s | %s |\n' "website-build" "$WEBSITE_BUILD"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          FAILED=false
+          for STATUS in "$CHANGES" "$WEBSITE_BUILD"; do
+            if [[ "$STATUS" == "failure" || "$STATUS" == "cancelled" ]]; then
+              FAILED=true
+            fi
+          done
+
+          if [[ "$FAILED" == "true" ]]; then
+            echo "ERROR: One or more website checks failed." >&2
+            exit 1
+          fi
