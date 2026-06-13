@@ -1,0 +1,15 @@
+addReviewers: true
+addAssignees: author
+
+reviewers:
+  - ndizazzo
+  - i386
+  - michaelneale
+
+numberOfReviewers: 1
+numberOfAssignees: 1
+runOnDraft: false
+
+skipKeywords:
+  - wip
+  - work in progress

@@ -357,7 +357,7 @@ describe('ConfigurationPage', () => {
       screen.getByText('No owner-control identity on this node, run both commands to unlock saving.')
     ).toBeInTheDocument()
     expect(screen.getByText('missing owner identity')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /docs/i })).toHaveAttribute('href', 'https://docs.meshllm.cloud/')
+    expect(screen.getByRole('link', { name: /docs/i })).toHaveAttribute('href', 'https://meshllm.cloud/')
     expect(screen.queryByRole('button', { name: /copy both/i })).not.toBeInTheDocument()
     expect(screen.getAllByText('mesh-llm')).toHaveLength(2)
     expect(screen.getByText('auth')).toBeInTheDocument()

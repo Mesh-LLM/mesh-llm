@@ -332,7 +332,7 @@ ui-dev api="http://127.0.0.1:3131" port="5173":
     MESH_UI_API_ORIGIN="{{ api }}" VITE_API_URL="{{ api }}" pnpm run dev -- --host 0.0.0.0 --port {{ port }}
 
 # Run the UI dev server proxying to the public meshllm.cloud API
-ui-dev-public: (ui-dev "https://meshllm.cloud")
+ui-dev-public: (ui-dev "https://public.meshllm.cloud")
 
 # Build the public website into docs/ for static hosting.
 website-build:
@@ -422,7 +422,7 @@ test-all:
         echo "No server on port 3131 — starting UI dev server with public mesh..."
 
         # Start dev server in background, capture PID tree for cleanup
-        MESH_UI_API_ORIGIN="https://meshllm.cloud" VITE_API_URL="https://meshllm.cloud" bash -c 'cd "{{ ui_dir }}" && pnpm exec vite --host 0.0.0.0 --port 5173' &
+        MESH_UI_API_ORIGIN="https://public.meshllm.cloud" VITE_API_URL="https://public.meshllm.cloud" bash -c 'cd "{{ ui_dir }}" && pnpm exec vite --host 0.0.0.0 --port 5173' &
         DEV_PID=$!
 
         # Wait for dev server to be ready (up to 30s)

@@ -2621,6 +2621,21 @@ async fn status_includes_external_inference_endpoint_models() {
 }
 
 #[tokio::test]
+async fn status_reports_local_build_version_and_independent_latest_release() {
+    let state = build_test_mesh_api().await;
+    let latest_release = "9.9.9".to_string();
+    {
+        let mut inner = state.inner.lock().await;
+        inner.latest_version = Some(latest_release.clone());
+    }
+
+    let status_body = request_management_json(state, "/api/status").await;
+
+    assert_eq!(status_body["version"], json!(crate::BUILD_VERSION));
+    assert_eq!(status_body["latest_version"], json!(latest_release));
+}
+
+#[tokio::test]
 async fn management_mcp_endpoint_initializes_streamable_http_session() {
     let state = build_test_mesh_api().await;
     let (addr, handle) = spawn_management_test_server(state).await;
@@ -4087,7 +4102,7 @@ async fn status_payload_safety_net_adds_self_when_empty() {
         instances.push(LocalInstance {
             pid: std::process::id(),
             api_port: Some(3131),
-            version: Some(MESH_LLM_VERSION.to_string()),
+            version: Some(MESH_LLM_BUILD_VERSION.to_string()),
             started_at_unix: 0,
             runtime_dir: String::new(),
             is_self: true,
@@ -4098,7 +4113,10 @@ async fn status_payload_safety_net_adds_self_when_empty() {
     assert!(instances[0].is_self);
     assert_eq!(instances[0].pid, std::process::id());
     assert_eq!(instances[0].api_port, Some(3131));
-    assert_eq!(instances[0].version, Some(MESH_LLM_VERSION.to_string()));
+    assert_eq!(
+        instances[0].version,
+        Some(MESH_LLM_BUILD_VERSION.to_string())
+    );
 }
 
 #[test]

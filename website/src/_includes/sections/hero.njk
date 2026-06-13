@@ -16,15 +16,19 @@
           <code class="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs sm:text-sm">
             <span class="cmd">curl</span>
             <span class="flag">-fsSL</span>
-            <span class="value">https://mesh-llm.cloud/install.sh</span>
+            <span class="value">https://meshllm.cloud/install.sh</span>
             <span class="pipe">|</span>
-            <span class="cmd">sh</span>
+            <span class="cmd">bash</span>
           </code>
-          <button class="hero-copy inline-flex shrink-0 items-center justify-center p-0 text-muted hover:text-fg" type="button" data-copy-text="curl -fsSL https://mesh-llm.cloud/install.sh | sh" aria-label="Copy install command" title="Copy install command">
+          <button class="hero-copy inline-flex shrink-0 items-center justify-center p-0 text-muted hover:text-fg" type="button" data-copy-text="curl -fsSL https://meshllm.cloud/install.sh | bash" aria-label="Copy install command" title="Copy install command">
             <i data-lucide="copy" aria-hidden="true"></i>
           </button>
         </div>
-        <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh border border-line-soft px-4 text-sm font-semibold text-muted hover:text-fg" href="#topology">
+        <a class="hero-public inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="{{ site.publicMeshUrl }}">
+          <span>Public mesh</span>
+          <i data-lucide="share-2" aria-hidden="true"></i>
+        </a>
+        <a class="hero-learn inline-flex min-h-12 items-center justify-center gap-2 rounded-mesh px-4 text-sm font-semibold" href="#topology">
           <span>Learn more</span>
           <i data-lucide="arrow-down" aria-hidden="true"></i>
         </a>

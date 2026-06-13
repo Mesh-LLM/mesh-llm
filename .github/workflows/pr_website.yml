@@ -55,6 +55,7 @@ jobs:
           required=(
             docs/index.html
             docs/CNAME
+            docs/funding.json
             docs/install.sh
             docs/install.ps1
             docs/mesh-llm-logo.svg

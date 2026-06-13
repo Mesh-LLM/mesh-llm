@@ -3180,7 +3180,7 @@ fn write_runtime_owner_metadata(
     let owner_meta = serde_json::json!({
         "pid": std::process::id(),
         "api_port": console_port,
-        "version": crate::VERSION,
+        "version": crate::BUILD_VERSION,
         "started_at_unix": started_at,
         "mesh_llm_binary": std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
@@ -3569,13 +3569,13 @@ async fn run_runtime_cli(
         plugin_requested: options.plugin.is_some(),
         command_is_update: options.command_is_update,
         llama_flavor: options.llama_flavor,
-        current_version: crate::VERSION,
+        current_version: crate::BUILD_VERSION,
     })
     .await?;
 
     // Finish the release check before startup continues.
     if !checked_updates && !options.command_is_update && !options.command_uses_machine_output {
-        autoupdate::check_for_update(crate::VERSION).await;
+        autoupdate::check_for_update(crate::BUILD_VERSION).await;
     }
 
     let config = plugin::load_config(options.config.as_deref())?;

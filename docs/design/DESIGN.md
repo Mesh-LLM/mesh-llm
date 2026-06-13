@@ -12,30 +12,36 @@ need to be split across peers.
 
 ## Architecture
 
-```
-src/
-├── main.rs                  CLI args, orchestration (auto, idle, passive)
-├── lib.rs                   Crate root re-exports
+The workspace is split across many crates (see the root `AGENTS.md` for the
+full map). The shipped `mesh-llm` binary is a thin entry point: Clap parsing
+lives in `mesh-llm-cli`, one-shot command handlers in `mesh-llm-commands`, and
+the host-side runtime in `mesh-llm-host-runtime`, whose module layout carries
+most of the behavior described in this document:
+
+```text
+crates/mesh-llm-host-runtime/src/
+├── lib.rs                   Crate entry; runtime entrypoints called by the binary
 ├── api/                     Management API (:3131): status, models, search, events, discover
-├── cli/                     Clap types, command parsing, command handlers
 ├── crypto/                  Key management, envelope encryption, keychain
 ├── inference/
 │   ├── election.rs          Per-model host election and split planning
 │   ├── skippy/              Embedded staged runtime integration
+│   ├── virtual_llm.rs       Inter-model collaboration hooks
 │   └── pipeline.rs          Inference pipeline coordination
 ├── mesh/mod.rs              Node struct, QUIC endpoint, gossip, peer management, mesh identity
 ├── models/
 │   ├── capabilities.rs      Vision/audio/multimodal/reasoning capability inference
 │   ├── catalog.rs           Model catalog and HuggingFace downloads
-│   ├── resolve.rs           Model path resolution, mmproj lookup
+│   ├── resolve/             Model reference resolution, mmproj lookup
 │   └── ...                  GGUF parsing, inventory, search, topology
 ├── network/
 │   ├── proxy.rs             HTTP proxy: request parsing, model routing, response helpers
 │   ├── router.rs            Request classification, model scoring, multimodal routing
-│   ├── tunnel.rs            TCP ↔ QUIC relay (RPC + HTTP), B2B rewrite map
+│   ├── tunnel.rs            TCP ↔ QUIC relay, B2B tunnel map
 │   ├── nostr.rs             Nostr discovery, score_mesh(), smart_auto()
 │   ├── affinity.rs          Prefix-affinity request routing
-│   └── rewrite.rs           REGISTER_PEER interception and endpoint rewriting
+│   └── openai/              OpenAI transport glue
+├── plugin/                  Plugin host, runtime, transport, MCP bridge
 ├── plugins/
 │   └── blobstore/           Request-scoped media object storage for multimodal
 ├── protocol/                Wire protocol types, protobuf encoding/decoding
@@ -48,8 +54,8 @@ src/
 
 ```rust
 enum NodeRole {
-    Worker,                      // rpc-server, provides GPU compute
-    Host { http_port: u16 },     // llama-server + rpc-server, serves HTTP API
+    Worker,                      // provides staged GPU compute for a model
+    Host { http_port: u16 },     // runs the local serving runtime, serves HTTP API
     Client,                      // no compute, just API access via tunnel
 }
 ```
@@ -72,9 +78,9 @@ Single QUIC connection per peer, multiplexed by 1-byte prefix:
 | Byte | Type | Purpose | Format |
 |------|------|---------|--------|
 | 0x01 | GOSSIP | Peer announcements (role, serving, VRAM, models, explicit interest, demand, mesh_id) | protobuf `GossipFrame` |
-| 0x02 | TUNNEL_RPC | TCP relay to remote rpc-server | raw TCP relay |
+| 0x02 | TUNNEL | TCP relay for remote runtime compute traffic | raw TCP relay |
 | 0x03 | TUNNEL_MAP | B2B tunnel port map exchange | protobuf `TunnelMap` |
-| 0x04 | TUNNEL_HTTP | TCP relay to remote llama-server HTTP | raw TCP relay |
+| 0x04 | TUNNEL_HTTP | TCP relay to a remote node's HTTP API | raw TCP relay |
 | 0x05 | ROUTE_REQUEST | Routing table for passive nodes (hosts + models) | protobuf `RouteTableRequest` / `RouteTable` |
 | 0x06 | PEER_DOWN | Death broadcast (immediate, from any node that detects a death) | protobuf `PeerDown` |
 | 0x07 | PEER_LEAVING | Clean shutdown broadcast (ctrl-c) | protobuf `PeerLeaving` |
@@ -158,7 +164,7 @@ Changing mesh requirements creates a new mesh.
 ## Bootstrap Proxy
 
 When joining an existing mesh, a tunnel-only API proxy starts immediately on the
-local port — before rpc-server or llama-server are ready. Requests are tunneled to
+local port — before the local serving runtime is ready. Requests are tunneled to
 mesh hosts via QUIC. When the real `api_proxy` is ready, it takes over the listener.
 
 This gives instant API access (within seconds of `mesh-llm serve --join`) while the local
@@ -241,11 +247,14 @@ When a model requires splitting across nodes:
 
 ## B2B Direct Transfer
 
-When the model is split across workers, activation tensors flow directly
-between workers (1 hop) instead of through the host (2 hops):
-1. Each node broadcasts `{EndpointId → tunnel_port}` via `STREAM_TUNNEL_MAP`
-2. `rewrite.rs` intercepts `REGISTER_PEER` and rewrites ports for local tunnels
-3. llama.cpp's `PUSH_TENSOR_TO_PEER` goes directly between workers
+When the model is split across workers, activation data flows directly
+between workers (1 hop) instead of through the host (2 hops). Each node
+broadcasts `{EndpointId → tunnel_port}` via `STREAM_TUNNEL_MAP` so peers can
+open direct worker-to-worker tunnels. In the current embedded staged runtime,
+stage-to-stage activation traffic uses the Skippy binary stage transport over
+these direct paths; the legacy llama.cpp RPC rewrite path (`rewrite.rs`
+intercepting `REGISTER_PEER`) survives only in the `mesh-client` compatibility
+surface.
 
 ## Management API (port 3131)
 

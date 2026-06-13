@@ -11,7 +11,7 @@ Install Mesh on every Windows machine that should serve a model or call into a m
 Open PowerShell and run:
 
 ```powershell
-irm https://mesh-llm.cloud/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 
 Open a new terminal after install if the installer added Mesh to your `PATH`.
@@ -36,7 +36,7 @@ The installer auto-detects your GPU and selects the best bundle. Supported Windo
 Force a specific flavor:
 
 ```powershell
-& ([scriptblock]::Create((irm https://mesh-llm.cloud/install.ps1))) -Flavor cuda
+& ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -Flavor cuda
 ```
 
 ## What the installer does
@@ -48,13 +48,13 @@ The installer detects your Windows hardware, selects the matching release bundle
 Install the latest prerelease:
 
 ```powershell
-& ([scriptblock]::Create((irm https://mesh-llm.cloud/install.ps1))) -PreRelease
+& ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -PreRelease
 ```
 
 Install to a custom location:
 
 ```powershell
-& ([scriptblock]::Create((irm https://mesh-llm.cloud/install.ps1))) -InstallDir "$HOME\bin"
+& ([scriptblock]::Create((irm https://meshllm.cloud/install.ps1))) -InstallDir "$HOME\bin"
 ```
 
 ## Next step

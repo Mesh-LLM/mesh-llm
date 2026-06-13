@@ -745,8 +745,12 @@ fn resolve_runtime_version(repo_root: &Path) -> DynResult<String> {
 fn extract_runtime_version(repo_root: &Path, contents: &str) -> DynResult<String> {
     const LITERAL_PREFIX: &str = "pub const VERSION: &str = \"";
     const CARGO_PKG_VERSION: &str = "pub const VERSION: &str = env!(\"CARGO_PKG_VERSION\");";
+    const RELEASE_VERSION_ALIAS: &str = "pub const VERSION: &str = RELEASE_VERSION;";
     for line in contents.lines().map(str::trim) {
         if line == CARGO_PKG_VERSION {
+            return host_runtime_package_version(repo_root);
+        }
+        if line == RELEASE_VERSION_ALIAS {
             return host_runtime_package_version(repo_root);
         }
         if let Some(rest) = line.strip_prefix(LITERAL_PREFIX) {

@@ -6,7 +6,7 @@ primary_region = "syd"
 
 [build.args]
   NODE_ENV = "production"
-  VITE_API_URL = "https://meshllm.cloud"
+  VITE_API_URL = "https://public.meshllm.cloud"
   VITE_STORAGE_NAMESPACE = "mesh-llm-ui-production"
 
 [env]

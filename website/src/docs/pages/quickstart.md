@@ -12,24 +12,24 @@ Choose your platform for the fastest path:
 
 {% set macosQuick %}
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 {% endset %}
 {% set linuxQuick %}
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 {% endset %}
 {% set windowsQuick %}
 ```powershell
-irm https://mesh-llm.cloud/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 {% endset %}
 
 **macOS** &mdash; Metal (Apple Silicon):
 
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 Full guide: [Installing on macOS](/docs/pages/installing-macos/)
@@ -37,7 +37,7 @@ Full guide: [Installing on macOS](/docs/pages/installing-macos/)
 **Linux** &mdash; CUDA, ROCm, Vulkan, or CPU:
 
 ```sh
-curl -fsSL https://mesh-llm.cloud/install.sh | bash
+curl -fsSL https://meshllm.cloud/install.sh | bash
 ```
 
 Full guide: [Installing on Linux](/docs/pages/installing-linux/)
@@ -45,7 +45,7 @@ Full guide: [Installing on Linux](/docs/pages/installing-linux/)
 **Windows** &mdash; CUDA, ROCm, Vulkan, or CPU:
 
 ```powershell
-irm https://mesh-llm.cloud/install.ps1 | iex
+irm https://meshllm.cloud/install.ps1 | iex
 ```
 
 Full guide: [Installing on Windows](/docs/pages/installing-windows/)

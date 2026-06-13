@@ -192,6 +192,66 @@ function Configure-CompilerCache {
     )
 }
 
+function Set-BuildVersionStamp {
+    if ($env:MESH_LLM_BUILD_VERSION) {
+        Write-Host "Using preset MESH_LLM_BUILD_VERSION: $($env:MESH_LLM_BUILD_VERSION)"
+        return
+    }
+
+    $pkgid = $null
+    try {
+        Push-Location $repoRoot
+        $pkgid = (& cargo pkgid -p mesh-llm 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $pkgid) {
+            Write-Warning "Unable to derive build version; cargo pkgid unavailable."
+            Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+            return
+        }
+    } finally {
+        Pop-Location
+    }
+
+    $releaseVersion = $pkgid.Substring($pkgid.LastIndexOf('#') + 1)
+    if (-not $releaseVersion -or $releaseVersion -eq $pkgid) {
+        Write-Warning "Unable to derive build version; cargo pkgid output was unexpected."
+        Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+        return
+    }
+
+    $sha = $null
+    try {
+        $sha = (& git -C $repoRoot rev-parse --short=6 HEAD 2>$null).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $sha) {
+            Write-Warning "Unable to derive build version; git SHA unavailable."
+            Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+            return
+        }
+    } catch {
+        Write-Warning "Unable to derive build version; git SHA unavailable."
+        Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+        return
+    }
+    $sha = $sha.ToUpperInvariant()
+
+    $statusOutput = $null
+    try {
+        $statusOutput = (& git -C $repoRoot status --porcelain --untracked-files=all 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Unable to derive build version; git status unavailable."
+            Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+            return
+        }
+    } catch {
+        Write-Warning "Unable to derive build version; git status unavailable."
+        Remove-Item Env:MESH_LLM_BUILD_VERSION -ErrorAction SilentlyContinue
+        return
+    }
+
+    $dirtySuffix = if ($statusOutput) { ".dirty" } else { "" }
+    $env:MESH_LLM_BUILD_VERSION = "$releaseVersion+g$sha$dirtySuffix"
+    Write-Host "Derived MESH_LLM_BUILD_VERSION: $($env:MESH_LLM_BUILD_VERSION)"
+}
+
 function Test-Sccache {
     return $compilerCacheBin -and ((Split-Path -Leaf $compilerCacheBin).ToLowerInvariant() -like "sccache*")
 }
@@ -977,6 +1037,19 @@ Invoke-InRepo {
         "-DGGML_HIP=OFF",
         "-DGGML_VULKAN=OFF",
         "-DGGML_OPENMP=ON",
+        # Do not optimize for the build runner's CPU. windows-2025 runners can
+        # expose AVX-512 / AVX-VNNI / BMI2 that consumer desktops (e.g. Alder
+        # Lake i5/i7) lack; a GGML_NATIVE build then crashes with
+        # STATUS_ILLEGAL_INSTRUCTION (0xC000001D) on those machines the moment a
+        # ggml compute kernel runs. Pin GGML_NATIVE=OFF (matching the Linux and
+        # macOS builds in scripts/build-llama.sh) and select a portable AVX2
+        # baseline, which every x86-64 CPU since ~2013 supports. On MSVC, F16C
+        # and FMA are implied by AVX2.
+        "-DGGML_NATIVE=OFF",
+        "-DGGML_AVX=ON",
+        "-DGGML_AVX2=ON",
+        "-DGGML_AVX512=OFF",
+        "-DGGML_BMI2=OFF",
         "-DBUILD_SHARED_LIBS=OFF",
         "-DLLAMA_CURL=OFF",
         "-DLLAMA_BUILD_EXAMPLES=OFF",
@@ -1078,6 +1151,7 @@ Invoke-InRepo {
         "cuda" { $cargoFeatureArgs = @("--features", "gpu-bench-cuda") }
         "rocm" { $cargoFeatureArgs = @("--features", "gpu-bench-hip") }
     }
+    Set-BuildVersionStamp
     switch ($buildProfile) {
         "dev" {
             Invoke-NativeCommand "cargo" (@("build", "-p", "mesh-llm", "--bin", "mesh-llm") + $cargoFeatureArgs)

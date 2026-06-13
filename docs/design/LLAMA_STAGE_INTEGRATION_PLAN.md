@@ -1,5 +1,15 @@
 # llama-stage-runtime Integration Plan
 
+## Status: completed — historical plan
+
+This migration has shipped. mesh-llm now embeds the staged (Skippy) runtime
+behind the C ABI, built from the upstream llama.cpp pin plus the patch queue in
+`third_party/llama.cpp/patches` (pinned by `third_party/llama.cpp/upstream.txt`).
+The external `llama-server` / `rpc-server` runtime lane described below as
+"Current State" no longer exists and must not be reintroduced. Keep this
+document as background for why the patch queue and embedded ABI are shaped the
+way they are; do not treat its "current state" sections as current.
+
 ## Purpose
 
 Track the planned integration of `/Users/jdumay/code/llama-stage-runtime` into

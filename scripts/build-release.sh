@@ -18,6 +18,50 @@ append_rustflag() {
     esac
 }
 
+stamp_build_version() {
+    local release_version=""
+    local pkgid=""
+    local sha=""
+    local dirty_suffix=""
+    local status_output=""
+
+    if [[ -n "${MESH_LLM_BUILD_VERSION:-}" ]]; then
+        echo "Using preset MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+        return 0
+    fi
+
+    if ! pkgid="$(cd "$REPO_ROOT" && cargo pkgid -p mesh-llm 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; cargo pkgid unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    release_version="${pkgid##*#}"
+    if [[ -z "$release_version" || "$release_version" == "$pkgid" ]]; then
+        echo "Warning: unable to derive build version; cargo pkgid output was unexpected." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+
+    if ! sha="$(git -C "$REPO_ROOT" rev-parse --short=6 HEAD 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; git SHA unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    sha="$(printf '%s' "$sha" | tr '[:lower:]' '[:upper:]')"
+
+    if ! status_output="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all 2>/dev/null)"; then
+        echo "Warning: unable to derive build version; git status unavailable." >&2
+        unset MESH_LLM_BUILD_VERSION || true
+        return 0
+    fi
+    if [[ -n "$status_output" ]]; then
+        dirty_suffix=".dirty"
+    fi
+
+    export MESH_LLM_BUILD_VERSION="${release_version}+g${sha}${dirty_suffix}"
+    echo "Derived MESH_LLM_BUILD_VERSION: $MESH_LLM_BUILD_VERSION"
+}
+
 configure_lld_linker() {
     case "$(uname -s)" in
         Linux)
@@ -133,4 +177,5 @@ cargo_features=()
 if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
     cargo_features=(--features dynamic-native-runtime)
 fi
+stamp_build_version
 (cd "$REPO_ROOT" && cargo build --release --locked -p mesh-llm "${cargo_features[@]}")

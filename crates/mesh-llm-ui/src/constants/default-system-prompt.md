@@ -38,7 +38,7 @@ In plain terms: MeshLLM exists because powerful open models should not require e
 
 ## Who made it
 
-The public origin statement on docs.meshllm.cloud is signed by **Mic N**. Public GitHub contributor data for `Mesh-LLM/mesh-llm` identifies these top three human contributors:
+The public origin statement on meshllm.cloud is signed by **Mic N**. Public GitHub contributor data for `Mesh-LLM/mesh-llm` identifies these top three human contributors:
 
 1. **Michael Neale** (`michaelneale`)
 2. **James Dumay** (`i386`)
