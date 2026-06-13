@@ -129,6 +129,15 @@ EOF
     esac
 }
 
+configure_rust_cache() {
+    if [[ -n "${RUSTC_WRAPPER:-}" ]]; then
+        echo "Using Rust compiler wrapper: $RUSTC_WRAPPER"
+    elif command -v sccache >/dev/null 2>&1; then
+        export RUSTC_WRAPPER="$(command -v sccache)"
+        echo "Using Rust compiler wrapper: $RUSTC_WRAPPER"
+    fi
+}
+
 os_name="$(uname -s)"
 case "$os_name" in
     Darwin)
@@ -155,6 +164,7 @@ if [[ -z "${LLAMA_STAGE_BUILD_DIR:-}" ]]; then
 fi
 
 configure_lld_linker
+configure_rust_cache
 
 if [[ "$DYNAMIC_NATIVE_RUNTIME" == "1" ]]; then
     echo "Skipping embedded llama.cpp ABI build; release binary will load native runtimes dynamically."

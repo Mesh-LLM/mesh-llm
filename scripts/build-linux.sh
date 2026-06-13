@@ -94,6 +94,15 @@ EOF
     echo "Using Rust linker: $(command -v ld.lld)"
 }
 
+configure_rust_cache() {
+    if [[ -n "${RUSTC_WRAPPER:-}" ]]; then
+        echo "Using Rust compiler wrapper: $RUSTC_WRAPPER"
+    elif command -v sccache >/dev/null 2>&1; then
+        export RUSTC_WRAPPER="$(command -v sccache)"
+        echo "Using Rust compiler wrapper: $RUSTC_WRAPPER"
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --clean)
@@ -265,6 +274,7 @@ if [[ "$CLEAN" -eq 1 ]]; then
 fi
 
 configure_lld_linker
+configure_rust_cache
 
 echo "Preparing patched llama.cpp ABI checkout..."
 LLAMA_WORKDIR="$LLAMA_DIR" "$SCRIPT_DIR/prepare-llama.sh" "${MESH_LLM_LLAMA_PIN_SHA:-pinned}"
