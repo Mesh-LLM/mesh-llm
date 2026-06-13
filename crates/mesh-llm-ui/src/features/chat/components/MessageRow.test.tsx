@@ -253,6 +253,24 @@ describe('MessageRow', () => {
     expect(screen.getByText('The capital of France is Paris.')).toBeInTheDocument()
   })
 
+  it('moves Gemma channel thinking into the trace before rendering the final response', () => {
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body="<|channel|>thoughtCheck whether the prompt is a test.<channel|>Test received!"
+        timestamp="12:11"
+        model="unsloth/gemma-4-31B-it-GGUF:UD-Q8_K_XL"
+      />
+    )
+
+    expect(screen.getByText('Thinking trace').closest('[data-thinking-state="complete"]')).toHaveTextContent(
+      'Check whether the prompt is a test.'
+    )
+    expect(screen.getByText('Test received!').closest('.select-text')).toBeInTheDocument()
+    expect(screen.queryByText(/<\|channel\|>thought/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/<channel\|>/)).not.toBeInTheDocument()
+  })
+
   it('formats final assistant response text as markdown', () => {
     render(
       <MessageRow

@@ -13,8 +13,15 @@ type SplitAssistantThinkingOptions = {
   streaming?: boolean
 }
 
+type TagMatch = {
+  index: number
+  tag: string
+}
+
 const THINK_OPEN_TAG = '<think>'
 const THINK_CLOSE_TAG = '</think>'
+const GEMMA_THOUGHT_CHANNEL_TAGS = ['<|channel|>thought', '<channel|>thought']
+const GEMMA_CHANNEL_BOUNDARY_TAGS = ['<|channel|>', '<channel|>']
 
 function indexOfTag(value: string, tag: string, fromIndex: number) {
   for (let index = fromIndex; index <= value.length - tag.length; index += 1) {
@@ -24,11 +31,66 @@ function indexOfTag(value: string, tag: string, fromIndex: number) {
   return -1
 }
 
+function findFirstTag(value: string, tags: string[], fromIndex: number): TagMatch | null {
+  let bestMatch: TagMatch | null = null
+
+  for (const tag of tags) {
+    const index = indexOfTag(value, tag, fromIndex)
+    if (index === -1) continue
+    if (bestMatch === null || index < bestMatch.index) {
+      bestMatch = { index, tag }
+    }
+  }
+
+  return bestMatch
+}
+
+function splitGemmaChannelThinking(body: string): AssistantContentSegment[] | null {
+  if (findFirstTag(body, GEMMA_THOUGHT_CHANNEL_TAGS, 0) === null) return null
+
+  const segments: AssistantContentSegment[] = []
+  let cursor = 0
+
+  while (cursor < body.length) {
+    const open = findFirstTag(body, GEMMA_THOUGHT_CHANNEL_TAGS, cursor)
+    if (open === null) {
+      const responseText = body.slice(cursor)
+      if (responseText.length > 0) {
+        segments.push({ kind: 'response', text: responseText })
+      }
+      break
+    }
+
+    const responseText = body.slice(cursor, open.index)
+    if (responseText.length > 0) {
+      segments.push({ kind: 'response', text: responseText })
+    }
+
+    const thinkingStart = open.index + open.tag.length
+    const nextChannel = findFirstTag(body, GEMMA_CHANNEL_BOUNDARY_TAGS, thinkingStart)
+    if (nextChannel === null) {
+      segments.push({ kind: 'thinking', text: body.slice(thinkingStart), open: true })
+      break
+    }
+
+    const thinkingText = body.slice(thinkingStart, nextChannel.index)
+    if (thinkingText.length > 0) {
+      segments.push({ kind: 'thinking', text: thinkingText, open: false })
+    }
+    cursor = nextChannel.index + nextChannel.tag.length
+  }
+
+  return segments
+}
+
 export function splitAssistantThinking(
   body: string,
   { streaming = false }: SplitAssistantThinkingOptions = {}
 ): AssistantContentSegment[] {
   if (body.length === 0) return []
+
+  const gemmaSegments = splitGemmaChannelThinking(body)
+  if (gemmaSegments !== null) return gemmaSegments
 
   const segments: AssistantContentSegment[] = []
   let cursor = 0
