@@ -1,3 +1,8 @@
+use super::direct_path::{
+    DIRECT_PATH_REPAIR_COOLDOWN_SECS, DIRECT_PATH_REPAIR_GRACE_SECS,
+    DirectPathMaintenanceController, DirectPathObservation, DirectPathRepairReason,
+    endpoint_addr_with_previously_advertised_direct_candidates,
+};
 use super::heartbeat::{
     HeartbeatFailurePolicy, HomeRelayStatusTransition, RELAY_DEGRADED_RTT_MS,
     RELAY_MISSING_GRACE_SECS, RELAY_ONLY_RECONNECT_SECS, RELAY_RECONNECT_COOLDOWN_SECS,
@@ -223,7 +228,7 @@ fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidate
         "https://relay.example.com".parse().unwrap(),
     ));
 
-    let filtered = filter_endpoint_addr_for_bind_ip(addr, Some("10.1.2.3".parse().unwrap()));
+    let filtered = filter_endpoint_addr_for_bind_ip(addr, Some("10.1.2.3".parse().unwrap()), true);
     let ip_addrs: HashSet<_> = filtered
         .addrs
         .iter()
@@ -238,6 +243,40 @@ fn endpoint_addr_filter_for_bind_ip_keeps_selected_ip_relay_and_public_candidate
     assert!(!ip_addrs.contains("172.23.0.1:47916"));
     assert!(!ip_addrs.contains("100.107.22.123:47916"));
     assert!(!ip_addrs.contains("192.168.1.20:47916"));
+    assert!(
+        filtered
+            .addrs
+            .iter()
+            .any(|addr| matches!(addr, iroh::TransportAddr::Relay(_)))
+    );
+}
+
+#[test]
+fn endpoint_addr_filter_for_lan_only_bind_ip_strips_public_candidates() {
+    let mut addr = EndpointAddr {
+        id: make_test_endpoint_id(0x42),
+        addrs: Default::default(),
+    };
+    addr.addrs
+        .insert(iroh::TransportAddr::Ip("10.1.2.3:47916".parse().unwrap()));
+    addr.addrs.insert(iroh::TransportAddr::Ip(
+        "35.199.1.10:47916".parse().unwrap(),
+    ));
+    addr.addrs.insert(iroh::TransportAddr::Relay(
+        "https://relay.example.com".parse().unwrap(),
+    ));
+
+    let filtered = filter_endpoint_addr_for_bind_ip(addr, Some("10.1.2.3".parse().unwrap()), false);
+    let ip_addrs: HashSet<_> = filtered
+        .addrs
+        .iter()
+        .filter_map(|addr| match addr {
+            iroh::TransportAddr::Ip(socket) => Some(socket.to_string()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(ip_addrs, HashSet::from(["10.1.2.3:47916".to_string()]));
     assert!(
         filtered
             .addrs
@@ -326,6 +365,7 @@ async fn make_test_node_with_requirements(
         endpoint_secret_key,
         public_addr: None,
         quic_bind: QuicBindSelection::default(),
+        relay_policy: RelayPolicy::DefaultPublic,
         owner_keypair: None,
         local_mesh_requirements,
         state: Arc::new(Mutex::new(MeshState {
@@ -334,6 +374,7 @@ async fn make_test_node_with_requirements(
             remote_tunnel_maps: HashMap::new(),
             dead_peers: HashMap::new(),
             peer_down_rejections: HashMap::new(),
+            direct_path_request_last_at: HashMap::new(),
             seen_plugin_messages: HashMap::new(),
             seen_plugin_message_order: VecDeque::new(),
             policy_rejected_peers: HashMap::new(),
@@ -3111,6 +3152,130 @@ fn relay_reconnect_controller_applies_cooldown_after_attempt_and_prunes_gone_pee
     assert!(
         controller.peer_health(peer).is_none(),
         "controller should prune peers that are no longer active"
+    );
+}
+
+#[test]
+fn direct_path_maintenance_requires_candidate_and_grace_period() {
+    let now = std::time::Instant::now();
+    let peer = make_test_endpoint_id(31);
+    let mut controller = DirectPathMaintenanceController::default();
+    let relay_observation = DirectPathObservation {
+        peer_id: peer,
+        snapshot: RelayPathSnapshot {
+            kind: SelectedPathKind::Relay,
+            rtt_ms: Some(200),
+        },
+        has_direct_candidate: true,
+    };
+
+    assert_eq!(
+        controller.plan_request([relay_observation], now, 0),
+        None,
+        "first non-direct observation starts the grace timer"
+    );
+    assert_eq!(
+        controller.plan_request(
+            [relay_observation],
+            now + std::time::Duration::from_secs(DIRECT_PATH_REPAIR_GRACE_SECS + 2),
+            0,
+        ),
+        Some((peer, DirectPathRepairReason::RelaySelected))
+    );
+
+    let mut no_candidate_controller = DirectPathMaintenanceController::default();
+    assert_eq!(
+        no_candidate_controller.plan_request(
+            [DirectPathObservation {
+                has_direct_candidate: false,
+                ..relay_observation
+            }],
+            now + std::time::Duration::from_secs(DIRECT_PATH_REPAIR_GRACE_SECS + 1),
+            0,
+        ),
+        None,
+        "without a direct candidate there is nothing useful to request"
+    );
+}
+
+#[test]
+fn direct_path_maintenance_cooldown_and_inflight_suppress_requests() {
+    let now = std::time::Instant::now();
+    let peer = make_test_endpoint_id(32);
+    let mut controller = DirectPathMaintenanceController::default();
+    let observation = DirectPathObservation {
+        peer_id: peer,
+        snapshot: RelayPathSnapshot {
+            kind: SelectedPathKind::Unknown,
+            rtt_ms: None,
+        },
+        has_direct_candidate: true,
+    };
+
+    assert_eq!(controller.plan_request([observation], now, 1), None);
+    assert!(
+        controller
+            .peer_health(peer)
+            .and_then(|health| health.non_direct_since)
+            .is_some(),
+        "active requests suppress repair but still record path state"
+    );
+
+    let ready_at = now + std::time::Duration::from_secs(DIRECT_PATH_REPAIR_GRACE_SECS + 1);
+    assert_eq!(
+        controller.plan_request([observation], ready_at, 0),
+        Some((peer, DirectPathRepairReason::UnknownSelected))
+    );
+    controller.record_request_attempt(peer, ready_at);
+    assert_eq!(
+        controller.plan_request(
+            [observation],
+            ready_at + std::time::Duration::from_secs(DIRECT_PATH_REPAIR_COOLDOWN_SECS - 1),
+            0,
+        ),
+        None,
+        "cooldown prevents repeated reverse-dial requests"
+    );
+}
+
+#[test]
+fn direct_path_request_keeps_only_previously_advertised_direct_candidates() {
+    let peer_id = make_test_endpoint_id(33);
+    let advertised_direct = TransportAddr::Ip("10.0.0.7:47916".parse().unwrap());
+    let unadvertised_direct = TransportAddr::Ip("10.0.0.99:47916".parse().unwrap());
+    let advertised_relay = TransportAddr::Relay("https://relay.example.com".parse().unwrap());
+
+    let mut advertised = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    advertised.addrs.insert(advertised_direct.clone());
+    advertised.addrs.insert(advertised_relay.clone());
+
+    let mut requested = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    requested.addrs.insert(advertised_direct.clone());
+    requested.addrs.insert(unadvertised_direct.clone());
+    requested.addrs.insert(advertised_relay.clone());
+
+    let filtered =
+        endpoint_addr_with_previously_advertised_direct_candidates(requested, &advertised)
+            .expect("the previously advertised direct candidate should be kept");
+    assert!(filtered.addrs.contains(&advertised_direct));
+    assert!(!filtered.addrs.contains(&unadvertised_direct));
+    assert!(!filtered.addrs.contains(&advertised_relay));
+
+    let mut unknown_only = EndpointAddr {
+        id: peer_id,
+        addrs: Default::default(),
+    };
+    unknown_only.addrs.insert(unadvertised_direct);
+    assert!(
+        endpoint_addr_with_previously_advertised_direct_candidates(unknown_only, &advertised)
+            .is_none(),
+        "requests with only unknown direct candidates must not trigger reverse dials"
     );
 }
 

@@ -976,6 +976,9 @@ impl Node {
         state
             .peer_down_rejections
             .retain(|_, ts| ts.elapsed().as_secs() < PEER_DOWN_REPORTER_COOLDOWN_SECS);
+        state.direct_path_request_last_at.retain(|_, ts| {
+            ts.elapsed().as_secs() < super::direct_path::DIRECT_PATH_REQUEST_COOLDOWN_SECS
+        });
         expired_dead_peers
     }
 

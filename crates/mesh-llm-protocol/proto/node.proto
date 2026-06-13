@@ -352,6 +352,13 @@ message PeerLeaving {
   uint32 gen = 2;      // must equal NODE_PROTOCOL_GENERATION; rejected otherwise
 }
 
+// Stream 0x0e — Direct Path Request
+message DirectPathRequest {
+  bytes requester_id = 1;      // exactly 32 bytes; must match the QUIC sender identity
+  uint32 gen = 2;              // must equal NODE_PROTOCOL_GENERATION; rejected otherwise
+  bytes serialized_addr = 3;   // JSON-serialized EndpointAddr the receiver should try to dial
+}
+
 // Shared enum
 enum NodeRole {
   NODE_ROLE_UNSPECIFIED = 0;

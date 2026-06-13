@@ -5765,6 +5765,7 @@ pub(crate) async fn run_plugin_mcp(options: &RuntimeOptions) -> Result<()> {
         .await;
     node.start_heartbeat();
     node.start_rtt_refresh();
+    node.start_direct_path_maintenance();
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
     join_mesh_for_mcp(options, &node).await?;
 
@@ -6132,6 +6133,7 @@ async fn build_run_auto_node_setup(
     node.set_available_models(local_models.clone()).await;
     node.start_heartbeat();
     node.start_rtt_refresh();
+    node.start_direct_path_maintenance();
     start_relay_health_monitor_for_discovery_mode(&node, options.mesh_discovery_mode);
 
     if !is_client {

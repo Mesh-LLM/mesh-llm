@@ -462,6 +462,19 @@ pub struct PeerLeaving {
     #[prost(uint32, tag = "2")]
     pub r#gen: u32,
 }
+/// Stream 0x0e — Direct Path Request
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DirectPathRequest {
+    /// exactly 32 bytes; must match the QUIC sender identity
+    #[prost(bytes = "vec", tag = "1")]
+    pub requester_id: ::prost::alloc::vec::Vec<u8>,
+    /// must equal NODE_PROTOCOL_GENERATION; rejected otherwise
+    #[prost(uint32, tag = "2")]
+    pub r#gen: u32,
+    /// JSON-serialized EndpointAddr the receiver should try to dial
+    #[prost(bytes = "vec", tag = "3")]
+    pub serialized_addr: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NodeConfigSnapshot {
     /// config schema version (currently 1)
