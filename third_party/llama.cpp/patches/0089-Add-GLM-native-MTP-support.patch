@@ -1,0 +1,607 @@
+From 928b982ab33185d9b99266aaf50fee7d6855f15e Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Sat, 13 Jun 2026 12:28:34 +1000
+Subject: [PATCH 89/89] Add GLM native MTP support
+
+---
+ conversion/glm.py                   |  11 ++
+ gguf-py/gguf/tensor_mapping.py      |   1 +
+ scripts/check-glm51-mtp-metadata.py | 110 +++++++++++
+ src/llama-context.cpp               |  15 +-
+ src/llama-model.cpp                 |   8 +
+ src/models/deepseek2.cpp            | 280 +++++++++++++++++++++++++++-
+ src/models/glm-dsa.cpp              |  12 +-
+ src/models/models.h                 |   5 +
+ 8 files changed, 432 insertions(+), 10 deletions(-)
+ create mode 100755 scripts/check-glm51-mtp-metadata.py
+
+diff --git a/conversion/glm.py b/conversion/glm.py
+index 64193772..87d443fe 100644
+--- a/conversion/glm.py
++++ b/conversion/glm.py
+@@ -204,10 +204,21 @@ class Glm4MoeModel(TextModel):
+ @ModelBase.register("Glm4MoeLiteForCausalLM")
+ class Glm4MoeLiteModel(DeepseekV2Model):
+     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
++    skip_mtp = False
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
++        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+ 
+     def set_vocab(self):
+         return self._set_vocab_glm()
+ 
++    def set_gguf_parameters(self):
++        super().set_gguf_parameters()
++        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
++            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
++
+ 
+ @ModelBase.register("GlmMoeDsaForCausalLM")
+ class GlmMoeDsaModel(DeepseekV2Model):
+diff --git a/gguf-py/gguf/tensor_mapping.py b/gguf-py/gguf/tensor_mapping.py
+index 5f1e2881..0b1614a9 100644
+--- a/gguf-py/gguf/tensor_mapping.py
++++ b/gguf-py/gguf/tensor_mapping.py
+@@ -470,6 +470,7 @@ class TensorNameMap:
+ 
+         MODEL_TENSOR.FFN_EXP_PROBS_B: (
+             "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
++            "model.layers.{bid}.mlp.gate.e_score_correction_bias",          # glm-dsa
+             "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
+             "model.layers.{bid}.mlp.gate.expert_bias",                      # bailingmoe2
+             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
+diff --git a/scripts/check-glm51-mtp-metadata.py b/scripts/check-glm51-mtp-metadata.py
+new file mode 100755
+index 00000000..208b46b9
+--- /dev/null
++++ b/scripts/check-glm51-mtp-metadata.py
+@@ -0,0 +1,110 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++
++def load_json(path: Path) -> dict:
++    with path.open("r", encoding="utf-8") as f:
++        return json.load(f)
++
++
++def import_gguf(repo: Path):
++    sys.path.insert(0, str(repo / "gguf-py"))
++    import gguf  # type: ignore
++
++    return gguf
++
++
++def map_name(tensor_map, name: str) -> str | None:
++    return tensor_map.get_name(name, try_suffixes=(".weight", ".bias"))
++
++
++def require(condition: bool, message: str, failures: list[str]) -> None:
++    if not condition:
++        failures.append(message)
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Validate GLM-5.1 native MTP metadata and GGUF tensor mapping.")
++    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1], help="llama.cpp checkout")
++    parser.add_argument("--meta-dir", type=Path, default=Path("/tmp/glm51-meta"), help="directory with config and safetensor index")
++    args = parser.parse_args()
++
++    config = load_json(args.meta_dir / "config.json")
++    index = load_json(args.meta_dir / "model.safetensors.index.json")
++    weight_names = set(index["weight_map"].keys())
++
++    gguf = import_gguf(args.repo)
++    block_count = int(config["num_hidden_layers"]) + int(config.get("num_nextn_predict_layers", 0))
++    tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.GLM_DSA, block_count)
++
++    failures: list[str] = []
++
++    require(config.get("architectures") == ["GlmMoeDsaForCausalLM"], "unexpected architectures", failures)
++    require(config.get("model_type") == "glm_moe_dsa", "unexpected model_type", failures)
++    require(config.get("num_hidden_layers") == 78, "unexpected num_hidden_layers", failures)
++    require(config.get("num_nextn_predict_layers") == 1, "unexpected num_nextn_predict_layers", failures)
++
++    mtp_layer = int(config["num_hidden_layers"])
++    require(f"model.layers.{mtp_layer}.eh_proj.weight" in weight_names, "missing MTP eh_proj", failures)
++    require(f"model.layers.{mtp_layer}.enorm.weight" in weight_names, "missing MTP enorm", failures)
++    require(f"model.layers.{mtp_layer}.hnorm.weight" in weight_names, "missing MTP hnorm", failures)
++    require(f"model.layers.{mtp_layer}.shared_head.norm.weight" in weight_names, "missing MTP shared head norm", failures)
++    require(f"model.layers.{mtp_layer}.embed_tokens.weight" not in weight_names, "unexpected MTP-specific embed_tokens", failures)
++    require(f"model.layers.{mtp_layer}.shared_head.head.weight" not in weight_names, "unexpected MTP-specific shared head", failures)
++
++    expected_mappings = {
++        f"model.layers.{mtp_layer}.eh_proj.weight": f"blk.{mtp_layer}.nextn.eh_proj.weight",
++        f"model.layers.{mtp_layer}.enorm.weight": f"blk.{mtp_layer}.nextn.enorm.weight",
++        f"model.layers.{mtp_layer}.hnorm.weight": f"blk.{mtp_layer}.nextn.hnorm.weight",
++        f"model.layers.{mtp_layer}.shared_head.norm.weight": f"blk.{mtp_layer}.nextn.shared_head_norm.weight",
++        f"model.layers.{mtp_layer}.input_layernorm.weight": f"blk.{mtp_layer}.attn_norm.weight",
++        f"model.layers.{mtp_layer}.self_attn.indexer.k_norm.weight": f"blk.{mtp_layer}.indexer.k_norm.weight",
++        f"model.layers.{mtp_layer}.self_attn.indexer.k_norm.bias": f"blk.{mtp_layer}.indexer.k_norm.bias",
++        f"model.layers.{mtp_layer}.self_attn.indexer.weights_proj.weight": f"blk.{mtp_layer}.indexer.proj.weight",
++        f"model.layers.{mtp_layer}.self_attn.indexer.wk.weight": f"blk.{mtp_layer}.indexer.attn_k.weight",
++        f"model.layers.{mtp_layer}.self_attn.indexer.wq_b.weight": f"blk.{mtp_layer}.indexer.attn_q_b.weight",
++        f"model.layers.{mtp_layer}.mlp.gate.weight": f"blk.{mtp_layer}.ffn_gate_inp.weight",
++        f"model.layers.{mtp_layer}.mlp.gate.e_score_correction_bias": f"blk.{mtp_layer}.exp_probs_b",
++        f"model.layers.{mtp_layer}.mlp.shared_experts.down_proj.weight": f"blk.{mtp_layer}.ffn_down_shexp.weight",
++        f"model.layers.{mtp_layer}.mlp.shared_experts.gate_proj.weight": f"blk.{mtp_layer}.ffn_gate_shexp.weight",
++        f"model.layers.{mtp_layer}.mlp.shared_experts.up_proj.weight": f"blk.{mtp_layer}.ffn_up_shexp.weight",
++    }
++
++    for src, expected in expected_mappings.items():
++        require(src in weight_names, f"missing source tensor {src}", failures)
++        actual = map_name(tensor_map, src)
++        require(actual == expected, f"mapping mismatch {src}: expected {expected}, got {actual}", failures)
++
++    expert_src = f"model.layers.{mtp_layer}.mlp.experts.down_proj.weight"
++    expert_expected = f"blk.{mtp_layer}.ffn_down_exps.weight"
++    expert_actual = map_name(tensor_map, expert_src)
++    require(expert_actual == expert_expected, f"merged expert mapping mismatch: expected {expert_expected}, got {expert_actual}", failures)
++
++    print(f"repo={args.repo}")
++    print(f"meta_dir={args.meta_dir}")
++    print(f"architecture={config['architectures'][0]}")
++    print(f"model_type={config['model_type']}")
++    print(f"trunk_layers={config['num_hidden_layers']}")
++    print(f"nextn_layers={config.get('num_nextn_predict_layers', 0)}")
++    print(f"total_blocks={block_count}")
++    print(f"mtp_layer={mtp_layer}")
++    print(f"tensor_count={len(weight_names)}")
++    print(f"source_total_size={index.get('metadata', {}).get('total_size')}")
++
++    if failures:
++        print("status=FAIL")
++        for failure in failures:
++            print(f"failure={failure}")
++        return 1
++
++    print("status=PASS")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 87f75b94..5cf50e6c 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1972,9 +1972,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
+ 
+                 const uint32_t n_embd  = hparams.n_embd_out();
+                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
++                const size_t n_bytes = (size_t) n_rows*n_embd*sizeof(float);
+ 
+                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
+-                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
++                if (n_bytes > ggml_nbytes(t_h_nextn)) {
++                    LLAMA_LOG_ERROR(
++                        "%s: nextn embedding tensor is too small: masked=%d, n_rows=%lld, offset=%lld, "
++                        "n_embd=%u, want=%zu bytes, have=%zu bytes, ne=[%lld, %lld, %lld, %lld], "
++                        "ubatch.n_tokens=%u, n_outputs=%d, n_outputs_prev=%lld, n_tokens_prev=%lld\n",
++                        __func__, (int) masked, (long long) n_rows, (long long) offset,
++                        n_embd, n_bytes, ggml_nbytes(t_h_nextn),
++                        (long long) t_h_nextn->ne[0], (long long) t_h_nextn->ne[1],
++                        (long long) t_h_nextn->ne[2], (long long) t_h_nextn->ne[3],
++                        ubatch.n_tokens, n_outputs, (long long) n_outputs_prev, (long long) n_tokens_prev);
++                    return -3;
++                }
++                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_bytes);
+             }
+         }
+ 
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index a1dc66c6..869f80b6 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -2147,6 +2147,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params,
+                         }
+                     }
+ 
++                    if ((arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_GLM_DSA) && hparams.n_layer_nextn > 0) {
++                        if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
++                            filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
++                        } else {
++                            filter = [&](uint32_t il) { return il <  hparams.n_layer(); };
++                        }
++                    }
++
+                     if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                         GGML_ASSERT(hparams.is_swa_any());
+ 
+diff --git a/src/models/deepseek2.cpp b/src/models/deepseek2.cpp
+index d1b261b4..b71fc076 100644
+--- a/src/models/deepseek2.cpp
++++ b/src/models/deepseek2.cpp
+@@ -20,6 +20,9 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
+     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm, false);
+     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func, false);
++    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,       hparams.n_layer_nextn, false);
++    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_impl");
++
+     if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
+         // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
+         // that have no expert_gating_func model parameter set
+@@ -81,7 +84,7 @@ void llama_model_deepseek2::load_arch_tensors(llama_model_loader &) {
+         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+     }
+ 
+-    for (int i = 0; i < n_layer; ++i) {
++    for (int i = 0; i < n_layer_all; ++i) {
+         auto & layer = layers[i];
+ 
+         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+@@ -136,10 +139,23 @@ void llama_model_deepseek2::load_arch_tensors(llama_model_loader &) {
+             layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
+             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+         }
++
++        if (i >= n_layer) {
++            layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), {2 * n_embd, n_embd}, 0);
++            layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), {n_embd},            0);
++            layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), {n_embd},            0);
++            layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), {n_embd, n_vocab},   TENSOR_NOT_REQUIRED);
++            layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab},   TENSOR_NOT_REQUIRED);
++            layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd},            TENSOR_NOT_REQUIRED);
++        }
+     }
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_deepseek2::build_arch_graph(const llm_graph_params & params) const {
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        return std::make_unique<graph_mtp>(*this, params);
++    }
++
+     return std::make_unique<graph>(*this, params);
+ }
+ 
+@@ -371,7 +387,7 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+             }
+         }
+-        if (il == il_end - 1 && inp_out_ids) {
++        if (il == il_end - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
+             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+         }
+@@ -429,6 +445,13 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+     }
+     cur = inpL;
+ 
++    cb(cur, "h_nextn", -1);
++    res->t_h_nextn = cur;
++
++    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
++        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
++    }
++
+     if (stage_filtered && !stage_filter.include_output) {
+         cb(cur, "stage_boundary", il_end - 1);
+         res->t_embd = cur;
+@@ -449,3 +472,256 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
+ 
+     ggml_build_forward_expand(gf, cur);
+ }
++
++llama_model_deepseek2::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
++    llm_graph_context(params) {
++    GGML_ASSERT(model.arch != LLM_ARCH_DEEPSEEK2OCR && "DEEPSEEK2 OCR MTP is not supported");
++    GGML_ASSERT(hparams.n_layer_nextn > 0 && "DEEPSEEK2 MTP requires n_layer_nextn > 0");
++
++    const bool is_mla = hparams.is_mla();
++
++    const int il = hparams.n_layer();
++    const auto & layer = model.layers[il];
++
++    GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
++    GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
++    GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
++
++    const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
++    const int64_t n_embd_head_v = hparams.n_embd_head_v_mla();
++
++    const int64_t n_embd_head_qk_rope = hparams.n_rot();
++    const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
++
++    const uint32_t kv_lora_rank = hparams.n_lora_kv;
++
++    GGML_ASSERT(n_embd_head_qk_nope >= 1);
++
++    float kq_scale = 1.0f / sqrtf(float(n_embd_head_k));
++    ggml_tensor * inp_attn_scale = nullptr;
++    if (hparams.f_attn_temp_scale != 0.0f) {
++        inp_attn_scale = build_inp_attn_scale();
++
++        GGML_ASSERT(ext_factor >= 0.0f);
++        const float attn_factor_org = attn_factor * (1.0f + 0.1f * logf(1.0f / freq_scale));
++        const float mscale = attn_factor_org * (1.0f + 0.1f * hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
++        kq_scale = mscale * mscale / sqrtf(float(n_embd_head_k));
++    }
++
++    auto inp = std::make_unique<llm_graph_input_embd>(hparams.n_embd);
++
++    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
++    ggml_set_input(inp->tokens);
++
++    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
++    ggml_set_input(inp->embd);
++    ggml_set_name(inp->embd, "mtp_h_input");
++
++    ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
++    ggml_tensor * h_input  = inp->embd;
++    ggml_tensor * tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
++    cb(tok_embd, "mtp_tok_embd", il);
++
++    res->add_input(std::move(inp));
++
++    ggml_tensor * inp_pos = build_inp_pos();
++    auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
++    auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
++
++    ggml_tensor * h_norm = build_norm(h_input, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
++    cb(h_norm, "mtp_hnorm", il);
++
++    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
++    cb(e_norm, "mtp_enorm", il);
++
++    ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
++    cb(concat, "mtp_concat", il);
++
++    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
++    cb(cur, "mtp_eh_proj", il);
++
++    ggml_tensor * inpSA = cur;
++
++    cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "mtp_attn_norm", il);
++
++    ggml_tensor * q = nullptr;
++    const bool is_lite = layer.wq;
++
++    if (!is_lite) {
++        q = ggml_mul_mat(ctx0, layer.wq_a, cur);
++        cb(q, "mtp_q", il);
++
++        q = build_norm(q, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
++        cb(q, "mtp_q_norm", il);
++
++        q = ggml_mul_mat(ctx0, layer.wq_b, q);
++        cb(q, "mtp_q_proj", il);
++    } else {
++        q = ggml_mul_mat(ctx0, layer.wq, cur);
++        cb(q, "mtp_q", il);
++    }
++
++    ggml_tensor * q_nope =
++        ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens, ggml_row_size(q->type, n_embd_head_k),
++                     ggml_row_size(q->type, n_embd_head_k) * n_head, 0);
++    cb(q_nope, "mtp_q_nope", il);
++
++    ggml_tensor * q_pe = ggml_view_3d(
++        ctx0, q, n_embd_head_qk_rope, n_head, n_tokens, ggml_row_size(q->type, n_embd_head_k),
++        ggml_row_size(q->type, n_embd_head_k) * n_head, ggml_row_size(q->type, n_embd_head_qk_nope));
++    cb(q_pe, "mtp_q_pe", il);
++
++    ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
++    cb(kv_cmpr_pe, "mtp_kv_cmpr_pe", il);
++
++    ggml_tensor * kv_cmpr =
++        ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
++                     ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope), 0);
++    cb(kv_cmpr, "mtp_kv_cmpr", il);
++
++    ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_cmpr_pe, n_embd_head_qk_rope, 1, n_tokens,
++                                      ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
++                                      ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
++                                      ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
++    cb(k_pe, "mtp_k_pe", il);
++
++    q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
++                         ext_factor, attn_factor, beta_fast, beta_slow);
++    cb(q_pe, "mtp_q_pe_pos", il);
++
++    k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
++                         ext_factor, attn_factor, beta_fast, beta_slow);
++    cb(k_pe, "mtp_k_pe_pos", il);
++
++    kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
++    cb(kv_cmpr, "mtp_kv_cmpr_norm", il);
++
++    if (is_mla) {
++        q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
++        cb(q_nope, "mtp_q_nope_perm", il);
++
++        ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
++        cb(q_nope_absorbed, "mtp_q_nope_absorbed", il);
++
++        q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
++        cb(q_nope_absorbed, "mtp_q_nope_absorbed_perm", il);
++
++        ggml_tensor * Qcur = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
++        cb(Qcur, "mtp_Qcur", il);
++
++        kv_cmpr = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
++        cb(kv_cmpr, "mtp_kv_cmpr_reshape", il);
++
++        ggml_tensor * Kcur = ggml_concat(ctx0, kv_cmpr, k_pe, 0);
++        cb(Kcur, "mtp_Kcur", il);
++
++        ggml_tensor * Vcur = kv_cmpr;
++        cb(Vcur, "mtp_Vcur", il);
++
++        if (inp_attn_scale) {
++            Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
++            cb(Qcur, "mtp_Qcur_attn_temp_scaled", il);
++        }
++
++        cur = build_attn(inp_attn_k,
++                layer.wo, nullptr, layer.wo_s,
++                Qcur, Kcur, Vcur, nullptr, nullptr, layer.wv_b, kq_scale, il);
++    } else {
++        ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_b, kv_cmpr);
++        cb(kv, "mtp_kv", il);
++
++        ggml_tensor * k_nope =
++            ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head, n_tokens,
++                         ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
++                         ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head, 0);
++        cb(k_nope, "mtp_k_nope_view", il);
++
++        ggml_tensor * Vcur = ggml_view_3d(ctx0, kv, n_embd_head_v, n_head, n_tokens,
++                                          ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
++                                          ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
++                                          ggml_row_size(kv->type, n_embd_head_qk_nope));
++        cb(Vcur, "mtp_Vcur_view", il);
++
++        Vcur = ggml_cont(ctx0, Vcur);
++        cb(Vcur, "mtp_Vcur_cont", il);
++
++        ggml_tensor * Qcur = ggml_concat(ctx0, q_nope, q_pe, 0);
++        cb(Qcur, "mtp_Qcur", il);
++
++        ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
++        cb(Kcur, "mtp_Kcur", il);
++
++        if (inp_attn_scale) {
++            Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
++            cb(Qcur, "mtp_Qcur_attn_temp_scaled", il);
++        }
++
++        cur = build_attn(inp_attn_kv,
++                layer.wo, nullptr, layer.wo_s,
++                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
++    }
++    cb(cur, "mtp_attn_out", il);
++
++    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
++    cb(ffn_inp, "mtp_ffn_inp", il);
++
++    cur = build_norm(ffn_inp, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
++    cb(cur, "mtp_ffn_norm", il);
++
++    if ((uint32_t) il < hparams.n_layer_dense_lead) {
++        cur = build_ffn(cur,
++            layer.ffn_up, nullptr, nullptr,
++            layer.ffn_gate, nullptr, nullptr,
++            layer.ffn_down, nullptr, nullptr,
++            nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
++        cb(cur, "mtp_ffn_out", il);
++    } else {
++        ggml_tensor * moe_out = build_moe_ffn(cur,
++            layer.ffn_gate_inp,
++            layer.ffn_up_exps,
++            layer.ffn_gate_exps,
++            layer.ffn_down_exps,
++            layer.ffn_exp_probs_b,
++            n_expert, n_expert_used,
++            LLM_FFN_SILU, hparams.expert_weights_norm,
++            hparams.expert_weights_scale,
++            (llama_expert_gating_func_type) hparams.expert_gating_func,
++            il,
++            nullptr,
++            layer.ffn_gate_up_exps);
++        cb(moe_out, "mtp_ffn_moe_out", il);
++
++        ggml_tensor * ffn_shexp =
++            build_ffn(cur,
++                layer.ffn_up_shexp, nullptr, nullptr,
++                layer.ffn_gate_shexp, nullptr, nullptr,
++                layer.ffn_down_shexp, nullptr, nullptr,
++                nullptr,
++                LLM_FFN_SILU, LLM_FFN_PAR, il);
++        cb(ffn_shexp, "mtp_ffn_shexp", il);
++
++        cur = ggml_add(ctx0, moe_out, ffn_shexp);
++        cb(cur, "mtp_ffn_out", il);
++    }
++
++    cur = ggml_add(ctx0, cur, ffn_inp);
++    cb(cur, "mtp_post_ffn", il);
++
++    cb(cur, "h_nextn", -1);
++    res->t_h_nextn = cur;
++
++    ggml_tensor * head_norm_w = layer.nextn.shared_head_norm ? layer.nextn.shared_head_norm : model.output_norm;
++    GGML_ASSERT(head_norm_w && "DEEPSEEK2 MTP: missing both nextn.shared_head_norm and output_norm");
++    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
++    cb(cur, "mtp_head_norm", -1);
++
++    ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
++    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
++    GGML_ASSERT(head_w && "DEEPSEEK2 MTP: missing LM head (nextn.shared_head_head or model.output)");
++    cur = build_lora_mm(head_w, cur, head_s);
++    cb(cur, "result_output", -1);
++
++    res->t_logits = cur;
++    ggml_build_forward_expand(gf, cur);
++}
+diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
+index 11d91312..d7067347 100644
+--- a/src/models/glm-dsa.cpp
++++ b/src/models/glm-dsa.cpp
+@@ -75,11 +75,6 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+ 
+     for (int i = 0; i < n_layer_all; ++i) {
+         int flags = 0;
+-        if (i >= n_layer) {
+-            // skip all tensors in the NextN layers
+-            // TODO @ngxson : TENSOR_NOT_REQUIRED was a hack, need to remove it later
+-            flags |= TENSOR_SKIP | TENSOR_NOT_REQUIRED;
+-        }
+ 
+         auto & layer = layers[i];
+ 
+@@ -132,7 +127,7 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, flags);
+         }
+ 
+-        // NextN/MTP tensors (preserved but unused) - conditionally load for last n_layer_nextn
++        // NextN/MTP tensors - conditionally load for last n_layer_nextn
+         if (i >= n_layer) {
+             layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags);
+             layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, flags);
+@@ -147,6 +142,9 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
+ }
+ 
+ std::unique_ptr<llm_graph_context> llama_model_glm_dsa::build_arch_graph(const llm_graph_params & params) const {
++    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
++        return std::make_unique<graph_mtp>(*this, params);
++    }
++
+     return std::make_unique<graph>(*this, params);
+ }
+-
+diff --git a/src/models/models.h b/src/models/models.h
+index ee3aff07..75c0ffcf 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -1051,6 +1051,10 @@ struct llama_model_deepseek2 : public llama_model_base {
+         graph(const llama_model & model, const llm_graph_params & params);
+     };
+ 
++    struct graph_mtp : public llm_graph_context {
++        graph_mtp(const llama_model & model, const llm_graph_params & params);
++    };
++
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+ 
+@@ -1085,6 +1089,7 @@ struct llama_model_glm_dsa : public llama_model_base {
+     void load_arch_tensors(llama_model_loader & ml) override;
+ 
+     using graph = llama_model_deepseek2::graph;
++    using graph_mtp = llama_model_deepseek2::graph_mtp;
+ 
+     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+ };
+-- 
+2.54.0 (Apple Git-156)
+

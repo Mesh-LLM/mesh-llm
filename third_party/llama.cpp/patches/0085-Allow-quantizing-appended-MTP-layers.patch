@@ -1,0 +1,25 @@
+From b1c6596c2f333447967f157260074d43948f2261 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 11 Jun 2026 10:46:54 +1000
+Subject: [PATCH 85/89] Allow quantizing appended MTP layers
+
+---
+ src/llama-quant.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index d4e7738a..0fe62d6b 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -847,7 +847,7 @@ static void init_quantize_state_counters(quantize_state_impl & qs, std::vector<t
+             qs.has_tied_embeddings = false;
+         }
+     }
+-    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer();
++    qs.n_ffn_down = qs.n_ffn_gate = qs.n_ffn_up = (int)qs.model.hparams.n_layer_all;
+ }
+ 
+ //
+-- 
+2.54.0 (Apple Git-156)
+

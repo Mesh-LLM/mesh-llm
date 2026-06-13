@@ -1,0 +1,45 @@
+From 5719e0c044ba8f5cfe617fbb17fb811127689e6f Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Thu, 11 Jun 2026 11:34:36 +1000
+Subject: [PATCH 86/89] Fix tokenizer regex during GGUF conversion
+
+---
+ gguf-py/gguf/vocab.py | 22 +++++++++++++++++-----
+ 1 file changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/gguf-py/gguf/vocab.py b/gguf-py/gguf/vocab.py
+index d93b94f2..52618906 100644
+--- a/gguf-py/gguf/vocab.py
++++ b/gguf-py/gguf/vocab.py
+@@ -580,11 +580,23 @@ class LlamaHfVocab(Vocab):
+ 
+         # Allow the tokenizer to default to slow or fast versions.
+         # Explicitly set tokenizer to use local paths.
+-        self.tokenizer = AutoTokenizer.from_pretrained(
+-            base_path,
+-            cache_dir=base_path,
+-            local_files_only=True,
+-        )
++        tokenizer_kwargs = {
++            "cache_dir": base_path,
++            "local_files_only": True,
++        }
++        try:
++            self.tokenizer = AutoTokenizer.from_pretrained(
++                base_path,
++                fix_mistral_regex=True,
++                **tokenizer_kwargs,
++            )
++        except TypeError as e:
++            if "fix_mistral_regex" not in str(e):
++                raise
++            self.tokenizer = AutoTokenizer.from_pretrained(
++                base_path,
++                **tokenizer_kwargs,
++            )
+         assert self.tokenizer.is_fast  # assume tokenizer.json is used  # ty: ignore[unresolved-attribute]
+ 
+         # Initialize lists and dictionaries for added tokens
+-- 
+2.54.0 (Apple Git-156)
+
